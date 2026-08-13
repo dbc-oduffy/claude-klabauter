@@ -13,6 +13,9 @@ Probes under test:
                             found, PASS on absent, NEVER DEGRADED
   claude-klabauter.version.sanity  — coordinator_core importable; retired submodules absent
   claude-klabauter.invoke.smoke    — spawn-per-call dispatch smoke; SKIP on spawn failure, never crash
+  claude-klabauter.execnet.orphaned_gateways — flags execnet gateways with no live controller;
+                            AC4: a gateway under a LIVE controller must be PASS, never
+                            flagged (docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md § C2)
 
 Probe-authoring invariant (per state/lessons/2026-07-04-a-diagnostic-must-always-emit-a-parseabl.yaml):
   Every probe must emit a parseable _ProbeResult on ALL paths — including its own
@@ -723,3 +726,217 @@ class TestInvokeSmokeProbe:
             f"Probe detail must state the entrypoint CAN dispatch (scope discipline); "
             f"got: {result.detail!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# claude-klabauter.execnet.orphaned_gateways tests
+# ---------------------------------------------------------------------------
+#
+# Fakes the process table entirely (no real process spawned — this machine runs
+# 50-70 concurrent LLM sessions; a spawning test here would be load-hostile) by
+# injecting a fake `psutil` module into sys.modules before the probe's own
+# lazy, guarded `import psutil` resolves it (see the probe's own docstring for
+# why that import is probe-local rather than module-top-level).
+
+
+class _FakeProc:
+    """Stand-in for a psutil.Process yielded by process_iter(attrs)."""
+
+    def __init__(self, info: dict) -> None:
+        self.info = info
+
+
+def _make_fake_psutil(procs, alive_pids):
+    """Build a minimal fake psutil module exposing only what the probe calls.
+
+    process_iter(attrs) ignores attrs (the real API narrows fields fetched;
+    the fakes here already carry only pid/ppid/cmdline) and yields _FakeProc
+    instances built from *procs*. pid_exists(pid) reports True iff pid is in
+    *alive_pids* — the sole primitive the probe uses to test controller
+    liveness, deliberately excluding pid 1/0 so the reparented-to-init branch
+    is exercised via the probe's own special-case, not via this fake.
+    """
+    import types
+
+    fake = types.ModuleType("psutil")
+    fake.process_iter = lambda attrs=None: iter(_FakeProc(p) for p in procs)
+    fake.pid_exists = lambda pid: pid in alive_pids
+    return fake
+
+
+_GATEWAY_CMDLINE = [
+    "python3",
+    "-c",
+    "import sys;exec(eval(sys.stdin.readline()))",
+]
+
+
+class TestOrphanedExecnetGatewaysProbe:
+    """_run_probe_orphaned_execnet_gateways() — AC4 is the load-bearing case.
+
+    AC4 (docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md): a gateway
+    process matching the execnet signature under a LIVE controller is a
+    healthy in-flight test run and MUST be PASS — observed live during the
+    spike (four such gateways under a peer's running suite), not
+    hypothetical. Every test here fakes psutil; none spawns a real process.
+    """
+
+    def test_orphaned_gateway_no_live_controller_is_degraded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DEGRADED when a gateway's parent pid no longer exists."""
+        mod = _require_module()
+
+        procs = [{"pid": 4242, "ppid": 9999, "cmdline": _GATEWAY_CMDLINE}]
+        fake_psutil = _make_fake_psutil(procs, alive_pids=set())
+        monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+        result = mod._run_probe_orphaned_execnet_gateways()
+
+        assert _is_parseable_probe_result(result), (
+            "orphaned-gateway path must produce a parseable _ProbeResult"
+        )
+        assert result.probe == "claude-klabauter.execnet.orphaned_gateways"
+        assert result.status == mod._DEGRADED, (
+            f"Expected DEGRADED when a gateway's controller is confirmed dead, "
+            f"got {result.status!r}"
+        )
+        assert result.data is not None
+        assert result.data["orphaned_pids"] == [4242]
+        assert result.data["live_controlled_count"] == 0
+
+    def test_gateway_reparented_to_init_is_degraded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DEGRADED when a gateway's ppid is 1 (reparented to init) — even though
+        pid_exists(1) would trivially be True on a real box, the probe must not
+        use that as evidence of a live controller."""
+        mod = _require_module()
+
+        procs = [{"pid": 5151, "ppid": 1, "cmdline": _GATEWAY_CMDLINE}]
+        # alive_pids includes 1 to prove the probe special-cases ppid in (0, 1)
+        # rather than trusting pid_exists(1)'s trivially-true answer.
+        fake_psutil = _make_fake_psutil(procs, alive_pids={1})
+        monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+        result = mod._run_probe_orphaned_execnet_gateways()
+
+        assert _is_parseable_probe_result(result)
+        assert result.status == mod._DEGRADED, (
+            f"Expected DEGRADED for a gateway reparented to init (ppid=1), "
+            f"got {result.status!r}"
+        )
+        assert result.data["orphaned_pids"] == [5151]
+
+    def test_gateway_under_live_controller_is_pass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PASS when a gateway's controller is alive — AC4's central case.
+
+        This is the exact false-positive shape observed live during the spike:
+        a raw signature count would call this a leak. The probe must not.
+        """
+        mod = _require_module()
+
+        procs = [{"pid": 6161, "ppid": 7171, "cmdline": _GATEWAY_CMDLINE}]
+        fake_psutil = _make_fake_psutil(procs, alive_pids={7171})
+        monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+        result = mod._run_probe_orphaned_execnet_gateways()
+
+        assert _is_parseable_probe_result(result)
+        assert result.probe == "claude-klabauter.execnet.orphaned_gateways"
+        assert result.status == mod._PASS, (
+            f"AC4: a gateway under a live controller must be PASS, not flagged as "
+            f"orphaned. Got {result.status!r} with data={result.data!r}"
+        )
+        assert result.data["orphaned_pids"] == []
+        assert result.data["live_controlled_count"] == 1
+
+    def test_zero_gateways_is_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PASS when no process on the box carries the execnet signature."""
+        mod = _require_module()
+
+        procs = [{"pid": 1, "ppid": 0, "cmdline": ["some-other-process"]}]
+        fake_psutil = _make_fake_psutil(procs, alive_pids=set())
+        monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+        result = mod._run_probe_orphaned_execnet_gateways()
+
+        assert _is_parseable_probe_result(result)
+        assert result.probe == "claude-klabauter.execnet.orphaned_gateways"
+        assert result.status == mod._PASS, (
+            f"Expected PASS when zero gateway processes are found, got {result.status!r}"
+        )
+        assert result.data["orphaned_pids"] == []
+        assert result.data["live_controlled_count"] == 0
+
+    def test_mixed_orphaned_and_live_reports_only_orphaned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the dead-controller gateway is flagged when both kinds are present."""
+        mod = _require_module()
+
+        procs = [
+            {"pid": 100, "ppid": 200, "cmdline": _GATEWAY_CMDLINE},   # live controller
+            {"pid": 101, "ppid": 999, "cmdline": _GATEWAY_CMDLINE},   # dead controller
+        ]
+        fake_psutil = _make_fake_psutil(procs, alive_pids={200})
+        monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+        result = mod._run_probe_orphaned_execnet_gateways()
+
+        assert result.status == mod._DEGRADED
+        assert result.data["orphaned_pids"] == [101]
+        assert result.data["live_controlled_count"] == 1
+
+    def test_psutil_absent_emits_skip_not_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SKIP (not a crash) when psutil is not importable.
+
+        Probe-authoring invariant: an optional probe's missing soft-dependency
+        must emit a SKIP envelope, never an unhandled exception.
+        """
+        mod = _require_module()
+
+        monkeypatch.setitem(sys.modules, "psutil", None)  # forces ImportError on import
+
+        result = mod._run_probe_orphaned_execnet_gateways()
+
+        assert _is_parseable_probe_result(result), (
+            "psutil-absent path must produce a parseable _ProbeResult, not a crash"
+        )
+        assert result.probe == "claude-klabauter.execnet.orphaned_gateways"
+        assert result.status == mod._INFO
+        assert result.skipped is True
+        assert result.required is False
+
+    def test_parent_liveness_read_error_fails_closed_to_alive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exception from pid_exists() must NOT be treated as a confirmed orphan.
+
+        Fail-closed-to-"assume alive" mirrors the repo's existing liveness
+        posture (coordinator_core.ops.session.reap's fail-closed-to-keep) —
+        an indeterminate read is not evidence of a dead controller.
+        """
+        mod = _require_module()
+
+        procs = [{"pid": 303, "ppid": 404, "cmdline": _GATEWAY_CMDLINE}]
+        fake_psutil = _make_fake_psutil(procs, alive_pids=set())
+
+        def _raise(pid):
+            raise OSError("indeterminate liveness read")
+
+        fake_psutil.pid_exists = _raise
+        monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+        result = mod._run_probe_orphaned_execnet_gateways()
+
+        assert _is_parseable_probe_result(result)
+        assert result.status == mod._PASS, (
+            f"An indeterminate parent-liveness read must fail closed toward "
+            f"'assume alive' (not orphaned), got {result.status!r}"
+        )
+        assert result.data["orphaned_pids"] == []

@@ -101,15 +101,13 @@ _BIN_DIR = Path(__file__).resolve().parent
 _LIB_DIR = _BIN_DIR / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
-from cc_invoke import resolve_colocated_claude_klabauter_root, child_env  # noqa: E402
+from cc_invoke import require_colocated_engine_on_path, child_env  # noqa: E402
 
 try:
-    _REPO_ROOT = Path(resolve_colocated_claude_klabauter_root(__file__))
+    _REPO_ROOT = Path(require_colocated_engine_on_path(__file__))
 except RuntimeError as _exc:
     print(f"{Path(__file__).name}: CLAUDE_KLABAUTER_ROOT resolution failed: {_exc}", file=sys.stderr)
     sys.exit(1)
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 from coordinator_core.daily_day import local_day  # noqa: E402
 from coordinator_core.machine_resolver import compute_machine  # noqa: E402

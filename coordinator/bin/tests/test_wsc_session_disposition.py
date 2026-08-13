@@ -32,6 +32,21 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+import pytest
+
+# Declared, not excused: this file spawns a real git process because the properties
+# under test are real merge-base/log/commit-trailer plumbing (session-id resolution
+# against actual git history, Detector B's git-provenance leg) that no mock stands in
+# for. 33 call sites build their own repo via `_init_repo_with_history`, each inside
+# its own test's `with tempfile.TemporaryDirectory()` block, then layer test-specific
+# commits/trailers on top -- not hoisted to a shared fixture, mirroring the
+# per-test-isolation lesson in test_verify_shipped.py's docstring (many of these tests
+# add distinct session/commit trailers that would collide if a repo were reused). The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly not
+# the route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 

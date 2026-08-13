@@ -1377,7 +1377,7 @@ def _atomic_copy(src: Path, dst: Path) -> bool:
 
 _BANNER_INLINE_INSTALL = """
 ╔══════════════════════════════════════════════════════════════════╗
-║  ℹ  settings.json has no `enabledPlugins` — but this is a example-doctrine-repo INLINE
+║  ℹ  settings.json has no `enabledPlugins` — but this is an INLINE
 ║     (--plugin-dir) install (`.doe-root` present, coordinator loads live
 ║     from the clone). This is EXPECTED, not a clobber. No action needed.
 ╚══════════════════════════════════════════════════════════════════╝
@@ -1815,8 +1815,7 @@ _KS_DISARM_RE = re.compile(r"(?im)^\s*disarm condition:\s*(.+)$")
 # out of free-text prose that may or may not still contain it.
 _HISTORICAL_DISARM_CONDITION = "delete once the naked-Python hook migration lands"
 _HISTORICAL_DISARM_STATUS = (
-    "MET as of 2026-07-28 (37/37 hook scripts are Python; "
-    "see example-doctrine-repo state/2026-07-28-machine-a-install-dogfood-friction-log.md)"
+    "MET as of 2026-07-28 (37/37 hook scripts are Python)"
 )
 
 

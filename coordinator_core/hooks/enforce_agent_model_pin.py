@@ -162,12 +162,9 @@ def _deny_reason(subagent_type: str, source_path: str, violations: "list[tuple[s
     ]
     return (
         "AGENT DISPATCH BLOCKED: " + " ".join(lines) + "\n"
-        "Each named pin is a cost-and-role invariant, not a default -- see "
-        "coordinator_core/hooks/enforce_agent_model_pin.py module docstring. "
-        "Drop the corresponding parameter(s) and re-dispatch.\n"
-        f"<resolved from: {source_path}>\n"
-        "An override exists for a human operator, pre-launch only -- see "
-        "docs/reference/guard-override-keys.md."
+        "Each pin is a cost-and-role invariant, not a default -- drop the "
+        "corresponding parameter(s) and re-dispatch.\n"
+        f"<resolved from: {source_path}>"
     )
 
 

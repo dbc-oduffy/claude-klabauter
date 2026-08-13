@@ -75,9 +75,7 @@ def _resolve_session_id(cwd: str) -> str:
     Raises RuntimeError on CLAUDE_KLABAUTER_ROOT/import failure (caller maps to exit 1,
     matching the bash oracle's fail-loud coordinator-root-unresolved path).
     """
-    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.session.core import resolve_session_id as _resolve
 
     return _resolve(cwd)

@@ -174,7 +174,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import resolve_engine_root  # noqa: E402
+from cc_invoke import require_engine_on_path, resolve_engine_root  # noqa: E402
 
 
 BLANKET_ALLOWED_COMMANDS = frozenset(
@@ -213,16 +213,15 @@ class UsageError(RuntimeError):
 
 
 def _import_session():
-    """Resolve claude-klabauter root (cc_invoke.resolve_engine_root seam, DR-047) and
-    import the four coordinator_core.session submodules this port needs.
+    """Resolve claude-klabauter root (cc_invoke.require_engine_on_path seam, wrapping
+    resolve_engine_root's ladder, DR-047) and import the four
+    coordinator_core.session submodules this port needs.
     Mirrors the refresh-queries.py in-process-import precedent."""
     try:
-        claude_klabauter_root = resolve_engine_root(__file__)
+        require_engine_on_path(__file__)
     except RuntimeError as exc:
         print(f"coordinator-safe-commit: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         sys.exit(3)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
     try:
         from coordinator_core.session import claims as cs_claims
         from coordinator_core.session import core as cs_core
@@ -534,8 +533,11 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     `sys.path` — true in claude-klabauter's own tree, false in every OTHER caller repo
     (example-doctrine-repo foremost), where it dies with `ModuleNotFoundError` the
     instant it's copy-pasted. Fixed by resolving claude-klabauter's root at emit time
-    via the same `cc_invoke.resolve_engine_root()` seam `_import_session()`
-    uses (module-level import, line ~159) — self-location (this script's own
+    via `cc_invoke.resolve_engine_root()` directly (module-level import, line
+    ~159). This is a resolve-only site — it wants the root as a value and
+    performs no `sys.path` insert — which is why it calls the resolver rather
+    than `_import_session()`'s inserting `require_engine_on_path()` wrapper;
+    both ride the same ladder. Self-location (this script's own
     enclosing checkout) is tried first, falling back to
     `_resolve_claude_klabauter_root()`'s pointer-file/registry ladder; settings-home
     is the sanctioned resolution point (PM ruling, 2026-07-29) for that

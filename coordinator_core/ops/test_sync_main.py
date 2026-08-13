@@ -8,7 +8,11 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.sync_main import main
+
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -159,12 +163,14 @@ def test_strict_hard_errors_when_far_behind_main(tmp_path, capsys, monkeypatch):
 
     _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
 
+    # 51 empty commits on main, made in a single visit (checkout in/out once
+    # rather than per-commit) -- only the commit COUNT matters to
+    # `git rev-list --count HEAD..main`, not file content, so this collapses
+    # ~204 spawns (checkout+add+commit+checkout x51) down to 53.
+    _git(clone, "checkout", "-q", "main")
     for i in range(51):
-        (clone / f"f{i}.txt").write_text(f"{i}\n")
-        _git(clone, "checkout", "-q", "main")
-        _git(clone, "add", f"f{i}.txt")
-        _git(clone, "commit", "-q", "-m", f"commit {i}")
-        _git(clone, "checkout", "-q", "work/testmachine/2026-01-01")
+        _git(clone, "commit", "-q", "--allow-empty", "-m", f"commit {i}")
+    _git(clone, "checkout", "-q", "work/testmachine/2026-01-01")
     _git(clone, "push", "-q", "origin", "main")
 
     monkeypatch.chdir(clone)
@@ -179,12 +185,13 @@ def test_non_strict_warns_when_far_behind_main(tmp_path, capsys, monkeypatch):
 
     _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
 
+    # See test_strict_hard_errors_when_far_behind_main: only the commit
+    # count matters, so empty commits made in one branch-visit collapse the
+    # spawn count from ~204 to 53.
+    _git(clone, "checkout", "-q", "main")
     for i in range(51):
-        (clone / f"f{i}.txt").write_text(f"{i}\n")
-        _git(clone, "checkout", "-q", "main")
-        _git(clone, "add", f"f{i}.txt")
-        _git(clone, "commit", "-q", "-m", f"commit {i}")
-        _git(clone, "checkout", "-q", "work/testmachine/2026-01-01")
+        _git(clone, "commit", "-q", "--allow-empty", "-m", f"commit {i}")
+    _git(clone, "checkout", "-q", "work/testmachine/2026-01-01")
     _git(clone, "push", "-q", "origin", "main")
 
     monkeypatch.chdir(clone)

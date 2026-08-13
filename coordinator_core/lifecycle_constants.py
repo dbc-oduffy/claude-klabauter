@@ -102,3 +102,13 @@ SPEC_SKIP_STATUSES = frozenset({"superseded", "abandoned", "partial"})
 PLAN_ORPHAN_TERMINAL_STATUS = frozenset(
     {"implemented", "shipped", "complete", "executed", "superseded", "abandoned", "deferred"}
 )
+
+# Question answered: "can this sizing-object's file be safely git-mv'd into
+# archive/sizings/?" (archivability — ops/fleet/archive_sizings.py's
+# terminality predicate). DR-293 names this family's shape; this set is its
+# ONLY terminality source — no literal status list appears in that module.
+# A sizing-object's status axis is independent of PLAN_TERMINAL_STATUS /
+# HANDOFF_TERMINAL_STATUS above — deliberately not expected to agree with
+# either, same convention as PLAN_ORPHAN_TERMINAL_STATUS's note.
+# Plan: docs/plans/2026-08-13-terminal-sizings-boot-sweep-family.md.
+SIZING_TERMINAL_STATUS = frozenset({"shipped", "superseded", "declined"})

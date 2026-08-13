@@ -369,25 +369,32 @@ def _is_grant_record_path(normalized_file_path: str, common_dir: str) -> bool:
     )
 
 
-def _deny_reason(file_path: str) -> str:
+def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> str:
     """Design-as-offers deny text (same posture as the plan's C1b/C4
     sibling legs) -- names report-BLOCKED-upward as the subagent's path,
     and that the EM is the one who acquires/writes the grant. Deliberately
     offers no self-executable remediation to the firing subagent -- see
     module docstring "Design-as-offers".
+
+    PARAGRAPH TRIM (C8, docs/plans/2026-08-13-guard-messages-stop-handing-
+    agents-the-keys.md, PM ruling 2026-08-13): the "This is not a judgment
+    on the edit -- ..." paragraph was deliberate when written and was held
+    out of C8's original register sweep for a PM ruling, since trimming it
+    reverses that earlier ratified design-as-offers call. The PM ruled to
+    trim it fully -- this is that trim landing, applied in the same target +
+    reason + route shape ``block_unauthorized_claude_md_write`` now uses.
     """
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
         "BLOCKED: writing the CLAUDE.md write-grant record directly is not "
-        "a path available to a dispatched agent.\n\n"
-        "This is not a judgment on the edit -- a dispatched agent cannot "
-        "itself acquire this authorization; only the EM can. Report "
-        "BLOCKED to your EM with:\n"
+        "available to a dispatched agent.\n\n"
+        "Report BLOCKED to your EM instead:\n"
         f"  Target: `{file_path}`\n"
         "  Reason: the CLAUDE.md write-grant record is EM-acquired, "
         "not subagent-writable.\n"
         "  Unblock (EM runs this, not you): acquire a live session grant "
-        "via the grant CLI, then re-dispatch.\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        "via the grant CLI, then re-dispatch."
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -419,7 +426,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not _is_grant_record_path(normalized, common_dir):
         return None
 
-    reason = _deny_reason(file_path)
+    reason = _deny_reason(file_path, payload)
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

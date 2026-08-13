@@ -17,6 +17,13 @@ import pytest
 
 from coordinator_core.ops.emit.envelope import main
 
+# Declared, not excused: this file spawns a real git process because the property under
+# test is check-shipped-on-main's own git-ancestry contract, which no mock stands in
+# for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -27,9 +34,12 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.fixture
-def repo_with_origin(tmp_path, monkeypatch):
-    """A working repo with a real "origin" remote and an on-main + off-main commit.
+@pytest.fixture(scope="module")
+def _shared_repo(tmp_path_factory):
+    """Built ONCE per module (~9 spawns total) and reused via `repo_with_origin`
+    below, rather than once per test (~9 spawns * 6 tests) -- Windows process-spawn
+    cost, not wall-clock, is the metric (see this repo's CLAUDE.md § Load norm). Every
+    consuming test only reads via `main()`'s git calls; none mutate this repo.
 
     Layout:
       - bare_origin/         — bare repo acting as "origin"
@@ -37,6 +47,7 @@ def repo_with_origin(tmp_path, monkeypatch):
         - first commit  -> pushed to origin/main (ON_MAIN)
         - second commit -> local-only, NOT pushed (NOT_ON_MAIN)
     """
+    tmp_path = tmp_path_factory.mktemp("check_shipped_on_main")
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
@@ -58,8 +69,13 @@ def repo_with_origin(tmp_path, monkeypatch):
 
     _git(work, "fetch", "origin")
 
-    monkeypatch.chdir(work)
-    return {"on_main": on_main_sha, "off_main": off_main_sha}
+    return {"work": work, "on_main": on_main_sha, "off_main": off_main_sha}
+
+
+@pytest.fixture
+def repo_with_origin(_shared_repo, monkeypatch):
+    monkeypatch.chdir(_shared_repo["work"])
+    return _shared_repo
 
 
 def test_help_exits_0(capsys):

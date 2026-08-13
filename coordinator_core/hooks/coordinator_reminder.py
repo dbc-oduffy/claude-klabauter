@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Union
 
-_QUICK_ORIENT = "## Quick Orient (always, before first tool call)\nBefore responding to the user's opening message, silently read `state/orientation_cache.md` if it exists and isn't already in context. Don't announce it. Do NOT read `state/lessons.md` at boot — it's a capture queue processed by `/learn-lessons`, not a must-see memo (load-bearing lessons live in `docs/wiki/` and are surfaced on demand by the prior-art-checker). If the user's message is vague/strategic/implies continuation, invoke `/workstream-start` for the full ceremony (which deliberately surveys lessons — PM-invoked, not EM-judged). If it's a specific actionable request, quick orient and go.\n\n## Coordinator Infrastructure\nAvailable for complex work:\n- /review (plan artifacts) or /review-code (code artifacts) — route artifacts to domain + architecture reviewers\n- /enrich-and-review — enrich specs with codebase research\n- For executor dispatch, follow docs/wiki/delegate-execution.md\nUse these when they add value. For direct requests, just do the work.\n"
+_QUICK_ORIENT = "## Quick Orient (always, before first tool call)\nSilently read `state/orientation_cache.md` if present before responding. Skip `state/lessons.md` at boot (a `/learn-lessons` queue; lessons live in `docs/wiki/`). Vague/strategic -> `/workstream-start`; specific request -> quick orient and go.\n\n## Coordinator Infrastructure\n- /review (plans) or /review-code — reviewers\n- /enrich-and-review — enrich specs\n- Executor dispatch: docs/wiki/delegate-execution.md\nUse when they add value; else just do the work.\n"
 
 
 def render_reminder(catalog_path: Optional[Union[str, "Path"]] = None) -> str:

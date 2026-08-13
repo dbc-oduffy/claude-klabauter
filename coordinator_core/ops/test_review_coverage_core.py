@@ -24,6 +24,8 @@ import pytest
 
 from coordinator_core.ops.review_coverage_core import main
 
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Fixture helpers — bare origin + working clone (mirrors the bash oracle's

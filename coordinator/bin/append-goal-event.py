@@ -92,8 +92,11 @@ from cc_invoke import (  # noqa: E402
     _op_timeout_ceiling,
     _resolve_claude_klabauter_root,
     _timeout_exceeded_message,
+    ensure_engine_on_path,
 )
 from repo_identity import resolve_checked_repo_root  # noqa: E402
+
+ensure_engine_on_path(__file__)
 
 
 def _cc_invoke_bare(op: str, params: dict[str, object], repo_root: str) -> dict[str, object]:

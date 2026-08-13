@@ -72,15 +72,38 @@ Negative-spec:
     - No caching/memoization across `snapshot()` calls — each call is a
       fresh, single scan; staleness policy belongs to the caller.
 
-`procStart` is a Windows FILETIME — 100ns ticks since 1601-01-01 — and
-converts to a Unix epoch via `int(procStart) / 1e7 - 11644473600`. A
-converted epoch outside `[now - 90d, now + 1h]` is REJECTED (record yields
-`None`) before it is ever returned: this turns a unit mismatch (e.g. an
-unobserved POSIX record shape — see plan Anti-scope, this conversion is
-verified only on Windows) into an explicit `None` rather than a coincidence
-risk. Verified this session against all 22 live rows on this box:
-sub-millisecond agreement with `psutil.Process(pid).create_time()` on every
-one.
+`procStart` is observed in TWO shapes. On macOS (Claude Code 2.1.231,
+observed 2026-08-13) it is a POSIX ctime string, e.g.
+`"Thu Aug 13 09:42:07 2026"` — **UTC**, not local time, confirmed live
+against 37/37 real records on this box via `calendar.timegm`: sub-second
+agreement with `psutil.Process(pid).create_time()` on every one, while
+`time.mktime` (local-time interpretation) is off by exactly the machine's
+UTC offset on every record (measured: 3600s at TZ=Europe/London/BST). Do
+NOT parse this leg with `time.mktime` — see the negative-spec entry below
+re: `core.lstart_to_epoch`. Parsed via `time.strptime` + `calendar.timegm`,
+with an ISO-8601 fallback (naive treated as UTC via
+`.replace(tzinfo=timezone.utc)`, tz-aware converted via `.timestamp()`). On
+Windows it is assumed to be a FILETIME integer — 100ns ticks since
+1601-01-01, converted via `int(procStart) / 1e7 - 11644473600` — but this
+leg is UNVERIFIED on Windows (assumed correct, not confirmed live) and
+unchanged by the string-parsing addition. A converted epoch outside
+`[now - 90d, now + 1h]` is REJECTED (record yields `None`) before it is
+ever returned, identically for both legs: this turns a unit mismatch or
+bad-shape record into an explicit `None` rather than a coincidence risk.
+The FILETIME leg was verified in an earlier session against 22 live rows
+on this box: sub-millisecond agreement with
+`psutil.Process(pid).create_time()` on every one.
+
+Negative-spec: `coordinator_core.session.core.lstart_to_epoch` parses a
+visually identical ctime shape but deliberately reads it as LOCAL time,
+because it parses `ps -o lstart=` output, which `ps` renders in the
+machine's local zone. It must NOT be reused here, and this parser must not
+later be "deduplicated" into it — the two functions parse the same string
+format under different zone semantics, and merging them reintroduces
+exactly this one-hour (or DST-dependent) error. The upside of `procStart`
+being UTC: the ±1h fall-back-DST ambiguity that `lstart_to_epoch`'s own
+docstring accepts as a residual on its local-time leg does not arise on
+this path at all.
 
 Defensive parsing: `OSError`, `json.JSONDecodeError`, a missing `pid` or
 `procStart` key, a non-`int` `pid`, a non-numeric `procStart`, and an
@@ -100,9 +123,11 @@ established bias.
 
 from __future__ import annotations
 
+import calendar
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from coordinator_core._settings_home import claude_config_dir
@@ -119,8 +144,9 @@ class RegistryRecord:
     """A parsed `(pid, start_epoch, cwd)` triple — NOT a liveness verdict.
 
     `start_epoch` is a Unix epoch (seconds, float) already converted from the
-    registry's raw Windows-FILETIME `procStart` and already validated inside
-    the sanity band. Consumers pair this with `pid` through
+    registry's raw `procStart` — a POSIX ctime/ISO-8601 string on macOS, a
+    Windows-FILETIME integer assumed on Windows (unverified) — and already
+    validated inside the sanity band. Consumers pair this with `pid` through
     `core.stable_pid_alive`'s tolerant birth-instant compare — never a bare
     `pid_exists`/`kill -0` check.
 
@@ -138,21 +164,54 @@ class RegistryRecord:
     cwd: str | None = None
 
 
-def _filetime_to_epoch(raw) -> float | None:
+def _proc_start_to_epoch(raw) -> float | None:
     """Convert a raw `procStart` field to a Unix epoch, or None if invalid.
 
-    Raises nothing — every failure mode (non-numeric, overflow, out of the
-    `[now - 90d, now + 1h]` sanity band) returns None so the caller skips the
-    record rather than propagating.
+    Accepts two observed shapes: a Windows FILETIME integer (100ns ticks
+    since 1601-01-01), or a string — a POSIX ctime string (`%a %b %d
+    %H:%M:%S %Y`, UTC — confirmed live against 37/37 real records, macOS,
+    Claude Code 2.1.231, observed 2026-08-13: `calendar.timegm` agrees with
+    `psutil.Process(pid).create_time()` to sub-second precision on every
+    one, while `time.mktime` (local-time interpretation) is off by exactly
+    the machine's UTC offset — do NOT swap this back to `time.mktime`) or
+    ISO-8601 (naive treated as UTC via `.replace(tzinfo=timezone.utc)`,
+    tz-aware converted via `.timestamp()`). The FILETIME leg is tried first
+    and is UNCHANGED from the original integer-only implementation.
+
+    Raises nothing — every failure mode (non-numeric, non-date string,
+    overflow, out of the `[now - 90d, now + 1h]` sanity band) returns None
+    so the caller skips the record rather than propagating.
     """
+    epoch = None
     try:
         ticks = int(raw)
     except (TypeError, ValueError, OverflowError):
+        ticks = None
+    if ticks is not None:
+        try:
+            epoch = ticks / _FILETIME_TICKS_PER_SEC - _FILETIME_EPOCH_OFFSET_SEC
+        except OverflowError:
+            return None
+    elif isinstance(raw, str) and raw:
+        try:
+            struct = time.strptime(raw, "%a %b %d %H:%M:%S %Y")
+            epoch = calendar.timegm(struct)
+        except (ValueError, OverflowError):
+            try:
+                dt = datetime.fromisoformat(raw)
+            except ValueError:
+                return None
+            if dt.tzinfo is None:
+                try:
+                    epoch = dt.replace(tzinfo=timezone.utc).timestamp()
+                except (ValueError, OverflowError):
+                    return None
+            else:
+                epoch = dt.timestamp()
+
+    if epoch is None:
         return None
-    try:
-        epoch = ticks / _FILETIME_TICKS_PER_SEC - _FILETIME_EPOCH_OFFSET_SEC
-    except OverflowError:
-        return None
+
     now = time.time()
     if epoch < now - _SANITY_BAND_PAST_SEC or epoch > now + _SANITY_BAND_FUTURE_SEC:
         return None
@@ -205,7 +264,7 @@ def _parse_one(path: Path) -> tuple[str, RegistryRecord] | None:
         # non-positive pid; same defensive class as the FILETIME sanity band.
         return None
 
-    start_epoch = _filetime_to_epoch(data.get("procStart"))
+    start_epoch = _proc_start_to_epoch(data.get("procStart"))
     if start_epoch is None:
         return None
 
@@ -262,7 +321,7 @@ def self_record() -> tuple[str, RegistryRecord] | None:
 
     The O(1) leg: reads `<registry_dir>/<CLAUDE_PID>.json` directly, via
     `_parse_one` — ONE `read_text`, no `glob`, no `snapshot()` scan. This is
-    what keeps a caller's zero-spawn claim true (a single Windows FILETIME
+    what keeps a caller's zero-spawn claim true (a single registry record
     file read only). `CLAUDE_PID` is resolved via the ONE shared resolver,
     `coordinator_core.session.core._resolve_claude_pid_from_env` — never a
     bare `os.environ.get('CLAUDE_PID')` — so an absent, non-integer, or

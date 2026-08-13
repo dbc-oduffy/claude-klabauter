@@ -1190,6 +1190,192 @@ in_reply_to: "2026-07-28-claude-klabauter-em-sat-01-store-home-answer.md"
 
 
 # ---------------------------------------------------------------------------
+# supersede-disposition (--supersede-note/--supersede-realized-by) — the
+# append-only correction path for a REVERSED verdict, distinct from
+# --correct-realization (evidence-only, unchanged decision). Fixes the
+# no-escape-hatch gap: cross-repo/inbox/2026-08-12-example-retrieval-repo-em-git-
+# index-lock-reaper.md was actioned with a `negotiate` disposition later
+# reversed by PM ruling, with the existing "cannot re-action" fail-loud
+# correctly refusing to silently overwrite it.
+# ---------------------------------------------------------------------------
+
+class TestSupersedeDisposition:
+    """--supersede-note/--supersede-realized-by: append-only reversal record."""
+
+    _ACTIONED_NOTE_FIXTURE = """\
+---
+kind: consult
+status: actioned
+picked_up_at: '2026-08-12T15:26:19Z'
+picked_up_by: session-test
+actioned_note: "reaper already exists; no new op; asked sender which command wedged"
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    _IN_PROGRESS_FIXTURE = """\
+---
+kind: consult
+status: in_progress
+picked_up_at: '2026-08-12T15:26:19Z'
+picked_up_by: session-test
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    _OPEN_FIXTURE = """\
+---
+kind: consult
+status: open
+from: sender-session
+summary: A test memo.
+created: 2026-06-01
+---
+"""
+
+    def _setup_memo(self, tmp_path: Path, content: str) -> str:
+        repo = tmp_path / "repo"
+        _git_init(repo)
+        inbox = repo / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        memo = inbox / "memo.md"
+        memo.write_text(content, encoding="utf-8")
+        _git_track(repo, memo)
+        return str(memo)
+
+    def test_supersede_on_actioned_memo_succeeds_and_preserves_original(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        result = _action(
+            memo,
+            {
+                "supersede_note": "deny removed rather than re-messaged",
+                "supersede_realized_by": "5fcece54e172",
+                "supersede_at": "2026-08-12T16:08:00Z",
+            },
+        )
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        # Original disposition preserved verbatim.
+        assert fm["status"] == "actioned"
+        assert fm["actioned_note"] == (
+            "reaper already exists; no new op; asked sender which command wedged"
+        )
+        # Superseding record present.
+        assert fm["disposition_superseded"] is True
+        assert fm["superseding_note"] == "deny removed rather than re-messaged"
+        assert fm["superseding_realized_by"] == "5fcece54e172"
+        assert fm["superseded_at"] == "2026-08-12T16:08:00Z"
+        assert validate_memo_cross_fields(fm) == []
+
+        # Current truth reads first: superseding_* fields precede actioned_note on disk.
+        text = Path(memo).read_text(encoding="utf-8")
+        assert text.index("disposition_superseded") < text.index("actioned_note")
+
+    def test_supersede_on_never_actioned_open_memo_is_refused(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._OPEN_FIXTURE)
+        before = Path(memo).read_text(encoding="utf-8")
+        result = _action(
+            memo,
+            {"supersede_note": "n", "supersede_realized_by": "r"},
+        )
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "there is no disposition yet to supersede" in result["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
+    def test_supersede_on_in_progress_memo_is_refused(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._IN_PROGRESS_FIXTURE)
+        before = Path(memo).read_text(encoding="utf-8")
+        result = _action(
+            memo,
+            {"supersede_note": "n", "supersede_realized_by": "r"},
+        )
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "there is no disposition yet to supersede" in result["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
+    def test_re_action_without_supersede_still_refused_exactly_as_today(self, tmp_path):
+        """The pre-existing fail-loud is untouched by the new mechanism."""
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        before = Path(memo).read_text(encoding="utf-8")
+        result = _action(memo, {"actioned_note": "a different note entirely"})
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+        assert "already actioned with a different disposition — cannot re-action" in result["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
+    def test_supersede_note_requires_realized_by(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        result = _action(memo, {"supersede_note": "n only"})
+        assert result["exit_code"] == 1
+        assert "--supersede-realized-by" in result["error"]
+
+    def test_supersede_realized_by_requires_note(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        result = _action(memo, {"supersede_realized_by": "r only"})
+        assert result["exit_code"] == 1
+        assert "--supersede-note" in result["error"]
+
+    def test_supersede_mutually_exclusive_with_decision(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        result = _action(
+            memo,
+            {
+                "supersede_note": "n", "supersede_realized_by": "r",
+                "decision": "accepted", "realized_by": "inline",
+            },
+        )
+        assert result["exit_code"] == 1
+        assert "mutually exclusive" in result["error"]
+
+    def test_supersede_idempotent_retry_is_noop(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        params = {
+            "supersede_note": "deny removed rather than re-messaged",
+            "supersede_realized_by": "5fcece54e172",
+            "supersede_at": "2026-08-12T16:08:00Z",
+        }
+        first = _action(memo, params)
+        assert first["exit_code"] == 0 and first["applied"] is True
+
+        second = _action(memo, dict(params))
+        assert second["exit_code"] == 0
+        assert second["applied"] is False
+
+    def test_double_supersede_with_different_note_fails_loud(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
+        first = _action(
+            memo,
+            {
+                "supersede_note": "first reversal",
+                "supersede_realized_by": "aaa1111",
+                "supersede_at": "2026-08-12T16:08:00Z",
+            },
+        )
+        assert first["exit_code"] == 0
+
+        before = Path(memo).read_text(encoding="utf-8")
+        second = _action(
+            memo,
+            {
+                "supersede_note": "second, different reversal",
+                "supersede_realized_by": "bbb2222",
+                "supersede_at": "2026-08-12T17:00:00Z",
+            },
+        )
+        assert second["exit_code"] == 1
+        assert "cannot supersede twice" in second["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
+
+# ---------------------------------------------------------------------------
 # (X) Receiver tolerance for an off-enum `kind` — see
 # _demote_kind_enum_finding/_validate_memo_fm in memo_transition.py.
 #

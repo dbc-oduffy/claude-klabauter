@@ -61,11 +61,9 @@ if _BIN_DIR not in sys.path:
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from cc_invoke import resolve_engine_root  # noqa: E402
+from cc_invoke import require_engine_on_path  # noqa: E402
 
-_ENGINE_ROOT = resolve_engine_root(__file__)
-if str(_ENGINE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ENGINE_ROOT))
+_ENGINE_ROOT = require_engine_on_path(__file__)
 
 from lib.repo_identity import clear_repo_identity_memo  # noqa: E402
 from coordinator_core.session import harness_registry as hr  # noqa: E402
@@ -214,7 +212,7 @@ class TestEmitCockpitSnapshot(_RepoIdentityHarness):
         mod = _load_module("emit-cockpit-snapshot.py")
 
         root = mod._resolve_repo_root()
-        self.assertEqual(root, str(repo_root))
+        self.assertEqual(root, str(repo_root.resolve()))
 
 
 class TestReconcileCompletionCommits(_RepoIdentityHarness):

@@ -3052,6 +3052,22 @@ def _init_git_repo(root: Path) -> None:
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True)
 
 
+def _commit_with_session_trailer(root: Path, name: str, sid: str) -> None:
+    """Shared by AC13/AC14's interleaved-peer fixtures (review-integrator
+    finding, P3, 2026-08-12) -- was a byte-identical nested `_commit` in
+    both `test_measure_session_review_scale_inputs_commit_count_ignores_
+    interleaved_peer_commits` and `test_review_trail_guard_foreign_flag_
+    implies_excluded_from_commits_arm`, extracted per this module's own
+    `_init_git_repo` precedent of a module-level fixture helper."""
+    (root / name).write_text(f"{name}\n", encoding="utf-8")
+    subprocess.run(["git", "add", name], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"add {name}", "--trailer", f"Session-Id: {sid}"],
+        cwd=root,
+        check=True,
+    )
+
+
 def test_classify_session_authored_files_excludes_known_concurrent_paths(tmp_path):
     from datetime import datetime, timedelta, timezone
 
@@ -4210,6 +4226,7 @@ def test_open_spine_row_gate_silent_when_no_open_rows(monkeypatch, tmp_path):
     assert gate["applies"] is False
     assert gate["warn_text"] is None
     assert gate["summary_line"]
+    assert gate["verdict"] == "not-applicable"
 
 
 def test_open_spine_row_gate_silent_when_no_resolvable_plan(monkeypatch, tmp_path):
@@ -4222,6 +4239,40 @@ def test_open_spine_row_gate_silent_when_no_resolvable_plan(monkeypatch, tmp_pat
     assert gate["applies"] is False
     assert gate["warn_text"] is None
     assert gate["summary_line"]
+    assert gate["verdict"] == "indeterminate"
+
+
+def test_open_spine_row_gate_verdict_splits_unresolved_from_genuinely_clean(monkeypatch, tmp_path):
+    """The false-clean this gate emitted for a plan-AUTHORING session:
+    `applies: False` fired because governing-plan resolution had no input
+    at all, and read identically to a spine whose every row was terminal.
+    `verdict` is what tells the two apart -- `applies` and `warn_text`
+    deliberately still match, because the gate stays advisory and
+    non-blocking in both (source memo 2026-08-12-example-market-data-repo-em-
+    wsc-capped-a-session-with-an-unexecuted-plan.md)."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_with_spine(
+        tmp_path,
+        "all-terminal",
+        "- id: C1\n  title: Shipped row\n  disposition: coded\n  disposition_ref: abc123\n",
+    )
+
+    resolved = wsc.brief(decisions={"governing_plan_slug": "all-terminal"}, repo_root=tmp_path)
+    unresolved = wsc.brief(decisions={}, repo_root=tmp_path)
+
+    resolved_gate = resolved["gates"]["open_spine_row_worklist"]
+    unresolved_gate = unresolved["gates"]["open_spine_row_worklist"]
+
+    assert resolved_gate["applies"] == unresolved_gate["applies"] is False
+    assert resolved_gate["warn_text"] == unresolved_gate["warn_text"] is None
+    assert resolved_gate["verdict"] == "not-applicable"
+    assert unresolved_gate["verdict"] == "indeterminate"
+    assert resolved_gate["summary_line"] != unresolved_gate["summary_line"]
+    assert "INDETERMINATE" in unresolved_gate["summary_line"]
+
+    # Still advisory: an indeterminate verdict adds no judgment point and
+    # no exit code -- the memo explicitly did not ask for a refusal.
+    assert not any("spine" in jp["id"] for jp in unresolved["judgment_points"])
 
 
 def test_open_spine_row_gate_silent_on_malformed_spine_never_raises(monkeypatch, tmp_path):
@@ -4237,6 +4288,7 @@ def test_open_spine_row_gate_silent_on_malformed_spine_never_raises(monkeypatch,
 
     assert gate["applies"] is False
     assert gate["warn_text"] is None
+    assert gate["verdict"] == "indeterminate"
 
 
 def test_open_spine_row_gate_never_blocks_even_while_firing(monkeypatch, tmp_path):
@@ -5029,3 +5081,246 @@ def test_real_review_trail_corpus_quarantine_count_unchanged_by_execution_basis_
     # No key this plan adds is projected into the collected record shape.
     for record in valid:
         assert "execution_basis" not in record
+
+
+# ---------------------------------------------------------------------------
+# C7 (docs/plans/2026-08-12-review-mandate-guides-the-split.md), AC13/AC14 —
+# the `commits=` brightline arm stops counting peers. Diagnosis (see this
+# chunk's own dispatch brief and sidecar): TWO candidates were live at HEAD,
+# both verified present, only ONE reproduced.
+#
+#   (a) CALLER OVERRIDE, REPRODUCED. `decisions["commit_count"]`
+#       (`__init__.py`'s `resolved_commit_count` backfill) wins
+#       unconditionally over `_measure_session_review_scale_inputs`'s
+#       session-scoped measurement, with zero check the supplied number is
+#       session-scoped — exactly the reported shape (an EM reading `commits=`
+#       off the gate's own unfiltered range line and passing it through).
+#       Landed as the PRE-AUTHORIZED SCOPE-ATTESTATION VARIANT this chunk's
+#       brief names: the override still wins (the documented hand-supply
+#       affordance, `workstream-complete` SKILL.md, is preserved), but the
+#       resolved row-4 `reason` now records the scope it was supplied under
+#       (`commit_count_scope=...`, defaulting to `"unspecified"` when the
+#       caller supplies `commit_count` with no accompanying
+#       `commit_count_scope`) — see `directives_review.decide_review_scale`'s
+#       own `commit_count_scope` docstring paragraph.
+#
+#   (b) TRAILER OVER-MATCH, DID NOT REPRODUCE. Measured directly against
+#       this repo's full commit history (14799 commits scanned): every
+#       instance where a `Session-Id: <sid>`-shaped LINE appears outside
+#       git's own strictly-parsed trailer block (50 instances) is a
+#       SAME-SESSION self-match on a malformed trailer block (a blank line,
+#       or a `---` section marker, breaking git's trailer-block detection —
+#       confirmed via `git interpret-trailers --parse` against several
+#       examples), never a body line quoting a DIFFERENT session's trailer.
+#       No genuine cross-session over-match was found. No fix lands for (b);
+#       `_session_owned_shas` and its documented KNOWN-over-match posture are
+#       untouched, per this chunk's own instruction not to fix a candidate
+#       that did not reproduce. The interleaved-peer regression test below
+#       is therefore a CONFIRMATION of the already-correct measured path
+#       (`_session_owned_shas` is trailer-scoped and peer-immune today), not
+#       a fix — it guards the measured path against a future regression
+#       while the actual reported defect (a) is what the fix above closes.
+# ---------------------------------------------------------------------------
+
+
+def test_measure_session_review_scale_inputs_commit_count_ignores_interleaved_peer_commits(tmp_path):
+    """AC13: on a shared branch where a peer commits BETWEEN this session's
+    own commits, `_measure_session_review_scale_inputs`'s `commit_count`
+    must equal the count of commits THIS session actually authored
+    (`Session-Id` trailer match via `_session_owned_shas`), never the length
+    of the commit range spanning both sessions. Also demonstrates the
+    "idle box" half of AC13: the same own-work commit count is measured
+    whether or not peers interleaved commits into the range."""
+    own_sid = "11111111-1111-1111-1111-111111111111"
+    peer_sid = "22222222-2222-2222-2222-222222222222"
+    _init_git_repo(tmp_path)
+
+    # Interleaved: own, peer, own, peer, peer, own -- 3 own commits, 3 peer,
+    # on one shared branch (this repo's actual load norm).
+    _commit_with_session_trailer(tmp_path, "own-1.md", own_sid)
+    _commit_with_session_trailer(tmp_path, "peer-1.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "own-2.md", own_sid)
+    _commit_with_session_trailer(tmp_path, "peer-2.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "peer-3.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "own-3.md", own_sid)
+
+    _, _, commit_count, _ = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time=None, session_id=own_sid, uncommitted_paths=[]
+    )
+    assert commit_count == 3, (
+        f"expected the session-owned count (3), got {commit_count} -- a range-length "
+        "measurement would report 6 (every non-seed commit on the branch)"
+    )
+
+    idle_root = tmp_path / "idle"
+    idle_root.mkdir()
+    _init_git_repo(idle_root)
+    _commit_with_session_trailer(idle_root, "own-1.md", own_sid)
+    _commit_with_session_trailer(idle_root, "own-2.md", own_sid)
+    _commit_with_session_trailer(idle_root, "own-3.md", own_sid)
+
+    _, _, idle_commit_count, _ = wsc._measure_session_review_scale_inputs(
+        idle_root, session_start_time=None, session_id=own_sid, uncommitted_paths=[]
+    )
+    assert idle_commit_count == commit_count == 3, (
+        "a session whose peers commit concurrently on the same branch must get the same "
+        "commit_count it would get on an idle box"
+    )
+
+
+def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_path):
+    """AC14: ceremony self-consistency, one-directional. No commit the
+    review-trail write guard's `trailer_foreign_shas` would flag as
+    AFFIRMATIVELY foreign to this session (a `Session-Id` trailer naming a
+    DIFFERENT session) is among the shas `_session_owned_shas` credits
+    toward the brightline mandate's `commits=` arm. Reuses AC13's
+    interleaved-peer synthetic repo (own/peer/own/peer/peer/own) rather than
+    authoring a second fixture.
+
+    Deliberately NOT an equivalence assertion. The two mechanisms have
+    opposite polarity on an UNTRAILERED commit: `trailer_foreign_shas` is
+    exclusion-based (an untrailered commit has no affirmatively-foreign
+    trailer, so it stays credited/"not foreign"), while `_session_owned_shas`
+    is inclusion-based (an untrailered commit never matches
+    `--grep=^Session-Id: <sid>`, so it is never counted as owned either) --
+    they disagree by construction there, and this fixture's own commits are
+    ALL trailered (own or peer), so no untrailered case appears here. An
+    untrailered commit is deliberately OUTSIDE this AC's agreement set: it is
+    not exercised or asserted on below, only the one-directional
+    flag-implies-excluded relation is."""
+    from coordinator_core import session_attribution
+
+    own_sid = "11111111-1111-1111-1111-111111111111"
+    peer_sid = "22222222-2222-2222-2222-222222222222"
+    _init_git_repo(tmp_path)
+
+    _commit_with_session_trailer(tmp_path, "own-1.md", own_sid)
+    _commit_with_session_trailer(tmp_path, "peer-1.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "own-2.md", own_sid)
+    _commit_with_session_trailer(tmp_path, "peer-2.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "peer-3.md", peer_sid)
+    _commit_with_session_trailer(tmp_path, "own-3.md", own_sid)
+
+    def _run(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
+        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        return result.returncode, result.stdout, result.stderr
+
+    foreign_shas = session_attribution.trailer_foreign_shas(
+        sha_range="HEAD",
+        own_session_id=own_sid,
+        cwd=str(tmp_path),
+        cache={},
+        run=_run,
+    )
+    # All 3 peer commits carry an affirmatively-foreign Session-Id trailer;
+    # the seed commit (no trailer at all) is untrailered, not foreign, and
+    # stays outside this set -- exclusion-based polarity, per docstring.
+    assert len(foreign_shas) == 3
+
+    owned_shas = wsc._session_owned_shas(tmp_path, own_sid)
+    assert owned_shas is not None and len(owned_shas) == 3
+
+    # The one-directional AC14 relation: flagged-affirmatively-foreign
+    # implies not-counted toward the commits= arm. Never asserted the
+    # converse (not-flagged implies counted) -- that fails by construction
+    # on an untrailered commit, which is outside this AC's agreement set.
+    for sha in foreign_shas:
+        assert sha not in owned_shas, (
+            f"{sha} was flagged affirmatively foreign by the review-trail write "
+            "guard's trailer_foreign_shas, yet was also credited toward the "
+            "commits= arm by _session_owned_shas -- AC14 violated"
+        )
+
+
+def test_commit_count_override_wins_unconditionally_and_records_supplied_scope(monkeypatch, tmp_path):
+    """C7 candidate (a), reproduction + fix. Reproduction: `tmp_path` here
+    is not even a git repo (measurement fails closed to `None`), yet the
+    caller-supplied override still resolves row 4 -- proof the override path
+    never consults, and is never checked against, the measured value. Fix
+    (pre-authorized scope-attestation variant): the override still wins
+    (preserving `workstream-complete` SKILL.md's documented hand-supply
+    affordance), but the resolved reason now records the scope it was
+    supplied under."""
+    _patch_gate(monkeypatch, _gate("single-session"))
+    decision_object = wsc.brief(
+        decisions={"commit_count": 21, "commit_count_scope": "gate-unfiltered-range"},
+        repo_root=tmp_path,
+    )
+    review_scale = decision_object["gates"]["review_scale"]
+    assert review_scale["resolved"] is True
+    assert review_scale["row"] == 4
+    assert "commits=21" in review_scale["reason"]
+    assert "commit_count_scope=gate-unfiltered-range" in review_scale["reason"]
+
+
+def test_commit_count_override_without_scope_records_unspecified(monkeypatch, tmp_path):
+    """The override is never refused for lacking a scope note -- refusing or
+    removing the override outright is the one path this chunk's brief
+    narrows to a PM call, not authorized here. An unattested override still
+    lands, but is recorded as `commit_count_scope=unspecified` rather than
+    silently read as equivalent to a real session-scoped measurement."""
+    _patch_gate(monkeypatch, _gate("single-session"))
+    decision_object = wsc.brief(decisions={"commit_count": 21}, repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+    assert review_scale["row"] == 4
+    assert "commit_count_scope=unspecified" in review_scale["reason"]
+
+
+def test_commit_count_measured_path_carries_no_scope_clause(monkeypatch, tmp_path):
+    """The measured (non-override) path must stay byte-identical to every
+    pre-2026-08-12 caller: no `commit_count_scope=` clause appears when the
+    session's own trailer-scoped measurement resolved `commit_count`, never
+    a caller override."""
+    own_sid = "testsid123"  # matches `_gate()`'s fixed sid
+    _init_git_repo(tmp_path)
+    for i in range(6):
+        name = f"f{i}.md"
+        (tmp_path / name).write_text(f"{i}\n", encoding="utf-8")
+        subprocess.run(["git", "add", name], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", f"c{i}", "--trailer", f"Session-Id: {own_sid}"],
+            cwd=tmp_path,
+            check=True,
+        )
+    _patch_gate(monkeypatch, _gate("single-session"))
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+    assert review_scale["row"] == 4, "6 own commits >= _BRIGHTLINE_COMMITS(5) must still trip row 4"
+    assert "commits=6" in review_scale["reason"]
+    assert "commit_count_scope" not in review_scale["reason"]
+
+
+def test_commit_count_scope_strips_unsafe_characters_and_caps_length(monkeypatch, tmp_path):
+    """P2 (review-integrator, 2026-08-12): `commit_count_scope` is
+    caller-supplied free text threaded verbatim into row 4's `reason`
+    string. A value containing `)`/`=`/control characters could otherwise
+    forge a second `commits=`/`surfaces=` clause or close the parenthetical
+    early; `_sanitize_commit_count_scope` strips those and caps length."""
+    _patch_gate(monkeypatch, _gate("single-session"))
+    decision_object = wsc.brief(
+        decisions={
+            "commit_count": 21,
+            "commit_count_scope": "session-owned) surfaces=99 (commits=1",
+        },
+        repo_root=tmp_path,
+    )
+    review_scale = decision_object["gates"]["review_scale"]
+    reason = review_scale["reason"]
+    scope_clause = reason.split("commit_count_scope=", 1)[1].rstrip(")")
+    assert "commit_count_scope=session-owned surfaces99 commits1" in reason
+    assert ")" not in scope_clause
+    assert "=" not in scope_clause
+
+
+def test_commit_count_scope_caps_length(monkeypatch, tmp_path):
+    """P2 (review-integrator, 2026-08-12): an over-long `commit_count_scope`
+    is truncated to `_COMMIT_COUNT_SCOPE_MAX_LEN`, not stored unbounded."""
+    _patch_gate(monkeypatch, _gate("single-session"))
+    overlong = "x" * 500
+    decision_object = wsc.brief(
+        decisions={"commit_count": 21, "commit_count_scope": overlong},
+        repo_root=tmp_path,
+    )
+    review_scale = decision_object["gates"]["review_scale"]
+    scope_clause = review_scale["reason"].split("commit_count_scope=", 1)[1].rstrip(")")
+    assert len(scope_clause) == wsc._COMMIT_COUNT_SCOPE_MAX_LEN

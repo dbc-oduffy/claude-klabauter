@@ -144,7 +144,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster
 from coordinator_core.session import scope as session_scope
 from coordinator_core.subagent_sandbox.engine import (
     load_policy,
@@ -152,6 +151,41 @@ from coordinator_core.subagent_sandbox.engine import (
     resolve_git_root,
 )
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
+
+# DEFERRED, NOT a module-level import (2026-08-13 hot-path import-budget fix,
+# fourth site of the same defect shape as coordinator_core/bash_guards/
+# _helpers.py, coordinator_core/bash_guards/block_subagent_plan_body_bash_
+# write.py, and coordinator_core/write_guards/block_subagent_plan_body_write.py):
+# a module-level `from coordinator_core.hooks.block_unenumerated_agent_type
+# import resolve_roster` drags in `coordinator_core.hooks`'s package
+# `__init__`'s full eager registration (18 submodules) on every import of this
+# module. Confirmed harmless in practice (this module is not imported by
+# `write_guards.engine` or `bash_guards.dispatch`, so no measured import-
+# budget entrypoint is affected -- see
+# state/improvement-queue/2026-08-13-dispatch-provision-py-147-carries-the-sa-
+# 0fb4638944ec.yaml), fixed anyway for consistency with the other three sites.
+# `_resolve_roster_accessor()` below imports lazily, ONLY when the roster is
+# actually needed. Caches on this module's own `resolve_roster` attribute --
+# same shape as `coordinator_core.session.core._psutil()` -- which is what
+# keeps `monkeypatch.setattr(provision, "resolve_roster", ...)` working
+# unmodified. DO NOT re-flatten this back to a module-level import.
+_UNRESOLVED = object()
+resolve_roster = _UNRESOLVED  # type: ignore[assignment]
+
+
+def _resolve_roster_accessor():
+    """Lazily import and cache ``resolve_roster`` on this module's own
+    attribute (see the negative-spec comment above this cache's
+    declaration). Returns the callable; never calls it.
+    """
+    global resolve_roster
+    if resolve_roster is _UNRESOLVED:
+        from coordinator_core.hooks.block_unenumerated_agent_type import (
+            resolve_roster as _imported_resolve_roster,
+        )
+
+        resolve_roster = _imported_resolve_roster
+    return resolve_roster
 
 
 def _yaml_quote(value: str) -> str:
@@ -189,7 +223,7 @@ def _log_unenumerated_sidecar_miss(agent_type: str, subagent_type: str) -> None:
     diagnostic is not important enough to newly fail loud on a roster read
     error.
     """
-    roster, roster_error = resolve_roster()
+    roster, roster_error = _resolve_roster_accessor()()
     if roster is None:
         return
     if agent_type in roster or subagent_type in roster:

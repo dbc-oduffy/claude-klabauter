@@ -1762,20 +1762,30 @@ def _build_guard_chain(
         # Ungated chain member (C1 audit finding): guard_offer_git_c.py
         # declares no MATCHERS and carries no tool_name gate of its own.
         GuardEntry("offer-git-c", lambda: _check_offer_git_c(cmd, session_id, cwd), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
-        # Mechanical leg of the fleet-wide `.git/index.lock` contention
-        # campaign: auto-rewrites `git status`/bare `git diff` to insert
-        # `--no-optional-locks` pre-subcommand, prompt-free -- see
-        # guard_no_optional_locks.py's own module docstring for the
-        # measured evidence this rewrite is behavior-preserving.
-        GuardEntry("git-no-optional-locks", lambda: _check_git_no_optional_locks(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
-        # Self-heal leg of the same campaign: a stat-gated (zero-subprocess
-        # in the common no-lock case) pre-op check that reaps an ORPHANED
-        # `.git/index.lock` ahead of a raw lock-taking git invocation
-        # (add/commit/status/diff/mv/stash), reusing `ops.reap_stale_locks`'
-        # own age-and-stability gate untouched -- see
-        # guard_reap_stale_git_lock.py's own module docstring. Always
-        # returns None (side-effect-only guard, never a rewrite/deny).
+        # Self-heal leg of the fleet-wide `.git/index.lock` contention
+        # campaign: a stat-gated (zero-subprocess in the common no-lock case)
+        # pre-op check that reaps an ORPHANED `.git/index.lock` ahead of a raw
+        # lock-taking git invocation (add/commit/status/diff/mv/stash),
+        # reusing `ops.reap_stale_locks`' own age-and-stability gate
+        # untouched -- see guard_reap_stale_git_lock.py's own module
+        # docstring. Always returns None (side-effect-only guard, never a
+        # rewrite/deny).
+        #
+        # INVARIANT: a side-effect-only guard (always returns None) must be
+        # registered ahead of any rewriting guard in this first-wins chain
+        # (see dispatch.py:~1315's `return out` on first non-None envelope).
+        # A rewrite envelope returned by a guard downstream in registration
+        # order never runs -- placing a side-effect-only guard after one
+        # starves it by construction. `git-no-optional-locks` returns a
+        # rewrite envelope for `git status`/bare `git diff`, so
+        # `reap-stale-git-lock` must precede it here.
         GuardEntry("reap-stale-git-lock", lambda: _check_reap_stale_git_lock(cmd, cwd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        # Mechanical leg of the same campaign: auto-rewrites `git status`/bare
+        # `git diff` to insert `--no-optional-locks` pre-subcommand,
+        # prompt-free -- see guard_no_optional_locks.py's own module
+        # docstring for the measured evidence this rewrite is
+        # behavior-preserving.
+        GuardEntry("git-no-optional-locks", lambda: _check_git_no_optional_locks(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # Content: deliberately NOT crash-deny-routed (see module docstring).
         # Review: code-reviewer (Finding 2) -- check_validate_commit's git
         # calls (staged-file list, scope-check toplevel resolution, CLAUDE.md
@@ -1851,7 +1861,7 @@ def _build_guard_chain(
         GuardEntry("multiprobe-banner-rewrite", lambda: _dc.check_multiprobe_banner_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         # Ungated chain member (C1 audit finding): guard_head_tail_rewrite.py
         # declares no MATCHERS and carries no tool_name gate of its own.
-        GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
+        GuardEntry("head-tail-plumbing-rewrite", lambda: _check_head_tail_plumbing_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
         # Registered in the rewrite band for the same reason as the entries
         # above it (its rewrite is provably params-identical -- see that
         # module's rung-A argument), with one difference worth naming: unlike

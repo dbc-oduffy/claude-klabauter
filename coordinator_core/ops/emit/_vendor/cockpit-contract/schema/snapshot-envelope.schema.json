@@ -5769,6 +5769,15 @@
               }
             ]
           },
+          "scan_incomplete": {
+            "type": "boolean"
+          },
+          "scan_errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "content_hash": {
             "type": "object",
             "properties": {
@@ -5818,7 +5827,9 @@
           "shipped_sha",
           "deliverable_status",
           "roll_up",
-          "critical_path"
+          "critical_path",
+          "scan_incomplete",
+          "scan_errors"
         ],
         "additionalProperties": false
       }
@@ -10431,5 +10442,5 @@
     "malformed_records"
   ],
   "additionalProperties": false,
-  "version": "3.10.0"
+  "version": "3.11.0"
 }

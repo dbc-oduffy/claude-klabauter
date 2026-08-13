@@ -54,10 +54,18 @@ Negative-spec:
     - Do NOT port ``cs_write_review_claim`` / ``cs_reap_stale_review_claims``
       — both RETIRED (Mode-B review-claim confinement is dead; see the bash
       source's "Review-claim lifecycle helpers RETIRED" banner).
+    - ``producer_set`` / ``producer_read`` do NOT add a new merge mode.
+      Whole-value replace (the existing "all other top-level keys REPLACE"
+      contract) is exactly what a single namespaced ``producer`` record
+      needs; ``producer_set`` builds on ``session_shape_set`` unmodified.
+    - ``producer_set`` MUST NOT swallow a ``False`` return from
+      ``session_shape_set`` (e.g. lock-acquisition failure) into a silent
+      success — the return value is passed through verbatim.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import shutil
@@ -371,6 +379,179 @@ def session_shape_read(sid: str, cwd: Optional[str] = None) -> str:
         except OSError:
             return skeleton  # TOCTOU: file vanished/unreadable after the is_file() check
     return skeleton
+
+
+#: Reserved ``typed_command`` sentinel values beyond a real command-name
+#: string (see ``producer_set``'s contract). Any other string is accepted
+#: as a normalized command name -- the reserved set is not an allowlist of
+#: the ONLY legal strings, it is documentation of the two sentinels with
+#: special meaning, AND is enforced as a near-miss typo guard in
+#: ``producer_set`` (see its docstring's negative-spec): a string that is a
+#: close-but-not-exact match to one of these two closed structural members
+#: is rejected, because a typo here (e.g. ``"unresolvd"``) would otherwise
+#: be written silently and render as an ordinary open-vocabulary command
+#: name downstream, defeating the three-state distinguishability the whole
+#: design rests on. This is NOT a re-enumeration of example-doctrine-repo's open command
+#: vocabulary -- an unrelated real command name never matches closely
+#: enough to trip the guard.
+_TYPED_COMMAND_SENTINELS = ("other-command", "unresolved")
+
+#: Similarity cutoff for the near-miss sentinel-typo guard below. Tight
+#: enough that a real, unrelated command name (e.g. ``"/pickup"``) never
+#: matches; loose enough to catch a single-character typo of a sentinel
+#: (e.g. ``"unresolvd"``, ``"unresolced"``).
+_SENTINEL_TYPO_CUTOFF = 0.8
+
+
+def producer_set(
+    sid: str,
+    *,
+    typed_command: Optional[str],
+    cwd: Optional[str] = None,
+) -> bool:
+    """Write a namespaced ``producer`` record onto ``session-shape.json`` via
+    the existing ``session_shape_set`` replace-semantics merge (a single
+    top-level key REPLACE, not a new merge mode).
+
+    ``typed_command`` contract (fail loud on anything else -- raises
+    ``ValueError`` rather than writing a malformed record):
+      - a normalized command-name ``str`` (the common case);
+      - ``"other-command"``: a typed slash verb outside coordinator's own
+        command set (e.g. ``/clear``, ``/loop``);
+      - ``"unresolved"``: capture failed;
+      - ``None``: nothing typed this session (a machine-minted producer).
+        Serializes as a present JSON ``null`` -- never an absent key -- so
+        ``null`` / ``"unresolved"`` / a real command name stay distinguishable
+        on disk.
+    Any non-``str``, non-``None`` value (e.g. an ``int`` or ``list``) raises
+    ``ValueError``: the three states above are the whole contract, and a
+    caller that hands in an out-of-contract type gets a loud failure instead
+    of a silently-malformed record.
+
+    Record shape written: ``{"typed_command": ..., "captured_at": <ISO-8601
+    str, core.now_iso()>}`` -- exactly two keys.
+
+    NEGATIVE-SPEC -- do NOT add ``op_identity`` here. There are TWO producer
+    records in this design and they are deliberately different shapes:
+
+      - CAPTURE-side (this function, ``session-shape.json``):
+        ``typed_command`` + ``captured_at``. Example-doctrine-repo's landed
+        ``session-shape.schema.json`` (x-schema-version 1.1.0) declares this
+        object ``additionalProperties: false`` with both keys REQUIRED, so an
+        extra ``op_identity`` key here is a hard validation failure on their
+        side, not a harmless addition.
+      - RESOLVED-side (handoff frontmatter, thence the wire, see
+        ``contract.cockpit_schema.entities.summaries._HandoffProducer``):
+        ``typed_command`` + ``op_identity``, and NO ``captured_at``.
+
+    ``op_identity`` is resolved at the CREATION seam -- which door minted the
+    record -- and never read back out of session state. ``captured_at`` is a
+    capture-side artifact for bounding staleness later; it is not provenance a
+    board consumes, and putting it on the wire would invite a consumer to
+    compute a bound nobody has agreed. The resolver's job is therefore a
+    PROJECTION, never a copy.
+
+    This function briefly shipped with an ``op_identity`` parameter (2026-08-12,
+    corrected same session) -- it contradicted both the schema above and the
+    argument this repo itself made for keeping op-identity out of session
+    state. Re-adding it would reintroduce that defect.
+
+    Return value: the underlying ``session_shape_set`` result, VERBATIM --
+    including a lock-acquisition ``False``. This function MUST NOT swallow a
+    ``False`` into a silent no-op: the caller is an external repo's hook that
+    has committed to failing loudly on a false return, and the return value
+    is the only signal it can fail against.
+
+    Negative-spec: do NOT validate ``typed_command`` against the coordinator
+    command vocabulary here. That vocabulary is declared single-point in
+    example-doctrine-repo (their AC-6, with its own parity test); re-enumerating it on
+    this side would create a second source of truth that drifts silently.
+    Any non-empty ``str`` is accepted by design -- the closed members
+    (``"other-command"`` / ``"unresolved"``) are the contract this side
+    enforces, membership of the open one is not.
+
+    The closed members ARE enforced narrowly: a string that is a near-miss
+    typo of ``"other-command"`` or ``"unresolved"`` (see
+    ``_TYPED_COMMAND_SENTINELS`` / ``_SENTINEL_TYPO_CUTOFF``) -- but not an
+    exact match to either, and not a real command name -- raises
+    ``ValueError``. This does not reopen the vocabulary question: it is a
+    guard against exactly the two closed sentinels this side already
+    produces and depends on being silently corrupted into an
+    indistinguishable "ordinary command name" on disk.
+
+    Spec backlink: state/sizings/2026-08-12-producer-axis-claude-klabauter-engine-half.yaml
+    Spec backlink (cross-repo contract): example-doctrine-repo
+        docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md D6
+    """
+    if typed_command is not None and not isinstance(typed_command, str):
+        raise ValueError(
+            f"producer_set: typed_command must be a str or None, got {type(typed_command).__name__}"
+        )
+    if typed_command == "":
+        raise ValueError(
+            "producer_set: typed_command must not be an empty string -- use None for "
+            "'nothing typed this session', which serializes as a present null and stays "
+            "distinguishable from 'unresolved' and from a real command name"
+        )
+    if typed_command is not None and typed_command not in _TYPED_COMMAND_SENTINELS:
+        near = difflib.get_close_matches(
+            typed_command, _TYPED_COMMAND_SENTINELS, n=1, cutoff=_SENTINEL_TYPO_CUTOFF
+        )
+        if near:
+            raise ValueError(
+                f"producer_set: typed_command {typed_command!r} looks like a typo of the "
+                f"reserved sentinel {near[0]!r} -- pass the sentinel exactly, or a real "
+                "command name that isn't a near-miss of it"
+            )
+    record = {
+        "typed_command": typed_command,
+        "captured_at": core.now_iso(),
+    }
+    return session_shape_set(sid, {"producer": record}, cwd=cwd)
+
+
+def producer_read(sid: str, cwd: Optional[str] = None) -> Optional[dict]:
+    """Read the namespaced ``producer`` record back via ``session_shape_read``.
+
+    Failure semantics (deliberately NOT collapsed to one value):
+      - Missing session-shape.json, OR a present file with no top-level
+        ``producer`` key: returns ``None``. (``session_shape_read`` fails
+        open to a skeleton object for an absent/unresolvable file, which
+        naturally has no ``producer`` key -- so file-absent and key-absent
+        both surface here as the same ``None``, exactly as
+        ``session_shape_read``'s own contract already collapses them.)
+      - A malformed/unparseable record -- the persisted file is not valid
+        JSON, is valid JSON but not a JSON object, or its ``producer`` value
+        is present but is not a JSON object -- raises ``ValueError``. This is
+        the deliberate distinguishing case: a malformed record must NOT be
+        silently reported as "no producer set" (``None``); it is surfaced
+        loudly instead, so the two are never confused by a caller that only
+        checks for ``None``.
+
+    Spec backlink: docs/plans/2026-08-05-session-shape-attribution-structural-gate.md
+    """
+    if not sid:
+        raise ValueError("session_id required")
+
+    raw = session_shape_read(sid, cwd=cwd)
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"producer_read: malformed session-shape.json for {sid!r}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"producer_read: session-shape.json for {sid!r} is not a JSON object"
+        )
+    if "producer" not in parsed:
+        return None
+    record = parsed["producer"]
+    if not isinstance(record, dict):
+        raise ValueError(
+            f"producer_read: producer record for {sid!r} is not a JSON object"
+        )
+    return record
 
 
 def _git(args, cwd: Optional[str]) -> Optional[subprocess.CompletedProcess]:

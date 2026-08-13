@@ -72,8 +72,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     doe_root = coordinator_doe_root()
     if doe_root is None:
         raise RuntimeError(
-            "ceremony.init_anchor_injection_state: cannot resolve the example-doctrine-repo "
-            "repo root — coordinator_doe_root() returned no result. Set "
+            "ceremony.init_anchor_injection_state: cannot resolve the coordinator "
+            "root — coordinator_doe_root() returned no result. Set "
             "repos.example_doctrine_repo in the machine-local registry, or set the "
             "DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO env var."
         )

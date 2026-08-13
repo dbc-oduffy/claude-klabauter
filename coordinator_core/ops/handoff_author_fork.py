@@ -142,6 +142,8 @@ from coordinator_core.ops.match_core import (
 )
 from coordinator_core.ops.plan_match import _collect_plans
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.person_resolver import resolve_operating_person
+from coordinator_core.session.producer_resolve import resolve_producer_for_creation
 from coordinator_core.session_ledger import (
     SESSION_LEDGER_BLOCK_LINES,
     SESSION_LEDGER_HEADING_RE,
@@ -1034,7 +1036,18 @@ async def _handler(
         # Compose handoff.normalize (inline) to fill in category, summary,
         # deliverable_id, initiative — exactly the six-normalization pass from
         # normalize-handoff-frontmatter.js (no reimplemented frontmatter I/O).
-        norm = _normalize_one_text(content, out_path, carried_deliverable_id)
+        minted_by = resolve_operating_person().get("github")
+        # producer-axis-claude-klabauter-engine-half: op_identity resolved HERE, at this
+        # creation seam. This door is machine (EM-initiated); the finer
+        # EM-initiated-vs-op-minted distinction is deliberately dropped — the
+        # closed op_identity axis carries only machine-minted/hand-authored
+        # (see ProducerOpIdentity's docstring and
+        # resolve_producer_for_creation's module docstring). Do not reinvent
+        # a third enum member here.
+        producer = resolve_producer_for_creation(op_identity="machine-minted")
+        norm = _normalize_one_text(
+            content, out_path, carried_deliverable_id, minted_by, producer
+        )
         if norm is not None and norm is not _NO_FRONTMATTER:
             return norm["rebuilt"]
         return content

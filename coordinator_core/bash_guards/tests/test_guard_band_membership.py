@@ -48,6 +48,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-destructive-action",
     "block-subagent-commit",
     "check-test-suite-invocation",
+    "block-subagent-grant-acquisition",
 ]
 
 # Every ADVISORY_REWRITE guard, in registration order. `inprocess-search`

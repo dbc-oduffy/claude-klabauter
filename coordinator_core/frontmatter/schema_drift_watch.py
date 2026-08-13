@@ -276,9 +276,9 @@ def _scan(
             "drifted": [],
             "indeterminate": [],
             "summary": (
-                "No example-doctrine-repo clone resolved on this machine (checked REPO_EXAMPLE_DOCTRINE_REPO, "
-                "the .doe-root pointer, and the sibling-checkout layout) — vendored-schema "
-                "drift is not determinable here."
+                "No sibling schema-source clone resolved on this machine (checked "
+                "REPO_EXAMPLE_DOCTRINE_REPO, the .doe-root pointer, and the sibling-checkout layout) "
+                "— vendored-schema drift is not determinable here."
             ),
         }
 

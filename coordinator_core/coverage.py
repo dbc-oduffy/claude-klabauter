@@ -651,6 +651,46 @@ def _is_planning_artifact_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _PLANNING_ARTIFACT_PATH_PREFIXES)
 
 
+#: `git --numstat`'s rename-row notation — the CANONICAL definition, shared
+#: by `review_brightline_gate.py` and `workstream_complete/__init__.py`
+#: (both re-export `_resolve_numstat_row_path` below rather than each
+#: keeping its own copy — see this module's own callers' path-predicate
+#: bug this shared home fixes, docs/plans/2026-08-12-numstat-rename-rows-
+#: leak-past-the-noise-fi.md). Homed here, not in either gate module,
+#: because `review_brightline_gate.py` is imported BY
+#: `workstream_complete/__init__.py` at module scope — a straight import
+#: the other direction would be a true two-file cycle, not merely a
+#: fragile ordering; this module is a dependency of both and a dependent
+#: of neither.
+_REVIEW_SCALE_BRACED_RENAME_RE = re.compile(r"^(.*)\{(.*) => (.*)\}(.*)$")
+_REVIEW_SCALE_BARE_RENAME_RE = re.compile(r"^(.*) => (.*)$")
+
+
+def _resolve_numstat_row_path(path: str) -> str:
+    """`git --numstat`'s rename row can name a path as `a/b/{old => new}.c`
+    (compact form, shared prefix/suffix hoisted out of the braces) or as a
+    bare `old/path => new/path` row (no shared prefix/suffix to hoist).
+    Every path PREDICATE (`_is_noise_path`, `classify_surface`,
+    `_is_planning_artifact_path`) needs the DESTINATION path, not the
+    literal rename fragment, to classify the row correctly — the literal
+    fragment starts `{state/handoffs => ` or `state/handoffs/x.md => `,
+    which fails every one of those predicates' path-prefix/suffix checks
+    even though the row's real destination is squarely inside them. LOC
+    accounting is unaffected either way: the numstat added/deleted columns
+    already sum the whole row regardless of what this function returns —
+    this function's return value ONLY changes classification/noise
+    outcomes, never the LOC sum itself."""
+    braced = _REVIEW_SCALE_BRACED_RENAME_RE.match(path)
+    if braced is not None:
+        prefix, _old, new, suffix = braced.groups()
+        return f"{prefix}{new}{suffix}"
+    bare = _REVIEW_SCALE_BARE_RENAME_RE.match(path)
+    if bare is not None:
+        _old, new = bare.groups()
+        return new
+    return path
+
+
 #: Chunk size for `_commit_touched_paths`' bare-SHA `git log --no-walk`
 #: positional-args batching — mirrors `_TRAILER_LOOKUP_CHUNK`'s rationale
 #: (keeps each spawn's argv comfortably under Windows' ~32K command-line
@@ -2606,6 +2646,15 @@ class _DagChainResult:
     #: field — existing callers reading only `shas`/`node_attribution` are
     #: unaffected.
     unattributable_shas: List[str] = field(default_factory=list)
+    #: walk_forward's own `terminatedEarly` discriminator ('' | 'lineage-cycle'
+    #: | 'missing-link'), threaded through verbatim (docs/plans/2026-08-13-
+    #: unrecordable-range-told-at-collapse-not-after.md C1 review finding):
+    #: a single-node `ordered_ancestry` is ambiguous on its own — it is the
+    #: same outcome for a genuine `predecessor: none` (terminatedEarly == '')
+    #: and for a broken/dangling predecessor pointer (terminatedEarly ==
+    #: 'missing-link'). Callers that need to discriminate the two read this
+    #: field; callers that only read `shas`/`ordered_ancestry` are unaffected.
+    terminated_early: str = ""
 
 
 @dataclass
@@ -2789,6 +2838,8 @@ def _derive_dag_chain_set(
     ancestors: List[str] = walk_result.get("orderedPaths", [])
     # Threaded through verbatim (AC1) — see _DagChainResult.ordered_ancestry.
     result.ordered_ancestry = list(ancestors)
+    # Threaded through verbatim — see _DagChainResult.terminated_early.
+    result.terminated_early = walk_result.get("terminatedEarly", "")
 
     # Build dag_index once for all reverse_membership calls in the fixpoint.
     # C4's reverse_membership will use this list as the in-memory frontmatter index.
@@ -4409,6 +4460,46 @@ def run_coverage_gate(
         # notes, never silently absorbed" claim this fixpoint's docstring
         # makes. Merge unconditionally here so it survives every return.
         notes.extend(dag_result.notes)
+
+        # Walk-collapsed diagnostic (docs/plans/2026-08-13-unrecordable-range-told-
+        # at-collapse-not-after.md C1): a single-node walk means ordered_ancestry
+        # holds only the closing handoff itself. Two distinct causes collapse to
+        # the same length-1 outcome (dag.py walk_forward): a genuine spinoff
+        # `predecessor: none` (terminatedEarly == '') vs a broken/dangling
+        # predecessor pointer (terminatedEarly == 'missing-link'). Only the
+        # former is the ruled DR-294 limit; the latter is a real bug and must
+        # not be told it is one. Fires unconditionally, independent of any
+        # downstream mint flag (AC2) — this is emission, not a gate:
+        # verdict/exit_code untouched.
+        if len(dag_result.ordered_ancestry) == 1:
+            if dag_result.terminated_early == "missing-link":
+                notes.append(
+                    "dag walk reached exactly one node (the --from-handoff "
+                    "handoff itself) because a declared predecessor could not "
+                    "be resolved: the walk stopped early on a broken link, not "
+                    "on predecessor: none. This is not the ruled DR-294 "
+                    "spinoff limit — check the predecessor pointer on that "
+                    "handoff."
+                )
+            elif dag_result.terminated_early == "":
+                # Deliberately `== ""` rather than a bare `else`. The DR-294
+                # claim is only true for a walk that stopped because there was
+                # no edge to follow; a future `terminatedEarly` value absorbed
+                # by a catch-all would be told it is a ruled limit, which is
+                # the exact misdiagnosis the branch above exists to prevent.
+                # An unrecognised value emits nothing — silence is the safe
+                # direction here, and the walk's own notes still surface.
+                notes.append(
+                    "dag walk reached exactly one node (the --from-handoff "
+                    "handoff itself): its predecessor: none stops the walk "
+                    "before a second node — true of every spinoff baton by "
+                    "schema rule C2-4, not specific to this chain — so no "
+                    "chain-ancestry waiver can be minted for this chain and no "
+                    "foreign-attributed ancestor commit in range can be "
+                    "recorded via review_trail.write — the reviewer's findings "
+                    "sidecar is the terminal evidence for this range "
+                    "(DR-294)."
+                )
 
         if scope_paths:
             filtered, filter_note = _filter_shas_by_scope_paths(

@@ -220,7 +220,9 @@ Three ORDERED passes. The order is load-bearing:
     DISPATCH-TO-FIX       -- a defect to repair. Name the defect.
     DISPATCH-TO-IMPLEMENT -- a surface to build. Name the surface.
     PLAN-WEIGHT           -- too big for a dispatch; needs a plan or a baton.
-    REPLY-ONLY            -- answerable with a reply; no code change owed.
+    NO-CODE-CHANGE        -- nothing to build; closes on a disposition stamp.
+                             An outbound memo only if the sender gets an
+                             action from it.
     SUPERSEDED            -- from pass 1.
   Fix and implement stay split deliberately: both dispatch, but repairing a
   defect and building a surface want different briefs and different
@@ -241,7 +243,9 @@ For each memo, read it in full, then assign exactly one classification:
     DISPATCH-TO-FIX       -- a defect to repair. Name the defect.
     DISPATCH-TO-IMPLEMENT -- a surface to build. Name the surface.
     PLAN-WEIGHT           -- too big for a dispatch; needs a plan or a baton.
-    REPLY-ONLY            -- answerable with a reply; no code change owed.
+    NO-CODE-CHANGE        -- nothing to build; closes on a disposition stamp.
+                             An outbound memo only if the sender gets an
+                             action from it.
     SUPERSEDED            -- a later memo already resolves it; name it.
 Fix and implement stay split deliberately -- both dispatch, but repairing a
 defect and building a surface want different briefs and different verification.

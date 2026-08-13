@@ -32,6 +32,15 @@ Verb contracts (mirrored from the JS spec, plus the native-only addition):
               ``decision_note`` only (evidence correction, e.g. a cited commit
               was later reverted) — a verdict change still fails loud
               regardless of the flag. See ``_handle_already_actioned``.
+              An already-actioned/superseded memo re-actioned with
+              ``supersede_note``+``supersede_realized_by`` (mutually exclusive
+              with ``decision``/``actioned_note``/``superseded_by``) records
+              an APPEND-ONLY reversal of the disposition itself — the
+              original decision/actioned_note/realized_by are left untouched
+              on disk; four new ``superseding_*``/``disposition_superseded``
+              fields are anchored right after ``status`` so a reader hits the
+              current truth first, superseded original as history beneath.
+              See ``_handle_supersede`` / ``_apply_supersede_fields``.
   release — in_progress → open; removes picked_up_by + picked_up_at entirely.
   resolve — open → actioned in ONE locked_rmw closure (native-only, no JS mirror).
               Collapses claim+action into a single atomic write — no intermediate
@@ -914,6 +923,40 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
             "serialize_yaml_scalar does not support multi-line scalar values"
         )
 
+    # supersede_note/supersede_realized_by is a FOURTH, standalone shape — an
+    # append-only correction of an ALREADY-actioned memo's disposition
+    # (distinct from --correct-realization: that path only ever moves
+    # realized_by/decision_note under an UNCHANGED decision; this path
+    # records that the verdict itself was reversed, without touching the
+    # original decision/actioned_note/realized_by at all). Mutually exclusive
+    # with decision/actioned_note/superseded_by — it never sets a fresh
+    # disposition, only appends a supersession record to an existing one.
+    # See _handle_supersede / _apply_supersede_fields.
+    supersede_note = params.get("supersede_note")
+    supersede_realized_by = params.get("supersede_realized_by")
+
+    if supersede_note and ("\n" in supersede_note or "\r" in supersede_note):
+        return _err(
+            f"{verb}: --supersede-note must be single-line (no embedded \\n or \\r) — "
+            "serialize_yaml_scalar does not support multi-line scalar values"
+        )
+
+    if supersede_note or supersede_realized_by:
+        if decision or actioned_note or superseded_by:
+            return _err(
+                f"{verb}: --supersede-note/--supersede-realized-by are mutually "
+                "exclusive with --decision/--actioned-note/--superseded-by — "
+                "supersede corrects an EXISTING disposition, it does not set a new one"
+            )
+        if not supersede_note:
+            return _err(f"{verb}: --supersede-realized-by requires --supersede-note")
+        if not supersede_realized_by:
+            return _err(
+                f"{verb}: --supersede-note requires --supersede-realized-by "
+                "(a pointer to what realized the reversal: a commit SHA, a memo, or a baton)"
+            )
+        return None
+
     # superseded_by is a third, standalone terminal shape (status: superseded,
     # not actioned) — mutually exclusive with decision/actioned_note (the
     # archive_stamp.py CLI layer already refuses the combination before this
@@ -1042,6 +1085,93 @@ def _apply_realization_correction(fm_text: str, params: dict) -> str:
             fm_text = replace_fm_field(fm_text, "realized_by", new_realized_by, numeric_quoting=True)
 
     return fm_text
+
+
+# ---------------------------------------------------------------------------
+# supersede-disposition (--supersede-note/--supersede-realized-by) — the ONE
+# place a REVERSED verdict on an already-actioned memo is recorded. Distinct
+# from --correct-realization above: that path corrects EVIDENCE
+# (realized_by/decision_note) under an UNCHANGED decision, folded into
+# decision_note with no new key. This path records that the disposition
+# itself was reversed — a different verdict now governs — while leaving the
+# original decision/decision_note/realized_by/actioned_note untouched on
+# disk, so the original remains fully readable (append-only correction, not
+# an in-place amend).
+#
+# Spec: cross-repo/inbox/2026-08-12-example-retrieval-repo-em-git-index-lock-reaper.md
+# was actioned with a `negotiate` disposition (actioned_note) that was
+# reversed by PM ruling within the hour — the existing "cannot re-action"
+# refusal correctly protects the audit trail, but there was no legitimate
+# escape hatch to record the reversal at all. This is that hatch.
+#
+# Negative-spec: does NOT overwrite actioned_note/decision/decision_note/
+# realized_by — a memo already actioned once, then superseded, must not
+# read as a memo actioned once cleanly; the ORIGINAL disposition fields stay
+# exactly as they were written, and the new superseding_* fields are
+# anchored immediately after status (ahead of them) so a reader hits the
+# CURRENT truth first and the superseded original as history, not the
+# reverse. Does NOT relax _handle_already_actioned's existing fail-loud for
+# a bare re-action with a different disposition and no supersede/correction
+# flag — that refusal is unchanged and is exactly what protects the audit
+# trail this mechanism exists to extend, not bypass.
+# ---------------------------------------------------------------------------
+
+def _apply_supersede_fields(fm_text: str, note: str, realized_by: str, at: str) -> str:
+    """Write the four superseding_* fields, anchored right after ``status`` —
+    ahead of the original decision/actioned_note fields on disk — so the
+    CURRENT (superseding) truth reads first and the superseded original
+    reads as history beneath it.
+
+    Never touches decision/decision_note/realized_by/actioned_note — the
+    original disposition is preserved verbatim (append-only).
+    """
+    anchor = "status"
+    for field, value in (
+        ("disposition_superseded", "true"),
+        ("superseding_note", note),
+        ("superseding_realized_by", realized_by),
+        ("superseded_at", at),
+    ):
+        if read_fm_field(fm_text, field) is None:
+            fm_text = insert_fm_field(fm_text, field, value, anchor, numeric_quoting=True)
+        else:
+            fm_text = replace_fm_field(fm_text, field, value, numeric_quoting=True)
+        anchor = field
+    return fm_text
+
+
+def _handle_supersede(fm_text: str, params: dict) -> str | None:
+    """Apply (or idempotently no-op) a supersede-disposition request against
+    an already-actioned/superseded memo.
+
+    Returns:
+        None — idempotent no-op (the on-disk superseding_* fields already
+            match ``params`` exactly); caller returns ``old_text`` unchanged.
+        str  — the corrected ``fm_text`` with superseding_* fields written.
+
+    Raises:
+        MutateAbort — the memo's disposition was already superseded with a
+        DIFFERENT note/realized_by/at (append-only: a second reversal is not
+        this mechanism's job — hand-collapse if genuinely needed).
+    """
+    note = params["supersede_note"]
+    realized_by = params["supersede_realized_by"]
+    at = params.get("supersede_at") or datetime.now(timezone.utc).isoformat()
+
+    already = unquote_yaml_scalar(read_fm_field(fm_text, "disposition_superseded"))
+    if already and str(already).strip().lower() == "true":
+        cur_note = unquote_yaml_scalar(read_fm_field(fm_text, "superseding_note"))
+        cur_realized_by = unquote_yaml_scalar(read_fm_field(fm_text, "superseding_realized_by"))
+        cur_at = unquote_yaml_scalar(read_fm_field(fm_text, "superseded_at"))
+        if cur_note == note and cur_realized_by == realized_by and cur_at == at:
+            return None  # idempotent no-op
+        raise MutateAbort(
+            "memo disposition is already superseded with a different supersede record — "
+            "cannot supersede twice (append-only: hand-collapse if a second reversal is "
+            "genuinely needed)"
+        )
+
+    return _apply_supersede_fields(fm_text, note, realized_by, at)
 
 
 def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | None:
@@ -1333,7 +1463,18 @@ def _action(memo: str, params: dict) -> dict:
         # is idempotent; a DIFFERENT pointer fails loud via the same
         # already-actioned-with-a-different-disposition raise (no
         # --correct-realization escape — that flag is decision-shape only).
-        if status in ("actioned", "superseded"):
+        if params.get("supersede_note"):
+            if status not in ("actioned", "superseded"):
+                raise MutateAbort(
+                    "action: --supersede-note requires the memo to already be actioned "
+                    "or superseded — there is no disposition yet to supersede"
+                )
+            corrected = _handle_supersede(split.fm_text, params)
+            if corrected is None:
+                _noop_result[0] = _ok(False, f"{memo} disposition already superseded — no-op")
+                return old_text
+            fm_text = corrected
+        elif status in ("actioned", "superseded"):
             corrected = _handle_already_actioned(split.fm_text, params, "action")
             if corrected is None:
                 _noop_result[0] = _ok(False, f"{memo} already {status} at target disposition — no-op")
@@ -1418,6 +1559,17 @@ def _action(memo: str, params: dict) -> dict:
                 f"INTERNAL ERROR — post-write superseded_by: key count {sb_count} (expected 1). "
                 f"Inspect {memo} immediately."
             )
+    if params.get("supersede_note"):
+        for field in (
+            "disposition_superseded", "superseding_note",
+            "superseding_realized_by", "superseded_at",
+        ):
+            count = len(re.findall(rf'^{field}:(?=[ \t]|\r?$)', written_split.fm_text, re.MULTILINE))
+            if count != 1:
+                return _err(
+                    f"INTERNAL ERROR — post-write {field}: key count {count} (expected 1). "
+                    f"Inspect {memo} immediately."
+                )
 
     commit_sha, commit_error = _commit_terminal_write(memo_path, git_root, "action", new_text)
     if commit_error is not None:
@@ -1918,6 +2070,17 @@ async def _handler(
         correction clause — no new frontmatter key is written. A ``decision:`` CHANGE
         still fails loud with or without this flag; it is not a force/override escape
         hatch. Absent this flag, behaviour is byte-identical to before it existed.
+
+    supersede_note + supersede_realized_by (str, action only, both required together):
+        records an APPEND-ONLY reversal of an already-actioned/superseded memo's
+        disposition — mutually exclusive with decision/actioned_note/superseded_by
+        (it corrects an EXISTING disposition, it does not set a new one). Writes
+        disposition_superseded/superseding_note/superseding_realized_by/superseded_at
+        (optional supersede_at, defaults to now) anchored right after status; the
+        original decision/decision_note/realized_by/actioned_note are left untouched.
+        Refused when the memo is not yet actioned/superseded (nothing to supersede),
+        and when the memo is already superseded with a DIFFERENT supersede record
+        (append-only — one reversal, not a rewrite target).
 
     Returns:
         {"exit_code": 0, "applied": bool,  "message": str, "commit_sha": str} on success

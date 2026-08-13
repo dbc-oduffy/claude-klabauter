@@ -16,6 +16,8 @@ import pytest
 
 from coordinator_core.ops import release_tagging as rt
 
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

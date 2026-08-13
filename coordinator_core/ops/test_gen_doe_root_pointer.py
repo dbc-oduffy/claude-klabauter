@@ -136,7 +136,7 @@ def test_nonexistent_root_fails_loud(tmp_path, monkeypatch, capsys, _isolated_en
     rc = main([])
 
     assert rc == 1
-    assert "example-doctrine-repo root not found" in capsys.readouterr().err
+    assert "resolved root not found" in capsys.readouterr().err
     assert not (_pointer_path(_isolated_env)).exists()
 
 
@@ -267,7 +267,7 @@ def test_check_only_fails_on_missing_root(tmp_path, monkeypatch, capsys, _isolat
     rc = main(["--check-only"])
 
     assert rc == 1
-    assert "example-doctrine-repo root not found" in capsys.readouterr().err
+    assert "resolved root not found" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +485,7 @@ def test_graceful_skip_unresolved_exits_zero_with_skip_row(capsys, _isolated_env
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "doe_root_pointer: skipped (example-doctrine-repo clone not resolved" in out
+    assert "doe_root_pointer: skipped (repos.example_doctrine_repo not resolved" in out
 
 
 def test_graceful_skip_unresolved_does_not_mask_check_only_failure(tmp_path, monkeypatch, capsys, _isolated_env):

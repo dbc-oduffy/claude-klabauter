@@ -287,7 +287,7 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
         "Engine is broadly untrustworthy. Function names, parameter signatures, "
         "class hierarchies, default behaviors, deprecation status — any of it "
         "may be wrong, stale, or hallucinated. You have 333K+ indexed doc "
-        "chunks and 73K verified API declarations via example-game-repo-docs MCP. Treat "
+        "chunks and 73K verified API declarations available via MCP. Treat "
         "MCP tools as ground truth and training knowledge as unverified "
         "hypothesis. Use quick_ue_lookup before asserting any UE API usage.\n"
     ) % project_name

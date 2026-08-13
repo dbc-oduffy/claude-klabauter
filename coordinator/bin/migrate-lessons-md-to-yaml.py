@@ -41,12 +41,15 @@ import argparse
 import subprocess
 from pathlib import Path
 
-from coordinator_core.win_portability import no_console_creationflags
-
 _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
+import cc_invoke  # noqa: E402
+
+cc_invoke.ensure_engine_on_path(__file__)
+
+from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 

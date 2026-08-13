@@ -360,9 +360,10 @@ def coordinator_claude_klabauter_root_with_class() -> Tuple[str, str]:
          ahead of the full gate walk (`_is_engine_working_repo`), so the
          single-tree box (no klabauter registered) keeps today's
          byte-identical zero-subprocess fast path (AC4). Note this still
-         pays one `_load_shim()`/`exec_module` cost (line 388, unconditional
-         before this branch) — it is the gate walk, not the shim load, that
-         is skipped here. On a dual-boot box (klabauter
+         pays one `_load_shim()`/`exec_module` cost (the unconditional
+         `_load_shim()` call at the top of this function, before this
+         branch) — it is the gate walk, not the shim load, that is skipped
+         here. On a dual-boot box (klabauter
          IS registered) the pointer is deliberately NOT consulted here —
          step 3's full gate decides instead, per plan
          `2026-08-12-arm-the-klabauter-dual-boot-the-wrapper.md` § Problem:
@@ -397,7 +398,12 @@ def coordinator_claude_klabauter_root_with_class() -> Tuple[str, str]:
         # own docstring, step 2. Only reachable here, on the
         # klabauter-absent single-tree box, so a dual-boot box never lets
         # the pointer pre-empt step 3's full gate.
-        pointer_path = machine_local_dir() / ".claude-klabauter-root"
+        # Reuses the already-computed `ml_dir` (override-aware via
+        # `shim._ml_dir()`) rather than re-resolving `machine_local_dir()`
+        # directly — the latter does not honor `MACHINE_LOCAL_REGISTRY_DIR`,
+        # so the two would disagree on the pointer file's location whenever
+        # that override is set. Review: code-reviewer.
+        pointer_path = ml_dir / ".claude-klabauter-root"
         try:
             with open(pointer_path, "r", encoding="utf-8") as f:
                 val = f.read().strip()
@@ -423,3 +429,24 @@ def coordinator_claude_klabauter_root_with_class() -> Tuple[str, str]:
     _GATE_MEMO_KEY = memo_key
     _GATE_MEMO_VALUE = result
     return result
+
+
+def published_engine_mirror_path() -> Optional[str]:
+    """Return the registered `repos.claude_klabauter` published-engine-mirror
+    path, or ``None`` if it is not registered/usable — the SAME
+    "registered and on-disk usable" check `coordinator_claude_klabauter_root_with_class`
+    already performs via the shim's `_resolve_published_engine`, exposed here
+    standalone so a caller (``coordinator_core.state_root``'s Rule 5 sibling
+    branch) can ask "is THIS path the published mirror clone?" without
+    running the full live-tree-vs-published gate, which answers a different
+    question (which root the CURRENT process should treat as ITS OWN claude-klabauter
+    root) that is irrelevant to a caller identifying a specific candidate
+    directory. Deliberately reuses the shim's `_resolve_published_engine`
+    rather than re-deriving the `repos.claude_klabauter` registry read here —
+    see this module's docstring, "single-implementation property". Never
+    raises: fail-open, mirroring the shim helper's own contract."""
+    try:
+        shim = _load_shim()
+        return shim._resolve_published_engine(shim._ml_dir())
+    except Exception:
+        return None

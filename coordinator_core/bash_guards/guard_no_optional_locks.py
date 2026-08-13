@@ -59,7 +59,7 @@ module's own opening paragraph).
 from __future__ import annotations
 
 import shlex
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards.dispatch_checks import (
     _GIT_GLOBAL_OPT_NO_ARG_SIMPLE,
@@ -173,7 +173,11 @@ def _maybe_insert_no_optional_locks(seg_tokens: List[str]) -> Tuple[List[str], b
     return new_tokens, True
 
 
-def check_git_no_optional_locks(cmd: str, session_id: str = "") -> Optional[dict]:
+def check_git_no_optional_locks(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[dict]:
     """PreToolUse ADVISORY_REWRITE-band guard: auto-rewrites every top-level
     `git status`/bare `git diff` segment in ``cmd`` to insert
     ``--no-optional-locks`` immediately before the subcommand, prompt-free
@@ -231,15 +235,12 @@ def check_git_no_optional_locks(cmd: str, session_id: str = "") -> Optional[dict
 
     new_cmd = " ".join(pieces)
     note = (
-        "Auto-rewritten: %s -> '--no-optional-locks' inserted immediately "
-        "before the subcommand on %d segment(s) (prompt-free; output and "
-        "exit code are byte-identical -- the flag only suppresses "
-        "write-back of refreshed index stat data, avoiding the "
-        "`.git/index.lock` acquisition that causes fleet-wide lock "
-        "contention across concurrent sessions on a shared tree)."
+        "Auto-rewritten: %s -> '--no-optional-locks' inserted before the "
+        "subcommand on %d segment(s) -- avoids the shared-tree "
+        "`.git/index.lock` acquisition."
         % (
             "; ".join("'%s'" % s for s in rewritten_segments),
             len(rewritten_segments),
         )
-    ) + " " + operator_override_note("COORDINATOR_ALLOW_OPTIONAL_LOCKS")
+    ) + " " + operator_override_note("COORDINATOR_ALLOW_OPTIONAL_LOCKS", payload=payload)
     return _allow_rewrite(new_cmd, note)

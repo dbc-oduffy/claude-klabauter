@@ -122,14 +122,17 @@ def test_subagent_message_names_sandbox_route(tmp_path):
     assert _SANDBOX_ROOT in text
 
 
-def test_subagent_message_contains_exact_clear_line(tmp_path):
+def test_subagent_message_never_contains_the_clear_line(tmp_path):
+    """SUBAGENT CHANNEL NEVER CARRIES THE UNLOCK (module docstring) -- the
+    subagent-class renderer must not carry the marker/`touch`/session-id
+    unlock recipe the EM-class renderer does."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
-    expected_line = marker.clear_line(gitdir, _SESSION_ID)
+    forbidden_line = marker.clear_line(gitdir, _SESSION_ID)
     text = message.render_subagent_message(
         _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT
     )
-    assert expected_line in text
+    assert forbidden_line not in text
 
 
 # ---------------------------------------------------------------------------
@@ -466,19 +469,6 @@ def test_em_clear_line_is_executable_verbatim(tmp_path):
     assert marker.marker_present(gitdir, _SESSION_ID)
 
 
-def test_subagent_clear_line_is_executable_verbatim(tmp_path):
-    root = _init_repo(tmp_path)
-    gitdir = marker.resolve_gitdir(str(root))
-    text = message.render_subagent_message(
-        _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT
-    )
-    touch_path = _clear_command(text)[len("touch "):]
-
-    assert not marker.marker_present(gitdir, _SESSION_ID)
-    subprocess.run(["touch", touch_path], check=True)
-    assert marker.marker_present(gitdir, _SESSION_ID)
-
-
 def test_publish_em_clear_line_is_executable_verbatim(tmp_path):
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
@@ -499,6 +489,77 @@ def test_clear_line_matches_a_machine_where_none_has_ever_existed(tmp_path):
     ]
     text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
     assert marker.clear_line(gitdir, _SESSION_ID) in text
+
+
+# ---------------------------------------------------------------------------
+# SUBAGENT CHANNEL NEVER CARRIES THE UNLOCK (module docstring) -- pins the
+# 2026-08-13 fix for the class named in cross-repo/inbox/2026-08-13-project-
+# cockpit-em-guard-advisories-read-as-injection-to-subagents.md, mirroring
+# state/audits/2026-08-11-guard-text-injection-mechanism-proof.md's fix on
+# the neighbouring emit leg. Property over BOTH subagent renderers, every
+# surface, every destination class, and (for the FOREIGN class) with and
+# without a populated raw_target -- not a single string comparison, so a
+# future edit cannot quietly reintroduce the button.
+# ---------------------------------------------------------------------------
+
+
+def _subagent_variant_text_fns():
+    return [
+        ("foreign-subagent", lambda gitdir: message.render_subagent_message(
+            _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT
+        )),
+        ("foreign-subagent-tool-surface", lambda gitdir: message.render_subagent_message(
+            _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT,
+            surface=message.SURFACE_TOOL,
+        )),
+        ("foreign-subagent-raw-target", lambda gitdir: message.render_subagent_message(
+            _LONG_RESOLVED_NATIVE_PATH, _SESSION_REPO, gitdir, _SESSION_ID, _SANDBOX_ROOT,
+            raw_target=_LONG_RAW_MSYS_TOKEN,
+        )),
+        ("publish-subagent", lambda gitdir: message.render_publish_subagent_message(
+            _TARGET_REPO, _MIRROR_OWNER, gitdir, _SESSION_ID, _SANDBOX_ROOT
+        )),
+        ("publish-subagent-tool-surface", lambda gitdir: message.render_publish_subagent_message(
+            _TARGET_REPO, _MIRROR_OWNER, gitdir, _SESSION_ID, _SANDBOX_ROOT,
+            surface=message.SURFACE_TOOL,
+        )),
+        ("publish-subagent-raw-target", lambda gitdir: message.render_publish_subagent_message(
+            _LONG_RESOLVED_NATIVE_PATH, _MIRROR_OWNER, gitdir, _SESSION_ID, _SANDBOX_ROOT,
+            raw_target=_LONG_RAW_MSYS_TOKEN,
+        )),
+    ]
+
+
+@pytest.mark.parametrize("label,text_fn", _subagent_variant_text_fns())
+def test_subagent_renderers_never_carry_the_unlock_mechanism(tmp_path, label, text_fn):
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    text = text_fn(gitdir)
+    assert marker.MARKER_PREFIX not in text, label
+    assert "allow-xrepo-write-" not in text, label
+    assert "touch " not in text, label
+
+
+@pytest.mark.parametrize("label,text_fn", _subagent_variant_text_fns())
+def test_subagent_renderers_via_dispatch_never_carry_the_unlock_mechanism(tmp_path, label, text_fn):
+    """Same property, reached through `render_bump_message`'s single entry
+    point -- the seam every real call site actually uses."""
+    root = _init_repo(tmp_path)
+    gitdir = marker.resolve_gitdir(str(root))
+    is_publish = label.startswith("publish")
+    text = message.render_bump_message(
+        agent_class=message.AGENT_CLASS_SUBAGENT,
+        target_repo=_TARGET_REPO,
+        session_repo=_SESSION_REPO,
+        gitdir=gitdir,
+        session_id=_SESSION_ID,
+        sandbox_root=_SANDBOX_ROOT,
+        destination_class=message.DESTINATION_PUBLISH if is_publish else message.DESTINATION_FOREIGN,
+        destination_owner=_MIRROR_OWNER if is_publish else "",
+    )
+    assert marker.MARKER_PREFIX not in text
+    assert "allow-xrepo-write-" not in text
+    assert "touch " not in text
 
 
 # ---------------------------------------------------------------------------

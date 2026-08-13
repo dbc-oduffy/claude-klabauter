@@ -265,10 +265,10 @@ def test_non_regression_cli_git_dir_flag_pointing_at_own_repo_does_not_bump(repo
 def test_non_regression_git_dir_readonly_allowlisted_subcommand_still_never_bumps(repos, monkeypatch):
     """Reads never bump regardless of how the target repo is named -- the
     `GIT_DIR` fix only changes candidate-target RESOLUTION, never the
-    reads-never-bump carve-out itself. `log` is in `_GIT_READONLY_
-    SUBCOMMANDS`; see `test_evasion_env_git_dir_cat_file_reproduces_live_
-    incident_bumps` below for `cat-file`, which is NOT in that allowlist and
-    so is the actual live-incident shape, not this negative case."""
+    reads-never-bump carve-out itself. `log` is not in
+    `_GIT_WRITE_SUBCOMMANDS`; see `test_evasion_env_git_dir_write_
+    subcommand_reproduces_live_incident_bumps` below for the positive
+    (write) leg of the same `GIT_DIR` resolution."""
     cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git log"
     _set_anchor(monkeypatch, repos, "sess-evasion-9")
 
@@ -277,22 +277,556 @@ def test_non_regression_git_dir_readonly_allowlisted_subcommand_still_never_bump
     assert result is None
 
 
-def test_evasion_env_git_dir_cat_file_reproduces_live_incident_bumps(repos, monkeypatch):
-    """The EXACT live-incident shape: `git cat-file` is not a member of
-    `_GIT_READONLY_SUBCOMMANDS` (that allowlist is `show`/`diff`/`log`/
-    `status`/`blame`/`ls-files`/`rev-parse`/`describe` only -- `cat-file` was
-    never added), so this guard's own fail-toward-bump-on-unknown-subcommand
-    direction (`_git_subcommand_and_target_cwd`'s own docstring) already
-    treats it as a candidate write needing target resolution. Before this
-    fix, that resolution used `cwd` alone (the session's own anchor) and
-    silently allowed; after this fix it resolves through `GIT_DIR` to the
-    real (foreign) target and bumps."""
-    cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git cat-file -t HEAD"
+def test_evasion_env_git_dir_write_subcommand_reproduces_live_incident_bumps(repos, monkeypatch):
+    """The live-incident SHAPE (2026-08-06): a `GIT_DIR=<foreign>/.git git
+    ...` that never `cd`s and never passes `-C`. Before the `GIT_DIR` fix,
+    target resolution used `cwd` alone (the session's own anchor) and
+    silently allowed; after it, resolution runs through `GIT_DIR` to the
+    real (foreign) target and bumps.
+
+    Carried on `commit` rather than the incident's literal `cat-file` since
+    2026-08-12: `cat-file` is a READ, and this test asserting a bump on it
+    was the reads-never-bump contract violation the example-doctrine-repo memo caught
+    (see `test_readonly_git_verb_outside_the_old_eight_never_bumps`). The
+    seam under test here is `GIT_DIR` resolution, not verb classification --
+    a write verb exercises it without enshrining the bug."""
+    cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-10")
 
     result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-10", str(repos["anchor"]), {})
 
     assert result is not None
+
+
+@pytest.mark.parametrize(
+    "verb",
+    [
+        "cat-file -t HEAD",
+        "merge-base --is-ancestor HEAD HEAD",
+        "rev-list --count HEAD",
+        "for-each-ref refs/heads",
+        "ls-tree HEAD",
+        "shortlog -s",
+        "name-rev HEAD",
+        "check-ignore -q x",
+        "count-objects -v",
+        "grep -n needle",
+        "whatchanged -1",
+    ],
+)
+def test_readonly_git_verb_outside_the_old_eight_never_bumps(repos, monkeypatch, verb):
+    """READS NEVER BUMP -- the module contract, restored 2026-08-12.
+
+    The bump used to fire on `subcommand not in _GIT_READONLY_SUBCOMMANDS`,
+    a CONFINEMENT allowlist of eight names, so every other read-only verb
+    git ships was billed as an attempted foreign-repo write. Cross-repo
+    reads are the substrate of this fleet's own doctrine (verify a peer's
+    cited commits before actioning their memo), and the bump made that
+    doctrinally-required read look like a write needing PM assent.
+
+    Membership in `_GIT_WRITE_SUBCOMMANDS` is now what bumps; an unknown or
+    read-only verb does not."""
+    cmd = f"git -C {_posix(repos['foreign'])} {verb}"
+    _set_anchor(monkeypatch, repos, "sess-readonly-verbs")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-readonly-verbs", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_unknown_git_verb_does_not_bump(repos, monkeypatch):
+    """The fail-open direction, made explicit: an unrecognised verb (a
+    future git subcommand, an alias, a misparsed option value) is not a
+    write. This is the property that stops the next read-only verb git
+    ships from regressing the contract above -- the old inverted test would
+    have bumped on it."""
+    cmd = f"git -C {_posix(repos['foreign'])} some-future-readonly-verb"
+    _set_anchor(monkeypatch, repos, "sess-unknown-verb")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-unknown-verb", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "verb",
+    [
+        # The command the example-doctrine-repo memo named as still costing them after
+        # the first pass -- the reason this predicate table exists.
+        "branch --show-current",
+        "branch",
+        "branch -a",
+        "branch -r -v",
+        "branch --list release/*",
+        "branch --contains HEAD",
+        "branch --merged main",
+        "tag",
+        "tag -l v1.*",
+        "tag -n5",
+        "tag --points-at HEAD",
+        "tag --verify v1.0",
+        "remote",
+        "remote -v",
+        "remote show origin",
+        "remote get-url origin",
+        "config --get user.name",
+        "config --list",
+        "config user.email",
+        "config --file .git/config --get core.bare",
+        "reflog",
+        "reflog show HEAD",
+        "notes list",
+        "notes show HEAD",
+        "stash list",
+        "stash show",
+        "submodule",
+        "submodule status",
+        "submodule summary",
+        "bisect log",
+        "worktree list",
+        "apply --check patch.diff",
+        "apply --stat patch.diff",
+    ],
+)
+def test_dual_mode_verb_read_spelling_never_bumps(repos, monkeypatch, verb):
+    """A dual-mode verb's READ spelling is a read -- the residual the first
+    pass (`3ebc5fa6a5b0`) knowingly left open and this closes.
+
+    Those verbs sit in `_GIT_WRITE_SUBCOMMANDS` because their write
+    spellings do mutate; `_DUAL_MODE_READ_PREDICATES` vetoes the bump for
+    the read spellings only. `git branch --show-current` is the specific
+    command the example-doctrine-repo memo named: an EM verifying a peer's branch
+    before memoing them is doing exactly what this fleet's doctrine tells
+    them to do, and it must not read as an attempted write."""
+    cmd = f"git -C {_posix(repos['foreign'])} {verb}"
+    _set_anchor(monkeypatch, repos, "sess-dual-read")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-dual-read", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "verb",
+    [
+        "branch -d topic",
+        "branch -D topic",
+        "branch -m old new",
+        "branch newtopic",
+        "branch --set-upstream-to=origin/main",
+        # A write flag alongside a read flag is still a write.
+        "branch -a -d topic",
+        "tag v1.0",
+        "tag -d v1.0",
+        "tag -a v1.0 -m msg",
+        "tag -f v1.0 HEAD",
+        "remote add peer /tmp/peer",
+        "remote set-url origin /tmp/x",
+        "remote remove origin",
+        "config user.email me@example.com",
+        "config --unset user.email",
+        "config --add core.hooksPath .githooks",
+        "config --replace-all core.bare false",
+        "reflog expire --all",
+        "reflog delete HEAD@{0}",
+        "notes add -m note",
+        "notes remove",
+        # Bare `git stash` PUSHES -- deliberately not symmetric with the
+        # other bare-verb reads above.
+        "stash",
+        "stash push -u",
+        "stash pop",
+        "stash drop",
+        "submodule update --init",
+        "submodule add /tmp/x sub",
+        "bisect start",
+        "bisect good",
+        "worktree add /tmp/wt",
+        "worktree remove /tmp/wt",
+        "apply patch.diff",
+    ],
+)
+def test_dual_mode_verb_write_spelling_still_bumps(repos, monkeypatch, verb):
+    """The other half: narrowing the dual-mode verbs must not silence their
+    write spellings. Every entry here mutates the foreign repo."""
+    cmd = f"git -C {_posix(repos['foreign'])} {verb}"
+    _set_anchor(monkeypatch, repos, "sess-dual-write")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-dual-write", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+# Review: code-reviewer (a99136f2, P3) -- the original version of this test
+# used `branch -qXz topic` and passed only because of the trailing
+# positional `topic`, which `_branch_is_read`'s flagless fallback would have
+# classified as a write on its own (same as `git branch newtopic`); the
+# unrecognised bundle `-qXz` contributed nothing to the outcome. Rewritten
+# below to isolate the actual property: an unrecognised flag bundle with NO
+# trailing positional must still land on write, per `_unrecognised_flag_
+# present` (see `_branch_is_read`/`_tag_is_read`). A positional-present case
+# is kept too, but named for what it actually tests.
+def test_dual_mode_predicate_unrecognised_bundle_alone_fails_toward_bump(repos, monkeypatch):
+    """`branch -qXz` with NO positional -- isolates the unrecognised-bundle
+    property: without `_unrecognised_flag_present`'s gate, `_branch_is_read`
+    would fall through to `_first_positional(args) is None`, find no
+    positional, and misclassify as read. The gate forces write instead."""
+    cmd = f"git -C {_posix(repos['foreign'])} branch -qXz"
+    _set_anchor(monkeypatch, repos, "sess-dual-unknown-nopos")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-dual-unknown-nopos", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_dual_mode_predicate_tag_unrecognised_bundle_alone_fails_toward_bump(repos, monkeypatch):
+    """`tag` equivalent of the above -- `_tag_is_read`'s identical gate."""
+    cmd = f"git -C {_posix(repos['foreign'])} tag -qXz"
+    _set_anchor(monkeypatch, repos, "sess-dual-unknown-tag-nopos")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-dual-unknown-tag-nopos", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_dual_mode_predicate_fails_toward_bump_on_unrecognised_spelling_with_positional(
+    repos, monkeypatch
+):
+    """The positional-present variant, kept and renamed for what it
+    actually pins: an unrecognised flag bundle PLUS a trailing positional is
+    a write via the ordinary create-branch path, same as `git branch
+    newtopic` -- not a test of the unrecognised-bundle property alone (see
+    the two tests above for that)."""
+    cmd = f"git -C {_posix(repos['foreign'])} branch -qXz topic"
+    _set_anchor(monkeypatch, repos, "sess-dual-unknown")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-dual-unknown", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+@pytest.mark.parametrize("verb", ["commit -m x", "push origin HEAD", "reset --hard", "stash"])
+def test_write_git_verb_still_bumps(repos, monkeypatch, verb):
+    """The other half of the swap: the verbs that actually mutate a foreign
+    repo must still bump. A membership test that silences reads is only
+    correct if it does not also silence writes."""
+    cmd = f"git -C {_posix(repos['foreign'])} {verb}"
+    _set_anchor(monkeypatch, repos, "sess-write-verbs")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-write-verbs", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer (run-report brief, items 2-5) -- regression coverage
+# for the four production defects fixed since the last two review passes
+# (symbolic-ref/hash-object/pack-refs write-membership, config get/list
+# reads), the `cd <foreign> && git <verb>` candidate-extraction leg, the
+# GIT_DIR/override seam combined with a dual-mode predicate, and the
+# remaining adversarial shapes named by the slice-2 reviewer.
+# ---------------------------------------------------------------------------
+
+
+def test_symbolic_ref_read_spelling_never_bumps(repos, monkeypatch):
+    """`git symbolic-ref HEAD` -- one positional, prints the ref (read)."""
+    cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref HEAD"
+    _set_anchor(monkeypatch, repos, "sess-symref-read")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-symref-read", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_symbolic_ref_reassign_write_spelling_bumps(repos, monkeypatch):
+    """`git symbolic-ref HEAD refs/heads/other` -- two positionals,
+    reassigns the ref (write)."""
+    cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref HEAD refs/heads/other"
+    _set_anchor(monkeypatch, repos, "sess-symref-reassign")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-symref-reassign", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_symbolic_ref_delete_write_spelling_bumps(repos, monkeypatch):
+    """`git symbolic-ref -d HEAD` -- deletes the named symbolic ref."""
+    cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref -d HEAD"
+    _set_anchor(monkeypatch, repos, "sess-symref-delete")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-symref-delete", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_hash_object_read_spelling_never_bumps(repos, monkeypatch):
+    """`git hash-object <file>` without `-w` computes and prints a hash
+    only -- does not touch the target's object database (read)."""
+    target_file = repos["foreign"] / "README.md"
+    cmd = f"git -C {_posix(repos['foreign'])} hash-object {_posix(target_file)}"
+    _set_anchor(monkeypatch, repos, "sess-hashobj-read")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-hashobj-read", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_hash_object_write_spelling_bumps(repos, monkeypatch):
+    """`git hash-object -w <file>` writes the blob into the target's object
+    database (write)."""
+    target_file = repos["foreign"] / "README.md"
+    cmd = f"git -C {_posix(repos['foreign'])} hash-object -w {_posix(target_file)}"
+    _set_anchor(monkeypatch, repos, "sess-hashobj-write")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-hashobj-write", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_pack_refs_bumps(repos, monkeypatch):
+    """`git pack-refs --all` -- always a write, no read spelling."""
+    cmd = f"git -C {_posix(repos['foreign'])} pack-refs --all"
+    _set_anchor(monkeypatch, repos, "sess-packrefs")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-packrefs", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+def test_config_get_subcommand_style_read_never_bumps(repos, monkeypatch):
+    """`git config get foo.bar` (git >= 2.46 subcommand syntax) is a read --
+    `_CONFIG_READ_SUBWORDS` fix."""
+    cmd = f"git -C {_posix(repos['foreign'])} config get foo.bar"
+    _set_anchor(monkeypatch, repos, "sess-config-get")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-config-get", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_config_list_subcommand_style_read_never_bumps(repos, monkeypatch):
+    """`git config list` (git >= 2.46 subcommand syntax) is a read."""
+    cmd = f"git -C {_posix(repos['foreign'])} config list"
+    _set_anchor(monkeypatch, repos, "sess-config-list")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-config-list", str(repos["anchor"]), {})
+
+    assert result is None
+
+
+def test_config_user_name_positional_write_still_bumps(repos, monkeypatch):
+    """`git config user.name bob` -- ordinary two-positional set, still a
+    write; must not be swallowed by the new read-subword table."""
+    cmd = f"git -C {_posix(repos['foreign'])} config user.name bob"
+    _set_anchor(monkeypatch, repos, "sess-config-username")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-config-username", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_config_unset_flag_write_still_bumps(repos, monkeypatch):
+    """`git config --unset x` -- still a write."""
+    cmd = f"git -C {_posix(repos['foreign'])} config --unset x"
+    _set_anchor(monkeypatch, repos, "sess-config-unset")
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-config-unset", str(repos["anchor"]), {})
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer (a99136f2 and a386c4ea, both P2) -- the `cd
+# <foreign> && git <verb>` candidate-extraction leg is the OTHER extractor
+# `_iter_write_sink_candidates` documents and was untested for any of the
+# new verb spellings; every case above uses `git -C` only.
+# ---------------------------------------------------------------------------
+
+
+def test_cd_and_git_dual_mode_read_verb_never_bumps(repos, monkeypatch):
+    cmd = f"cd {_posix(repos['foreign'])} && git branch --show-current"
+    _set_anchor(monkeypatch, repos, "sess-cdgit-dual-read")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-cdgit-dual-read", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_cd_and_git_dual_mode_write_verb_bumps(repos, monkeypatch):
+    cmd = f"cd {_posix(repos['foreign'])} && git branch -d topic"
+    _set_anchor(monkeypatch, repos, "sess-cdgit-dual-write")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-cdgit-dual-write", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_cd_and_git_plain_read_verb_never_bumps(repos, monkeypatch):
+    cmd = f"cd {_posix(repos['foreign'])} && git log"
+    _set_anchor(monkeypatch, repos, "sess-cdgit-plain-read")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-cdgit-plain-read", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer (a99136f2, P2) -- nothing exercised a GIT_DIR/
+# --work-tree/-c core.worktree= override combined with a dual-mode
+# predicate; the env-resolution fix and the dual-mode predicates were each
+# tested in isolation but never at their seam.
+# ---------------------------------------------------------------------------
+
+
+def test_git_dir_override_with_dual_mode_read_verb_does_not_bump(repos, monkeypatch):
+    cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git branch --show-current"
+    _set_anchor(monkeypatch, repos, "sess-gitdir-dual-read")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-gitdir-dual-read", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_git_dir_override_with_dual_mode_write_verb_bumps(repos, monkeypatch):
+    cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git branch -d topic"
+    _set_anchor(monkeypatch, repos, "sess-gitdir-dual-write")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-gitdir-dual-write", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_work_tree_override_with_dual_mode_read_verb_does_not_bump(repos, monkeypatch):
+    cmd = f"GIT_WORK_TREE={_posix(repos['foreign'])} git branch --show-current"
+    _set_anchor(monkeypatch, repos, "sess-worktree-dual-read")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-worktree-dual-read", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_work_tree_override_with_dual_mode_write_verb_bumps(repos, monkeypatch):
+    cmd = f"GIT_WORK_TREE={_posix(repos['foreign'])} git branch -d topic"
+    _set_anchor(monkeypatch, repos, "sess-worktree-dual-write")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-worktree-dual-write", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+def test_dash_c_core_worktree_override_with_dual_mode_read_verb_does_not_bump(repos, monkeypatch):
+    cmd = f"git -c core.worktree={_posix(repos['foreign'])} branch --show-current"
+    _set_anchor(monkeypatch, repos, "sess-coreworktree-dual-read")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-coreworktree-dual-read", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+
+
+def test_dash_c_core_worktree_override_with_dual_mode_write_verb_bumps(repos, monkeypatch):
+    cmd = f"git -c core.worktree={_posix(repos['foreign'])} branch -d topic"
+    _set_anchor(monkeypatch, repos, "sess-coreworktree-dual-write")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-coreworktree-dual-write", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer (a386c4ea, P3) -- adversarial shapes named by the
+# slice-2 reviewer, hand-traced but not previously present in the
+# parametrize lists.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "verb",
+    [
+        "branch -dr topic",
+        "tag -df v1",
+        "remote set-head origin -a",
+        "stash -u",
+        "stash --keep-index",
+        "worktree lock /tmp/wt",
+        "submodule foreach echo hi",
+    ],
+)
+def test_adversarial_dual_mode_shapes_still_bump(repos, monkeypatch, verb):
+    """Every one of these mutates the foreign repo (or, for `stash -u`/
+    `stash --keep-index`, is a bare stash PUSH with an extra flag, not a
+    read sub-word) and must still bump."""
+    cmd = f"git -C {_posix(repos['foreign'])} {verb}"
+    _set_anchor(monkeypatch, repos, "sess-adversarial-write")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-adversarial-write", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+
+
+@pytest.mark.parametrize(
+    "verb",
+    [
+        "notes get-ref",
+        "bisect view",
+        "config --get x y",
+    ],
+)
+def test_adversarial_dual_mode_shapes_never_bump(repos, monkeypatch, verb):
+    """`notes get-ref` (a recognised read sub-word in `_notes_is_read`),
+    `bisect view` (a recognised read sub-word in `_bisect_is_read`), and
+    `config --get x y` (`--get` is a recognised read flag in `_config_is_
+    read`; the trailing `y` is a value-pattern filter on the query, not a
+    second value to set) are all reads."""
+    cmd = f"git -C {_posix(repos['foreign'])} {verb}"
+    _set_anchor(monkeypatch, repos, "sess-adversarial-read")
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-adversarial-read", str(repos["anchor"]), {}
+    )
+
+    assert result is None
 
 
 def test_evasion_dash_c_core_worktree_write_subcommand_bumps(repos, monkeypatch):

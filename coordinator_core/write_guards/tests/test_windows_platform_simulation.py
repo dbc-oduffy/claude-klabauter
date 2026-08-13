@@ -317,12 +317,19 @@ def test_doctrine_guard_denies_windows_shaped_home_claude_md(_windows_os_path, m
     assert result is not None
     out = result["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
-    # Deny message discipline: the sentinel filename IS printed (2026-07-30
-    # reversal -- naming it is safe now that creation is denied on both
-    # surfaces; see the module docstring's "Deny message" section). This
-    # was the pre-reversal contract asserting the opposite; it went stale
-    # when the posture flipped and is inverted here to match the live one.
-    assert ".coordinator-doctrine-edit-approved" in out["permissionDecisionReason"]
+    # Deny message discipline (2026-08-13, C4a, INVERTED -- plan
+    # docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
+    # docs/wiki/guard-messaging.md § Register B6): the prior 2026-07-30
+    # reversal asserted the sentinel filename WAS printed, reasoning that
+    # naming it was safe once creation was denied on both surfaces -- B6
+    # supersedes that reasoning: showing a confined reader the key while
+    # forbidding its use is itself the disclosure that makes a well-meaning
+    # subagent's rationalisation through the gate available, independent of
+    # whether creation is also blocked. No unresolved-audience payload is
+    # passed here (`check()`'s payload carries no `session_id`), so this
+    # fires the unresolved-audience leg, which degrades to terse -- never
+    # the mechanism, per B6's unresolved-audience degradation rule.
+    assert ".coordinator-doctrine-edit-approved" not in out["permissionDecisionReason"]
 
 
 def test_doctrine_guard_allows_unrelated_windows_shaped_path(_windows_os_path, monkeypatch):

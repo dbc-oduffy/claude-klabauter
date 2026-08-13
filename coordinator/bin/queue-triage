@@ -62,7 +62,7 @@ if _LIB_DIR not in sys.path:
 
 from cc_invoke import (  # noqa: E402
     RouteMutationError,
-    resolve_engine_root,
+    require_engine_on_path,
     route,
     route_mutation,
 )
@@ -72,9 +72,7 @@ from cc_invoke import (  # noqa: E402
 # is NOT pip-installed, so a bare import resolves nothing and the CLI dies at
 # import time. Same bootstrap as coordinator/bin/lib/workday_ceremony_lib.py
 # (landed in d2d4ec545 for the identical failure on /workday-start Step 0).
-_ENGINE_ROOT = str(resolve_engine_root(__file__))
-if _ENGINE_ROOT not in sys.path:
-    sys.path.insert(0, _ENGINE_ROOT)
+_ENGINE_ROOT = str(require_engine_on_path(__file__))
 
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 

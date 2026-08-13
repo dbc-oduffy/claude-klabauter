@@ -72,7 +72,7 @@ from pathlib import Path
 _LIB_DIR = str(Path(__file__).resolve().parent / "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import resolve_colocated_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_colocated_engine_on_path  # noqa: E402
 
 _REVIEW_TRAIL_FLAGS = (
     "--review-sha-range",
@@ -236,7 +236,7 @@ def _cmd_archive_session(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        claude_klabauter_root = resolve_colocated_claude_klabauter_root(__file__)
+        require_colocated_engine_on_path(__file__)
     except RuntimeError as exc:
         print(
             f"wsc-close.py archive-session: CLAUDE_KLABAUTER_ROOT resolution failed: {exc} "
@@ -244,9 +244,6 @@ def _cmd_archive_session(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 0
-
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
 
     try:
         from coordinator_core.session.scope import archive

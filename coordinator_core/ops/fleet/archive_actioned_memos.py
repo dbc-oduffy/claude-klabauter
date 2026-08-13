@@ -49,7 +49,6 @@ Negative-spec:
 """
 
 from __future__ import annotations
-import sys
 
 import asyncio
 import logging
@@ -71,17 +70,20 @@ from coordinator_core.ops.fleet._common import (
     rel_id,
     validate_params,
 )
+from coordinator_core.ops.fleet._common import _REASON_DEST_CONFLICT  # noqa: F401 — re-export, see below
+from coordinator_core.ops.fleet._common import _is_identical_duplicate  # noqa: F401 — re-export, see below
 
 _LOG = logging.getLogger(__name__)
 
-#: Skip reason for "the archive destination is occupied by a file with DIFFERENT content".
-#: Deliberately NOT the AC12-pinned "already-archived" string, which means the benign
-#: source-gone idempotent-replay case. This one is a wedge: the memo cannot be archived and
-#: no future sweep will unwedge it without a human reconciling the two copies. Conflating
-#: the two let a stuck memo report as converged.
-#: Spec backlink: archive/specs/2026-07/2026-07-04-pcore-11-fleet-invoke-ops.md § AC12
-#: (which pins "already-archived" to the source-gone case only).
-_REASON_DEST_CONFLICT = "archive-dest-conflict"
+# _REASON_DEST_CONFLICT and _is_identical_duplicate now live in _common.py as
+# shared exports (2026-08-13, dest-collision-vs-idempotent-replay plan C1) —
+# every archive family (memos, handoffs, shipped handoffs, bugs) consumes the
+# same predicate and constant rather than each carrying its own copy. Imported
+# by name (not `import _common` + attribute access) so this module's existing
+# bare-name usages below need no rewrite, and re-exported here — not just
+# imported for local use — because bin/tests/test_sweep_actioned_memos_blocked.py
+# imports `_REASON_DEST_CONFLICT` from THIS module path; moving the definition
+# without a re-export would break that import.
 
 #: The one place the disposition-field vocabulary is enumerated — the memo.transition
 #: op's "exactly one of decision/decision_note/realized_by/actioned_note/superseded_by"
@@ -280,28 +282,6 @@ def _archive_dest(worktree_root: Path, memo_path: Path) -> Path:
     git mv cross-repo/inbox/<fname> cross-repo/archive/<fname>.
     """
     return worktree_root / "cross-repo" / "archive" / memo_path.name
-
-
-def _is_identical_duplicate(src: Path, dst: Path) -> bool:
-    """True when dst already exists AND is byte-identical to src.
-
-    Duplicate deliveries happen: a sender can write the same memo filename into
-    cross-repo/inbox/ a second time after the first copy was already archived.
-    Before this predicate existed, such a memo was skipped as "already-archived"
-    on EVERY sweep run and could therefore never leave the inbox — a permanent
-    stranded-duplicate leak that inflated the apparent backlog.  When the bytes
-    match, archiving is lossless: the git mv -f overwrite is a no-op on content
-    and a pure delete of the redundant inbox copy.
-
-    Returns False (skip, do not overwrite) whenever the contents differ or
-    either file cannot be read — a differing dst is real archived history and
-    must never be clobbered.
-    """
-    try:
-        return dst.is_file() and src.read_bytes() == dst.read_bytes()
-    except OSError:
-        print(f"skip: _is_identical_duplicate: return dst.is_file() and src.read_bytes() == dst.read_bytes() failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return False
 
 
 def _extract_title(memo_path: Path) -> Optional[str]:

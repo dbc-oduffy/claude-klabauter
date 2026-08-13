@@ -122,7 +122,7 @@ followed by three body sections, in this order:
 
 - What did you grep, read, or probe that turned out to be a dead end — and what were you actually looking for?
 
-- Where did your tool access, permissions, or output contract fight you? What would you have reached for if it existed?
+- Where did your tool access, permissions, or output contract fight you? What was missing that isn't deliberately withheld from this role — a guard denial is not a gap.
 
 - Anything you wanted to say and had nowhere to put?
 ```
@@ -160,6 +160,20 @@ which is what actually gates schema validation downstream) does not support flow
 and parses one as a raw string instead of a dict, silently tripping the object-shaped check on
 every provisioned sidecar (see `cross-repo/inbox/2026-07-25-example-doctrine-repo-em-provision-report-
 divergence-flow-style.md`).
+
+**Forward-binding constraint on the pcli-04 emitter — commit-phase pathspec provenance.** When the
+emitter lands and `dispatch_feed` goes live, an emitted Workflow MAY interleave
+`coordinator:git-commit-agent` phases between executor waves: example-doctrine-repo took the "not yet dispatchable"
+banner down 2026-08-12 (DR-153, example-doctrine-repo `79be06759`), discharging SC-DR-021's consumer-repo
+condition, and their `execute-plan` RACI now names the EM Accountable for every commit with the
+Responsible keystroke delegable. **Every emitted commit phase's pathspec MUST carry real
+provenance** — the preceding wave's executor-reported touched-file set, or the chunk's
+`surface:`/`writes:` list off the plan spine (`plan-tasks.schema.json` ≥ 1.7.0). Never a tree
+survey, never an invented set. This binds harder here than in a consumer repo because SC-DR-021
+population (c) is unchanged: **a path written by a raw Bash heredoc carries no session claim and is
+denied at runtime.** An emitted commit phase whose pathspec covers engine-authored state will be
+refused, correctly. The executor-wave case works only because executors author via `Write`/`Edit`.
+Source: `cross-repo/inbox/2026-08-12-example-doctrine-repo-em-emitter-emits-commit-phases.md`.
 
 **`--type` axis / template registry (SUBSUME):** the CLI grows an optional `--type` argument
 (`choices=["run-report", "review-findings", "assessment", "staff-eng-review"]`, `default:

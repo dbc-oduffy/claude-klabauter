@@ -1132,6 +1132,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # repo_root=None, which would break the DEC-11 confinement DR-241's
     # Amendment affirms; do not omit this entry.
     "tracker.fold_observed_set":                "common_dir",
+    # tracker.mint_person — common_dir, the SAME scope tracker.fold_observed_set
+    # and session.boot_sweep use. DECISION, not a default: this op's WRITE
+    # BOUND (PM ruling 2026-08-12, see coordinator_core/ops/tracker/
+    # mint_person.py module docstring) confines every write to the LOCAL
+    # repo's own worktree root, derived via main_worktree_root(common_dir) —
+    # never a holder/peer repo's root. An op missing from this table silently
+    # degrades to repo_root=None, which would break that per-repo
+    # confinement bound silently; do not omit this entry.
+    "tracker.mint_person":                      "common_dir",
     # priority.set — none: the priority-ledger root is resolved centrally via
     # coordinator_state_root(central=True), never from a caller repo_root
     # (same class as ping / goal.set_kr_status). See

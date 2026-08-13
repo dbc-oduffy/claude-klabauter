@@ -122,12 +122,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not _LEDGER_RE.search(file_path_norm):
             return None
 
+        _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = (
             "Use instead:\n"
             f"  {file_path}: run `priority-set` (op `priority.set`) instead of "
             "hand-editing this disk-truth ledger — skips its provenance stamp, "
-            "atomic write, and schema check.\n\n"
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            "atomic write, and schema check."
+            + ("\n\n" + _note if _note else "")
         )
 
         # Advisory envelope (DR-277) — additionalContext only, NEVER

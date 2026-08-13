@@ -304,10 +304,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "$COORDINATOR_GUARD_COVERAGE_CORPUS.\n\n"
             "A corpus is produced by streaming every Bash tool_use command "
             'out of ~/.claude/projects/*/*.jsonl into {"c": "<command>"} '
-            "lines -- see "
-            "state/plan-sidecars/2026-07-28-bash-tax-negative-space.md "
-            "(example-doctrine-repo) for the extraction method the 0.44%/1.4%/3.2% "
-            "baseline used. This tool never invents a corpus: a coverage "
+            "lines. This tool never invents a corpus: a coverage "
             "number measured against a corpus nobody can point to is worse "
             "than no number.",
             file=sys.stderr,

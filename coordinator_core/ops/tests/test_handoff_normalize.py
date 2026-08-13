@@ -28,13 +28,45 @@ DIRECTORIES on disk, never git objects, so this file monkeypatches
 anywhere in this module.
 
 Spec backlink: docs/plans/2026-08-10-a-commit-trailer-that-names-the-session.md § C1b
+
+C5 ADDITION (2026-08-12, person-identity-primitive-first-slice § C5, re-done):
+the `minted_by` stamping cases below drive `_normalize_one_text` directly
+against synthetic content strings (no disk I/O, no `git init`), passing
+`minted_by=` as a caller-supplied parameter -- NEVER by monkeypatching a
+`resolve_operating_person` import inside `handoff_normalize` itself, which no
+longer imports that symbol at all (break-class fix: the batch sweep must not
+resolve the operating human internally, or every session that runs a sweep
+stamps its own identity onto the whole corpus -- see
+`_normalize_one_text`'s docstring and step-7 comment). The end-to-end,
+creation-door-level case monkeypatches `resolve_operating_person` at its
+import site in `coordinator_core.ops.handoff_author_fork` instead, per the
+authoring plan's § The test-design constraint that makes this harder than it
+looks (this is a solo-user box; a resolver that ignores its inputs and
+returns a constant passes every real-world check).
+
+A separate regression test, `test_batch_sweep_never_stamps_minted_by_on_unrelated_handoffs`
+below, drives the `handoff.normalize` batch-sweep handler directly (mirroring
+`test_handoff_normalize_carry_scope.py`'s real-`git init` fixture pattern) to
+assert the two-door hazard itself cannot recur.
+
+Spec backlink (C5): docs/plans/2026-08-12-person-identity-primitive-first-slice.md § C5
 """
 from __future__ import annotations
 
+import asyncio
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
+
+from coordinator_core.ops import handoff_normalize
 from coordinator_core.ops.fleet._common import plan_claim_dir
-from coordinator_core.ops.handoff_normalize import _resolve_claimed_plan_deliverable_id
+from coordinator_core.ops.handoff_normalize import (
+    _handler,
+    _normalize_one_text,
+    _resolve_claimed_plan_deliverable_id,
+)
 from coordinator_core.session import core
 
 
@@ -119,3 +151,230 @@ def test_multi_claim_tier_b_only_picks_earliest_claimed_at_not_alphabetical(
     resolved = _resolve_claimed_plan_deliverable_id(tmp_path)
 
     assert resolved == "dlv-hn-first-claimed"
+
+
+# ---------------------------------------------------------------------------
+# C5 -- minted_by stamping (person-identity-primitive-first-slice)
+# ---------------------------------------------------------------------------
+
+_MINIMAL_HANDOFF = """\
+---
+title: Some handoff
+created: 2026-08-12
+pickup_ready: true
+category: infra
+summary: A summary already present.
+deliverable_id: dlv-existing-123abc
+initiative: null
+owner: dbc-em-session-xyz
+author: dbc-em-session-xyz
+---
+
+# Some handoff
+
+Body.
+"""
+
+
+def test_minted_by_stamped_on_creation():
+    """A created handoff (no minted_by field yet) carries minted_by after
+    normalization, sourced from the CALLER-supplied `minted_by` param --
+    `_normalize_one_text` never resolves the operating human itself; see the
+    creation-door end-to-end case in `test_handoff_author_fork.py`."""
+    result = _normalize_one_text(
+        _MINIMAL_HANDOFF, Path("state/handoffs/x.md"), minted_by="dbc-example-operator"
+    )
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    assert handoff_normalize.read_fm_field(fm_text, "minted_by") == "dbc-example-operator"
+    assert any("minted_by" in c for c in result["changes"])
+
+
+def test_minted_by_lands_casefolded_for_mixed_case_github_alias():
+    """AC9: a mixed-case resolved github alias lands casefolded in minted_by --
+    the caller (the resolver's 'github' key) already casefolds, this asserts
+    the seam does not re-uppercase or otherwise disturb that casefolding on
+    the way into frontmatter."""
+    result = _normalize_one_text(
+        _MINIMAL_HANDOFF,
+        Path("state/handoffs/x.md"),
+        minted_by="dbc-example-operator".casefold(),
+    )
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    minted_by = handoff_normalize.read_fm_field(fm_text, "minted_by")
+    assert minted_by == minted_by.casefold()
+    assert minted_by == "dbc-example-operator"
+
+
+def test_minted_by_omitted_entirely_when_unresolvable():
+    """Unresolvable identity (no minted_by supplied by the caller) omits
+    minted_by ENTIRELY -- not null, not "unknown" (DEC-41, extended)."""
+    result = _normalize_one_text(
+        _MINIMAL_HANDOFF, Path("state/handoffs/x.md"), minted_by=None
+    )
+
+    # _MINIMAL_HANDOFF has no other drift (all six prior fields already
+    # clean), so with minted_by unresolvable there is no drift at all.
+    assert result is None
+
+
+def test_minted_by_omitted_when_unresolvable_alongside_other_drift():
+    """Same unresolvable case, but forced through the changed-file path via
+    an absent `category` field, to assert the key-absent contract even when
+    the file is NOT already-clean end-to-end."""
+    content = _MINIMAL_HANDOFF.replace("category: infra\n", "")
+
+    result = _normalize_one_text(content, Path("state/handoffs/x.md"), minted_by=None)
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    assert handoff_normalize.read_fm_field(fm_text, "minted_by") is None
+    assert not any("minted_by" in c for c in result["changes"])
+
+
+def test_owner_and_author_untouched():
+    """owner/author are untouched in meaning and population (AC7) -- both
+    survive normalization byte-identical."""
+    result = _normalize_one_text(
+        _MINIMAL_HANDOFF, Path("state/handoffs/x.md"), minted_by="dbc-example-operator"
+    )
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    assert handoff_normalize.read_fm_field(fm_text, "owner") == "dbc-em-session-xyz"
+    assert handoff_normalize.read_fm_field(fm_text, "author") == "dbc-em-session-xyz"
+    assert not any("owner" in c for c in result["changes"])
+    assert not any("author" in c for c in result["changes"])
+
+
+def test_existing_normalize_behaviour_unchanged_when_already_clean():
+    """Idempotency: a fully-clean file (including minted_by already present)
+    still returns None -- the C5 addition does not disturb the existing
+    already-clean contract."""
+    content = _MINIMAL_HANDOFF.replace(
+        "author: dbc-em-session-xyz\n",
+        "author: dbc-em-session-xyz\nminted_by: dbc-example-operator\n",
+    )
+
+    result = _normalize_one_text(content, Path("state/handoffs/x.md"), minted_by="dbc-example-operator")
+
+    assert result is None
+
+
+def test_existing_minted_by_carried_unchanged_not_reminted():
+    """An already-present minted_by is carried, never re-stamped, even when
+    the caller would now supply a different identity (session-independent
+    carry, mirrors deliverable_id's D1 carry discipline)."""
+    content = _MINIMAL_HANDOFF.replace("category: infra\n", "").replace(
+        "author: dbc-em-session-xyz\n",
+        "author: dbc-em-session-xyz\nminted_by: dbc-original-minter\n",
+    )
+
+    result = _normalize_one_text(content, Path("state/handoffs/x.md"), minted_by="someone-else")
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    assert handoff_normalize.read_fm_field(fm_text, "minted_by") == "dbc-original-minter"
+    assert not any("minted_by" in c for c in result["changes"])
+
+
+# ---------------------------------------------------------------------------
+# C5 -- batch-sweep regression: the defect that shipped in the first C5 pass
+# ---------------------------------------------------------------------------
+
+_GIT_ENV = {
+    "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True, text=True, env={**os.environ, **_GIT_ENV},
+        timeout=15, stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
+    )
+
+
+def _init_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, "init")
+    _git(repo, "config", "commit.gpgsign", "false")
+    (repo / "README.md").write_text("init\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "init")
+
+
+def _write_unrelated_handoff(worktree_root: Path, slug: str) -> Path:
+    """A handoff with no `minted_by` and no `claimed_by` tying it to any
+    session -- unrelated to whatever session runs the sweep."""
+    path = worktree_root / "state" / "handoffs" / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\ntitle: {slug}\ncreated: 2026-08-12\n---\n\n# {slug}\n\nBody.\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.spawns_process
+def test_batch_sweep_never_stamps_minted_by_on_unrelated_handoffs(tmp_path, monkeypatch):
+    """Break-class regression (the defect the first C5 attempt shipped):
+    running the `handoff.normalize` batch sweep (write=True) over a corpus of
+    handoffs that lack `minted_by` and are NOT this session's own creation
+    must stamp `minted_by` on NONE of them. The prior (defective) design
+    resolved the operating human INSIDE `_normalize_one_text`/`_normalize_one`,
+    which the sweep calls unconditionally for every file in
+    `state/handoffs/*.md` -- meaning any session that ran a sweep would stamp
+    its own identity onto the entire corpus, since `minted_by` is a brand-new
+    field absent from every existing handoff.
+
+    This test is the DIRECT catch for that: swap the fix (`minted_by=None`
+    threaded through the sweep's dry-run and write-path call sites) for the
+    old-shape defect and this test FAILS -- see the executor's dispatch
+    report for the swap-and-confirm this test performed before landing.
+    """
+    # NOTE for future editors: this test tree's autouse HOME-quarantine fixture
+    # (conftest.py) makes resolve_operating_person() unresolvable by default
+    # in-suite. If a future defective change reintroduces an in-normalizer
+    # resolve call, this test as written will NOT catch it unless
+    # `handoff_normalize.resolve_operating_person` is also monkeypatched to a
+    # resolvable identity here -- verified by hand (see the executor's
+    # dispatch report for this chunk): with the in-normalizer resolve
+    # temporarily restored AND `resolve_operating_person` monkeypatched to
+    # return {"github": "dbc-example-operator"}, this test fails exactly as intended.
+    monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(tmp_path / "repo" / ".git" / "coordinator-sessions"))
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-sweep-never-stamps")
+    # Review: coordinator:code-reviewer c71df2b9 (P1) -- this module does not
+    # import `resolve_operating_person` today (that is the fix), so
+    # `raising=False` creates the attribute for the duration of this test
+    # only. This closes the vacuous-test gap: the autouse HOME-quarantine
+    # fixture in conftest.py already makes a REAL resolve_operating_person()
+    # unresolvable, so without this monkeypatch the test would pass whether
+    # or not a defective in-normalizer resolve call were reintroduced. By
+    # forcing a resolvable identity here, the test can only pass if the
+    # sweep path genuinely never calls the resolver at all.
+    monkeypatch.setattr(
+        handoff_normalize,
+        "resolve_operating_person",
+        lambda: {"github": "dbc-example-operator"},
+        raising=False,
+    )
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    first = _write_unrelated_handoff(repo, "2026-08-12-unrelated-one")
+    second = _write_unrelated_handoff(repo, "2026-08-12-unrelated-two")
+
+    result = asyncio.run(_handler({"write": True}, repo_root=repo / ".git"))
+
+    assert result["errors"] == []
+    for path in (first, second):
+        content = path.read_text(encoding="utf-8")
+        assert handoff_normalize.read_fm_field(content, "minted_by") is None, (
+            f"{path} was stamped with minted_by by the batch sweep -- "
+            f"the two-door hazard has regressed:\n{content}"
+        )

@@ -247,7 +247,7 @@ def main(argv: List[str]) -> int:
     doe_root, rc = _resolve_doe_root()
     if doe_root is None:
         if graceful_skip_unresolved and not check_only:
-            print("doe_root_pointer: skipped (example-doctrine-repo clone not resolved — complete step 3.5a first)")
+            print("doe_root_pointer: skipped (repos.example_doctrine_repo not resolved — complete step 3.5a first)")
             return 0
         return rc
 
@@ -255,7 +255,7 @@ def main(argv: List[str]) -> int:
     doe_root = doe_root.rstrip("/")
 
     if not os.path.isdir(doe_root):
-        print(f'{_PROG}: example-doctrine-repo root not found at "{doe_root}"', file=sys.stderr)
+        print(f'{_PROG}: resolved root not found at "{doe_root}"', file=sys.stderr)
         print(
             "  Remediation: confirm repos.example_doctrine_repo in the registry is a valid directory,\n"
             "  or set REPO_EXAMPLE_DOCTRINE_REPO=<path>  then /coordinator:install",
@@ -270,7 +270,7 @@ def main(argv: List[str]) -> int:
             file=sys.stderr,
         )
         print(
-            "  Remediation: confirm the example-doctrine-repo clone has coordinator/ populated (W4.2 cutover required).",
+            "  Remediation: confirm the resolved repos.example_doctrine_repo root has coordinator/ populated (W4.2 cutover required).",
             file=sys.stderr,
         )
         print("doe_root_pointer: failed (see stderr for gen-doe-root-pointer.py output)")

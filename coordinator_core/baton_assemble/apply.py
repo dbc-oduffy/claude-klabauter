@@ -615,25 +615,85 @@ def _ledger_claim_record(predecessor_path: str, repo_root: Path) -> Optional[dic
     it here closes a split-brain in which the resolver and the DR-242 gate read
     two different halves of one claim.
 
-    Delegates to `coordinator_core.claim_state.resolve_claim_state` (2026-08-07,
-    claim-state-ledger-first-authoritative-read plan, C1) -- this function's own
-    ledger-only read was the reference implementation that accessor was
-    generalized FROM; the shared core now lives there and this is the sole
-    remaining call site re-shaped around its return.
-    """
-    from coordinator_core.claim_state import resolve_claim_state
+    Delegates to `coordinator_core.claim_state.resolve_historical_claim`
+    (2026-08-07, claim-state-ledger-first-authoritative-read plan, C1) -- this
+    function's own ledger-only read was the reference implementation that
+    module's accessors were generalized FROM; the shared core now lives there
+    and this is the sole remaining call site re-shaped around its return.
 
-    state = resolve_claim_state(Path(predecessor_path), repo_root=repo_root)
-    if state.ledger_holder is None:
-        # Mirrors the original degrade: no live ledger record is "no
-        # evidence" here, regardless of what the mirror side answers --
-        # this function's contract is ledger-only.
+    WHY THE LIVENESS-FREE ACCESSOR AND NOT `resolve_claim_state`. The two answer
+    different questions, and the C1 re-shape initially bound this call site to
+    the wrong one. `resolve_claim_state` answers "who holds this baton NOW", so
+    it gates the ledger record on `cs_claim_holder_live` and a dead holder
+    correctly degrades to "no ledger claim" -- correct for pickup-eligibility,
+    ownership, and reaping, and wrong here. DR-242's question at this gate is
+    retrospective: "was this baton ever claimed", where the holder's liveness is
+    irrelevant, because the ONLY predecessor that ever reaches a supersede is one
+    a session claimed, worked, and finished with. Gating on liveness therefore
+    made the reconcile unreachable in exactly the incident
+    `_reconcile_claim_from_ledger` exists to fix -- the ledger held the claim, the
+    holder had exited, and d6 degraded `predecessor-not-claimed-or-shipped`
+    anyway. `handoff_archive_transition._attribute_claim_holder` -- the writer on
+    the far side of this same supersede -- already reads the ledger liveness-free
+    for the identical reason; see `_supersede_continued`'s "Superseding is
+    retrospective" paragraph. This is not a weakening of the liveness gate: that
+    gate stays untouched for every decision it belongs to.
+
+    Negative-spec: does NOT consult the frontmatter mirror. This function's
+    contract is ledger-only -- the mirror is precisely the half d6's own gate has
+    already read and found empty, so re-reading it here would answer nothing.
+
+    REACHABILITY (2026-08-13, code-review Slice-3 P2 follow-up) -- the prose
+    invariant above ("the only predecessor that ever reaches a supersede is
+    one a session claimed, worked, and exited") is now STRUCTURALLY
+    enforced, not merely asserted, and this paragraph names the enforcing
+    mechanism rather than re-asserting the prose.
+
+    The reviewer's concern was: a predecessor whose true ledger holder is a
+    DIFFERENT session that is STILL LIVE reaches this liveness-free read via
+    `resolve_lineage`'s `kind="handoff"` explicit-`artifact_path` route (the
+    `is_own_handoff_record` branch sets `lineage["predecessor"]` to whatever
+    path the caller supplies, UNCONDITIONALLY -- unlike the empty-
+    `artifact_path` self-resolution path, `_resolve_held_handoff_for_
+    session`, which filters to the caller's own ledger entries). That route
+    genuinely reaches `_dispatch_handoff_supersede_predecessor` with a
+    foreign predecessor path -- but verified BY EXECUTION (two probes, not
+    inference; see this module's own test coverage in
+    `coordinator_core/baton_assemble/tests/test_ledger_claim_record_liveness.py`),
+    it does NOT reach past this function's caller into the liveness-free
+    read for a genuinely-live different holder: `_dispatch_handoff_
+    supersede_predecessor`'s own DR-242 gate (`archival.
+    claimed_or_shipped_at_path`) is checked FIRST and already consults
+    `claim_state.resolve_claim_state` -- the LIVENESS-GATED sibling accessor
+    (`cs_claim_holder_live`) -- which reports a live ledger claim as
+    claimed-or-shipped on its own, before `_reconcile_claim_from_ledger`
+    (and therefore this liveness-free function) is ever called at all. Probe
+    1 (a ledger record for a non-existent, hence naturally-dead, session id)
+    reached this function and reconciled, matching the documented dead-
+    holder incident. Probe 2 -- the identical fixture with
+    `coordinator_core.session.liveness.claim_holder_live` forced to report
+    the SAME record's holder as live -- found `claimed_or_shipped_at_path`
+    already `True` before `_reconcile_claim_from_ledger` was ever reached;
+    this function's own print statement never fired, and the op composed
+    directly off the DR-242 gate's own live-claim read, never touching this
+    liveness-free accessor. The enforcing mechanism this paragraph names is
+    therefore `_dispatch_handoff_supersede_predecessor`'s ORDERING: DR-242's
+    gate always runs first, and it is liveness-aware; this liveness-free
+    accessor is reachable ONLY on the branch where that gate already found
+    no live claim -- structurally the same "claimed, worked, exited" shape
+    the retired prose asserted, now enforced by that gate's own call order
+    rather than merely believed.
+    """
+    from coordinator_core.claim_state import resolve_historical_claim
+
+    record = resolve_historical_claim(Path(predecessor_path), repo_root=repo_root)
+    if record is None:
         return None
+    session_id, claimed_at = record
     return {
-        "session_id": state.ledger_holder,
-        "claimed_at": state.claimed_at
-        if state.source == "ledger" and state.claimed_at
-        else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "session_id": session_id,
+        "claimed_at": claimed_at
+        or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 

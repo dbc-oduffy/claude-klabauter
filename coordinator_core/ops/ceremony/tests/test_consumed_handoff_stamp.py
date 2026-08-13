@@ -72,6 +72,8 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
 )
 from .fixtures.real_git import make_diverged_path, real_git_repo
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _run(coro) -> Any:
     return asyncio.run(coro)

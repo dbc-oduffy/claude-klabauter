@@ -136,14 +136,15 @@ def _guarded_roots() -> "list[Path]":
     return roots
 
 
-def _deny_reason(target: str) -> str:
+def _deny_reason(target: str, payload: Optional[Dict[str, Any]] = None) -> str:
+    _note = operator_override_note(OVERRIDE_ENV, payload=payload)
     return (
         f"[oss-mirror-memo] DENY: {target} — publish-only mirror; memo "
         "unactioned, no EM reads it.\n"
         "Use instead:\n"
         "  bin/cross-repo-memo --to <real-receiver-em> --topic <slug> "
-        '--title "<one line>"\n'
-        + operator_override_note(OVERRIDE_ENV)
+        '--title "<one line>"'
+        + ("\n" + _note if _note else "")
     )
 
 
@@ -180,7 +181,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
-                "permissionDecisionReason": _deny_reason(target_raw),
+                "permissionDecisionReason": _deny_reason(target_raw, payload),
             }
         }
     except Exception:

@@ -89,7 +89,7 @@ def test_key_set_derivation_is_non_empty():
 
 @pytest.mark.parametrize("env_var", _OVERRIDE_KEYS)
 def test_flag_shaped_render_carries_no_key_literal(env_var):
-    note = operator_override_note(env_var)
+    note = operator_override_note(env_var, payload={"session_id": "sess-c1d-em"})
     assert env_var not in note, (
         "operator_override_note(%r) (flag-shaped) re-interpolated the "
         "override key into its render -- got: %r" % (env_var, note)
@@ -98,7 +98,11 @@ def test_flag_shaped_render_carries_no_key_literal(env_var):
 
 @pytest.mark.parametrize("env_var", _OVERRIDE_KEYS)
 def test_reason_shaped_render_carries_no_key_literal(env_var):
-    note = operator_override_note(env_var, reason_placeholder="not now, doing X")
+    note = operator_override_note(
+        env_var,
+        payload={"session_id": "sess-c1d-em"},
+        reason_placeholder="not now, doing X",
+    )
     assert env_var not in note, (
         "operator_override_note(%r, reason_placeholder=...) (reason-shaped) "
         "re-interpolated the override key into its render -- got: %r"
@@ -111,7 +115,7 @@ def test_empty_string_call_carries_no_key_literal():
     by `_message_size._OVERRIDE_NOTE_TAIL` (module-import-time evaluation,
     out of scope to touch here). Must render the same doc-pointer-only
     string as any other input, with nothing key-shaped in it."""
-    note = operator_override_note("")
+    note = operator_override_note("", payload={"session_id": "sess-c1d-em"})
     assert note, "operator_override_note('') rendered an empty string"
     for env_var in _OVERRIDE_KEYS:
         assert env_var not in note, (
@@ -124,7 +128,10 @@ def test_render_carries_no_bare_coordinator_prefix_at_all():
     """Belt-and-suspenders: no COORDINATOR_ prefixed token of any shape
     should appear in the render, not just the specific keys this repo
     happens to enumerate today."""
-    note = operator_override_note("COORDINATOR_ALLOW_BELT_AND_SUSPENDERS_CHECK")
+    note = operator_override_note(
+        "COORDINATOR_ALLOW_BELT_AND_SUSPENDERS_CHECK",
+        payload={"session_id": "sess-c1d-em"},
+    )
     assert "COORDINATOR_" not in note, (
         "operator_override_note() render contains a COORDINATOR_-prefixed "
         "token -- got: %r" % note

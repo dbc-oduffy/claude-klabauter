@@ -51,11 +51,9 @@ if _BIN_DIR not in sys.path:
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from cc_invoke import resolve_engine_root  # noqa: E402
+from cc_invoke import require_engine_on_path  # noqa: E402
 
-_ENGINE_ROOT = resolve_engine_root(__file__)
-if str(_ENGINE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ENGINE_ROOT))
+_ENGINE_ROOT = require_engine_on_path(__file__)
 
 from lib.repo_identity import (  # noqa: E402
     _VERDICT_EXPLICIT,
@@ -173,7 +171,7 @@ class TestVerdictMatch(_RepoIdentityTestCase):
                 os.chdir(old_cwd)
 
             self.assertEqual(verdict["verdict"], _VERDICT_MATCH)
-            self.assertEqual(root, str(repo_root))
+            self.assertEqual(root, str(repo_root.resolve()))
 
 
 class TestVerdictMismatch(_RepoIdentityTestCase):
@@ -200,7 +198,7 @@ class TestVerdictMismatch(_RepoIdentityTestCase):
                 os.chdir(old_cwd)
 
             self.assertEqual(verdict["verdict"], _VERDICT_MISMATCH)
-            self.assertEqual(root, str(repo_root))
+            self.assertEqual(root, str(repo_root.resolve()))
 
 
 class TestVerdictUnresolved(_RepoIdentityTestCase):
@@ -221,7 +219,7 @@ class TestVerdictUnresolved(_RepoIdentityTestCase):
                 os.chdir(old_cwd)
 
             self.assertEqual(verdict["verdict"], _VERDICT_UNRESOLVED)
-            self.assertEqual(root, str(repo_root))
+            self.assertEqual(root, str(repo_root.resolve()))
 
     def test_unresolved_when_no_registry_record(self):
         import tempfile
@@ -483,6 +481,12 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         # Resolves `git -C <its own bin dir>`, never the process cwd --
         # same class-C shape, different neighbourhood.
         "check-bin-sh-polyglot.py",
+        # Class-C, new since the 2026-08-11 KNOWN_REMAINDER baseline was
+        # frozen: `git -C dirname(handoff_path) rev-parse --show-toplevel`,
+        # own docstring carries the literal phrase "not the process cwd";
+        # same technique as the already-allowlisted
+        # handoff-reconcile-close-terminal.py, not this plan's to migrate.
+        "handoff-backfill-claim-stamp.py",
         # Named class-C individually in Anti-scope:
         "check-global-doctrine-mirror.py",
         "regen-cockpit-schema.py",

@@ -537,6 +537,10 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "pm_priority": None,
             "pm_priority_origin": None,
             "pm_priority_source_id": None,
+            # Producer axis (C6a) — model + emit pass-through only; the resolver
+            # that supplies the value is a separate chunk, so this carries null
+            # until that chunk lands.
+            "producer": _jq_or(fm.get("producer"), None),
             "_shipped_in_sha": shipped_sha_raw,
         })
 

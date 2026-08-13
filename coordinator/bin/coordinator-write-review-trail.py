@@ -59,6 +59,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR / "lib"))
 
 import cc_invoke  # noqa: E402  (path insert above must precede this import)
+from repo_identity import resolve_checked_repo_root  # noqa: E402
 
 cc_invoke.ensure_engine_on_path(__file__)
 
@@ -92,26 +93,26 @@ def _no_console_creationflags() -> dict:
 
 
 def _resolve_repo_root() -> str:
-    """Resolve the git repo root from cwd — parity with the bash oracle's
-    ``git -C "$PWD" rev-parse --show-toplevel``.
+    """Resolve the git repo root via the checked resolver (repo_identity.
+    resolve_checked_repo_root), replacing the prior process-cwd
+    ``git -C "$PWD" rev-parse --show-toplevel`` shell-out
+    (state/bug-backlog/2026-08-12-checked-repo-resolver-five-tests-fail-on-
+    764cb28669d3.yaml). MISMATCH and no-root-resolved both refuse — this
+    writer script has no legitimate reason to proceed against a foreign or
+    unresolved repo root, mirroring the fail-loud exit-1 contract this
+    function already had.
     """
-    try:
-        proc = subprocess.run(
-            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            **_no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        proc = None
-    if proc is None or proc.returncode != 0 or not proc.stdout.strip():
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
+        sys.exit(1)
+    if not root:
         print(
             f"coordinator-write-review-trail.py: cannot resolve git repo root from {os.getcwd()}",
             file=sys.stderr,
         )
         sys.exit(1)
-    return proc.stdout.strip()
+    return root
 
 
 _PLAN_REVIEW_PATH_PREFIXES = (

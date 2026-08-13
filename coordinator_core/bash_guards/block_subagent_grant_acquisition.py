@@ -309,13 +309,9 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
         "  Reason: grant acquisition is EM-only; a subagent's write "
         "should inherit the EM's own grant via shared-session-id "
         "resolution, not mint one of its own.\n"
-        "  Unblock (EM runs this, not you): the EM obtains PM "
-        "ratification, then acquires the grant itself in the session "
-        "that will dispatch the write --\n"
-        "    python3 -m coordinator_core.session.claude_md_grant grant pm "
-        '"<verbatim PM note>"\n'
-        "  -- run from the repo being unblocked, in the EM's own session, "
-        "before dispatching the write."
+        "  Unblock: the EM obtains PM ratification, then acquires the "
+        "grant itself in the session that will dispatch the write, before "
+        "dispatching the write."
     )
 
 

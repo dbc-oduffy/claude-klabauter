@@ -65,7 +65,7 @@ from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KIND
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
 # single-literal-source discipline.
 # ---------------------------------------------------------------------------
-MEMO_SCHEMA_VERSION = "1.4.0"
+MEMO_SCHEMA_VERSION = "1.5.0"
 
 # ---------------------------------------------------------------------------
 # x-bump-class / x-bump-note — example-doctrine-repo's bump-class annotation (memo
@@ -80,6 +80,16 @@ MEMO_SCHEMA_VERSION = "1.4.0"
 # ---------------------------------------------------------------------------
 MEMO_SCHEMA_BUMP_CLASS = "nested-field-additive"
 MEMO_SCHEMA_BUMP_NOTE = (
+    "1.4.0 -> 1.5.0 added the append-only supersede-disposition field quartet "
+    "(`disposition_superseded`, `superseding_note`, `superseding_realized_by`, "
+    "`superseded_at`) to both schemas, plus the "
+    "`_memo_cf_disposition_superseded_requires_companions` cross-field rule — "
+    "records that an already-actioned memo's disposition was later reversed "
+    "WITHOUT overwriting the original decision/actioned_note/realized_by "
+    "(coordinator_core.ops.memo_transition._handle_supersede). Purely "
+    "additive: four new optional properties, never required — no previously-"
+    "valid memo carries `disposition_superseded` at all, so none becomes "
+    "invalid. "
     "1.3.0 -> 1.4.0 added `superseded_by` to the archived-memo schema "
     "(previously declared only on cross-repo-memo, while the archived "
     "corpus has always carried it on memos superseded before archival). "
@@ -88,7 +98,7 @@ MEMO_SCHEMA_BUMP_NOTE = (
     "2026-07-28-archived-memo-schema-omits-superseded-by-1d8a0735e39a.yaml). "
     "(1.2.0 -> 1.3.0 added `space` as a new optional field and widened "
     "`supersedes` from a bare string to string-or-list, both in service of "
-    "mechanical inbox-blitz bucketing (example-retrieval-repo-em proposal 2026-07-28). "
+    "mechanical inbox-blitz bucketing (a sibling repo's 2026-07-28 proposal). "
     "Purely additive: no previously-valid memo becomes invalid — a "
     "string-valued `supersedes` still validates under the widened oneOf. "
     "1.0.0 -> 1.2.0 adopted campaign_id and in_reply_to, commit 5140d176.)"
@@ -126,13 +136,13 @@ _IN_REPLY_TO_DESCRIPTION = (
 
 _SPACE_DESCRIPTION = (
     "Optional sender-declared thread / problem-space hint (2026-07-28 "
-    "addition, example-retrieval-repo-em's inbox-blitz proposal). EXPLICITLY "
+    "addition, a sibling repo's inbox-blitz proposal). EXPLICITLY "
     "NON-AUTHORITATIVE: the receiver may override or ignore it, and nothing "
     "validates it against a controlled vocabulary — it is a grouping hint, "
     "not a taxonomy. Its value is that reconstructing threads from memo "
     "bodies is the single most expensive judgment step in a batch inbox "
     "pass, and a sender-declared hint collapses that step to a GROUP BY "
-    "(example-retrieval-repo's 16-memo dominant correspondent was five threads to the "
+    "(a sibling repo's 16-memo dominant correspondent was five threads to the "
     "sender and expensively so to the receiver). Consumed by "
     "coordinator_core.ops.fleet.memo_blitz_buckets as the preferred "
     "space key. Never required — the entire pre-2026-07-28 corpus lacks it "
@@ -147,7 +157,7 @@ _SUPERSEDES_DESCRIPTION = (
     "is the observed shape of a running thread that ends in a correction). "
     "A reference is a memo basename or topic ref. Sender-declared rather "
     "than receiver-inferred because the sender usually knows: two of the "
-    "three supersessions example-retrieval-repo inferred during their 2026-07-28 blitz "
+    "three supersessions a sibling repo inferred during their 2026-07-28 blitz "
     "were memos whose own bodies said 'this corrects my earlier one' in "
     "prose. memo.send's same-day re-delivery filename disambiguator "
     "(memo_send._redelivery_filename) slugs the FIRST reference when a list "
@@ -166,7 +176,7 @@ _TO_REPO_CROSS_REPO_MEMO_DESCRIPTION = (
     "landed in the right repo, whereas `to_repo` is machine-checkable "
     "without already knowing the alias mapping. Absent on the entire "
     "pre-2026-07-24 corpus and not yet emitted by claude-klabauter's memo_send — "
-    "always optional, never required, example-doctrine-repo-local extension "
+    "always optional, never required, a receiver-repo-local extension "
     "consumed by hooks/scripts/validate-frontmatter-schema.py's "
     "routing-mismatch check. Adopted per cross-repo/inbox/2026-07-24-"
     "claude-klabauter-em-central-id-canonical-order.md \"Not asked for, "
@@ -196,7 +206,7 @@ _TO_REPO_ARCHIVED_MEMO_DESCRIPTION = (
     "still validates after `git mv` to cross-repo/archive/. `to:` "
     "remains the human-readable addressee; `to_repo` disambiguates, it "
     "does not replace. Never required — historical archived memos "
-    "predate this field and must keep validating. Example-doctrine-repo-local "
+    "predate this field and must keep validating. A receiver-repo-local "
     "extension, not (yet) emitted by claude-klabauter's memo_send."
 )
 
@@ -211,6 +221,43 @@ _CAMPAIGN_ID_DESCRIPTION = (
     "never-delivered (write failed) receivers. Absent on ordinary "
     "single-receiver memos. Additive field (DEC-1 discipline) — never "
     "required."
+)
+
+_DISPOSITION_SUPERSEDED_DESCRIPTION = (
+    "Receiver-set marker: this memo's disposition (decision/actioned_note as "
+    "originally actioned) was later REVERSED. Append-only correction, "
+    "distinct from `superseded_by` (which points to a DIFFERENT memo that "
+    "supersedes this whole one): this field records a supersession of the "
+    "SAME memo's own disposition, written by "
+    "coordinator_core.ops.memo_transition._handle_supersede via the "
+    "`--supersede-note`/`--supersede-realized-by` action flags. When true, "
+    "requires superseding_note/superseding_realized_by/superseded_at "
+    "(cross-field rule "
+    "schema_validate._memo_cf_disposition_superseded_requires_companions) and "
+    "status must already be actioned or superseded — there is no disposition "
+    "to supersede otherwise. The ORIGINAL decision/decision_note/realized_by/"
+    "actioned_note are left untouched on disk (never overwritten), so a "
+    "reader sees the current (superseding) truth first — these four fields "
+    "are anchored immediately after `status`, ahead of the original "
+    "disposition fields — with the superseded original readable as history "
+    "beneath. Never required — absent on the entire pre-existing corpus and "
+    "on every memo whose disposition was never reversed."
+)
+
+_SUPERSEDING_NOTE_DESCRIPTION = (
+    "Free-text rationale for the disposition reversal. Required by "
+    "cross-field rule when disposition_superseded=true."
+)
+
+_SUPERSEDING_REALIZED_BY_DESCRIPTION = (
+    "Pointer to what realized the reversal: a commit SHA, a memo path/"
+    "basename, or a baton reference. Required by cross-field rule when "
+    "disposition_superseded=true."
+)
+
+_SUPERSEDED_AT_DESCRIPTION = (
+    "Timestamp the disposition reversal was recorded. Required by "
+    "cross-field rule when disposition_superseded=true."
 )
 
 _SUPERSEDES_PROPERTY: dict[str, Any] = {
@@ -297,9 +344,11 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
             "rules: in_progress -> picked_up_by, actioned+accepted/partial -> "
             "realized_by shape, action_taken companions, closed companions, "
             "superseded -> superseded_by, central-only -> to, summary length cap, "
-            "kind enum, distill_fate=ratification -> in_repo_capture shape. "
-            "Grandfather cutoff: memos created < 2026-05-22 skip cross-field "
-            "validation."
+            "kind enum, distill_fate=ratification -> in_repo_capture shape, "
+            "disposition_superseded=true -> superseding_note/"
+            "superseding_realized_by/superseded_at + status already "
+            "actioned/superseded. Grandfather cutoff: memos created < "
+            "2026-05-22 skip cross-field validation."
         ),
         "type": "object",
         "required": ["title", "from", "to", "created", "status", "delivery_mode"],
@@ -483,6 +532,22 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
                 ),
             },
             "scoped_to": _SCOPED_TO_PROPERTY,
+            "disposition_superseded": {
+                "type": "boolean",
+                "description": _DISPOSITION_SUPERSEDED_DESCRIPTION,
+            },
+            "superseding_note": {
+                "type": "string",
+                "description": _SUPERSEDING_NOTE_DESCRIPTION,
+            },
+            "superseding_realized_by": {
+                "type": "string",
+                "description": _SUPERSEDING_REALIZED_BY_DESCRIPTION,
+            },
+            "superseded_at": {
+                "type": "string",
+                "description": _SUPERSEDED_AT_DESCRIPTION,
+            },
         },
     }
 
@@ -584,6 +649,22 @@ def _build_archived_memo_schema() -> dict[str, Any]:
                     "Never required — historical archived memos predate this "
                     "field and must keep validating."
                 ),
+            },
+            "disposition_superseded": {
+                "type": "boolean",
+                "description": _DISPOSITION_SUPERSEDED_DESCRIPTION,
+            },
+            "superseding_note": {
+                "type": "string",
+                "description": _SUPERSEDING_NOTE_DESCRIPTION,
+            },
+            "superseding_realized_by": {
+                "type": "string",
+                "description": _SUPERSEDING_REALIZED_BY_DESCRIPTION,
+            },
+            "superseded_at": {
+                "type": "string",
+                "description": _SUPERSEDED_AT_DESCRIPTION,
             },
         },
     }

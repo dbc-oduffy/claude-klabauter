@@ -1969,7 +1969,12 @@ def _deny(reason: str) -> Dict[str, Any]:
     }
 
 
-def _deny_reason_subagent(detected: str, cmd_safe: str) -> str:
+def _deny_reason_subagent(
+    detected: str,
+    cmd_safe: str,
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> str:
     """Identity-leg deny text.
 
     Cut (2026-08-03, guard message-size discipline C8): compressed from
@@ -1992,14 +1997,16 @@ def _deny_reason_subagent(detected: str, cmd_safe: str) -> str:
     package_script_note = (
         _PACKAGE_SCRIPT_OFFER if _is_package_script_label(detected) else ""
     )
+    _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
+    _override_line = "  " + _override_note + "\n" if _override_note else ""
     return (
         "Run the tests you actually touched: full-suite subagent runs are "
         "denied (concurrency degrades the machine) -- use these instead:\n"
         "  pytest path/to/your/test_file.py\n"
         "  pytest path/to/your/test_file.py::test_the_case_you_changed\n"
         "  pytest -k the_behaviour_you_changed\n"
-        "  " + operator_override_note(_OVERRIDE_ENV_VAR) + "\n"
-        "  Detected: %s -- no test file, directory, or node-id scope\n"
+        + _override_line
+        + "  Detected: %s -- no test file, directory, or node-id scope\n"
         "  Command:  %s\n\n"
         "A retry reshaped so the command text parses differently is still "
         "denied.%s"
@@ -2129,15 +2136,27 @@ def _deny_reason_mutex(detected: str, cmd_safe: str, holder: Dict[str, Any]) -> 
 #: paragraph, and the authority-vs-resource-control aside live now that
 #: `_deny_reason_grant` no longer inlines them on every Tier-U deny (2026-07-30
 #: PM ruling: the deny ran 256 words, ~170 of it doctrine paid on every
-#: firing). No wiki page exists for this guard yet, so the pointer names this
-#: module's own docstring (GRANT leg, above) rather than inventing one.
-_GRANT_DETAIL_POINTER = (
-    "coordinator_core/bash_guards/check_test_suite_invocation.py "
-    "(module docstring, GRANT leg)"
-)
+#: firing). No wiki page exists for this guard yet, so this constant's own
+#: VALUE (not this comment) is what the deny text renders to a reader --
+#: register trim (C8, docs/plans/2026-08-13-guard-messages-stop-handing-
+#: agents-the-keys.md): the prior value named this module's own source-file
+#: path as the pointer target, which reads as instructing an agent to open
+#: and read implementation code as its documentation -- the self-narration
+#: shape the example-retrieval-repo memo flagged. The doctrine still genuinely lives in
+#: this module's own docstring (GRANT leg, above; no wiki home exists to
+#: relocate it to), so the pointer keeps saying that, just without a
+#: source-path literal doing the pointing.
+_GRANT_DETAIL_POINTER = "this guard's own GRANT-leg doctrine (no wiki page yet)"
 
 
-def _deny_reason_grant(detected: str, cmd_safe: str, *, is_tie: bool = False) -> str:
+def _deny_reason_grant(
+    detected: str,
+    cmd_safe: str,
+    *,
+    is_tie: bool = False,
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> str:
     """Deny text for the grant leg. ``is_tie`` marks a repo whose configured
     ``fast_test_cmd`` and ``full_test_cmd`` resolved to the identical command
     string -- for such a repo the ``fast_test_cmd`` remediation route was
@@ -2246,37 +2265,38 @@ def _deny_reason_grant(detected: str, cmd_safe: str, *, is_tie: bool = False) ->
     substrings (several ``TestGrantLeg`` cases assert them independent of
     surrounding phrasing) even though the sentence around them was rebuilt.
     """
+    _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     if is_tie:
         return (
-            "No Tier-F escape -- get the PM's Tier-U authorization grant, "
-            "or run what you touched:\n"
+            (
+                "No Tier-F escape -- get the PM's Tier-U authorization grant, "
+                "or run what you touched:\n"
+                "  tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
+                "  pytest path/to/your/test_file.py\n"
+                "  pytest path/to/your/test_file.py::test_the_case_you_changed\n"
+                "  pytest -k the_behaviour_you_changed\n\n"
+                "  Detected: %s\n"
+                "  Command:  %s\n\n"
+                "Grant detail: %s"
+                % (detected, cmd_safe, _GRANT_DETAIL_POINTER)
+            )
+            + ("\n\n%s" % _override_note if _override_note else "")
+        )
+    return (
+        (
+            "Ask the PM for a Tier-U authorization grant (their exact words go "
+            "in the quotes), or run only what you touched:\n"
             "  tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
             "  pytest path/to/your/test_file.py\n"
             "  pytest path/to/your/test_file.py::test_the_case_you_changed\n"
             "  pytest -k the_behaviour_you_changed\n\n"
             "  Detected: %s\n"
             "  Command:  %s\n\n"
-            "Grant detail: %s\n\n"
-            "%s"
-            % (
-                detected,
-                cmd_safe,
-                _GRANT_DETAIL_POINTER,
-                operator_override_note(_OVERRIDE_ENV_VAR),
-            )
+            "Full grant detail (ceremonies, session scope, authority vs. "
+            "resource control): %s"
+            % (detected, cmd_safe, _GRANT_DETAIL_POINTER)
         )
-    return (
-        "Ask the PM for a Tier-U authorization grant (their exact words go "
-        "in the quotes), or run only what you touched:\n"
-        "  tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
-        "  pytest path/to/your/test_file.py\n"
-        "  pytest path/to/your/test_file.py::test_the_case_you_changed\n"
-        "  pytest -k the_behaviour_you_changed\n\n"
-        "  Detected: %s\n"
-        "  Command:  %s\n\n"
-        "Full grant detail (ceremonies, session scope, authority vs. "
-        "resource control): %s\n\n"
-        "%s" % (detected, cmd_safe, _GRANT_DETAIL_POINTER, operator_override_note(_OVERRIDE_ENV_VAR))
+        + ("\n\n%s" % _override_note if _override_note else "")
     )
 
 
@@ -2484,8 +2504,13 @@ def _agent_touched_test_files(raw_agent_id: str, session_id: str,
     return out
 
 
-def _deny_reason_subagent_directory(dir_args: Sequence[str], cmd_safe: str,
-                                    touched_tests: Sequence[str]) -> str:
+def _deny_reason_subagent_directory(
+    dir_args: Sequence[str],
+    cmd_safe: str,
+    touched_tests: Sequence[str],
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> str:
     """R9 deny text. Leads with the caller's own touched test files -- the
     posture this guard already takes everywhere else (offer the better
     command, don't merely refuse the worse one).
@@ -2509,6 +2534,7 @@ def _deny_reason_subagent_directory(dir_args: Sequence[str], cmd_safe: str,
             "  pytest path/to/test_file.py\n"
             "  pytest path/to/test_file.py::test_the_case_you_changed\n"
         )
+    _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     return (
         alternative
         + "\nA node id is always permitted, touched or not -- re-running the "
@@ -2526,14 +2552,13 @@ def _deny_reason_subagent_directory(dir_args: Sequence[str], cmd_safe: str,
         "instead, and that this override was not invoked.\n\n"
         "  Directory arg%s: %s\n"
         "  Command:  %s\n\n"
-        "%s\n\n"
         "%s" % (
             "s" if len(dir_args) > 1 else "",
             ", ".join(dir_args),
             cmd_safe,
             _ANTI_EVASION,
-            operator_override_note(_OVERRIDE_ENV_VAR),
         )
+        + ("\n\n%s" % _override_note if _override_note else "")
     )
 
 
@@ -2796,6 +2821,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     payload.get("session_id") if isinstance(payload.get("session_id"), str) else "",
                     repo_root,
                 ),
+                payload=payload,
+                git_root=repo_root,
             ))
 
     if detected is None:
@@ -2804,7 +2831,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd_safe = _sanitize(cmd)
 
     if is_subagent:
-        return _deny(_deny_reason_subagent(detected, cmd_safe))
+        return _deny(_deny_reason_subagent(detected, cmd_safe, payload=payload, git_root=repo_root))
 
     if configured is None:
         configured = _configured_test_cmds(repo_root)
@@ -2885,8 +2912,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # warranted) has somewhere to land without re-deriving
             # `matched_tiers` at the call site.
             if "U" in matched_tiers:
-                return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie))
-            return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie))
+                return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root))
+            return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root))
 
         # WRAPPER leg (new, sited strictly after identity and grant, and
         # strictly before the mutex leg below): a granted Tier-U/F command

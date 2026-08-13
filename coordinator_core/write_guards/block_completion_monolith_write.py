@@ -110,13 +110,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not _MONOLITH_RE.search(file_path_norm):
             return None
 
+        _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = (
             "Use instead:\n"
             "  archive/completed/YYYY-MM.md is the retired monolith shape "
             "(Phase 1 moved it to per-entry files) -- write "
             "archive/completed/YYYY-MM/YYYY-MM-DD-<slug>-<sid6>.md instead, "
             "or archive/completed/legacy/YYYY-MM.md for a frozen "
-            "pre-migration edit.\n\n" + operator_override_note(_OVERRIDE_ENV_VAR)
+            "pre-migration edit."
+            + ("\n\n" + _note if _note else "")
         )
 
         return {

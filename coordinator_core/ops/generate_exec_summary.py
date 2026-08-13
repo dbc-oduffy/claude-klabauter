@@ -23,7 +23,9 @@ transport call exists inside this module (no cc_invoke / IPC round-trip):
     1  — fail-loud: not inside a git repository; a HAND fence pair is absent or
          malformed on an existing target (generator refuses to overwrite an
          unparseable HAND region); or the claude-klabauter/state-root resolver failed
-         (coordinator_claude_klabauter_root() raised).
+         (coordinator_claude_klabauter_root_with_class() raised, including the
+         published-engine-mirror refusal reused from
+         coordinator_core.state_root._claude_klabauter_state).
     2  — CLI usage error (unknown argument).
 
 Behavior:
@@ -69,10 +71,11 @@ import sys
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
-from coordinator_core import claude_klabauter_root as _claude_klabauter_root_mod
 from coordinator_core import meta_repo_identity as _meta_repo_identity
 from coordinator_core.ops._relative_link import relative_markdown_target
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.state_root import StateRootError
+from coordinator_core.state_root import _claude_klabauter_state as _guarded_claude_klabauter_state
 
 _SUBPROCESS_TIMEOUT_SECS = 10
 
@@ -104,7 +107,15 @@ def _resolve_state_root(repo_root: str) -> str:
 
     Raises RuntimeError (coordinator_claude_klabauter_root's own remediation text) when
     repo_root IS the meta-repo but CLAUDE_KLABAUTER_ROOT cannot be resolved — matches the
-    bash oracle's fail-loud `|| return 1` on that branch.
+    bash oracle's fail-loud `|| return 1` on that branch. Also raises
+    RuntimeError (as `coordinator_core.state_root.StateRootError`, itself a
+    RuntimeError subclass) when the meta-repo branch resolves to a PUBLISHED
+    engine mirror rather than a live working tree — this reuses
+    `coordinator_core.state_root._claude_klabauter_state`'s own published-mirror guard
+    (class-AWARE `coordinator_claude_klabauter_root_with_class`, not the class-less
+    `coordinator_claude_klabauter_root` this function used to call directly) rather than
+    reimplementing the check; see commit 5dedf53b9, which added that guard to
+    `state_root.py` and this call site was found to have been missed by.
     """
     try:
         is_meta = _meta_repo_identity.is_meta_repo(repo_root)
@@ -113,8 +124,7 @@ def _resolve_state_root(repo_root: str) -> str:
         is_meta = False
 
     if is_meta:
-        claude_klabauter_root = _claude_klabauter_root_mod.coordinator_claude_klabauter_root()
-        return os.path.join(claude_klabauter_root, "state")
+        return _guarded_claude_klabauter_state()
     return os.path.join(repo_root, "state")
 
 

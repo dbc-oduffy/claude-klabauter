@@ -112,6 +112,10 @@ _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cc_invoke  # noqa: E402
+
+cc_invoke.ensure_engine_on_path(__file__)
+
 from coordinator_core.claim_state import resolve_claim_state  # noqa: E402
 from coordinator_core.wire_paths import rel_id  # noqa: E402
 

@@ -362,7 +362,7 @@ def item_person_retracted(item_id: str, person_id: str, role: str) -> dict:
 # --- sat-05: person/alias/merge payload constructors (DEC-40/DEC-42/DEC-44) ---
 
 ALIAS_NAMESPACES: frozenset[str] = frozenset(
-    {"transcript_name", "email", "git_author", "display"}
+    {"transcript_name", "email", "git_author", "display", "github", "github_id"}
 )
 """The closed alias-namespace enum for `person_alias_added`/
 `person_alias_retracted`. Nothing else rides in an alias payload's
@@ -374,10 +374,10 @@ def reject_invalid_namespace(namespace: str, *, action: str) -> None:
 
     Raises ``TrackerEntityError`` unless *namespace* is one of the closed
     ``ALIAS_NAMESPACES`` enum values — ``transcript_name`` / ``email`` /
-    ``git_author`` / ``display``. Exported (not a leading-underscore
-    private) so any future alias-related constructor routes through this
-    one guard rather than re-deriving the namespace check, mirroring
-    ``reject_invalid_role``'s shape.
+    ``git_author`` / ``display`` / ``github`` / ``github_id``. Exported (not a
+    leading-underscore private) so any future alias-related constructor
+    routes through this one guard rather than re-deriving the namespace
+    check, mirroring ``reject_invalid_role``'s shape.
     """
     if namespace not in ALIAS_NAMESPACES:
         raise TrackerEntityError(
@@ -389,13 +389,17 @@ def reject_invalid_namespace(namespace: str, *, action: str) -> None:
 def normalize_alias(namespace: str, raw_value: str) -> str:
     """Normalize an alias's raw value per DEC-44, keyed on *namespace*.
 
-    ``email`` and ``git_author`` are stripped and casefolded (identity is
-    case-insensitive for those namespaces). ``display`` and
+    ``email``, ``git_author``, and ``github`` are stripped and casefolded
+    (identity is case-insensitive for those namespaces — GitHub handles
+    are case-insensitive but case-preserving, so presentation case lives
+    in the ``display`` alias, not here). ``display`` and
     ``transcript_name`` are stripped only — case is significant for a
-    human-facing display form.
+    human-facing display form. ``github_id`` is stripped only because it
+    is a numeric id, for which casefolding is a no-op that would only
+    imply a case-sensitivity question the value cannot have.
     """
     stripped = raw_value.strip()
-    if namespace in ("email", "git_author"):
+    if namespace in ("email", "git_author", "github"):
         return stripped.casefold()
     return stripped
 

@@ -131,10 +131,7 @@ def _ensure_claude_klabauter_on_path() -> str:
     catch RuntimeError around this (`_resolve_state_root`,
     `_resolve_repo_root`) keep working unchanged.
     """
-    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
-    return claude_klabauter_root
+    return cc_invoke.require_engine_on_path(__file__)
 
 
 def _import_housekeeping_seam():

@@ -54,7 +54,7 @@ from pathlib import Path
 _LIB_DIR = str(Path(__file__).resolve().parent / "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import resolve_colocated_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_colocated_engine_on_path  # noqa: E402
 
 _USAGE_FAIL = 2
 _TRANSPORT_FAIL = 3
@@ -69,12 +69,10 @@ def main(argv: list[str]) -> int:
     subcmd, rest = argv[0], argv[1:]
 
     try:
-        repo_root = Path(resolve_colocated_claude_klabauter_root(__file__))
+        require_colocated_engine_on_path(__file__)
     except RuntimeError as exc:
         print(f"{prog}: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         return _TRANSPORT_FAIL
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
 
     try:
         if subcmd == "brief":

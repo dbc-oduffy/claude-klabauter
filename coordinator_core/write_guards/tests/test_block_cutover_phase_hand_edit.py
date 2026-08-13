@@ -81,7 +81,13 @@ class TestFlagsPhaseHandEdit:
         reason = result["hookSpecificOutput"]["additionalContext"]
         assert "cutover-cli advance" in reason
 
-    def test_advisory_reason_leads_with_route(self, tmp_path, monkeypatch):
+    def test_advisory_reason_leads_with_route_and_names_no_override(self, tmp_path, monkeypatch):
+        """Inverted (was: `..._leads_with_route`, which asserted "override"
+        WAS present). This advisory's current text is the sanctioned-op
+        route ("Use instead: `cutover-cli advance <record>`.") with no
+        override mention at all -- positively asserts both the route AND
+        the absence of "override" anywhere in the reason, so this cannot
+        pass vacuously on a reason carrying neither."""
         repo_root, record_path = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         payload = {
@@ -98,7 +104,8 @@ class TestFlagsPhaseHandEdit:
         reason = result["hookSpecificOutput"]["additionalContext"]
 
         assert "cutover-cli advance" in reason
-        assert "override" in reason.lower()
+        assert "Use instead" in reason
+        assert "override" not in reason.lower()
 
     def test_multiedit_touching_phase_flagged(self, tmp_path, monkeypatch):
         repo_root, record_path = _make_repo(tmp_path)

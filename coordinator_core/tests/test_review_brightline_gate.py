@@ -15,18 +15,23 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.coverage import _DagChainResult
+from coordinator_core.coverage import _DagChainResult, _resolve_numstat_row_path
 from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from coordinator_core.ops.review_brightline_gate import (
     _classify_surface,
     _compute_chain_oracle,
     _compute_plan_oracle,
+    _compute_session_oracle_single,
     _enumerate_owned_batons,
     _find_governing_plans,
     _is_noise_path,
     _is_planning_artifact_path,
+    _is_prose_bearing_path,
     _resolve_closing_session_id,
+    _substance_weight,
     _sum_loc,
+    _SUBSTANCE_WEIGHT_CONTENT,
+    _SUBSTANCE_WEIGHT_RENAME,
     main,
 )
 from coordinator_core.session import claims
@@ -866,6 +871,110 @@ def test_is_noise_path_sizings_and_audits_not_excluded():
     assert _is_noise_path("state/audits/2026-08-04-some-audit.md") is False
 
 
+def test_resolve_numstat_row_path_braced_rename_resolves_to_destination_for_noise():
+    """AC1: a compact braced rename row (`{old => new}` with a shared
+    prefix/suffix hoisted out of the braces) must noise-drop identically to
+    the bare destination path — the literal rename fragment starting `{`
+    fails `_is_noise_path`'s anchored alternation even though the
+    destination plainly matches it."""
+    row = "{state/handoffs => archive/handoffs/2026-08}/2026-08-12-x.md"
+    resolved = _resolve_numstat_row_path(row)
+    assert resolved == "archive/handoffs/2026-08/2026-08-12-x.md"
+    assert _is_noise_path(resolved) == _is_noise_path("archive/handoffs/2026-08/2026-08-12-x.md")
+    assert _is_noise_path(resolved) is True
+
+
+def test_resolve_numstat_row_path_mid_path_brace_not_always_leading():
+    """The braced form is not always anchored at the start of the row —
+    `cross-repo/{inbox => archive}/y.md` hoists a shared PREFIX
+    (`cross-repo/`) and SUFFIX (`/y.md`) around the braces, unlike the
+    leading-brace form above."""
+    row = "cross-repo/{inbox => archive}/2026-08-12-y.md"
+    resolved = _resolve_numstat_row_path(row)
+    assert resolved == "cross-repo/archive/2026-08-12-y.md"
+    assert _is_noise_path(resolved) is True
+
+
+def test_resolve_numstat_row_path_bare_rename_resolves_to_destination():
+    """AC2: the bare `old/p.md => new/p.md` form (no shared prefix/suffix to
+    hoist into braces) must resolve to the DESTINATION for classification —
+    a test asserting on the source path would not exercise the fix."""
+    row = "docs/plans/2026-07-27-old-name.md => archive/specs/2026-07/2026-07-27-old-name.md"
+    resolved = _resolve_numstat_row_path(row)
+    assert resolved == "archive/specs/2026-07/2026-07-27-old-name.md"
+    assert resolved != "docs/plans/2026-07-27-old-name.md"
+    assert _classify_surface(resolved) == _classify_surface(
+        "archive/specs/2026-07/2026-07-27-old-name.md"
+    )
+
+
+def test_resolve_numstat_row_path_non_rename_returned_identical():
+    """AC3: a normal non-rename path passes through byte-identical — this is
+    what makes applying the resolution unconditionally to every row safe."""
+    path = "coordinator_core/ops/review_brightline_gate.py"
+    assert _resolve_numstat_row_path(path) == path
+
+
+def test_resolve_numstat_row_path_single_definition_shared_with_workstream_complete():
+    """AC7: exactly one definition of the rename-resolution logic exists —
+    `workstream_complete/__init__.py` imports and re-exports the same
+    function object from `coverage.py` rather than keeping its own copy."""
+    from coordinator_core import workstream_complete
+
+    assert workstream_complete._resolve_numstat_row_path is _resolve_numstat_row_path
+
+
+def test_is_noise_path_lockfiles_pnpm_and_bun_are_noise_package_json_is_not():
+    """AC6: pnpm-lock.yaml and bun.lockb are noise (regenerated, not authored
+    intent); package.json is NOT (a real dependency change); poetry.lock and
+    package-lock.json remain noise — no regression on the pre-existing set."""
+    assert _is_noise_path("pnpm-lock.yaml") is True
+    assert _is_noise_path("bun.lockb") is True
+    assert _is_noise_path("package.json") is False
+    assert _is_noise_path("poetry.lock") is True
+    assert _is_noise_path("package-lock.json") is True
+
+
+def test_compute_chain_oracle_pure_lifecycle_rename_commit_contributes_nothing(
+    tmp_path, monkeypatch
+):
+    """AC4: a synthetic commit whose every numstat row is a zero-LOC
+    lifecycle/archive rename must be skipped by the `if not non_noise`
+    branch — contributing 0 to chain_commits and 0 surfaces, matching the
+    measured 28->22 commits / 6->5 chain_oracle real-repo fix."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    handoffs_dir = repo / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    (handoffs_dir / "2026-08-12-baton.md").write_text("stuff\n", encoding="utf-8")
+    _git(repo, "add", "state/handoffs/2026-08-12-baton.md")
+    _git(repo, "commit", "-q", "-m", "handoff: create")
+
+    archive_dir = repo / "archive" / "handoffs" / "2026-08"
+    archive_dir.mkdir(parents=True)
+    _git(
+        repo,
+        "mv",
+        "state/handoffs/2026-08-12-baton.md",
+        "archive/handoffs/2026-08/2026-08-12-baton.md",
+    )
+    _git(repo, "commit", "-q", "-m", "ceremony: lifecycle rename")
+    rename_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    fake_result = _DagChainResult(shas=[rename_sha])
+    monkeypatch.setattr(rbg, "_derive_dag_chain_set", lambda *a, **kw: fake_result)
+    monkeypatch.chdir(repo)
+
+    result = _compute_chain_oracle(repo, [(repo / "seed.md", {})], "closing-sid")
+
+    assert result["chain_commits"] == 0
+    assert result["chain_loc"] == 0
+    assert result["chain_surfaces"] == set()
+
+
 def test_compute_chain_oracle_drops_noise_but_keeps_mixed_commit_code_loc(
     tmp_path, monkeypatch
 ):
@@ -917,6 +1026,308 @@ def test_compute_chain_oracle_drops_noise_but_keeps_mixed_commit_code_loc(
 
 
 # ---------------------------------------------------------------------------
+# _is_prose_bearing_path / chain+session oracle mandate exemption — C1a,
+# 2026-08-12. Spec backlink:
+# docs/plans/2026-08-12-review-mandate-guides-the-split.md § C1a, AC1.
+# ---------------------------------------------------------------------------
+
+
+def test_is_prose_bearing_path_covers_md_yaml_extensions():
+    assert _is_prose_bearing_path("docs/plans/2026-08-12-foo.md") is True
+    assert _is_prose_bearing_path("README.markdown") is True
+    assert _is_prose_bearing_path("state/sizings/2026-08-12-foo.yaml") is True
+    assert _is_prose_bearing_path("coordinator/config.yml") is True
+
+
+def test_is_prose_bearing_path_excludes_code_extensions():
+    assert _is_prose_bearing_path("coordinator_core/ops/review_brightline_gate.py") is False
+    assert _is_prose_bearing_path("a.sh") is False
+    assert _is_prose_bearing_path("a.json") is False
+
+
+def test_is_prose_bearing_path_extension_only_no_code_directory_carveout():
+    """Judgment call (C1a dispatch brief): a `.yaml` under a code directory
+    (a fixture, a runtime-read config) is STILL prose-bearing — classification
+    is by extension only, no directory-based carve-out. See
+    `_is_prose_bearing_path`'s docstring for the reasoning."""
+    assert _is_prose_bearing_path("coordinator_core/tests/fixtures/foo.yaml") is True
+    assert _is_prose_bearing_path("coordinator_core/ops/config.yaml") is True
+
+
+def test_compute_chain_oracle_prose_only_commit_contributes_nothing_ac1(
+    tmp_path, monkeypatch
+):
+    """AC1: a chain whose only changes are `.md`/`.yaml` contributes 0 to
+    chain_commits/chain_loc/chain_surfaces, yielding chain_oracle=1."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text("prose\n" * 10, encoding="utf-8")
+    (repo / "config.yaml").write_text("key: value\n" * 10, encoding="utf-8")
+    _git(repo, "add", "docs/plan.md", "config.yaml")
+    _git(repo, "commit", "-q", "-m", "prose-only commit")
+    prose_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    fake_result = _DagChainResult(shas=[prose_sha])
+    monkeypatch.setattr(rbg, "_derive_dag_chain_set", lambda *a, **kw: fake_result)
+    monkeypatch.chdir(repo)
+
+    result = _compute_chain_oracle(repo, [(repo / "seed.md", {})], "closing-sid")
+
+    assert result["chain_commits"] == 0
+    assert result["chain_loc"] == 0
+    assert result["chain_surfaces"] == set()
+    assert result["chain_oracle"] == 1
+
+
+def test_compute_chain_oracle_mixed_commit_prose_row_dropped_code_row_kept(
+    tmp_path, monkeypatch
+):
+    """File-granularity contract mirrors the noise-path test: a commit mixing
+    a prose-bearing row (.md) with a code row (.py) keeps only the code row's
+    LOC/surface."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    (repo / "notes.md").write_text("prose\n" * 5, encoding="utf-8")
+    (repo / "b.py").write_text("y = 2\nz = 3\n", encoding="utf-8")
+    _git(repo, "add", "notes.md", "b.py")
+    _git(repo, "commit", "-q", "-m", "mixed prose+code commit")
+    mixed_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    fake_result = _DagChainResult(shas=[mixed_sha])
+    monkeypatch.setattr(rbg, "_derive_dag_chain_set", lambda *a, **kw: fake_result)
+    monkeypatch.chdir(repo)
+
+    result = _compute_chain_oracle(repo, [(repo / "seed.md", {})], "closing-sid")
+
+    assert result["chain_commits"] == 1
+    assert result["chain_loc"] == 2
+    assert result["chain_surfaces"] == {"python"}
+
+
+def test_compute_session_oracle_single_prose_only_commit_contributes_nothing_ac1(
+    tmp_path, monkeypatch
+):
+    """AC1, session arm: `_compute_session_oracle_single` over a Session-Id
+    trailer-matched range whose only commit touches `.md`/`.yaml` returns
+    loc=0/commits=0/surfaces=set(), the session_oracle=1 input."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    (repo / "config.yml").write_text("key: value\n" * 10, encoding="utf-8")
+    _git(repo, "add", "config.yml")
+    _git(
+        repo,
+        "commit",
+        "-q",
+        "-m",
+        "prose-only commit\n\nSession-Id: session-under-test",
+    )
+    monkeypatch.chdir(repo)
+
+    result = _compute_session_oracle_single(
+        "session-under-test", ["HEAD~1..HEAD"], cwd=None
+    )
+
+    assert result == {"loc": 0, "commits": 0, "surfaces": set()}
+
+
+def test_session_id_range_prose_only_commit_single_reviewer_ok_ac1(
+    tmp_path, capsys, monkeypatch
+):
+    """AC1, session-scoped range path (`_session_scoped`, ~L1334): a
+    `--session-id`-filtered range whose only matching commit is `.md`/`.yaml`
+    yields commits=0 and VERDICT=single-reviewer-ok."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text("prose\n" * 10, encoding="utf-8")
+    _git(repo, "add", "docs/plan.md")
+    _git(
+        repo,
+        "commit",
+        "-q",
+        "-m",
+        "prose-only commit\n\nSession-Id: prose-session",
+    )
+    monkeypatch.chdir(repo)
+
+    rc = main(["--session-id", "prose-session", "HEAD~1..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "commits=0" in captured.out
+    assert "VERDICT=single-reviewer-ok" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# _substance_weight / _accumulate_countable_rows — AC2/AC3 change-substance
+# weighting, C2, 2026-08-12. Spec backlink:
+# docs/plans/2026-08-12-review-mandate-guides-the-split.md § C2, AC2, AC3.
+# ---------------------------------------------------------------------------
+
+
+def test_substance_weight_zeroes_only_content_identical_rename():
+    assert _substance_weight("R", 0, 0) == _SUBSTANCE_WEIGHT_RENAME
+    assert _substance_weight("R", 3, 1) == _SUBSTANCE_WEIGHT_CONTENT
+    assert _substance_weight("A", 0, 0) == _SUBSTANCE_WEIGHT_CONTENT
+    assert _substance_weight("M", 0, 0) == _SUBSTANCE_WEIGHT_CONTENT
+    assert _substance_weight("D", 5, 0) == _SUBSTANCE_WEIGHT_CONTENT
+    assert _substance_weight("", 0, 0) == _SUBSTANCE_WEIGHT_CONTENT
+    # Review: code-reviewer — P3: pin "C" (copy) deliberately, not by accident
+    # of "R" being the only exempted branch. A copy adds a NEW surface, not a
+    # content-identical move, so it stays at full weight even at 0 added/0
+    # deleted (a copy with no line-level diff, e.g. a copy-then-immediate-
+    # revert-detected-as-identical case) — unlike "R", which zeroes exactly
+    # that shape.
+    assert _substance_weight("C", 0, 0) == _SUBSTANCE_WEIGHT_CONTENT
+    assert _substance_weight("C", 5, 0) == _SUBSTANCE_WEIGHT_CONTENT
+
+
+def test_compute_chain_oracle_pure_code_rename_contributes_zero_loc_ac2(
+    tmp_path, monkeypatch
+):
+    """AC2: a content-identical rename of a non-prose (`.py`) file is the
+    'breadth without burden' case named in the plan body — it must
+    contribute 0 to chain_loc even though it is not caught by C1a's
+    prose-bearing exemption (which only exempts by extension, not by
+    rename-ness)."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    (repo / "old_name.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+    _git(repo, "add", "old_name.py")
+    _git(repo, "commit", "-q", "-m", "add file to rename")
+    _git(repo, "mv", "old_name.py", "new_name.py")
+    _git(repo, "commit", "-q", "-m", "pure rename, no content change")
+    rename_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    fake_result = _DagChainResult(shas=[rename_sha])
+    monkeypatch.setattr(rbg, "_derive_dag_chain_set", lambda *a, **kw: fake_result)
+    monkeypatch.chdir(repo)
+
+    result = _compute_chain_oracle(repo, [(repo / "seed.md", {})], "closing-sid")
+
+    assert result["chain_commits"] == 1
+    assert result["chain_loc"] == 0
+    assert result["chain_surfaces"] == {"python"}
+
+
+def test_compute_chain_oracle_renamed_with_edits_keeps_full_weight_ac2(
+    tmp_path, monkeypatch
+):
+    """A rename that ALSO edits content is real authored change, not
+    breadth-without-burden — it stays at full substance weight."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    original = "".join(f"line {n}\n" for n in range(10))
+    (repo / "old_name.py").write_text(original, encoding="utf-8")
+    _git(repo, "add", "old_name.py")
+    _git(repo, "commit", "-q", "-m", "add file to rename")
+    _git(repo, "mv", "old_name.py", "new_name.py")
+    # High-similarity edit (append 1 line to 10) so git still detects this
+    # as a rename (status "R"), not an independent delete+add pair — a
+    # low-similarity content swap falls below git's rename-detection
+    # threshold and is reported as D+A instead, which is a different (and
+    # already full-weight) case this test isn't exercising.
+    (repo / "new_name.py").write_text(original + "line 10\n", encoding="utf-8")
+    _git(repo, "add", "new_name.py")
+    _git(repo, "commit", "-q", "-m", "rename plus edit")
+    mixed_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    fake_result = _DagChainResult(shas=[mixed_sha])
+    monkeypatch.setattr(rbg, "_derive_dag_chain_set", lambda *a, **kw: fake_result)
+    monkeypatch.chdir(repo)
+
+    result = _compute_chain_oracle(repo, [(repo / "seed.md", {})], "closing-sid")
+
+    # 1 inserted line at full weight — the rename itself contributes 0, the
+    # genuine content edit on top of it does not.
+    assert result["chain_commits"] == 1
+    assert result["chain_loc"] == 1
+
+
+def test_compute_session_oracle_single_pure_rename_contributes_zero_loc_ac2(
+    tmp_path, monkeypatch
+):
+    """Session-arm mirror of the chain-arm rename test above."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    (repo / "old_name.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+    _git(repo, "add", "old_name.py")
+    _git(repo, "commit", "-q", "-m", "add file to rename\n\nSession-Id: session-under-test")
+    _git(repo, "mv", "old_name.py", "new_name.py")
+    _git(
+        repo,
+        "commit",
+        "-q",
+        "-m",
+        "pure rename, no content change\n\nSession-Id: session-under-test",
+    )
+    monkeypatch.chdir(repo)
+
+    result = _compute_session_oracle_single(
+        "session-under-test", ["HEAD~2..HEAD"], cwd=None
+    )
+
+    # 2 commits: the file's own creation (2 inserted lines, full weight)
+    # plus the pure rename on top of it (0 loc).
+    assert result["commits"] == 2
+    assert result["loc"] == 2
+    assert result["surfaces"] == {"python"}
+
+
+def test_parse_show_numstat_pairs_interleaved_rename_to_its_own_row(tmp_path):
+    """Review: code-reviewer — P2: every prior rename test puts the rename
+    as the ONLY row in its commit, leaving `_parse_show_numstat`'s positional
+    raw/numstat pairing unexercised for the case most likely to break it — a
+    single commit touching several files where a rename/copy is interleaved
+    among plain add/modify rows. Asserts each file's raw status pairs to its
+    OWN numstat row, not a neighbor's."""
+    import coordinator_core.ops.review_brightline_gate as rbg
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    (repo / "rename_source.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "modify_target.py").write_text("a = 1\n", encoding="utf-8")
+    _git(repo, "add", "rename_source.py", "modify_target.py")
+    _git(repo, "commit", "-q", "-m", "seed files")
+
+    _git(repo, "mv", "rename_source.py", "rename_dest.py")
+    (repo / "modify_target.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+    (repo / "added_file.py").write_text("c = 1\nd = 2\n", encoding="utf-8")
+    _git(repo, "add", "modify_target.py", "added_file.py")
+    _git(repo, "commit", "-q", "-m", "mixed commit: rename + modify + add")
+    mixed_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    show_out = _git(repo, "show", "--raw", "--numstat", "--format=%H", mixed_sha)
+    per_commit = rbg._parse_show_numstat(show_out)
+    rows = per_commit[mixed_sha]
+
+    by_path = {
+        _resolve_numstat_row_path(path): (added, deleted, status)
+        for added, deleted, path, status in rows
+    }
+    assert by_path["rename_dest.py"] == ("0", "0", "R")
+    assert by_path["modify_target.py"] == ("1", "0", "M")
+    assert by_path["added_file.py"] == ("2", "0", "A")
+
+
+# ---------------------------------------------------------------------------
 # _is_planning_artifact_path / chain_oracle planning-artifact de-weight —
 # 2026-08-06 (C7, AC8). Spec backlink: docs/plans/2026-08-05-coverage-gate-
 # planning-artifact-class.md § C7.
@@ -964,7 +1375,14 @@ def test_compute_chain_oracle_deweights_plan_prose_not_code(tmp_path, monkeypatc
     fix both commits produced chain_oracle=3 (1500 LOC each, undifferentiated
     at full weight); after the fix the plan commit's LOC is scaled by
     `_PLANNING_LOC_WEIGHT` and its chain_oracle drops to 1, while the code
-    commit is untouched."""
+    commit is untouched.
+
+    Fixture uses `.txt`, not `.md` (C1a, 2026-08-12): `_is_prose_bearing_path`
+    now fully excludes `.md`/`.yaml`/`.yml` BEFORE this weight is ever
+    applied, so a `.md` planning artifact contributes 0, not a de-weighted
+    fraction — see `_PLANNING_LOC_WEIGHT`'s "SUPERSEDED IN PART" comment. A
+    non-prose-bearing extension under a planning prefix is what still
+    exercises the de-weight path this test is for."""
     import coordinator_core.ops.review_brightline_gate as rbg
 
     repo = tmp_path / "repo"
@@ -972,10 +1390,10 @@ def test_compute_chain_oracle_deweights_plan_prose_not_code(tmp_path, monkeypatc
 
     # Commit 1: a 1500-line plan-prose edit under docs/plans/.
     (repo / "docs" / "plans").mkdir(parents=True)
-    (repo / "docs" / "plans" / "big-plan.md").write_text(
+    (repo / "docs" / "plans" / "big-plan.txt").write_text(
         "line of plan prose\n" * 1500, encoding="utf-8"
     )
-    _git(repo, "add", "docs/plans/big-plan.md")
+    _git(repo, "add", "docs/plans/big-plan.txt")
     _git(repo, "commit", "-q", "-m", "plan: large plan prose commit")
     plan_sha = _git(repo, "rev-parse", "HEAD").strip()
 
@@ -1011,16 +1429,21 @@ def test_compute_chain_oracle_mixed_commit_deweights_only_planning_file(
     """File-granularity contract (mirrors the noise-exclusion test above): a
     MIXED commit touching one planning-artifact file and one code file
     de-weights only the planning-artifact file's LOC, at full code weight
-    for the other."""
+    for the other.
+
+    Fixture uses `.txt`, not `.md` (C1a, 2026-08-12) — see the sibling test
+    above for why a `.md` planning artifact no longer exercises this
+    de-weight path at all (full exclusion via `_is_prose_bearing_path` runs
+    first)."""
     import coordinator_core.ops.review_brightline_gate as rbg
 
     repo = tmp_path / "repo"
     _init_repo(repo)
 
     (repo / "docs" / "plans").mkdir(parents=True)
-    (repo / "docs" / "plans" / "plan.md").write_text("prose\n" * 10, encoding="utf-8")
+    (repo / "docs" / "plans" / "plan.txt").write_text("prose\n" * 10, encoding="utf-8")
     (repo / "c.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
-    _git(repo, "add", "docs/plans/plan.md", "c.py")
+    _git(repo, "add", "docs/plans/plan.txt", "c.py")
     _git(repo, "commit", "-q", "-m", "mixed plan+code commit")
     mixed_sha = _git(repo, "rev-parse", "HEAD").strip()
 
@@ -1030,10 +1453,10 @@ def test_compute_chain_oracle_mixed_commit_deweights_only_planning_file(
 
     result = rbg._compute_chain_oracle(repo, [(repo / "seed.md", {})], "closing-sid")
 
-    # plan.md: 10 insertions * 0.2 weight = int(2.0) = 2.
+    # plan.txt: 10 insertions * 0.2 weight = int(2.0) = 2.
     # c.py: 2 insertions at full weight = 2.
     assert result["chain_loc"] == 4
-    assert result["chain_surfaces"] == {"doctrine", "python"}
+    assert result["chain_surfaces"] == {"other", "python"}
 
 
 def test_compute_chain_oracle_shares_one_dag_context_across_batons(

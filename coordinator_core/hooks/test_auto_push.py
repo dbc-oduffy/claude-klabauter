@@ -2087,13 +2087,19 @@ def test_wire_path_respawn_actually_pushes_to_a_real_remote(tmp_path):
         )
         return out.stdout.strip() if out.returncode == 0 else ""
 
+    # Poll interval intentionally coarser than the deadline resolution: this
+    # loop's own `git rev-parse` calls are additional real spawns on top of
+    # the fixture's, and a 0.1s interval against a 15s deadline bounds the
+    # failure-path worst case at ~150 extra spawns for one test. 0.5s bounds
+    # the same worst case at 30 while leaving the happy path (resolves in a
+    # fraction of a second) unaffected.
     deadline = time.time() + 15
     remote_sha = ""
     while time.time() < deadline:
         remote_sha = _remote_tip()
         if remote_sha:
             break
-        time.sleep(0.1)
+        time.sleep(0.5)
 
     assert remote_sha == local_sha, (
         "the respawned child's real push attempt never reached the "

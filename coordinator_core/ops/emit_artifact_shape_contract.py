@@ -221,6 +221,10 @@ from pathlib import Path
 from typing import Any, List
 
 from coordinator_core.frontmatter.schema_validate import load_schemas
+from coordinator_core.lifecycle_constants import (
+    HANDOFF_TERMINAL_DEPLOYMENT,
+    HANDOFF_TERMINAL_STATUS,
+)
 from coordinator_core.ops.records_query import liveness as _records_liveness
 from coordinator_core.session.declared_writes import declare_write
 
@@ -446,6 +450,60 @@ def _derive_axis_mapping(record_type: str, field: str, values: List[str]) -> dic
     return {value: _records_liveness({field: value}, record_type) for value in values}
 
 
+# Explicit display-order tuples for the handoff axes (status, deployment_state).
+# HANDOFF_TERMINAL_STATUS / HANDOFF_TERMINAL_DEPLOYMENT (lifecycle_constants,
+# the SSOT) are unordered frozensets, but this contract is a vendored,
+# byte-identity-checked artifact (example-doctrine-repo's test_artifact_shape_contract_freshness.py
+# regenerates and diffs against a committed bundle) — a `sorted()` derivation
+# would silently reorder consumer-facing bytes on any future Python/hash-seed
+# change with no version bump. Order is therefore hand-authored here once, and
+# checked against the SSOT below rather than trusted to stay in sync silently.
+_HANDOFF_STATUS_DISPLAY_ORDER: tuple[str, ...] = ("claimed", "consumed", "superseded")
+
+# deployment_state's display order additionally carries the three live
+# (non-terminal) values, which have no SSOT constant — only the terminal tail
+# is checked against HANDOFF_TERMINAL_DEPLOYMENT.
+_HANDOFF_DEPLOYMENT_LIVE_DISPLAY_ORDER: tuple[str, ...] = ("awaiting_gate", "ready_to_fire", "in_flight")
+_HANDOFF_DEPLOYMENT_TERMINAL_DISPLAY_ORDER: tuple[str, ...] = ("shipped", "continued", "closed", "abandoned")
+_HANDOFF_DEPLOYMENT_DISPLAY_ORDER: tuple[str, ...] = (
+    _HANDOFF_DEPLOYMENT_LIVE_DISPLAY_ORDER + _HANDOFF_DEPLOYMENT_TERMINAL_DISPLAY_ORDER
+)
+
+
+def _assert_axis_display_order_covers_ssot(
+    axis_name: str, display_order: tuple[str, ...], ssot: frozenset[str], *, exact: bool
+) -> None:
+    """Fail-loud drift guard between a hand-authored display-order tuple above
+    and its SSOT frozenset in coordinator_core.lifecycle_constants. ``exact``
+    requires set equality (the ``status`` axis lists ONLY terminal values);
+    otherwise requires the display order to be a superset (the
+    ``deployment_state`` axis additionally lists non-terminal live values).
+    Raises at import time — a narrowed or widened SSOT must never emit stale
+    values into this vendored contract silently.
+    """
+    order_set = set(display_order)
+    ok = order_set == ssot if exact else order_set >= ssot
+    if ok:
+        return
+    missing = sorted(ssot - order_set)
+    unexpected = sorted(order_set - ssot) if exact else []
+    raise RuntimeError(
+        f"coordinator_core/ops/emit_artifact_shape_contract.py: handoff.{axis_name} "
+        f"display order has drifted from lifecycle_constants — missing from display "
+        f"order: {missing}; unexpected in display order: {unexpected}. Update the "
+        "display-order tuple in this module to match the SSOT, preserving intended "
+        "display order (do NOT sort — see the comment above on vendored-bundle "
+        "byte-identity)."
+    )
+
+
+_assert_axis_display_order_covers_ssot(
+    "status", _HANDOFF_STATUS_DISPLAY_ORDER, HANDOFF_TERMINAL_STATUS, exact=True
+)
+_assert_axis_display_order_covers_ssot(
+    "deployment_state", _HANDOFF_DEPLOYMENT_DISPLAY_ORDER, HANDOFF_TERMINAL_DEPLOYMENT, exact=False
+)
+
 LIVENESS_MAPPING: dict = {
     "version": CONTRACT_VERSION,
     "spec_backlink": "docs/wiki/canonical-artifact-shapes.md § The Cross-Type Liveness Predicate",
@@ -457,16 +515,22 @@ LIVENESS_MAPPING: dict = {
             "note": "status and deployment_state combine; see axes. DR-084: status new-vocab is claimed (was consumed); superseded is archived-schema-only grandfather, never written. deployment_state new-vocab is continued|closed (was abandoned); read-side stays dual-tolerant on both axes.",
             "axes": {
                 "status": _derive_axis_mapping(
-                    "handoff", "status", ["claimed", "consumed", "superseded"]
+                    "handoff", "status", list(_HANDOFF_STATUS_DISPLAY_ORDER)
                 ),
                 "deployment_state": _derive_axis_mapping(
                     "handoff",
                     "deployment_state",
-                    ["awaiting_gate", "ready_to_fire", "in_flight", "shipped", "continued", "closed", "abandoned"],
+                    list(_HANDOFF_DEPLOYMENT_DISPLAY_ORDER),
                 ),
             },
             "combination_logic": [
-                {"condition": "status ∈ {claimed,consumed,superseded} OR deployment_state ∈ {shipped,continued,closed,abandoned}", "result": "DONE"},
+                {
+                    "condition": (
+                        "status ∈ {" + ",".join(_HANDOFF_STATUS_DISPLAY_ORDER) + "} OR "
+                        "deployment_state ∈ {" + ",".join(_HANDOFF_DEPLOYMENT_TERMINAL_DISPLAY_ORDER) + "}"
+                    ),
+                    "result": "DONE",
+                },
                 {"condition": "deployment_state == awaiting_gate", "result": "BLOCKED"},
                 {"condition": "otherwise", "result": "LIVE"},
             ],

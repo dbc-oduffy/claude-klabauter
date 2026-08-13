@@ -136,6 +136,18 @@ def test_write_guard_untriggered_set_is_documented_not_silently_empty():
         )
 
 
+def test_write_guard_live_triggers_registry_is_non_empty():
+    """The two parametrized tests below collect zero cases -- and silently
+    report a pass -- if `WRITE_GUARD_LIVE_TRIGGERS` were ever emptied. Same
+    dark-gate shape `guard_message_register_lint`'s own gate guards against
+    with `test_gate_fails_loud_if_collection_drops_to_zero`: a green run and
+    a RUNNING run must not be distinguishable only by incident."""
+    assert altlive.WRITE_GUARD_LIVE_TRIGGERS, (
+        "WRITE_GUARD_LIVE_TRIGGERS is empty -- the parametrized write_guards "
+        "liveness tests below would collect zero cases and pass vacuously"
+    )
+
+
 @pytest.mark.parametrize("guard", sorted(altlive.WRITE_GUARD_LIVE_TRIGGERS))
 def test_write_guard_registered_trigger_fires(guard):
     result = altlive.fire_guard(guard)
@@ -181,6 +193,17 @@ def test_registered_trigger_fires(guard):
     )
 
 
+def _guard_message_text(hso: Dict[str, Any]) -> str:
+    """Read a guard envelope's rendered message from whichever field
+    carries it -- a deny's ``permissionDecisionReason`` or a rewrite/
+    advisory's ``additionalContext`` (see `_alternative_liveness.
+    extract_alternatives`'s own identical fallback). Guards this gate
+    exercises legitimately render either shape, so tests that need the
+    prose (not the envelope's decision field itself) go through this
+    rather than hard-coding one field name."""
+    return hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
+
+
 def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
     """``fire_guard`` must observe a guaranteed-first call for
     ``guard_inprocess_search``'s session latch, never whatever latch state
@@ -203,7 +226,7 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
         result = altlive.fire_guard("guard_inprocess_search")
 
         assert result.fired, "guard_inprocess_search's trigger did not fire: %r" % result.error
-        reason = result.envelope.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+        reason = _guard_message_text(result.envelope.get("hookSpecificOutput", {}))
         # Guard's actual wording is "recognized as a search" -- this phrase
         # opens `_footer`'s full-paragraph branch and is absent from
         # `_ANSWERED_MARKER`, so it is a reliable full-vs-short discriminator.

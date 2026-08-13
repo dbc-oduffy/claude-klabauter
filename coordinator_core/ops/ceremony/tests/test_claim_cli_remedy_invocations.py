@@ -259,24 +259,23 @@ def test_remedy_invocations_parse_against_cli_dispatch(
         )
 
 
-def test_claim_conflict_remedy_names_a_reachable_guard_unlock() -> None:
-    """B6: `_CLAIM_CONFLICT_REMEDY`'s `` `guard-unlock <name>` `` marker
-    must name the SAME guard name `_check_claim_conflicts` actually calls
-    `guard_unlock_sentinel.consume()` with -- never a hand-copied literal
-    that can independently drift from the wiring (the exact regression
-    class this file's own module docstring describes for the CLI-shaped
-    remedies, applied here to the file-shaped one)."""
-    markers = _extract_unlock_markers(sgc._CLAIM_CONFLICT_REMEDY)
-    assert markers, (
-        "_CLAIM_CONFLICT_REMEDY: no `guard-unlock <name>` marker found -- "
-        "B5's break-past mechanism has no named remedy pointing at it"
+def test_claim_conflict_remedy_names_no_guard_unlock() -> None:
+    """C5 (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-
+    keys.md): `_CLAIM_CONFLICT_REMEDY` no longer discusses DR-260's
+    operator-granted unlock at all -- a wall does not discuss its own
+    doors. This asserts that absence positively, on both axes: no
+    `` `guard-unlock <name>` `` marker, and the wiring's own guard name
+    (`_CLAIM_CONFLICT_GUARD_NAME`) is not a substring of the rendered text
+    either -- a bare re-source of the deleted marker check would otherwise
+    go silently vacuous the moment the marker disappeared."""
+    assert not _extract_unlock_markers(sgc._CLAIM_CONFLICT_REMEDY), (
+        "_CLAIM_CONFLICT_REMEDY: found a `guard-unlock <name>` marker -- "
+        "the remedy text must not name this escape at all (see C5)"
     )
-    assert markers == [sgc._CLAIM_CONFLICT_GUARD_NAME], (
-        f"_CLAIM_CONFLICT_REMEDY names guard(s) {markers!r}, but "
-        f"_check_claim_conflicts wires the unlock to "
-        f"{sgc._CLAIM_CONFLICT_GUARD_NAME!r} -- these must be the identical "
-        "string or the refusal text is pointing an operator at a guard "
-        "name that does not match what consume() is actually keyed on"
+    assert sgc._CLAIM_CONFLICT_GUARD_NAME not in sgc._CLAIM_CONFLICT_REMEDY, (
+        f"_CLAIM_CONFLICT_REMEDY still names the guard "
+        f"{sgc._CLAIM_CONFLICT_GUARD_NAME!r} -- the constant stays as the "
+        "wiring's SSOT, but the rendered remedy text must not mention it"
     )
 
 

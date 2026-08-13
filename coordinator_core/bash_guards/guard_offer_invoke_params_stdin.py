@@ -241,7 +241,10 @@ def _payload_hazard(quote: str, payload: str) -> Optional[str]:
 
 
 def check_offer_invoke_params_stdin(
-    cmd: str, session_id: str = ""
+    cmd: str,
+    session_id: str = "",
+    hook_payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
@@ -282,6 +285,9 @@ def check_offer_invoke_params_stdin(
         "--repo <root> <<'%s'\n  <json payload, verbatim>\n  %s" % (delim, delim)
     )
 
+    _offer_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=hook_payload, git_root=git_root)
+    _offer_note_trailer = ("\n\n" + _offer_note) if _offer_note else ""
+
     # Cross-check the extracted span against the command's own shell
     # tokenization, where that is possible. Every one of the four outcomes is
     # branched on BY NAME below -- an outcome that resolves by falling out of
@@ -303,10 +309,10 @@ def check_offer_invoke_params_stdin(
             (
                 "Denied: %s. Tokens merged or vanished -- the op would not "
                 "get what you typed.\n\n"
-                "Use instead:\n%s\n\n"
+                "Use instead:\n%s"
                 % (hazard, offer_shape)
             )
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            + _offer_note_trailer
         )
 
     # TOO_LARGE: the command is past the shared tokenizer ceiling, so no
@@ -321,10 +327,10 @@ def check_offer_invoke_params_stdin(
             (
                 "Denied: %s, and the command is too large to shell-tokenize, "
                 "so its payload boundaries cannot be verified.\n\n"
-                "Use instead:\n%s\n\n"
+                "Use instead:\n%s"
                 % (hazard, offer_shape)
             )
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            + _offer_note_trailer
         )
 
     # UNAVAILABLE: `cmd` is not shell-tokenizable at all (an odd number of
@@ -342,9 +348,9 @@ def check_offer_invoke_params_stdin(
         return _deny(
             (
                 "Denied: %s, and the payload's boundaries could not be "
-                "verified.\n\nUse instead:\n%s\n\n" % (hazard, offer_shape)
+                "verified.\n\nUse instead:\n%s" % (hazard, offer_shape)
             )
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            + _offer_note_trailer
         )
 
     if "\n" in original_cmd:
@@ -356,10 +362,10 @@ def check_offer_invoke_params_stdin(
             (
                 "Denied: %s. Not rewritten -- command spans multiple "
                 "lines; a heredoc body must follow its own '<<' line.\n\n"
-                "Use instead:\n%s\n\n"
+                "Use instead:\n%s"
                 % (hazard, offer_shape)
             )
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            + _offer_note_trailer
         )
 
     rewritten = "%s--params-file - <<'%s'%s\n%s\n%s" % (
@@ -372,8 +378,8 @@ def check_offer_invoke_params_stdin(
     return _allow_rewrite(
         rewritten,
         (
-            "Auto-rewritten to '--params-file -' heredoc: %s.\n\n"
+            "Auto-rewritten to '--params-file -' heredoc: %s."
             % hazard
         )
-        + operator_override_note(_OVERRIDE_ENV_VAR),
+        + _offer_note_trailer,
     )

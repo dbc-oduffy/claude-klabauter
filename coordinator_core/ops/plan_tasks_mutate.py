@@ -95,11 +95,16 @@ Verb contracts:
         `pm_approved` field must be `True`, checked per row, no batching
         semantics apply (legacy plans have no groupings).
     `coded` is NOT closed and needs no authorization in either mode (D3).
-    The refusal names NO command — this is deliberate, not an omission: an
-    earlier version worded the refusal as an offer naming what would
-    satisfy it (e.g. "stamp pm_approved: true first"), which is the write
-    guard's own key printed back at whoever hit the gate — see the retired
-    `_PM_APPROVAL_OFFER` banner below for the full excision. `resolve` does
+    The GOVERNED refusal names NO command — this is deliberate, not an
+    omission: an earlier version worded the refusal as an offer naming what
+    would satisfy it (e.g. "stamp pm_approved: true first"), which is the
+    write guard's own key printed back at whoever hit the gate — see the
+    retired `_PM_APPROVAL_OFFER` banner below for the full excision. The
+    LEGACY refusal DOES name `pm_approved`, and must (example-doctrine-repo ruling 2026-08-12,
+    exit 1): the excision's reasoning holds only where the impossibility
+    claim is true, and on a per-row boolean the same agent can stamp it
+    never was — see `_LEGACY_PM_APPROVAL_HINT`'s own banner for why naming
+    the field is the honesty layer rather than a re-offer. `resolve` does
     NOT itself grant authorization in either mode: a GOVERNED plan's
     `grouping_approvals` blocks are authored and approved by the PM
     directly in the plan's frontmatter, outside this op's surface entirely;
@@ -761,17 +766,35 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 # LEGACY plans (no `grouping_approvals` key at all) have no groupings and no
 # `pm_utterance` field anywhere in their schema — `_GROUPING_APPROVAL_HINT`
 # above describes machinery that does not exist on the plan this branch
-# fires for (Review: code-reviewer Finding 4). This hint stays in the same
-# refuse-with-no-self-service-command voice — it still names the PM as the
-# one who ratifies, and still supplies no command an EM could run to satisfy
-# the gate itself — but uses the vocabulary that actually exists on a legacy
-# plan (the per-row pm_approved boolean), not grouping/pm_utterance vocabulary
-# borrowed from the governed contract.
+# fires for (Review: code-reviewer Finding 4).
+#
+# REWRITTEN 2026-08-12 (example-doctrine-repo ruling, exit 1 —
+# cross-repo/inbox/2026-08-12-example-doctrine-repo-em-legacy-refusal-honesty-ruling.md;
+# tripwire A-REFUSAL-MAY-NOT-CLAIM-IMPOSSIBILITY-IT-CANNOT-ENFORCE). The
+# prior text carried the governed branch's impossibility claim ("there is
+# deliberately no command that satisfies this from inside the session") onto
+# a branch where a command does: `pm_approved` is a per-row boolean the same
+# agent can set via the `stamp` verb. The claim was false, and false in the
+# direction that costs the honest party everything and the self-certifying
+# party one extra call — example-cockpit-repo-em read it as impossibility, could
+# not record a verbatim PM ruling, and took a divergence (PM-ruled wont_do in
+# plan prose, spine row still `open`).
+#
+# So the protection moves from the mechanism layer to the honesty layer,
+# which is the strongest thing a self-settable boolean can carry: the
+# assertion recording the field MAKES leads, and the field is named after it,
+# never instead of it. Self-certification becomes a lie an agent has to tell
+# rather than a door it cannot find. This is NOT a relaxation into a
+# missing-field nit — "set this field to proceed" is the voice the retired
+# `_PM_APPROVAL_OFFER` banner below correctly killed, because it teaches a
+# well-meaning EM to satisfy the field. `_GROUPING_APPROVAL_HINT` above is
+# untouched by this ruling: its impossibility claim is TRUE, and the
+# membership digest is what makes it true.
 _LEGACY_PM_APPROVAL_HINT = (
-    "Ask the PM to ratify this disposition. Which work gets closed out is "
-    "the PM's call, not the authoring agent's — there is deliberately no "
-    "command that satisfies this from inside the session. Present the row "
-    "(its id, title, and why it is being closed) and record their assent."
+    "Recording pm_approved: true on this row asserts that the PM ratified "
+    "this specific cut. Nothing in this session can verify that, so stamping "
+    "it without their word puts a false statement in the record. "
+    "plan-tasks-stamp sets the field once they have ruled."
 )
 
 # All three CLOSED dispositions require an explicit caller-supplied
@@ -1369,9 +1392,8 @@ def _resolve(
                     if row.get("pm_approved") is not True:
                         raise MutateAbort(
                             f"resolve: disposition {disposition!r} for task {tid!r} is a scope "
-                            "decision and needs PM ratification before it can be recorded "
-                            f"(D3/D4). {_LEGACY_PM_APPROVAL_HINT} Refusing rather than "
-                            "recording an ungated closed disposition."
+                            f"decision and needs the PM's ratification (D3/D4). "
+                            f"{_LEGACY_PM_APPROVAL_HINT}"
                         )
 
         # Defect 2 fix (see _PLAN_TASKS_DETAIL_REQUIRED_DISPOSITIONS docstring

@@ -228,7 +228,12 @@ def _offer_anchor_followers(followers: str, qt: str) -> Tuple[str, Optional[List
     return (" ".join(pieces), unanchored)
 
 
-def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional[Dict[str, Any]]:
+def check_offer_git_c(
+    cmd: str,
+    session_id: str = "",
+    cwd: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
@@ -239,6 +244,11 @@ def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional
         return None
     if _override("COORDINATOR_ALLOW_CD_PREFIX"):
         return None
+
+    _cd_note = operator_override_note(
+        "COORDINATOR_ALLOW_CD_PREFIX", payload=payload, git_root=cwd or None
+    )
+    _cd_note_suffix = (" " + _cd_note) if _cd_note else ""
 
     segments = _offer_quote_aware_segments(cmd)
     seg_count = sum(1 for s in segments if s.strip())
@@ -301,6 +311,18 @@ def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional
     target = _offer_strip_q(target)
     if target.startswith("-"):
         return None
+
+    # Expand a leading `~` BEFORE quoting. `cd ~/X/peer` works because the
+    # shell expands the tilde; `shlex.quote` below then emits `'~/X/peer'`,
+    # and a QUOTED tilde is never expanded -- git receives the literal four
+    # characters and dies with "cannot change to '~/X/peer'", naming a path
+    # the operator did read as valid. Expansion happens here, on the
+    # unquoted token, so the suggestion carries the real absolute path.
+    # Only a leading `~`/`~user` is touched; `os.path.expanduser` returns
+    # the input unchanged when the user is unresolvable, which correctly
+    # leaves an unexpandable token alone rather than fabricating a home.
+    if target.startswith("~"):
+        target = os.path.expanduser(target)
 
     # Always shell-quote `target`, not only when it contains whitespace --
     # an unquoted Windows path with backslashes (e.g. `C:\Users\x\tmp`) is
@@ -394,11 +416,11 @@ def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional
                         "segment scopes to that command either way, so it "
                         "carries forward verbatim)."
                         % (target, carried, carried, target)
-                    ) + " " + operator_override_note("COORDINATOR_ALLOW_CD_PREFIX")
+                    ) + _cd_note_suffix
                 else:
                     note = (
                         "cd+git stalls; auto-rewritten."
-                    ) + " " + operator_override_note("COORDINATOR_ALLOW_CD_PREFIX")
+                    ) + _cd_note_suffix
                 return _allow_rewrite(suggestion, note)
 
         # Every follower is itself a bare `git ...` invocation -- anchor
@@ -419,14 +441,14 @@ def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional
                     "itself a git invocation, and the wrapper/env prefix on "
                     "the first one carries forward verbatim -- prompt-free)."
                     % (target, carried, carried, target, target)
-                ) + " " + operator_override_note("COORDINATOR_ALLOW_CD_PREFIX")
+                ) + _cd_note_suffix
             else:
                 note = (
                     "Auto-rewritten: 'cd %s && git ... && git ...' -> "
                     "'git -C %s ... && git -C %s ...' (every follower is itself "
                     "a git invocation, so anchoring each one is equivalent to "
                     "the original 'cd' -- prompt-free)." % (target, target, target)
-                ) + " " + operator_override_note("COORDINATOR_ALLOW_CD_PREFIX")
+                ) + _cd_note_suffix
             return _allow_rewrite(suggestion, note)
 
     if not has_prefix:
@@ -443,8 +465,7 @@ def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional
                         "Auto-rewritten: leading 'cd %s' stripped (cwd "
                         "already matches target; followers unchanged)." % target
                     )
-                    + " "
-                    + operator_override_note("COORDINATOR_ALLOW_CD_PREFIX"),
+                    + _cd_note_suffix,
                 )
 
     residual_note = ""
@@ -472,8 +493,7 @@ def check_offer_git_c(cmd: str, session_id: str = "", cwd: str = "") -> Optional
             "relative path that was anchored at the cd target, prefix the path "
             "with '%s/'." % (suggestion, residual_note, target, target)
         )
-        + " "
-        + operator_override_note("COORDINATOR_ALLOW_CD_PREFIX")
+        + _cd_note_suffix
     )
 
 

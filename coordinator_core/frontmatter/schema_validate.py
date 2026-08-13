@@ -1147,20 +1147,25 @@ def _cf_spinoff_roadmap_requires_graph(fm: dict) -> ErrorDict | None:
         # `bash_guards._helpers` (and its `subagent_sandbox.engine` import) on
         # this module's import graph -- `schema_validate` is imported on the
         # per-invocation hot path, the renderer is needed on the deny leg only.
-        # Rendered through the SSOT rather than hand-written: a hand-typed
-        # override clause is the exact shape
-        # `bash_guards/tests/test_no_handwritten_override_clauses.py` exists to
-        # stop, and only the SSOT carries the pre-launch-only constraint.
-        from coordinator_core.bash_guards._helpers import operator_override_note
-
+        # NO OVERRIDE POINTER HERE, and that is deliberate (2026-08-13,
+        # docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md,
+        # C1/D5). `operator_override_note` is audience-gated now and takes a
+        # required `payload=`; this module never receives one. It is reached
+        # through `validate_frontmatter`, whose signature is a cross-repo
+        # contract example-doctrine-repo imports by file path, so threading a payload
+        # down to here is out of bounds -- not a local defect to fix later.
+        #
+        # The pointer is therefore dropped for every audience rather than
+        # rendered blind. Under AC-1 the subagent case must not see it at
+        # all; under AC-2 an EM message MAY carry it, never must. What
+        # survives is the refusal and the route, which is complete on its own.
         return {
             'field': ', '.join(missing),
             'error': 'required for kind=roadmap-baton',
             'hint': (
                 'Roadmap batons must declare their identifier (roadmap_id, stub_id), '
                 'serialization order (wave), and graph edges (blocks, blocked_by — empty list ok). '
-                'See skills/roadmap-planning/SKILL.md § Phase 2.1. '
-                + operator_override_note(_ROADMAP_GRAPH_OVERRIDE_ENV_VAR)
+                'See skills/roadmap-planning/SKILL.md § Phase 2.1.'
             ),
         }
     return None
@@ -3295,6 +3300,55 @@ def _memo_cf_summary_length_cap(fm: dict) -> ErrorDict | None:
     return None
 
 
+def _memo_cf_disposition_superseded_requires_companions(fm: dict) -> ErrorDict | None:
+    """disposition_superseded=true requires superseding_note, superseding_realized_by,
+    superseded_at, AND status in (actioned, superseded).
+
+    Native-only rule, no JS oracle (post-DR-210 claude-klabauter owns cross-repo-memo tooling
+    outright) — the append-only supersede-disposition mechanism
+    (coordinator_core.ops.memo_transition._handle_supersede /
+    _apply_supersede_fields) records that a reversed verdict now governs an
+    already-actioned memo WITHOUT touching the original decision/decision_note/
+    realized_by/actioned_note fields, which remain readable as history. This rule
+    is the presence-triggered completeness gate for that shape — mirrors
+    _memo_cf_closed_requires_companions's "presence of the terminal marker implies
+    its companion fields" pattern, not a hard schema `required` addition (no
+    previously-valid memo carries disposition_superseded at all, so this can never
+    retroactively invalidate the existing corpus — additive-only, same discipline
+    as _memo_cf_kind_enum).
+
+    Spec: cross-repo/inbox/2026-08-12-example-retrieval-repo-em-git-index-lock-reaper.md —
+    actioned with a `negotiate` disposition later reversed by PM ruling within the
+    hour, with no prior mechanism to record the reversal without silently
+    overwriting the original actioned_note.
+    """
+    if not fm.get('disposition_superseded'):
+        return None
+    missing = []
+    if not fm.get('superseding_note') or str(fm.get('superseding_note', '')).strip() == '':
+        missing.append('superseding_note')
+    if not fm.get('superseding_realized_by') or str(fm.get('superseding_realized_by', '')).strip() == '':
+        missing.append('superseding_realized_by')
+    if not fm.get('superseded_at') or str(fm.get('superseded_at', '')).strip() == '':
+        missing.append('superseded_at')
+    if fm.get('status') not in ('actioned', 'superseded'):
+        missing.append('status (must be actioned or superseded)')
+    if missing:
+        return {
+            'field': ', '.join(missing),
+            'error': 'required when disposition_superseded is true',
+            'hint': (
+                'A disposition_superseded=true memo must also carry superseding_note '
+                '(the reversal rationale), superseding_realized_by (a pointer to what '
+                'realized the reversal: a commit SHA, a memo, or a baton), and '
+                'superseded_at (a timestamp), and must already be status=actioned or '
+                'status=superseded — you cannot supersede a disposition that was never '
+                'made.'
+            ),
+        }
+    return None
+
+
 def _memo_cf_kind_enum(fm: dict) -> ErrorDict | None:
     """kind must be one of ask|consult|fyi|proposal when present; absent/null is valid.
 
@@ -3415,6 +3469,7 @@ _MEMO_CROSS_FIELD_RULES = [
     _memo_cf_summary_length_cap,
     _memo_cf_kind_enum,
     _memo_cf_distill_fate,
+    _memo_cf_disposition_superseded_requires_companions,
 ]
 
 # ---------------------------------------------------------------------------

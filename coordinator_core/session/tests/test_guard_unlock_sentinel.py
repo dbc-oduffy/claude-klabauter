@@ -131,50 +131,131 @@ class TestConsumeOneShotSemantics:
         assert p_peer.exists()
 
 
-class TestUnlockWikiPointerBranches:
-    """`_unlock_wiki_pointer()` is `functools.lru_cache(maxsize=1)`,
-    process-lifetime memoized -- clear the cache before AND after each test
-    so neither test order nor a resolved value from this module leaks into
-    another test in the same pytest process (Review: coordinator:code-reviewer
-    — untested branches on a module-scope cache is the exact ambient-state
-    cross-test-pollution class this session already fixed twice elsewhere)."""
+class TestAnnotateDenyDoesNotNameACodename:
+    """AC6/register: the rendered deny text names no private-repo codename —
+    the example-doctrine-repo-source pointer branch is gone (§ EM ruling, branch B) and the
+    settings-root pointer is unconditional and codename-free."""
 
-    @pytest.fixture(autouse=True)
-    def _clear_wiki_pointer_cache(self):
-        gus._unlock_wiki_pointer.cache_clear()
-        yield
-        gus._unlock_wiki_pointer.cache_clear()
+    def _fire(self, **kwargs):
+        out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
+        return gus.annotate_deny(out, SID, GUARD, "doc-display-text", **kwargs)
 
-    def test_doe_checkout_present_renders_doe_source_pointer(self, tmp_path, monkeypatch):
+    def test_no_example_doctrine_repo_codename(self):
+        out = self._fire()
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "example-doctrine-repo" not in reason
+
+    def test_no_placeholder_codename(self):
+        out = self._fire()
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "example-doctrine-repo" not in reason
+
+    def test_doe_checkout_present_no_longer_changes_the_pointer(self, tmp_path, monkeypatch):
+        """The example-doctrine-repo-checkout-present branch is gone: presence of a example-doctrine-repo
+        checkout on disk must not change the rendered pointer text."""
+        import coordinator_core.doe_root_pointer as doe_root_pointer_mod
+
         doe_root = tmp_path / "example-doctrine-repo"
         (doe_root / "coordinator" / "docs" / "wiki").mkdir(parents=True)
-        monkeypatch.setattr(gus, "read_doe_root_pointer", lambda: str(doe_root))
-        pointer, pending = gus._unlock_wiki_pointer()
-        assert pointer == gus._DOE_SOURCE_WIKI_POINTER
-        assert pending is False
+        monkeypatch.setattr(
+            doe_root_pointer_mod, "read_doe_root_pointer", lambda: str(doe_root)
+        )
+        out_with_checkout = self._fire()
+        reason_with_checkout = out_with_checkout["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_doe_checkout_absent_degrades_to_settings_root_pointer(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(gus, "read_doe_root_pointer", lambda: "")
-        pointer, pending = gus._unlock_wiki_pointer()
-        assert pointer == gus._SETTINGS_ROOT_WIKI_POINTER
-        assert pending is True
+        out_without_checkout = self._fire()
+        reason_without_checkout = out_without_checkout["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_doe_pointer_resolved_but_wiki_dir_missing_degrades_to_settings_root(self, tmp_path, monkeypatch):
-        doe_root = tmp_path / "example-doctrine-repo-no-wiki"
-        doe_root.mkdir()
-        monkeypatch.setattr(gus, "read_doe_root_pointer", lambda: str(doe_root))
-        pointer, pending = gus._unlock_wiki_pointer()
-        assert pointer == gus._SETTINGS_ROOT_WIKI_POINTER
-        assert pending is True
+        assert reason_with_checkout == reason_without_checkout
+        assert gus._SETTINGS_ROOT_WIKI_POINTER in reason_with_checkout
 
-    def test_read_doe_root_pointer_raising_degrades_to_settings_root(self, monkeypatch):
-        def _raise():
-            raise RuntimeError("registry unresolved")
 
-        monkeypatch.setattr(gus, "read_doe_root_pointer", _raise)
-        pointer, pending = gus._unlock_wiki_pointer()
-        assert pointer == gus._SETTINGS_ROOT_WIKI_POINTER
-        assert pending is True
+class TestAnnotateDenyDoesNotInlineTheUnlockRecipe:
+    """AC-3/Task 1 revert (2026-08-13, C3): the 2026-08-12 regression
+    re-inlined the sentinel filename shape, drop location, and per-firing
+    session id/guard name into the rendered text. This class asserts the
+    reverted (pre-regression) shape: only the wiki/doc pointers render, none
+    of the recipe pieces do."""
+
+    def _reason(self, **kwargs):
+        out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
+        out = gus.annotate_deny(out, SID, GUARD, "doc-display-text", **kwargs)
+        return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_filename_prefix_shape_is_absent(self):
+        assert gus._SENTINEL_PREFIX not in self._reason()
+
+    def test_session_id_is_not_rendered(self):
+        assert SID not in self._reason()
+
+    def test_guard_name_is_not_rendered(self):
+        assert GUARD not in self._reason()
+
+    def test_doc_display_and_wiki_pointer_are_rendered(self):
+        reason = self._reason()
+        assert "doc-display-text" in reason
+        assert gus._SETTINGS_ROOT_WIKI_POINTER in reason
+
+    def test_assembled_sentinel_path_literal_is_not_rendered(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+        assembled = str(gus.sentinel_path(SID, GUARD))
+        assert assembled not in self._reason()
+
+
+class TestAnnotateDenyAgentIdSuppression:
+    """AC-3 (2026-08-13, C3, item 8): the fast positive-subagent leg is
+    unchanged, but the EM decision now routes through
+    ``identity.resolves_em_audience`` and its inverted fail direction —
+    only a positively-resolved EM audience emits; absence/malformed/
+    exception all degrade to terse."""
+
+    def _reason(self, **kwargs):
+        out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
+        out = gus.annotate_deny(out, SID, GUARD, "doc-display-text", **kwargs)
+        return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_resolved_subagent_suppresses_the_block(self, monkeypatch):
+        import coordinator_core.session.identity as identity_mod
+
+        monkeypatch.setattr(
+            identity_mod, "resolve_subagent_identity", lambda agent_id, session_id: "some-agent"
+        )
+        reason = self._reason(agent_id="some-agent-id")
+        assert reason == "denied: reason"
+
+    def test_absent_agent_id_emits_the_block_for_a_resolved_em(self):
+        # A well-formed envelope (session_id present, agent_id absent) with
+        # no backpointer state resolves as a positively-resolved EM
+        # audience under `resolves_em_audience` -- emits.
+        reason = self._reason(agent_id="")
+        assert "human-only affordance" in reason
+
+    def test_malformed_agent_id_degrades_to_terse(self, monkeypatch):
+        """AC-3 inversion: a present-but-unresolvable agent_id used to emit
+        (old fail direction, item 5). It now degrades -- `resolves_em_audience`
+        treats a non-empty raw `agent_id` as "cannot resolve", never as "no
+        agent" (DECISIONS.md D1, "ABSENT VS UNRESOLVABLE")."""
+        import coordinator_core.session.identity as identity_mod
+
+        monkeypatch.setattr(
+            identity_mod, "resolve_subagent_identity", lambda agent_id, session_id: ""
+        )
+        reason = self._reason(agent_id="not-a-real-agent-id")
+        assert reason == "denied: reason"
+
+    def test_exception_during_resolution_degrades_to_terse(self, monkeypatch):
+        """AC-3 inversion: the `except Exception: pass` branch used to fall
+        through to emit (old fail direction, item 5's docstring names this
+        exact branch). It now degrades: any exception during identity
+        resolution returns `out` unchanged."""
+        import coordinator_core.session.identity as identity_mod
+
+        def _raise(agent_id, session_id):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(identity_mod, "resolve_subagent_identity", _raise)
+        reason = self._reason(agent_id="")
+        assert reason == "denied: reason"
 
 
 class TestConsumeNeverRaises:

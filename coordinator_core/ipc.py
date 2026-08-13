@@ -346,10 +346,13 @@ Negative-spec (hard-won):
 
       SOVEREIGN-TRACKER append-ordered event-store class (library-only, zero ops, DR-241) —
         sanctioned MUTATING append-ordered category ratified in charter ahead of any handler
-        code (deliberate DR-241 carve-out; DEC-4: this DR registers zero ops — the first
-        tracker.* op to call append_event/read_events in anger, and its per-op DR-208 §5
-        five-question affirmation against real handler code, land at sat-06, a separate
-        downstream stub):
+        code (deliberate DR-241 carve-out; DEC-4: this DR registers zero ops). The
+        affirmation obligation is compliance with DR-241's own five D2 bounds below, not a
+        DR-208 §5 citation duty (docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
+        § Amendment (2026-07-28), "Correction — DR-208 §5 is the wrong citation"). That
+        affirmation landed early, at sat-01b, not sat-06 (same § Amendment); the `person_*`
+        emitters were separately affirmed at DR-241's § Amendment (2026-08-11), "sat-05
+        person-registry event handler affirmation":
         - tracker_store.append_event / tracker_store.read_events: library functions in
           coordinator_core/tracker_store.py with no registered caller as of this entry;
           NOT an op, NOT OP_CLASSIFICATION-entered (DEC-4).
@@ -372,7 +375,7 @@ Negative-spec (hard-won):
         Classification: a future tracker.* op would be MUTATING (DR-208 §2) — this DR
         does not register one; the guard C3 adds (asserting no coordinator_core/ops/
         module imports tracker_store and no OP_CLASSIFICATION entry references it) holds
-        this unaffirmed-until-sat-06 status honest in code, not merely in prose.
+        this no-op-registered status honest in code, not merely in prose.
 
       Backlinks:
         docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § AC4 / C7

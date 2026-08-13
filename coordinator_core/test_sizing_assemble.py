@@ -986,13 +986,19 @@ def test_sizing_object_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/sizing-object.schema.json"
         ).read_text(encoding="utf-8")
     )
-    # 1.11.0 since the routine-ask-sized-XL widen appended
-    # `intent_em_elaborated`, `precedent_shipped_before` and
-    # `probe_raise_on_substrate_condition` to `detents.items.enum`. Bump class
-    # stays `enum-value-additive`: values on one existing enum, nothing else
-    # shape-visible. Example-doctrine-repo landed the matching stamp at e004e18f1 and told us
-    # this number (cross-repo memo 2026-08-11-example-doctrine-repo-em-sizing-intent-
-    # landed-1-11-0-and-one-counter.md).
+    # 1.14.0 since the four-field widen (cross-repo memo 2026-08-13-example-doctrine-repo-
+    # em-sizing-object-schema-widened-1-14-0.md, example-doctrine-repo-side commit 1fabbc9c3)
+    # added `intent_source`, `precedent`, `boundary_in_notch`, and `probe` as
+    # optional top-level properties, and widened `scout_evidence.items` to
+    # accept an object. Bump class moves to `nested-field-additive`: `probe` is
+    # a new optional nested object, the strictly more-restrictive member of the
+    # bundle under this schema's own house rule.
+    #
+    # `boundary_in_notch` accepts the string enum `yes|no` OR a boolean: a
+    # sizing-object is YAML, and under YAML 1.1 an unquoted `no` parses as
+    # boolean `false`. `sizing_assemble` itself takes the value as a CLI string
+    # and never writes state/sizings/*.yaml, so the engine has no round-trip
+    # exposure — the widened type is what protects the hand-authored record.
     #
     # CORRECTION to the note this replaces, which said to hold a bump because
     # an unequal version otherwise goes silent: it does not. Example-doctrine-repo's
@@ -1004,8 +1010,25 @@ def test_sizing_object_schema_version_and_bump_class():
     # one quiet — and it reads our COMMITTED HEAD, so their red clears when we
     # commit, not when we write. Do not reintroduce the hold-for-silence
     # reasoning.
-    assert schema["x-schema-version"] == "1.12.0"
-    assert schema["x-bump-class"] == "enum-value-additive"
+    assert schema["x-schema-version"] == "1.14.0"
+    # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
+    # `nested-field-additive` — and absent is the PERMANENT answer for this
+    # schema, not a waiting state. Example-doctrine-repo's `9f4c0c17b` (2026-08-10, "schemas: drop
+    # the bump-class the 1.10.0 label reconciliation never earned") removed the
+    # key deliberately, replacing it with a `$comment`: that bump was
+    # label-reconciliation-only with zero shape effect, so it earned no class.
+    # Read at their own commits, NEITHER 1.12.0 (`f8c4b15b2`) NOR 1.13.0
+    # (`86d786147`) carries the key; only `x-bump-note` survives. Correcting the
+    # note this replaces, which said 1.13.0 carried it — it did not, and any
+    # local copy that appears to is a pre-`9f4c0c17b` vendoring.
+    #
+    # Do NOT hand-restore the key here: that would manufacture drift against a
+    # deliberate decision, and example-doctrine-repo's `test_vendored_schema_matches_doe_source`
+    # hashes shape. And do NOT read a red here as a re-vendor signal — restoring
+    # the key would mean reverting `9f4c0c17b`, which example-doctrine-repo-em has stated
+    # they will not do (memo
+    # 2026-08-13-example-doctrine-repo-em-bump-class-deliberately-absent.md).
+    assert "x-bump-class" not in schema
 
 
 def test_completion_entry_schema_version_and_bump_class():
@@ -1080,6 +1103,10 @@ def test_vendored_schema_widened_enums_order_exact():
         # 1.12.0: example-doctrine-repo-em's counter — the symmetric mark on ask-scope,
         # so the notch-preserving answer is no longer the unmarked one.
         "probe_raise_ask_scope_asserted",
+        # 1.13.0: the breadth arm (cross-repo memo 2026-08-12-example-doctrine-repo-em-
+        # sizing-breadth-arm.md, adopted). Same order-exact, append-at-end
+        # discipline as every widen above — never re-sort.
+        "probe_raise_on_breadth",
     ]
 
     completion_schema = json.loads(
@@ -1089,6 +1116,29 @@ def test_vendored_schema_widened_enums_order_exact():
     )
     tshirt_arm = completion_schema["properties"]["loe"]["properties"]["tshirt"]["anyOf"][0]
     assert tshirt_arm["enum"] == ["XS", "S", "M", "L", "XL", "XXL"]
+
+
+def test_vendored_schema_enums_stay_parity_with_the_engine_tuples():
+    """The two tests directly above pin the vendored schema's `detents` and
+    `route` enums against a HARDCODED literal, and this module's own tests
+    never check them against `DETENT_ENUM`/`ROUTE_ENUM` at all — so a tuple
+    widen that forgot to touch the vendored schema (or the schema half of a
+    bump that forgot the tuple) could land and stay green, since neither
+    side's suite reads the other's source of truth. This test closes that
+    gap directly: engine tuple and vendored schema enum, compared ORDER-EXACT
+    (not set-equal — order is load-bearing against example-doctrine-repo's
+    EQUAL_VERSION_SHAPE_DRIFT gate, same as the hardcoded-literal tests
+    above)."""
+    import json
+    import pathlib
+
+    sizing_schema = json.loads(
+        pathlib.Path(
+            "coordinator_core/frontmatter/schemas/sizing-object.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert list(sa.DETENT_ENUM) == sizing_schema["properties"]["detents"]["items"]["enum"]
+    assert list(sa.ROUTE_ENUM) == sizing_schema["properties"]["route"]["enum"]
 
 
 # --- AC12: goal_setting_pm_gated detent ------------------------------------
@@ -1570,3 +1620,71 @@ def test_ask_scope_mark_is_advisory_only():
 
 def test_ask_scope_detent_is_declared_in_the_enum():
     assert "probe_raise_ask_scope_asserted" in sa.DETENT_ENUM
+
+
+# ---------------------------------------------------------------------------
+# The breadth arm (cross-repo memo 2026-08-12-example-doctrine-repo-em-sizing-breadth-
+# arm.md, adopted): a raise resting solely on a touchpoint COUNT is a
+# dispatch shape, not a size signal, and must not move the notch — same
+# suppression contract as `substrate-condition`, distinct detent.
+# ---------------------------------------------------------------------------
+
+
+def test_breadth_raise_is_not_applied():
+    """A raise justified only by site count must not move the notch, and
+    fires its own detent rather than the substrate-condition one."""
+    out = sa.route(
+        estimate={"tshirt": "L"},
+        probe_signal="raise",
+        probe_raise_basis="breadth",
+    )
+    assert out["resolved_estimate"]["tshirt"] == "L"
+    assert "probe_raise_on_breadth" in out["detents"]
+    assert "probe_raise_on_substrate_condition" not in out["detents"]
+    # The whole point: L routes to plan, XL would have routed to pm-decision.
+    assert out["route"] == "plan"
+    assert "route_boundary_crossed" not in out["detents"]
+
+
+def test_breadth_and_substrate_condition_detents_are_disjoint():
+    """Each suppressing basis fires exactly its own detent, never the other's."""
+    for basis, expected, other in (
+        ("breadth", "probe_raise_on_breadth", "probe_raise_on_substrate_condition"),
+        ("substrate-condition", "probe_raise_on_substrate_condition", "probe_raise_on_breadth"),
+    ):
+        out = sa.route(
+            estimate={"tshirt": "L"}, probe_signal="raise", probe_raise_basis=basis
+        )
+        assert expected in out["detents"], basis
+        assert other not in out["detents"], basis
+
+
+def test_breadth_basis_validates():
+    """`breadth` is accepted by `_validate_probe_raise_basis`; an unknown
+    basis still raises, naming all three values."""
+    sa._validate_probe_raise_basis("breadth")  # no raise
+    with pytest.raises(sa.SizingAssembleError) as exc_info:
+        sa._validate_probe_raise_basis("bogus")
+    assert "ask-scope" in str(exc_info.value)
+    assert "substrate-condition" in str(exc_info.value)
+    assert "breadth" in str(exc_info.value)
+
+
+def test_breadth_collapse_and_bare_raise_paths_unchanged():
+    """`collapse` and a bare `raise` (no basis) are untouched by the breadth
+    arm's addition."""
+    collapsed = sa.route(
+        estimate={"tshirt": "L"},
+        probe_signal="collapse",
+        probe_raise_basis="breadth",
+    )
+    assert collapsed["resolved_estimate"]["tshirt"] == "M"
+    assert "probe_raise_on_breadth" not in collapsed["detents"]
+
+    bare = sa.route(estimate={"tshirt": "L"}, probe_signal="raise")
+    assert bare["resolved_estimate"]["tshirt"] == "XL"
+    assert "probe_raise_on_breadth" not in bare["detents"]
+
+
+def test_breadth_detent_is_declared_in_the_enum():
+    assert "probe_raise_on_breadth" in sa.DETENT_ENUM

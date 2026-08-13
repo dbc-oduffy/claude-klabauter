@@ -37,6 +37,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from coordinator_core.subagent_sandbox.provision_report import _exit_interview_section
+
 #: Matches the Exit interview heading through the next top-level heading
 #: (or end of file) -- DOTALL so '.' spans newlines, non-greedy so we stop
 #: at the *next* '## ' rather than swallowing the rest of the document.
@@ -50,17 +52,53 @@ _EXIT_INTERVIEW_RE = re.compile(
 #: not a general YAML parser.
 _FRONTMATTER_LINE_RE = re.compile(r"^agent_type:\s*(?P<value>.+?)\s*$", re.MULTILINE)
 
-#: The four verbatim discovery-question prompts provision_report.py seeds.
-#: A section is "empty/unanswered" if, once these prompts (and blank
-#: lines/bullet markers) are stripped out, nothing is left.
-_QUESTION_PROMPTS = (
-    "What did you have to work out that the brief could have told you?",
-    "What did you grep, read, or probe that turned out to be a dead end — "
-    "and what were you actually looking for?",
-    "Where did your tool access, permissions, or output contract fight you? "
-    "What would you have reached for if it existed?",
-    "Anything you wanted to say and had nowhere to put?",
-)
+
+def _derive_question_prompts() -> Tuple[str, ...]:
+    """Derive the discovery-question prompts straight from
+    ``provision_report._exit_interview_section()`` -- the single literal
+    source of truth for the four questions -- rather than hand-duplicating
+    them here. Each question renders as one ``- <question>`` bullet line
+    (blank-line-separated, no embedded newlines within a question); this
+    just strips the leading ``- `` marker off every non-blank line of the
+    section body (skipping the ``## Exit interview`` heading itself).
+
+    A hand-duplicated tuple here silently drifts from the rendered
+    template on a one-sided reword (no test failure signals it) -- see
+    commit f342615b75a2, which had to touch six files by hand to keep a
+    single question wording in sync. Deriving instead of asserting makes
+    that drift structurally impossible: there is exactly one literal.
+
+    Fails LOUD on an empty derivation rather than degrading: with no
+    prompts to strip, ``_is_answered`` finds the pristine question text
+    still in the body and reports every untouched scaffold as ANSWERED --
+    the same false-negative deriving exists to prevent, reintroduced one
+    level down and silently. A section that renders no bullets means the
+    template shape changed underneath this parser, which is a defect to
+    surface at import, not to absorb.
+    """
+    section = _exit_interview_section()
+    prompts: List[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            prompts.append(stripped[2:].strip())
+    if not prompts:
+        raise RuntimeError(
+            "exit-interview prompt derivation found no '- ' bullets in "
+            "provision_report._exit_interview_section() -- the template "
+            "shape changed; _is_answered cannot detect unanswered "
+            "scaffolds until this parser is realigned"
+        )
+    return tuple(prompts)
+
+
+#: The verbatim discovery-question prompts, derived from
+#: ``provision_report._exit_interview_section()`` (the sidecar template's
+#: single source of truth) rather than hand-duplicated -- see
+#: ``_derive_question_prompts``'s docstring. A section is
+#: "empty/unanswered" if, once these prompts (and blank lines/bullet
+#: markers) are stripped out, nothing is left.
+_QUESTION_PROMPTS = _derive_question_prompts()
 
 
 def _extract_frontmatter_agent_type(text: str) -> Optional[str]:

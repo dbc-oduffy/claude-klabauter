@@ -253,8 +253,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_lineage_ancestry", 'registers "handoff.lineage_ancestry"'),
     ("coordinator_core.ops.plan_tasks_mutate", ""),
     ("coordinator_core.ops.plan_tasks_grouping_digest", 'registers "plan.tasks.grouping_digest"'),
-    ("coordinator_core.ops.percolate_run", 'registers "percolate.run"'),
-    ("coordinator_core.ops.percolate_validate", 'registers "percolate.validate_store"'),
     ("coordinator_core.ops.engine_drift", 'registers "engine.drift"'),
     ("coordinator_core.plugin_health.drift", 'registers "plugin_health.drift"'),
     ("coordinator_core.plugin_health.scan", 'registers "plugin_health.scan"'),
@@ -330,9 +328,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.parse_cli_args",
         'registers "cli.parse_flag", "cli.parse_date_flags"',
     ),
-    ("coordinator_core.ops.percolate_check_inverse_drift", 'registers "percolate.check_inverse_drift"'),
-    ("coordinator_core.ops.percolate_ci_smoke_check", 'registers "percolate.run_ci_smoke_check"'),
-    ("coordinator_core.ops.percolate_identity_check", 'registers "percolate.run_identity_check"'),
     ("coordinator_core.ops.probe_fresh_repo_noop", 'registers "update_docs.probe_fresh_repo_noop"'),
     ("coordinator_core.ops.schema_drift_gate", 'registers "schema.drift_gate"'),
     (
@@ -411,6 +406,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.tracker.fold_observed_set",
         'registers "tracker.fold_observed_set" (sat-01b C5, DR-241-affirmed; '
         "actuated from session.boot_sweep, opt-in-by-existence only)",
+    ),
+    (
+        "coordinator_core.ops.tracker.mint_person",
+        'registers "tracker.mint_person" (sat-06 C4, DR-241-affirmed producer-'
+        "facing op that mints a person through the sovereign-tracker person "
+        "registry, per-repo, no cross-tree write)",
     ),
     ("coordinator_core.ops.priority_set", 'registers "priority.set"'),
     ("coordinator_core.ops.priority_drain", 'registers "priority.drain"'),

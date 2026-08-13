@@ -44,20 +44,37 @@ Five routing rules (verbatim from the bash oracle's header):
   Rule 5  central=False  [BACKWARD-COMPAT DEFAULT]
             -> <coordinator_claude_klabauter_root()>/state  when cwd git root IS the meta-repo
                <git_root>/state                   when cwd git root is a sibling repo
+                                                    AND is not the published mirror
+                                                    (see "Published-mirror guard" below)
             Fail-loud on unresolvable git root.
 
   Published-mirror guard (applies to every rule that resolves claude-klabauter engine
-  state — Rules 2, 4, and 5's meta-repo branch): DR-132's two-tier gate means
-  the resolved claude-klabauter root can now be a PUBLISHED engine mirror
-  (`RESOLUTION_RESOLVED_ENGINE`), not only a live working tree
-  (`RESOLUTION_LIVE_WORKING_TREE`). State must never be written into a
-  published mirror — doing so leaks runtime/session artifacts (observed:
-  operator-machine-codename-bearing filenames) into a public repo and can
-  strand or split a state corpus. This module fail-louds
+  state — Rules 2, 4, and 5's meta-repo branch — AND Rule 5's sibling-repo
+  branch): DR-132's two-tier gate means the resolved claude-klabauter root can now be
+  a PUBLISHED engine mirror (`RESOLUTION_RESOLVED_ENGINE`), not only a live
+  working tree (`RESOLUTION_LIVE_WORKING_TREE`). State must never be written
+  into a published mirror — doing so leaks runtime/session artifacts
+  (observed: operator-machine-codename-bearing filenames) into a public repo
+  and can strand or split a state corpus. This module fail-louds
   (`StateRootError`) whenever engine-subject state would resolve under a
-  `RESOLUTION_RESOLVED_ENGINE` root, mirroring this module's existing
-  fail-loud posture for other unresolvable/ambiguous cases (Rule 1, Rule 3's
-  cross-cutting branch). It does NOT invent an alternative state location.
+  `RESOLUTION_RESOLVED_ENGINE` root (Rules 2/4/5-meta), mirroring this
+  module's existing fail-loud posture for other unresolvable/ambiguous cases
+  (Rule 1, Rule 3's cross-cutting branch). It does NOT invent an alternative
+  state location.
+
+  Rule 5's sibling-repo branch gets the SAME guard applied to an arbitrary
+  candidate git root rather than only "my own" claude-klabauter root: before treating
+  a non-meta cwd git root as its own state root, it asks
+  `coordinator_core.claude_klabauter_root.published_engine_mirror_path()` (the same
+  `repos.claude_klabauter` discriminator `_claude_klabauter_state()` already uses,
+  exposed standalone) whether that git root IS the registered published
+  mirror clone (e.g. a `claude-klabauter` checkout sitting on disk as an
+  otherwise-ordinary sibling repo). If so: fail-loud, same rationale and
+  same StateRootError shape as the engine-subject guard above — a mirror
+  clone must never become a state root, whether reached via "this is the
+  claude-klabauter engine root" (Rules 2/4/5-meta) or "this is just some sibling repo"
+  (Rule 5 sibling). Bug backlog:
+  `state/bug-backlog/2026-08-13-state-root-rule-5-cannot-tell-a-publishe-fd79452138b2.yaml`.
 
 Public API:
     coordinator_state_root(central=False, subject=None, artifact=None, git_root=None) -> str
@@ -97,6 +114,7 @@ from coordinator_core.git import repo_root as _repo_root_seam
 from coordinator_core.claude_klabauter_root import (
     coordinator_claude_klabauter_root,
     coordinator_claude_klabauter_root_with_class,
+    published_engine_mirror_path,
 )
 from coordinator_core.meta_repo_identity import (
     MetaRepoResolutionError,
@@ -150,7 +168,7 @@ def _doe_state() -> str:
             "coordinator_state_root: cannot resolve example-doctrine-repo doctrine root — "
             "repos.example_doctrine_repo is not set. Does NOT fall back to claude-klabauter for the "
             "doctrine subject. Remediate: machine-local set repos.example_doctrine_repo "
-            "/path/to/example-doctrine-repo, or re-run /coordinator:install."
+            "<path>, or re-run /coordinator:install."
         )
     return _state_of(doe)
 
@@ -268,7 +286,28 @@ def coordinator_state_root(
     if meta:
         # Meta-repo -> central state is in claude-klabauter.
         return _claude_klabauter_state()
-    # Sibling repo -> per-repo state stays in the repo itself.
+    # Sibling repo -> per-repo state stays in the repo itself, UNLESS this
+    # sibling IS the registered published-engine mirror clone (see this
+    # module's docstring, "Published-mirror guard") — reuses the exact same
+    # `repos.claude_klabauter` discriminator `_claude_klabauter_state()` already
+    # applies via `coordinator_claude_klabauter_root_with_class`, exposed standalone as
+    # `published_engine_mirror_path()` so this branch can ask the question
+    # for an arbitrary candidate path rather than only for "my own" root.
+    _mirror = published_engine_mirror_path()
+    # realpath (not normpath) so a registry value and a git-toplevel-resolved
+    # path that differ only by an unresolved symlink component (e.g. macOS
+    # /var -> /private/var) still compare equal -- normpath alone would
+    # under-fire on exactly that class of path.
+    if _mirror and os.path.realpath(_mirror) == os.path.realpath(resolved_git_root):
+        raise StateRootError(
+            "coordinator_state_root: cwd's git root "
+            f"('{resolved_git_root}') is the PUBLISHED engine mirror "
+            "(repos.claude_klabauter) — refusing to treat it as a per-repo "
+            "state root. This would leak runtime/session artifacts (e.g. "
+            "operator-machine identifiers) into a public repo and can strand "
+            "or split a state corpus. Remediate: run from a live working-tree "
+            "checkout instead of the published mirror clone."
+        )
     return _state_of(resolved_git_root)
 
 
@@ -318,10 +357,25 @@ def print_map() -> str:
         )
         subjects["doctrine"] = None
 
-    # Engine root. On failure: null + one stderr WARN line, continue.
+    # Engine root. Routed through the class-aware resolver so the printed
+    # map reflects the same published-mirror guard `_claude_klabauter_state()` applies
+    # (Rule 2/4/5) — the class-less `coordinator_claude_klabauter_root()` would happily
+    # report a mirror path that the resolver itself refuses to hand out for
+    # writing, which is worse than no diagnostic. On failure OR on a resolved
+    # published-mirror class: null + one stderr WARN line, continue.
+    # Review: code-reviewer.
     try:
-        engine_root = coordinator_claude_klabauter_root()
-        subjects["engine"] = _state_of(engine_root)
+        engine_root, resolution_class = coordinator_claude_klabauter_root_with_class()
+        if resolution_class == _RESOLUTION_RESOLVED_ENGINE_LITERAL:
+            sys.stderr.write(
+                "coordinator_state_root --print-map: engine root resolved to a "
+                "PUBLISHED engine mirror — refusing to report it as the state "
+                "map's engine root (state is never written into a published "
+                "mirror); WARN+skip semantics apply\n"
+            )
+            subjects["engine"] = None
+        else:
+            subjects["engine"] = _state_of(engine_root)
     except RuntimeError:
         sys.stderr.write(
             "coordinator_state_root --print-map: engine root unresolvable — "

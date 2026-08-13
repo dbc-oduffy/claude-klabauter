@@ -3102,6 +3102,44 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec: docs/plans/2026-07-28-sat-01b-observed-set-fold-actuator.md § Tasks C5
     # ---------------------------------------------------------------------------
     "tracker.fold_observed_set": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # tracker.mint_person — MUTATING. Own justification, not leaning on either
+    # sibling tracker.* op's comment above (each explicitly disclaims being
+    # precedent for a differently-shaped tracker.* op):
+    #   1. Opens any file for write (including sentinel creation)?            YES.
+    #      Appends a person_created event and one or more person_alias_added
+    #      events to the calling repo's own sovereign-tracker event store via
+    #      coordinator_core.tracker_entities.emit_person_created /
+    #      emit_person_alias_added.
+    #   2. Writes into rag's relational store?                                No.
+    #      Writes only through tracker_entities' own emit functions, which are
+    #      confined to the sovereign-tracker event store; dual-write ban
+    #      satisfied.
+    #   3. Mutates shared mutable state outside its own module?               YES.
+    #      The person registry is read by handoff.normalize (minted_by
+    #      resolution) and by any future consumer of resolve_alias/
+    #      resolve_person.
+    #   4. Persistent state changes observable across process boundaries?     YES.
+    #      A future session/process resolves the minted person via
+    #      tracker_projection.resolve_alias/resolve_person.
+    #   5. Read-only, no side effects at all?                                 No.
+    #      Question 1 alone already answers YES to "opens a file for write" —
+    #      DR-208 §5's COMPUTE_ONLY checklist does not apply to a MUTATING op
+    #      by construction (DR-241's Amendment corrects D1's original
+    #      mis-citation of DR-208 §5; the affirmation actually owed is against
+    #      DR-241 D2's own five bounds, discharged in
+    #      coordinator_core/ops/tracker/mint_person.py's own module docstring
+    #      compliance table).
+    # Write confinement: per-repo only (DEC-11, PM ruling 2026-08-12) — no
+    # write_root_for call, no cross-tree write, no claude-klabauter-tree default;
+    # lock-free compare-and-retry idempotence, no second lock acquisition; no
+    # anonymous person minted on an empty resolved alias bundle (DEC-41).
+    # Authority: docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
+    #   § D2 — Bounds of the sanction; § Amendment (2026-08-11) — the
+    #   person-registry event handler affirmation this op's writes rely on.
+    # Spec: docs/plans/2026-08-12-person-identity-primitive-first-slice.md § Tasks C4
+    # ---------------------------------------------------------------------------
+    "tracker.mint_person": OpClass.MUTATING,
     # priority.set — MUTATING: the sole writer of a priority-ledger entry
     # (<central-state>/priority-ledger/<target_id>.yaml). See
     # coordinator_core/ops/priority_set.py module docstring.

@@ -150,7 +150,7 @@ _LOUD_COVERAGE_STATES = frozenset({"missing_grammar", "partial_coverage"})
 _SYMBOL_EXTRACT_REMEDY = (
     "install the optional extra to enable non-Python symbol extraction: "
     'python -m pip install -e ".[symbols]" from the claude-klabauter repo root '
-    "(requires read access to the private example-retrieval-repo repo; the extra resolves "
+    "(requires read access to the extra's source repo; the extra resolves "
     "a git-ref pin, and the underlying distribution is example-retrieval-repo-symbol-extract, "
     "import name symbol_extract)"
 )

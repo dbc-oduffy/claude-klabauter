@@ -532,7 +532,9 @@ def _partial_pipe_rewrite(tokens: list) -> Optional[str]:
 
 
 def _composed_advisory(
-    evidence: str, partial_rewrite: Optional[str] = None
+    evidence: str,
+    partial_rewrite: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Advisory-only envelope (never a deny, on any platform) for the
     narrow slice of composed grep-via-Bash traffic this guard still has
@@ -595,7 +597,7 @@ def _composed_advisory(
         "PreToolUse",
         "BASH-SPAWN ADVISORY: %s Else, Explore or general-purpose "
         "subagent. %s"
-        % (lede, operator_override_note(_OVERRIDE_ENV_VAR)),
+        % (lede, operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)),
     )
 
 
@@ -705,4 +707,4 @@ def check(
         # (H11(c) evidence: 99.67% of this guard's prior firing set was
         # exactly this case).
         return None
-    return _composed_advisory(match.evidence, partial_rewrite)
+    return _composed_advisory(match.evidence, partial_rewrite, payload=payload)

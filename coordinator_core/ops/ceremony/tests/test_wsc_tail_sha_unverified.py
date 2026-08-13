@@ -65,14 +65,6 @@ def sha_unverified_repo(tmp_path) -> Path:
     (root / "state" / "handoffs" / ".gitkeep").write_text("", encoding="utf-8")
     _git(["add", "-A"], root)
     _git(["commit", "-m", "chore: initial skeleton"], root)
-
-    bare = tmp_path / "origin.git"
-    subprocess.run(
-        ["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True
-    )
-    _git(["remote", "add", "origin", str(bare)], root)
-    push = _git(["push", "-u", "origin", "main"], root)
-    assert push.returncode == 0, push.stderr
     return root
 
 

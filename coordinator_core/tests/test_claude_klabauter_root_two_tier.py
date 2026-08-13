@@ -647,6 +647,49 @@ def test_dual_boot_absent_klabauter_byte_identical_pointer_fast_path(tmp_path, m
     assert cls == "live-working-tree"
 
 
+def test_dual_boot_absent_klabauter_pointer_honors_machine_local_registry_dir_override(
+    tmp_path, monkeypatch
+):
+    """The rung-1.5 pointer read (AC4 fast path) must reuse the already-
+    computed, override-aware `ml_dir` (`shim._ml_dir()`) rather than
+    re-resolving `machine_local_dir()` directly — the two diverge whenever
+    `MACHINE_LOCAL_REGISTRY_DIR` is set, since only `shim._ml_dir()` honors
+    it. Proves the override genuinely reaches this rung: the settings-home
+    machine-local dir is left EMPTY (no pointer file there at all) while the
+    override dir holds the pointer — a resolution that only succeeds if the
+    override is actually consulted, not merely a value-equality assertion
+    that could pass by coincidence.
+
+    Review: code-reviewer.
+    """
+    settings_home = tmp_path / "settings-home"
+    settings_home_ml_dir = settings_home / "machine-local"
+    settings_home_ml_dir.mkdir(parents=True)
+    # Deliberately no `.claude-klabauter-root` written here — if the fix under test
+    # regresses to `machine_local_dir()` (settings-home-derived, override-
+    # blind), this rung would find nothing and fall through to Rung 2,
+    # which has no registry entry either and would raise instead of
+    # resolving `override_live_dir` below.
+
+    override_ml_dir = tmp_path / "override-machine-local"
+    override_ml_dir.mkdir()
+    override_live_dir = tmp_path / "override-live"
+    override_live_dir.mkdir()
+    (override_ml_dir / ".claude-klabauter-root").write_text(
+        str(override_live_dir), encoding="utf-8"
+    )
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(override_ml_dir))
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+    root, cls = claude_klabauter_root.coordinator_claude_klabauter_root_with_class()
+
+    assert root == str(override_live_dir)
+    assert cls == "live-working-tree"
+
+
 def _make_bin_dir_with_sentinel(root, extra_targets=()):
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)

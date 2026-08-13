@@ -87,7 +87,7 @@ def _write_handoff(handoffs_dir, name, *, status, deployment_state, consumed_by=
 # ===========================================================================
 # _batch_commit_timestamps -- the ONE git-spawning leg.
 # ===========================================================================
-def test_batch_commit_timestamps_makes_one_call_for_many_shas():
+def test_batch_commit_timestamps_makes_one_call_for_many_shas(monkeypatch):
     mod = _load_module()
 
     class FakeResult:
@@ -101,11 +101,8 @@ def test_batch_commit_timestamps_makes_one_call_for_many_shas():
         calls.append(cmd)
         return FakeResult(0, "sha1full 1000\nsha2full 2000\n")
 
-    mod.subprocess.run = fake_run
-    try:
-        result = mod._batch_commit_timestamps(["sha1", "sha2"], "/some/repo")
-    finally:
-        pass
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    result = mod._batch_commit_timestamps(["sha1", "sha2"], "/some/repo")
 
     assert len(calls) == 1, f"expected exactly one git-log call, got {len(calls)}: {calls}"
     cmd = calls[0]
@@ -122,7 +119,7 @@ def test_batch_commit_timestamps_makes_one_call_for_many_shas():
     assert result == {"sha1": 1000, "sha2": 2000}
 
 
-def test_batch_commit_timestamps_empty_input_makes_no_call():
+def test_batch_commit_timestamps_empty_input_makes_no_call(monkeypatch):
     mod = _load_module()
 
     calls = []
@@ -131,13 +128,13 @@ def test_batch_commit_timestamps_empty_input_makes_no_call():
         calls.append(cmd)
         raise AssertionError("must not spawn for an empty SHA list")
 
-    mod.subprocess.run = fake_run
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
     result = mod._batch_commit_timestamps([], "/some/repo")
     assert result == {}
     assert calls == []
 
 
-def test_batch_commit_timestamps_dropped_sha_absent_from_result():
+def test_batch_commit_timestamps_dropped_sha_absent_from_result(monkeypatch):
     """§ anti-scope 25: --ignore-missing silently drops an unresolvable SHA
     from stdout. The dropped SHA must be reconciled as ABSENT from the
     returned map -- never defaulted to a resolved answer."""
@@ -147,7 +144,7 @@ def test_batch_commit_timestamps_dropped_sha_absent_from_result():
         returncode = 0
         stdout = "presentshafull 5000\n"  # "droppedsha" never appears in stdout
 
-    mod.subprocess.run = lambda cmd, **kwargs: FakeResult()
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kwargs: FakeResult())
 
     result = mod._batch_commit_timestamps(["presentsha", "droppedsha"], "/some/repo")
     assert result.get("presentsha") == 5000
@@ -156,14 +153,14 @@ def test_batch_commit_timestamps_dropped_sha_absent_from_result():
     )
 
 
-def test_batch_commit_timestamps_git_failure_returns_empty_map():
+def test_batch_commit_timestamps_git_failure_returns_empty_map(monkeypatch):
     mod = _load_module()
 
     class FakeResult:
         returncode = 1
         stdout = ""
 
-    mod.subprocess.run = lambda cmd, **kwargs: FakeResult()
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kwargs: FakeResult())
     assert mod._batch_commit_timestamps(["sha1"], "/some/repo") == {}
 
 
@@ -305,7 +302,7 @@ def _patch_common(mod, *, repo_root, session_live_map=None, claim_holder_map=Non
     mod._run_archive_stamp_cli = lambda args: (True, "")
 
 
-def test_main_batches_across_multiple_orphans_in_one_git_log_call(tmp_path):
+def test_main_batches_across_multiple_orphans_in_one_git_log_call(tmp_path, monkeypatch):
     """The C13 target: two dead-holder orphans, each with their own
     completed-ceremony commits[], must resolve committer timestamps via
     EXACTLY ONE git-log call across the whole in-flight set -- not one
@@ -356,7 +353,7 @@ def test_main_batches_across_multiple_orphans_in_one_git_log_call(tmp_path):
         other_git_calls.append(cmd)
         return FakeResult(1, "")
 
-    mod.subprocess.run = fake_run
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
     stamped = []
 
@@ -399,7 +396,7 @@ def test_main_batches_across_multiple_orphans_in_one_git_log_call(tmp_path):
     assert b_stamp[2] == "--sha" and b_stamp[3] == "sha-b1", b_stamp
 
 
-def test_main_dropped_candidate_sha_falls_through_to_release_not_ship(tmp_path):
+def test_main_dropped_candidate_sha_falls_through_to_release_not_ship(tmp_path, monkeypatch):
     """§ anti-scope 25, end-to-end: an orphan whose ONLY candidate commit sha
     is silently dropped by --ignore-missing (absent from git-log stdout) must
     fall through to claim-release, never be treated as shipped."""
@@ -436,7 +433,7 @@ def test_main_dropped_candidate_sha_falls_through_to_release_not_ship(tmp_path):
             return FakeResult(0, "")
         return FakeResult(1, "")
 
-    mod.subprocess.run = fake_run
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
     stamped = []
     mod._run_archive_stamp_cli = lambda args: (stamped.append(args) or (True, ""))
@@ -450,7 +447,7 @@ def test_main_dropped_candidate_sha_falls_through_to_release_not_ship(tmp_path):
     assert stamp_verbs == ["unconsume-handoff"], stamp_verbs
 
 
-def test_main_no_orphans_makes_zero_git_log_batch_calls(tmp_path):
+def test_main_no_orphans_makes_zero_git_log_batch_calls(tmp_path, monkeypatch):
     """No in-flight orphans -> pending is empty -> _batch_commit_timestamps
     must not spawn at all."""
     mod = _load_module()
@@ -476,7 +473,7 @@ def test_main_no_orphans_makes_zero_git_log_batch_calls(tmp_path):
             return FakeResult(0, "")
         return FakeResult(1, "")
 
-    mod.subprocess.run = fake_run
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
     rc = mod.main([])
     assert rc == 0

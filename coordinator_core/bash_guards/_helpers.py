@@ -120,7 +120,7 @@ from __future__ import annotations
 
 import re
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # --- (1) Identity resolver: thin re-export, NOT a new module -----------------
 # Per recipe \xa7(a): "do NOT author coordinator_core.identity. Extend/reuse
@@ -134,6 +134,7 @@ from coordinator_core.subagent_sandbox.engine import (  # noqa: F401
     _canonical_agent_id,
     _read_backpointer_subagent_type,
 )
+from coordinator_core.session.identity import resolves_em_audience
 
 # AC5 (docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md, C2):
 # a plain re-use of C1's dispatch-seam roster resolver, NOT a second roster
@@ -143,9 +144,41 @@ from coordinator_core.subagent_sandbox.engine import (  # noqa: F401
 # unreadable roster -- see that module's own docstring. This bash-guard
 # package borrows it for the SAME reason it borrows `resolve_effective_types`
 # above: one resolver, not a parallel one.
-from coordinator_core.hooks.block_unenumerated_agent_type import (  # noqa: F401
-    resolve_roster,
-)
+#
+# DEFERRED, NOT re-exported at module level (2026-08-13 hot-path import-budget
+# fix): a module-level `from coordinator_core.hooks.block_unenumerated_agent_type
+# import resolve_roster` drags in `coordinator_core.hooks`'s package `__init__`
+# and its full eager registration (18 submodules) on EVERY `write_guards.engine`
+# / `bash_guards.dispatch` import -- the exact regression commit `670cf7878`
+# (2026-08-10) introduced, doubling `write_guards.engine`'s import cost against
+# `coordinator_core/benchmarks/import-budget-manifest.json`'s hot-path budget.
+# `_resolve_roster()` below imports lazily, ONLY when
+# `is_confined_by_roster_absence` actually needs the roster (the same
+# already-documented "walks real disk I/O" fallback path). Mirrors
+# `coordinator_core.session.core._psutil()`'s cache-on-the-module-attribute-
+# itself shape byte-for-byte, for the SAME reason: it is what keeps
+# `monkeypatch.setattr(_helpers, "resolve_roster", ...)` working unmodified
+# (see this package's `tests/test_block_reviewer_bash_outside_allowlist_
+# roster_absence.py`) -- a private `_resolve_roster_mod` cache would silently
+# break that patch point. DO NOT re-flatten this back to a module-level
+# import; it will re-open the exact regression this fix closes.
+_UNRESOLVED = object()
+resolve_roster = _UNRESOLVED  # type: ignore[assignment]
+
+
+def _resolve_roster_accessor():
+    """Lazily import and cache ``resolve_roster`` on this module's own
+    attribute (see the negative-spec comment above this cache's
+    declaration). Returns the callable; never calls it.
+    """
+    global resolve_roster
+    if resolve_roster is _UNRESOLVED:
+        from coordinator_core.hooks.block_unenumerated_agent_type import (
+            resolve_roster as _imported_resolve_roster,
+        )
+
+        resolve_roster = _imported_resolve_roster
+    return resolve_roster
 
 __all__ = [
     "resolve_git_root",
@@ -354,7 +387,11 @@ def resolve_override_keys_doc_display() -> str:
 
 
 def operator_override_note(
-    env_var: str, *, reason_placeholder: Optional[str] = None
+    env_var: str,
+    *,
+    payload: Optional[Dict[str, Any]],
+    git_root: Optional[str] = None,
+    reason_placeholder: Optional[str] = None,
 ) -> str:
     """Render the ONE short pointer every guard message that names an escape
     hatch appends -- the SSOT this whole function exists for.
@@ -496,7 +533,53 @@ def operator_override_note(
     prior rounds already tried and the source memo (2026-08-11-example-retrieval-repo-
     ue-addon-em-guard-self-narration-reads-as-injection.md) reports as still
     unclosed.
+
+    AUDIENCE-GATED, 2026-08-13 (this dispatch;
+    tasks/guard-messages-keys/DECISIONS.md D1/D2; plan
+    docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md).
+    Every prior reshape above still rendered the doc pointer for EVERY
+    audience -- a dispatched subagent included. A doc pointer is itself a
+    statement that an unlock exists, which is a banned message shape for a
+    subagent audience (plan AC-1) even with no key named and no assignment
+    form. ``payload`` is now a REQUIRED keyword argument with NO DEFAULT --
+    a call site missed by this migration must raise ``TypeError`` at
+    collection, never silently keep the old always-render behaviour.
+
+    Resolution: ``coordinator_core.session.identity.resolves_em_audience(
+    payload, git_root)``. False (including on any resolution exception) ->
+    return ``""`` -- not a shorter pointer, not "blocked, see docs", the
+    empty string. True -> return today's doc-pointer literal, unchanged
+    (plan AC-2's permitted shape). See ``resolves_em_audience``'s own
+    docstring for the inverted-default rationale, the two-leg-not-three
+    divergence from ``_blanket_disarm.py::_is_em_caller``, and why
+    forgeability is out of scope here -- this function does not re-derive
+    any of that.
+
+    SPLICE CONTRACT for every caller (this module's own two internal call
+    sites, below, and the ~106 call sites in other files C1b/C1c own):
+    this function's return value must be safe to concatenate/join into a
+    guard message with NO special-casing at the call site for the empty
+    case -- no dangling connective (`` -- ``), no double space, no orphan
+    trailing newline. The two shapes callers must pick between:
+      - Append this call's result as the LAST element of a `" -- ".join(...)`
+        (or equivalent) list of message parts, filtering out any empty
+        string from that list before joining -- the empty case then simply
+        contributes nothing.
+      - Or, where the pointer is the ONLY content of a trailing sentence,
+        gate the whole trailing sentence on ``bool(operator_override_note(...))``
+        rather than always appending it.
+    Do not hand-roll a third splice shape; both of the above degrade
+    cleanly to "no trailing artefact" when this returns ``""``.
+
+    NEGATIVE SPEC 6 (2026-08-13, this reshape) -- do not widen this
+    function back to rendering for an unresolved/unknown audience. The
+    default here is DENY-EMIT (return ``""``) on anything short of a
+    positively-resolved EM audience, including "could not tell" -- that is
+    the specific regression this whole plan exists to close, and reverting
+    to "emit unless we positively know it's a subagent" reopens it.
     """
+    if not resolves_em_audience(payload, git_root):
+        return ""
     return "See %s for this guard's override keys." % _resolve_override_keys_doc_display()
 
 
@@ -610,7 +693,7 @@ def is_confined_by_roster_absence(effective_type: str) -> bool:
     """
     if not effective_type:
         return False
-    roster, error = resolve_roster()
+    roster, error = _resolve_roster_accessor()()
     if roster is None:
         return True
     return effective_type not in roster

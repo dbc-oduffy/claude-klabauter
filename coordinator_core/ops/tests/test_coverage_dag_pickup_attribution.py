@@ -46,6 +46,7 @@ Spec backlink: docs/plans/2026-08-10-chain-attribution-pickup-author.md § C3
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 from typing import List
@@ -397,3 +398,172 @@ def test_pickup_claim_read_failure_attribution_unchanged(
         "the fail-closed degrade must still surface its stderr diagnostic; "
         f"stderr={captured.err!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-13-unrecordable-range-told-at-collapse-not-after.md):
+# a single-node DAG walk (every spinoff's `predecessor: none`, schema rule
+# C2-4) must surface a walk-collapsed note through `run_coverage_gate`'s
+# existing `notes` channel — AC1/AC2/AC3/AC5.
+# ---------------------------------------------------------------------------
+
+
+def test_single_node_walk_emits_collapse_note_and_leaves_verdict_untouched(
+    tmp_path: Path,
+) -> None:
+    """AC1 + AC5: `_build_repo_with_handoff`'s closing handoff carries
+    `predecessor: none` (schema rule C2-4), so `dag.walk_forward` never
+    crosses a continuation edge and `ordered_ancestry` holds exactly one
+    node — the closing handoff itself. `run_coverage_gate` must append the
+    walk-collapsed note (naming the single-node fact, `predecessor: none`
+    as cause, and the unmintable consequence) while leaving verdict/
+    exit_code/uncovered_shas exactly as an identical fixture already
+    produces without this change (same-session author/runner control,
+    mirroring `test_same_session_author_runner_control_MUST_NOT_CHANGE`
+    above)."""
+    closing, repo = _build_repo_with_handoff(tmp_path, author_session_id=_SESSION_A)
+
+    result = cov.run_coverage_gate(
+        from_handoff=str(closing.resolve()),
+        repo_root=str(repo),
+        closing_session_id=_SESSION_A,
+    )
+
+    assert result.verdict != "INDETERMINATE"
+    assert result.exit_code in (0, 1), (
+        f"verdict/exit_code must be the ordinary same-session outcome, "
+        f"unaffected by the added note; verdict={result.verdict!r} "
+        f"exit_code={result.exit_code!r}"
+    )
+
+    collapse_notes = [n for n in result.notes if "exactly one node" in n]
+    assert len(collapse_notes) == 1, (
+        f"expected exactly one walk-collapsed note; notes={result.notes!r}"
+    )
+    note = collapse_notes[0]
+    assert "predecessor: none" in note, note
+    assert "no chain-ancestry waiver can be minted" in note, note
+    assert "review_trail.write" in note, note
+    assert "sidecar" in note and "terminal evidence" in note, note
+    assert "re-run" not in note.lower() and "rerun" not in note.lower(), (
+        f"AC3: must not prescribe re-running the gate; note={note!r}"
+    )
+
+
+def test_multi_node_walk_does_not_emit_collapse_note(tmp_path: Path) -> None:
+    """Control for AC1: a walk that reaches more than one node must NOT
+    fire the single-node collapse note."""
+    closing, repo = _build_repo_with_handoff(tmp_path, author_session_id=_SESSION_A)
+
+    predecessor = repo / "state" / "handoffs" / "predecessor.md"
+    predecessor.write_text("---\nsession_id: s0\npredecessor: none\n---\nEarlier.\n")
+    _git(["add", "state/handoffs/predecessor.md"], repo)
+    _git(
+        ["commit", "-m", f"add predecessor handoff\n\nSession-Id: {_SESSION_A}"],
+        repo,
+    )
+    closing.write_text(
+        "---\nsession_id: s1\npredecessor: state/handoffs/predecessor.md\n---\n"
+        "Closing body.\n"
+    )
+    _git(["add", "state/handoffs/closing.md"], repo)
+    _git(
+        [
+            "commit", "-m",
+            f"repoint closing handoff at predecessor\n\nSession-Id: {_SESSION_A}",
+        ],
+        repo,
+    )
+
+    result = cov.run_coverage_gate(
+        from_handoff=str(closing.resolve()),
+        repo_root=str(repo),
+        closing_session_id=_SESSION_A,
+    )
+
+    assert not any("exactly one node" in n for n in result.notes), (
+        f"a multi-node walk must not fire the single-node collapse note; "
+        f"notes={result.notes!r}"
+    )
+
+
+def test_missing_link_walk_emits_broken_pointer_note_not_dr294(
+    tmp_path: Path,
+) -> None:
+    """Review finding (docs/plans/2026-08-13-unrecordable-range-told-at-
+    collapse-not-after.md item 1): `len(ordered_ancestry) == 1` conflates two
+    distinct causes. This fixture builds the SECOND one -- a declared
+    predecessor that does not resolve (dag.walk_forward sets
+    terminatedEarly='missing-link') -- distinct from
+    `test_single_node_walk_emits_collapse_note_and_leaves_verdict_untouched`
+    above, which builds the genuine `predecessor: none` cause. Both collapse
+    `ordered_ancestry` to length 1, but only the genuine-none cause is the
+    ruled DR-294 spinoff limit; this one is a broken pointer and must get a
+    different, honest note that does NOT cite DR-294."""
+    closing, repo = _build_repo_with_handoff(tmp_path, author_session_id=_SESSION_A)
+
+    closing.write_text(
+        "---\nsession_id: s1\n"
+        "predecessor: state/handoffs/never-existed-broken-link.md\n"
+        "---\nClosing body.\n"
+    )
+    _git(["add", "state/handoffs/closing.md"], repo)
+    _git(
+        [
+            "commit", "-m",
+            f"repoint closing handoff at a dangling predecessor\n\n"
+            f"Session-Id: {_SESSION_A}",
+        ],
+        repo,
+    )
+
+    result = cov.run_coverage_gate(
+        from_handoff=str(closing.resolve()),
+        repo_root=str(repo),
+        closing_session_id=_SESSION_A,
+    )
+
+    collapse_notes = [n for n in result.notes if "exactly one node" in n]
+    assert len(collapse_notes) == 1, (
+        f"expected exactly one walk-collapsed note; notes={result.notes!r}"
+    )
+    note = collapse_notes[0]
+    assert "schema rule C2-4" not in note, (
+        f"broken-pointer collapse must not claim the universal-spinoff fact; "
+        f"note={note!r}"
+    )
+    assert "not the ruled DR-294" in note, (
+        f"broken-pointer collapse must explicitly disclaim the DR-294 "
+        f"spinoff limit rather than staying silent on it; note={note!r}"
+    )
+    assert "could not be resolved" in note or "broken link" in note, (
+        f"expected the note to name the broken/unresolved predecessor "
+        f"pointer; note={note!r}"
+    )
+
+
+def test_single_node_walk_note_fires_regardless_of_mint_flag(tmp_path: Path) -> None:
+    """AC2: the note fires identically whether `mint_chain_waivers` is True
+    or False — it is diagnostic emission, not gated behind the mint side
+    effect, so an EM running the gate merely to see its obligation gets the
+    same warning as one running it to mint."""
+    import coordinator_core.ops.coverage_gate  # noqa: F401 — fires @register_op
+    from coordinator_core.ops.coverage_gate import _coverage_gate
+
+    closing, repo = _build_repo_with_handoff(tmp_path, author_session_id=_SESSION_A)
+
+    for mint_flag in (False, True):
+        result = asyncio.run(
+            _coverage_gate(
+                {
+                    "from_handoff": str(closing.resolve()),
+                    "closing_session_id": _SESSION_A,
+                    "mint_chain_waivers": mint_flag,
+                },
+                repo_root=repo,
+            )
+        )
+        assert any("exactly one node" in n for n in result["notes"]), (
+            f"note must fire with mint_chain_waivers={mint_flag}; "
+            f"notes={result['notes']!r}"
+        )

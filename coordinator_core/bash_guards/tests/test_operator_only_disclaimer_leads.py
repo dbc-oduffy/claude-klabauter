@@ -149,11 +149,15 @@ class TestOperatorOverrideNoteDisclaimer:
     env-var-only bypass pointer."""
 
     def test_doc_pointer_statement_present(self):
-        note = operator_override_note("COORDINATOR_OVERRIDE_SOME_GUARD")
+        note = operator_override_note(
+            "COORDINATOR_OVERRIDE_SOME_GUARD", payload={"session_id": "sess-c1d-em"}
+        )
         assert _OVERRIDE_NOTE_LEAD in note
 
     def test_doc_pointer_statement_leads(self):
-        note = operator_override_note("COORDINATOR_OVERRIDE_SOME_GUARD")
+        note = operator_override_note(
+            "COORDINATOR_OVERRIDE_SOME_GUARD", payload={"session_id": "sess-c1d-em"}
+        )
         assert note.startswith(_OVERRIDE_NOTE_LEAD), (
             "operator_override_note() must lead with the doc-pointer "
             "statement -- got: %r" % note
@@ -167,15 +171,21 @@ class TestOperatorOverrideNoteDisclaimer:
         rendered output at all (see that function's own docstring), so this
         is now also a direct regression check that both calls render the
         identical string."""
-        default_note = operator_override_note("COORDINATOR_QUEUE_PUNT")
+        default_note = operator_override_note(
+            "COORDINATOR_QUEUE_PUNT", payload={"session_id": "sess-c1d-em"}
+        )
         note = operator_override_note(
-            "COORDINATOR_QUEUE_PUNT", reason_placeholder="<why this is being punted>"
+            "COORDINATOR_QUEUE_PUNT",
+            payload={"session_id": "sess-c1d-em"},
+            reason_placeholder="<why this is being punted>",
         )
         assert note.startswith(_OVERRIDE_NOTE_LEAD)
         assert note == default_note
 
     def test_retired_disclaimer_register_does_not_reappear(self):
-        note = operator_override_note("COORDINATOR_OVERRIDE_SOME_GUARD")
+        note = operator_override_note(
+            "COORDINATOR_OVERRIDE_SOME_GUARD", payload={"session_id": "sess-c1d-em"}
+        )
         assert _RETIRED_DISCLAIMER not in note, (
             "the old 'not this agent' disclaimer register must not reappear -- "
             "it was itself the injection tell the 2026-08-11 reshape removed"
@@ -288,17 +298,14 @@ class TestAnnotateDenyDisclaimer:
         monkeypatched temp dir, and the create-then-retry sequencing
         sentence) and passes on the current one.
 
-        RECIPE removed, but not INFORMATION (second PM pass, same
-        dispatch): the bare ``session_id``/``guard_name`` VALUES this
-        firing carries are still rendered -- no static wiki page can ever
-        supply those two per-firing data points on its own, and the
-        distinction the PM drew is data (kept) vs. an assembled,
-        ready-to-paste path plus imperative/sequencing advice (removed).
-        This test pins BOTH halves: the identifiers present as bare
-        values, and no assembled path/prefix/temp-root ever appearing --
-        so a future edit that either drops the identifiers again (making
-        the unlock unreachable) or re-assembles them into a path
-        (reintroducing the recipe) fails it."""
+        REVERTED (2026-08-13, C3, tasks/guard-messages-keys/C3.md Task 1):
+        a later, separate regression (2026-08-12) re-inlined the bare
+        ``session_id``/``guard_name`` VALUES plus the sentinel's filename
+        shape and drop location as live parameters -- the exact recipe this
+        test originally asserted was removed, reintroduced one layer
+        differently. C3 reverted that regression: this test now pins that
+        NEITHER the assembled path/prefix/temp-root NOR the bare per-firing
+        identifiers appear -- only the wiki/doc pointers do."""
         import tempfile
 
         from coordinator_core.session.guard_unlock_sentinel import (
@@ -326,15 +333,15 @@ class TestAnnotateDenyDisclaimer:
         assert "create-then-retry" not in reason
         assert "before any command runs" not in reason
         assert "single combined" not in reason
-        # The two bare identifiers ARE data the message must still carry --
-        # see this test's own docstring, "RECIPE removed, but not
-        # INFORMATION".
-        assert "sess-disclaimer-test" in reason, (
-            "annotate_deny() must still name the bare session_id as data -- "
+        # REVERTED (C3, Task 1): the two bare identifiers were re-inlined by
+        # a later regression (2026-08-12) and taken back out (2026-08-13) --
+        # see this test's own docstring.
+        assert "sess-disclaimer-test" not in reason, (
+            "annotate_deny() must not name the bare session_id -- "
             "got: %r" % reason
         )
-        assert "fake_guard" in reason, (
-            "annotate_deny() must still name the bare guard_name as data -- "
+        assert "fake_guard" not in reason, (
+            "annotate_deny() must not name the bare guard_name -- "
             "got: %r" % reason
         )
 
@@ -358,12 +365,15 @@ class TestAnnotateDenyDisclaimer:
 
 
 class TestAnnotateDenyAgentIdSuppression:
-    """2026-08-11 (this dispatch): the unlock block is a human-only
-    affordance a dispatched subagent structurally cannot use (see
-    `annotate_deny`'s docstring item 5) -- suppressed for a positively
-    resolved subagent `agent_id`, still emitted for everyone else (fail
-    direction: absence/malformed emits, only a resolved subagent
-    suppresses)."""
+    """2026-08-11: the unlock block is a human-only affordance a dispatched
+    subagent structurally cannot use (see `annotate_deny`'s docstring item
+    5) -- suppressed for a positively resolved subagent `agent_id`.
+    SUPERSEDED direction (2026-08-13, C3, item 8 -- AC-3): the EM decision
+    for everything else now routes through `identity.resolves_em_audience`,
+    which only emits for a positively-resolved EM audience -- absence emits
+    (a well-formed envelope with no agent legs IS the EM signal), but
+    malformed/unresolvable/exception now degrade to terse instead of
+    emitting."""
 
     def _fire(self, tmp_path, monkeypatch, *, agent_id=""):
         import tempfile
@@ -400,11 +410,14 @@ class TestAnnotateDenyAgentIdSuppression:
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD in reason
 
-    def test_malformed_agent_id_still_emits_the_block(self, tmp_path, monkeypatch):
-        """Fail direction: an unrecognised/malformed agent_id resolves to
-        `""` via `resolve_subagent_identity`'s own fail-closed contract,
-        which this function treats identically to "absent" -- it must NOT
-        be treated as a resolved subagent and must NOT suppress."""
+    def test_malformed_agent_id_degrades_to_terse(self, tmp_path, monkeypatch):
+        """AC-3 inversion (2026-08-13, C3): a malformed/unrecognised
+        agent_id resolves to `""` via `resolve_subagent_identity`'s own
+        fail-closed contract -- it is NOT treated as a resolved subagent
+        (unchanged), but the EM-audience decision now routes through
+        `identity.resolves_em_audience`, which treats a present-but-
+        unresolvable `agent_id` as "cannot resolve" and degrades to terse,
+        reversing the old fail-open-to-emit direction."""
         out = self._fire(tmp_path, monkeypatch, agent_id="not-a-recognised-shape")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert _UNLOCK_BLOCK_LEAD in reason
+        assert _UNLOCK_BLOCK_LEAD not in reason

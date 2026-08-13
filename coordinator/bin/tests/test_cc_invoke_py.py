@@ -41,6 +41,7 @@ Spec backlink: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -1707,6 +1708,13 @@ class ResolveEngineRootTest(unittest.TestCase):
         returns any non-empty env value verbatim (no isdir gate): this
         function adds the gate because a stale CLAUDE_KLABAUTER_ROOT surviving a
         cross-platform ~/.claude sync must fall through, not be honored.
+
+        Asserts against ``own.resolve()`` rather than ``own``: on macOS,
+        ``tempfile.TemporaryDirectory()`` yields a path under ``/var/...``
+        while the resolver canonicalizes through the ``/var -> /private/var``
+        symlink, so the raw and resolved forms diverge unless both sides of
+        the comparison are resolved. — Review: coordinator:code-reviewer
+        (a46f2a6d) P3
         """
         with tempfile.TemporaryDirectory() as tmp:
             own = Path(tmp) / "own"
@@ -1717,7 +1725,7 @@ class ResolveEngineRootTest(unittest.TestCase):
 
             for bogus in ("", str(Path(tmp) / "does-not-exist")):
                 with unittest.mock.patch.dict(os.environ, {"CLAUDE_KLABAUTER_ROOT": bogus}):
-                    self.assertEqual(_mod.resolve_engine_root(str(script)), str(own))
+                    self.assertEqual(_mod.resolve_engine_root(str(script)), str(own.resolve()))
 
     def test_self_location_is_depth_agnostic(self) -> None:
         """A helper under coordinator/bin/lib/ resolves its own checkout too —
@@ -1731,7 +1739,7 @@ class ResolveEngineRootTest(unittest.TestCase):
 
             with unittest.mock.patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
-                self.assertEqual(_mod.resolve_engine_root(str(deep)), str(own))
+                self.assertEqual(_mod.resolve_engine_root(str(deep)), str(own.resolve()))
 
     def test_falls_back_to_registry_ladder_outside_any_checkout(self) -> None:
         """Published/vendored outside a claude-klabauter tree — rung 3 answers."""
@@ -1761,10 +1769,10 @@ class ResolveEngineRootTest(unittest.TestCase):
             try:
                 with unittest.mock.patch.dict(os.environ, {}, clear=False):
                     os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
-                    self.assertEqual(_mod.ensure_engine_on_path(str(script)), str(own))
-                    self.assertEqual(sys.path[0], str(own))
+                    self.assertEqual(_mod.ensure_engine_on_path(str(script)), str(own.resolve()))
+                    self.assertEqual(sys.path[0], str(own.resolve()))
                     _mod.ensure_engine_on_path(str(script))
-                    self.assertEqual(sys.path.count(str(own)), 1)
+                    self.assertEqual(sys.path.count(str(own.resolve())), 1)
             finally:
                 sys.path[:] = saved
 
@@ -1782,6 +1790,251 @@ class ResolveEngineRootTest(unittest.TestCase):
                 with unittest.mock.patch.dict(os.environ, {}, clear=False):
                     os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
                     self.assertIsNone(_mod.ensure_engine_on_path(str(stray)))
+
+
+class RequireEngineVariantsTest(unittest.TestCase):
+    """require_engine_on_path / require_colocated_engine_on_path — the fail-loud
+    wrappers C1 added around resolve_engine_root / resolve_colocated_claude_klabauter_root.
+
+    Spec backlink: docs/plans/2026-08-12-hand-rolled-engine-root-bootstraps-become-seam-calls.md § C2
+    AC2 (agreement with the wrapped ladder), AC3 (fail-loud, no swallowing), AC8
+    (order pin — env-first vs self-location-first must not collapse to the same
+    resolution when they diverge).
+    """
+
+    @staticmethod
+    def _make_checkout(root: Path) -> None:
+        (root / "coordinator_core").mkdir(parents=True)
+        (root / "pyproject.toml").write_text("", encoding="utf-8")
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _hermetic_env(settings_home: Path):
+        """Pin COORDINATOR_SETTINGS_HOME to a tmp dir with no pointer file, and
+        neutralize CLAUDE_HOME/CLAUDE_KLABAUTER_ROOT — required per the brief's Part 1
+        Hermeticity note: _resolve_claude_klabauter_root reads COORDINATOR_SETTINGS_HOME /
+        CLAUDE_HOME (for the .claude-klabauter-root pointer) and the machine-local
+        repos.claude_klabauter registry, not just CLAUDE_KLABAUTER_ROOT.
+
+        CLAUDE_HOME/CLAUDE_CONFIG_DIR are PINNED to an empty tmp subdir, not
+        merely popped: machine_local_impl_resolve.claude_home() falls through
+        to the real ${HOME}/.claude when both env vars are absent, so popping
+        alone lets a box with coordinator-claude installed spawn a subprocess
+        against the REAL ~/.claude/bin/_machine_local.py instead of provably
+        having no machine-local script to find. — Review: coordinator:code-
+        reviewer (a46f2a6d) P2
+        """
+        fake_claude_home = settings_home / "_fake_claude_home"
+        fake_claude_home.mkdir(parents=True, exist_ok=True)
+        with unittest.mock.patch.dict(
+            os.environ,
+            {
+                "COORDINATOR_SETTINGS_HOME": str(settings_home),
+                "CLAUDE_HOME": str(fake_claude_home),
+                "CLAUDE_CONFIG_DIR": str(fake_claude_home),
+            },
+            clear=False,
+        ):
+            os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+            yield
+
+    # -- Agreement (AC2) -----------------------------------------------------
+
+    def test_require_engine_on_path_agrees_with_resolve_engine_root_shallow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            settings_home = Path(tmp) / "settings-home"
+            self._make_checkout(own)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with self._hermetic_env(settings_home):
+                    expected = _mod.resolve_engine_root(str(script))
+                    sys.path[:] = saved
+                    self.assertEqual(_mod.require_engine_on_path(str(script)), expected)
+            finally:
+                sys.path[:] = saved
+
+    def test_require_engine_on_path_agrees_with_resolve_engine_root_deep(self) -> None:
+        """coordinator/bin/lib/X.py — the depth case the fixed parents[2] probe misses."""
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            settings_home = Path(tmp) / "settings-home"
+            self._make_checkout(own)
+            deep = own / "coordinator" / "bin" / "lib" / "helper.py"
+            deep.parent.mkdir(parents=True)
+            deep.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with self._hermetic_env(settings_home):
+                    expected = _mod.resolve_engine_root(str(deep))
+                    sys.path[:] = saved
+                    self.assertEqual(_mod.require_engine_on_path(str(deep)), expected)
+            finally:
+                sys.path[:] = saved
+
+    def test_require_colocated_engine_on_path_agrees_with_resolve_colocated_shallow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            settings_home = Path(tmp) / "settings-home"
+            self._make_checkout(own)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with self._hermetic_env(settings_home):
+                    expected = _mod.resolve_colocated_claude_klabauter_root(str(script))
+                    sys.path[:] = saved
+                    self.assertEqual(
+                        _mod.require_colocated_engine_on_path(str(script)), expected
+                    )
+            finally:
+                sys.path[:] = saved
+
+    def test_require_colocated_engine_on_path_agrees_with_resolve_colocated_deep(self) -> None:
+        """coordinator/bin/lib/X.py — resolve_colocated's fixed parents[2] probe
+        lands on coordinator/bin, not the checkout root, and misses; both the
+        wrapper and the raw call must fall through to _resolve_claude_klabauter_root the
+        same way."""
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            settings_home = Path(tmp) / "settings-home"
+            self._make_checkout(own)
+            deep = own / "coordinator" / "bin" / "lib" / "helper.py"
+            deep.parent.mkdir(parents=True)
+            deep.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with self._hermetic_env(settings_home):
+                    expected = _mod.resolve_colocated_claude_klabauter_root(str(deep))
+                    sys.path[:] = saved
+                    self.assertEqual(
+                        _mod.require_colocated_engine_on_path(str(deep)), expected
+                    )
+            finally:
+                sys.path[:] = saved
+
+    # -- Order (AC8 pin) ------------------------------------------------------
+
+    def test_env_first_vs_self_location_first_diverge_correctly(self) -> None:
+        """CLAUDE_KLABAUTER_ROOT points at a DIFFERENT valid checkout than the script's own:
+        require_engine_on_path (env-first) must return the ENV tree;
+        require_colocated_engine_on_path (self-location-first) must return its
+        OWN tree. A naive migration that swapped the two ladders would collapse
+        this into agreement — this is the assertion that catches it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            other = Path(tmp) / "other"
+            settings_home = Path(tmp) / "settings-home"
+            self._make_checkout(own)
+            self._make_checkout(other)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with self._hermetic_env(settings_home):
+                    os.environ["CLAUDE_KLABAUTER_ROOT"] = str(other)
+                    self.assertEqual(
+                        _mod.require_engine_on_path(str(script)), str(other)
+                    )
+                    sys.path[:] = saved
+                    self.assertEqual(
+                        _mod.require_colocated_engine_on_path(str(script)),
+                        str(own.resolve()),
+                    )
+            finally:
+                sys.path[:] = saved
+
+    # -- Failure (AC3) ----------------------------------------------------------
+
+    def test_require_variants_raise_runtimeerror_when_every_rung_misses(self) -> None:
+        """Not reachable by unsetting env and moving the script outside a
+        checkout — cc_invoke's own __file__-based terminal rung always
+        resolves from a live checkout. Force the miss by patching
+        _resolve_claude_klabauter_root to raise, mirroring
+        test_falls_back_to_registry_ladder_outside_any_checkout's precedent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            stray = Path(tmp) / "vendored" / "x.py"
+            stray.parent.mkdir(parents=True)
+            stray.write_text("", encoding="utf-8")
+            settings_home = Path(tmp) / "settings-home"
+
+            with unittest.mock.patch.object(
+                _mod, "_resolve_claude_klabauter_root", side_effect=RuntimeError("no root")
+            ):
+                with self._hermetic_env(settings_home):
+                    with self.assertRaises(RuntimeError):
+                        _mod.require_engine_on_path(str(stray))
+                    with self.assertRaises(RuntimeError):
+                        _mod.require_colocated_engine_on_path(str(stray))
+                    self.assertIsNone(_mod.ensure_engine_on_path(str(stray)))
+
+    def test_require_variants_do_not_swallow_oserror(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stray = Path(tmp) / "vendored" / "x.py"
+            stray.parent.mkdir(parents=True)
+            stray.write_text("", encoding="utf-8")
+            settings_home = Path(tmp) / "settings-home"
+
+            with unittest.mock.patch.object(
+                _mod, "_resolve_claude_klabauter_root", side_effect=OSError("broken junction")
+            ):
+                with self._hermetic_env(settings_home):
+                    with self.assertRaises(OSError):
+                        _mod.require_engine_on_path(str(stray))
+                    with self.assertRaises(OSError):
+                        _mod.require_colocated_engine_on_path(str(stray))
+
+    # -- sys.path (front-insert, idempotent) -----------------------------------
+
+    def test_require_engine_on_path_inserts_at_front_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            settings_home = Path(tmp) / "settings-home"
+            self._make_checkout(own)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with self._hermetic_env(settings_home):
+                    root = _mod.require_engine_on_path(str(script))
+                    self.assertEqual(sys.path[0], root)
+                    _mod.require_engine_on_path(str(script))
+                    self.assertEqual(sys.path.count(root), 1)
+            finally:
+                sys.path[:] = saved
+
+    def test_require_colocated_engine_on_path_inserts_at_front_and_is_idempotent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            own = Path(tmp) / "own"
+            settings_home = Path(tmp) / "settings-home"
+            self._make_checkout(own)
+            script = own / "coordinator" / "bin" / "x.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("", encoding="utf-8")
+
+            saved = list(sys.path)
+            try:
+                with self._hermetic_env(settings_home):
+                    root = _mod.require_colocated_engine_on_path(str(script))
+                    self.assertEqual(sys.path[0], root)
+                    _mod.require_colocated_engine_on_path(str(script))
+                    self.assertEqual(sys.path.count(root), 1)
+            finally:
+                sys.path[:] = saved
 
 
 # ---------------------------------------------------------------------------

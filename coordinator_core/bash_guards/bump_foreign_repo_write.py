@@ -27,11 +27,13 @@ Reuses rather than reimplements (see each import site for why):
     composes its own text.
   - `_write_bump_sink_shapes` -- the plain-bash write-sink shape table this
     chunk owns and C5 (next wave) imports, never restates.
-  - `block_reviewer_bash_outside_allowlist._GIT_READONLY_SUBCOMMANDS` -- the
-    package's own existing read-only-git-subcommand allowlist, reused here
-    (inverted: unlisted means "assume write", matching that module's own
-    deny-by-omission convention) rather than a second, independently
-    hand-maintained list of git verbs.
+  - NOT `block_reviewer_bash_outside_allowlist._GIT_READONLY_SUBCOMMANDS`.
+    That constant answers a confinement question (may a confined agent run
+    this?) where an unknown verb must DENY; this guard asks "is this a
+    write?", where an unknown verb must NOT bump. It was reused inverted
+    until 2026-08-12 and billed every read-only verb outside its eight
+    names as a write -- see `_GIT_WRITE_SUBCOMMANDS`, this module's own
+    bump-by-membership set.
   - `commit_tripwires._same_tree`'s own `os.path.realpath`-equality shape
     for "same repo root" -- see `_same_repo_root` below for why this module
     ALSO case-folds both operands before calling it (Anti-scope; `_same_
@@ -102,9 +104,10 @@ path match would be a hole, and this module's own test suite for the
 negative case (a hand-rolled write into a sibling's `cross-repo/` directory
 via `cp`/`tee`/etc. is NOT this executable and still bumps).
 
-READS NEVER BUMP. Only a git WRITE subcommand (i.e. not a member of
-`_GIT_READONLY_SUBCOMMANDS`) or a recognised plain-bash write-sink shape is
-ever a candidate at all -- see `_iter_write_sink_candidates`.
+READS NEVER BUMP. Only a git WRITE subcommand (i.e. a MEMBER of
+`_GIT_WRITE_SUBCOMMANDS`) or a recognised plain-bash write-sink shape is
+ever a candidate at all -- see `_iter_write_sink_candidates`. An
+unrecognised git verb is not a write and does not bump.
 
 Negative-spec:
   - Does NOT add fail-closed behaviour anywhere -- see § Design posture.
@@ -172,9 +175,6 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
     extract_write_sink_targets_powershell,
     nearest_existing_ancestor as _nearest_existing_ancestor,
     resolve_relative as _resolve_relative,
-)
-from coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist import (
-    _GIT_READONLY_SUBCOMMANDS,
 )
 from coordinator_core.bash_guards.commit_tripwires import _same_tree
 from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -272,6 +272,510 @@ _ENV_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 #: so no second tokenization pass is needed to recover it.
 _GIT_DIR_ENV_NAMES = ("GIT_DIR", "GIT_COMMON_DIR")
 _WORK_TREE_ENV_NAME = "GIT_WORK_TREE"
+
+#: The git subcommands that MUTATE a repository -- this guard's own
+#: bump-by-membership set, deliberately NOT the inverse of
+#: `block_reviewer_bash_outside_allowlist._GIT_READONLY_SUBCOMMANDS`.
+#:
+#: That constant is a deny-by-omission CONFINEMENT allowlist: it answers
+#: "may a confined reviewer agent run this?", where an unrecognised verb
+#: must deny. Reusing it inverted here answered a different question --
+#: "is this a write?" -- with the same eight names, so every read-only verb
+#: git ships outside `show`/`diff`/`log`/`status`/`blame`/`ls-files`/
+#: `rev-parse`/`describe` (`merge-base`, `cat-file`, `branch --show-current`,
+#: `rev-list`, `for-each-ref`, `ls-tree`, `shortlog`, ...) was billed as an
+#: attempted foreign-repo WRITE and bumped. Reading a sibling tree is the
+#: substrate of cross-repo work, not an edge case: this fleet's own doctrine
+#: tells an EM to verify a peer's cited commits before actioning a memo, and
+#: a bump on that read teaches every operator that the correct response to
+#: this guard is to push past it -- which is how a speed bump stops working
+#: (see this module's own § Design posture: "a bump that misfires on
+#: legitimate work gets disabled").
+#:
+#: Membership therefore replaces non-membership: an UNKNOWN verb does not
+#: bump, matching this module's fail-open posture everywhere else, and a
+#: read-only verb git adds in some future release cannot regress this.
+#: `fetch` is included: it writes remote-tracking refs and objects into the
+#: foreign repo's gitdir.
+#:
+#: A DUAL-MODE verb -- one whose read and write spellings differ only by
+#: flag or sub-word (`branch --show-current` vs `branch -d`, `stash list` vs
+#: `stash`) -- is listed here AND carries an entry in
+#: `_DUAL_MODE_READ_PREDICATES` below, which vetoes the bump for its
+#: recognised read spellings only. Membership here is the default; the
+#: predicate is the narrowing.
+#: Review finding (classifier-first-pass, P3): three plumbing write-verbs
+#: were absent from this membership set and so never bumped at all --
+#: `hash-object` (writes an object into the target's object database, but
+#: ONLY with `-w`; without it the command just prints a hash and is a
+#: read -- dual-mode, see `_hash_object_is_read`), `pack-refs` (always
+#: writes -- no read spelling), and `symbolic-ref` (dual-mode: `git
+#: symbolic-ref HEAD` reads a ref, `git symbolic-ref HEAD refs/heads/x`
+#: reassigns one, `--delete`/`-d` deletes -- see `_symbolic_ref_is_read`).
+#: Added here; each dual-mode verb also gets a
+#: `_DUAL_MODE_READ_PREDICATES` entry below.
+#:
+#: The reviewer also asked this module to consider `write-tree`,
+#: `commit-tree`, `mktree`, `mktag`, `unpack-objects`, `index-pack`,
+#: `prune-packed`, `fast-import`. Deliberately NOT added: every one of
+#: these is a plumbing command an interactive agent shell essentially
+#: never invokes directly against a sibling repo (they are git-internal
+#: primitives real porcelain calls under the hood, not commands a session
+#: types), so the cost of enumerating them (more surface for this
+#: predicate to get wrong) is not paid back by a realistic bump they would
+#: catch -- the same "unlikely-to-invoke plumbing" reasoning the P3
+#: finding itself named for the still-omitted verbs. If one of these shows
+#: up in a live incident, it should be added then, named the same way this
+#: comment names its own additions.
+_GIT_WRITE_SUBCOMMANDS = frozenset(
+    {
+        "add",
+        "am",
+        "apply",
+        "bisect",
+        "branch",
+        "checkout",
+        "cherry-pick",
+        "clean",
+        "commit",
+        "config",
+        "fetch",
+        "filter-branch",
+        "gc",
+        "hash-object",
+        "init",
+        "merge",
+        "mv",
+        "notes",
+        "pack-refs",
+        "prune",
+        "pull",
+        "push",
+        "rebase",
+        "reflog",
+        "remote",
+        "repack",
+        "replace",
+        "reset",
+        "restore",
+        "revert",
+        "rm",
+        "sparse-checkout",
+        "stash",
+        "submodule",
+        "switch",
+        "symbolic-ref",
+        "tag",
+        "update-index",
+        "update-ref",
+        "worktree",
+    }
+)
+
+
+def _first_positional(args: List[str], value_taking: Tuple[str, ...] = ()) -> Optional[str]:
+    """The first non-flag token in `args`, skipping the mandatory value of
+    any flag named in `value_taking` (separate-token spelling; the
+    `--flag=value` attached spelling needs no skip because it is one token
+    and already reads as a flag). Returns `None` when `args` holds no
+    positional at all."""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in value_taking:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        return tok
+    return None
+
+
+def _positionals(args: List[str], value_taking: Tuple[str, ...] = ()) -> List[str]:
+    """Every non-flag token in `args`, with `value_taking` flags' separate-
+    token values skipped -- the count discriminator for verbs whose read/
+    write split is arity-shaped rather than flag-shaped (`git config
+    <name>` reads, `git config <name> <value>` writes)."""
+    out: List[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in value_taking:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def _flag_present(args: List[str], names: frozenset) -> bool:
+    """Whether any token in `args` is one of `names`, matching both the bare
+    (`--set-upstream-to`) and `=`-attached (`--set-upstream-to=origin/x`)
+    spellings of a long flag. Short bundles (`-dr`) are NOT decomposed -- an
+    unrecognised bundle simply fails to match, `True` or `False` either way,
+    same as any other unmatched token.
+
+    Review finding (classifier-dual-mode, P2): this docstring previously
+    claimed an unmatched token "lands on the write side, the safe direction
+    for this whole table" -- that is NOT a property of this helper. It only
+    held for `_branch_is_read`/`_tag_is_read` because their write-flag check
+    runs before their read-flag check AND every real destructive short flag
+    for `branch`/`tag` requires a positional, so an unmatched bundle used to
+    fall through to a `_first_positional(args) is None` fallback that still
+    landed on write only because a positional was present -- see the P1 fix
+    to `_branch_is_read`/`_tag_is_read` below, which now enforces
+    fail-toward-write directly rather than relying on this helper's return
+    value alone. The fail-toward-write OBLIGATION belongs to each caller,
+    not to this token-matching primitive."""
+    for tok in args:
+        if tok in names:
+            return True
+        if tok.startswith("--") and "=" in tok and tok.split("=", 1)[0] in names:
+            return True
+    return False
+
+
+def _unrecognised_flag_present(
+    args: List[str], known: frozenset, extra_patterns: Tuple[re.Pattern, ...] = ()
+) -> bool:
+    """Whether `args` contains any `-`-prefixed token that is NOT a member of
+    `known` (bare or `=`-attached spelling) and does not match any of
+    `extra_patterns` (for shapes like `git tag -n5`'s numeric-suffix flag).
+
+    Review finding (classifier-dual-mode, P1): added so a dual-mode
+    predicate's flagless-fallback branch (`_first_positional(args) is
+    None`) can be gated on "every flag token present is a RECOGNISED read
+    flag" rather than silently treating an unparsed/unknown flag bundle as
+    absent. `git branch -qXz` (an unrecognised bundle, no positional) must
+    land on write, not fall through to the bare-verb read fallback -- see
+    `_branch_is_read`/`_tag_is_read`."""
+    for tok in args:
+        if not tok.startswith("-"):
+            continue
+        if tok in known:
+            continue
+        if tok.startswith("--") and "=" in tok and tok.split("=", 1)[0] in known:
+            continue
+        if any(p.match(tok) for p in extra_patterns):
+            continue
+        return True
+    return False
+
+
+#: `git branch` write spellings. Presence of any of these makes the
+#: invocation a write regardless of what else is on the line -- `git branch
+#: -a -d foo` is a delete, not a listing.
+_BRANCH_WRITE_FLAGS = frozenset(
+    {
+        "-d", "-D", "--delete",
+        "-m", "-M", "--move",
+        "-c", "-C", "--copy",
+        "-f", "--force",
+        "-u", "--set-upstream", "--set-upstream-to", "--unset-upstream",
+        "--edit-description",
+    }
+)
+
+#: `git branch` read spellings. `--show-current` is the one this fleet's own
+#: doctrine puts on the hot path (an EM verifying a peer's branch before
+#: memoing them), and the one the example-doctrine-repo memo named as costing a real
+#: session real time.
+_BRANCH_READ_FLAGS = frozenset(
+    {
+        "--show-current",
+        "-l", "--list",
+        "-a", "--all",
+        "-r", "--remotes",
+        "-v", "-vv", "--verbose",
+        "--contains", "--no-contains",
+        "--merged", "--no-merged",
+        "--points-at",
+        "--format", "--sort",
+        "-i", "--ignore-case",
+        "--color", "--no-color", "--column", "--no-column",
+    }
+)
+
+_TAG_WRITE_FLAGS = frozenset(
+    {
+        "-d", "--delete",
+        "-a", "--annotate",
+        "-s", "--sign", "-u", "--local-user",
+        "-m", "--message", "-F", "--file",
+        "-f", "--force",
+        "--create-reflog",
+        "-e", "--edit",
+    }
+)
+
+_TAG_READ_FLAGS = frozenset(
+    {
+        "-l", "--list",
+        "-n", "--contains", "--no-contains",
+        "--points-at", "--merged", "--no-merged",
+        "--format", "--sort",
+        "-i", "--ignore-case",
+        "-v", "--verify",
+        "--column", "--no-column",
+    }
+)
+
+_CONFIG_WRITE_FLAGS = frozenset(
+    {
+        "--add",
+        "--unset", "--unset-all",
+        "--replace-all",
+        "-e", "--edit",
+        "--rename-section", "--remove-section",
+    }
+)
+
+_CONFIG_READ_FLAGS = frozenset(
+    {
+        "--get", "--get-all", "--get-regexp", "--get-urlmatch",
+        "--get-color", "--get-colorbool",
+        "-l", "--list",
+    }
+)
+
+#: `git config` flags taking a MANDATORY separate-token value that would
+#: otherwise be miscounted as a name/value positional by `_positionals`.
+_CONFIG_VALUE_TAKING = ("--file", "-f", "--blob", "--type", "-t", "--default")
+
+_CONFIG_WRITE_SUBWORDS = frozenset(
+    {"set", "unset", "unset-all", "add", "replace-all", "rename-section", "remove-section", "edit"}
+)
+
+#: `git config` subcommand-style READ spellings (git >= 2.46, `git-config(1)`)
+#: -- `git config get <name>` / `git config list` place the subword itself
+#: (`"get"`/`"list"`) into `_positionals`, so `git config get foo.bar` is
+#: `positionals = ["get", "foo.bar"]`, length 2, which used to fail the
+#: `len(positionals) <= 1` arity fallback below and misclassify as write.
+#: Review finding (classifier-dual-mode, P2): safe direction (a missed
+#: read, not a missed write) but exactly the false-bump class this module
+#: exists to close, for a syntax git already ships.
+_CONFIG_READ_SUBWORDS = frozenset({"get", "list"})
+
+_APPLY_READ_FLAGS = frozenset({"--check", "--stat", "--numstat", "--summary"})
+
+#: `git hash-object` write flag -- Review finding (classifier-first-pass,
+#: P3): `-w` is the ONLY flag that makes `hash-object` write an object into
+#: the target's database; without it the command computes and prints a
+#: hash only (read).
+_HASH_OBJECT_WRITE_FLAGS = frozenset({"-w"})
+
+#: `git symbolic-ref` write flags -- Review finding (classifier-first-pass,
+#: P3): `-d`/`--delete` deletes the named symbolic ref.
+_SYMBOLIC_REF_WRITE_FLAGS = frozenset({"-d", "--delete"})
+
+
+#: `git tag -n5` -- the numeric-suffix spelling of `-n`, one token; kept as
+#: an `_unrecognised_flag_present` extra-pattern so that shape doesn't get
+#: misclassified as "unrecognised" by the P1 fix below.
+_TAG_N_SUFFIX_RE = re.compile(r"^-n\d+$")
+
+
+def _branch_is_read(args: List[str]) -> bool:
+    """Review finding (classifier-dual-mode, P1): the flagless fallback
+    below (`_first_positional(args) is None`) used to run unconditionally
+    once neither the write nor read flag sets matched -- so an UNRECOGNISED
+    flag bundle with no trailing positional (`git branch -qXz`) fell through
+    to that fallback, found no positional, and returned `True` (read, no
+    bump), contradicting this module's own fail-toward-write guarantee. The
+    `_unrecognised_flag_present` gate below closes that: the flagless
+    fallback now only fires when every `-`-prefixed token present is a
+    RECOGNISED read flag (or there are none at all); any unrecognised flag
+    token makes the invocation a write. Bare `git branch` (no args at all)
+    is unaffected -- no flags to be unrecognised."""
+    if _flag_present(args, _BRANCH_WRITE_FLAGS):
+        return False
+    if _unrecognised_flag_present(args, _BRANCH_WRITE_FLAGS | _BRANCH_READ_FLAGS):
+        return False
+    if _flag_present(args, _BRANCH_READ_FLAGS):
+        return True
+    # Bare `git branch` lists; `git branch <name>` creates one.
+    return _first_positional(args) is None
+
+
+def _tag_is_read(args: List[str]) -> bool:
+    """Review finding (classifier-dual-mode, P1): same defect and fix as
+    `_branch_is_read` above -- an unrecognised flag bundle with no trailing
+    positional (`git tag -qXz`) used to fall through the flagless fallback
+    and misclassify as read. `-n<digits>` is folded into the
+    `_unrecognised_flag_present` gate's `extra_patterns` so that recognised
+    numeric-suffix shape doesn't itself get treated as unrecognised."""
+    if _flag_present(args, _TAG_WRITE_FLAGS):
+        return False
+    if _unrecognised_flag_present(
+        args, _TAG_WRITE_FLAGS | _TAG_READ_FLAGS, extra_patterns=(_TAG_N_SUFFIX_RE,)
+    ):
+        return False
+    if _flag_present(args, _TAG_READ_FLAGS):
+        return True
+    # `git tag -n5` -- the numeric-suffix spelling of `-n`, one token.
+    for tok in args:
+        if _TAG_N_SUFFIX_RE.match(tok):
+            return True
+    return _first_positional(args) is None
+
+
+def _remote_is_read(args: List[str]) -> bool:
+    first = _first_positional(args)
+    if first is None:
+        return True  # bare `git remote`, and `git remote -v`, both list
+    return first in ("show", "get-url")
+
+
+def _config_is_read(args: List[str]) -> bool:
+    if _flag_present(args, _CONFIG_WRITE_FLAGS):
+        return False
+    positionals = _positionals(args, _CONFIG_VALUE_TAKING)
+    if positionals and positionals[0] in _CONFIG_WRITE_SUBWORDS:
+        return False
+    if positionals and positionals[0] in _CONFIG_READ_SUBWORDS:
+        return True
+    if _flag_present(args, _CONFIG_READ_FLAGS):
+        return True
+    # `git config <name>` prints a value; `git config <name> <value>` sets
+    # one. Arity is the discriminator once no flag or sub-word has settled
+    # it -- the same split git's own `config` synopsis draws.
+    return len(positionals) <= 1
+
+
+def _reflog_is_read(args: List[str]) -> bool:
+    """Review finding (classifier-dual-mode, P3): the write-subword set used
+    to read `("expire", "delete", "drop")` -- `"drop"` is not a real `git
+    reflog` subcommand (real set: `show` [default, read], `expire` [write],
+    `delete` [write], `exists` [read]). Harmless (over-inclusive, a name git
+    never emits still lands on the safe/write side) but corrected so the
+    table reads as ground truth against `git help reflog`."""
+    first = _first_positional(args)
+    if first is None:
+        return True  # bare `git reflog` is `reflog show`
+    return first not in ("expire", "delete")
+
+
+def _notes_is_read(args: List[str]) -> bool:
+    first = _first_positional(args)
+    if first is None:
+        return True  # bare `git notes` lists
+    return first in ("list", "show", "get-ref")
+
+
+def _stash_is_read(args: List[str]) -> bool:
+    # Deliberately NOT symmetric with the verbs above: bare `git stash`
+    # PUSHES. Only the two explicit read sub-words are reads.
+    first = _first_positional(args)
+    return first in ("list", "show")
+
+
+def _submodule_is_read(args: List[str]) -> bool:
+    first = _first_positional(args)
+    if first is None:
+        return True  # bare `git submodule` is `submodule status`
+    return first in ("status", "summary")
+
+
+def _bisect_is_read(args: List[str]) -> bool:
+    first = _first_positional(args)
+    if first is None:
+        return False
+    return first in ("log", "view", "visualize")
+
+
+def _worktree_is_read(args: List[str]) -> bool:
+    return _first_positional(args) == "list"
+
+
+def _apply_is_read(args: List[str]) -> bool:
+    return _flag_present(args, _APPLY_READ_FLAGS)
+
+
+def _hash_object_is_read(args: List[str]) -> bool:
+    """Review finding (classifier-first-pass, P3): `git hash-object` only
+    writes the blob into the target's object database when `-w` is given;
+    bare `git hash-object <file>` computes and prints the hash without
+    touching the object database (read). Any other flag/spelling this
+    predicate does not recognise still lands on the write side by default
+    (`_flag_present` absent -> not read), matching this module's
+    fail-toward-write contract."""
+    return not _flag_present(args, _HASH_OBJECT_WRITE_FLAGS)
+
+
+def _symbolic_ref_is_read(args: List[str]) -> bool:
+    """Review finding (classifier-first-pass, P3): `git symbolic-ref` is
+    read with exactly one positional (`git symbolic-ref HEAD` -- prints
+    the ref HEAD points at) and a write with two (`git symbolic-ref HEAD
+    refs/heads/other` -- reassigns it) or with `-d`/`--delete` (removes
+    it). Zero positionals (a bare `git symbolic-ref` -- real git's usage
+    error) and any other shape fall through to `False` (write), the
+    fail-toward-bump default this module's predicates all share."""
+    if _flag_present(args, _SYMBOLIC_REF_WRITE_FLAGS):
+        return False
+    return len(_positionals(args)) == 1
+
+
+#: Dual-mode verbs: in `_GIT_WRITE_SUBCOMMANDS` by default, vetoed by these
+#: predicates for their recognised READ spellings.
+#:
+#: Closing the residual the first pass left open (example-doctrine-repo memo,
+#: 2026-08-12; the sender named `git branch --show-current` as one of three
+#: commands the misfiring bump cost them, and listing the dual-mode verbs
+#: wholesale kept that one bumping). Every predicate fails toward WRITE on
+#: anything it does not recognise, so the narrowing can only remove false
+#: bumps, never add a missed one: an unparsed flag bundle, an unknown
+#: sub-word, or a spelling git adds later all land back on the bump side.
+_DUAL_MODE_READ_PREDICATES = {
+    "apply": _apply_is_read,
+    "bisect": _bisect_is_read,
+    "branch": _branch_is_read,
+    "config": _config_is_read,
+    "hash-object": _hash_object_is_read,
+    "notes": _notes_is_read,
+    "reflog": _reflog_is_read,
+    "remote": _remote_is_read,
+    "stash": _stash_is_read,
+    "submodule": _submodule_is_read,
+    "symbolic-ref": _symbolic_ref_is_read,
+    "tag": _tag_is_read,
+    "worktree": _worktree_is_read,
+}
+
+
+def _git_invocation_is_write(subcommand: str, args: List[str]) -> bool:
+    """Whether `git <subcommand> <args>` MUTATES the target repo.
+
+    Membership in `_GIT_WRITE_SUBCOMMANDS` first (an unknown verb is not a
+    write -- "READS NEVER BUMP", module docstring), then the dual-mode
+    predicate veto for the verbs whose read and write spellings share a
+    name."""
+    if subcommand not in _GIT_WRITE_SUBCOMMANDS:
+        return False
+    predicate = _DUAL_MODE_READ_PREDICATES.get(subcommand)
+    if predicate is None:
+        return True
+    try:
+        return not predicate(args)
+    except Exception as exc:  # noqa: BLE001 -- fail toward the bump, never crash the dispatcher
+        # Review finding (classifier-dual-mode, P3): breadcrumb this
+        # fail-open decision point the same way this module's other
+        # fail-open/fail-safe branches already do (see the `record_silent`
+        # call sites elsewhere in this file) -- without it, a future
+        # predicate bug (e.g. an `IndexError` from a malformed `args` list)
+        # would silently degrade into "always bump" for that verb
+        # indefinitely, with no signal beyond field reports of nagging
+        # false bumps.
+        record_silent(
+            "bump-foreign-repo-write",
+            "dual-mode read predicate for git subcommand %r raised %s: %s "
+            "-- treating this invocation as a write (fail toward bump)"
+            % (subcommand, type(exc).__name__, exc),
+        )
+        return True
 
 
 def _deny(reason: str) -> Dict[str, Any]:
@@ -583,9 +1087,10 @@ def _git_subcommand_and_target_cwd(
     tokens: List[str],
     effective_cwd: str,
     raw_tokens: Optional[List[str]] = None,
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, List[str]]:
     """`tokens[0]` is already known to be `git` (basename-normalized).
-    Returns `(subcommand, target_cwd)` -- the first non-flag token after
+    Returns `(subcommand, target_cwd, subcommand_args)` -- the first
+    non-flag token after
     consuming any `-C <dir>`/`-C<dir>` global option(s) (each resolved in
     turn, relative to the PREVIOUS resolved dir, matching real `git -C`
     chaining semantics), and every other leading `-`-prefixed global option
@@ -594,11 +1099,15 @@ def _git_subcommand_and_target_cwd(
     fail-open consequence of under-skipping an option's value is that this
     function returns a wrong `subcommand`, which just means the guard
     either misses a real write [never a false bump] or treats an option
-    VALUE as the subcommand [which will not match any entry in `_GIT_
-    READONLY_SUBCOMMANDS` and so, in the fail-toward-bump-on-unknown
-    direction this module takes for git subcommands specifically, could
-    read as a write -- an acceptable, narrow imprecision for a passable
-    bump, not a security property]).
+    VALUE as the subcommand [which will not match any entry in
+    `_GIT_WRITE_SUBCOMMANDS`, so the bump is simply missed -- both arms of
+    this imprecision now fail toward silence, never toward a false bump on
+    a read]).
+
+    `subcommand_args` is every token AFTER the subcommand, verbatim -- the
+    input `_git_invocation_is_write` needs to tell a dual-mode verb's read
+    spelling from its write one (`branch --show-current` vs `branch -d x`).
+    Empty when no subcommand was found.
 
     `GIT_DIR`/`--git-dir`/`GIT_COMMON_DIR`/`GIT_WORK_TREE`/`--work-tree`
     EVASION FIX -- `-C` is no longer the only way this function's `cwd_for_
@@ -729,7 +1238,7 @@ def _git_subcommand_and_target_cwd(
                 cwd_for_git = (
                     _worktree_root_for_gitdir_override(resolved) if git_dir_override else resolved
                 )
-        return tok, cwd_for_git
+        return tok, cwd_for_git, list(tokens[i + 1 :])
     env_git_dir, env_work_tree = (
         _env_repo_overrides(raw_tokens, tokens) if raw_tokens is not None else (None, None)
     )
@@ -743,7 +1252,7 @@ def _git_subcommand_and_target_cwd(
             cwd_for_git = (
                 _worktree_root_for_gitdir_override(resolved) if git_dir_override else resolved
             )
-    return None, cwd_for_git
+    return None, cwd_for_git, []
 
 
 def _iter_write_sink_candidates(
@@ -756,8 +1265,9 @@ def _iter_write_sink_candidates(
     recognised plain-bash write-sink shape (`_write_bump_sink_shapes`).
 
     `target_dir` is NOT YET resolved to a git root -- callers do that via
-    `resolve_gitdir`. Reads (a git subcommand in `_GIT_READONLY_SUBCOMMANDS`)
-    are never yielded at all (module docstring, "READS NEVER BUMP").
+    `resolve_gitdir`. Only a git subcommand in `_GIT_WRITE_SUBCOMMANDS` is
+    yielded from the git leg; a read -- or any verb not on that set -- is
+    never yielded at all (module docstring, "READS NEVER BUMP").
 
     `resolve_command_positions` is called with `preserve_windows_
     backslashes=_host_is_windows()` (C2, docs/plans/2026-08-10-carve-claude-
@@ -820,10 +1330,10 @@ def _iter_write_sink_candidates(
             continue
 
         if head_base == "git":
-            subcommand, target_cwd = _git_subcommand_and_target_cwd(
+            subcommand, target_cwd, sub_args = _git_subcommand_and_target_cwd(
                 rc.tokens, effective_cwd, raw_tokens=rc.raw_tokens
             )
-            if subcommand and subcommand not in _GIT_READONLY_SUBCOMMANDS:
+            if subcommand and _git_invocation_is_write(subcommand, sub_args):
                 yield (target_cwd, "git %s" % subcommand, None)
             continue
 

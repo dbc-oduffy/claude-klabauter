@@ -277,7 +277,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="install-sandbox-check",
         description=(
-            "Validates the W4.1 thin-~/.claude + cloned-example-doctrine-repo + wired-wrapper "
+            "Validates the W4.1 thin-~/.claude + cloned-upstream + wired-wrapper "
             "install shape in an isolated sandbox."
         ),
         add_help=False,
@@ -288,10 +288,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--coordinator-root",
         dest="coordinator_root_override",
         default=None,
-        help="Override <doe_clone>/coordinator resolution (the example-doctrine-repo trampoline "
+        help="Override <doe_clone>/coordinator resolution (the claude-doe trampoline "
         "resolves the default via doe_root(), NOT its own script-dir "
         "location, since this executable now lives in claude-klabauter while "
-        "coordinator/templates/ stayed in example-doctrine-repo).",
+        "coordinator/templates/ stayed in the upstream clone).",
     )
     parser.add_argument("-h", "--help", action="store_true", dest="help")
     return parser
@@ -301,7 +301,7 @@ def _usage_text() -> str:
     return (
         "Usage: install-sandbox-check [OPTIONS]\n"
         "\n"
-        "Validates the W4.1 thin-~/.claude + cloned-example-doctrine-repo + wired-wrapper install shape\n"
+        "Validates the W4.1 thin-~/.claude + cloned-upstream + wired-wrapper install shape\n"
         "in an isolated sandbox. Tier 1 (filesystem) only — Tier 2 (running-in-Claude-Code)\n"
         "is printed as a DEFERRED manual gate at the end.\n"
         "\n"
@@ -309,14 +309,14 @@ def _usage_text() -> str:
         "  --keep-sandbox           Do not delete the sandbox directory after the run.\n"
         "  --verbose, -v            Print each assertion with context even when passing.\n"
         "  --coordinator-root PATH  Override <doe_clone>/coordinator (normally resolved\n"
-        "                           by the example-doctrine-repo trampoline via doe_root(), not its own\n"
+        "                           by the claude-doe trampoline via doe_root(), not its own\n"
         "                           script-dir location).\n"
         "  -h, --help               Show this usage.\n"
         "\n"
         "Environment:\n"
-        "  REPO_EXAMPLE_DOCTRINE_REPO  Path to the example-doctrine-repo clone (primary resolution override).\n"
+        "  REPO_EXAMPLE_DOCTRINE_REPO  Path to the resolved clone (primary resolution override).\n"
         "                   Falls back to: machine-local get repos.example_doctrine_repo.\n"
-        "                   At least one must be set for the example-doctrine-repo clone checks to run.\n"
+        "                   At least one must be set for the clone checks to run.\n"
         "\n"
         "Exit codes:\n"
         "  0  all assertions passed (or gracefully skipped)\n"
@@ -349,18 +349,18 @@ def _tier1_filesystem_shape(
     doe_coordinator_present = False
     if doe_clone_resolved:
         if os.path.isdir(os.path.join(doe_clone, ".git")):
-            r.ok(f"example-doctrine-repo clone present: {doe_clone}")
+            r.ok(f"clone present: {doe_clone}")
         else:
-            r.bad(f"example-doctrine-repo clone missing .git: {doe_clone}")
+            r.bad(f"clone missing .git: {doe_clone}")
 
         if os.path.isdir(os.path.join(doe_clone, "coordinator")):
-            r.ok(f"example-doctrine-repo coordinator/ dir present: {os.path.join(doe_clone, 'coordinator')}")
+            r.ok(f"clone's coordinator/ dir present: {os.path.join(doe_clone, 'coordinator')}")
             doe_coordinator_present = True
         else:
-            r.skip("example-doctrine-repo coordinator/ dir absent — W4.2 cutover not yet completed (expected pre-cutover)")
+            r.skip("clone's coordinator/ dir absent — W4.2 cutover not yet completed (expected pre-cutover)")
             r.info("  coordinator/ will be populated after the W4.2 source-relocation cutover.")
     else:
-        r.skip("example-doctrine-repo clone checks (clone path not resolved)")
+        r.skip("clone checks (clone path not resolved)")
 
     # 4. no plugin byte-copy
     sandbox_plugin_dir = os.path.join(sandbox, "plugins", "coordinator-claude")
@@ -390,7 +390,7 @@ def _tier1_filesystem_shape(
     r.section("--- Step 3.5c: settings.json hook block seed ---")
     if not doe_coordinator_present:
         r.ok("gen_settings_hooks module available (in-process call, no bash subprocess)")
-        r.skip("gen-settings-hooks live seed (example-doctrine-repo coordinator/ absent pre-W4.2 — will run post-cutover)")
+        r.skip("gen-settings-hooks live seed (clone's coordinator/ absent pre-W4.2 — will run post-cutover)")
         r.info(f"  Seeding will succeed after W4.2 populates {doe_clone}/coordinator/")
     else:
         _assert_gen_settings_hooks_interface(r)
@@ -483,15 +483,15 @@ def _tier1_filesystem_shape(
             else:
                 r.bad(f"claude-doe --dry-run output missing 'exec claude --plugin-dir' (got: {dry_out})")
             if f"{doe_clone}/coordinator" in dry_out:
-                r.ok("claude-doe --dry-run exec line references example-doctrine-repo coordinator dir")
+                r.ok("claude-doe --dry-run exec line references clone's coordinator dir")
             else:
-                r.bad("claude-doe --dry-run exec line does not reference example-doctrine-repo coordinator dir")
+                r.bad("claude-doe --dry-run exec line does not reference clone's coordinator dir")
         else:
             r.bad(f"claude-doe --dry-run exited non-zero (see {dryrun_err})")
     elif not doe_clone_resolved:
-        r.skip("claude-doe --dry-run (example-doctrine-repo clone path not resolved)")
+        r.skip("claude-doe --dry-run (clone path not resolved)")
     else:
-        r.skip("claude-doe --dry-run (example-doctrine-repo coordinator/ dir absent pre-W4.2 — runs post-cutover)")
+        r.skip("claude-doe --dry-run (clone's coordinator/ dir absent pre-W4.2 — runs post-cutover)")
 
     # 7b. F5 regression: standalone-copy
     r.section("--- F5 regression: claude-doe standalone-copy --dry-run (siblings absent) ---")
@@ -523,15 +523,15 @@ def _tier1_filesystem_shape(
                 else:
                     r.bad(f"F5: standalone-copy claude-doe --dry-run output missing 'exec claude --plugin-dir' (got: {dry_out})")
                 if f"{doe_clone}/coordinator" in dry_out:
-                    r.ok("F5: standalone-copy claude-doe --dry-run exec line references example-doctrine-repo coordinator dir")
+                    r.ok("F5: standalone-copy claude-doe --dry-run exec line references clone's coordinator dir")
                 else:
-                    r.bad("F5: standalone-copy claude-doe --dry-run exec line does not reference example-doctrine-repo coordinator dir")
+                    r.bad("F5: standalone-copy claude-doe --dry-run exec line does not reference clone's coordinator dir")
             else:
                 r.bad(f"F5: standalone-copy claude-doe --dry-run exited non-zero (see {f5_err})")
     elif not doe_clone_resolved:
-        r.skip("F5 regression: standalone-copy claude-doe --dry-run (example-doctrine-repo clone path not resolved)")
+        r.skip("F5 regression: standalone-copy claude-doe --dry-run (clone path not resolved)")
     else:
-        r.skip("F5 regression: standalone-copy claude-doe --dry-run (example-doctrine-repo coordinator/ dir absent pre-W4.2 — runs post-cutover)")
+        r.skip("F5 regression: standalone-copy claude-doe --dry-run (clone's coordinator/ dir absent pre-W4.2 — runs post-cutover)")
 
     return doe_coordinator_present
 
@@ -791,7 +791,7 @@ def _tier1b_pointer_and_shim(
             else:
                 r.bad("gen_doe_root_pointer.main() failed on second (idempotency) run")
     else:
-        r.skip("pointer sandbox run (example-doctrine-repo clone path not resolved)")
+        r.skip("pointer sandbox run (clone path not resolved)")
 
     # ---- 9. Shim artifact ----
     r.section("--- Shim artifact (claude-doe-shim.sh) ---")
@@ -940,7 +940,7 @@ def _tier1b_mirror_and_cold_tier(
         else:
             r.bad(f"AC5: resolve_coordinator_clone.resolve_content_root(): returned empty or non-existent path (error: {mirror_out_or_err})")
     else:
-        r.skip("mirror verification (example-doctrine-repo clone path not resolved)")
+        r.skip("mirror verification (clone path not resolved)")
 
     # ---- 11. Resolver cold tier ----
     r.section("--- Resolver cold tier (AC6) ---")
@@ -962,13 +962,13 @@ def _tier1b_mirror_and_cold_tier(
             r.bad(f"cold-env setup: flat tree unexpectedly present at {cold_flat}")
 
         if os.path.isdir(os.path.join(doe_clone, ".git")):
-            r.ok("example-doctrine-repo clone has .git at root (git-ops pointer-tier pre-condition met)")
+            r.ok("clone has .git at root (git-ops pointer-tier pre-condition met)")
         else:
-            r.bad("example-doctrine-repo clone missing .git at root — --for-git-ops pointer tier cannot satisfy .git gate")
+            r.bad("clone missing .git at root — --for-git-ops pointer tier cannot satisfy .git gate")
         if os.path.isdir(os.path.join(doe_clone, "coordinator")):
-            r.ok("example-doctrine-repo clone has coordinator/ subdir (content pointer-tier pre-condition met)")
+            r.ok("clone has coordinator/ subdir (content pointer-tier pre-condition met)")
         else:
-            r.bad("example-doctrine-repo clone missing coordinator/ subdir — --for-content pointer tier cannot satisfy -d gate")
+            r.bad("clone missing coordinator/ subdir — --for-content pointer tier cannot satisfy -d gate")
 
         cold_bare_path = "/usr/bin:/bin"
         if os.path.isdir("/opt/homebrew/bin"):
@@ -1015,7 +1015,7 @@ def _tier1b_mirror_and_cold_tier(
         else:
             r.bad(f"AC6(b): resolve_clone_root() cold: got '{cold_gitops_out}', expected '{expected_cold_gitops}'")
     else:
-        r.skip("resolver cold-tier tests (example-doctrine-repo clone path not resolved)")
+        r.skip("resolver cold-tier tests (clone path not resolved)")
 
     # ---- 12. Cold-shell launch ----
     r.section("--- Cold-shell launch: REPO_EXAMPLE_DOCTRINE_REPO from pointer alone (AC2) ---")
@@ -1077,7 +1077,7 @@ def _tier1c_publish_repo_parity(
     r.section("=== Tier 1c: Publish-repo clean-install parity (F8 — parameterization contract) ===")
 
     if not doe_clone_resolved:
-        r.skip("F8 publish-repo clean-install parity (example-doctrine-repo clone path not resolved)")
+        r.skip("F8 publish-repo clean-install parity (clone path not resolved)")
         return
 
     pub_root = os.path.join(sandbox, "publish-repo-check")
@@ -1091,7 +1091,7 @@ def _tier1c_publish_repo_parity(
         shutil.copy2(oracle_hooks_json, pub_hooks_json)
 
     if os.path.isdir(os.path.join(pub_clone, ".git")) and os.path.isfile(pub_hooks_json):
-        r.ok(f"F8 setup: publish-repo-shaped sandbox clone built at {pub_clone} (distinct from $DOE_CLONE={doe_clone})")
+        r.ok(f"F8 setup: publish-repo-shaped sandbox clone built at {pub_clone} (distinct from $RESOLVED_CLONE={doe_clone})")
     else:
         r.bad(f"F8 setup: publish-repo-shaped sandbox clone build failed at {pub_clone}")
 
@@ -1121,9 +1121,9 @@ def _tier1c_publish_repo_parity(
             else:
                 r.bad(f"F8: .doe-root pointer NOT rooted at publish clone — got '{pub_pointer_content}', expected '{pub_clone}'")
             if pub_pointer_content != doe_clone:
-                r.ok("F8: .doe-root pointer does NOT leak the real $DOE_CLONE path (no example-doctrine-repo-hardcoding)")
+                r.ok("F8: .doe-root pointer does NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
             else:
-                r.bad("F8: .doe-root pointer content equals the real $DOE_CLONE path — example-doctrine-repo-hardcoding bug in gen_doe_root_pointer (ignores REPO_EXAMPLE_DOCTRINE_REPO)")
+                r.bad("F8: .doe-root pointer content equals the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_doe_root_pointer (ignores REPO_EXAMPLE_DOCTRINE_REPO)")
         else:
             r.bad(f"F8: .doe-root pointer not created for publish clone (expected at: {pub_doe_root})")
     else:
@@ -1159,9 +1159,9 @@ def _tier1c_publish_repo_parity(
             else:
                 r.bad("F8: settings.json hook commands do NOT reference the publish clone's coordinator/hooks/ path")
             if any(f"{doe_clone}/coordinator/hooks/" in c for c in pub_hook_cmds):
-                r.bad("F8: settings.json hook commands leak the real $DOE_CLONE path — example-doctrine-repo-hardcoding bug in gen_settings_hooks (ignores REPO_EXAMPLE_DOCTRINE_REPO)")
+                r.bad("F8: settings.json hook commands leak the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_settings_hooks (ignores REPO_EXAMPLE_DOCTRINE_REPO)")
             else:
-                r.ok("F8: settings.json hook commands do NOT leak the real $DOE_CLONE path (no example-doctrine-repo-hardcoding)")
+                r.ok("F8: settings.json hook commands do NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
     else:
         f8_hooks_err = os.path.join(sandbox, "f8-gen-hooks-err.txt")
         Path(f8_hooks_err).write_text(err2 or "", encoding="utf-8")
@@ -1178,10 +1178,10 @@ def _tier1c_publish_repo_parity(
         r.bad(f"F8: resolve_content_root() did not root at publish clone — got '{pub_mirror_out}', expected '{pub_clone}/coordinator' (error: {pub_mirror_out_or_err})")
 
     # ---- 17. Negative control ----
-    r.section("--- F8: negative control — assertion discriminates a simulated example-doctrine-repo-hardcoded bug ---")
+    r.section("--- F8: negative control — assertion discriminates a simulated hardcoded-clone bug ---")
     simulated_hardcoded_output = doe_clone
     if simulated_hardcoded_output != pub_clone:
-        r.ok("F8 negative-control: simulated hardcoded-path output ('$DOE_CLONE') correctly fails the '== $_pub_clone' comparison — assertion is selective, not vacuously true")
+        r.ok("F8 negative-control: simulated hardcoded-path output ('$RESOLVED_CLONE') correctly fails the '== $_pub_clone' comparison — assertion is selective, not vacuously true")
     else:
         r.bad("F8 negative-control: simulated hardcoded-path output matched the expected publish-clone path — F8 assertions above are NOT selective (would not have caught the bug)")
 
@@ -1246,9 +1246,9 @@ def run_all(
     doe_clone, doe_clone_resolved = resolve_doe_clone()
     if not doe_clone_resolved:
         r.bad("repos.example_doctrine_repo not resolved (set REPO_EXAMPLE_DOCTRINE_REPO or seed via machine-local set repos.example_doctrine_repo)")
-        r.info("Skipping example-doctrine-repo-clone-dependent checks.")
+        r.info("Skipping clone-dependent checks.")
     else:
-        r.info(f"example-doctrine-repo clone resolved: {doe_clone}")
+        r.info(f"clone resolved: {doe_clone}")
 
     coordinator_root = (coordinator_root_override or "").rstrip("/") or (
         f"{doe_clone}/coordinator" if doe_clone else ""

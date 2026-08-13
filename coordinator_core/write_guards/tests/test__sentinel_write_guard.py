@@ -91,11 +91,19 @@ class TestIsSentinelWrite:
 
 
 class TestSentinelWriteDenial:
+    """``payload`` is a REQUIRED keyword (no default; 2026-08-13, C4c of
+    docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md) --
+    every call below passes it explicitly, matching every real caller in
+    this package. A missed keyword raises ``TypeError`` at collection, so
+    there is no "omit it" shape left to test.
+    """
+
     def test_returns_none_for_non_sentinel_path(self):
         result = helper.sentinel_write_denial(
             "/repo/README.md",
             ".coordinator-override-worktree-guard",
             "denied for reasons",
+            payload=None,
         )
         assert result is None
 
@@ -104,6 +112,7 @@ class TestSentinelWriteDenial:
             "/repo/.coordinator-override-worktree-guard",
             ".coordinator-override-worktree-guard",
             "denied for reasons",
+            payload=None,
         )
         assert result == {
             "hookSpecificOutput": {
@@ -119,13 +128,62 @@ class TestSentinelWriteDenial:
             "/repo/.coordinator-override-worktree-guard",
             ".coordinator-override-worktree-guard",
             reason,
+            payload=None,
         )
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == reason
 
     def test_empty_target_path_passes_through(self):
         assert (
             helper.sentinel_write_denial(
-                "", ".coordinator-override-worktree-guard", "reason"
+                "", ".coordinator-override-worktree-guard", "reason", payload=None
             )
             is None
         )
+
+    def test_missing_payload_keyword_raises_type_error(self):
+        """No default -- a call site missed by the C4c migration must fail
+        loudly at call time, never silently keep the pre-migration,
+        payload-blind shape."""
+        import pytest
+
+        with pytest.raises(TypeError):
+            helper.sentinel_write_denial(  # type: ignore[call-arg]
+                "/repo/.coordinator-override-worktree-guard",
+                ".coordinator-override-worktree-guard",
+                "denied for reasons",
+            )
+
+
+class TestSentinelWriteAdvisory:
+    def test_returns_none_for_non_sentinel_path(self):
+        result = helper.sentinel_write_advisory(
+            "/repo/README.md",
+            ".coordinator-dev-repo",
+            "advisory text",
+            payload=None,
+        )
+        assert result is None
+
+    def test_returns_nested_advisory_envelope_for_sentinel_path(self):
+        result = helper.sentinel_write_advisory(
+            "/repo/.coordinator-dev-repo",
+            ".coordinator-dev-repo",
+            "advisory text",
+            payload=None,
+        )
+        assert result == {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "advisory text",
+            }
+        }
+
+    def test_missing_payload_keyword_raises_type_error(self):
+        import pytest
+
+        with pytest.raises(TypeError):
+            helper.sentinel_write_advisory(  # type: ignore[call-arg]
+                "/repo/.coordinator-dev-repo",
+                ".coordinator-dev-repo",
+                "advisory text",
+            )

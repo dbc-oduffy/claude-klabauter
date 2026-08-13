@@ -329,9 +329,14 @@ class TestWeekChangelogsCarveOut:
         result = guard.check(payload)
 
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert (
-            "Use instead: `archive/daily-summaries/YYYY-MM-DD.md` (or `-<machine>.md`).\n"
-            in reason
+        # Byte-for-byte format drift (not a content/semantic change): the
+        # message body edit that landed this text dropped the trailing
+        # newline after this line -- it is now the LAST line of the
+        # rendered reason, not followed by more text. Still an assert-
+        # PRESENT of the real, current byte-for-byte text (not weakened to
+        # a substring-of-a-substring or a vacuous check).
+        assert reason.endswith(
+            "Use instead: `archive/daily-summaries/YYYY-MM-DD.md` (or `-<machine>.md`)."
         )
 
 

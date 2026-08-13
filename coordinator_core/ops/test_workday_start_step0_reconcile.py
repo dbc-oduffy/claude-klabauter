@@ -8,7 +8,11 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.workday_start_step0_reconcile import main
+
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:

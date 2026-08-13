@@ -46,6 +46,8 @@ import yaml
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import (
     Move,
+    _REASON_DEST_CONFLICT,
+    _is_identical_duplicate,
     archive_and_commit,
     build_act_result,
     build_dry_run_result,
@@ -257,12 +259,22 @@ async def _handler(params: dict, repo_root=None) -> dict:
         ym = _archive_month(src)
         dst = worktree / "archive" / "bug-backlog" / ym / src.name
 
+        force = False
         if dst.exists():
-            # Destination already present (concurrent archive or replay edge-case).
-            skipped.append({"id": cid, "reason": "already-archived"})
-            continue
+            if not _is_identical_duplicate(src, dst):
+                _LOG.warning(
+                    "prune_bugs: %s NOT archived — a DIFFERENT file already "
+                    "occupies the archive destination %s. Reconcile the two copies "
+                    "before the next sweep.",
+                    cid,
+                    rel_id(dst, worktree),
+                )
+                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
+                continue
+            # Byte-identical duplicate: converge by archiving over it.
+            force = True
 
-        moves.append(Move(src=src, dst=dst, candidate_id=cid))
+        moves.append(Move(src=src, dst=dst, candidate_id=cid, force=force))
 
     if moves:
         # TOCTOU note: a narrow window exists between the per-candidate D1 terminality

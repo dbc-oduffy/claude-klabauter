@@ -49,6 +49,8 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
     run_commit_pipeline,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(args, cwd) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)

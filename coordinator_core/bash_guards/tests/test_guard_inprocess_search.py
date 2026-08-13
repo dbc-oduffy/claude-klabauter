@@ -25,14 +25,18 @@ FAIL against the prior `rendered + footer` composition and bare
 `[answered in-process]` marker (see each test's docstring for how that was
 established from `git diff` on the guard module).
 
-Lead-word reframe (2026-08-11, this dispatch): the message used to lead with
-"Denied as written" -- correct in substance but distrusted in practice; three
-independently dispatched agents cross-verified genuine in-process results
-against direct `Read` calls rather than trust a message that opened with
-"Denied". The composed text now leads with "Answered in-process" and mentions
-the no-subprocess-ran fact second, not first -- the tests below assert both
-the new lead text and that the no-subprocess/not-a-refusal fact still
-precedes the rendered results.
+Success-envelope contract (2026-08-13, `TestSuccessNeverShipsAsError` below) --
+driven by `cross-repo/inbox/2026-08-13-example-cockpit-repo-em-guard-advisories-
+read-as-injection-to-subagents.md` instance 3: a dispatched agent in a sibling
+repo met genuinely correct in-process results wrapped in the harness's `<error>`
+framing (permissionDecisionReason on a deny) and re-did the work by reading
+files directly rather than trust an answer delivered as a failure. `check()`
+now answers a successfully-recognized search via `hooks._envelope.rewrite_input`
+(`updatedInput` + `additionalContext`) -- never `deny()`
+(`permissionDecisionReason`) -- for the answered path. The tests below assert
+this as a PROPERTY of the success path (envelope shape, not a single string),
+so a future edit that reintroduces `deny()` for a successful answer fails
+these tests regardless of what banner text accompanies it.
 
 Pure Python -- no real shell spawns. `coordinator_core.search.answer.answer`
 is monkeypatched to a fixed non-None return so `check()` reaches `_footer()`
@@ -52,10 +56,11 @@ from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import guard_inprocess_search as guard
 
 
-def _payload(command: str, cwd: str) -> dict:
+def _payload(command: str, cwd: str, **extra_tool_input) -> dict:
+    tool_input = {"command": command, **extra_tool_input}
     return {
         "tool_name": "Bash",
-        "tool_input": {"command": command},
+        "tool_input": tool_input,
         "cwd": cwd,
     }
 
@@ -78,15 +83,18 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _deny_reason(result: dict) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+def _answered_context(result: dict) -> str:
+    """Return the composed answer text from a successfully-answered `check()`
+    result. Reads `additionalContext` off the `rewrite_input` shape -- the
+    2026-08-13 success channel -- never `permissionDecisionReason`."""
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 class TestSessionLatchDedupesTheParagraph:
     def test_first_call_carries_full_paragraph(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-1")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        reason = _deny_reason(result)
+        reason = _answered_context(result)
         assert "recognized as a search" in reason
         assert guard._ANSWERED_MARKER not in reason
 
@@ -94,18 +102,18 @@ class TestSessionLatchDedupesTheParagraph:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-2")
         guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
-        reason = _deny_reason(second)
+        reason = _answered_context(second)
         assert "recognized as a search" not in reason
         assert guard._ANSWERED_MARKER in reason
 
     def test_every_answered_call_carries_an_already_handled_signal(self, repo, monkeypatch):
         """First, second, and Nth calls all carry SOME unambiguous
-        already-handled signal -- never a bare deny with no framing at all
+        already-handled signal -- never a bare rewrite with no framing at all
         (the module docstring's "deny here means ALREADY HANDLED, not
         refused" contract)."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-3")
         reasons = [
-            _deny_reason(guard.check(_payload("grep %d foo.py" % i, str(repo))))
+            _answered_context(guard.check(_payload("grep %d foo.py" % i, str(repo))))
             for i in range(4)
         ]
         assert "recognized as a search" in reasons[0]
@@ -119,7 +127,7 @@ class TestSessionLatchDedupesTheParagraph:
         guard.check(_payload("grep foo bar.py", str(repo)))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-B")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        assert "recognized as a search" in _deny_reason(result)
+        assert "recognized as a search" in _answered_context(result)
 
     def test_marker_survives_spawn_per_call_reinvocation(self, repo, monkeypatch):
         """The latch is disk state, not an in-process cache -- calling
@@ -135,26 +143,26 @@ class TestFailsOpenTowardTheFullParagraph:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         first = guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
-        assert "recognized as a search" in _deny_reason(first)
-        assert "recognized as a search" in _deny_reason(second)
+        assert "recognized as a search" in _answered_context(first)
+        assert "recognized as a search" in _answered_context(second)
 
     def test_current_session_id_sentinel_file_is_never_consulted(self, repo, monkeypatch, tmp_path):
         """SC-DR-009: `.current-session-id` is documented last-writer-wins
-        under concurrency and is not an acceptable fallback for this latch
-        -- presence of that sentinel must not influence latching at all."""
+        under concurrency and is not an acceptable fallback for this latch --
+        presence of that sentinel must not influence latching at all."""
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         (repo / ".current-session-id").write_text("some-other-session", encoding="utf-8")
         first = guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
-        assert "recognized as a search" in _deny_reason(first)
-        assert "recognized as a search" in _deny_reason(second)
+        assert "recognized as a search" in _answered_context(first)
+        assert "recognized as a search" in _answered_context(second)
 
     def test_unresolvable_repo_root_fails_open_to_full_paragraph(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-noroot")
         no_git_dir = tmp_path / "not-a-repo"
         no_git_dir.mkdir()
         result = guard.check(_payload("grep foo bar.py", str(no_git_dir)))
-        assert "recognized as a search" in _deny_reason(result)
+        assert "recognized as a search" in _answered_context(result)
 
     def test_unwritable_marker_parent_fails_open_never_raises(self, repo, monkeypatch):
         """A latch WRITE failure (read-only `.git`, MinGit permissions) must
@@ -166,7 +174,7 @@ class TestFailsOpenTowardTheFullParagraph:
             lambda cwd, sid: (_ for _ in ()).throw(OSError("simulated unwritable path")),
         )
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        assert "recognized as a search" in _deny_reason(result)
+        assert "recognized as a search" in _answered_context(result)
 
     def test_stat_failure_on_read_fails_open_to_full_paragraph(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-statfail")
@@ -177,7 +185,7 @@ class TestFailsOpenTowardTheFullParagraph:
 
         monkeypatch.setattr(guard, "_latch_path", lambda cwd, sid: _BoomPath())
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        assert "recognized as a search" in _deny_reason(result)
+        assert "recognized as a search" in _answered_context(result)
 
 
 class TestHelpers:
@@ -237,7 +245,7 @@ class TestDenyVersusSubstitutionContract:
         which would put "ANSWERED-TEXT" first."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-full")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        reason = _deny_reason(result)
+        reason = _answered_context(result)
         assert "ANSWERED-TEXT" in reason
         assert reason.index("in-process") < reason.index("ANSWERED-TEXT"), (
             "the deny-versus-substitution contract must precede the "
@@ -247,7 +255,7 @@ class TestDenyVersusSubstitutionContract:
     def test_full_paragraph_states_the_contract_explicitly(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-full-text")
         result = guard.check(_payload("grep foo bar.py", str(repo)))
-        reason = _deny_reason(result)
+        reason = _answered_context(result)
         assert "Answered in-process" in reason
         assert "recognized as a search" in reason
         assert not reason.startswith("[Denied")
@@ -272,10 +280,64 @@ class TestDenyVersusSubstitutionContract:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-latched")
         guard.check(_payload("grep foo bar.py", str(repo)))
         second = guard.check(_payload("grep baz qux.py", str(repo)))
-        reason = _deny_reason(second)
+        reason = _answered_context(second)
         assert guard._ANSWERED_MARKER in reason
         assert "ANSWERED-TEXT" in reason
         assert reason.index("in-process") < reason.index("ANSWERED-TEXT"), (
             "the latched marker's contract must precede the rendered "
             "results -- got: %r" % reason
         )
+
+
+class TestSuccessNeverShipsAsError:
+    """2026-08-13 -- `cross-repo/inbox/2026-08-13-example-cockpit-repo-em-guard-
+    advisories-read-as-injection-to-subagents.md` instance 3: a genuinely
+    correct in-process answer must never arrive through the harness's
+    error/deny channel (`permissionDecision: "deny"` +
+    `permissionDecisionReason`). These tests assert the ENVELOPE SHAPE of
+    every successfully-answered `check()` call -- a property of the success
+    path, not a single string -- so any future change that routes a
+    successful answer back through `deny()` fails here regardless of what
+    text it carries.
+    """
+
+    def test_successful_answer_uses_rewrite_input_shape_not_deny(self, repo, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-shape")
+        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        hso = result["hookSpecificOutput"]
+        assert hso.get("permissionDecision") != "deny"
+        assert "permissionDecisionReason" not in hso
+        assert "updatedInput" in hso
+        assert "additionalContext" in hso
+
+    def test_successful_answer_rewrites_command_to_a_no_op(self, repo, monkeypatch):
+        """The real command never runs -- `updatedInput.command` is replaced
+        with `true` (a real, PATH-resolvable coreutils no-op -- not the shell
+        builtin `:`, which `_alternative_liveness.py`'s guard-message-liveness
+        gate flags DEAD since it has no on-PATH binary), preserving the
+        "no subprocess spawned" claim under the new envelope."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-noop")
+        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        updated_input = result["hookSpecificOutput"]["updatedInput"]
+        assert updated_input["command"] == "true"
+
+    def test_successful_answer_preserves_other_tool_input_keys(self, repo, monkeypatch):
+        """`rewrite_input` REPLACES the whole tool input object -- any other
+        key on the original call (e.g. `description`) must survive the
+        rewrite, not be silently dropped."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-preserve")
+        result = guard.check(
+            _payload("grep foo bar.py", str(repo), description="find foo in bar.py")
+        )
+        updated_input = result["hookSpecificOutput"]["updatedInput"]
+        assert updated_input["description"] == "find foo in bar.py"
+
+    def test_multiple_answered_calls_in_a_session_never_use_deny(self, repo, monkeypatch):
+        """Not just the first call -- every answered call in a session,
+        latched marker or full paragraph, stays off the deny channel."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-multi")
+        for i in range(3):
+            result = guard.check(_payload("grep %d foo.py" % i, str(repo)))
+            hso = result["hookSpecificOutput"]
+            assert hso.get("permissionDecision") != "deny"
+            assert "permissionDecisionReason" not in hso

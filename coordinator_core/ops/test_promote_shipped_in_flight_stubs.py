@@ -32,6 +32,8 @@ from coordinator_core.ops.promote_shipped_in_flight_stubs import (
     main,
 )
 
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _run(*args, cwd=None, check=True):
     return subprocess.run(

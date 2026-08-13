@@ -25,6 +25,21 @@ Contract (four tokens, one emitted per call, plus the resolving SHA list):
                            trailer. This is a VACUOUS PASS, not an error — the
                            normal pre-adoption state.
 
+Malformed-trailer diagnostic (stderr only; stdout contract unmoved). Three
+populations reach `no-resolving-commits`, and only one of them is a defect the
+caller can act on: a commit that spells `Resolves: <artifact-id>` somewhere
+other than the final trailer block, which git therefore never parses as a
+trailer. `_candidate_shas` matches it on the raw message, the parse step drops
+it, and stdout is indistinguishable from a true zero — a reader with a
+`git log --grep` hit in hand concludes the primitive is broken. So when every
+candidate was dropped because NO `Resolves:` trailer parsed at all, the count
+is named on stderr. Deliberately NOT reported: a candidate whose trailer parsed
+to a different artifact-id (the prefix-sharing narrowing in the negative-spec
+below) — that drop is correct, and reporting it would train the reader to
+ignore the line. The token, the exit code, and the stdout shape are unchanged;
+this is diagnostic, never a verdict. Raised by example-doctrine-repo-em
+(cross-repo/archive/2026-08-13-example-doctrine-repo-em-rollup-derive-malformed-trailer-diagnostic.md).
+
 This op's own contract is already machine-distinguishable: `no-resolving-
 commits` is a distinct token, never collapsed into `not-shipped`. The
 consumer that historically discarded that distinction downstream is
@@ -175,13 +190,23 @@ def _batch_primary_trailers(shas: List[str]) -> dict:
     return result
 
 
-def _resolving_shas(artifact_id: str) -> List[str]:
+def _derive_resolving(artifact_id: str) -> tuple[List[str], List[str]]:
+    """Return (resolving_shas, untrailered_shas).
+
+    The second element is the malformed-trailer population: candidates whose
+    raw message matched but for which NEITHER parse rung yielded any
+    `Resolves:` trailer at all. It is the only drop reason a caller can act on
+    — a candidate dropped because its trailer named a different artifact-id is
+    the correct prefix-sharing narrowing and is deliberately absent here (see
+    the module docstring's malformed-trailer diagnostic paragraph).
+    """
     candidates = _candidate_shas(artifact_id)
     if not candidates:
-        return []
+        return [], []
 
     primary_map = _batch_primary_trailers(candidates)
     resolved: dict = {}
+    untrailered: List[str] = []
     fallback_needed: List[str] = []
     for candidate_sha in candidates:
         values = primary_map.get(candidate_sha)
@@ -197,8 +222,14 @@ def _resolving_shas(artifact_id: str) -> List[str]:
     for candidate_sha in fallback_needed:
         candidate_ids, _rc = _parse_resolves_run(candidate_sha)
         resolved[candidate_sha] = artifact_id in candidate_ids
+        if not candidate_ids:
+            untrailered.append(candidate_sha)
 
-    return [sha for sha in candidates if resolved.get(sha)]
+    return [sha for sha in candidates if resolved.get(sha)], untrailered
+
+
+def _resolving_shas(artifact_id: str) -> List[str]:
+    return _derive_resolving(artifact_id)[0]
 
 
 def _shipped_rc(resolving_shas: List[str]) -> int:
@@ -234,10 +265,22 @@ def main(argv: List[str]) -> int:
         print(f"{_PROG}: not inside a git repository", file=sys.stderr)
         return 0
 
-    resolving_shas = _resolving_shas(artifact_id)
+    resolving_shas, untrailered_shas = _derive_resolving(artifact_id)
 
     if not resolving_shas:
         print("no-resolving-commits")
+        if untrailered_shas:
+            print(
+                f"{_PROG}: {len(untrailered_shas)} commit(s) name "
+                f"'Resolves: {artifact_id}' in the message but carry no parsed "
+                f"trailer, so they do not resolve it: {' '.join(untrailered_shas)}",
+                file=sys.stderr,
+            )
+            print(
+                f"{_PROG}: git reads trailers only from the final block; check one with "
+                "git log -1 --format=%(trailers:key=Resolves,valueonly) <sha>",
+                file=sys.stderr,
+            )
         return 0
 
     shipped_rc = _shipped_rc(resolving_shas)

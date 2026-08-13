@@ -20,6 +20,13 @@ import pytest
 from coordinator_core.ops.introspect import verify_shipped as vs_module
 from coordinator_core.ops.introspect.verify_shipped import verify_shipped
 
+# Declared, not excused: this file spawns a real git process because the property under
+# test is git's own ancestry semantics (git merge-base against origin/main), which no
+# mock stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
+# and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -33,6 +40,15 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 @pytest.fixture
 def repo_with_origin(tmp_path):
     """A working repo with a real "origin" remote and an on-main + off-main commit.
+
+    Function-scoped, NOT hoisted to module scope like the sibling
+    test_check_shipped_on_main.py fixture: most tests here write and commit their own
+    `docs/plans/example.md`/`state/handoffs/example.md` with content that repeats
+    across tests (e.g. two different tests both write "status: implemented"), so a
+    shared repo would make a later test's `git commit` fail with "nothing to commit"
+    when its content happens to match a still-pending prior commit in the shared
+    working tree -- tried, reproduced the failure, reverted. One repo per test is the
+    correct tradeoff here.
 
     Layout (mirrors test_check_shipped_on_main.py's fixture):
       - bare_origin/  — bare repo acting as "origin"

@@ -214,10 +214,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # warn" is a comment only, see negative-spec).
             return None
 
+        _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = (
             f"{wiki_filename} mirrors a bundled wiki. Use instead:\n"
-            f"  {bundled_path}\n\n"
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            f"  {bundled_path}"
+            + ("\n\n" + _note if _note else "")
         )
 
         return {

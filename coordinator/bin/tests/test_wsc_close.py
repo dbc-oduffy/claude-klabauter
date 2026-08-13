@@ -311,7 +311,7 @@ def test_archive_session_success_calls_archive_with_sid():
     fake_scope_mod.archive = mock.MagicMock(return_value=True)
 
     with mock.patch.object(
-        _wsc_close, "resolve_colocated_claude_klabauter_root", return_value="/fake/claude-klabauter/root"
+        _wsc_close, "require_colocated_engine_on_path", return_value="/fake/claude-klabauter/root"
     ):
         with mock.patch.dict(
             sys.modules, {"coordinator_core.session.scope": fake_scope_mod}
@@ -327,7 +327,7 @@ def test_archive_session_false_return_is_non_fatal():
     fake_scope_mod.archive = mock.MagicMock(return_value=False)
 
     with mock.patch.object(
-        _wsc_close, "resolve_colocated_claude_klabauter_root", return_value="/fake/claude-klabauter/root"
+        _wsc_close, "require_colocated_engine_on_path", return_value="/fake/claude-klabauter/root"
     ):
         with mock.patch.dict(
             sys.modules, {"coordinator_core.session.scope": fake_scope_mod}
@@ -345,7 +345,7 @@ def test_archive_session_raising_is_non_fatal():
     fake_scope_mod.archive = mock.MagicMock(side_effect=RuntimeError("boom"))
 
     with mock.patch.object(
-        _wsc_close, "resolve_colocated_claude_klabauter_root", return_value="/fake/claude-klabauter/root"
+        _wsc_close, "require_colocated_engine_on_path", return_value="/fake/claude-klabauter/root"
     ):
         with mock.patch.dict(
             sys.modules, {"coordinator_core.session.scope": fake_scope_mod}
@@ -361,7 +361,7 @@ def test_archive_session_raising_is_non_fatal():
 def test_archive_session_claude_klabauter_root_unresolvable_is_non_fatal():
     with mock.patch.object(
         _wsc_close,
-        "resolve_colocated_claude_klabauter_root",
+        "require_colocated_engine_on_path",
         side_effect=RuntimeError("no claude-klabauter checkout found"),
     ):
         err = io.StringIO()

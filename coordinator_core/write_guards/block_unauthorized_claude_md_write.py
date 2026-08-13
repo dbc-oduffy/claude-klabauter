@@ -144,7 +144,6 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
-from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.claude_md_budget import is_claude_md_class
 from coordinator_core.session.claude_md_grant import check_claude_md_write_grant
 
@@ -191,10 +190,13 @@ _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 #: condition (4) above for why the two are distinct.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CLAUDE_MD_WRITE"
 
-#: Fallback form of the grant-CLI invocation the deny text names as the
-#: legitimate, PM-ratified override path (C5's grant CLI). Used only when
-#: this host's claude-klabauter root cannot be resolved in-process — see
-#: ``_grant_cli_invocation()``, which is what the deny text actually calls.
+#: Fallback form of the grant-CLI invocation the advisory (shrink/size-
+#: neutral) text names as the legitimate, PM-ratified override path (C5's
+#: grant CLI) -- the deny leg no longer renders this invocation at all
+#: (C4(b), docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-
+#: keys.md). Used only when this host's claude-klabauter root cannot be resolved
+#: in-process — see ``_grant_cli_invocation()``, which is what
+#: ``_advisory_reason`` calls.
 #:
 #: Two preconditions are stated inline because omitting them made the
 #: remediation fail SILENTLY: the grant module is claude-klabauter-resident but the
@@ -295,15 +297,6 @@ def _grant_cli_invocation() -> str:
         'python3 -m coordinator_core.session.claude_md_grant grant pm "<verbatim PM note>"'
     )
 
-
-#: Rendered directly beneath the invocation in the deny text. The cwd
-#: requirement is not inferable from the command itself, and getting it
-#: wrong produces a grant that exists on disk but is never found.
-_GRANT_CLI_PRECONDITION = (
-    "Run from the repo whose file you are unblocking (the grant is scoped to "
-    "that repo's session dir), and from the session that will perform the "
-    "write — a grant filed by a different session does not apply."
-)
 
 #: Control-whitespace/C0-control sanitization before interpolating an
 #: attacker-influenced file_path into a deny reason (same discipline as
@@ -435,47 +428,75 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
     is present). A subagent cannot itself confirm PM ratification — it
     never speaks to the PM directly, only to its EM — so the remediation
     here is "report BLOCKED upward", never a runnable ``grant pm``
-    invocation framed as the reader's own next step. The text states the
-    structural reason (a property of every subagent on every dispatch,
-    not a judgment that this agent's work is unauthorized) and hands the
-    agent the three pieces its BLOCKED report needs: the governed
-    surface, the structural reason, and the exact command the EM runs to
-    unblock it.
+    invocation framed as the reader's own next step.
+
+    RESHAPE (C4(b), docs/plans/2026-08-13-guard-messages-stop-handing-
+    agents-the-keys.md): the rendered ``PYTHONPATH=... python3 -m ...``
+    grant invocation and its cwd/session precondition (formerly rendered
+    beneath "Unblock (EM runs this, not you):") are GONE. Per the
+    recorded EM ruling in that plan's § Problem "The design premise (PM
+    ruling, 2026-08-13)": the EM's route when blocked is "check with your
+    PM", which is rung-1 familiar and needs no unfamiliar artifact — a
+    message that refuses and says who to ask is complete. The text now
+    hands the agent only the two pieces its BLOCKED report needs: the
+    governed surface (``Target:``) and the structural reason
+    (``Reason:``). No override pointer, wiki reference, or "an unlock
+    exists" marker replaces the deleted lines — this guard fires only on
+    a dispatched subagent's write and has no EM audience to point at.
+
+    PARAGRAPH TRIM (C8, docs/plans/2026-08-13-guard-messages-stop-handing-
+    agents-the-keys.md, PM ruling 2026-08-13): the "This is not a judgment
+    on the edit -- ..." design-as-offers paragraph that used to sit ahead
+    of "Report BLOCKED to your EM instead:" was deliberate when written and
+    was held out of C8's original register sweep specifically for a PM
+    ruling, because trimming it reverses that earlier ratified call. The PM
+    ruled to trim it fully ("a PARAGRAPH is way overkill anyway") — this is
+    that trim landing. The deny is now target + reason + route, same shape
+    C4b/C2c already used elsewhere in this plan.
 
     Byte-budgeted prose (see ``docs/plans/2026-08-02-guard-message-size-
     discipline.md`` C8): leads with the BETTER ALTERNATIVE — the discharge
-    hierarchy (DEC-6), named but not restated in full — before naming the
-    concrete, PM-ratified override path (C5's grant CLI). ``agent_id`` is no
+    hierarchy (DEC-6), named but not restated in full. ``agent_id`` is no
     longer echoed into the rendered text (the deny already reaches the
     firing subagent directly; the id added prose bytes with no reader who
-    needed it there). The target path, grant command, and grant
-    precondition all sit inside the "Report BLOCKED to your EM instead:"
-    cue window (``_CUE_WINDOW_RE``,
-    ``coordinator_core.bash_guards._alternative_liveness``, matched here via
-    the bare "instead" token) so they render exempt from the prose cap
-    rather than needing to be cut. "instead" is load-bearing here for a
-    reason beyond the byte cap too: it names what the agent does IN PLACE
-    OF the write it was about to make (report upward, instead of writing),
-    which is the correct AC6/AC7 framing — not a "run this instead of the
-    thing you'd otherwise be blocked on" offer, which is the framing this
-    guard exists to avoid handing a dispatched subagent.
+    needed it there). "instead" in "Report BLOCKED to your EM instead:"
+    still names what the agent does IN PLACE OF the write it was about to
+    make (report upward, instead of writing), which is the correct
+    AC6/AC7 framing — not a "run this instead of the thing you'd
+    otherwise be blocked on" offer, which is the framing this guard
+    exists to avoid handing a dispatched subagent.
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     return (
         "BLOCKED: CLAUDE.md needs a session grant for dispatched writes. "
         "Check the discharge hierarchy (mechanize/reroute/wiki) first.\n\n"
-        "This is not a judgment on the edit -- a dispatched agent cannot "
-        "see, from where it stands, whether its dispatch carries a PM "
-        "ratification; it only hears what its EM tells it. Confirming "
-        "that is the EM's call, not something to resolve from here. "
         "Report BLOCKED to your EM instead:\n"
         f"  Target: `{file_path_safe}`\n"
         "  Reason: needs a live CLAUDE.md write grant for this session.\n"
-        "  Unblock (EM runs this, not you):\n"
-        f"    {_grant_cli_invocation()}\n"
-        f"    {_GRANT_CLI_PRECONDITION}\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
     )
+    # NO override pointer appended, deliberately (2026-08-13,
+    # docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md, C1).
+    # This reason renders ONLY for a dispatched subagent -- the check leg
+    # allows unconditionally when no `agent_id` is present -- so its audience
+    # is, by construction, the one AC-1 forbids showing any unlock statement
+    # to, in any shape, pointer included. Threading `payload=` here would be
+    # the wrong fix: it would compute an audience this call site already
+    # knows the answer to. `_OVERRIDE_ENV_VAR` stays wired in `check()`.
+    #
+    # C4(b) removed the resolved `PYTHONPATH=... python3 -m ...` grant
+    # invocation and its cwd/session precondition that used to render here
+    # (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md
+    # § Problem "The design premise (PM ruling, 2026-08-13)", task C4(b)):
+    # the EM's route when blocked is "check with your PM" -- rung-1
+    # familiar, names no unfamiliar artifact, requires no inspection. A
+    # message that refuses and says who to ask is complete; the inline
+    # resolved CLI was never what made it complete, it was an extra
+    # affordance whose cost (a pasteable grant invocation shown exclusively
+    # to the agent forbidden to run it) is exactly what this removes. Do
+    # NOT re-add a pointer, wiki reference, or "an unlock exists" marker
+    # here -- this guard has no EM audience to point at; see the ruling.
+    # `_grant_cli_invocation()` itself is NOT dead: `_advisory_reason`
+    # (the shrink/size-neutral leg) still calls it directly.
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

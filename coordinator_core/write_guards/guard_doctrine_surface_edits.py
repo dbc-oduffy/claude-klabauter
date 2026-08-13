@@ -96,17 +96,30 @@ Design-as-offers: leads with why THIS file matters — per class, because a
 class-1 reason attached to coordinator.local.md reads as false to anyone who
 has looked at the file, and a deny message a reader can falsify is a deny
 message they route around — and follows with what to do about it (describe
-the proposed change to the PM, ask for approval).
+the proposed change to the PM and ask for approval).
 
-It names the sentinel and prints the creation command deliberately, paired
-with an explicit "relay this, do NOT run it": creation is blocked on BOTH
-surfaces (Write/Edit here via `sentinel_write_denial`, Bash via
-coordinator_core.bash_guards.block_approval_sentinel_creation), so the
-agent reading it cannot act on it, and withholding it only made the agent
-re-derive the same command for the PM by hand. This SUPERSEDES the original
-never-name-it posture inherited from block-home-dir-memo-delivery.py, whose
-precedent applies to guards with no creation-side block — the printed
-override there was genuinely actionable by the reader; here it is not.
+AUDIENCE-GATED (2026-08-13, C4a; plan
+docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
+docs/wiki/guard-messaging.md § Register, B6). The prior render named the
+sentinel filename and printed its creation command verbatim, paired with an
+explicit "relay this, do NOT run it, you cannot" — the exact BYPASS-in-the-
+denial shape B6 forbids: showing a confined reader the key and forbidding
+its use in the same breath is the disclosure, not a mitigation, because it
+is what makes a well-meaning subagent's rationalisation through the gate
+available ("my EM told me to..., and this guard shows the button, so I
+press it"). Per B6's audience split:
+  - **Dispatched subagent** — no statement that an unlock exists survives in
+    any shape: no filename, no command, no "you cannot" line. The REFUSAL
+    (describe the change to the PM) is the entire message.
+  - **Positively resolved EM** (`resolves_em_audience`,
+    `coordinator_core.session.identity`) — the message additionally routes
+    to `docs/reference/guard-override-keys.md` (which documents this exact
+    sentinel, `.coordinator-doctrine-edit-approved`, under its own entry)
+    and nothing else: no key, no path, no command.
+  - **Unresolved audience** — degrades to the terse (subagent) form, never
+    the mechanism, per B6's unresolved-audience degradation rule.
+`_deny_reason` therefore takes `payload` (the PreToolUse envelope) to
+resolve audience at render time; `check()` threads it through unchanged.
 
 Fail-open paths (all return None, in order):
   - tool_name not in the guarded set.
@@ -138,7 +151,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
 from coordinator_core.pickup_assemble import compute_repo_identity_gate
+from coordinator_core.session.identity import resolves_em_audience
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import (
     extract_target_path,
@@ -279,24 +294,30 @@ def _why_protected(is_local_config: bool) -> str:
     )
 
 
-def _deny_reason(target: str, is_local_config: bool = False) -> str:
-    return (
+def _deny_reason(
+    target: str,
+    is_local_config: bool = False,
+    payload: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Audience-gated render — see module docstring "Deny message".
+
+    Subagent/unresolved audience: REFUSAL only, no unlock statement in any
+    shape. Positively-resolved EM (`resolves_em_audience`): the REFUSAL plus
+    a doc pointer, and nothing else — no key, no path, no command.
+    """
+    base = (
         "[doctrine-surface guard] BLOCKED: "
         f"{target} {_why_protected(is_local_config)}. Describe the proposed "
         "change to the PM and ask them to approve it before editing this "
-        "file.\n"
-        "What approval looks like, so you do not have to re-derive it: the PM "
-        f"creates `{_SENTINEL_NAME}` at the repo root, themselves, in-harness "
-        f"(`!touch {_SENTINEL_NAME}`). One approval opens a "
-        f"{int(_APPROVAL_WINDOW_SECONDS // 60)}-minute window covering a "
-        "multi-edit change. Relay that command to the PM — do NOT run it. You "
-        "cannot: creation is blocked on BOTH surfaces (Write/Edit here, Bash "
-        "in the engine's approval-sentinel creation guard), because an agent "
-        "creating its own approval is self-approval, not approval.\n"
-        "In the meantime, consider whether the content actually belongs "
-        "in a wiki page or a skill surface instead — those need no "
-        "approval and are the right home for most doctrine additions."
+        "file. Consider whether the content belongs in a wiki page or a "
+        "skill surface instead — those need no approval."
     )
+    if resolves_em_audience(payload, _git_root()):
+        base += (
+            f" See {resolve_override_keys_doc_display()} for how "
+            "approval works."
+        )
+    return base
 
 
 def _write_repo_identity_advisory_log(
@@ -392,7 +413,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # boundary. Delegated to the shared _sentinel_write_guard helper -- see
     # that module's docstring for the ordering contract this call site
     # relies on.
-    denial = sentinel_write_denial(target, _SENTINEL_NAME, _sentinel_write_deny_reason())
+    denial = sentinel_write_denial(
+        target, _SENTINEL_NAME, _sentinel_write_deny_reason(), payload=payload
+    )
     if denial is not None:
         return denial
 
@@ -409,7 +432,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(
-                target_raw, is_local_config=(target == _local_config_path(repo_root))
+                target_raw,
+                is_local_config=(target == _local_config_path(repo_root)),
+                payload=payload,
             ),
         }
     }

@@ -119,6 +119,11 @@ class TestDeniesEmHandEditWithUnaddressedFinding:
         _advise(_payload(tmp_path))
 
     def test_deny_reason_names_target_sidecar_and_override(self, tmp_path):
+        """Negative-spec: the override KEY must never appear in the message
+        (``docs/wiki/guard-messaging.md`` § Register, B6). The compliant shape
+        is a pointer to the override-key doc, which is what
+        ``operator_override_note`` has rendered since the 2026-08-11 reshape
+        dropped the pasteable ``VAR=1`` literal."""
         _write_sidecar(
             tmp_path, "sess-abc", "codereview-sliceA.md", body=_findings_body()
         )
@@ -127,7 +132,21 @@ class TestDeniesEmHandEditWithUnaddressedFinding:
         assert _TARGET_FILE in reason
         assert "codereview-sliceA.md" in reason
         assert "review-integrator" in reason
-        assert f"{guard._OVERRIDE_ENV_VAR}=1" in reason
+        assert "guard-override-keys.md" in reason
+        assert guard._OVERRIDE_ENV_VAR not in reason
+
+    def test_deny_reason_names_the_integrator_unavailable_exit(self, tmp_path):
+        """The advisory states no blind absolute: a genuinely dead integrator
+        has a named exit, and the message points at it rather than leaving the
+        EM to pick between a silent override and a shipped defect."""
+        _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md", body=_findings_body()
+        )
+        result = _advise(_payload(tmp_path))
+        reason = result["hookSpecificOutput"]["additionalContext"]
+        assert "re-dispatch once" in reason
+        assert "park with an owner" in reason
+        assert "fresh-disk re-check" in reason
 
     def test_write_tool_also_denied(self, tmp_path):
         _write_sidecar(

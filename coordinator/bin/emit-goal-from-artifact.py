@@ -83,9 +83,7 @@ def _no_console_kw() -> dict:
     that RuntimeError into a silent None here, losing the remediation text
     before either caller's except clause ever saw it.
     """
-    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.win_portability import no_console_creationflags
 
     return no_console_creationflags()
@@ -110,9 +108,7 @@ def _resolve_read_frontmatter_field():
     precondition (exit 1) by main(), matching the bash oracle's jq-absent /
     helper-not-found fatal-precondition class.
     """
-    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
     return read_frontmatter_field

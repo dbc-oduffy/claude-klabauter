@@ -736,7 +736,10 @@ class TestCheckStagedPathspecDivergence:
         assert result.startswith("OFFER:")
         assert "shared.txt" in result
         assert "SC-DR-015" in result
-        assert "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE" in result
+        # The offer routes to the override-keys doc rather than naming the key
+        # itself -- register rule B6 (BYPASS-KEY IN THE DENIAL). Asserting the
+        # literal key back would re-pin the shape that rule exists to forbid.
+        assert "guard-override-keys.md" in result
 
     def test_index_matches_worktree_silent_pass(self, tmp_path):
         root = _init_repo(tmp_path)

@@ -2538,8 +2538,7 @@ def _build_indirection_advisory_reason(wrapper_shape: str) -> str:
         "payload is opaque to this guard's text classifier -- it may be "
         "entirely benign.\n\n"
         f"  Shape: {wrapper_shape}\n\n"
-        "Genuinely destructive? Surface it to the EM instead of running it "
-        "-- there is no subagent-honored override for this guard."
+        "Genuinely destructive? Surface it to the EM instead of running it."
     )
 
 

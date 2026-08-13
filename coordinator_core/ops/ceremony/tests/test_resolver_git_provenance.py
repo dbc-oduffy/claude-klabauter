@@ -64,6 +64,8 @@ import pytest
 from coordinator_core.ops.ceremony import wsc_tail as wsc_tail_mod
 from coordinator_core.ops.ceremony.resolver import detect_git_provenance_consumed
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

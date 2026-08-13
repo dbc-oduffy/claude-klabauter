@@ -604,6 +604,21 @@ def resolve_engine_root(script_file: str) -> str:
     return _resolve_claude_klabauter_root()
 
 
+def _front_insert_on_path(root: str) -> str:
+    """Shared ``if root not in sys.path: sys.path.insert(0, root)`` body.
+
+    The one insert primitive every path-mutating resolver wrapper in this
+    module (``ensure_engine_on_path``, ``require_engine_on_path``,
+    ``require_colocated_engine_on_path``) calls through, so the front-insert
+    behavior — an explicit ``CLAUDE_KLABAUTER_ROOT`` outranking an ambient editable
+    install of ``coordinator_core`` — lives in exactly one place. Returns
+    ``root`` unchanged, so callers can end on ``return _front_insert_on_path(root)``.
+    """
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return root
+
+
 def ensure_engine_on_path(script_file: str) -> str | None:
     """Resolve the engine root via ``resolve_engine_root`` and put it on ``sys.path``.
 
@@ -616,7 +631,7 @@ def ensure_engine_on_path(script_file: str) -> str | None:
     misses, because the callers are CLIs that degrade gracefully on an
     engine-less install (a scaffold that needs no engine must not die on a
     resolution failure). A caller that genuinely requires the engine should
-    call ``resolve_engine_root`` directly and let the RuntimeError fly.
+    call ``require_engine_on_path`` directly and let the RuntimeError fly.
 
     Catches both ``RuntimeError`` (every rung missed) and ``OSError``
     (a filesystem probe along the way — e.g. a broken junction or an
@@ -634,9 +649,46 @@ def ensure_engine_on_path(script_file: str) -> str | None:
         return None
     if not root:
         return None
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    return root
+    return _front_insert_on_path(root)
+
+
+def require_engine_on_path(script_file: str) -> str:
+    """Resolve the engine root via ``resolve_engine_root`` and put it on ``sys.path``, fail-loud.
+
+    Env-first ladder (``resolve_engine_root``'s own rung order: an existing-directory
+    ``CLAUDE_KLABAUTER_ROOT`` first, then self-location, then the pointer-file/registry rungs) — so
+    an explicit operator override outranks self-location here, unlike
+    ``require_colocated_engine_on_path`` below.
+
+    Catches NOTHING: a ``RuntimeError`` from ``resolve_engine_root`` (every rung missed)
+    or an ``OSError`` from a filesystem probe along the way propagates straight to the
+    caller. Use this over ``ensure_engine_on_path`` when the caller genuinely requires the
+    engine and an unresolvable root should be a hard failure, not a silent None.
+
+    Returns the resolved root.
+    """
+    root = resolve_engine_root(script_file)
+    return _front_insert_on_path(root)
+
+
+def require_colocated_engine_on_path(script_file: str) -> str:
+    """Resolve the engine root via ``resolve_colocated_claude_klabauter_root`` and put it on ``sys.path``, fail-loud.
+
+    Self-location-first ladder: ``resolve_colocated_claude_klabauter_root``'s rung 1 probes
+    ``Path(script_file)``'s own ``parents[2]`` as a candidate engine checkout BEFORE
+    consulting the environment — while its two-marker probe hits, an explicit
+    ``CLAUDE_KLABAUTER_ROOT`` is never even consulted. Only when that self-location probe misses
+    does resolution fall through to ``_resolve_claude_klabauter_root()``'s ladder, where
+    ``CLAUDE_KLABAUTER_ROOT`` is rung 1.
+
+    Catches NOTHING: a ``RuntimeError`` from ``resolve_colocated_claude_klabauter_root`` (both
+    rungs missed) or an ``OSError`` from a filesystem probe along the way propagates
+    straight to the caller.
+
+    Returns the resolved root.
+    """
+    root = resolve_colocated_claude_klabauter_root(script_file)
+    return _front_insert_on_path(root)
 
 
 # ---------------------------------------------------------------------------

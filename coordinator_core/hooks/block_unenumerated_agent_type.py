@@ -68,7 +68,21 @@ AC2 -- OVERRIDE MARKER. A `COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE:
 <reason>` line, own line, non-empty reason, read off the dispatch prompt --
 same pattern as `block-dispatch-suite-invocation.py`'s own
 `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD: <reason>` hatch. No new pattern
-per PM constraint ("we don't need new patterns here").
+per PM constraint ("we don't need new patterns here"). The marker still
+EXISTS and the short-circuit logic still honors it (`_OVERRIDE_MARKER_PREFIX`
+/ `_OVERRIDE_MARKER_RE` / `_has_override_marker`, unchanged) -- it is
+deliberately NOT disclosed in ANY rendered reason text this module returns,
+including `_unenumerated_deny_reason`'s deny text (2026-08-13 guard-messages
+fix) and the four roster-load-failure reasons `resolve_roster()` returns
+plus the two `resolve_model_pins()` returns via the same fail-closed legs
+(C12b residual, same date): this marker is agent-writable bypass text the
+denied dispatcher pastes into ITS OWN NEXT PROMPT, and the module's own
+INPUT TRUST rule already refuses to READ agent-writable state -- announcing
+the marker in any of these messages hands the agent the bypass in the same
+breath the guard refused it. A human operator who needs the hatch still has
+it via source/doctrine; these messages just stop teaching it. Do not restore
+a hint at any of these call sites -- if you're tempted to, the marker is
+still fully functional, just undisclosed.
 
 INPUT TRUST. `subagent_type`, `name`, and `prompt` are read from `tool_input`
 ONLY -- never `dispatched-agents.txt` column 3, which the governed agent can
@@ -606,13 +620,6 @@ def _home_dir() -> Optional[str]:
     )
 
 
-def _with_override_hint(reason: str) -> str:
-    return (
-        f"{reason} Override (last resort, clears THIS dispatch only): add "
-        f"a line `{_OVERRIDE_MARKER_PREFIX} <reason>` to the dispatch prompt."
-    )
-
-
 def resolve_roster(
     *, doe_root: Any = _UNSET, home: Any = _UNSET
 ) -> Tuple[Optional[FrozenSet[str]], Optional[str]]:
@@ -620,8 +627,10 @@ def resolve_roster(
 
     Returns `(roster, None)` on success, or `(None, reason)` on a
     fail-CLOSED roster-load failure (AC10) -- `reason` is self-describing:
-    it names the resolved path(s) actually attempted, the underlying
-    OS/parse error verbatim, and the AC2 override marker.
+    it names the resolved path(s) actually attempted and the underlying
+    OS/parse error verbatim. It deliberately does NOT name the AC2 override
+    marker (see module docstring "AC2 -- OVERRIDE MARKER"): the marker
+    still exists and is still honored, it just is not disclosed here.
 
     `doe_root`/`home` are injectable (default: real resolution via
     `read_doe_root_pointer()` / `_home_dir()`) purely for test isolation --
@@ -633,9 +642,9 @@ def resolve_roster(
         home = _home_dir()
 
     if not doe_root:
-        return None, _with_override_hint(
+        return None, (
             "roster source MISSING ENTIRELY (path/install defect): the "
-            "example-doctrine-repo root pointer is unresolved -- checked registry "
+            "doe-root pointer is unresolved -- checked registry "
             "repos.example_doctrine_repo, <settings-home>/machine-local/.doe-root, "
             "${CLAUDE_HOME:-$HOME}/.claude/.doe-root. Sources (a) "
             "coordinator/subagent-sandbox-policy.yaml and (b) "
@@ -645,12 +654,12 @@ def resolve_roster(
     try:
         policy_roster = _load_policy_roster(doe_root)
     except _RosterError as exc:
-        return None, _with_override_hint(exc.reason)
+        return None, exc.reason
 
     try:
         agents_roster = _load_agents_roster(doe_root)
     except _RosterError as exc:
-        return None, _with_override_hint(exc.reason)
+        return None, exc.reason
 
     plugin_roster = _load_plugin_roster(home)
 
@@ -659,7 +668,7 @@ def resolve_roster(
         # Unreachable in practice (`_HARNESS_BUILTIN_TYPES` is a non-empty
         # constant), kept as an explicit fail-closed leg rather than an
         # assumption -- see module docstring "FAIL CLOSED".
-        return None, _with_override_hint(
+        return None, (
             "roster resolved to the EMPTY SET despite no individual source "
             f"raising -- policy={sorted(policy_roster)!r} "
             f"agents={sorted(agents_roster)!r} "
@@ -716,7 +725,10 @@ def resolve_model_pins(
     docstring "FAIL CLOSED, but only on the two PEER-REPO sources"): leg
     (b) reuses `_scan_agents_frontmatter`'s fail-closed contract unchanged
     -- an unreadable/missing `coordinator/agents/` denies here too (AC10
-    self-describing reason, override hint included). The plugin leg is
+    self-describing reason; the AC2 override marker is deliberately NOT
+    disclosed in it, same as `resolve_roster()` -- see that function's
+    docstring and the module docstring "AC2 -- OVERRIDE MARKER"). The
+    plugin leg is
     local install state, not a live peer-repo checkout: it is read via
     `_scan_plugin_agents_frontmatter`, which NEVER raises, so an absent or
     unreadable `~/.claude/plugins/` degrades this leg to an EMPTY
@@ -768,9 +780,9 @@ def resolve_model_pins(
         home = _home_dir()
 
     if not doe_root:
-        return None, _with_override_hint(
+        return None, (
             "roster source MISSING ENTIRELY (path/install defect): the "
-            "example-doctrine-repo root pointer is unresolved -- checked registry "
+            "doe-root pointer is unresolved -- checked registry "
             "repos.example_doctrine_repo, <settings-home>/machine-local/.doe-root, "
             "${CLAUDE_HOME:-$HOME}/.claude/.doe-root. Source (b) "
             "coordinator/agents/*.md cannot be read without it."
@@ -779,7 +791,7 @@ def resolve_model_pins(
     try:
         scanned = _scan_agents_frontmatter(doe_root)
     except _RosterError as exc:
-        return None, _with_override_hint(exc.reason)
+        return None, exc.reason
 
     plugin_scanned = _scan_plugin_agents_frontmatter(home)
 
@@ -823,16 +835,8 @@ def _unenumerated_deny_reason(subagent_type: str, name: Any) -> str:
     named_clause = f"name={name_str!r}" if name_str else "no `name` given"
     return (
         f"AGENT DISPATCH BLOCKED: subagent_type={subagent_type!r} "
-        f"({named_clause}) is not on the enumerated roster (union of "
-        "(a) example-doctrine-repo coordinator/subagent-sandbox-policy.yaml map keys, "
-        "(b) coordinator/agents/*.md, (c) harness built-ins plus "
-        "~/.claude/plugins/**/agents/*.md). An unenumerated type gets no "
-        "guard coverage and no dispatch catering -- see "
-        "docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md. "
-        "If this is a genuine new agent type, add it to the roster first "
-        "(a policy map row and/or coordinator/agents/<type>.md). Override "
-        f"(rare -- names the reason): add a line "
-        f"`{_OVERRIDE_MARKER_PREFIX} <reason>` to the dispatch prompt."
+        f"({named_clause}) not on the enumerated roster. Add it to the policy map "
+        f"and/or coordinator/agents/<type>.md."
     )
 
 

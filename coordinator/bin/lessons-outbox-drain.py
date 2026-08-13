@@ -62,7 +62,7 @@ _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-from cc_invoke import resolve_colocated_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_colocated_engine_on_path  # noqa: E402
 from target_wiki_canon import canonical_target_wiki_for_kind  # noqa: E402
 
 # `assert-empty` reuses the SAME peer-root enumeration `learn-lessons-roots.py` uses,
@@ -71,12 +71,10 @@ from target_wiki_canon import canonical_target_wiki_for_kind  # noqa: E402
 # exists to catch. Resolved via the colocated-checkout ladder (this script lives inside
 # the claude-klabauter tree itself), same pattern as the distill-*.py CLIs.
 try:
-    _REPO_ROOT = Path(resolve_colocated_claude_klabauter_root(__file__))
+    _REPO_ROOT = Path(require_colocated_engine_on_path(__file__))
 except RuntimeError as _exc:
     print(f"{Path(__file__).name}: CLAUDE_KLABAUTER_ROOT resolution failed: {_exc}", file=sys.stderr)
     sys.exit(1)
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 from coordinator_core.ops.learn_lessons_roots import resolve_roots  # noqa: E402
 

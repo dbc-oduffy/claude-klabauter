@@ -93,15 +93,19 @@ from typing import Dict, List, Optional
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
+    read_fm_nested_field,
     rebuild,
     replace_fm_field,
+    serialize_yaml_scalar,
     split_frontmatter,
+    write_fm_nested_field,
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
+from coordinator_core.session.core import resolve_session_id
 from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
@@ -182,6 +186,44 @@ def _resolve_claimed_plan_deliverable_id(worktree_root: Optional[Path]) -> Optio
     return deliverable_id or None
 
 
+def _carry_value_for_file(
+    content: str, carried_deliverable_id: Optional[str], session_id: str
+) -> Optional[str]:
+    """Narrow the batch-invariant carried_deliverable_id to THIS file only.
+
+    Break-class fix (measured 2026-08-12, see
+    archive/specs/2026-08/2026-08-01-deliverable-id-carry-onto-executing-handoff.md):
+    `_resolve_claimed_plan_deliverable_id` is resolved ONCE per `handoff.normalize`
+    invocation (I/O fix, correct) but the *executing* handoff's carried value must
+    NOT be applied uniformly to every file the batch sweep touches — only the file
+    this session is itself the `claimed_by` holder of may receive it. Every other
+    key-absent file (unclaimed, or claimed by a different session) must see `None`
+    so it falls through to the mint-from-slug path instead of being silently
+    stamped with an unrelated session's claimed-plan identity.
+
+    Returns `carried_deliverable_id` iff `session_id` is non-empty AND this file's
+    frontmatter `claimed_by` equals `session_id`. Returns `None` in every other
+    case, INCLUDING when `session_id` is unresolvable (`""`) — fail toward
+    not-stamping, never toward stamping.
+
+    Negative-spec:
+      - Does NOT change `_normalize_one_text`'s own carry-vs-mint branch — that
+        function's caller-supplied-parameter contract is unchanged and still
+        shared byte-for-byte with `handoff_author_fork.py` /
+        `queue_scaffold_baton.py`, which legitimately carry unconditionally
+        because they are authoring THIS session's own new artifact.
+    """
+    if not carried_deliverable_id or not session_id:
+        return None
+    split = split_frontmatter(content)
+    if split is None:
+        return None
+    claimed_by = read_fm_field(split.fm_text, "claimed_by")
+    if claimed_by == session_id:
+        return carried_deliverable_id
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Category heuristic (exact port of matchCategory from JS)
 # ---------------------------------------------------------------------------
@@ -224,7 +266,11 @@ def _match_category(title: str) -> str:
 
 
 def _normalize_one_text(
-    content: str, file_path: Path, carried_deliverable_id: Optional[str] = None
+    content: str,
+    file_path: Path,
+    carried_deliverable_id: Optional[str] = None,
+    minted_by: Optional[str] = None,
+    producer: Optional[dict] = None,
 ) -> Optional[Dict]:
     """Compute the normalized content for a single handoff file (pure — caller provides content).
 
@@ -244,6 +290,13 @@ def _normalize_one_text(
     `queue_scaffold_baton.py` — resolves this once in its own enclosing scope and
     passes the result here; a caller that omits it (or has no worktree_root to
     resolve from) keeps the prior mint-from-slug-only behaviour unchanged.
+
+    `producer` (optional) is the ALREADY-RESOLVED result of
+    `coordinator_core.session.producer_resolve.resolve_producer_for_creation`
+    (producer-axis-claude-klabauter-engine-half) — same caller-supplied-parameter
+    discipline as `carried_deliverable_id`/`minted_by`: only the two creation
+    doors resolve and pass it; the batch sweep passes nothing, and this
+    function never backfills an absent `producer` onto an existing record.
 
     Exact port of normalizeOne() from normalize-handoff-frontmatter.js.
     Only the six listed fields are touched — key order and all other frontmatter
@@ -359,6 +412,55 @@ def _normalize_one_text(
         changes.append('initiative: (absent) → null')
     # If present (including the literal "null" value): carry — no drift.
 
+    # ── 7. minted_by: stamp the CALLER-SUPPLIED github alias at creation ──────
+    # C5 (person-identity-primitive-first-slice): value is the casefolded
+    # `github` alias from resolve_operating_person's bundle (§ The `minted_by`
+    # representation decision) — NOT a person_id UUID, independent of C4's
+    # registry by design. Unresolvable identity omits `minted_by` ENTIRELY — no
+    # null, no "unknown" sentinel (DEC-41, extended).
+    #
+    # CALLER-SUPPLIED, never read from session state here. This function is
+    # reached by BOTH the creation doors (handoff_author_fork /
+    # queue_scaffold_baton, authoring THIS session's own new artifact) and the
+    # `handoff.normalize` batch sweep, which walks every file in handoffs_dir.
+    # Resolving the operating human inside this function would stamp the
+    # SWEEPING operator's handle onto every handoff lacking the key — and since
+    # `minted_by` is new, that is the entire corpus, not the handful a partially
+    # populated field would expose. That is the same break-class defect fixed
+    # for `carried_deliverable_id` on 2026-08-12; see `_carry_value_for_file`'s
+    # negative-spec, which names this contract explicitly. Sweep callers pass
+    # nothing and stamp nothing.
+    if minted_by and read_fm_field(fm_text, 'minted_by') is None:
+        fm_text = insert_fm_field(fm_text, 'minted_by', minted_by)
+        changes.append(f'minted_by: (absent) → {minted_by}')
+    # If present: carry unchanged — not a drift condition; no changes entry.
+
+    # ── 8. producer: stamp the CALLER-SUPPLIED creation-seam record ──────────
+    # producer-axis-claude-klabauter-engine-half: {typed_command, op_identity} resolved
+    # ONCE per creation call via `coordinator_core.session.producer_resolve
+    # .resolve_producer_for_creation` and handed in here — same caller-supplied
+    # discipline as `minted_by` / `carried_deliverable_id` above, and for the
+    # identical reason: this function is reached by BOTH the creation doors
+    # (handoff_author_fork.py / queue_scaffold_baton.py, authoring THIS
+    # session's own new artifact, each resolving its own distinct op_identity
+    # at its own call site) and the `handoff.normalize` batch sweep, which
+    # walks every pre-existing file in handoffs_dir. The sweep passes no
+    # `producer` and this function never infers one for an existing record —
+    # back-stamping the corpus with the sweeping session's value is the exact
+    # defect fixed for `carried_deliverable_id` at 60e17407c (see
+    # `_carry_value_for_file`'s docstring) and this axis must not re-find it.
+    if producer is not None and read_fm_nested_field(fm_text, 'producer') is None:
+        block_lines = [
+            f"  op_identity: {serialize_yaml_scalar(producer.get('op_identity'))}",
+            f"  typed_command: {serialize_yaml_scalar(producer.get('typed_command'))}",
+        ]
+        fm_text = write_fm_nested_field(fm_text, 'producer', "\n".join(block_lines) + "\n")
+        changes.append(
+            f"producer: (absent) → op_identity={producer.get('op_identity')}, "
+            f"typed_command={producer.get('typed_command')}"
+        )
+    # If present: carry unchanged — not a drift condition; no changes entry.
+
     if not changes:
         return None  # already clean — idempotent
 
@@ -366,23 +468,33 @@ def _normalize_one_text(
     return {'rebuilt': rebuilt, 'changes': changes}
 
 
-def _normalize_one(file_path: Path, carried_deliverable_id: Optional[str] = None) -> Optional[Dict]:
+def _normalize_one(
+    file_path: Path,
+    carried_deliverable_id: Optional[str] = None,
+    session_id: str = "",
+) -> Optional[Dict]:
     """Read file and compute its normalized content.
 
     Thin wrapper around _normalize_one_text: reads the file and delegates all
     normalization logic to the pure helper.  Used by the dry-run path (write=False)
     where no lock is needed.
 
-    `carried_deliverable_id` is threaded straight through to `_normalize_one_text`
-    — see its docstring for the deliverable_id carry-from-claimed-plan check it
-    enables, and for why it is a pre-resolved value rather than a worktree_root.
+    `carried_deliverable_id` is the batch-invariant resolved value (see
+    `_resolve_claimed_plan_deliverable_id`); `session_id` is the current
+    session's resolved id (see `coordinator_core.session.core.resolve_session_id`).
+    Both are narrowed per-file via `_carry_value_for_file` — the executing
+    handoff's carried value applies ONLY to the file this session itself holds
+    `claimed_by` on, never to unrelated key-absent files the sweep also touches
+    (break-class fix, 2026-08-12 — see `_carry_value_for_file`'s docstring).
+    Sole caller is this module's own dry-run handler branch.
 
     Returns {'rebuilt': str, 'changes': [str]} when drift is detected, None when
     already clean, or _NO_FRONTMATTER when the file lacks a valid frontmatter block.
     Raises OSError on I/O failure — caller logs and appends to errors list.
     """
     content = file_path.read_text(encoding="utf-8")
-    return _normalize_one_text(content, file_path, carried_deliverable_id)
+    local_carry = _carry_value_for_file(content, carried_deliverable_id, session_id)
+    return _normalize_one_text(content, file_path, local_carry)
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +575,16 @@ async def _handler(
     # across a ~141-file corpus.  Threaded straight into every call site below.
     carried_deliverable_id = _resolve_claimed_plan_deliverable_id(worktree_root)
 
+    # Break-class fix (2026-08-12): the batch-invariant carried_deliverable_id
+    # above must NOT be applied uniformly across the sweep — only the file THIS
+    # session itself claims (`claimed_by` == session_id) may receive it. Resolved
+    # once here (not per file — the session id is invariant for the whole call,
+    # same rationale as the carried_deliverable_id hoist above); narrowed
+    # per-file via `_carry_value_for_file` at each call site below. Unresolvable
+    # (`""`) fails toward not-stamping any file — see resolve_session_id's
+    # "always returns successfully" contract.
+    session_id = resolve_session_id()
+
     # Flat glob — no subdirectory recursion (mirrors walkHandoffsDir constraint in JS).
     for file_path in sorted(handoffs_dir.glob("*.md")):
         rel = rel_id(file_path, worktree_root)
@@ -479,7 +601,8 @@ async def _handler(
             _norm_box: list = [None]
 
             def _mutate(old_text: str, _fp: Path = file_path) -> str:
-                norm_result = _normalize_one_text(old_text, _fp, carried_deliverable_id)
+                local_carry = _carry_value_for_file(old_text, carried_deliverable_id, session_id)
+                norm_result = _normalize_one_text(old_text, _fp, local_carry)
                 _norm_box[0] = norm_result
                 if norm_result is None:
                     return old_text  # already clean; byte-identical → no write
@@ -518,7 +641,9 @@ async def _handler(
             # calls read_text) to satisfy DR-212 D3 async-loop mandate; prevents event-loop
             # stall under the batch-normalize path which may read N files in one call.
             try:
-                result = await asyncio.to_thread(_normalize_one, file_path, carried_deliverable_id)
+                result = await asyncio.to_thread(
+                    _normalize_one, file_path, carried_deliverable_id, session_id
+                )
             except Exception as exc:  # noqa: BLE001
                 _LOG.warning("handoff.normalize: error processing %s: %s", rel, exc)
                 errors.append({"file": rel, "error": str(exc)})

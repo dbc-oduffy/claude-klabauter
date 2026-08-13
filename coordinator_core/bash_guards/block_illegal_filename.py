@@ -408,7 +408,9 @@ def _safe_suggestion(raw_name: str) -> str:
     return squeezed
 
 
-def _make_deny_msg(raw_name: str, illegal_char_hint: str) -> str:
+def _make_deny_msg(
+    raw_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
     """Compressed reason text (message-size discipline, plan chunk C8):
     names the offending char, the Windows-breakage consequence, and a
     ready-to-run rename -- no restated Reference/backstop boilerplate,
@@ -420,7 +422,7 @@ def _make_deny_msg(raw_name: str, illegal_char_hint: str) -> str:
         f"'{raw_name}' has '{illegal_char_hint}' -- illegal on Windows, blocks "
         f"`git checkout`. Use instead: rename to '{safe_suggestion}', or run "
         "`coordinator-safe-name timestamp`. "
-        + operator_override_note(_OVERRIDE_ENV)
+        + operator_override_note(_OVERRIDE_ENV, payload=payload)
     )
 
 
@@ -504,7 +506,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if result is None:
                 continue
             basename, hint = result
-            reason = _make_deny_msg(basename, hint)
+            reason = _make_deny_msg(basename, hint, payload=payload)
             ctx = _advisory_ctx(reason)
             return allow_advisory("PreToolUse", ctx)
 

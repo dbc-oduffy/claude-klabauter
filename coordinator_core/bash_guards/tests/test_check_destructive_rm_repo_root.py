@@ -286,6 +286,67 @@ class TestRmOverride:
         assert not _denied(f"rm -rf {repo_outside_any_repo}")
 
 
+class TestGitLockTarget:
+    """A `*.lock` file under the git store is ALLOWED, reversing the deny
+    added by 5b1f3a19f9b2. It holds no committed data -- git writes a new
+    index to `index.lock` and renames it onto `index`; unlink the lock
+    mid-flight and the rename fails and the git command errors out loudly,
+    leaving the on-disk index untouched and still consistent. See the lock
+    leg's own rationale block in `dispatch_checks.py` and `cross-repo/inbox/
+    2026-08-12-example-retrieval-repo-em-git-index-lock-reaper.md` for the incident
+    this class pins. Non-lock store targets remain denied -- that is the
+    regression that matters most.
+    """
+
+    def test_lock_file_allowed(self, repo_outside_any_repo):
+        lock = os.path.join(repo_outside_any_repo, ".git", "index.lock")
+        with open(lock, "w", encoding="utf-8") as fh:
+            fh.write("")
+        assert not _denied(f"rm -f {lock}")
+
+    def test_nested_ref_lock_allowed(self, repo_outside_any_repo):
+        refs_dir = os.path.join(repo_outside_any_repo, ".git", "refs", "heads")
+        os.makedirs(refs_dir, exist_ok=True)
+        lock = os.path.join(refs_dir, "main.lock")
+        with open(lock, "w", encoding="utf-8") as fh:
+            fh.write("")
+        assert not _denied(f"rm -f {lock}")
+
+    def test_non_lock_store_target_keeps_original_irreversibility_message(self, repo_outside_any_repo):
+        """The regression that matters most: a real store target (not a
+        lock) must still get the full irreversibility wording, unweakened
+        by the lock leg sitting ahead of it."""
+        head = os.path.join(repo_outside_any_repo, ".git", "HEAD")
+        reason = _reason(f"rm -f {head}")
+        assert "irreversibly" in reason
+        assert "reflog" in reason
+
+    def test_git_objects_dir_still_denied(self, repo_outside_any_repo):
+        objects_dir = os.path.join(repo_outside_any_repo, ".git", "objects", "ab")
+        os.makedirs(objects_dir, exist_ok=True)
+        assert _denied(f"rm -rf {objects_dir}")
+
+    def test_git_dir_itself_still_denied(self, repo_outside_any_repo):
+        git_dir = os.path.join(repo_outside_any_repo, ".git")
+        assert _denied(f"rm -rf {git_dir}")
+
+    def test_lock_suffixed_directory_still_denied(self, repo_outside_any_repo):
+        """Review: code-reviewer (dispatch d6708a9c, finding 2) -- the lock
+        leg's allow is scoped to a lock FILE; a `.lock`-suffixed directory
+        under the git store carries no rename-onto-index safety argument and
+        must fall through to the general git-store deny."""
+        lock_dir = os.path.join(repo_outside_any_repo, ".git", "objects", "incoming-1234.lock")
+        os.makedirs(lock_dir, exist_ok=True)
+        assert _denied(f"rm -rf {lock_dir}")
+
+    def test_override_still_allows_lock_leg(self, monkeypatch, repo_outside_any_repo):
+        lock = os.path.join(repo_outside_any_repo, ".git", "index.lock")
+        with open(lock, "w", encoding="utf-8") as fh:
+            fh.write("")
+        monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
+        assert not _denied(f"rm -f {lock}")
+
+
 class TestIsSameDir:
     def test_distinct_directories_are_not_the_same(self, tmp_path):
         a, b = tmp_path / "a", tmp_path / "b"

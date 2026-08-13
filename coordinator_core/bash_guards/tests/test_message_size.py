@@ -169,7 +169,9 @@ class TestTailSubtractionByIdentity:
     per-call-site value to be wrong about)."""
 
     def test_tail_is_subtracted_by_identity(self):
-        tail = operator_override_note("COORDINATOR_ALLOW_TEST_GUARD")
+        tail = operator_override_note(
+            "COORDINATOR_ALLOW_TEST_GUARD", payload={"session_id": "sess-c1d-em"}
+        )
         text = "Advisory prose sentence. " + tail
         envelope = _envelope(additional_context=text)
         result = msz.measure_envelope(envelope)
@@ -182,9 +184,17 @@ class TestTailSubtractionByIdentity:
         renders the SAME string now, so the tail subtracted is the same
         regardless of which env var (or reason_placeholder) a guard's call
         site happens to pass."""
-        flag_tail = operator_override_note("COORDINATOR_ALLOW_TEST_GUARD")
-        other_flag_tail = operator_override_note("COORDINATOR_ALLOW_SOME_OTHER_GUARD")
-        reason_tail = operator_override_note("COORDINATOR_QUEUE_PUNT", reason_placeholder="not now, doing X")
+        flag_tail = operator_override_note(
+            "COORDINATOR_ALLOW_TEST_GUARD", payload={"session_id": "sess-c1d-em"}
+        )
+        other_flag_tail = operator_override_note(
+            "COORDINATOR_ALLOW_SOME_OTHER_GUARD", payload={"session_id": "sess-c1d-em"}
+        )
+        reason_tail = operator_override_note(
+            "COORDINATOR_QUEUE_PUNT",
+            payload={"session_id": "sess-c1d-em"},
+            reason_placeholder="not now, doing X",
+        )
         assert flag_tail == other_flag_tail == reason_tail
 
     def test_no_override_note_leaves_tail_bytes_zero(self):

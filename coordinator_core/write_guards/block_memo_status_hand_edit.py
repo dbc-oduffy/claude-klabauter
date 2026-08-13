@@ -506,6 +506,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # (no live claim, nothing to collide with) degrades to advisory —
         # the offer, not the block.
         if _has_live_claim(cwd, disk_path.name):
+            _note = operator_override_note(_OVERRIDE_ENV, payload=payload)
             reason = (
                 "Memo status hand-edit blocked: status: is disk-truth, changed "
                 "only via the op — it also skips the collision/validation "
@@ -513,8 +514,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "closes), and a live session currently holds this memo's "
                 "claim. Use instead:\n"
                 "  archive-stamp-cli resolve-memo <memo-path> --actioned-note "
-                "\"...\"\n\n"
-                + operator_override_note(_OVERRIDE_ENV)
+                "\"...\""
+                + ("\n\n" + _note if _note else "")
             )
             return {
                 "hookSpecificOutput": {

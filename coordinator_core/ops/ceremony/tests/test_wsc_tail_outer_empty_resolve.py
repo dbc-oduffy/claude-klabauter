@@ -39,7 +39,7 @@ import pytest
 
 import coordinator_core.ops.ceremony.wsc_tail as wsc_tail_mod
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> subprocess.CompletedProcess:

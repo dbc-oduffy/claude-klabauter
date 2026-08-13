@@ -43,7 +43,7 @@ The exact frontmatter key name for agent_type -- had to read provision_report.py
 
 Grepped for a harvest CLI that didn't exist yet.
 
-- Where did your tool access, permissions, or output contract fight you? What would you have reached for if it existed?
+- Where did your tool access, permissions, or output contract fight you? What was missing that isn't deliberately withheld from this role — a guard denial is not a gap.
 
 Nothing fought me here.
 
@@ -72,7 +72,7 @@ dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter
 
 - What did you grep, read, or probe that turned out to be a dead end — and what were you actually looking for?
 
-- Where did your tool access, permissions, or output contract fight you? What would you have reached for if it existed?
+- Where did your tool access, permissions, or output contract fight you? What was missing that isn't deliberately withheld from this role — a guard denial is not a gap.
 
 - Anything you wanted to say and had nowhere to put?
 

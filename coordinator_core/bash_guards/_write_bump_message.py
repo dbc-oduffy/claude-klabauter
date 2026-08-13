@@ -94,6 +94,34 @@ publish-owner resolver lives there, in `publish_destination_owner`) to avoid
 an import-order hazard against a concurrently-authored sibling module; the
 caller (C4/C5) resolves the owner and passes it through.
 
+SUBAGENT CHANNEL NEVER CARRIES THE UNLOCK. Fixed 2026-08-13, mirroring the
+identical class already fixed on a neighbouring emit leg on 2026-08-11
+(`session.guard_unlock_sentinel.annotate_deny`, which suppresses its own
+unlock block on a positively-resolved subagent identity --
+state/audits/2026-08-11-guard-text-injection-mechanism-proof.md, "The fix,
+and its measurement"). Two dispatched subagents in a sibling repo
+(example-cockpit-repo) independently classified the OLD subagent-class copy --
+which named the marker path, the literal `touch` command, and the session
+id in the very message telling that agent it may not use them -- as prompt
+injection; one refused to comply and worked around its own harness
+(cross-repo/inbox/2026-08-13-example-cockpit-repo-em-guard-advisories-read-as-
+injection-to-subagents.md). That memo's own framing is the rule: showing a
+subordinate agent the exact button, telling it the button works, and
+telling it that pressing the button is forbidden is not a guard rail --
+it is an Eden snake. `render_subagent_message` and
+`render_publish_subagent_message` therefore render a WALL, not a redacted
+recipe: what the agent is confined to, where it may write instead
+(sandbox / durable source-side fix), and the route (report to the
+dispatching EM) -- and nothing else. No marker path, no `touch`, no session
+id, no statement that an unlock mechanism exists at all; a subagent that
+cannot see the mechanism exist cannot be tempted by it and cannot classify
+it as a pretext. `render_em_message` and `render_publish_em_message` are
+UNCHANGED by this fix -- the EM is the audience the unlock line is drafted
+for, and keeps it verbatim. This is presentation-only: the marker
+MECHANISM itself (`_write_bump_marker.py`, `XREPO_MARKER_IS_ORDINARY_FILE`
+-- an ordinary file, bare `touch`, no identity gating, no expiry) is a
+standing PM ruling this fix does not touch.
+
 Negative-spec:
     - Does NOT decide whether to bump, or which destination class applies
       -- that is every calling guard's own job, using
@@ -105,6 +133,13 @@ Negative-spec:
     - Does NOT match a publish destination by path pattern, gate the
       verdict on `owner`, or hardcode a mirror DESTINATION path anywhere in
       this module's own literals (Anti-scope).
+    - Does NOT render `clear_line()`'s output, a marker-path fragment
+      (`allow-xrepo-write-`), the literal string `touch `, or the session
+      id on either subagent-class renderer, ever, regardless of `surface`
+      or `destination_class` (Anti-scope, this fix -- see "SUBAGENT CHANNEL
+      NEVER CARRIES THE UNLOCK"). Pinned as a property over both subagent
+      renderers in the test suite, not a single string comparison, so a
+      future edit cannot quietly reintroduce the button.
 """
 
 from __future__ import annotations
@@ -264,17 +299,18 @@ def render_subagent_message(
 ) -> str:
     """The FOREIGN-class, subagent-class deny copy. `sandbox_root` is
     caller-resolved (see module docstring, "CALLERS RESOLVE THE INPUTS");
-    this function only places it in the template. `surface` selects the
-    truthful clear-scope phrase (module docstring, `SURFACE_BASH`/
-    `SURFACE_TOOL`)."""
-    line = clear_line(gitdir, session_id)
-    phrase = _clear_offer_phrase(surface)
+    this function only places it in the template.
+
+    NO UNLOCK MECHANISM ON THIS CHANNEL (see module docstring, "SUBAGENT
+    CHANNEL NEVER CARRIES THE UNLOCK"). `gitdir`/`session_id`/`surface` are
+    accepted for call-site parity with the EM-class renderer and
+    `render_bump_message`'s single dispatch signature -- none of the three
+    is rendered here, because none of the three is the reader's to use."""
+    del gitdir, session_id, surface
     return (
         "Coordinator guard — instead: no PM here — report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
-        f"write in your sandbox `{sandbox_root}` instead, or once assented, "
-        f"{phrase}:\n"
-        f"  {line}"
+        f"write in your sandbox `{sandbox_root}` instead."
     )
 
 
@@ -320,17 +356,17 @@ def render_publish_subagent_message(
     `sandbox_root` is accepted for signature parity with the other
     subagent-class renderer but is not named in this copy -- the offer here
     is the durable source-side alternative, not this session's sandbox.
-    `surface` selects the truthful clear-scope phrase (module docstring,
-    `SURFACE_BASH`/`SURFACE_TOOL`)."""
-    del sandbox_root
-    line = clear_line(gitdir, session_id)
-    phrase = _clear_offer_phrase(surface)
+    NO UNLOCK MECHANISM ON THIS CHANNEL (see module docstring, "SUBAGENT
+    CHANNEL NEVER CARRIES THE UNLOCK"). `gitdir`/`session_id`/`surface` are
+    accepted for call-site parity with the EM-class renderer and
+    `render_bump_message`'s single dispatch signature -- none of the three
+    is rendered here, because none of the three is the reader's to use."""
+    del sandbox_root, gitdir, session_id, surface
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
-        f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. Report to "
-        f"your EM; if assented, {phrase}:\n"
-        f"  {line}"
+        f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. "
+        "Report to your EM."
     )
 
 

@@ -114,15 +114,18 @@ def _safe_suggestion(raw_name: str) -> str:
     return squeezed
 
 
-def _make_deny_msg(raw_name: str, illegal_char_hint: str) -> str:
+def _make_deny_msg(
+    raw_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
     """Port of ``make_deny_msg``, byte-for-byte reason text (design-as-offers:
     leads with the safe alternative).
     """
     safe_suggestion = _safe_suggestion(raw_name)
+    _note = operator_override_note(_OVERRIDE_ENV, payload=payload)
     return (
         f"'{raw_name}': '{illegal_char_hint}' breaks Windows checkout. Use instead: "
-        f"`{safe_suggestion}` or `coordinator-safe-name timestamp`.\n\n"
-        + operator_override_note(_OVERRIDE_ENV)
+        f"`{safe_suggestion}` or `coordinator-safe-name timestamp`."
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -154,7 +157,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if illegal_char_hint is None:
             return None
 
-        reason = _make_deny_msg(bname, illegal_char_hint)
+        reason = _make_deny_msg(bname, illegal_char_hint, payload)
 
         return {
             "hookSpecificOutput": {

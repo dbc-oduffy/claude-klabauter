@@ -102,9 +102,34 @@ class OpenSpineRowGate(NamedTuple):
     open_count: int
     warn_text: Optional[str]
     summary_line: str
+    #: Which of the three answers `applies=False` was standing in for,
+    #: drawing the same `not-applicable` vs `indeterminate` distinction
+    #: `consumed_handoff_completeness` already draws. `applies` alone
+    #: collapses "resolved the governing plan, nothing open" with "could
+    #: not resolve a governing plan at all", and a caller cannot tell a
+    #: genuinely clean close from a gate whose input never arrived — the
+    #: false-clean that let a plan-authoring session close with five open
+    #: spine rows (source memo 2026-08-12-example-market-data-repo-em-wsc-
+    #: capped-a-session-with-an-unexecuted-plan.md).
+    #:
+    #:   "applicable"     — spine resolved, at least one row open
+    #:   "not-applicable" — spine resolved, nothing open (or no spine)
+    #:   "indeterminate"  — no input: no governing plan resolved, the plan
+    #:                      file unreadable, or its spine fence malformed
+    #:
+    #: Advisory only, exactly like `applies`: `indeterminate` adds no
+    #: judgment point, no dependency edge, and no exit code (see the
+    #: module Negative-spec, and the source memo's own "not asking you to
+    #: make the ceremony refuse on ambiguity").
+    verdict: str = "not-applicable"
 
 
 _NOT_APPLICABLE_SUMMARY = "Open spine rows: not applicable — no open rows on the governing plan"
+
+_INDETERMINATE_SUMMARY = (
+    "Open spine rows: INDETERMINATE — {reason}; this is not a clean-close signal, "
+    "check by hand whether a plan of this session's own authorship has open rows"
+)
 
 _WARN_TEMPLATE = """WARN [open-spine-row-worklist]: {count} plan-spine row(s) still open on {plan_ref}.
 Five honest ends, via `coordinator/bin/plan-tasks-resolve --id <row-id> ... --disposition-detail "<why>"`:
@@ -124,6 +149,20 @@ left it open, or resolve it via `coordinator/bin/plan-tasks-resolve` above and r
 /workstream-complete."""
 
 
+def _indeterminate(reason: str) -> OpenSpineRowGate:
+    """The gate could not resolve its input — distinct from resolving it
+    and finding nothing open. Same non-blocking shape as every other
+    `applies=False` branch; only `verdict`/`summary_line` differ."""
+    return OpenSpineRowGate(
+        applies=False,
+        rows=(),
+        open_count=0,
+        warn_text=None,
+        summary_line=_INDETERMINATE_SUMMARY.format(reason=reason),
+        verdict="indeterminate",
+    )
+
+
 def compute_open_spine_row_gate(
     governing_plan_slug: Optional[str],
     governing_plan_path: Optional[Path],
@@ -138,6 +177,16 @@ def compute_open_spine_row_gate(
     one), or a LOCATED spine with zero `open`-disposition rows.
     `summary_line` is populated in the not-applicable case too, matching
     `CompletenessChecklistGate`'s own convention.
+
+    Those five degradations are NOT one answer, and `verdict` splits them
+    (see `OpenSpineRowGate.verdict`): the first three are `indeterminate`
+    — the gate never got an input — while an absent fence or an empty
+    open set is `not-applicable`, a real resolution that found nothing.
+    Collapsing them is what let a plan-authoring session read as a clean
+    close: governing-plan resolution has no input on a session that
+    *writes* a plan rather than inheriting one, so `applies=False` fired
+    for want of an input and was indistinguishable at the call site from
+    a spine with every row terminal.
 
     When at least one open row exists, `rows`/`open_count` reflect the
     FULL open set from `spine_projection` unfiltered by waiver — a
@@ -154,21 +203,29 @@ def compute_open_spine_row_gate(
     waived_ids = frozenset(str(x) for x in decisions.get(_WAIVED_ROWS_KEY, ()))
 
     if not governing_plan_slug or governing_plan_path is None:
-        return OpenSpineRowGate(applies=False, rows=(), open_count=0, warn_text=None, summary_line=_NOT_APPLICABLE_SUMMARY)
+        return _indeterminate("no governing plan resolved for this session")
 
     try:
         source = governing_plan_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return OpenSpineRowGate(applies=False, rows=(), open_count=0, warn_text=None, summary_line=_NOT_APPLICABLE_SUMMARY)
+        return _indeterminate(f"governing plan {governing_plan_slug} could not be read")
 
     result = load_rows(source)
+    if result.status is LocateStatus.MALFORMED:
+        return _indeterminate(f"governing plan {governing_plan_slug} has a malformed plan-tasks spine")
     if result.status is not LocateStatus.LOCATED:
-        return OpenSpineRowGate(applies=False, rows=(), open_count=0, warn_text=None, summary_line=_NOT_APPLICABLE_SUMMARY)
+        return OpenSpineRowGate(
+            applies=False, rows=(), open_count=0, warn_text=None,
+            summary_line=_NOT_APPLICABLE_SUMMARY, verdict="not-applicable",
+        )
 
     projection = spine_projection(result.rows)
     open_rows = projection["open"]
     if not open_rows:
-        return OpenSpineRowGate(applies=False, rows=(), open_count=0, warn_text=None, summary_line=_NOT_APPLICABLE_SUMMARY)
+        return OpenSpineRowGate(
+            applies=False, rows=(), open_count=0, warn_text=None,
+            summary_line=_NOT_APPLICABLE_SUMMARY, verdict="not-applicable",
+        )
 
     items = tuple(
         SpineRowItem(
@@ -183,7 +240,8 @@ def compute_open_spine_row_gate(
     if not unwaived:
         summary_line = f"Open spine rows: {len(items)} open on {governing_plan_slug} — all waived"
         return OpenSpineRowGate(
-            applies=True, rows=items, open_count=len(items), warn_text=None, summary_line=summary_line
+            applies=True, rows=items, open_count=len(items), warn_text=None,
+            summary_line=summary_line, verdict="applicable",
         )
 
     row_lines = "\n".join(f"  - {it.id} — {it.title}" for it in unwaived)
@@ -195,5 +253,6 @@ def compute_open_spine_row_gate(
     )
     summary_line = f"Open spine rows: {len(unwaived)} still open on {governing_plan_slug} — WARN emitted"
     return OpenSpineRowGate(
-        applies=True, rows=items, open_count=len(items), warn_text=warn_text, summary_line=summary_line
+        applies=True, rows=items, open_count=len(items), warn_text=warn_text,
+        summary_line=summary_line, verdict="applicable",
     )

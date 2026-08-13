@@ -48,6 +48,10 @@ import coordinator_core.claim_state as claim_state_mod
 from coordinator_core.ops.ceremony.branch_resolution import _sanitize_consumed_handoffs
 from coordinator_core.ops.ceremony.resolver import detect_git_provenance_consumed
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SID = "sess-c4-own"
 _FOREIGN_LIVE_SID = "sess-c4-foreign-live"
 
@@ -64,6 +68,16 @@ def _git(args, cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _init_repo_with_origin(tmp_path: Path) -> Path:
+    """Init a real, seeded work repo with a pushed bare origin.
+
+    Confirmed load-bearing (2026-08-13, C-HAZARD reframe attempt): NOT
+    copy-paste cruft -- `detect_git_provenance_consumed`'s Detector B scans
+    ``git log $(git merge-base origin/main HEAD)..HEAD`` (resolver.py), so
+    an `origin/main` remote-tracking ref genuinely must exist and be
+    resolvable, which requires a real bare origin plus a push. Verified by
+    downgrading this helper to drop the bare+push and observing 3/5 tests in
+    this file fail on the merge-base resolution, then reverting.
+    """
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-b", "main"], root)

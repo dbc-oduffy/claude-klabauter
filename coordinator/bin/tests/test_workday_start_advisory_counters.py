@@ -34,6 +34,16 @@ from pathlib import Path
 
 import pytest
 
+# Declared, not excused: 3 of this file's tests (test_local_ahead_*) spawn a real git
+# process because the property under test is git's own ahead-count/no-origin
+# resolution against a real branch/remote, which no mock stands in for. Each builds
+# its own small repo (3-9 git calls) exercising a genuinely different branch/remote
+# scenario, so there is no shared state to hoist to module scope without conflating
+# those scenarios. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
+# and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).parent.parent
 
 

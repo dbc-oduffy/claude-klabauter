@@ -349,10 +349,8 @@ def _advisory_reason(cmd: str, name: str) -> str:
         "  Command:  %s\n\n"
         "Use instead: create or switch to your canonical daily branch: "
         "`git checkout -b %s`, or use a sanctioned longlived prefix if this "
-        "is genuinely longlived work.\n\n"
-        "If this really needs a differently-shaped branch name, that is a "
-        "policy question for the PM/EM, not something a Bash call can "
-        "grant itself."
+        "is genuinely longlived work. A differently-shaped name is a "
+        "PM/EM call."
     ) % (name, cmd_safe, canonical)
 
 

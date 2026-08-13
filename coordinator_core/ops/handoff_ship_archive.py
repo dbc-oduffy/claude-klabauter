@@ -37,12 +37,19 @@ for the full mechanism and its accepted (not eliminated) absorption window.
 Graceful partial outcome (this is a FEATURE, not an error): if shipped_in is neither
 supplied nor already present, step 2 still stamps deployment_state:shipped (closing the
 Bug-2 "shipped work never marked terminal" gap) while step 3 skips archival with
-reason "terminality-drift: shipped_in ... " — the handoff is now terminal-marked and
-the next boot_sweep / on-demand call will archive it once a shipped_in lands. On THIS
-branch, unlike the archived outcome above, the deployment_state:shipped frontmatter
-mutation is left UNCOMMITTED in the working tree — there is no archival commit this
-call to carry it — pending a later archival pass (boot_sweep or a subsequent
-ship_and_archive call once a shipped_in lands).
+reason "terminality-drift: shipped_in ... " — the handoff is now terminal-marked. On
+THIS branch, unlike the archived outcome above, the deployment_state:shipped
+frontmatter mutation is left UNCOMMITTED in the working tree — there is no archival
+commit this call to carry it. Per the disk/HEAD drift guard in archive_and_commit
+(coordinator_core/ops/fleet/_common.py, commit 4541069c3), a batch session.boot_sweep
+pass CANNOT archive it from this state: its restage_src=False call would re-verify
+terminality against fresh disk content but git-mv from the HEAD-seeded private index,
+so the guard refuses the move rather than commit HEAD's stale pre-stamp blob. The
+stamp must first be COMMITTED (by any means) before boot_sweep's batch path can act
+on it. The only call that tolerates a fresh, still-uncommitted stamp on THIS handoff
+is a SUBSEQUENT handoff.ship_and_archive call once a shipped_in lands — its own step 3
+passes restage_src=True, which stages src's on-disk content immediately before the
+move so the stamp rides into that call's own archival commit.
 
 Self-registration: importing this module fires register_op("handoff.ship_and_archive").
 Add to coordinator_core/ops/__init__.py and register its scope ("common_dir") in

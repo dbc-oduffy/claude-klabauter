@@ -198,20 +198,11 @@ _DENY_MSG_TEMPLATE = (
 
 
 _REROUTE_NOTICE = (
-    "FOREGROUND AGENT DISPATCH AUTO-REROUTED TO BACKGROUND — this dispatch was rewritten "
-    "with `run_in_background: true` and is running now; its result will arrive as a task "
-    "notification rather than inline. Coordinator default is backgrounded dispatch: a "
-    "foreground subagent does not merely cost time, it LOCKS THE EM IN PLACE. With one "
-    "outstanding you cannot issue the rest of your wave, reconcile plans, or answer the PM "
-    "until it finishes or the PM manually backgrounds it (ctrl+b) — so a single foreground "
-    "dispatch stalls every other dispatch you intended to make alongside it. "
-    "Escape hatch for rare legitimate foreground (inline result needed for the very "
-    "next statement): touch "
-    ".git/coordinator-sessions/{session_id}/.foreground-ok "
-    "— with that sentinel present, foreground dispatches pass through unrewritten for the "
-    "rest of the session. "
-    "This notice fires on every reroute, not just the first — a silenced notice is exactly "
-    "how a broken reroute went undetected for a whole session before (2026-07-30). "
+    "FOREGROUND AGENT DISPATCH AUTO-REROUTED TO BACKGROUND — rewritten with "
+    "`run_in_background: true`; result is a task notification, not inline. "
+    "Locks the EM till backgrounded. "
+    "Escape hatch: touch .git/coordinator-sessions/{session_id}/.foreground-ok — "
+    "persists for session, firing till then. "
     "Doctrine: coordinator/snippets/em-operating-doctrine.md § How to Dispatch."
 )
 

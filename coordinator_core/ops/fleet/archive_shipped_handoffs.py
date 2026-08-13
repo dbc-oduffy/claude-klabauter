@@ -51,6 +51,8 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import (
     Move,
     _make_git_env,
+    _is_identical_duplicate,
+    _REASON_DEST_CONFLICT,
     archive_and_commit,
     build_act_result,
     build_dry_run_result,
@@ -330,12 +332,23 @@ async def _handle_act(
             continue
 
         dst = handoff_archive_dest(worktree_root, handoff_path)
-        # Review: code-reviewer F3 — dst.exists() guard: consistent with C3's pattern;
-        # closes reversal-failure edge case where dst is present but uncommitted.
+        force = False
         if dst.exists():
-            skipped.append({"id": cid, "reason": "already-archived"})
-            continue
-        moves.append(Move(src=handoff_path, dst=dst, candidate_id=cid, restage_src=restage_src))
+            if not _is_identical_duplicate(handoff_path, dst):
+                _LOG.warning(
+                    "archive_shipped_handoffs: %s NOT archived — a DIFFERENT file already "
+                    "occupies the archive destination %s. Reconcile the two copies before "
+                    "the next sweep.",
+                    cid,
+                    rel_id(dst, worktree_root),
+                )
+                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
+                continue
+            # Byte-identical duplicate delivery: converge by archiving over it.
+            force = True
+        moves.append(
+            Move(src=handoff_path, dst=dst, candidate_id=cid, restage_src=restage_src, force=force)
+        )
 
     if moves:
         n = len(moves)

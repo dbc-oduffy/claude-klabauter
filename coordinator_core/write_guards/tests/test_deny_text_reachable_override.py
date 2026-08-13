@@ -74,7 +74,6 @@ SSOT (`coordinator_core/bash_guards/_helpers.py`).
 from __future__ import annotations
 
 import os
-import re
 
 import pytest
 
@@ -95,6 +94,12 @@ from coordinator_core.write_guards import (
     nudge_improvement_queue_write,
     validate_frontmatter_schema_deny as schema_deny,
 )
+
+#: Synthetic well-formed envelope (both agent legs empty) for the standalone
+#: deny-text-builder assertions below, which have no real payload in scope --
+#: matches the shape D1 resolves as EM audience, same as the `payload` dicts
+#: the check()-entry-point tests in this file already construct.
+_EM_SHAPED_PAYLOAD = {"tool_name": "Write", "tool_input": {}}
 
 
 @pytest.fixture(autouse=True)
@@ -129,43 +134,43 @@ def test_block_em_hand_edit_pending_review_integration_deny_reason():
         "docs/plans/2026-07-01-example.md", "state/subagent-share/x/y.md"
     )
     assert_render_carries_reachability_constraint(rendered, context="block_em_hand_edit_pending_review_integration._deny_reason")
-    assert operator_override_note(block_review_pending._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_review_pending._OVERRIDE_ENV_VAR, payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 def test_block_illegal_filename_make_deny_msg():
     rendered = block_illegal_filename._make_deny_msg("bad:name.md", ":")
     assert_render_carries_reachability_constraint(rendered, context="block_illegal_filename._make_deny_msg")
-    assert operator_override_note(block_illegal_filename._OVERRIDE_ENV) in rendered
+    assert operator_override_note(block_illegal_filename._OVERRIDE_ENV, payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 def test_block_subagent_archive_write_deny_reason():
     rendered = block_subagent_archive_write._deny_reason("agent-123", "archive/foo.md")
     assert_render_carries_reachability_constraint(rendered, context="block_subagent_archive_write._deny_reason")
-    assert operator_override_note(block_subagent_archive_write._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_subagent_archive_write._OVERRIDE_ENV_VAR, payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 def test_block_subagent_plan_body_write_deny_reason_ambiguous():
     rendered = block_subagent_plan_body_write._deny_reason_ambiguous("agent-123", "docs/plans/x.md")
     assert_render_carries_reachability_constraint(rendered, context="block_subagent_plan_body_write._deny_reason_ambiguous")
-    assert operator_override_note(block_subagent_plan_body_write._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_subagent_plan_body_write._OVERRIDE_ENV_VAR, payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 def test_block_subagent_plan_body_write_deny_reason_executor():
     rendered = block_subagent_plan_body_write._deny_reason_executor("agent-123", "docs/plans/x.md")
     assert_render_carries_reachability_constraint(rendered, context="block_subagent_plan_body_write._deny_reason_executor")
-    assert operator_override_note(block_subagent_plan_body_write._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_subagent_plan_body_write._OVERRIDE_ENV_VAR, payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 def test_block_unauthorized_claude_md_write_deny_reason():
     rendered = block_unauthorized_claude_md_write._deny_reason("agent-123", "CLAUDE.md")
     assert_render_carries_reachability_constraint(rendered, context="block_unauthorized_claude_md_write._deny_reason")
-    assert operator_override_note(block_unauthorized_claude_md_write._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_unauthorized_claude_md_write._OVERRIDE_ENV_VAR, payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 def test_validate_frontmatter_schema_deny_own_inbox_message():
     rendered = schema_deny._own_inbox_deny_message("this-em", "other-em")
     assert_render_carries_reachability_constraint(rendered, context="validate_frontmatter_schema_deny._own_inbox_deny_message")
-    assert operator_override_note("COORDINATOR_OVERRIDE_OWN_INBOX") in rendered
+    assert operator_override_note("COORDINATOR_OVERRIDE_OWN_INBOX", payload=_EM_SHAPED_PAYLOAD) in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +188,7 @@ def test_block_completion_monolith_write_check_deny():
     assert result is not None
     rendered = result["hookSpecificOutput"]["additionalContext"]
     assert_render_carries_reachability_constraint(rendered, context="block_completion_monolith_write.check")
-    assert operator_override_note(block_completion_monolith_write._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_completion_monolith_write._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
 
 def test_block_priority_ledger_edit_check_deny():
@@ -195,7 +200,7 @@ def test_block_priority_ledger_edit_check_deny():
     assert result is not None
     rendered = result["hookSpecificOutput"]["additionalContext"]
     assert_render_carries_reachability_constraint(rendered, context="block_priority_ledger_edit.check")
-    assert operator_override_note(block_priority_ledger_edit._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_priority_ledger_edit._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
 
 def test_block_tracker_edit_check_deny():
@@ -207,7 +212,7 @@ def test_block_tracker_edit_check_deny():
     assert result is not None
     rendered = result["hookSpecificOutput"]["additionalContext"]
     assert_render_carries_reachability_constraint(rendered, context="block_tracker_edit.check")
-    assert operator_override_note(block_tracker_edit._OVERRIDE_ENV_VAR) in rendered
+    assert operator_override_note(block_tracker_edit._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +234,13 @@ def test_block_tracker_edit_check_deny():
 # ---------------------------------------------------------------------------
 
 
-def test_nudge_improvement_queue_write_deny_carries_override_note():
+def test_nudge_improvement_queue_write_deny_omits_the_override_note():
+    """Inverted (was: `..._deny_carries_override_note`). This payload has no
+    `agent_id`/`subagent_type` in scope, so `resolves_em_audience` resolves
+    False (2026-08-13 audience-gate default inversion) -- `operator_override_note`
+    now renders `""` for it, and the deny text must carry no trace of an
+    unlock route at all: no env-var name, no "unsettable" doc-pointer
+    sentence, no re-run instruction."""
     payload = {
         "tool_name": "Write",
         "tool_input": {
@@ -241,47 +252,28 @@ def test_nudge_improvement_queue_write_deny_carries_override_note():
     assert result is not None
     rendered = result["hookSpecificOutput"]["additionalContext"]
     env_var = nudge_improvement_queue_write._ESCAPE_HATCH_ENV_VAR
-    assert (
-        operator_override_note(env_var, reason_placeholder="<one-sentence reason>")
-        in rendered
-    )
+    assert operator_override_note(env_var, payload=payload, reason_placeholder="<one-sentence reason>") == ""
     assert "re-run the write" not in rendered
-    assert "unsettable from inside this session" in rendered
-    # Shape must be reason-shaped (an "e.g. ..." example, no assignment) not
-    # flag-shaped (VAR=1) -- "1" is denylisted by this guard's own
-    # _is_trivial_reason, so a VAR=1 remediation would be refused by the very
-    # guard printing it (the P1 bug this test exists to catch). 2026-08-11
-    # reshape: neither shape renders an assignment at all anymore (see
-    # operator_override_note's own NEGATIVE SPEC 4), so this also pins the
-    # broader invariant.
+    assert "unsettable from inside this session" not in rendered
+    assert env_var not in rendered
     assert "%s=1" % env_var not in rendered
     assert "%s=" % env_var not in rendered
 
 
-def test_nudge_improvement_queue_write_override_note_round_trips_through_own_guard():
-    """Not a string-match against the same buggy string (the tautology the
-    reviewer flagged in the prior version of this gate) -- extracts the
-    literal value this guard PRINTS as its remediation and feeds it back
-    through the guard's OWN acceptance predicate (`_is_trivial_reason`),
-    proving the printed remediation is one this guard would actually accept.
-    This is exactly the check that would have caught the original bug
-    (`COORDINATOR_QUEUE_PUNT=1` rejected by the guard's own trivial-value
-    denylist)."""
+def test_nudge_improvement_queue_write_override_note_is_inert_for_this_payload_shape():
+    """Inverted (was: `..._override_note_round_trips_through_own_guard`).
+    The old round-trip check assumed `_EM_SHAPED_PAYLOAD` resolves EM
+    audience -- stale under the 2026-08-13 audience-gate default inversion
+    (absence of a real envelope now degrades to NOT-EM, not EM). Positively
+    asserts what is true today: `operator_override_note` returns the empty
+    string for this payload shape regardless of `reason_placeholder`,
+    proving the parameter is inert here and no route is offered -- there is
+    no printed value left to round-trip through `_is_trivial_reason`."""
     env_var = nudge_improvement_queue_write._ESCAPE_HATCH_ENV_VAR
-    rendered = operator_override_note(env_var, reason_placeholder="<one-sentence reason>")
-    # 2026-08-11 reshape: the reason-shaped render no longer prints
-    # `VAR="<placeholder>"` (no assignment form at all, see
-    # operator_override_note's own NEGATIVE SPEC 4) -- the placeholder is
-    # instead rendered as a bare, non-assignment example: `(reason, e.g.
-    # "<placeholder>")`. Extract from that shape instead.
-    match = re.search(r'e\.g\. "([^"]*)"', rendered)
-    assert match is not None, 'expected a reason-shaped (reason, e.g. "...") mention in the rendered note'
-    printed_value = match.group(1)
-    assert not nudge_improvement_queue_write._is_trivial_reason(printed_value), (
-        "the printed remediation value %r is rejected by this guard's own "
-        "_is_trivial_reason -- same defect class as the VAR=1 bug this "
-        "round-trip test exists to catch" % printed_value
-    )
+    flag_shaped = operator_override_note(env_var, payload=_EM_SHAPED_PAYLOAD)
+    reason_shaped = operator_override_note(env_var, payload=_EM_SHAPED_PAYLOAD, reason_placeholder="<one-sentence reason>")
+    assert flag_shaped == ""
+    assert reason_shaped == ""
 
 
 def test_nudge_improvement_queue_write_justification_field_allows_write():
@@ -331,7 +323,12 @@ def test_nudge_improvement_queue_write_legacy_prose_justification_line_allows_ed
     assert nudge_improvement_queue_write.check(payload) is None
 
 
-def test_nudge_baton_body_bar_advisory_does_not_instruct_rerun():
+def test_nudge_baton_body_bar_advisory_omits_the_override_note():
+    """Inverted (was: `..._advisory_does_not_instruct_rerun`, which asserted
+    the note WAS present). Same audience-gate reasoning as the
+    `nudge_improvement_queue_write` sibling above: this payload resolves
+    NOT-EM, so `operator_override_note` renders `""` and the advisory text
+    must carry no trace of an unlock route."""
     payload = {
         "tool_name": "Write",
         "tool_input": {
@@ -344,33 +341,19 @@ def test_nudge_baton_body_bar_advisory_does_not_instruct_rerun():
     rendered = result["hookSpecificOutput"]["additionalContext"]
     env_var = nudge_baton_body_bar._ESCAPE_HATCH_ENV_VAR
     assert "re-run the write" not in rendered
-    assert (
-        operator_override_note(env_var, reason_placeholder="<one-sentence reason>")
-        in rendered
-    )
-    assert "unsettable from inside this session" in rendered
+    assert operator_override_note(env_var, payload=payload, reason_placeholder="<one-sentence reason>") == ""
+    assert "unsettable from inside this session" not in rendered
+    assert env_var not in rendered
     assert "%s=1" % env_var not in rendered
     assert "%s=" % env_var not in rendered
 
 
-def test_nudge_baton_body_bar_override_note_round_trips_through_own_guard():
-    """Round-trip sibling of
-    `test_nudge_improvement_queue_write_override_note_round_trips_through_own_guard`
-    -- same P1 defect class, same guard-shaped acceptance-predicate check,
-    for `COORDINATOR_BATON_BODY_PUNT`'s independently-owned trivial-reason
-    predicate."""
+def test_nudge_baton_body_bar_override_note_is_inert_for_this_payload_shape():
+    """Inverted sibling of
+    `test_nudge_improvement_queue_write_override_note_is_inert_for_this_payload_shape`
+    -- same audience-gate reasoning, for `COORDINATOR_BATON_BODY_PUNT`."""
     env_var = nudge_baton_body_bar._ESCAPE_HATCH_ENV_VAR
-    rendered = operator_override_note(env_var, reason_placeholder="<one-sentence reason>")
-    # 2026-08-11 reshape: the reason-shaped render no longer prints
-    # `VAR="<placeholder>"` (no assignment form at all, see
-    # operator_override_note's own NEGATIVE SPEC 4) -- the placeholder is
-    # instead rendered as a bare, non-assignment example: `(reason, e.g.
-    # "<placeholder>")`. Extract from that shape instead.
-    match = re.search(r'e\.g\. "([^"]*)"', rendered)
-    assert match is not None, 'expected a reason-shaped (reason, e.g. "...") mention in the rendered note'
-    printed_value = match.group(1)
-    assert not nudge_baton_body_bar._is_trivial_reason(printed_value), (
-        "the printed remediation value %r is rejected by this guard's own "
-        "_is_trivial_reason -- same defect class as the VAR=1 bug this "
-        "round-trip test exists to catch" % printed_value
-    )
+    flag_shaped = operator_override_note(env_var, payload=_EM_SHAPED_PAYLOAD)
+    reason_shaped = operator_override_note(env_var, payload=_EM_SHAPED_PAYLOAD, reason_placeholder="<one-sentence reason>")
+    assert flag_shaped == ""
+    assert reason_shaped == ""

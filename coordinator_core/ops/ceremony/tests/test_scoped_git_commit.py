@@ -41,6 +41,8 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness
 from coordinator_core.session import scope as session_scope
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(args, cwd) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)

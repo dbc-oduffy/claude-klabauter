@@ -170,7 +170,7 @@ def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
     return cmd.replace("\r", "")
 
 
-def _advisory() -> Dict[str, Any]:
+def _advisory(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Advisory-only envelope (never a deny -- see module docstring "Never
     denies"). Leads with the alternative per design-as-offers: the
     PowerShell tool takes the script verbatim, so naming it first is the
@@ -191,7 +191,7 @@ def _advisory() -> Dict[str, Any]:
         "powershell-via-bash: double-quoted inline script contains `$` -- "
         "bash will silently expand it first. Use the `PowerShell` tool "
         "instead (verbatim, no bash seam), or single-quote the script. %s"
-        % operator_override_note(_OVERRIDE_ENV_VAR),
+        % operator_override_note(_OVERRIDE_ENV_VAR, payload=payload),
     )
 
 
@@ -225,4 +225,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not _UNESCAPED_DOLLAR_RE.search(match.group("body")):
         return None  # double-quoted, but nothing bash would expand
 
-    return _advisory()
+    return _advisory(payload=payload)

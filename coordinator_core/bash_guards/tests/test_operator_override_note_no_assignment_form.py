@@ -54,7 +54,9 @@ _ASSIGNMENT_RE = re.compile(r"\bCOORDINATOR_[A-Z0-9_]+=")
 
 
 def test_flag_shaped_render_has_no_assignment_form():
-    note = operator_override_note("COORDINATOR_ALLOW_NO_ASSIGNMENT_CHECK")
+    note = operator_override_note(
+        "COORDINATOR_ALLOW_NO_ASSIGNMENT_CHECK", payload={"session_id": "sess-c1d-em"}
+    )
     assert not _ASSIGNMENT_RE.search(note), (
         "operator_override_note() (flag-shaped, default) rendered a pasteable "
         "KEY= assignment -- got: %r" % note
@@ -65,6 +67,7 @@ def test_flag_shaped_render_has_no_assignment_form():
 def test_reason_placeholder_render_has_no_assignment_form():
     note = operator_override_note(
         "COORDINATOR_QUEUE_PUNT_NO_ASSIGNMENT_CHECK",
+        payload={"session_id": "sess-c1d-em"},
         reason_placeholder="not now, doing X",
     )
     assert not _ASSIGNMENT_RE.search(note), (
@@ -85,10 +88,14 @@ def test_key_is_not_named_in_either_render_path():
     (``OVERRIDE_KEYS_DOC``), not the per-firing message -- see
     ``test_operator_override_note_retains_affordances.py`` for the pointer
     coverage that replaces it."""
-    flag_note = operator_override_note("COORDINATOR_ALLOW_BARE_NAME_CHECK")
+    flag_note = operator_override_note(
+        "COORDINATOR_ALLOW_BARE_NAME_CHECK", payload={"session_id": "sess-c1d-em"}
+    )
     assert "COORDINATOR_ALLOW_BARE_NAME_CHECK" not in flag_note
 
     reason_note = operator_override_note(
-        "COORDINATOR_QUEUE_PUNT_BARE_NAME_CHECK", reason_placeholder="why"
+        "COORDINATOR_QUEUE_PUNT_BARE_NAME_CHECK",
+        payload={"session_id": "sess-c1d-em"},
+        reason_placeholder="why",
     )
     assert "COORDINATOR_QUEUE_PUNT_BARE_NAME_CHECK" not in reason_note

@@ -32,11 +32,13 @@ Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (A
 
 sedge-03 s1 review follow-on evidence note (AC6/AC9, 2026-08-11): AC6's five-zombie check
 against the live `state/cockpit-emission.json` corpus was performed as a one-off manual
-run at implementation time, not by a standing automated test — the five real ids appear in
-this module's test suite only as literals inside hand-built fixture dicts. No test here
-loads the live corpus or runs `_compute_map`/`stamp` against it, so AC6 currently has no
-regression coverage; a corpus-backed test was deliberately not added because it would rot
-against corpus drift. AC9 (golden reconciliation): verified by inspection that this is a
+run at implementation time, not by a standing automated test at that point — the five real
+ids appeared in this module's test suite only as literals inside hand-built fixture dicts.
+This has since been closed: `test_sedge03_deliverable_status_liveness.py`'s
+`TestShapeA`/`TestShapeB`/`TestAC6RemainingZombies` cover all five ids against fixtures
+transcribed from the live corpus (revert-proven, 2026-08-13).
+
+AC9 (golden reconciliation): verified by inspection that this is a
 non-issue rather than an untested claim — `_handoff_phase` already mapped a `continued`
 handoff to `"in-progress"` before this change (it falls through the shipped/closed/
 abandoned checks to the default), and the bridge only changes which groups are marked in

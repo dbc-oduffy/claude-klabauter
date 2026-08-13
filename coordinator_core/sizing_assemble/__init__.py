@@ -274,6 +274,11 @@ DETENT_ENUM = (
     # answer the free, unmarked one. Now both answers leave a mark and only
     # one moves the size.
     "probe_raise_ask_scope_asserted",
+    # Appended per the breadth arm (cross-repo memo 2026-08-12-example-doctrine-repo-em-
+    # sizing-breadth-arm.md, adopted). Same append-at-the-end discipline as
+    # every widen above — never re-sort; order is load-bearing against example-doctrine-repo's
+    # EQUAL_VERSION_SHAPE_DRIFT gate.
+    "probe_raise_on_breadth",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
@@ -310,14 +315,32 @@ INTENT_SOURCE_ENUM = ("pm-verbatim", "em-elaborated")
 # negative-spec forbids.
 PRECEDENT_ENUM = ("shipped-before", "novel")
 
-# What a `--probe-signal raise` is actually based on: the ASK's scope, or the
-# SUBSTRATE's condition. These are different claims and only the first is a
-# size signal. Finding problems in the area you are about to touch does not make
-# the requested work bigger — in the motivating incident every one of four
-# scout_evidence items described the mirror's health (orphaned tests, a stray
-# allowlist row, an uncommitted backlog) and none described the ask, which
-# remained "commit and push".
-PROBE_RAISE_BASIS_ENUM = ("ask-scope", "substrate-condition")
+# What a `--probe-signal raise` is actually based on: the ASK's scope, the
+# SUBSTRATE's condition, or the touchpoint BREADTH. These are different claims
+# and only the first is a size signal. Finding problems in the area you are
+# about to touch does not make the requested work bigger — in the motivating
+# incident every one of four scout_evidence items described the mirror's
+# health (orphaned tests, a stray allowlist row, an uncommitted backlog) and
+# none described the ask, which remained "commit and push". `breadth` is the
+# third claim (cross-repo memo 2026-08-12-example-doctrine-repo-em-sizing-breadth-arm.md,
+# adopted into example-doctrine-repo's sizing SKILL.md § *A touchpoint count is not a depth
+# read*): a raise resting solely on "there are many sites" is a dispatch
+# SHAPE, not a size signal, and moving the notch on it is as untrue as
+# `substrate-condition` is. `breadth` is a typed claim of UNIFORM breadth —
+# sites that each need their own call, or that interact, are depth wearing a
+# count and size normally under `ask-scope`; the engine cannot see which, so
+# the EM applies that discriminator by choosing the value, same as it does
+# for `substrate-condition`.
+PROBE_RAISE_BASIS_ENUM = ("ask-scope", "substrate-condition", "breadth")
+
+# Detent name for each suppressing basis. `ask-scope` is deliberately absent —
+# it is the non-suppressing basis and is named via `probe_raise_ask_scope_
+# asserted` on a separate, unrelated predicate below. Total over exactly the
+# two bases `_apply_symmetric_resize` suppresses on.
+_PROBE_RAISE_SUPPRESSION_DETENT = {
+    "substrate-condition": "probe_raise_on_substrate_condition",
+    "breadth": "probe_raise_on_breadth",
+}
 
 # Appetite budget ceiling, expressed as the heaviest tshirt weight the
 # budget comfortably absorbs without the estimate being flagged as
@@ -535,9 +558,10 @@ def _apply_symmetric_resize(
     move one band up) — supplied by the caller's on-demand substrate probe.
     Assumes `probe_signal` was already validated by `_validate_probe_signal`.
 
-    A `raise` declared as `probe_raise_basis="substrate-condition"` is NOT
-    applied, and the third return element reports the suppression so the caller
-    can fire `probe_raise_on_substrate_condition`.
+    A `raise` declared as `probe_raise_basis="substrate-condition"` OR
+    `"breadth"` is NOT applied, and the third return element reports the
+    suppression so the caller can fire the matching detent
+    (`probe_raise_on_substrate_condition` / `probe_raise_on_breadth`).
 
     Why this one auto-suppresses when `boundary_in_notch="yes"` deliberately
     does NOT (module docstring's negative-spec): that negative-spec turns on
@@ -546,20 +570,27 @@ def _apply_symmetric_resize(
     which, so collapsing would resize on an UNREAD discriminator. Here the
     caller has already applied the discriminator by choosing the value:
     `substrate-condition` states, as a typed claim, that the raise rests on
-    the area's condition rather than the ask's scope, and the area's condition
-    is not a size signal by definition. Suppressing therefore resizes on a
-    READ discriminator, which is the sanctioned `_apply_symmetric_resize`
+    the area's condition rather than the ask's scope, and `breadth` states,
+    as a typed claim, that it rests on a count of UNIFORM touchpoints rather
+    than the ask's scope — in both cases the claimed basis is not a size
+    signal by definition. Suppressing therefore resizes on a READ
+    discriminator, which is the sanctioned `_apply_symmetric_resize`
     correction mechanism working as designed, not a Hard Gate violation — the
     SIZE changes and the route re-resolves from the table, exactly as
     § Hard Gate prescribes. An EM whose ask genuinely did grow says
     `ask-scope` and keeps the raise; that assertion is recorded and
-    falsifiable, which is the point."""
+    falsifiable, which is the point. `breadth` names UNIFORM breadth only —
+    non-uniform breadth (sites that each need their own call, or that
+    interact) is depth wearing a count and belongs under `ask-scope`, sizing
+    normally; the engine cannot tell the two apart, so this suppression
+    trusts the EM's choice of value exactly as it does for
+    `substrate-condition`."""
     if probe_signal is None:
         return tshirt, False, False
     if probe_signal == "collapse":
         resized = _step_tshirt(tshirt, -1)
         return resized, resized != tshirt, False
-    if probe_raise_basis == "substrate-condition":
+    if probe_raise_basis in ("substrate-condition", "breadth"):
         return tshirt, False, True
     resized = _step_tshirt(tshirt, +1)
     return resized, resized != tshirt, False
@@ -755,13 +786,16 @@ def route(
     if precedent == "shipped-before":
         detents.append("precedent_shipped_before")
 
-    # Raise-suppressed detent. Unlike every other advisory in this module, the
-    # substrate-condition answer DID change the size (the raise was not
+    # Raise-suppressed detent. Unlike every other advisory in this module, a
+    # suppressing basis answer DID change the size (the raise was not
     # applied) — see `_apply_symmetric_resize` for why that is a read
     # discriminator rather than an unread one. The route still comes from the
-    # table, so § Hard Gate holds.
+    # table, so § Hard Gate holds. Two bases suppress now (substrate-condition,
+    # breadth), so the detent NAME is selected from `probe_raise_basis` —
+    # total over the suppressing bases, since `raise_suppressed` alone can no
+    # longer disambiguate which one fired.
     if raise_suppressed:
-        detents.append("probe_raise_on_substrate_condition")
+        detents.append(_PROBE_RAISE_SUPPRESSION_DETENT[probe_raise_basis])
 
     # The symmetric mark on the OTHER answer. Advisory, and unlike its
     # counterpart it changes nothing — the raise it names has already been
@@ -977,6 +1011,16 @@ def route(
             "--probe-raise-basis ask-scope and name what the PM asked for that the "
             "original notch missed."
         )
+    elif "probe_raise_on_breadth" in detents:
+        next_move += (
+            f" NOTE (this one DID change the size): the probe raise was NOT applied — "
+            f"you declared it based on touchpoint breadth, not the ask's scope, so the "
+            f"estimate stands at {resized_tshirt}. A count of sites is a dispatch shape, "
+            "not a size signal, PROVIDED the sites are uniform — each needing the same "
+            "call, none interacting. If any site needs its own call, or sites interact, "
+            "that is depth wearing a count: re-run with --probe-raise-basis ask-scope and "
+            "name what the PM asked for that the original notch missed."
+        )
 
     if "probe_raise_ask_scope_asserted" in detents:
         next_move += (
@@ -1046,7 +1090,7 @@ def _usage(prog: str) -> int:
         "[--scout-evidence <str> ...] "
         "[--intent <str>] [--intent-source pm-verbatim|em-elaborated] "
         "[--precedent shipped-before|novel] "
-        "[--probe-raise-basis ask-scope|substrate-condition]",
+        "[--probe-raise-basis ask-scope|substrate-condition|breadth]",
         file=__import__("sys").stderr,
     )
     return EXIT_USAGE

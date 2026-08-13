@@ -30,6 +30,8 @@ import pytest
 from coordinator_core.ops import workweek_trail_scope
 from coordinator_core.ops.workweek_trail_scope import main
 
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Fixture helpers — mirror the bash oracle's _make_fixture / _add_commit.

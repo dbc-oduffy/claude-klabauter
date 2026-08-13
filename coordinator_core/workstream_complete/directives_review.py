@@ -216,6 +216,7 @@ def decide_review_scale(
     chain_disposition: str,
     chain_partition_verdict: Optional[str] = None,
     baton_count: Optional[int] = None,
+    commit_count_scope: Optional[str] = None,
 ) -> ReviewScaleDecision:
     """SKILL.md's diff-shape row-selection table (lines 415-424) plus its
     precedence rule (line 426, order 6 > 4 > 5 > 3 > 1 > 2): the big-diff
@@ -289,6 +290,34 @@ def decide_review_scale(
         implicit default) leaves every row selection byte-identical to
         before this input existed — the multiplier and the floor both
         no-op on `None`.
+      - `commit_count_scope` — SESSION-scoped, cosmetic-only (2026-08-12,
+        docs/plans/2026-08-12-review-mandate-guides-the-split.md C7,
+        example-market-data-repo-em memo `cross-repo/inbox/2026-08-12-market-
+        intelligence-em-brightline-peer-commit-count-second-instance.md`).
+        Names the scope `commit_count` was resolved under when it came from
+        a caller-supplied `decisions["commit_count"]` override rather than
+        this engine's own trailer-scoped measurement
+        (`_measure_session_review_scale_inputs`) — e.g. `"session-owned"`
+        when the EM attests the number is already session-scoped, or a
+        franker label when it is not. Never influences row SELECTION or the
+        brightline predicate itself: an override still wins unconditionally
+        over the measured value (that affordance is deliberately preserved,
+        `workstream-complete` SKILL.md documents it as available EM hand-
+        supply), and this parameter does not gate or validate the supplied
+        `commit_count` in any way. Its only effect is threading into row 4's
+        `reason` string (see `_row4_decision`) so an override's scope is
+        RECORDED on the review-trail record rather than silently trusted —
+        closing the reported failure mode where an EM read an unfiltered
+        branch-range count off the gate's own stdout and passed it through
+        with nothing on disk distinguishing that from a genuine session-
+        scoped measurement. `None` (every pre-2026-08-12 caller, and every
+        caller that left `commit_count` on the measured path) omits the
+        clause entirely — byte-identical to before this parameter existed.
+        An explicitly-supplied empty string collapses to the same
+        `"unspecified"` the caller's outright omission produces (the
+        resolution site's `... or "unspecified"` is falsy-coercing, not
+        `is None`-checking) — a caller cannot distinguish "I attested and
+        the scope is empty" from "I didn't attest" on the trail record.
 
     Producer/consumer seam (C5, 2026-08-03 plan
     docs/plans/2026-08-03-chain-end-review-scale-wiring.md, the Staff Engineer finding 2):
@@ -370,11 +399,12 @@ def decide_review_scale(
         multiplier_note = (
             f", baton_count={baton_count} multiplier applied" if baton_multiplier != 1 else ""
         )
+        scope_note = f", commit_count_scope={commit_count_scope}" if commit_count_scope is not None else ""
         return ReviewScaleDecision(
             row=4, scale="partitioned", partition_mandatory=True, commit_message_names_change=False,
             reason=(
                 f"big-diff brightline hit (code_loc={code_loc}, commits={commit_count}, "
-                f"surfaces={surface_count}{multiplier_note})"
+                f"surfaces={surface_count}{multiplier_note}{scope_note})"
             ),
         )
 

@@ -42,11 +42,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-from cc_invoke import resolve_engine_root  # noqa: E402
+from cc_invoke import require_engine_on_path  # noqa: E402
 
-_ENGINE_ROOT = str(resolve_engine_root(__file__))
-if _ENGINE_ROOT not in sys.path:
-    sys.path.insert(0, _ENGINE_ROOT)
+_ENGINE_ROOT = require_engine_on_path(__file__)
 
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 

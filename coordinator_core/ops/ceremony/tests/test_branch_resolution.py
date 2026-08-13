@@ -148,6 +148,8 @@ from coordinator_core.ops.ceremony.node_handlers import (
     STEP_B1,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 # ---------------------------------------------------------------------------
 # Test helpers

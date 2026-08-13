@@ -40,7 +40,9 @@ _SENTINEL_ENV_VAR = "COORDINATOR_ALLOW_EXAMPLE"
 
 
 def _note() -> str:
-    return operator_override_note(_SENTINEL_ENV_VAR)
+    return operator_override_note(
+        _SENTINEL_ENV_VAR, payload={"session_id": "sess-c1d-em"}
+    )
 
 
 def _doc_text() -> str:

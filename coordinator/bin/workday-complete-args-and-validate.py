@@ -135,9 +135,10 @@ def _current_machine() -> str:
     invoke Python from inside a Python-adjacent bash block. Since this CLI
     already runs under Python, that spawn collapses to a plain import.
 
-    Deliberately uses `resolve_engine_root` (raises RuntimeError with
-    remediation text on total miss), not `ensure_engine_on_path` (swallows to
-    None) — this function is unguarded by design; its only caller,
+    Deliberately uses `require_engine_on_path` (env-first ladder, raises
+    RuntimeError with remediation text on total miss), not
+    `ensure_engine_on_path` (swallows to None) — this function is unguarded by
+    design; its only caller,
     `cmd_check_cross_machine`, prints the raised exception's message verbatim
     to the operator, so a resolution failure must keep the "machine-local set
     repos.claude_klabauter ..." remediation text intact rather than degrading
@@ -145,9 +146,7 @@ def _current_machine() -> str:
     """
     import cc_invoke
 
-    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.machine_resolver import compute_machine
 
     return compute_machine()

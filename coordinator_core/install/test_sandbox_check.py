@@ -243,13 +243,13 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
     r, sandbox = run_all(coordinator_root_override=coordinator_root)
 
     assert not os.path.isdir(sandbox)
-    # example-doctrine-repo clone + coordinator/ dir + claude-doe wrapper checks must PASS.
-    assert any("example-doctrine-repo clone present" in line for line in r.lines)
-    assert any("example-doctrine-repo coordinator/ dir present" in line for line in r.lines)
+    # clone + coordinator/ dir + claude-doe wrapper checks must PASS.
+    assert any("clone present" in line for line in r.lines)
+    assert any("clone's coordinator/ dir present" in line for line in r.lines)
     assert any("claude-doe wrapper source present" in line for line in r.lines)
     assert any("claude-doe --dry-run emitted exec line with --plugin-dir" in line for line in r.lines)
     assert any(
-        "claude-doe --dry-run exec line references example-doctrine-repo coordinator dir" in line for line in r.lines
+        "claude-doe --dry-run exec line references clone's coordinator dir" in line for line in r.lines
     )
     # Native in-process pointer/shim/resolver calls must succeed even though
     # the example-doctrine-repo .sh bridges are absent from this fixture (the whole point of

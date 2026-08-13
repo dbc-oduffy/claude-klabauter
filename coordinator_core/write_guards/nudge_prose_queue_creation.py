@@ -167,9 +167,7 @@ def _extract_file_path(payload: Dict[str, Any]) -> str:
     return file_path if isinstance(file_path, str) else ""
 
 
-_REASON_TEMPLATE = """OFFER: New legacy queue files are invisible to records_query and downstream ceremonies (depth, triage, cockpit). Use instead: `coordinator-queue-append --schema {family}`, which writes `state/{family}/<date>-<slug>.yaml`.
-
-{override_note}"""
+_REASON_TEMPLATE = """OFFER: New legacy queue files are invisible to records_query and downstream ceremonies (depth, triage, cockpit). Use instead: `coordinator-queue-append --schema {family}`, which writes `state/{family}/<date>-<slug>.yaml`.{override_block}"""
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -225,9 +223,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         family = _family_from_basename(basename)
+        _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = _REASON_TEMPLATE.format(
             family=family,
-            override_note=operator_override_note(_OVERRIDE_ENV_VAR),
+            override_block=("\n\n" + _note if _note else ""),
         )
 
         return {

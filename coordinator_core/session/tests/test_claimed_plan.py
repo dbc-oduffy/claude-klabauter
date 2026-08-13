@@ -86,23 +86,51 @@ class TestListHeldPlanClaims:
             "2026-08-10T12:00:00+00:00",
         ]
 
-    def test_two_claims_one_missing_claimed_at_falls_back_to_name_order(
+    def test_two_claims_one_missing_claimed_at_orders_per_claim_not_set_wide(
         self, tmp_path, monkeypatch
     ):
+        """2026-08-13, sedge-15: this used to codify the SET-WIDE
+        alphabetical fallback (one claim missing `claimed_at` discarded the
+        ordering signal for the WHOLE set, including `plan-z`'s own known
+        timestamp). Per DR-291's precedent, brought onto the same per-claim
+        discipline: `plan-a` (unknown `claimed_at`, sorts via the high
+        sentinel) no longer drags `plan-z` (known `claimed_at`) down to name
+        order with it -- `plan-z` keeps outranking `plan-a` on its own
+        known timestamp, and only `plan-a`'s own position degrades."""
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
-        # `plan-z` has a claimed_at that would sort it FIRST temporally, but
-        # `plan-a` lacks one entirely -- no durable ordering signal exists
-        # for this set, so the documented name-order fallback applies
-        # instead, and this must not raise.
         _write_claim(
             sessions_dir, "2026-08-10-plan-z", "me-sid", "2026-08-10T01:00:00+00:00"
         )
         _write_claim(sessions_dir, "2026-08-10-plan-a", "me-sid", None)
         held = claimed_plan.list_held_plan_claims(str(tmp_path))
         assert [path for path, _ in held] == [
-            "docs/plans/2026-08-10-plan-a.md",
             "docs/plans/2026-08-10-plan-z.md",
+            "docs/plans/2026-08-10-plan-a.md",
+        ]
+
+    def test_per_claim_degradation_orders_known_timestamps_around_unknown(
+        self, tmp_path, monkeypatch
+    ):
+        """A THIRD claim with its own known `claimed_at`, earlier than
+        `plan-z`'s, still sorts ahead of both -- the unknown-timestamp claim
+        (`plan-a`) sorts LAST regardless of its name, proving the ordering is
+        per-claim (keyed on each claim's own evidence) rather than a
+        set-wide degrade-to-name-order fallback."""
+        sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
+        _set_sid(monkeypatch)
+        _write_claim(
+            sessions_dir, "2026-08-10-plan-z", "me-sid", "2026-08-10T05:00:00+00:00"
+        )
+        _write_claim(
+            sessions_dir, "2026-08-10-plan-b", "me-sid", "2026-08-10T01:00:00+00:00"
+        )
+        _write_claim(sessions_dir, "2026-08-10-plan-a", "me-sid", None)
+        held = claimed_plan.list_held_plan_claims(str(tmp_path))
+        assert [path for path, _ in held] == [
+            "docs/plans/2026-08-10-plan-b.md",
+            "docs/plans/2026-08-10-plan-z.md",
+            "docs/plans/2026-08-10-plan-a.md",
         ]
 
     def test_no_session_id_returns_empty_list(self, tmp_path, monkeypatch):

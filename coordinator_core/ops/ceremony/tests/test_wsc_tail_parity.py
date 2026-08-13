@@ -103,6 +103,8 @@ from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 from .fixtures.pipeline_result import make_pipeline_result
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _EM_DASH = " — "
 
 

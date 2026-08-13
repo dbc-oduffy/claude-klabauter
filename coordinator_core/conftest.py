@@ -178,6 +178,85 @@ except ImportError:  # pragma: no cover - defensive, see NEGATIVE SPEC above
 _REAL_USER_SITE = site.getusersitepackages()
 
 
+def _capture_real_doe_root() -> str:
+    """Resolve the sibling example-doctrine-repo checkout ONCE, at collection time, under
+    the real (un-quarantined) HOME — used ONLY to locate the manifest to copy
+    into a throwaway stub (see ``_STUB_DOE_ROOT`` below). The real path itself
+    is never seeded into a quarantined test's ``.doe-root`` pointer.
+
+    Same capture-before-quarantine shape as ``_REAL_USER_SITE`` above, for the
+    same class of reason. ``coordinator/bin/lib/coordinator_registry.py``
+    resolves its manifest (``coordinator/schemas/coordinator-registry.manifest
+    .json``, which DR-047 keeps in example-doctrine-repo while this repo owns the engine)
+    at IMPORT time, through a ladder whose every live rung is home-anchored:
+    the ``.doe-root`` pointer files, the marketplace-cache probe, the flat
+    plugin-layout probe, and the machine-local registry CLI all hang off
+    ``$HOME``/settings-home. Quarantining HOME therefore does not isolate that
+    module — it makes it unresolvable, and it fails loud with an
+    install-integrity ``FileNotFoundError`` at import. Every test that loads a
+    ``coordinator/bin/`` CLI (in-process via ``SourceFileLoader``, as
+    ``baton_assemble.apply._load_doc_new_module`` does, or as a spawned
+    subprocess inheriting this environment) dies before reaching its assertion.
+
+    Returns "" when nothing resolves — on a machine with no example-doctrine-repo checkout
+    the seeding below is skipped and behavior is unchanged.
+    """
+    try:
+        from coordinator_core.testing.doe_root import resolve_doe_root
+
+        root = resolve_doe_root()
+    except Exception:  # pragma: no cover - defensive; a broken resolver must not break collection
+        return ""
+    return root if root and os.path.isdir(root) else ""
+
+
+_REAL_DOE_ROOT = _capture_real_doe_root()
+
+_REAL_DOE_MANIFEST_RELPATH = os.path.join(
+    "coordinator", "schemas", "coordinator-registry.manifest.json"
+)
+
+
+def _build_stub_doe_root(base_dir: str) -> str:
+    """Build a throwaway example-doctrine-repo STUB under ``base_dir`` and return its path.
+
+    Copies only the one file quarantined tests actually need to READ —
+    ``coordinator/schemas/coordinator-registry.manifest.json`` — out of the
+    real checkout captured by ``_capture_real_doe_root`` above. Nothing else
+    from the real repo is copied or referenced.
+
+    This is the fix for a P1: seeding the REAL example-doctrine-repo path into a
+    quarantined test's ``.doe-root`` pointer made the manifest READ succeed,
+    but ``coordinator_registry.py::doe_root()`` is also the documented anchor
+    other call sites join WRITE targets onto (``state/lessons-outbox``,
+    ``state/improvement-queue``) — so any quarantined test that reached a
+    ``doe_root()``-anchored write path without its own override could write
+    into the LIVE sibling repo, the exact corruption class this fixture
+    exists to prevent. Pointing at a stub instead keeps the manifest read
+    working while making every write land inside the throwaway quarantine
+    dir — strictly more isolation than tests had before the real path was
+    ever seeded (``16e1c220c``), and strictly less exposure than the real
+    repo.
+
+    Returns "" if the real manifest cannot be located, mirroring
+    ``_capture_real_doe_root``'s graceful degradation — callers must treat an
+    empty return the same as "nothing to seed".
+    """
+    if not _REAL_DOE_ROOT:
+        return ""
+    real_manifest = os.path.join(_REAL_DOE_ROOT, _REAL_DOE_MANIFEST_RELPATH)
+    if not os.path.isfile(real_manifest):
+        return ""
+
+    import shutil
+
+    stub_root = os.path.join(base_dir, "example-doctrine-repo-stub")
+    stub_manifest = os.path.join(stub_root, _REAL_DOE_MANIFEST_RELPATH)
+    os.makedirs(os.path.dirname(stub_manifest), exist_ok=True)
+    shutil.copyfile(real_manifest, stub_manifest)
+    return stub_root
+
+
 @pytest.fixture(autouse=True)
 def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     """Redirect every home-resolution env var into a per-test throwaway dir.
@@ -276,6 +355,58 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # independently deriving the same temp-path heuristic correctly. See
     # `coordinator_core.install.substrate._refuse_machine_mutation`.
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+
+    # Make the throwaway home a FAITHFUL home rather than an empty one for the
+    # one read the quarantine would otherwise break outright: the `.doe-root`
+    # pointer that `coordinator_registry`'s import-time manifest bootstrap
+    # resolves through (see `_capture_real_doe_root` above for the mechanism).
+    # Seeded as a FILE inside the quarantine, not as a `REPO_EXAMPLE_DOCTRINE_REPO` env
+    # override: the env route outranks the machine-local registry in the
+    # ratified DR-071 precedence and would silently mask the rung a test is
+    # exercising, whereas the pointer file sits at the same rung a real install
+    # populates and leaves that precedence intact. Read-only plumbing — it
+    # restores no write access to the real home, so it does not reopen the
+    # live-machine-config-corruption hole this fixture exists to close.
+    #
+    # The pointer value itself is a THROWAWAY STUB (`_build_stub_doe_root`),
+    # never `_REAL_DOE_ROOT`. Seeding the real path here made the manifest
+    # read succeed but ALSO made `doe_root()` — the documented join-anchor
+    # other call sites use for WRITE targets (`state/lessons-outbox`,
+    # `state/improvement-queue`) — resolve to the live sibling checkout, so a
+    # quarantined test reaching a `doe_root()`-anchored write path without its
+    # own override could corrupt the real repo: exactly the class of bug this
+    # fixture exists to prevent. The stub carries only a copy of the one file
+    # a manifest read needs, so reads still succeed and every write instead
+    # lands inside this test's own throwaway quarantine directory.
+    #
+    # Both locations are written because a real install carries both and the
+    # reader (`coordinator/lib/read_doe_root_pointer.py`) tries them in this
+    # order: `${settings-home}/machine-local/.doe-root` (durable, DR-072) then
+    # `${CLAUDE_HOME:-$HOME}/.claude/.doe-root` (legacy fallback). Seeding only
+    # the first would leave any test that redirects COORDINATOR_SETTINGS_HOME
+    # on its own back at an unresolvable pointer.
+    stub_doe_root = _build_stub_doe_root(str(quarantine))
+    if stub_doe_root:
+        for pointer in (
+            quarantine / ".coordinator-claude-settings" / "machine-local" / ".doe-root",
+            quarantine / ".claude" / ".doe-root",
+        ):
+            pointer.parent.mkdir(parents=True, exist_ok=True)
+            pointer.write_text(stub_doe_root + "\n", encoding="utf-8")
+
+    # `_capture_real_doe_root`'s collection-time call resolved through
+    # `ops.coordinator_doe_root`, whose module-scope memo would otherwise hold
+    # the REAL checkout path for the rest of the process — a second resolver
+    # still handing out the live sibling repo under quarantine, which is the
+    # same corruption class the stub above exists to close. Dropping the memo
+    # per test forces every in-test resolution back through the quarantined
+    # environment.
+    try:
+        from coordinator_core.ops.coordinator_doe_root import _reset_doe_root_cache
+
+        _reset_doe_root_cache()
+    except ImportError:  # pragma: no cover - defensive, mirrors the capture helper
+        pass
 
     return quarantine
 

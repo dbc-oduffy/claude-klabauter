@@ -113,13 +113,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not _TRACKER_RE.search(file_path_norm):
             return None
 
+        _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = (
             "OFFER: Use instead:\n"
             "  edit the handoff's frontmatter (the source of truth), then run:\n"
             "    python3 coordinator/bin/render-handoff-tracker.py\n\n"
             f"  {file_path} is a generated render — a hand-edit here is overwritten "
-            "on the next render.\n\n"
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            "on the next render."
+            + ("\n\n" + _note if _note else "")
         )
 
         return {

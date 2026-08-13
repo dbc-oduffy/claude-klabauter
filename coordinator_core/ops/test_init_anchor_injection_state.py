@@ -44,7 +44,7 @@ def test_double_invocation_is_idempotent(monkeypatch):
 def test_unresolvable_doe_root_fails_loud(monkeypatch):
     monkeypatch.setattr(mod, "coordinator_doe_root", lambda: None)
 
-    with pytest.raises(RuntimeError, match="cannot resolve the example-doctrine-repo repo root"):
+    with pytest.raises(RuntimeError, match="cannot resolve the coordinator root"):
         mod._handler({})
 
 

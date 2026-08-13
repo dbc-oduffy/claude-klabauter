@@ -137,11 +137,9 @@ _BIN_DIR = os.path.dirname(_SCRIPT_DIR)
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 
-from cc_invoke import resolve_engine_root  # noqa: E402
+from cc_invoke import require_engine_on_path  # noqa: E402
 
-_ENGINE_ROOT = resolve_engine_root(__file__)
-if str(_ENGINE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ENGINE_ROOT))
+_ENGINE_ROOT = require_engine_on_path(__file__)
 
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel  # noqa: E402
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # noqa: E402

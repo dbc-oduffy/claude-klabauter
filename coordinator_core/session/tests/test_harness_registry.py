@@ -9,12 +9,41 @@ operator's real `~/.claude/sessions`.
 
 from __future__ import annotations
 
+import calendar
 import json
+import os
 import time
+from datetime import datetime, timezone
 
 import pytest
 
 from coordinator_core.session import harness_registry as hr
+
+# The UTC-vs-local distinction on the ctime leg is invisible on a
+# UTC-offset-0 runner (mktime == timegm there) — pin a non-UTC zone for
+# every test in this module so a regression to `time.mktime` fails loudly
+# regardless of the CI box's own zone. `time.tzset()` is POSIX-only (absent
+# on Windows); tests using it are skipped there rather than silently
+# passing on a zone they didn't actually pin.
+_HAS_TZSET = hasattr(time, "tzset")
+
+
+@pytest.fixture(autouse=True)
+def _pin_non_utc_timezone():
+    if not _HAS_TZSET:
+        yield
+        return
+    original = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/London"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original
+        time.tzset()
 
 
 def _write_record(sessions_dir, filename, session_id, pid, proc_start_ticks):
@@ -33,21 +62,65 @@ class TestFiletimeConversion:
         # this instant computed via (epoch + 11644473600) * 1e7.
         epoch = 1783929600.0
         ticks = _epoch_to_filetime_ticks(epoch)
-        assert hr._filetime_to_epoch(ticks) == pytest.approx(epoch, abs=1e-3)
+        assert hr._proc_start_to_epoch(ticks) == pytest.approx(epoch, abs=1e-3)
 
     def test_out_of_band_past_rejected(self):
         epoch = time.time() - hr._SANITY_BAND_PAST_SEC - 3600
         ticks = _epoch_to_filetime_ticks(epoch)
-        assert hr._filetime_to_epoch(ticks) is None
+        assert hr._proc_start_to_epoch(ticks) is None
 
     def test_out_of_band_future_rejected(self):
         epoch = time.time() + hr._SANITY_BAND_FUTURE_SEC + 3600
         ticks = _epoch_to_filetime_ticks(epoch)
-        assert hr._filetime_to_epoch(ticks) is None
+        assert hr._proc_start_to_epoch(ticks) is None
 
     def test_non_numeric_rejected(self):
-        assert hr._filetime_to_epoch("not-a-number") is None
-        assert hr._filetime_to_epoch(None) is None
+        assert hr._proc_start_to_epoch("not-a-number") is None
+        assert hr._proc_start_to_epoch(None) is None
+
+    def test_ctime_string_in_band_parses(self):
+        # procStart's ctime string is UTC (memo-confirmed, 37/37 live
+        # records) — build the fixture from gmtime, expect it to round-trip
+        # via timegm exactly. TZ is pinned non-UTC by the module fixture, so
+        # this fails if the implementation regresses to `time.mktime`.
+        epoch = int(time.time()) - 60
+        ctime_str = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch))
+        result = hr._proc_start_to_epoch(ctime_str)
+        assert result is not None
+        assert result == pytest.approx(epoch, abs=1e-6)
+        # The buggy local-time interpretation of the identical clock-face
+        # reading: on a non-UTC runner (pinned above) this must diverge from
+        # `result`, or this test isn't exercising the UTC-vs-local defect.
+        buggy = time.mktime(time.strptime(ctime_str, "%a %b %d %H:%M:%S %Y"))
+        assert result != pytest.approx(buggy, abs=1.0)
+
+    def test_iso8601_naive_string_parses(self):
+        # A naive ISO-8601 procStart is treated as UTC, not local time.
+        epoch = int(time.time()) - 60
+        iso_str = datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None).isoformat()
+        result = hr._proc_start_to_epoch(iso_str)
+        assert result is not None
+        assert result == pytest.approx(epoch, abs=1e-6)
+        # Buggy local-time interpretation of the same naive clock-face value.
+        naive = datetime.fromisoformat(iso_str)
+        buggy = time.mktime(naive.timetuple())
+        assert result != pytest.approx(buggy, abs=1.0)
+
+    def test_iso8601_aware_string_parses(self):
+        epoch = time.time() - 60
+        iso_str = datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+        result = hr._proc_start_to_epoch(iso_str)
+        assert result is not None
+        assert result == pytest.approx(epoch, abs=1.0)
+
+    def test_ctime_string_out_of_band_rejected(self):
+        epoch = time.time() - hr._SANITY_BAND_PAST_SEC - 3600
+        ctime_str = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch))
+        assert hr._proc_start_to_epoch(ctime_str) is None
+
+    def test_garbage_string_rejected(self):
+        assert hr._proc_start_to_epoch("not-a-date-or-number") is None
+        assert hr._proc_start_to_epoch("") is None
 
 
 class TestSnapshotAndLookup:
@@ -164,6 +237,28 @@ class TestSnapshotAndLookup:
         assert hr.snapshot() == {}
         assert hr.lookup("sess-zero") is None
         assert hr.lookup("sess-neg") is None
+
+
+class TestCtimeShapedRegistry:
+    def test_snapshot_parses_all_ctime_shaped_records(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        epoch_a = int(time.time()) - 60
+        epoch_b = int(time.time()) - 120
+        ctime_a = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch_a))
+        ctime_b = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch_b))
+        payload_a = {"sessionId": "sess-a", "pid": 1, "procStart": ctime_a}
+        payload_b = {"sessionId": "sess-b", "pid": 2, "procStart": ctime_b}
+        (sessions_dir / "1.json").write_text(json.dumps(payload_a), encoding="utf-8")
+        (sessions_dir / "2.json").write_text(json.dumps(payload_b), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        result = hr.snapshot()
+        assert set(result) == {"sess-a", "sess-b"}
+        assert result["sess-a"].pid == 1
+        assert result["sess-a"].start_epoch == pytest.approx(epoch_a, abs=1.0)
+        assert result["sess-b"].pid == 2
+        assert result["sess-b"].start_epoch == pytest.approx(epoch_b, abs=1.0)
 
 
 class TestExceptionBoundary:

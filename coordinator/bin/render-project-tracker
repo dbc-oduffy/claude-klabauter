@@ -237,7 +237,23 @@ def _import_runner():
     return run_op_main
 
 
+_USAGE = (
+    "usage: render-project-tracker\n"
+    "\n"
+    "Renders docs/project-tracker.md from the current state/workstreams/\n"
+    "store (the sole writer of that file). Takes no arguments -- store root\n"
+    "and coordinator_root_path are both self-resolved (see this file's own\n"
+    "module comment). May refuse with exit 3 if the target tracker file is\n"
+    "frozen (see the underlying op's own frozen-tracker guard); that refusal\n"
+    "is a real app-level outcome, not a startup failure.\n"
+)
+
+
 def main() -> None:
+    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+        print(_USAGE, end="")
+        sys.exit(0)
+
     root = _resolve_store_root()
     coordinator_root_path = _resolve_coordinator_root_path(root)
 

@@ -63,10 +63,22 @@ tool lockout), and offers the real fix: hook commands must be
 machine-portable -- `${CLAUDE_PLUGIN_ROOT}` in this plugin's own
 `coordinator/hooks/hooks.json`, or the settings-home self-resolving form
 (`coordinator_core.install._shared.PORTABLE_HOOK_ROOT_EXPR`, claude-klabauter)
-for generated `settings.json` entries -- plus the recovery path for a session
-that is ALREADY wedged: the input-box `!` prefix bypasses PreToolUse hooks
-entirely (it is not a tool call), so a wedged session can still repair the
-file by hand.
+for generated `settings.json` entries.
+
+REMOVED (2026-08-13, C4a; plan
+docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
+docs/wiki/guard-messaging.md § Trichotomy) -- both deny renders used to
+close with "Wedged? `!` bypasses to hand-repair," naming the input-box `!`
+prefix's PreToolUse bypass. That clause operates on the GATE, not the
+GOAL -- a textbook BYPASS -- and B6 bans naming a BYPASS to ANY audience,
+not just a subagent one (`docs/wiki/guard-messaging.md` § Register: "an EM
+message may carry the wiki pointer and nothing else -- no key, no path, no
+command"; a bare `!`-bypass instruction is a command). Both deny functions
+now take `payload` (the PreToolUse envelope) and thread it from `check()`,
+mirroring `guard_doctrine_surface_edits._deny_reason` -- kept for shape
+parity with that sibling site and any future audience-conditional content,
+even though today's render is audience-invariant (the bypass clause is
+gone for every reader, not merely gated by resolved audience).
 
 Negative-spec
 -------------
@@ -213,24 +225,35 @@ def _deny(reason: str) -> Dict[str, Any]:
     }
 
 
-def _foreign_path_deny_reason(token: str) -> str:
+def _foreign_path_deny_reason(
+    token: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
+    """See module docstring "Deny message discipline" -- `payload` is
+    accepted and threaded from `check()` for shape parity with
+    `guard_doctrine_surface_edits._deny_reason`; today's render is
+    audience-invariant (no BYPASS clause survives for any reader)."""
+    del payload  # unused -- see module docstring's REMOVED note
     platform_name = "Windows" if _is_windows() else "POSIX"
     return (
         f"[settings.json guard] BLOCKED: {token!r} unresolvable on "
         f"{platform_name} -- a dead hook path locks out every tool.\n"
-        "Instead: `${CLAUDE_PLUGIN_ROOT}` or PORTABLE_HOOK_ROOT_EXPR. "
-        "Wedged? `!` bypasses to hand-repair."
+        "Instead: `${CLAUDE_PLUGIN_ROOT}` or PORTABLE_HOOK_ROOT_EXPR."
     )
 
 
-_HOOKS_DISABLED_DENY_REASON = (
-    "[settings.json guard] BLOCKED: `hooks` block while "
-    ".coordinator-hooks-disabled is present -- risks racing recovery or "
-    "reintroducing the corruption being repaired.\n"
-    "Instead: delete the marker first, then write the hooks block "
-    "separately. Wedged already? `!` in the input box bypasses PreToolUse "
-    "for hand-repair."
-)
+def _hooks_disabled_deny_reason(payload: Optional[Dict[str, Any]] = None) -> str:
+    """See module docstring "Deny message discipline" -- `payload` is
+    accepted and threaded from `check()` for shape parity with
+    `guard_doctrine_surface_edits._deny_reason`; today's render is
+    audience-invariant (no BYPASS clause survives for any reader)."""
+    del payload  # unused -- see module docstring's REMOVED note
+    return (
+        "[settings.json guard] BLOCKED: `hooks` block while "
+        ".coordinator-hooks-disabled is present -- risks racing recovery or "
+        "reintroducing the corruption being repaired.\n"
+        "Instead: delete the marker first, then write the hooks block "
+        "separately."
+    )
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -251,12 +274,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         token = _foreign_path_match(content)
         if token:
-            return _deny(_foreign_path_deny_reason(token))
+            return _deny(_foreign_path_deny_reason(token, payload))
 
         if _HOOKS_BLOCK_RE.search(content):
             marker = config_dir / _HOOKS_DISABLED_MARKER
             if marker.is_file():
-                return _deny(_HOOKS_DISABLED_DENY_REASON)
+                return _deny(_hooks_disabled_deny_reason(payload))
 
         return None
     except Exception:

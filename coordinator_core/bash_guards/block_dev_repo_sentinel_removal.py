@@ -132,11 +132,17 @@ def _evaluate(cmd: str, dialect: Optional[Dialect]):
     return _detector.evaluate(cmd, dialect)
 
 
-def _deny_reason(reason_kind: str, reason_class: str) -> str:
+def _deny_reason(
+    reason_kind: str,
+    reason_class: str,
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> str:
     # Deliberately does NOT echo `cmd` and does NOT name the target
     # basename -- same message-safety discipline as the sibling sentinel
     # guards (an eager agent reading its own bypass in a deny message
     # treats it as sanctioned).
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
         return (
@@ -147,32 +153,34 @@ def _deny_reason(reason_kind: str, reason_class: str) -> str:
             "interpreter/stdin/xargs wrapper) so this guard can see them, "
             "or, if this genuinely does not touch the dev-repo discriminant "
             "sentinel, ask the EM/PM to run it.\n\n"
-            "Detected shape: %s\n\n"
-            "%s" % (safe_shape, operator_override_note(_OVERRIDE_ENV_VAR))
-        )
+            "Detected shape: %s"
+            % (safe_shape,)
+        ) + ("\n\n%s" % _note if _note else "")
     return (
         "[dev-repo guard] BLOCKED: instead, confirm this removal/relocation "
-        "is intentional and use the override below -- this command would "
+        "is intentional and ask the EM/PM to run it -- this command would "
         "remove or relocate a file whose mere presence is the dev-vs-OSS "
         "discriminant this repo's tooling relies on; removing or moving it "
         "away from the repo root breaks that discriminant fleet-wide with "
         "no error at the moment of the move, only later, in an unrelated "
-        "session.\n\n"
-        "%s" % operator_override_note(_OVERRIDE_ENV_VAR)
-    )
+        "session."
+    ) + ("\n\n%s" % _note if _note else "")
 
 
-def _advisory_reason() -> str:
+def _advisory_reason(
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> str:
     # Deliberately short (Axis-A/prose-cap discipline) and never names the
     # target basename (message-safety discipline, same as `_deny_reason`)
     # -- covers both a direct-match input (formerly this guard's deny leg,
     # widened here into the sole advisory leg) and genuine indirection.
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     return (
         "[dev-repo guard] ADVISORY: not blocked. This command may remove "
         "or relocate the dev/OSS discriminant sentinel; recoverable by "
-        "hand -- if unintended, restore or recreate it.\n\n%s"
-        % operator_override_note(_OVERRIDE_ENV_VAR)
-    )
+        "hand -- if unintended, restore or recreate it."
+    ) + ("\n\n%s" % _note if _note else "")
 
 
 def _cmd_from_payload(payload: Dict[str, Any]) -> str:
@@ -226,7 +234,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(reason_kind, reason_class),
+            "permissionDecisionReason": _deny_reason(reason_kind, reason_class, payload=payload),
         }
     }
 
@@ -272,6 +280,6 @@ def check_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
-            "additionalContext": _advisory_reason(),
+            "additionalContext": _advisory_reason(payload=payload),
         }
     }

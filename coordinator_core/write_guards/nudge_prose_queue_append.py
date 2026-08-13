@@ -203,9 +203,7 @@ def _reconstruct_pre_and_post(
     return None
 
 
-_REASON_TEMPLATE = """Legacy queue. Append instead: `coordinator-queue-append --schema {family}`. Read instead: `records_query`. Migrate instead: `{transformer}`.
-
-{override_note}"""
+_REASON_TEMPLATE = """Legacy queue. Append instead: `coordinator-queue-append --schema {family}`. Read instead: `records_query`. Migrate instead: `{transformer}`.{override_block}"""
 
 _TRIVIAL_HINT = """
 [hook] {env_var} was set but the value was trivial ("1", "ok", "yes",
@@ -278,13 +276,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if punt_reason:
             hint = _TRIVIAL_HINT.format(env_var=_ESCAPE_HATCH_ENV_VAR)
 
+        _note = operator_override_note(
+            _ESCAPE_HATCH_ENV_VAR,
+            payload=payload,
+            reason_placeholder="repo not migrating yet, tracked separately",
+        )
         reason = _REASON_TEMPLATE.format(
             transformer=_TRANSFORMER_PATH,
             family=family,
-            override_note=operator_override_note(
-                _ESCAPE_HATCH_ENV_VAR,
-                reason_placeholder="repo not migrating yet, tracked separately",
-            ),
+            override_block=("\n\n" + _note if _note else ""),
         )
         if hint:
             reason = reason + "\n" + hint

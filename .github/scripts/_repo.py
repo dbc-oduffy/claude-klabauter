@@ -24,6 +24,7 @@ FILE ENUMERATION MUST WORK IN A ZERO-COMMIT REPO
 
 from __future__ import annotations
 
+import fnmatch
 import pathlib
 import subprocess
 
@@ -69,7 +70,53 @@ def _git_files(root: pathlib.Path) -> list[str] | None:
     return [p for p in result.stdout.split("\0") if p]
 
 
+def _parse_gitignore_fallback_patterns(root: pathlib.Path) -> tuple[set[str], list[str]]:
+    """Minimal, dependency-free ``.gitignore`` reader for the ``_walk_files``
+    fallback (a tree with no ``.git``, so ``git ls-files --exclude-standard``
+    is unavailable).
+
+    NOT a general gitignore engine -- deliberately covers only the two
+    pattern shapes this repo's own ``.gitignore`` actually uses: a bare
+    directory name (``state/``) and an unslashed basename glob (``*.bak``,
+    ``.DS_Store``). No negation (``!``), no ``**``, no anchored (``/foo``) or
+    nested-slash pattern. The git-aware path (``_git_files``, real gitignore
+    semantics via ``git ls-files --exclude-standard``) stays authoritative
+    whenever a real ``.git`` is present; this only closes the specific gap
+    where the fallback walk sees a git-less copy of a tree (e.g. a percolate
+    publish staging directory -- ``shutil.copytree`` excludes only ``.git``,
+    never gitignored content) whose own tracked ``.gitignore`` already
+    declares these paths unpublishable. Root cause + evidence:
+    state/audits/2026-08-13-persona-guard-staging-gitignore-gap.md.
+
+    Returns (dir_names, basename_patterns): directory names to exclude at
+    any depth, and basename glob patterns (``fnmatch``-compatible) to
+    exclude regardless of depth.
+    """
+    gitignore_path = root / ".gitignore"
+    dir_names: set[str] = set()
+    basename_patterns: list[str] = []
+    try:
+        lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return dir_names, basename_patterns
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("!") or "/" in line.rstrip("/"):
+            # Negation and anchored/nested patterns are out of scope for this
+            # minimal matcher -- unmatched entries simply are not filtered
+            # here (fail toward MORE scanning, never less).
+            continue
+        if line.endswith("/"):
+            dir_names.add(line[:-1])
+        else:
+            basename_patterns.append(line)
+    return dir_names, basename_patterns
+
+
 def _walk_files(root: pathlib.Path) -> list[str]:
+    ignored_dir_names, ignored_basename_patterns = _parse_gitignore_fallback_patterns(root)
     found: list[str] = []
     stack = [root]
     while stack:
@@ -82,10 +129,13 @@ def _walk_files(root: pathlib.Path) -> list[str]:
             if entry.is_symlink():
                 continue
             if entry.is_dir():
-                if entry.name not in SKIP_DIR_NAMES:
-                    stack.append(entry)
+                if entry.name in SKIP_DIR_NAMES or entry.name in ignored_dir_names:
+                    continue
+                stack.append(entry)
                 continue
             if entry.suffix in SKIP_SUFFIXES:
+                continue
+            if any(fnmatch.fnmatch(entry.name, pat) for pat in ignored_basename_patterns):
                 continue
             found.append(entry.relative_to(root).as_posix())
     return sorted(found)

@@ -25,6 +25,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coordinator_core.producer_vocab import ProducerOpIdentity
+
 from ..common import IsoDate, IsoDateTime
 from ..provenance import ContentHash, ProvenanceEnvelope
 from .deliverable_spine import DeliverableStatus, WorkstreamType
@@ -161,6 +163,27 @@ Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md
 """
 
 
+# ProducerOpIdentity is defined in coordinator_core.producer_vocab (imported
+# above) — a leaf module with no third-party imports, so that
+# session.producer_resolve can validate against it without pulling pydantic
+# and the cockpit-contract package onto the handoff-creation hot path. See
+# that module's docstring for the full machine-minted/hand-authored contract
+# (carried across verbatim from what used to live here).
+
+ProducerTypedCommand = Literal["other-command", "unresolved"]
+"""
+Named-literal half of `HandoffSummary.producer.typed_command`'s value space.
+The full field type is `ProducerTypedCommand | str | None`: a normalized
+coordinator slash-command name (plain `str`, the common case), `"other-
+command"` (a typed slash verb outside coordinator's own command set),
+`"unresolved"` (capture failed), or `None` (machine-minted with nothing
+typed this turn — distinct from `"unresolved"`: the field never even had a
+capture attempt).
+
+Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C6a.
+"""
+
+
 class ForeignOriginTriple(BaseModel):
     """
     A foreign-kind origin reference — for origin kinds whose artifacts are
@@ -185,6 +208,31 @@ class ForeignOriginTriple(BaseModel):
     """
     label: str
     """Human-readable display label for rendering without a back-lookup."""
+
+
+class _HandoffProducer(BaseModel):
+    """
+    Namespaced record of who/what produced a handoff, along two independent
+    axes. Both axes must round-trip, and the combination of the two must
+    keep three states distinguishable: "no ceremony ran" (`op_identity ==
+    "hand-authored"`), "session typed nothing this turn" (`typed_command ==
+    None`), and "the field stopped resolving" (`typed_command ==
+    "unresolved"`) — these must never collapse into a single null.
+
+    Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C6a.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    op_identity: ProducerOpIdentity
+    """Machine vs. human authorship. `hand-authored` has a truth-condition
+    independent of `typed_command` — it does not depend on what (if
+    anything) the session typed."""
+    typed_command: ProducerTypedCommand | str | None
+    """A normalized coordinator command name (plain `str`), `"other-
+    command"` (a typed slash verb outside coordinator's own set),
+    `"unresolved"` (capture failure), or `None` (machine-minted with
+    nothing typed this turn). D9: nullable, never optional."""
 
 
 DeploymentState = Literal[
@@ -447,6 +495,17 @@ class HandoffSummary(BaseModel):
     """The record's own frontmatter `suggested_priority` value, passed
     through unresolved — the resolution algorithm's own step-3 fallback
     input, not itself a resolved value. D9: nullable, never optional."""
+
+    # ── Producer axis (C6a) ───────────────────────────────────────────────
+    # Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C6a.
+    # Model + emit pass-through only — the resolver that supplies the value
+    # is a separate chunk; this field carries null until that chunk lands.
+    producer: _HandoffProducer | None
+    """
+    Namespaced op_identity/typed_command producer record — see
+    `_HandoffProducer`. D9: nullable, never optional (required-with-null:
+    present-as-null, never an absent key — `extra="forbid"` makes an
+    unknown emitted key a hard validation failure)."""
 
 
 # ── Backlog item summary (debt / bug / improvement YAML) ────────────────────

@@ -65,6 +65,42 @@ _VALID_MODES = frozenset({"already-terminal"})
 _TERMINAL_DEPLOYMENT_STATES = HANDOFF_TERMINAL_DEPLOYMENT
 
 # ---------------------------------------------------------------------------
+# Dest-collision vs idempotent-replay predicate (shared across archive families)
+# ---------------------------------------------------------------------------
+
+#: Skip reason for "the archive destination is occupied by a file with DIFFERENT content".
+#: Deliberately NOT the AC12-pinned "already-archived" string, which means the benign
+#: source-gone idempotent-replay case. This one is a wedge: the candidate cannot be
+#: archived and no future sweep will unwedge it without a human reconciling the two
+#: copies. Conflating the two let a stuck record report as converged.
+#: Spec backlink: archive/specs/2026-07/2026-07-04-pcore-11-fleet-invoke-ops.md § AC12
+#: (which pins "already-archived" to the source-gone case only).
+_REASON_DEST_CONFLICT = "archive-dest-conflict"
+
+
+def _is_identical_duplicate(src: Path, dst: Path) -> bool:
+    """True when dst already exists AND is byte-identical to src.
+
+    Duplicate deliveries happen: a sender can write the same memo filename into
+    cross-repo/inbox/ a second time after the first copy was already archived, and
+    the same shape recurs for handoffs, shipped handoffs, and bugs re-entering their
+    respective source directories. Before this predicate existed, such a candidate
+    was skipped as "already-archived" on EVERY sweep run and could therefore never
+    leave its source directory — a permanent stranded-duplicate leak that inflated
+    the apparent backlog. When the bytes match, archiving is lossless: the git mv -f
+    overwrite is a no-op on content and a pure delete of the redundant source copy.
+
+    Returns False (skip, do not overwrite) whenever the contents differ or
+    either file cannot be read — a differing dst is real archived history and
+    must never be clobbered.
+    """
+    try:
+        return dst.is_file() and src.read_bytes() == dst.read_bytes()
+    except OSError:
+        print(f"skip: _is_identical_duplicate: return dst.is_file() and src.read_bytes() == dst.read_bytes() failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return False
+
+# ---------------------------------------------------------------------------
 # Hardened env builder for git subprocess calls (LOW env-hardening fix)
 # ---------------------------------------------------------------------------
 
@@ -316,7 +352,7 @@ class Move(NamedTuple):
     force=True adds `-f` to the git mv, permitting an existing dst to be
     overwritten.  Callers MUST only set it when the overwrite is provably
     lossless (e.g. a byte-identical duplicate delivery — see
-    archive_actioned_memos._is_identical_duplicate).  Default False preserves
+    _is_identical_duplicate in this module).  Default False preserves
     the fail-on-existing-dst behaviour for every other archival family.
 
     restage_src=True tells archive_and_commit to run a targeted
@@ -1268,6 +1304,52 @@ async def archive_and_commit(
             # the empty tree it created rather than leaving destination residue.
             created_dirs_by_id[move.candidate_id] = _mkdir_and_track_created(move.dst.parent)
 
+            if not move.restage_src:
+                # Disk/HEAD drift guard (archive-gate bypass fix, b3e61bd00
+                # incident): every fleet terminality predicate re-verifies a
+                # candidate by reading its CURRENT ON-DISK content — but a
+                # plain `git mv` below re-keys whatever blob the
+                # read-tree-HEAD-seeded private index holds for src (see
+                # "op-authored pre-move content" above), which is src's
+                # LAST-COMMITTED content, not what was just verified. If disk
+                # content has drifted from HEAD (e.g. an uncommitted
+                # deployment_state/shipped_in stamp), a caller's disk-based
+                # verify can pass while this git mv silently commits STALE
+                # HEAD content to dst — the caller believes it archived what
+                # it just verified; it did not. `git diff --quiet -- src`
+                # against this HEAD-seeded private index detects exactly that
+                # mismatch. Skipped only for restage_src=True moves, which
+                # already restage src's current disk content into the index
+                # immediately below and so cannot exhibit this drift.
+                diff_proc = await asyncio.create_subprocess_exec(
+                    "git", "diff", "--quiet", "--", str(move.src),
+                    cwd=str(worktree_root),
+                    env=base_env,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _out, diff_stderr = await diff_proc.communicate()
+                if diff_proc.returncode not in (0, 1):
+                    err_msg = diff_stderr.decode(errors="replace").strip()
+                    _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
+                    failed.append({
+                        "id": move.candidate_id,
+                        "reason": f"drift-check-failed: {err_msg}" if err_msg else "drift-check-failed",
+                    })
+                    continue
+                if diff_proc.returncode == 1:
+                    _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
+                    failed.append({
+                        "id": move.candidate_id,
+                        "reason": (
+                            "disk/HEAD drift: src has uncommitted changes not "
+                            "reflected in HEAD — refusing move (a terminality "
+                            "check that read on-disk content would be "
+                            "misrepresented by committing stale HEAD content)"
+                        ),
+                    })
+                    continue
+
             if move.restage_src:
                 # Targeted `git add -- src` against the private index ONLY,
                 # so the git mv below re-keys src's CURRENT on-disk content
@@ -1311,6 +1393,7 @@ async def archive_and_commit(
                 err_msg = stderr.decode(errors="replace").strip()
                 # git mv may have moved the file before failing on the index update.
                 # Reverse the disk rename if src is now absent and dst now present.
+                reversal_skipped_reason = None
                 if move.dst.exists() and not move.src.exists():
                     try:
                         move.dst.rename(move.src)
@@ -1320,6 +1403,16 @@ async def archive_and_commit(
                             "%s → %s after git mv failure: %s",
                             move.dst, move.src, exc,
                         )
+                elif move.dst.exists():
+                    # src has reappeared — the rename-back cannot run without
+                    # clobbering it, so dst is left as an untracked orphan.
+                    _LOG.warning(
+                        "archive_and_commit: skipping reversal for %s → %s "
+                        "after git mv failure — source has reappeared, "
+                        "leaving destination orphaned",
+                        move.src, move.dst,
+                    )
+                    reversal_skipped_reason = "reversal-skipped-src-reappeared"
                 if move.restage_src:
                     # The restage_src `git add -- src` above already staged src's
                     # CURRENT on-disk content into the private index before this
@@ -1350,9 +1443,15 @@ async def archive_and_commit(
                 # unreversed file from a failed rename-back.
                 if not move.dst.exists():
                     _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
+                reason = err_msg if err_msg else "git-mv-failed"
+                if reversal_skipped_reason:
+                    reason = (
+                        f"{reason}; {reversal_skipped_reason}: "
+                        f"dst {move.dst} orphaned, src {move.src} reappeared"
+                    )
                 failed.append({
                     "id": move.candidate_id,
-                    "reason": err_msg if err_msg else "git-mv-failed",
+                    "reason": reason,
                 })
             else:
                 acted.append({"id": move.candidate_id, "archived": True})
@@ -1385,6 +1484,7 @@ async def archive_and_commit(
                 worktree_root, err_msg,
             )
             # Reverse all acted renames on disk — commit failed, nothing was committed.
+            orphaned_reversal_ids = set()
             for move in moves:
                 if move.candidate_id in acted_ids:
                     if move.dst.exists() and not move.src.exists():
@@ -1396,6 +1496,17 @@ async def archive_and_commit(
                                 "commit failure %s → %s: %s",
                                 move.dst, move.src, exc,
                             )
+                    elif move.dst.exists():
+                        # src has reappeared — the rename-back cannot run
+                        # without clobbering it, so dst is left as an
+                        # untracked orphan.
+                        _LOG.warning(
+                            "archive_and_commit: skipping reversal for %s → %s "
+                            "after commit failure — source has reappeared, "
+                            "leaving destination orphaned",
+                            move.src, move.dst,
+                        )
+                        orphaned_reversal_ids.add(move.candidate_id)
                     # C9: same "only remove if genuinely empty" guard as the
                     # per-move git-mv-failure branch above — a failed
                     # reverse-rename leaves dst populated, and that dir must
@@ -1403,7 +1514,15 @@ async def archive_and_commit(
                     if not move.dst.exists():
                         _cleanup_created_dirs(created_dirs_by_id[move.candidate_id])
             commit_failed = [
-                {"id": a["id"], "reason": f"commit-failed: {err_msg}"}
+                {
+                    "id": a["id"],
+                    "reason": (
+                        f"commit-failed: {err_msg}; "
+                        f"reversal-skipped-src-reappeared: dst orphaned"
+                        if a["id"] in orphaned_reversal_ids
+                        else f"commit-failed: {err_msg}"
+                    ),
+                }
                 for a in acted
             ]
             return [], failed + commit_failed

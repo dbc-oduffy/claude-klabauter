@@ -127,6 +127,75 @@ class TestShapeB:
         assert "dlv-20260805-handoff-393911" in bridged_ids
 
 
+class TestAC6RemainingZombies:
+    """AC6: the three measured live-corpus zombies not already covered by TestShapeA/
+    TestShapeB above. Fixtures are the ACTUAL records from `state/cockpit-emission.json`
+    (verified by direct read at the cited line numbers, 2026-08-13) — not restated from
+    the implementation. The `bridged_ids` membership assertion is the discriminating one:
+    `_handoff_phase` already maps `continued` to `"in-progress"` regardless of the bridge,
+    so only `bridged_ids` fails if the bridge condition is reverted."""
+
+    def test_close_out_and_stamp_chunk_evidence_join_bridges(self) -> None:
+        """`dlv-close-out-and-stamp-s-chunk-evidence-joi-1dbe26` — Shape B: single archived
+        `continued` handoff, `continued_into` points at a successor path that is not itself
+        a live record anywhere in this emission (cockpit-emission.json line 15837)."""
+        handoffs = [
+            _continued_handoff(
+                "dlv-close-out-and-stamp-s-chunk-evidence-joi-1dbe26",
+                "archive/handoffs/2026-08/2026-08-03-close-out-stamp-chunk-evidence-join.md",
+                "state/handoffs/2026-08-03-deliverable-id-carry-plan-handoff-agree.md",
+            ),
+        ]
+
+        bridged_ids: set[str] = set()
+        dlv_map = deliverable_status._compute_map(handoffs, [], [], bridged_ids=bridged_ids)
+
+        assert dlv_map["dlv-close-out-and-stamp-s-chunk-evidence-joi-1dbe26"] == "in-progress"
+        assert "dlv-close-out-and-stamp-s-chunk-evidence-joi-1dbe26" in bridged_ids
+
+    def test_archive_and_commit_resync_stages_bridges_with_two_archived_carriers(self) -> None:
+        """`dlv-archive-and-commit-s-resync-stages-the-w-b2075d` — Shape B, TWO archived
+        carriers under this id (cockpit-emission.json lines 17499 and 18744, both under
+        `archive/handoffs/2026-08/`) — neither is live, so the group still has no live
+        carrier and must bridge even though `has_live_carrier` is computed via an OR over
+        multiple records for the same canonical id."""
+        handoffs = [
+            _continued_handoff(
+                "dlv-archive-and-commit-s-resync-stages-the-w-b2075d",
+                "archive/handoffs/2026-08/2026-08-05-arm-b-dirty-src-resync-worktree-blob.md",
+                "state/handoffs/2026-08-05_190206_arm-b-dirty-src-resync-worktree-blob.md",
+            ),
+            _continued_handoff(
+                "dlv-archive-and-commit-s-resync-stages-the-w-b2075d",
+                "archive/handoffs/2026-08/2026-08-05_190206_arm-b-dirty-src-resync-worktree-blob.md",
+                "state/handoffs/2026-08-05-resync-stages-the-committed-blob.md",
+            ),
+        ]
+
+        bridged_ids: set[str] = set()
+        dlv_map = deliverable_status._compute_map(handoffs, [], [], bridged_ids=bridged_ids)
+
+        assert dlv_map["dlv-archive-and-commit-s-resync-stages-the-w-b2075d"] == "in-progress"
+        assert "dlv-archive-and-commit-s-resync-stages-the-w-b2075d" in bridged_ids
+
+    def test_roadmap_baton_supersede_guard_bridges(self) -> None:
+        """`dlv-roadmap-baton-supersede-guard-refuses-on-5e5761` — Shape B: single archived
+        `continued` handoff, dangling `continued_into` (cockpit-emission.json line 18336)."""
+        handoffs = [
+            _continued_handoff(
+                "dlv-roadmap-baton-supersede-guard-refuses-on-5e5761",
+                "archive/handoffs/2026-08/2026-08-05-supersede-guard-blind-to-continuation-chase.md",
+                "state/handoffs/2026-08-05-c2-supersede-gate-chaseable-terminus.md",
+            ),
+        ]
+
+        bridged_ids: set[str] = set()
+        dlv_map = deliverable_status._compute_map(handoffs, [], [], bridged_ids=bridged_ids)
+
+        assert dlv_map["dlv-roadmap-baton-supersede-guard-refuses-on-5e5761"] == "in-progress"
+        assert "dlv-roadmap-baton-supersede-guard-refuses-on-5e5761" in bridged_ids
+
+
 class TestNotBridged:
     """A genuinely healthy `in-progress` group (live carrier present) must never land in
     `bridged_ids` — the marker's whole point is distinguishing bridged from real."""

@@ -97,6 +97,18 @@ _METADATA_KEYS = frozenset({
     "x-bump-class",
     "x-bump-note",
     "x-baton-class",
+    # The single-point declaration of the producer-axis typed-command
+    # vocabulary (49 members: 46 coordinator command verbs plus
+    # `other-command`, `hand-authored`, `unresolved`), each carrying a
+    # `group` for consumer-side facet grouping. Authored and owned in
+    # example-doctrine-repo and vendored here with handoff.schema.json 7.1.0 — a
+    # DECLARATION consumed by readers and a parity test on their side, never
+    # a value-shape constraint this validator could enforce. Deliberately
+    # single-point: re-enumerating the vocabulary on this side would create a
+    # second source of truth that drifts silently, which is why
+    # `session/producer_resolve.py` validates only the closed op-identity
+    # axis and leaves membership of this open one to the declaring repo.
+    "x-producer-typed-command",
     # Declares which sibling repos read this schema's records as an external
     # contract (e.g. research-claim.schema.json's `["example-market-data-repo"]`)
     # — annotation for humans/memos, not a value-shape constraint. See

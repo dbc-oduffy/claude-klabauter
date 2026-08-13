@@ -35,6 +35,7 @@ a GIVES-PAUSE candidate, not something this port silently rewires).
 from __future__ import annotations
 
 import re
+from typing import Any, Dict, Optional
 
 #: CS_CANONICAL_AGENT_ID_RE — single source of truth for the bare-hex
 #: unnamed-agent format predicate. Format: lowercase hex, >= 12 chars, no
@@ -150,3 +151,136 @@ def resolve_subagent_identity(agent_id: str, session_id: str) -> str:
 
     # (c) Unrecognised shape — fail-closed.
     return ""
+
+
+def resolves_em_audience(
+    payload: Optional[Dict[str, Any]], git_root: Optional[str]
+) -> bool:
+    """Positive-EM-audience predicate for guard messages (D3 Branch A of
+    ``tasks/guard-messages-keys/DECISIONS.md``, C1a).
+
+    Lands here rather than in ``bash_guards`` because ``bash_guards ->
+    session`` is an existing, heavily-used, permitted import edge (dozens of
+    module-level and lazy imports across ``bash_guards/dispatch.py``,
+    ``dispatch_checks.py``, etc. — verified against the actual import graph,
+    not assumed), while ``session -> bash_guards`` is the edge
+    ``guard_unlock_sentinel.py``'s own docstring deliberately refuses (the
+    reason ``doc_display`` is passed into ``annotate_deny`` rather than
+    resolved locally there). Landing the predicate here lets
+    ``bash_guards._helpers.operator_override_note`` import it with no new
+    edge, and ``session/guard_unlock_sentinel.py`` (C3, next wave) can adopt
+    it as an in-package sibling without crossing that refused boundary
+    either.
+
+    WHY THE DEFAULT IS INVERTED (DECISIONS.md D1): the prior direction, per
+    ``state/audits/2026-08-11-guard-text-injection-mechanism-proof.md``
+    § "The fix, and its measurement", was "Absent ``agent_id`` means the
+    main/EM session where a human is watching — emit." This predicate
+    inverts that: absence of a real envelope, or any resolution failure, now
+    degrades to NOT-EM (terse). The inversion is deliberate under the PM's
+    2026-08-13 ruling — a survey of every candidate signal available at a
+    guard's ``check()`` seam (DECISIONS.md D1 table) found none is
+    EM-affirmative, so "observed a real envelope with no agent identity" is
+    the closest available positive signal, and "could not observe" must NOT
+    collapse into it.
+
+    WHY TWO LEGS, NOT THREE: only ``agent_id`` (canonicalized) and
+    ``subagent_type`` (backpointer-resolved) are checked — ``agent_type`` is
+    deliberately EXCLUDED, per the spike
+    ``docs/research/spike-verdicts/2026-08-08-agent-id-reaches-bash-guards.md``:
+    ``agent_type`` is also populated when a session launches with
+    ``--agent``, which would misclassify a legitimate EM as not-EM. This
+    diverges intentionally from ``bash_guards/_blanket_disarm.py::
+    _is_em_caller``, which keeps all three legs — that divergence is
+    intentional, not a parity gap to close.
+
+    WHY FORGEABILITY IS NOT A DEFECT HERE: a subagent that sets its own
+    ``agent_id``/backpointer state to look EM-shaped could force this
+    predicate True. That is out of scope by PM ruling (DECISIONS.md D1):
+    these locks exist "not out of safety from malicious attack but because
+    doctrine alone cannot keep amnesiac Claudes from machine-degrading or
+    otherwise deleterious behavior," and example-doctrine-repo's own
+    ``bash-guard-threat-model.md`` names the actor "an eager subagent, not
+    an adversary." A predicate a determined subagent could forge still
+    fully discharges that threat model — do not harden it; hardening
+    ``resolve_subagent_identity``/backpointer resolution is out of scope for
+    this plan.
+
+    Contract (DECISIONS.md D1):
+      False  if ``payload`` is ``None``, not a ``dict``, or carries no
+             ``session_id`` (not a real envelope).
+      False  if the RAW ``agent_id`` leg is present and non-empty but
+             canonicalizes to empty (present-but-unresolvable — see
+             "ABSENT VS UNRESOLVABLE" below).
+      False  if the ``agent_id`` leg resolves non-empty.
+      False  if the ``subagent_type`` leg resolves non-empty.
+      False  on ANY exception during resolution — degrade to terse, never
+             to emitting.
+      True   only otherwise (a well-formed envelope with both legs empty).
+
+    ABSENT VS UNRESOLVABLE (C1i, tasks/guard-messages-keys/C1i.md):
+    ``resolve_effective_types`` -> ``_canonical_agent_id`` silently
+    canonicalizes BOTH "no ``agent_id`` key at all" (a genuine EM session)
+    AND "an ``agent_id`` present but of an unrecognised shape" (a malformed
+    or unresolvable identity) to the same empty string. Left undistinguished,
+    that conflation would resolve a malformed ``agent_id`` as EM-class —
+    the strongest possible false-positive, and exactly the fail-open
+    direction AC-3 forbids, reintroduced one layer below the C1 fix. This
+    function therefore re-derives the distinction itself, ahead of calling
+    the shared resolver: it reads the RAW ``payload["agent_id"]`` first, and
+    if that raw value is present/non-empty, treats it as "cannot resolve"
+    (``False``) regardless of what the shared resolver's canonicalization
+    does with it — never as "no agent" (which alone is entitled to fall
+    through toward ``True``). The fix belongs here, not in
+    ``_canonical_agent_id``/``resolve_effective_types`` themselves: those are
+    shared identity resolvers with other callers, and their fail-soft-to-
+    empty behaviour is load-bearing elsewhere. A future reader collapsing
+    this back to "both legs empty -> EM" reopens the hole.
+
+    ``subagent_type`` does NOT need the same treatment: it is never read
+    from a raw payload key. It is derived ENTIRELY from the (already
+    canonicalized) ``agent_id`` via a backpointer file lookup
+    (``resolve_effective_types``: ``subagent_type`` is computed only ``if
+    agent_id and git_root``, by ``_read_backpointer_subagent_type``). There
+    is no independent raw ``subagent_type`` leg on the payload to be
+    "present but unresolvable" — verified by reading
+    ``coordinator_core.subagent_sandbox.engine.resolve_effective_types``
+    (2026-08-13), not assumed symmetric with ``agent_id``.
+
+    Reuses ``subagent_sandbox.engine.resolve_effective_types`` as the sole
+    resolver (imported lazily, inside the function, to avoid adding a
+    module-level ``session -> subagent_sandbox`` import edge to this
+    otherwise dependency-light module) — this is NOT a fifth identity
+    resolver; the plan's census already found four, and this predicate is a
+    read-only classification over the SAME resolver's output, not a new
+    resolution path.
+
+    Never raises: any exception (malformed ``payload``, resolver failure,
+    filesystem error inside the backpointer read) is caught and treated as
+    False, matching the "degrade to terse, never to emitting" contract
+    above.
+    """
+    try:
+        if not isinstance(payload, dict):
+            return False
+        if not payload.get("session_id"):
+            return False
+        raw_agent_id = payload.get("agent_id")
+        if raw_agent_id:
+            # Present-but-possibly-unresolvable: distinguish from "no
+            # agent_id key at all" BEFORE the shared resolver canonicalizes
+            # both cases to the same empty string. See "ABSENT VS
+            # UNRESOLVABLE" above.
+            return False
+        from coordinator_core.subagent_sandbox.engine import resolve_effective_types
+
+        agent_id, _agent_type, subagent_type = resolve_effective_types(
+            payload, git_root
+        )
+        if agent_id:
+            return False
+        if subagent_type:
+            return False
+        return True
+    except Exception:
+        return False

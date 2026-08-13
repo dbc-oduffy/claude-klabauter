@@ -108,7 +108,8 @@ Behaviour:
      (that package's own eager ~161-module sweep never fires), so this
      import is as cheap on the hot commit-hook path as the pre-existing
      claimed-plan import in step 4b below. Lazily imported the same way, via
-     ``_ensure_claude_klabauter_on_syspath()`` / ``cc_invoke.resolve_colocated_claude_klabauter_root``.
+     ``_ensure_claude_klabauter_on_syspath()`` / ``cc_invoke.require_colocated_engine_on_path``
+     (self-location-first, wrapping ``resolve_colocated_claude_klabauter_root``).
      ORDERING DEPENDENCY (reviewer finding, 2026-08-10): the "zero
      ``coordinator_core.ops`` imports" property holds only because
      ``_ensure_claude_klabauter_on_syspath()`` imports ``cc_invoke`` first, and
@@ -361,12 +362,9 @@ def _ensure_claude_klabauter_on_syspath() -> str:
         lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
         if lib_dir not in sys.path:
             sys.path.insert(0, lib_dir)
-        from cc_invoke import resolve_colocated_claude_klabauter_root
+        from cc_invoke import require_colocated_engine_on_path
 
-        claude_klabauter_root = resolve_colocated_claude_klabauter_root(__file__)
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
-        return claude_klabauter_root
+        return require_colocated_engine_on_path(__file__)
     except Exception:
         return ""
 
@@ -547,7 +545,8 @@ def _resolve_deliverable_id_from_claimed_plan() -> str:
     Lazily reaches into ``coordinator_core`` — deliberately NOT imported at
     module scope, so a hit on step 4/4a (the common case) never pays this
     import's cost on the commit hot path. Resolves CLAUDE_KLABAUTER_ROOT via the
-    self-location-first ``resolve_colocated_claude_klabauter_root()`` (this script
+    self-location-first ``require_colocated_engine_on_path()`` (which wraps
+    ``resolve_colocated_claude_klabauter_root()``; this script
     lives inside the claude-klabauter checkout at ``coordinator/bin/``, so
     ``Path(__file__)``'s own parents answer it with zero external
     dependency) SOLELY to put ``coordinator_core`` on ``sys.path`` for the
@@ -574,11 +573,9 @@ def _resolve_deliverable_id_from_claimed_plan() -> str:
         lib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
         if lib_dir not in sys.path:
             sys.path.insert(0, lib_dir)
-        from cc_invoke import resolve_colocated_claude_klabauter_root
+        from cc_invoke import require_colocated_engine_on_path
 
-        claude_klabauter_root = resolve_colocated_claude_klabauter_root(__file__)
-        if claude_klabauter_root not in sys.path:
-            sys.path.insert(0, claude_klabauter_root)
+        require_colocated_engine_on_path(__file__)
         from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
         from coordinator_core.frontmatter.primitives import (
             read_fm_field_unquoted,

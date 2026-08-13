@@ -197,7 +197,43 @@ from coordinator_core.contract.cockpit_schema.common import (
 # sequence: claude-klabauter widens and regenerates into example-doctrine-repo's schema/ out-dir, example-doctrine-repo
 # commits the bundle and advances the release tag, claude-klabauter re-vendors, and only
 # then does the emitter begin populating the keys.
-CONTRACT_VERSION = "3.11.0"
+# 3.11.0 -> 3.12.0 (producer-axis) adds the `producer` record to
+# HandoffSummary: a two-axis provenance object carrying `op_identity`
+# (machine-minted | hand-authored, resolved at the creation seam) and
+# `typed_command` (a coordinator command verb, `other-command`, `unresolved`,
+# or null). Two distinct surfaces, do not conflate them:
+#   - on the vendored frontmatter schema (handoff.schema.json 7.1.0),
+#     `producer` is OPTIONAL: pre-bump records legitimately lack the key
+#     entirely, and the batch normalize sweep must never backfill it.
+#   - on this cockpit entity (HandoffSummary), `producer` is
+#     REQUIRED-WITH-NULL (D9): every emitted summary carries the key,
+#     present-as-null when there is nothing to report. The sole construction
+#     site (ops/emit/sections/handoffs.py) always supplies it.
+# Classified MINOR either way: one new field on an existing entity, nothing
+# narrowed and nothing removed, the same class example-doctrine-repo assigned their paired
+# handoff.schema.json 7.1.0 / handoff-archived.schema.json 2.5.0
+# (`nested-field-additive`) — MINOR does not turn on optional-vs-required-
+# with-null, only on additive-vs-narrowing/removing.
+#
+# Bumped because this repo's own `assert_no_version_desync` refused to
+# re-emit: HandoffSummary's shape moved while the constant did not, which is
+# the guard doing its job rather than a defect — a bundle whose version says
+# nothing changed is the failure it exists to prevent. It fired for
+# example-doctrine-repo-em when they went to run their C6b regen; reported to us by memo
+# rather than worked around, and this bump is the discharge.
+#
+# D39 source-first release sequence, unchanged from 3.11.0: claude-klabauter widens and
+# regenerates into example-doctrine-repo's schema/ out-dir, example-doctrine-repo commits the bundle and advances
+# the release tag, claude-klabauter re-vendors, and only then does the emitter's output
+# reach a validator that knows the shape. Between this bump and that
+# re-vendor the local desync guard is EXPECTED to trip — that interim red is
+# the handshake holding, not a regression to chase.
+#
+# Owed and not yet discharged at time of writing: the D21 consumer census
+# (cockpit and rag) and claude-central-em's ratification of this MINOR
+# classification, both of which the 3.11.0 bump above carried. Heads-up sent;
+# do not treat the census as discharged until it is recorded here.
+CONTRACT_VERSION = "3.12.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

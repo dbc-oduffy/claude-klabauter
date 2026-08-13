@@ -63,32 +63,12 @@ _INSTALL_CHAIN_ORDER_RE = re.compile(r"^install_chain_order:\s*[0-9]", re.MULTIL
 # ---------------------------------------------------------------------------
 
 _NUDGE_MSG_TEMPLATE = """\
-[nudge] You just created a file under {parent_dir}/ directly —
-[nudge] no /handoff, /workstream-complete, or /spinoff was active. This is a nudge, not
-[nudge] a block: the file is written and you may proceed if this was deliberate.
-[nudge]
-[nudge] If you reached for this because the work feels "done" or "tidy here":
-[nudge]   handoffs are NOT tidy stopping points — /handoff passes an IN-FLIGHT
-[nudge]   workstream. A DONE workstream is capped by /workstream-complete (or commit and
-[nudge]   stop, or /workday-complete). (coordinator/skills/handoff/SKILL.md § Step 0 —
-[nudge]   "/handoff and /workstream-complete are mutually exclusive.")
-[nudge]
-[nudge] If you are messaging another repo's EM:
-[nudge]   use the cross-repo-memo CLI (writes into <receiver>/cross-repo/ and
-[nudge]   prints a path for PM relay) — do NOT seed state/handoffs/ as a queue
-[nudge]   for another repo. (coordinator/docs/wiki/cross-repo-communication.md § Tell
-[nudge]   another repo's EM about something.)
-[nudge]
-[nudge] If you genuinely mean to hand off or fork a topic:
-[nudge]   /handoff and /spinoff carry the PM gate (spinoffs are PM-authorized).
-[nudge]   Invoking the skill is the doctrine-correct path; a direct write skips
-[nudge]   the Step-0 gate. (skills/spinoff Step 0, skills/handoff Step 0.)
-[nudge]
-[nudge] If this write was correct as-is (recovery handoff, /pickup rewrite,
-[nudge] review-marker), ignore this — nothing is blocked.
-[nudge]
-[nudge] Silence in autonomous runs: an override exists -- see
-[nudge] docs/reference/guard-override-keys.md."""
+[nudge] File written under {parent_dir}/, no /handoff, /workstream-complete, or /spinoff
+[nudge] active. Nudge, not a block — proceed if deliberate.
+[nudge] "Done"? /workstream-complete (or commit+stop) — /handoff is IN-FLIGHT only.
+[nudge] Another repo's EM? Use cross-repo-memo.
+[nudge] Genuine handoff/fork? /handoff or /spinoff (PM-gated).
+[nudge] Correct as-is (recovery, /pickup, review)? Ignore this."""
 
 # ---------------------------------------------------------------------------
 # Blocking helpers (called via asyncio.to_thread)

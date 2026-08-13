@@ -589,7 +589,10 @@ def _memo_offer_message() -> str:
     )
 
 
-def _own_inbox_deny_message(this_em_id: str, to_value: Optional[str]) -> str:
+def _own_inbox_deny_message(
+    this_em_id: str, to_value: Optional[str], payload: Optional[Dict[str, Any]] = None
+) -> str:
+    _note = operator_override_note("COORDINATOR_OVERRIDE_OWN_INBOX", payload=payload)
     return (
         f"This memo's `from:` is THIS repo ({this_em_id}) but it's landing "
         "in this repo's own cross-repo/inbox/. cross-repo/inbox/ holds "
@@ -598,8 +601,8 @@ def _own_inbox_deny_message(this_em_id: str, to_value: Optional[str]) -> str:
         f"  cross-repo-memo --to {to_value or '<recipient-em>'} --topic <slug> "
         "--title \"...\" < body.md\n\n"
         "That command writes into the RECIPIENT's cross-repo/inbox/ "
-        "directory, not yours. Rare legit case:\n\n"
-        + operator_override_note("COORDINATOR_OVERRIDE_OWN_INBOX")
+        "directory, not yours."
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -642,7 +645,7 @@ def _scaffold_offer_message(
         "open() (structurally exempt from this PreToolUse Write-tool hook — see "
         "new-file-only rationale below), so subsequent body-fill edits stay silent. "
         "Hand-rolling bypasses schema enforcement and risks frontmatter drift that "
-        "breaks query-records and example-cockpit-repo ingest."
+        "breaks query-records and downstream ingest."
     )
     if authoring_hint:
         message += f"\n\n{authoring_hint}"
@@ -694,6 +697,7 @@ def _memo_guard_step(
     repo_root: str,
     abs_file_path: str,
     repo_rel: str,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[str, str]]:
     if tool_name not in _GUARDED_TOOLS:
         return None
@@ -768,7 +772,7 @@ def _memo_guard_step(
 
                 if from_value and _matches_this_repo(from_value):
                     if not _matches_this_repo(to_value):
-                        return ("deny", _own_inbox_deny_message(this_em_id, to_value))
+                        return ("deny", _own_inbox_deny_message(this_em_id, to_value, payload))
 
     is_canonical_memo_surface = bool(
         re.match(r"^cross-repo/inbox/", normalized_rel_for_routing)
@@ -1321,8 +1325,7 @@ def _unvendored_offerable_message(doc_type: dict) -> str:
         "coordinator_core/frontmatter/schemas/, even though the registry manifest marks "
         f"`{type_}` offerable: true. This write proceeds unchecked. Remedy: vendor "
         f"{schema_name}'s schema into coordinator_core/frontmatter/schemas/ (see "
-        "cross-repo/inbox/2026-08-06-example-doctrine-repo-em-twelve-doc-types-lost-write-enforcement-today.md "
-        "and state/audits/2026-08-06-offerable-types-without-vendored-schemas.md for the "
+        "state/audits/2026-08-06-offerable-types-without-vendored-schemas.md for the "
         "per-type migration cost before vendoring)."
     )
 
@@ -1380,7 +1383,9 @@ def _first_result(
     if ctx is None:
         return None
 
-    memo_result = _memo_guard_step(ctx, tool_name, tool_input, repo_root, abs_file_path, repo_rel)
+    memo_result = _memo_guard_step(
+        ctx, tool_name, tool_input, repo_root, abs_file_path, repo_rel, payload
+    )
     if memo_result is not None:
         return memo_result
 

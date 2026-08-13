@@ -108,6 +108,25 @@ The sweeps, in order:
      never raises), so it is safe to call unconditionally here exactly like
      sweeps 6/7 above; unlike those two it needs no try/except of its own
      since its entire body is already wrapped that way.
+  9. Terminal-sizings (docs/plans/2026-08-13-terminal-sizings-boot-sweep-
+     family.md, DR-293) — `archive_sizings._handle_preview` /
+     `archive_sizings._handle_act`, wired exactly like the terminal-plans
+     family (sweep 2) above: T1 preview against `worktree/state/sizings/`
+     yields candidate ids, which are then acted in one batch. Terminality is
+     status-only (`SIZING_TERMINAL_STATUS`, `coordinator_core.
+     lifecycle_constants`) — this sweep never writes or infers a `status:`.
+     Dest-collision (differing dst → skip with `_REASON_DEST_CONFLICT`;
+     byte-identical dst → converge) is enforced inside
+     `archive_sizings._handle_act` itself (AC4/AC5,
+     docs/plans/2026-08-13-fleet-archive-dest-collision-vs-idempotent-
+     replay.md) — the same predicate the terminal-sizings family imports
+     from `_common`. This composite has no separate dry-run/preview surface
+     for the terminal-sizings family (identical in this respect to the
+     terminal-plans family immediately above it): preview candidate ids are
+     acted in the same call, so there is no independent "WOULD-archive" set
+     that could over-count a colliding candidate — the collision check
+     gating actual archival in `_handle_act` is the only enforcement point
+     and it always runs before any candidate is archived.
 
 session.reap (Class-B untracked .git/ substrate, 12h cadence) is invoked
 SEPARATELY by session-init.sh — NOT part of this sweep.
@@ -205,9 +224,17 @@ from coordinator_core.ops.fleet.archive_handoffs import (
     _handle_preview_handoffs,
     _shipped_in_resolvable,
 )
+from coordinator_core.ops.fleet._common import (
+    _REASON_DEST_CONFLICT,
+    _is_identical_duplicate,
+)
 from coordinator_core.ops.fleet.archive_plans import (
     _handle_act as _handle_act_plans,
     _handle_preview as _handle_preview_plans,
+)
+from coordinator_core.ops.fleet.archive_sizings import (
+    _handle_act as _handle_act_sizings,
+    _handle_preview as _handle_preview_sizings,
 )
 from coordinator_core.ops.fleet.archive_shipped_handoffs import (
     _handle_act as _handle_act_shipped,
@@ -270,6 +297,9 @@ def _build_result(
     priority_drained: Optional[list] = None,
     priority_rejected: Optional[list] = None,
     priority_failed: Optional[list] = None,
+    sizings_archived: Optional[list] = None,
+    sizings_skipped: Optional[list] = None,
+    sizings_failed: Optional[list] = None,
 ) -> dict:
     """Build the session.boot_sweep success/partial-failure result envelope.
 
@@ -297,7 +327,7 @@ def _build_result(
     """
     any_failed = bool(
         consumed_failed or plans_failed or shipped_failed or memos_failed
-        or unintegrated_failed or priority_failed
+        or unintegrated_failed or priority_failed or sizings_failed
     )
     return {
         "exit_code": 2 if any_failed else 0,
@@ -331,6 +361,11 @@ def _build_result(
             "drained": priority_drained or [],
             "rejected": priority_rejected or [],
             "failed": priority_failed or [],
+        },
+        "sizings": {
+            "archived": sizings_archived or [],
+            "skipped": sizings_skipped or [],
+            "failed": sizings_failed or [],
         },
     }
 
@@ -391,6 +426,7 @@ def _build_error_result(reason: str) -> dict:
         "memos": {"archived": [], "skipped": [], "failed": []},
         "unintegrated_findings": {"reaped": [], "skipped": [], "failed": []},
         "priority_intents": {"drained": [], "rejected": [], "failed": []},
+        "sizings": {"archived": [], "skipped": [], "failed": []},
     }
 
 
@@ -1632,14 +1668,40 @@ async def _sweep_consumed_handoffs(
             cand["id"]: cand for cand in candidates
             if isinstance(cand, dict) and isinstance(cand.get("id"), str)
         }
+
+        # AC5 (docs/plans/2026-08-13-fleet-archive-dest-collision-vs-idempotent-
+        # replay.md, § Ruling on the dry-run fork): the archive destination is a
+        # pure path computation plus a stat, deterministic at preview time, so the
+        # preview runs it here rather than only in the act path — otherwise a
+        # candidate whose destination already exists (which _handle_act_handoffs
+        # skips) would still appear in the WOULD-archive set, over-counting. Uses
+        # the same destination helper the act path uses (_handoff_archive_dest),
+        # not a second derivation. A destination that already exists but is
+        # byte-identical to src is a converging duplicate, not a conflict — it
+        # will force-overwrite and archive successfully on the act path, so it
+        # stays in would_archive rather than being reported as skipped.
+        dest_conflict_ids: set = set()
+        dest_conflict_skipped: List[dict] = []
+        for cid in filtered_ids:
+            handoff_path = state_worktree / cid
+            if not handoff_path.exists():
+                continue
+            dst = _handoff_archive_dest(state_worktree, handoff_path)
+            if dst.exists() and not _is_identical_duplicate(handoff_path, dst):
+                dest_conflict_ids.add(cid)
+                dest_conflict_skipped.append({
+                    "id": cid,
+                    "reason": _REASON_DEST_CONFLICT,
+                })
+
         would_archive: List[dict] = [
             dict(cand_by_id[cid], heir=(cid in heir_cids))
             for cid in filtered_ids
-            if cid in cand_by_id
+            if cid in cand_by_id and cid not in dest_conflict_ids
         ]
         return (
             would_archive,
-            recency_skipped + awaiting_adjudication_skipped,
+            recency_skipped + awaiting_adjudication_skipped + dest_conflict_skipped,
             [],
             warnings,
         )
@@ -1856,6 +1918,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
       priority_intents (C7) — has drained / rejected / failed sub-lists; a
         rejected entry (malformed record or unknown target) does NOT
         contribute to exit_code:2, only a failed one does.
+      sizings — the terminal-sizings family (DR-293); has archived / skipped /
+        failed sub-lists, same shape as plans/memos above.
       observed_set_fold (sat-01b C5) — {"ran": bool, "reason": str,
         "marker": dict | None}. "ran": False iff this repo has no sovereign
         tracker store (opt-in-by-existence gate — see module docstring
@@ -1944,12 +2008,38 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     else:
         plans_archived, plans_skipped, plans_failed = [], [], []
 
+    # --- Sweep 9: terminal-sizings (DR-293) ---
+    # Sizing-objects live in GIT_ROOT/state/sizings/ — always worktree (GIT_ROOT),
+    # mirroring the terminal-plans family's own worktree-only scoping immediately
+    # above. Same preview→act call shape as terminal-plans: T1 preview yields
+    # candidate ids, acted in one batch. Dest-collision handling (differing dst
+    # → skip with _REASON_DEST_CONFLICT; byte-identical dst → converge) lives
+    # inside archive_sizings._handle_act itself — this composite exposes no
+    # separate dry-run surface for this family (identical in that respect to
+    # terminal-plans), so there is no independent WOULD-archive set that could
+    # over-count a colliding candidate.
+    sizings_dir = worktree / "state" / "sizings"
+    if sizings_dir.is_dir():
+        sizings_preview = await _handle_preview_sizings(_MODE, worktree, sizings_dir, common_dir)
+        sizing_ids = [c["id"] for c in sizings_preview.get("candidates", [])]
+        if sizing_ids:
+            sizings_act = await _handle_act_sizings(_MODE, worktree, sizings_dir, sizing_ids, common_dir)
+            sizings_archived: List[dict] = sizings_act.get("acted", [])
+            sizings_skipped: List[dict] = sizings_act.get("skipped", [])
+            sizings_failed: List[dict] = sizings_act.get("failed", [])
+        else:
+            sizings_archived, sizings_skipped, sizings_failed = [], [], []
+    else:
+        sizings_archived, sizings_skipped, sizings_failed = [], [], []
+
     # --- Sweep 3: shipped-handoffs ---
     # Shipped handoffs live in state/handoffs/ under the STATE repo (AC7).
     # archive_shipped_handoffs.py:33-34: "operates against _STATE_REPO".
     # state_worktree routes the scan and archival to the correct repo.
     shipped_scan_errors: List[str] = []
-    shipped_candidates = await _scan_shipped(state_worktree, scan_errors=shipped_scan_errors)
+    shipped_candidates = await _scan_shipped(
+        state_worktree, scan_errors=shipped_scan_errors, common_dir=common_dir
+    )
     shipped_warnings: List[dict] = [
         {"scope": "shipped_handoffs", "reason": f"cannot scan live handoffs: {err}"}
         for err in shipped_scan_errors
@@ -1961,7 +2051,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # id here silently misses every lookup on Windows.
             rel_id(p, state_worktree) for p, _ in shipped_candidates
         ]
-        shipped_act = await _handle_act_shipped(_MODE, state_worktree, shipped_ids)
+        shipped_act = await _handle_act_shipped(
+            _MODE, state_worktree, shipped_ids, common_dir=common_dir
+        )
         shipped_archived: List[dict] = shipped_act.get("acted", [])
         shipped_skipped: List[dict] = shipped_act.get("skipped", [])
         shipped_failed: List[dict] = shipped_act.get("failed", [])
@@ -2053,6 +2145,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         + _index_resync_warnings("shipped_handoffs", shipped_archived)
         + _index_resync_warnings("memos", memos_archived)
         + _index_resync_warnings("unintegrated_findings", unintegrated_reaped)
+        + _index_resync_warnings("sizings", sizings_archived)
     )
 
     result = _build_result(
@@ -2066,6 +2159,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         priority_drained=priority_drained,
         priority_rejected=priority_rejected,
         priority_failed=priority_failed,
+        sizings_archived=sizings_archived,
+        sizings_skipped=sizings_skipped,
+        sizings_failed=sizings_failed,
     )
     result["observed_set_fold"] = observed_set_fold_result
     return result

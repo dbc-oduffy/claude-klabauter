@@ -201,7 +201,7 @@ def _plugin_root() -> str:
     root = coordinator_doe_root()
     if root is None:
         print(
-            "verify_skill_anchor_links: cannot resolve the example-doctrine-repo repo root — "
+            "verify_skill_anchor_links: cannot resolve the coordinator root — "
             "coordinator_doe_root() returned no result. Set repos.example_doctrine_repo in the "
             "machine-local registry, or set the DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO env var, or "
             "set CLAUDE_PLUGIN_ROOT directly. Nothing was checked.",

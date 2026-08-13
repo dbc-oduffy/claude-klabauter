@@ -78,6 +78,15 @@ def _coordinator_state_root() -> str | None:
     sep = ";" if os.name == "nt" else ":"
     env["PYTHONPATH"] = claude_klabauter_root + (sep + pythonpath if pythonpath else "")
 
+    # `claude_klabauter_root` above only reaches the CHILD subprocess's env
+    # (PYTHONPATH) -- this process's own `sys.path` never got it, so the
+    # coordinator_core import below died on a mirror checkout where
+    # coordinator_core isn't pip-installed. `ensure_engine_on_path` puts it
+    # on THIS process's sys.path too.
+    from cc_invoke import ensure_engine_on_path
+
+    ensure_engine_on_path(__file__)
+
     from coordinator_core.win_portability import no_console_creationflags
 
     proc = subprocess.run(

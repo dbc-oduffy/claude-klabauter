@@ -171,22 +171,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # will not match across re-invocations — append a warning so the EM is not
     # misled into writing a sentinel that will never be seen again.
     # (Mirrors JS lines 146-156.)
-    sentinel_note = (
-        "."
-        if has_true_sid
-        else (
-            " (invocation-scoped — session_id was absent from payload; "
-            "this sentinel only matches if the same OS pid runs the hook again)."
-        )
-    )
+    sentinel_note = "." if has_true_sid else " (this OS pid only — session_id absent)."
 
     nudge_message = (
-        f"You're the EM, not the typist. This is a code-file write — did you mean to "
-        f"dispatch an executor (/execute-plan or a fan-out wave)? "
-        f"If inline is genuinely cheaper here, name why per the When-to-EM-Inline checklist "
-        f"(agent-dispatch-economics.md). "
-        f"To suppress for an authorized inline run, the carve-out path writes "
-        f"{nudge_ok_tmp}"
+        f"EM, not typist. Code-file write — dispatch an executor instead "
+        f"(agent-dispatch-economics.md). Suppress by writing {nudge_ok_tmp}"
         f"{sentinel_note}"
     )
 
@@ -411,16 +400,14 @@ def _build_dispatch_brief(file_path: str, executor_type: str, edit_description: 
     """
     return "\n".join(
         [
-            "## Pre-assembled executor dispatch brief",
+            "## Pre-assembled dispatch brief",
             f"file:          {file_path}",
             f"executor-type: {executor_type}",
-            f"in-scope:      {file_path} (only)",
-            "commit:        false  — EM commits after verification",
+            "commit:        false — EM commits after verification",
             "---",
             f"task:          {edit_description}",
             "",
-            "Dispatch via: fan-out-dispatch.sh or Agent tool with the above brief.",
-            "Docs: docs/wiki/dispatching-parallel-agents.md",
+            "Dispatch: fan-out-dispatch.sh or Agent (docs/wiki/dispatching-parallel-agents.md).",
         ]
     )
 
@@ -757,34 +744,14 @@ def op(payload: dict) -> dict | None:
     raw_sid = payload.get("session_id")
     has_true_session_id = isinstance(raw_sid, str) and raw_sid.strip() != ""
 
-    hash8 = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:8]
-    artifact_note = ""
-    if not ambiguous and not multiple_code_files:
-        import tempfile
+    artifact_note = "" if ambiguous or multiple_code_files else " Artifact written."
 
-        artifact_path = os.path.join(
-            tempfile.gettempdir(),
-            f"coordinator-pending-dispatch-{session_id}-{hash8}.json",
-        )
-        artifact_note = f" Pending-dispatch artifact written to: {artifact_path}."
-
-    sentinel_suffix = (
-        "."
-        if has_true_session_id
-        else (
-            " (invocation-scoped — session_id was absent from payload; this "
-            "sentinel only matches if the same OS pid runs the hook again)."
-        )
-    )
+    sentinel_suffix = "." if has_true_session_id else " (this OS pid only — session_id absent)."
 
     nudge_message = (
-        f"You're the EM, not the typist. Code-file write detected: {file_path}. "
-        "Did you mean to dispatch an executor (/execute-plan or a fan-out wave)? "
-        "If inline is genuinely cheaper here, name why per the When-to-EM-Inline "
-        "checklist (agent-dispatch-economics.md). "
-        f"To suppress for an authorized inline run, the carve-out path writes {nudge_ok_sentinel}"
-        f"{sentinel_suffix}"
-        f"\n\n{dispatch_brief_text}"
+        f"EM, not typist. Code write: {file_path}. Dispatch an executor instead "
+        "(agent-dispatch-economics.md). "
+        f"Suppress: write {nudge_ok_sentinel}{sentinel_suffix}\n\n{dispatch_brief_text}"
         f"{artifact_note}"
     )
 

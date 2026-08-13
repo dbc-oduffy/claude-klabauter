@@ -20,13 +20,28 @@ fact plainly instead, and `operator_override_note` went further still — as
 of the 2026-08-11 key-removal pass it states no per-key fact at all,
 pointing here instead (see this doc's contract note above). See each
 builder's own docstring for the full rationale. Every route below remains a
-human-only affordance in substance — only the framing that said so changed.
+human-only affordance in substance for a dispatched subagent — only the
+framing that said so changed. **Reversed for the EM specifically (PM
+ruling, 2026-08-13):** the EM is now a granting role for the wiki pointer —
+it may be routed to the doc/wiki describing these locks, on an agent's
+behalf, mid-session, and keep that pointer without handing it to the
+subagent. See § "Human-only affordances" immediately below for the precise
+scope of that reversal.
 
 ## Human-only affordances — an in-session agent cannot exercise these
 
-None of the routes below are actions a dispatched agent (or the EM acting on
-an agent's behalf, mid-session) can take. They are what a human operator,
-watching the session, can do.
+None of the routes below are actions a dispatched agent can take — they are
+what a human operator, watching the session, can do. **As of the PM's
+2026-08-13 ruling this is no longer true of the EM in one specific respect:**
+the EM, acting on a dispatched agent's behalf mid-session, may itself be
+routed to the wiki pointer describing these locks (never the key, path, or
+command — see AC-2) and hold it as EM-only context. The EM is a granting
+role for that pointer, not a route by which the subagent gains anything —
+the subagent-audience message stays the terse form regardless of what the
+EM sees. Every route below otherwise remains exactly what it says: a human
+operator, not any agent (EM or subagent), still has to be the one who
+actually creates a marker, sets a pre-launch var, or types the `!`-prefixed
+prompt.
 
 1. **The `!`-prefixed prompt.** Skips PreToolUse hooks entirely for that one
    turn. Human-only — there is no agent-invocable equivalent.
@@ -147,40 +162,28 @@ the point, not an oversight — see "Why the recipe was removed" below. The
 block is APPENDED after the guard's own reason, not prepended before it (see
 "Why appended, not prepended" below):
 
-On a coordinator-only machine (no example-doctrine-repo checkout, or one without the wiki page
-yet admitted to example-doctrine-repo's seed set):
+The rendered line, unconditional — one form, on every machine, with no
+Example-doctrine-repo-checkout branch to pick between:
 
 ```
 <the guard's own deny reason>
 
-An in-session unlock exists for this guard, but it is a human-only affordance: it is granted by a human operator from a terminal outside this session, it cannot be granted by this agent, and creating it from inside the session is a doctrine violation, not a shortcut. How to construct and grant it is documented at ~/.coordinator-claude-settings/coordinator-claude/docs/wiki/ (wiki page for this channel still pending -- meanwhile also docs/reference/guard-override-keys.md); the construction steps there need these two values from this firing: session <session_id>, guard <guard_name>.
+An in-session unlock exists for this guard, but it is a human-only affordance: it is granted by a human operator from a terminal outside this session, it cannot be granted by this agent, and creating it from inside the session is a doctrine violation, not a shortcut. The unlock takes the form of a file named "coordinator-guard-unlock-<session_id>.<guard_name>" in the platform's temp directory, built from session <session_id> and guard <guard_name> of this firing; ~/.coordinator-claude-settings/coordinator-claude/docs/wiki/ and docs/reference/guard-override-keys.md document the convention.
 ```
 
-On a machine with a example-doctrine-repo checkout present (the dedicated page has landed
-there — `example-doctrine-repo coordinator/docs/wiki/guard-unlock-channel.md`, commit
-`fe0919f3b`):
-
-```
-<the guard's own deny reason>
-
-An in-session unlock exists for this guard, but it is a human-only affordance: it is granted by a human operator from a terminal outside this session, it cannot be granted by this agent, and creating it from inside the session is a doctrine violation, not a shortcut. How to construct and grant it is documented at example-doctrine-repo coordinator/docs/wiki/guard-unlock-channel.md; the construction steps there need these two values from this firing: session <session_id>, guard <guard_name>.
-```
-
-The pending clause (`wiki page for this channel still pending -- meanwhile
-also docs/reference/guard-override-keys.md`) is branch-conditional, not a
-fixed part of the line: it renders only on the settings-root branch, where
-the dedicated page genuinely isn't reachable yet. On the example-doctrine-repo-source branch
-the dedicated page IS the answer, so the clause — and the `docs/reference/
-guard-override-keys.md` fallback it names — drops out entirely.
-
-`<wiki pointer>` and whether the pending clause renders are both resolved
-by `guard_unlock_sentinel._unlock_wiki_pointer()` at render time, per the
-dual-install rule below — the function returns `(pointer, pending)` as a
-pair rather than the pointer alone, so `annotate_deny` doesn't have to
-re-derive pending-ness from the pointer's string shape. Never a sentinel
-path, and never an in-process-resolved absolute path (same portability
-constraint as `_resolve_override_keys_doc_display`, § "Exact deny-message
-wording"'s sibling history in `bash_guards._helpers`).
+(2026-08-12) The example-doctrine-repo-source-tree pointer branch — and the process-lifetime-
+cached helper function that used to resolve it at render time — are both gone: the
+dedicated wiki page (`guard-unlock-channel.md`) never landed in example-doctrine-repo's seed
+set, so the settings-root pointer (`_SETTINGS_ROOT_WIKI_POINTER` in
+`guard_unlock_sentinel.py`) is now the only form, named unconditionally
+alongside this doc rather than selected at render time. The line also
+inlines the sentinel's filename shape directly (built from this firing's
+`session_id`/`guard_name`) rather than only pointing at where the shape is
+documented — the temp-directory portion of the path is still left for the
+operator to supply from platform knowledge, so this is not the fully
+assembled path either (same portability constraint as
+`_resolve_override_keys_doc_display`, § "Exact deny-message wording"'s
+sibling history in `bash_guards._helpers`).
 
 **The message supplies data; the wiki supplies shape — that division is the
 whole design.** `<session_id>` and `<guard_name>` above are the exact, bare
@@ -199,42 +202,13 @@ shape into the per-firing message re-creates the recipe; dropping the
 identifiers from the message re-creates the unreachability this paragraph
 exists to prevent.
 
-**Dual-install resolution.** A coordinator-only install has the wiki only
-under the settings root; a example-doctrine-repo user has both, and the example-doctrine-repo source tree
-is the fresher, editable copy. `_unlock_wiki_pointer()` prefers the example-doctrine-repo
-source-tree form when a example-doctrine-repo checkout is present and its
-`coordinator/docs/wiki/` directory actually exists on disk; otherwise it
-names the settings-root form. As of 2026-08-11 the two forms are no longer
-symmetric in what they point at:
-
-- **example-doctrine-repo-source branch** — `example-doctrine-repo coordinator/docs/wiki/guard-unlock-
-  channel.md`, the dedicated page directly (commit `fe0919f3b`). Safe to
-  name because this branch only resolves when a example-doctrine-repo checkout is present,
-  and on any such machine the file is on disk the moment that commit is
-  pulled — there is no separate install step in between for this branch.
-  `pending` is `False` here.
-- **Settings-root branch** — `~/.coordinator-claude-settings/coordinator-
-  claude/docs/wiki/`, the directory, NOT the page (portable — never expanded
-  to an absolute path). The dedicated page exists in example-doctrine-repo's tree but is not
-  yet admitted to example-doctrine-repo's seed set — that allowlist doubles as their public
-  OSS publish allowlist, so admission is a PM decision on example-doctrine-repo's side with no
-  committed date — so naming the page here would hand a 404 to precisely
-  the operator with the fewest other ways to find the answer. `pending` is
-  `True` here, which is what makes `annotate_deny` append the "meanwhile
-  also `docs/reference/guard-override-keys.md`" fallback clause.
-
-The check is a single registry read plus one `Path.is_dir()` stat, cached
-for the process lifetime, and never raises — it degrades to the
-settings-root form (`pending=True`) on any doubt (unresolved registry key,
-missing directory, or any exception along the way), since a crash here
-would fail the hard-deny guard OPEN.
-
-Constructing the actual sentinel path is now left to the operator, following
-§ "In-session unlock" above (`<tempdir>/coordinator-guard-unlock-
-<session_id>.<guard_name>`) using the `session_id`/`guard_name` the deny
-message and envelope already name elsewhere — this doc (or the wiki page,
-once ratified) is where that shape is documented, since the deny message no
-longer hands it over pre-assembled.
+**Constructing the full sentinel path.** The deny message inlines the
+filename shape (`coordinator-guard-unlock-<session_id>.<guard_name>`) built
+from this firing's own `session_id`/`guard_name`, but not the temp-directory
+portion — the operator supplies that from platform knowledge (or the exact
+shape documented in § "In-session unlock" above:
+`<tempdir>/coordinator-guard-unlock-<session_id>.<guard_name>`) rather than
+having it handed over as a ready-to-paste absolute path.
 
 This block is appended at the two engine seams only — never hand-written
 into an individual guard module — so a guard added tomorrow inherits it for
@@ -594,3 +568,36 @@ Spec backlink: `coordinator_core/bash_guards/_helpers.py::operator_override_note
 (the SSOT this doc is the reference half of), and the PM ruling (2026-07-30,
 same session as H12) that moved the full bypass-options content here in
 place of a per-firing inline note.
+
+## Hyphenated prompt-marker overrides — a different kind of artifact
+
+The two tables above are `COORDINATOR_OVERRIDE_*`/`COORDINATOR_ALLOW_*`/
+`COORDINATOR_DISABLE_*` **environment variables**, read at hook-process
+spawn, `_FAMILY_RE`-matched by `coordinator_core.message_register._override_keys`
+(underscore-only pattern:
+`COORDINATOR_(?:OVERRIDE|ALLOW|DISABLE)_[A-Z0-9_]+`). The table below is a
+different kind of artifact entirely: **hyphenated prompt markers and
+sentinel filenames**, read from a dispatch prompt's own text or from an
+agent-writable file on disk, not from `os.environ`. Because they are
+hyphenated they fall outside `_FAMILY_RE` and are structurally invisible to
+registry-derived enumeration — this table is what makes the family
+doc-known so it can be enumerated at all, and **this table IS the registry
+for the hyphenated family**: adding a marker to a guard without adding a row
+here is the defect the register lint (B8/AC-5) catches.
+
+| Marker | Guard | What it does |
+|---|---|---|
+| `COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE` | `hooks/block_unenumerated_agent_type.py` | A `COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE: <reason>` line, own line, non-empty reason, read off the dispatch prompt (`tool_input`, never `dispatched-agents.txt`) — short-circuits the unenumerated-`subagent_type` hard deny before the roster lookup runs. Not disclosed in the rendered deny text (2026-08-13): this marker is agent-writable bypass text the denied dispatcher pastes into its own next prompt, so announcing it in the deny message would hand the bypass to the agent in the same breath the guard refused it. |
+| `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD` | `coordinator/hooks/scripts/block-dispatch-suite-invocation.py` (example-doctrine-repo, peer repo — not present under `coordinator_core/` in this repo) | Same pattern, named in `block_unenumerated_agent_type.py`'s own docstring as the precedent this module's marker reuses ("no new pattern per PM constraint"): a `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD: <reason>` line short-circuits that guard's own dispatch-suite-invocation deny. |
+| `.COORDINATOR-OVERRIDE-WORKTREE-GUARD` | `coordinator_core/write_guards/block_worktree_sentinel_write.py` (case-folded basename match; also referenced by `coordinator_core/bash_guards/block_worktree_sentinel_creation.py`'s sibling Bash-leg guard) | An ordinary dotfile sentinel — `_SENTINEL_NAME = ".coordinator-override-worktree-guard"` — whose presence (case-insensitively matched by basename, Windows-safe) short-circuits the guard that otherwise blocks a Write/Edit into the worktree-sentinel path. Same `XREPO_MARKER_IS_ORDINARY_FILE` posture as the cross-repo write markers above: an ordinary file, no identity gating, no expiry — this table adds it to the registry, it does not harden the mechanism. |
+
+Members are resolved by grepping `coordinator_core/` for the literal marker
+text, not guessed from a guard's name — see this table's own spec backlink
+below for the sweep that produced it. A member whose guard does not exist in
+this tree yet (or has moved) is a defect in this table, not a defect to
+paper over silently.
+
+Spec backlink: `docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md`
+§ C9 (this table is C9's precondition of C6/AC-5 — C6 widens
+`message_register._override_keys._FAMILY_RE` to match the hyphenated shape
+and enumerates FROM this table, not from a hand-kept list).

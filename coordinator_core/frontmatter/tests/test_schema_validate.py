@@ -4956,6 +4956,55 @@ class TestMemoRuleKindEnum:
         assert any(e['field'] == 'kind' for e in errors)
 
 
+class TestMemoRuleDispositionSupersededRequiresCompanions:
+    """disposition_superseded=true requires superseding_note/superseding_realized_by/
+    superseded_at + status already actioned/superseded — the append-only
+    supersede-disposition mechanism's presence-triggered completeness gate."""
+
+    def test_absent_disposition_superseded_ok(self):
+        fm = _valid_memo(status='actioned', decision='accepted', realized_by='inline')
+        errors = validate_memo_cross_fields(fm)
+        assert not any('superseding' in e['field'] or 'superseded_at' in e['field'] for e in errors)
+
+    def test_disposition_superseded_missing_all_companions_fails(self):
+        fm = _valid_memo(
+            status='actioned', decision='accepted', realized_by='inline',
+            disposition_superseded=True,
+        )
+        errors = validate_memo_cross_fields(fm)
+        assert any('superseding_note' in e['field'] for e in errors)
+        assert any('superseding_realized_by' in e['field'] for e in errors)
+        assert any('superseded_at' in e['field'] for e in errors)
+
+    def test_disposition_superseded_complete_ok(self):
+        fm = _valid_memo(
+            status='actioned', decision='accepted', realized_by='inline',
+            disposition_superseded=True,
+            superseding_note='deny removed rather than re-messaged',
+            superseding_realized_by='5fcece54e172',
+            superseded_at='2026-08-12T16:00:00Z',
+        )
+        errors = validate_memo_cross_fields(fm)
+        assert errors == []
+
+    def test_disposition_superseded_true_but_status_open_fails(self):
+        """Can't supersede a disposition that was never made."""
+        fm = _valid_memo(
+            status='open',
+            disposition_superseded=True,
+            superseding_note='n',
+            superseding_realized_by='r',
+            superseded_at='2026-08-12T16:00:00Z',
+        )
+        errors = validate_memo_cross_fields(fm)
+        assert any('status' in e['field'] for e in errors)
+
+    def test_disposition_superseded_falsy_ok_even_without_companions(self):
+        fm = _valid_memo(status='open', disposition_superseded=False)
+        errors = validate_memo_cross_fields(fm)
+        assert not any('superseding' in e['field'] for e in errors)
+
+
 # Review: code-reviewer (2026-07-24 D1 slice, P1) — parse_yaml() (the legacy-dialect
 # YAML *parser*, distinct from _validate_legacy_field/_validate_legacy_yaml_frontmatter
 # below which exercise the field *validator* against hand-built dicts) lost its ONLY

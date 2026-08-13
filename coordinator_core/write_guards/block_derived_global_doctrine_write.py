@@ -120,10 +120,12 @@ _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 #: Rare-use escape hatch — read the module docstring before invoking.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DERIVED_GLOBAL_DOCTRINE_WRITE"
 
-#: Last-resort literal, used ONLY when the registry lookup for
-#: repos.example_doctrine_repo fails. Never used to decide the block — message text
-#: only (mirrors block_home_dir_memo_delivery._FALLBACK_RECEIVER).
-_FALLBACK_AUTHORING_ROOT = "X:/example-doctrine-repo"  # abs-path-ok: message-text-only fallback, never a real filesystem path on this host
+#: NEGATIVE-SPEC: there is deliberately no literal fallback root here. A
+#: message that fabricates a path for an unregistered root hands the reader
+#: somewhere that does not exist — and a codename literal in that position
+#: publishes as a redaction placeholder naming nothing at all. When the
+#: registry lookup fails, `_deny_reason` names the registry key the operator
+#: sets instead of inventing a location.
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
@@ -218,21 +220,35 @@ def _is_derived_live_copy(file_path: str) -> bool:
     return normalized in _derived_live_target_suffixes()
 
 
-def _authoring_path() -> str:
+def _authoring_path() -> Optional[str]:
     """The authoring surface's path, resolved from the registry at
-    message-render time — never a literal (module docstring "Deny text")."""
-    root = registry_get("repos.example_doctrine_repo") or _FALLBACK_AUTHORING_ROOT
+    message-render time — never a literal (module docstring "Deny text").
+
+    Returns None when the root is unregistered on this machine, so the
+    caller can name the registry key rather than render a fabricated path.
+    """
+    root = registry_get("repos.example_doctrine_repo")
+    if not root:
+        return None
     return root.replace("\\", "/").rstrip("/") + "/global-doctrine/CLAUDE.md"
 
 
-def _deny_reason(file_path: str) -> str:
+def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> str:
     authoring = _authoring_path()
+    target = (
+        f"edit instead: `{authoring}`"
+        if authoring
+        else (
+            "the authoring root is unregistered here — "
+            "`machine-local set repos.example_doctrine_repo <path>` names it"
+        )
+    )
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
-        "BLOCKED: not the authoring source — edit instead: "
-        f"`{authoring}` (not `{file_path}`); a re-derivation hook leaves "
-        "edits made here silently overwritten, with no error and no "
-        "signal at the moment of loss.\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        f"BLOCKED: not the authoring source — {target} (not `{file_path}`); "
+        "a re-derivation hook leaves edits made here silently overwritten, "
+        "with no error and no signal at the moment of loss."
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -258,6 +274,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(file_path),
+            "permissionDecisionReason": _deny_reason(file_path, payload),
         }
     }

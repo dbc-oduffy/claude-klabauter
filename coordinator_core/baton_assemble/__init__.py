@@ -179,6 +179,7 @@ from typing import Any, Callable, NamedTuple, Optional
 
 from coordinator_core.contract.decision_object.envelope import build_envelope
 from coordinator_core.contract.decision_object.judgment import (
+    build_disposition,
     build_untrusted_gate_judgment_point,
 )
 from coordinator_core.frontmatter.primitives import (
@@ -1763,6 +1764,17 @@ def resolve_lineage(
     when `artifact_path` is empty (the standalone-handoff mint case, which has
     no lineage source to derive a slug from); every other case's slug still
     derives from `artifact_path` alone, unchanged.
+
+    `predecessor_ordering_degraded` (AC-6, folded candidate 7, 2026-08-13):
+    `bool`, set ONLY inside the `kind == "handoff"` branch that self-resolves
+    via `_resolve_held_handoff_for_session` (the `is_plan_input` ledger
+    read) -- `True` when that resolver's composite ordering key could not
+    fully distinguish two or more of the session's held claims (a set-level
+    signal; see that function's own docstring for what it does and does not
+    say about the primary pick), `False` when it ran and found a clean
+    order. For every OTHER `kind`/branch -- including `kind == "spinoff"`
+    entirely -- this key is ABSENT from the returned dict, not `False`; a
+    caller that needs the value regardless of branch must use `.get()`.
     """
     # `was_bare_slug` distinguishes the bare-slug mint convention (fresh
     # output target -- legitimately absent on disk, nothing to archive-
@@ -2066,6 +2078,13 @@ def resolve_lineage(
         # divergence check is blind to them, since they are discovered only
         # after that check already ran).
         _ledger_extra_paths: list[str] = []
+        # Default: only the `is_plan_input` branch below (the sole call site
+        # that self-resolves via `_resolve_held_handoff_for_session`) ever has
+        # a degradation fact to report -- every other branch's `predecessor`
+        # comes straight off a frontmatter field, with no composite-key
+        # ordering involved at all, so `False` (not `None`) is the accurate
+        # "nothing degraded, because nothing was ordered" answer, not a gap.
+        lineage["predecessor_ordering_degraded"] = False
         if is_own_handoff_record:
             predecessor = artifact_path
             predecessor_id = own_handoff_id
@@ -2079,12 +2098,16 @@ def resolve_lineage(
                 else None
             )
             try:
-                predecessor, _ledger_additional = _resolve_held_handoff_for_session(root)
+                predecessor, _ledger_additional, _ledger_degraded = (
+                    _resolve_held_handoff_for_session(root)
+                )
             except ValueError as exc:
                 predecessor = None
                 predecessor_id = None
                 lineage["plan_ledger_no_claim"] = str(exc)
+                lineage["predecessor_ordering_degraded"] = False
             else:
+                lineage["predecessor_ordering_degraded"] = _ledger_degraded
                 _ledger_extra_paths = list(_ledger_additional)
                 predecessor_path = Path(predecessor)
                 if not predecessor_path.is_absolute():
@@ -2409,6 +2432,84 @@ def _build_roadmap_baton_decline_judgment_point(
             "unconditionally for a roadmap-baton predecessor; this judgment point "
             "is the primary closure for the ordinary /handoff path (plan "
             "claude-klabauter docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md § Layering)."
+        ),
+    )
+
+
+def _build_fan_in_cardinality_judgment_point(
+    lineage: dict[str, Any], root: Path
+) -> dict[str, Any]:
+    """`j-fan-in-cardinality` -- surfaced by `brief()` whenever a session
+    holds 2+ claimed handoffs and `resolve_lineage` resolves a fan-in
+    (`lineage["additional_predecessors"]` non-empty). Per Resolution 1
+    (`state/roadmap/sedge-2026-08-06/COORDINATOR-RESOLUTIONS.md`), N->1
+    fan-in is the CORRECT shape and stays -- this point adds no new
+    cardinality, it only narrates one that already exists: the primary
+    predecessor's `deliverable_id` is the one that survives onto the
+    successor (via `resolve_lineage`'s own carry, see `resolve_deliverable_
+    and_initiative`), and every additional predecessor's `deliverable_id`
+    is named but NOT carried -- Cluster 7's ledger, not this stub's, owns
+    dropped-deliverable survival.
+
+    NARRATION-ONLY (non-negotiable, per the sedge-04 stub and the 2026-07-29
+    hazard `_build_roadmap_baton_decline_judgment_point`'s own docstring
+    describes): this id is never wired into any directive's `depends_on`
+    -- `_build_directives`'s d6/d6-N loop already arms unconditionally off
+    `lineage["additional_predecessors"]` regardless of whether this point is
+    resolved, so there is nothing here for a halt to gate. A future editor
+    wiring `j-fan-in-cardinality` into a `depends_on` re-opens that hazard
+    and must re-solve it, not assume this comment still covers it.
+
+    Acknowledge-only by design (sedge-04's second open question, carried
+    forward unresolved): the single `acknowledge` disposition below carries
+    `resolves: []`, mirroring `j-continuation-vs-fork`'s own `resolves: []`
+    precedent for a disposition with nothing to arm. Whether this point
+    should offer an actionable disposition (e.g. nulling one
+    `additional_predecessors` entry) is a direction-class call this stub
+    does not make.
+    """
+    primary_path = lineage.get("predecessor")
+    additional_paths = lineage.get("additional_predecessors") or []
+
+    def _deliverable_id_for(rel_or_abs_path: Optional[str]) -> Optional[str]:
+        if not rel_or_abs_path:
+            return None
+        candidate = Path(rel_or_abs_path)
+        full_path = candidate if candidate.is_absolute() else root / candidate
+        value = _read_frontmatter_field(str(full_path), "deliverable_id")
+        return value or None
+
+    primary_deliverable_id = _deliverable_id_for(primary_path)
+    entries = [
+        f"primary predecessor {primary_path!r} (deliverable_id="
+        f"{primary_deliverable_id!r}) -- SURVIVES onto the successor"
+    ]
+    for extra_path in additional_paths:
+        extra_deliverable_id = _deliverable_id_for(extra_path)
+        entries.append(
+            f"additional predecessor {extra_path!r} (deliverable_id="
+            f"{extra_deliverable_id!r}) -- dropped, not carried onto the successor"
+        )
+
+    return build_untrusted_gate_judgment_point(
+        id="j-fan-in-cardinality",
+        question=(
+            f"This session holds {1 + len(additional_paths)} claimed batons "
+            "fanning into one successor -- per Resolution 1 this N->1 shape "
+            "is correct and stays; acknowledge which predecessor's "
+            "deliverable_id survives and which are dropped."
+        ),
+        dispositions=[
+            {"value": "acknowledge", "resolves": []},
+        ],
+        evidence="; ".join(entries),
+        reason=(
+            "Resolution 1 (state/roadmap/sedge-2026-08-06/COORDINATOR-"
+            "RESOLUTIONS.md) keeps N->1 fan-in and retires fan-out -- this "
+            "point makes the existing drop of batons 2..N's deliverable_id "
+            "legible to the operator rather than silent; it is narration "
+            "only and never gates `apply` (see this function's own "
+            "docstring for the 2026-07-29 hazard this must not reopen)."
         ),
     )
 
@@ -3058,14 +3159,43 @@ def _build_judgment_points(
         build_untrusted_gate_judgment_point(
             id="j-self-honesty",
             question="Step 0 self-honesty gate: is the branch/artifact state actually what it claims?",
-            dispositions=[{"value": "proceed", "resolves": ["d1"]}],
+            dispositions=[
+                build_disposition(
+                    "proceed",
+                    ["d1"],
+                    guidance=(
+                        "Check this baton against the trigger gate before authoring anything: "
+                        "auto-compaction imminent, an unavoidable restart, a hard blocker acting "
+                        "right now, a literal PM `/handoff` invocation, the review-owed close "
+                        "trampoline, or the plan→execute stamp (`execution_authorized_at`). "
+                        "\"Feels like a good pause point\" is the trap the gate exists to catch, "
+                        "not a trigger -- if none of the gate conditions actually hold, stop and "
+                        "take the next action in this session instead of proceeding here."
+                    ),
+                )
+            ],
             evidence="Left to the caller SKILL.md's own Step 0 prose (C4/C5).",
             reason="Judgment residue -- not mechanically decidable from disk state alone.",
         ),
         build_untrusted_gate_judgment_point(
             id="j-pm-auth",
             question="Has the PM authorized this baton's dispatch/continuation?",
-            dispositions=[{"value": "authorized", "resolves": ["d5"]}],
+            dispositions=[
+                build_disposition(
+                    "authorized",
+                    ["d5"],
+                    guidance=(
+                        "Authorization is either a literal invocation -- the PM typing "
+                        "`/handoff` (or the skill name) for this workstream by name, not an "
+                        "intent-shaped remark like \"you can hand that off\" -- or the "
+                        "plan→execute discriminator: review-integration is done AND the "
+                        "plan carries `execution_authorized_at`, which authorizes independent "
+                        "of any conversational trigger. Absent one of those two, this "
+                        "disposition does not apply -- surface the gap rather than assuming "
+                        "consent from context."
+                    ),
+                )
+            ],
             evidence="PM authorization is a conversational fact, not a disk artifact.",
             reason="Judgment residue -- the EM/PM dialogue, never mechanically inferred.",
         ),
@@ -3097,8 +3227,32 @@ def _build_judgment_points(
                 # the predecessor edge is cut. See `brief()`'s own
                 # decision_note-required handling for this disposition.
                 dispositions=[
-                    {"value": "continue", "resolves": ["d1"]},
-                    {"value": "excise", "resolves": ["d1"]},
+                    build_disposition(
+                        "continue",
+                        ["d1"],
+                        guidance=(
+                            "This is a continuation, not a fork, when the work resumes THIS "
+                            "session's own thread -- including the next phase of the same "
+                            "multi-phase workstream (research → goal-setting → plan → execute "
+                            "→ verify), even when the phase boundary reads like a new topic. "
+                            "That boundary is illusory; the workstream is one arc. Keeps the "
+                            "resolved predecessor edge intact."
+                        ),
+                    ),
+                    build_disposition(
+                        "excise",
+                        ["d1"],
+                        guidance=(
+                            "Break-glass predecessor removal: author the handoff but discard "
+                            "the resolved predecessor edge deliberately -- `deliverable_id`/"
+                            "`initiative` still carry from `artifact_path`, only the "
+                            "predecessor link is cut. Distinct from a genuinely different "
+                            "mid-session topic someone picks up cold, which is `/spinoff` "
+                            "(outside this judgment point's scope) rather than a disposition "
+                            "of this one. Requires a non-empty `decision_note` explaining why "
+                            "the predecessor edge was cut."
+                        ),
+                    ),
                 ],
                 evidence="Requires reading the predecessor's actual content, not just its frontmatter.",
                 reason="Judgment residue -- stays SKILL prose (C4).",
@@ -3141,7 +3295,7 @@ def _build_judgment_points(
             build_untrusted_gate_judgment_point(
                 id="j-dirty-tree-case-c",
                 question="Dirty-tree case-c: are the uncommitted changes this baton's own, or a sibling session's?",
-                dispositions=[{"value": "mine", "resolves": ["d1"]}],
+                dispositions=[build_disposition("mine", ["d1"])],
                 evidence=evidence,
                 reason="Judgment residue -- stays SKILL prose (C4/C5).",
             )
@@ -3159,8 +3313,8 @@ def _build_judgment_points(
                 id="j-tracker-hand-curated",
                 question="This repo's docs/project-tracker.md is hand-curated (d4 was not armed) -- did this session progress anything worth recording in it, and if so, has it been updated by hand?",
                 dispositions=[
-                    {"value": "recorded", "resolves": ["d1"]},
-                    {"value": "nothing-to-record", "resolves": ["d1"]},
+                    build_disposition("recorded", ["d1"]),
+                    build_disposition("nothing-to-record", ["d1"]),
                 ],
                 evidence=_tracker_hand_curated_evidence(root),
                 reason="Judgment residue -- a hand-curated tracker has no renderer to discharge this; the EM must decide and act by hand.",
@@ -3220,7 +3374,7 @@ def _emit(decision_object: dict[str, Any], exit_code: int) -> BriefResult:
 
 def _resolve_held_handoff_for_session(
     root: Path, *, allow_standalone: bool = False
-) -> tuple[Optional[str], list[str]]:
+) -> tuple[Optional[str], list[str], bool]:
     """Self-resolves kind="handoff"'s predecessor(s) from the CURRENT
     session's own DURABLE claim ledger, for the `brief`/`apply` calling
     convention where the caller supplies no `artifact_path` at all -- the
@@ -3240,14 +3394,27 @@ def _resolve_held_handoff_for_session(
     to a baton path -- callers reuse this function rather than re-deriving
     the lookup.
 
-    Returns `("state/handoffs/<basename>", [additional-basenames...])` --
-    the LIVE-directory contract shape (mirrors `_resolve_origin_handoff`'s
-    own return convention) even when the named file(s) have since moved to
-    `archive/handoffs/`; `resolve_lineage`'s archive-aware resolution
-    (`_resolve_qualified_path_or_raise`) is what actually finds them there
-    when these strings are fed back into `resolve_lineage` -- this
-    function's own contract stops at "which basename(s) does the session
-    hold", not "where do they currently live on disk".
+    Returns `("state/handoffs/<basename>", [additional-basenames...],
+    degraded)` -- the LIVE-directory contract shape (mirrors
+    `_resolve_origin_handoff`'s own return convention) even when the named
+    file(s) have since moved to `archive/handoffs/`; `resolve_lineage`'s
+    archive-aware resolution (`_resolve_qualified_path_or_raise`) is what
+    actually finds them there when these strings are fed back into
+    `resolve_lineage` -- this function's own contract stops at "which
+    basename(s) does the session hold", not "where do they currently live on
+    disk". `degraded` (AC-6, folded candidate 7, 2026-08-13) is `True` when
+    the composite key below could not distinguish two or more held claims --
+    i.e. they tied on every leg through `basename`, or the set carried no
+    readable claim metadata at all. This is a SET-LEVEL signal, not a
+    statement about the primary pick specifically: it means the ORDERING OF
+    THE SET (primary and additional alike) contains at least one position
+    decided by the arbitrary basename tiebreak rather than an ordering fact
+    -- it does NOT by itself imply the primary pick was arbitrary, since the
+    tie may be entirely among non-primary claims while the primary is still
+    cleanly ordered ahead of them. `False` for a single-claim set (nothing to
+    tie) and for any multi-claim set the key actually orders. This reports
+    THAT degradation happened somewhere in the set; it does NOT change which
+    claim is picked.
 
     Fails loud (`ValueError`) rather than silently minting or silently
     picking one, on either of two conditions -- each names what was (or
@@ -3298,23 +3465,88 @@ def _resolve_held_handoff_for_session(
     predecessor, in the same earliest-first order, for the caller to thread
     into `resolve_lineage`'s `additional_predecessor_paths`.
 
-    Ordering signal: each claim dir's own `claimed_at` file (ISO8601,
-    written once by `session.claims._write_claim_meta` at claim time,
-    never touched again) is the durable ordering fact -- `list_claims_
-    by_session` itself exposes no timestamp, so this function reads the
-    claim-record store's `claimed_at` file directly, the same store
-    `list_claims_by_session` itself reads `session_id` from. When EVERY
-    held claim has a readable `claimed_at`, ordering is by that value
-    ascending (earliest = primary). When at least one does not (a legacy or
-    hand-seeded claim dir missing the file), there is NO durable ordering
-    signal at all for this set, and this function falls back to the
-    pre-existing `sorted()`-by-basename order -- ARBITRARY (alphabetical,
-    not temporal), not a real predecessor-identity claim, but preferable to
-    reintroducing the ambiguous-hard-fail this fix removes.
+    Ordering signal (DR-291, `docs/decisions/DR-291-*.md`, extended by
+    DR-292 -- see `docs/decisions/` for the re-brief-ordering leg below):
+    each held claim sorts on a FOUR-part composite key, applied per-claim
+    rather than set-wide -- `(stage_rank, claimed_at_or_sentinel,
+    claim_mtime, basename)`. The legs are deliberately ordered by how much
+    they actually know about claim order:
+
+    0. `stage_rank` (2026-08-13, DR-292, closing sedge-15 AC-8) -- `0` for an
+       `apply`-stage claim, `1` for a `brief`-stage claim OR for a claim
+       whose `stage` file is missing/unreadable/unrecognized. This leg
+       exists because `session.claims.touch_brief_claim` rewrites a
+       `brief`-stage claim's `claimed_at` (and, with it, the claim-file
+       mtime -- see leg 1's correction below) on every re-brief, so legs 1
+       and 2 alone can move a re-briefed reservation LATER than a worked
+       (`apply`-stage) baton with an earlier claim time. Ranking `apply`
+       ahead of `brief` restores "the baton actually being worked sorts
+       first" without needing a new writer: the `stage` file already exists
+       in every claim dir written by `_write_claim_meta`. An unreadable/
+       absent stage is NOT privileged into rank 0 -- unknown stage is
+       treated the same as `brief`, mirroring leg 1's own "unknown is not
+       earliest" rule for `claimed_at`. GUARANTEE this leg gives: among
+       held claims, every `apply`-stage claim outranks every `brief`-stage
+       (or stage-unknown) claim, regardless of `claimed_at`. It does NOT
+       guarantee earliest-claimed-first ordering WITHIN the `apply` tier or
+       WITHIN the `brief` tier when a `brief`-stage claim has been
+       re-briefed -- that residual (leg 1's re-brief hole) is UNCHANGED by
+       this leg; it narrows the leg's effect to same-stage-tier claims, it
+       does not close it.
+    1. `claimed_at` -- the claim dir's own `claimed_at` file (ISO8601,
+       written once by `session.claims._write_claim_meta` at claim time).
+       This is write-once for an `apply`-stage claim, but NOT for a
+       `brief`-stage one: `session.claims.touch_brief_claim` deliberately
+       rewrites `claimed_at` to now on re-brief, as a lease refresh, and
+       `list_claims_by_session` does not filter by stage -- so a re-briefed
+       claim's rewritten `claimed_at` reaches this ordering function too
+       (2026-08-13 correction; the prior "never touched again" text here was
+       false). Consequence: a re-brief can move a claim LATER in the
+       ordering, so PRIMARY may not be the earliest-claimed baton once a
+       brief-stage claim has been re-briefed. This is still the durable,
+       recorded INTENT of claim order, so it leads. A claim missing (or
+       unable to read) this file sorts on the high sentinel `"￿"` instead --
+       UNKNOWN is not "earliest"; treating a missing timestamp as earliest
+       would silently promote an unrecorded claim ahead of ones this
+       function can actually prove came first.
+    2. `claim_mtime` -- the `claimed_at` FILE's own `st_mtime` (falling back
+       to the claim DIR's `st_mtime`, then to `float("inf")` when neither
+       stats). This sits under `claimed_at` because it is only a
+       machine-local filesystem fact, not a recorded claim -- but it still
+       tracks write order, which is exactly what's needed to break a
+       same-second `claimed_at` tie (two claims recorded within the same
+       ISO8601 second) without falling all the way to an alphabetical
+       tiebreak that carries no time content at all. The `claimed_at` file
+       specifically (not the sibling `stage` file) is used because for an
+       `apply`-stage claim `_write_claim_meta` writes it once and never
+       rewrites it, while `stage` IS rewritten on brief->apply promotion and
+       would desync mtime from claim order. Note this mtime leg does NOT
+       backstop the `touch_brief_claim` re-brief case described in leg 1
+       above: the same rewrite that moves `claimed_at` also moves the file's
+       `st_mtime`, so both legs move together and neither corrects the
+       other.
+    3. `basename` -- the terminal, total, deterministic tiebreak, unchanged
+       from before. It carries no time content at all, so it only ever
+       decides when both of the above are exactly equal (or entirely
+       absent, e.g. no `sessions_dir`).
+
+    Applying this key PER-CLAIM (rather than set-wide, as before) fixes the
+    prior degradation: one claim missing `claimed_at` used to collapse the
+    ENTIRE set to basename order, discarding real ordering signal for every
+    OTHER claim that did have one. Now a claim with a known `claimed_at`
+    always outranks one without, regardless of what else is in the set.
+
+    `degraded` (AC-6): computed after sorting, by comparing every claim's
+    full `(stage_rank, claimed_at_key, mtime_key)` prefix against its
+    immediate neighbour in sorted order -- `True` iff two or more claims tie
+    on all three (which also covers "the set carried no readable claim
+    metadata at all": every claim then lands on the same sentinel triple).
+    This mirrors DR-291's own "two claims tie on claimed_at and mtime"
+    residual, widened by one leg to match the new key.
     """
     from coordinator_core.ops.session_context import resolve_current_session_id
     from coordinator_core.session import core as _session_core
-    from coordinator_core.session.claims import list_claims_by_session
+    from coordinator_core.session.claims import CLAIM_STAGE_APPLY, list_claims_by_session
 
     session_id = resolve_current_session_id(root)
     if not session_id:
@@ -3330,39 +3562,69 @@ def _resolve_held_handoff_for_session(
     )
     if not held_handoffs:
         if allow_standalone:
-            return None, []
+            return None, [], False
         raise ValueError(
             f"baton_assemble: kind='handoff' with no artifact-path supplied, but "
             f"session {session_id!r} holds ZERO handoff claims in the durable claim "
             "ledger -- pass the predecessor path explicitly."
         )
     if len(held_handoffs) == 1:
-        return "state/handoffs/" + held_handoffs[0], []
+        return "state/handoffs/" + held_handoffs[0], [], False
 
     sessions_dir = _session_core.sessions_dir(str(root))
-    ordering: list[tuple[Optional[str], str]] = []
-    all_have_claimed_at = bool(sessions_dir)
+    _SENTINEL = "￿"
+    ordering: list[tuple[int, str, float, str]] = []
     for basename in held_handoffs:
-        claimed_at: Optional[str] = None
+        stage_rank = 1
+        claimed_at_key = _SENTINEL
+        mtime_key = float("inf")
         if sessions_dir:
             claim_dir = Path(sessions_dir) / "handoff-claims" / basename
+            stage_file = claim_dir / "stage"
             try:
-                claimed_at = (claim_dir / "claimed_at").read_text(encoding="utf-8").strip() or None
-            except OSError:
+                stage_raw = stage_file.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError):
+                # Review: coordinatorstaff-eng-f4ecb2da Finding 0 -- a
+                # non-UTF-8 stage file must degrade ordering, never crash
+                # brief()'s unguarded call site.
+                stage_raw = None
+            # Unlike `session.claims.claim_stage` (which defaults a missing/
+            # unreadable stage to "apply" for a LIVENESS-check caller, where
+            # that default must never make a live holder's claim takeable),
+            # an absent/unreadable stage here is deliberately NOT privileged
+            # into rank 0 -- see this function's own docstring, leg 0: unknown
+            # is not "worked", any more than leg 1 treats unknown as
+            # "earliest".
+            if stage_raw == CLAIM_STAGE_APPLY:
+                stage_rank = 0
+            claimed_at_file = claim_dir / "claimed_at"
+            try:
+                claimed_at = claimed_at_file.read_text(encoding="utf-8").strip() or None
+            except (OSError, UnicodeDecodeError):
+                # Review: coordinatorstaff-eng-f4ecb2da Finding 0 -- same
+                # corrupt-metadata edge as the stage read above.
                 claimed_at = None
-        if not claimed_at:
-            all_have_claimed_at = False
-        ordering.append((claimed_at, basename))
+            if claimed_at:
+                claimed_at_key = claimed_at
+            try:
+                mtime_key = claimed_at_file.stat().st_mtime
+            except OSError:
+                try:
+                    mtime_key = claim_dir.stat().st_mtime
+                except OSError:
+                    mtime_key = float("inf")
+        ordering.append((stage_rank, claimed_at_key, mtime_key, basename))
 
-    if all_have_claimed_at:
-        ordering.sort(key=lambda pair: pair[0])
-        ordered_basenames = [basename for _, basename in ordering]
-    else:
-        ordered_basenames = held_handoffs
+    ordering.sort(key=lambda quad: (quad[0], quad[1], quad[2], quad[3]))
+    ordered_basenames = [basename for _, _, _, basename in ordering]
+
+    degraded = any(
+        ordering[i][:3] == ordering[i + 1][:3] for i in range(len(ordering) - 1)
+    )
 
     primary = "state/handoffs/" + ordered_basenames[0]
     additional = ["state/handoffs/" + basename for basename in ordered_basenames[1:]]
-    return primary, additional
+    return primary, additional, degraded
 
 
 def brief(
@@ -3511,9 +3773,14 @@ def brief(
     # that also happens for a genuinely-supplied artifact_path whose own
     # frontmatter simply names no predecessor, which is not this shape.
     standalone_no_predecessor_reason: Optional[str] = None
+    # Only this self-resolution call site has a degradation fact to override
+    # `resolve_lineage`'s own default (`False`, set unconditionally near its
+    # `is_plan_input` branch -- see that function's comment) with; `None`
+    # means "this call site never ran", not "not degraded".
+    _brief_ledger_degraded: Optional[bool] = None
     if not artifact_path and kind == "handoff":
-        resolved_predecessor, additional_predecessor_paths = _resolve_held_handoff_for_session(
-            root, allow_standalone=True
+        resolved_predecessor, additional_predecessor_paths, _brief_ledger_degraded = (
+            _resolve_held_handoff_for_session(root, allow_standalone=True)
         )
         if resolved_predecessor is None:
             # 2026-08-03 break-class fix: a memo-pickup session legitimately
@@ -3541,6 +3808,8 @@ def brief(
         explicit_deliverable_id=explicit_deliverable_id,
     )
     lineage["standalone_no_predecessor_reason"] = standalone_no_predecessor_reason
+    if _brief_ledger_degraded is not None:
+        lineage["predecessor_ordering_degraded"] = _brief_ledger_degraded
     # Break-glass predecessor excise, continued from the decision-note gate
     # above: nulling `predecessor`/`predecessor_id` here -- BEFORE
     # `_build_directives` reads either -- is the whole mechanism. d1's
@@ -3628,6 +3897,12 @@ def brief(
                 normalized_artifact_path, lineage["plan_ledger_no_claim"], root
             )
         )
+    # sedge-04 (PIN-3): narration-only fan-in cardinality legibility. Never
+    # wired into `_build_judgment_points` (no `lineage` in scope there, per
+    # the research corpus § 3) -- appended here alongside the other
+    # `lineage`-scoped conditional points above, same append-site precedent.
+    if kind == "handoff" and lineage.get("additional_predecessors"):
+        judgment_points.append(_build_fan_in_cardinality_judgment_point(lineage, root))
     narration, next_move = _ready_summary(directives, judgment_points)
 
     envelope = build_envelope(

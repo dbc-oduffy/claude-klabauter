@@ -181,7 +181,7 @@ def _exit_interview_section() -> str:
         "## Exit interview\n\n"
         "- What did you have to work out that the brief could have told you?\n\n"
         "- What did you grep, read, or probe that turned out to be a dead end — and what were you actually looking for?\n\n"
-        "- Where did your tool access, permissions, or output contract fight you? What would you have reached for if it existed?\n\n"
+        "- Where did your tool access, permissions, or output contract fight you? What was missing that isn't deliberately withheld from this role — a guard denial is not a gap.\n\n"
         "- Anything you wanted to say and had nowhere to put?\n\n"
     )
 

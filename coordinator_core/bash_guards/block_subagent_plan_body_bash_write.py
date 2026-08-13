@@ -93,10 +93,40 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.bash_guards._verdict import record_silent
-from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster
 from coordinator_core.write_guards.block_subagent_plan_body_write import (
     _resolve_subagent_identity,
 )
+
+# DEFERRED, NOT a module-level import (2026-08-13 hot-path import-budget fix,
+# latent-infra-blocker sibling of coordinator_core/bash_guards/_helpers.py's
+# `_resolve_roster_accessor`): a module-level `from coordinator_core.hooks.
+# block_unenumerated_agent_type import resolve_roster` drags in the
+# `coordinator_core.hooks` package `__init__`'s full eager registration into
+# every `coordinator_core.bash_guards.dispatch` import, against
+# `coordinator_core/benchmarks/import-budget-manifest.json`'s hot-path budget.
+# Cached on this module's OWN attribute (mirrors `_helpers._resolve_roster_
+# accessor` and `coordinator_core.session.core._psutil()`) so the existing
+# `monkeypatch.setattr(guard, "resolve_roster", ...)` surface (see this
+# package's `tests/test_block_subagent_plan_body_bash_write.py`) keeps
+# working unmodified. DO NOT re-flatten to a module-level import.
+_UNRESOLVED = object()
+resolve_roster = _UNRESOLVED  # type: ignore[assignment]
+
+
+def _resolve_roster_accessor():
+    """Lazily import and cache ``resolve_roster`` on this module's own
+    attribute (see the negative-spec comment above this cache's
+    declaration). Returns the callable; never calls it.
+    """
+    global resolve_roster
+    if resolve_roster is _UNRESOLVED:
+        from coordinator_core.hooks.block_unenumerated_agent_type import (
+            resolve_roster as _imported_resolve_roster,
+        )
+
+        resolve_roster = _imported_resolve_roster
+    return resolve_roster
+
 
 CLASS = "hard-deny"
 MATCHERS = ("Bash",)
@@ -185,18 +215,28 @@ def _write_block_log(git_root: Optional[str], session_id: str, agent_id: str) ->
         )
 
 
-def _deny_reason_ambiguous(agent_id: str, cmd_safe: str) -> str:
+def _deny_reason_ambiguous(
+    agent_id: str,
+    cmd_safe: str,
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> str:
     """Compressed port of the AMBIGUOUS-branch REASON (reference hook)."""
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     return (
         "BLOCKED: ambiguous agent identity — canonical-id collision, failing closed.\n\n"
         "Two dispatches shared one id with different subagent_types. Ask the EM to\n"
-        "re-dispatch cleanly.\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        "re-dispatch cleanly."
+        + ("\n\n" + _note if _note else "")
     )
 
 
 def _deny_reason_executor(
-    agent_id: str, cmd_safe: str, subagent_type: str = _EXECUTOR_TYPE
+    agent_id: str,
+    cmd_safe: str,
+    subagent_type: str = _EXECUTOR_TYPE,
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
 ) -> str:
     """Compressed port of the coordinator:executor-branch REASON (reference hook).
 
@@ -208,6 +248,7 @@ def _deny_reason_executor(
     "wrong agent, ask the EM to re-route" is wrong advice for those: the fix
     for an unenumerated kind is the roster, not a re-route.
     """
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     if subagent_type != _EXECUTOR_TYPE:
         return (
             f"BLOCKED: subagent_type {subagent_type!r} is not on coordinator's\n"
@@ -215,16 +256,16 @@ def _deny_reason_executor(
             "Status stamps use instead:\n"
             "  state/subagent-share/<path>.md (report_sidecar)\n\n"
             "Type is legitimate? It belongs on the roster. Body edit was your\n"
-            "deliverable? Ask the EM to dispatch an enumerated kind.\n\n"
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            "deliverable? Ask the EM to dispatch an enumerated kind."
+            + ("\n\n" + _note if _note else "")
         )
     return (
         "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash.\n\n"
         "Status stamps use instead:\n"
         "  state/subagent-share/<path>.md (report_sidecar)\n\n"
         "Body edit was your deliverable? Wrong agent — ask the EM to route to\n"
-        "enricher/review-integrator.\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        "enricher/review-integrator."
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -341,7 +382,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "block_subagent_plan_body_bash_write", agent_id, git_root, None
             )
             return None
-        roster, _roster_error = resolve_roster()
+        roster, _roster_error = _resolve_roster_accessor()()
         if roster is None or subagent_type in roster:
             return None
 
@@ -393,9 +434,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd_safe = _sanitize_cmd_for_reason(cmd)
 
     if is_ambiguous:
-        reason = _deny_reason_ambiguous(agent_id or raw_agent_id, cmd_safe)
+        reason = _deny_reason_ambiguous(agent_id or raw_agent_id, cmd_safe, payload=payload, git_root=git_root)
     else:
-        reason = _deny_reason_executor(agent_id or raw_agent_id, cmd_safe, subagent_type)
+        reason = _deny_reason_executor(
+            agent_id or raw_agent_id, cmd_safe, subagent_type, payload=payload, git_root=git_root
+        )
 
     # ADVISORY_REWRITE (C14c) -- allow the command through and surface the
     # advisory in `additionalContext` rather than denying via

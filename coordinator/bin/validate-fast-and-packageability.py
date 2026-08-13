@@ -112,6 +112,7 @@ import io
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 
@@ -124,15 +125,13 @@ _BIN_DIR = os.path.dirname(os.path.abspath(__file__))
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import resolve_colocated_claude_klabauter_root, child_env  # noqa: E402
+from cc_invoke import require_colocated_engine_on_path, child_env  # noqa: E402
 
 try:
-    _REPO_ROOT = resolve_colocated_claude_klabauter_root(__file__)
+    _REPO_ROOT = require_colocated_engine_on_path(__file__)
 except RuntimeError as _exc:
     print(f"{os.path.basename(__file__)}: CLAUDE_KLABAUTER_ROOT resolution failed: {_exc}", file=sys.stderr)
     sys.exit(1)
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
 
 from coordinator_core.diff_scoped_tests import (  # noqa: E402
     PYTEST_NO_TESTS_COLLECTED,
@@ -214,6 +213,213 @@ def _fail_on_ambiguous_shell_syntax(cmd: str) -> None:
     raise AmbiguousShellSyntax(cmd)
 
 
+# --------------------------------------------------------------------------
+# Process-group teardown on abort (docs/plans/2026-08-13-reap-orphaned-
+# execnet-gateways.md, chunk C1) -- when the resolved fast-test command
+# spawns `pytest -n auto`, execnet's worker pool are grandchildren of this
+# process. subprocess.run's own KeyboardInterrupt path (and a bare SIGTERM
+# with no handler) reaps only the direct child, orphaning the pool; execnet
+# does register an atexit cleanup (execnet/multi.py:62) but atexit never
+# runs on an uncatchable abort. Proven on this host (docs/research/
+# spike-verdicts/2026-08-13-execnet-gateway-reap-on-abort.md): putting the
+# child in its own process group and killpg-ing that group on a catchable
+# signal reaps 2 of 2 orphaned gateways (spike scenarios 2 and 3a).
+# --------------------------------------------------------------------------
+
+
+def _add_process_group_spawn_kwargs(spawn_kwargs: dict) -> None:
+    """Mutate `spawn_kwargs` (already carrying env/console-suppression
+    kwargs meant for subprocess.Popen) so the child starts in its own
+    process group -- the seam `_install_group_teardown` needs to tear the
+    whole group down on abort instead of orphaning it.
+
+    POSIX: `start_new_session=True` makes the child's pgid equal its own
+    pid (setsid), so `os.killpg(proc.pid, ...)` reaps the whole pool and
+    nothing outside it -- proven (spike scenarios 2/3a).
+
+    Windows: `start_new_session` is accepted by `subprocess.Popen.__init__`
+    but is unused by CPython's own Windows `_execute_child` (the parameter
+    exists only for the POSIX code path), so leaving it set is harmless
+    there. `CREATE_NEW_PROCESS_GROUP` is ORed into whatever creationflags
+    `no_console_passthrough_kwargs()` already supplied -- this is the
+    Windows process-group primitive; the actual kill mechanism is the Job
+    Object in `_assign_windows_job_object` below. NOT PROVEN on this host
+    (macOS/arm64) -- see that function's docstring.
+    """
+    spawn_kwargs["start_new_session"] = True
+    if os.name == "nt":
+        spawn_kwargs["creationflags"] = spawn_kwargs.get("creationflags", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+
+
+def _teardown_process_group(proc: "subprocess.Popen") -> None:
+    """Kill ONLY the process group `proc` itself created -- never anything
+    else. `_add_process_group_spawn_kwargs` makes `proc`'s pgid equal its
+    own pid (POSIX `start_new_session`), so `os.killpg(proc.pid, ...)`
+    reaps exactly this runner's pool. Deliberately never matches on the
+    execnet command-line signature: 50-70 concurrent LLM sessions share
+    this box and peers run xdist here too, and the spike observed four
+    gateways under a live peer controller that a signature match would
+    have killed.
+
+    Swallows any failure (AC3): a reap that raises must never change the
+    run's exit code, and the caller's own `except OSError` rc=127 contract
+    for a missing-executable spawn stays byte-identical.
+
+    Defense-in-depth: confirms `proc` is still its own process-group leader
+    before signaling. Correct today only because the paired spawn always
+    sets `start_new_session=True` (pgid == pid); if a future edit drops
+    that kwarg while this teardown stays wired, `proc` would otherwise
+    inherit the runner's own pgid and `killpg` would self-kill the
+    runner's whole process group. Fails closed: any doubt (including
+    `os.getpgid` itself raising because the child already exited) skips
+    the signal rather than risking it.
+    """
+    if os.name == "nt":
+        return
+    try:
+        if os.getpgid(proc.pid) != proc.pid:
+            return
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def _install_group_teardown(proc: "subprocess.Popen"):
+    """Install SIGTERM/SIGINT handlers that tear down `proc`'s process
+    group before this process itself terminates -- the proven POSIX abort
+    path (spike scenarios 2/3a). Returns a `restore()` callable that
+    reinstates whatever handler was previously installed; call it in a
+    `finally` around the wait so the handler installed here never outlives
+    the single spawn it guards.
+
+    After tearing the group down, the handler restores the prior
+    disposition and re-raises the same signal at itself -- SIGTERM then
+    terminates normally (its default disposition), and SIGINT resumes
+    whatever the previous handler did (ordinarily Python's own
+    `default_int_handler`, raising `KeyboardInterrupt`), so the run's own
+    abort semantics are unchanged; only the orphaned pool is now reaped
+    first.
+    """
+    if os.name == "nt":
+        return lambda: None
+
+    prev_handlers: dict[int, object] = {}
+
+    def _on_signal(signum, frame):
+        _teardown_process_group(proc)
+        signal.signal(signum, prev_handlers[signum])
+        os.kill(os.getpid(), signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        prev_handlers[sig] = signal.getsignal(sig)
+        signal.signal(sig, _on_signal)
+
+    def _restore() -> None:
+        for sig, handler in prev_handlers.items():
+            signal.signal(sig, handler)
+
+    return _restore
+
+
+def _assign_windows_job_object(proc: "subprocess.Popen"):
+    """Put `proc` into a Windows Job Object configured with
+    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the OS kills every process in
+    the job -- including execnet grandchildren -- the moment the job's
+    last handle closes, which happens automatically whenever this process
+    exits, by any means, not only a caught signal. This is a STRONGER
+    mechanism than the POSIX signal-handler path: it does not depend on a
+    handler running at all.
+
+    NOT PROVEN on this host -- this repo's dev machine is macOS/arm64
+    (docs/research/spike-verdicts/2026-08-13-execnet-gateway-reap-on-abort.md
+    § Not executed). Implemented per AC6 and marked unverified here rather
+    than assumed equivalent to the proven POSIX leg.
+
+    Returns the job handle (the caller must keep it alive for the child's
+    lifetime and close it via `_close_windows_job_object` when done), or
+    `None` on any failure -- swallowed, matching AC3: this plumbing must
+    never change the run's exit code.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+        JobObjectExtendedLimitInformation = 9
+
+        class _IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", _IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+
+        info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            job, JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)
+        ):
+            kernel32.CloseHandle(job)
+            return None
+
+        if not kernel32.AssignProcessToJobObject(job, int(proc._handle)):  # noqa: SLF001 -- no public Windows-handle accessor exists on Popen
+            kernel32.CloseHandle(job)
+            return None
+        return job
+    except Exception:
+        # AC3: teardown plumbing must never change the run's exit code.
+        return None
+
+
+def _close_windows_job_object(job_handle) -> None:
+    """Release a job handle returned by `_assign_windows_job_object`.
+    Swallows any failure -- matches AC3, and matches that function's own
+    unproven-on-this-host status."""
+    if os.name != "nt" or job_handle is None:
+        return
+    try:
+        import ctypes
+
+        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(job_handle)
+    except Exception:
+        pass
+
+
 def _run_resolved_command(cmd: str) -> int:
     """Execute the resolved fast-test command as a direct argv vector
     (`shlex.split`, no shell) -- the metacharacter guard already refused any
@@ -225,6 +431,13 @@ def _run_resolved_command(cmd: str) -> int:
     command must run as its own process, not be imported and called
     in-line. Reason recorded in
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
+
+    Spawned in its own process group (`_add_process_group_spawn_kwargs`)
+    with a SIGTERM/SIGINT teardown installed for the duration of the wait
+    (`_install_group_teardown`) and, on Windows, a kill-on-close Job
+    Object (`_assign_windows_job_object`) -- see the module section above
+    this function for why (docs/plans/2026-08-13-reap-orphaned-execnet-
+    gateways.md, chunk C1).
     """
     argv = shlex.split(cmd)
     # env=child_env(): strip COORDINATOR_CORE_LAZY_OPS before spawning -- this repo's
@@ -233,13 +446,13 @@ def _run_resolved_command(cmd: str) -> int:
     # coordinator_core.ops skip eager registration, breaking collection on a green
     # tree (see commit 5943ec01, which patched the sibling workday-complete-step1-
     # validate.py copy of this exact leak by hand before child_env() existed).
+    spawn_kwargs = dict(
+        env=child_env(),
+        **no_console_passthrough_kwargs(),
+    )
+    _add_process_group_spawn_kwargs(spawn_kwargs)
     try:
-        proc = subprocess.run(
-            argv,
-            env=child_env(),
-            **no_console_passthrough_kwargs(),
-        )
-        return proc.returncode
+        proc = subprocess.Popen(argv, **spawn_kwargs)
     except OSError as exc:
         # `bash -c` used to report an unresolvable first token as rc=127;
         # direct exec instead raises (FileNotFoundError on both POSIX and
@@ -247,6 +460,14 @@ def _run_resolved_command(cmd: str) -> int:
         # contract rather than letting this escape as an uncaught traceback.
         print(f"command not found: {argv[0]!r} ({exc})", file=sys.stderr)
         return 127
+
+    job_handle = _assign_windows_job_object(proc)
+    restore_signals = _install_group_teardown(proc)
+    try:
+        return proc.wait()
+    finally:
+        restore_signals()
+        _close_windows_job_object(job_handle)
 
 
 def run_fast(repo_root: str | None) -> tuple[str, int]:

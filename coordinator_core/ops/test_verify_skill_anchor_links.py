@@ -494,4 +494,4 @@ def test_plugin_root_unset_and_unresolvable_exits_2(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc_info:
         _plugin_root()
     assert exc_info.value.code == 2
-    assert "cannot resolve the example-doctrine-repo repo root" in capsys.readouterr().err
+    assert "cannot resolve the coordinator root" in capsys.readouterr().err

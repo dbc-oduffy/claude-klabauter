@@ -40,6 +40,8 @@ Supports --check-only (validate without mutating live files) and --rc/
 #   gen-claude-doe-shim.py --check-only       -- validate without mutating live files
 #   gen-claude-doe-shim.py --rc <path>        -- override target rc file
 #   gen-claude-doe-shim.py --template <path>  -- override template source path
+#   gen-claude-doe-shim.py --shell powershell -- target a PowerShell profile
+#                                                (default template follows the family)
 #
 # Exit codes: 0 on success (including an idempotent no-op re-run, or a clean
 # --check-only pass); 1 on a business failure (unknown argument, missing flag
@@ -70,15 +72,34 @@ from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 from coordinator_data_root import data_root  # noqa: E402
 
 
-def _default_template_path() -> str:
+def _default_template_path(shell_family: str = "bash") -> str:
     """Mirror the bash oracle's `${_script_dir}/../templates/shell/claude-doe-shim.sh.tmpl`
     default. Resolved via `coordinator_data_root.data_root()`'s co-located/
     example-doctrine-repo-resident two-rung chain, not a bare `__file__`-relative walk: the
     2026-07-22 executable-surface migration moved this trampoline into
     claude-klabauter while `templates/` stayed in example-doctrine-repo (DR-047
     contract/engine split), so a `${script_dir}/../templates` walk no longer
-    lands anywhere."""
-    return os.path.join(str(data_root("templates")), "shell", "claude-doe-shim.sh.tmpl")
+    lands anywhere.
+
+    Negative-spec: the default MUST branch on the shell family, symmetric with
+    the engine's `_shim_filename`. A family-blind default renders the bash
+    oracle's bytes into a file named `claude-doe-shim.ps1` and dot-sources it
+    from a PowerShell profile — a render that succeeds, a `--check-only` that
+    reports "Template valid", and a profile that fails at every subsequent
+    shell start. An unrecognized family falls through to the bash template and
+    is rejected downstream by the engine's own `--shell` validation."""
+    stem = "claude-doe-shim.ps1.tmpl" if shell_family == "powershell" else "claude-doe-shim.sh.tmpl"
+    return os.path.join(str(data_root("templates")), "shell", stem)
+
+
+def _shell_family_from_argv(argv: list[str]) -> str:
+    """Read `--shell <family>` out of argv without consuming or validating it —
+    the engine owns both. Space-separated form only, matching the engine's
+    parser."""
+    for i, arg in enumerate(argv):
+        if arg == "--shell" and i + 1 < len(argv):
+            return argv[i + 1]
+    return "bash"
 
 
 def _import_runner():
@@ -124,7 +145,7 @@ def main() -> None:
     argv = sys.argv[1:]
     if "--template" not in argv and "-h" not in argv and "--help" not in argv:
         try:
-            argv = argv + ["--template", _default_template_path()]
+            argv = argv + ["--template", _default_template_path(_shell_family_from_argv(argv))]
         except RuntimeError as exc:
             print(
                 f"gen-claude-doe-shim.py: could not resolve a default "

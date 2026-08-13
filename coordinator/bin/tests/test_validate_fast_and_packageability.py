@@ -36,6 +36,25 @@ Test coverage:
         mutex (mutex_owner acquires and releases across the call)
     T11 a suite mutex already held by another owner produces the WARN and
         still proceeds (fail-open), never an abort
+  Process-group teardown on abort (docs/plans/2026-08-13-reap-orphaned-
+  execnet-gateways.md, chunk C1) -- the resolved fast-test command spawns
+  its own process group and installs a SIGTERM/SIGINT teardown for the
+  duration of the wait, so an aborted run reaps its execnet worker pool
+  instead of orphaning it. These tests exercise the wiring, not a real
+  spawn-and-kill of an xdist pool (that is the throwaway spike's job,
+  already discharged in docs/research/spike-verdicts/2026-08-13-execnet-
+  gateway-reap-on-abort.md):
+    T12 _add_process_group_spawn_kwargs sets start_new_session on every
+        platform, and additionally ORs CREATE_NEW_PROCESS_GROUP into
+        creationflags when modelling Windows
+    T13 _install_group_teardown installs SIGTERM/SIGINT handlers and its
+        restore() reinstates the prior disposition
+    T14 _teardown_process_group swallows a raising os.killpg (AC3: a
+        reap that raises must never change the run's exit code)
+    T15 _assign_windows_job_object / _close_windows_job_object are no-ops
+        on a non-Windows host (this dev machine) and never raise
+    T16 _run_resolved_command still preserves its rc=0/rc=N/rc=127
+        contract now that it spawns via Popen instead of subprocess.run
 """
 from __future__ import annotations
 
@@ -345,6 +364,77 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
             self.assertEqual(ran, [True])
             self.assertIn("suite mutex held by other-owner", stderr_buf.getvalue())
             self.assertIn("proceeding unserialized", stderr_buf.getvalue())
+
+
+class ProcessGroupTeardownTest(unittest.TestCase):
+    """T12-T16: the abort-time process-group teardown wiring around
+    `_run_resolved_command` (see module docstring's Process-group
+    teardown section)."""
+
+    def test_t12_start_new_session_always_set(self) -> None:
+        mod = _load_cli_module()
+        kwargs: dict = {}
+        mod._add_process_group_spawn_kwargs(kwargs)
+        self.assertTrue(kwargs["start_new_session"])
+
+    def test_t12_windows_ors_create_new_process_group(self) -> None:
+        mod = _load_cli_module()
+        from unittest import mock
+
+        with mock.patch.object(mod.os, "name", "nt"):
+            kwargs = {"creationflags": 0x08000000}  # pretend CREATE_NO_WINDOW already set
+            mod._add_process_group_spawn_kwargs(kwargs)
+            create_new_pgroup = getattr(mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            self.assertEqual(kwargs["creationflags"], 0x08000000 | create_new_pgroup)
+
+    @unittest.skipIf(os.name == "nt", "POSIX-only signal-handler leg")
+    def test_t13_install_and_restore_signal_handlers(self) -> None:
+        import signal as _signal
+
+        mod = _load_cli_module()
+        orig_term = _signal.getsignal(_signal.SIGTERM)
+        orig_int = _signal.getsignal(_signal.SIGINT)
+        try:
+            fake_proc = type("FakeProc", (), {"pid": os.getpid() + 1})()
+            restore = mod._install_group_teardown(fake_proc)
+            self.assertIsNot(_signal.getsignal(_signal.SIGTERM), orig_term)
+            self.assertIsNot(_signal.getsignal(_signal.SIGINT), orig_int)
+            restore()
+            self.assertEqual(_signal.getsignal(_signal.SIGTERM), orig_term)
+            self.assertEqual(_signal.getsignal(_signal.SIGINT), orig_int)
+        finally:
+            _signal.signal(_signal.SIGTERM, orig_term)
+            _signal.signal(_signal.SIGINT, orig_int)
+
+    @unittest.skipIf(os.name == "nt", "POSIX-only killpg leg")
+    def test_t14_teardown_swallows_raising_killpg(self) -> None:
+        from unittest import mock
+
+        mod = _load_cli_module()
+        fake_proc = type("FakeProc", (), {"pid": 999999})()
+        with mock.patch.object(mod.os, "killpg", side_effect=OSError("no such process group")):
+            # Must not raise -- AC3: a reap that raises must never change
+            # the run's exit code.
+            mod._teardown_process_group(fake_proc)
+
+    def test_t15_windows_job_object_noop_off_windows(self) -> None:
+        mod = _load_cli_module()
+        fake_proc = type("FakeProc", (), {"pid": os.getpid()})()
+        self.assertIsNone(mod._assign_windows_job_object(fake_proc))
+        # Must not raise on a None handle or on a non-Windows host.
+        mod._close_windows_job_object(None)
+        mod._close_windows_job_object("not-a-real-handle")
+
+    def test_t16_run_resolved_command_still_direct_execs_via_popen(self) -> None:
+        mod = _load_cli_module()
+        cmd = f"{mod.shlex.quote(sys.executable)} -c \"import sys; sys.exit(0)\""
+        self.assertEqual(mod._run_resolved_command(cmd), 0)
+
+        cmd = f"{mod.shlex.quote(sys.executable)} -c \"import sys; sys.exit(3)\""
+        self.assertEqual(mod._run_resolved_command(cmd), 3)
+
+        exit_code = mod._run_resolved_command("this-binary-does-not-exist-anywhere-12345")
+        self.assertEqual(exit_code, 127)
 
 
 if __name__ == "__main__":

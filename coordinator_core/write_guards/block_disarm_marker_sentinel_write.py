@@ -111,11 +111,21 @@ _SENTINEL_NAME = MARKER_BASENAME
 
 #: Deny reason -- deliberately withholds the sentinel basename and any
 #: override incantation (see module docstring "Deny message discipline").
+#:
+#: 2026-08-13 (docs/plans/2026-08-13-guard-messages-stop-handing-agents-
+#: the-keys.md, C4c): the prior text named the sanctioned creation route as
+#: "via !-prefixed prompt" -- a CLI-invocation-shaped clause naming a
+#: concrete unlock mechanism. Removed unconditionally, for every audience:
+#: AC-1 bans a CLI invocation / any statement that an unlock exists from a
+#: subagent-audience render, and AC-2 caps an EM-audience render at "a key,
+#: path, or command" only via a wiki pointer -- this guard has no doc
+#: pointer to substitute (no override env var backs this sentinel), so the
+#: clause has no audience-safe form and is dropped rather than gated.
 _DENY_REASON = (
     "[disarm-marker guard] BLOCKED: this file disarms the guard suite; no "
     "self-grant.\n"
-    "Only the operator creates it, via !-prefixed prompt. If warranted, "
-    "say so, let EM/PM decide.\n"
+    "Only the operator can create it. If warranted, say so, let EM/PM "
+    "decide.\n"
     "Read/remove stays allowed -- removal re-arms."
 )
 
@@ -137,4 +147,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not target:
         return None
 
-    return sentinel_write_denial(target, _SENTINEL_NAME, _DENY_REASON)
+    return sentinel_write_denial(target, _SENTINEL_NAME, _DENY_REASON, payload=payload)

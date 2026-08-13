@@ -121,11 +121,9 @@ import tomllib  # stdlib, 3.11+
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import resolve_colocated_claude_klabauter_root  # noqa: E402
+from cc_invoke import require_colocated_engine_on_path  # noqa: E402
 
-_CLAUDE_KLABAUTER_ROOT = resolve_colocated_claude_klabauter_root(__file__)
-if _CLAUDE_KLABAUTER_ROOT not in sys.path:
-    sys.path.insert(0, _CLAUDE_KLABAUTER_ROOT)
+_CLAUDE_KLABAUTER_ROOT = require_colocated_engine_on_path(__file__)
 from coordinator_core.install.write_surface import (  # noqa: E402
     ShapedClause,
     WriteSurfaceDeclaration,

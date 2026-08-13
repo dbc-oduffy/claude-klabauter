@@ -12,6 +12,8 @@ import pytest
 
 from coordinator_core.ops.rollup_derive import main
 
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 @pytest.fixture()
 def git_repo(tmp_path):

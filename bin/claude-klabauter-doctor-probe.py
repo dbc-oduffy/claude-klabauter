@@ -45,6 +45,10 @@ Checks — seven ProbeResult objects, in dependency order:
                          strings live against each record's committing sibling (DEGRADED when
                          any record's evidence resolves truthy while status: is still open;
                          never auto-flips status:).
+  claude-klabauter.execnet.orphaned_gateways  OPTIONAL — flags execnet gateway (pytest -n worker)
+                         processes whose controller has died (DEGRADED on any found with
+                         no live controller; PASS when none found or all found are under
+                         a live controller — a healthy in-flight run, never flagged).
 
 Run modes:
 
@@ -57,7 +61,13 @@ is importable; falls back to an equivalent local implementation otherwise so the
 still reports useful results on a broken tree.
 
 Negative-spec:
-  - stdlib-only: no third-party imports anywhere in this module.
+  - stdlib-only at module scope: no third-party import at module top-level. ONE
+    probe-local exception is documented in place — a lazy, guarded `import psutil`
+    inside `_run_probe_orphaned_execnet_gateways` only, mirroring
+    `coordinator_core.diagnostics.contained_run`'s own guarded-import convention
+    (psutil is a declared, required coordinator_core dependency, not an
+    arbitrary third party); ImportError there degrades to SKIP and never breaks
+    module import or any other probe.
   - Does NOT depend on a live coordinator_core process — designed to run when it is dead.
   - Does NOT hardcode the claude-klabauter root path — resolves via CLAUDE_KLABAUTER_ROOT ladder.
   - Does NOT probe a resident UDS service — retired under DR-215 (command-type engine).
@@ -2090,6 +2100,193 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
 
 
 # ---------------------------------------------------------------------------
+# Probe 11: orphaned execnet gateways (OPTIONAL)
+# ---------------------------------------------------------------------------
+
+
+_EXECNET_GATEWAY_PROBE = "claude-klabauter.execnet.orphaned_gateways"
+
+# The execnet worker bootstrap line every gateway process carries on its command
+# line — nothing else on this box carries it (spike-verified,
+# docs/research/spike-verdicts/2026-08-13-execnet-gateway-reap-on-abort.md).
+_EXECNET_GATEWAY_SIGNATURE = "exec(eval(sys.stdin.readline()))"
+
+
+def _run_probe_orphaned_execnet_gateways() -> _ProbeResult:
+    """Probe claude-klabauter.execnet.orphaned_gateways — OPTIONAL (required=False).
+
+    Detects execnet gateway worker processes (spawned by `pytest -n` / xdist)
+    whose controller has died without reaping them — the residual leak an
+    uncatchable `SIGKILL` of the runner leaves behind even after C1's
+    process-group teardown closes every catchable abort path (see
+    docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md § Problem: "the
+    two deliverables below are one problem, not two").
+
+    Detection: enumerate every process whose command line contains
+    _EXECNET_GATEWAY_SIGNATURE, then test whether its parent (the pytest
+    controller / execnet bootstrap channel) is still alive.  A parent that no
+    longer exists, or that has been reparented to init (ppid 0 or 1), means
+    the controller is gone — orphaned.  A parent that IS alive means this is
+    a healthy in-flight test run, not a leak.
+
+    AC4 — the single most likely way to get this wrong (proven live during
+    the spike, not hypothetical): four gateway processes matching the
+    signature were observed under a LIVE controller — a peer's healthy
+    in-flight `pytest -n` run on this shared, 50-70-concurrent-session box.
+    A raw command-line count (the shape the originating memo proposed) would
+    have flagged those four as a leak. This probe reports ONLY gateways with
+    NO live controller; a gateway under a live controller is PASS, never
+    reported as orphaned.
+
+    Negative-spec:
+      - Does NOT spawn anything — psutil.process_iter/pid_exists are
+        process-table reads, no subprocess.
+      - Does NOT kill anything — read-only diagnostic; remediation names the
+        pid(s) for the operator to act on, this probe never terminates them.
+      - Does NOT match on the execnet signature alone to call something
+        orphaned — a signature match with a live parent is explicitly PASS
+        (AC4). Signature-plus-dead-controller is the whole predicate.
+      - Does NOT shell out to `ps`/`tasklist`/`wmic` — psutil.process_iter and
+        psutil.pid_exists are the SAME primitives coordinator_core's own
+        liveness seam (coordinator_core.session.core) and containment
+        self-test (coordinator_core.diagnostics.contained_run) already use,
+        cross-platform (POSIX + Windows) with no platform branch needed here.
+      - An indeterminate parent-liveness read (psutil raises reading ppid)
+        fails CLOSED toward "assume alive, not orphaned" — an ambiguous read
+        is not a confirmed orphan, mirroring the fail-closed-to-keep posture
+        coordinator_core.ops.session.reap uses for claim-dir liveness.
+
+    Probe-authoring invariant: wraps all logic so unexpected exceptions become
+    a SKIP verdict (not a crash), matching the optional-probe contract.
+
+    Spec backlink: docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md § C2, AC4-AC5;
+    docs/research/spike-verdicts/2026-08-13-execnet-gateway-reap-on-abort.md.
+    """
+    try:
+        try:
+            import psutil  # Probe-local guarded third-party import — see module docstring Negative-spec.
+        except ImportError:
+            return _ProbeResult(
+                probe=_EXECNET_GATEWAY_PROBE,
+                status=_INFO,
+                detail=(
+                    "psutil not importable; orphaned-execnet-gateway detection skipped. "
+                    "psutil is a declared, required coordinator_core dependency — its "
+                    "absence indicates an incomplete engine install, not a normal state."
+                ),
+                remediation=(
+                    "Install coordinator_core's declared dependencies "
+                    "(pip install -e . from CLAUDE_KLABAUTER_ROOT), then re-run the doctor probe."
+                ),
+                required=False,
+                skipped=True,
+            )
+
+        orphaned_pids: list[int] = []
+        live_controlled_count = 0
+
+        # `psutil.process_iter` can itself raise NoSuchProcess/ZombieProcess
+        # from its own internal snapshot step -- not only from `proc.info`
+        # access below -- when a process vanishes mid-enumeration, which is
+        # the normal case under this box's process churn. Advancing the
+        # iterator by hand lets a per-process failure skip that process and
+        # continue enumerating, instead of aborting the whole probe.
+        proc_iter = psutil.process_iter(["pid", "ppid", "cmdline"])
+        while True:
+            try:
+                proc = next(proc_iter)
+            except StopIteration:
+                break
+            except Exception:
+                continue
+
+            try:
+                cmdline = proc.info.get("cmdline") or []
+            except Exception:
+                continue
+            if not any(_EXECNET_GATEWAY_SIGNATURE in part for part in cmdline):
+                continue
+
+            pid = proc.info.get("pid")
+            ppid = proc.info.get("ppid")
+
+            if ppid in (0, 1):
+                # Reparented to init/kernel — controller definitively gone.
+                orphaned_pids.append(pid)
+                continue
+
+            try:
+                controller_alive = bool(ppid) and psutil.pid_exists(ppid)
+            except Exception:
+                # Indeterminate parent-liveness read — fail closed toward
+                # "assume alive" (AC4: an ambiguous read is not a confirmed
+                # orphan; only a confirmed-dead controller is reported).
+                controller_alive = True
+
+            if controller_alive:
+                live_controlled_count += 1
+                continue
+
+            orphaned_pids.append(pid)
+
+        if orphaned_pids:
+            pids_str = ", ".join(str(p) for p in orphaned_pids)
+            return _ProbeResult(
+                probe=_EXECNET_GATEWAY_PROBE,
+                status=_DEGRADED,
+                detail=(
+                    f"{len(orphaned_pids)} execnet gateway process(es) with no live "
+                    f"controller detected: pid(s) {pids_str}. "
+                    f"{live_controlled_count} other gateway process(es) on this box have "
+                    "a live controller and are a healthy in-flight test run — not counted "
+                    "as orphaned (AC4)."
+                ),
+                remediation=(
+                    f"These pid(s) ({pids_str}) are leaked pytest -n worker processes from "
+                    "an aborted run whose controller died without reaping them. Confirm "
+                    "none is your own in-flight run, then terminate the named pid(s) "
+                    "directly — this probe does not kill anything itself."
+                ),
+                required=False,
+                data={
+                    "orphaned_pids": orphaned_pids,
+                    "live_controlled_count": live_controlled_count,
+                },
+            )
+
+        return _ProbeResult(
+            probe=_EXECNET_GATEWAY_PROBE,
+            status=_PASS,
+            detail=(
+                "No orphaned execnet gateway processes found"
+                + (
+                    f" ({live_controlled_count} gateway process(es) under a live "
+                    "controller — healthy in-flight run)."
+                    if live_controlled_count
+                    else "."
+                )
+            ),
+            remediation="—",
+            required=False,
+            data={
+                "orphaned_pids": [],
+                "live_controlled_count": live_controlled_count,
+            },
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_EXECNET_GATEWAY_PROBE,
+            status=_INFO,
+            detail=(
+                f"Unexpected error in orphaned execnet gateway probe: {type(exc).__name__}: {exc}"
+            ),
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Probe manifest — doctor-probes.toml loader
 # ---------------------------------------------------------------------------
 
@@ -2343,6 +2540,7 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results.append(_run_probe_commitments_recheck(claude_klabauter_root))
     results.append(_run_probe_root_pointer(claude_klabauter_root))
     results.append(_run_probe_invoke_latency(claude_klabauter_root))
+    results.append(_run_probe_orphaned_execnet_gateways())
 
     return results, claude_klabauter_root
 

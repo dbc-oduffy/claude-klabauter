@@ -126,7 +126,7 @@ def _bullet_or_numbered_is_prose(line: str) -> bool:
 
 _REASON = """OFFER: baton body is bare rows, no prose -- next reader gets a
 manifest, not a baton. Add why: goal, decisions made, next step. Advisory
-only, write already landed. Silence future notes: {override_note}
+only, write already landed.{override_sentence}
 """
 
 _TRIVIAL_HINT = """
@@ -298,10 +298,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # reason-shaped, not flag-shaped; render VAR="<reason>", not the
         # default VAR=1 (which this guard's own _is_trivial_reason would
         # reject).
+        _note = operator_override_note(
+            _ESCAPE_HATCH_ENV_VAR,
+            payload=payload,
+            reason_placeholder="<one-sentence reason>",
+        )
+        _override_sentence = f" Silence future notes: {_note}" if _note else ""
         reason = _REASON.format(
-            override_note=operator_override_note(
-                _ESCAPE_HATCH_ENV_VAR, reason_placeholder="<one-sentence reason>"
-            )
+            override_sentence=_override_sentence
         ) + (_TRIVIAL_HINT if trivial_reason else "")
 
         return {

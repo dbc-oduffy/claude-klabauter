@@ -30,6 +30,13 @@ review pass actually closed the loop, so checking for it is equivalent to
 checking for the integrator run without adding a second cross-referenced
 state surface.
 
+Not a blind absolute: an integrator genuinely unavailable has a named
+exit, cited by the advisory itself — example-doctrine-repo
+``coordinator/docs/wiki/review-integration-doctrine.md`` §
+"Integrator unavailable — the named exit" (re-dispatch once; if not
+break-class, park with an owner; if break-class, hand-apply after the
+integrator's own fresh-disk re-check, deviation recorded in the commit).
+
 Scope — why EM-inline only, mirroring
 ``block_unauthorized_claude_md_write``'s allow-condition (1), inverted:
 this guard targets the EM's OWN hand-edit specifically ("Reviewer findings
@@ -261,13 +268,20 @@ def _find_pending_sidecar(
     return None
 
 
-def _deny_reason(file_path: str, sidecar_path: str) -> str:
+def _deny_reason(
+    file_path: str, sidecar_path: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
         "Use instead:\n"
         f"  dispatch coordinator:review-integrator against {sidecar_path} for "
         f"{file_path} - an unaddressed code-reviewer finding on this file must "
         "be applied via the integrator, not hand-edited\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        "If the integrator is genuinely unavailable, re-dispatch once; if "
+        "still unavailable and not break-class, park with an owner instead "
+        "of hand-editing; if break-class, hand-apply after your own "
+        "fresh-disk re-check and record the deviation in the commit"
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -308,7 +322,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if pending is None:
             return None
 
-        reason = _deny_reason(file_path, str(pending))
+        reason = _deny_reason(file_path, str(pending), payload)
         # Advisory envelope (DR-277) — additionalContext only, NEVER
         # permissionDecision:"deny". See INTERFACE.md § Envelope — advisory.
         return {

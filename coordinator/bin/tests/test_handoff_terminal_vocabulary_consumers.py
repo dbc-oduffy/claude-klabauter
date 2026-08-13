@@ -131,6 +131,7 @@ _CONSUMERS: list[tuple[str, bool]] = [
     # spells the field — flipped from False to True.
     ("coordinator/bin/tests/test_handoff_archive_transition.py", True),  # C13 (5310420b2) added a re-read assertion on deployment_state: continued
     ("coordinator/bin/tests/test_handoff_terminal_vocabulary_consumers.py", True),  # this module — a vocabulary-pinning test inside the scanned path is its own fixed point; its CANON literal is the canonical set by construction
+    ("coordinator_core/ops/emit_artifact_shape_contract.py", True),  # derives handoff axis display order from lifecycle_constants + a guarded coverage assertion, not a hand-typed enumeration; not a JS-oracle-port bin/ file but genuinely reads deployment_state
     # Re-triaged 2026-08-07, NOT silently dropped: test_reap_orphaned_in_flight_handoffs.py
     # and test_sweep_shipped_handoffs_terminal_selector.py were both excised in the
     # spawn-heavy test cull (both resolved _REPO_ROOT by spawning `git rev-parse

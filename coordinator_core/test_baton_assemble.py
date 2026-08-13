@@ -666,12 +666,15 @@ class TestSelfResolutionFromClaimLedger:
         session_id: str,
         basename: str,
         claimed_at: str | None = None,
+        stage: str | None = None,
     ) -> None:
         claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
         claims_dir.mkdir(parents=True, exist_ok=True)
         (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
         if claimed_at is not None:
             (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+        if stage is not None:
+            (claims_dir / "stage").write_text(stage, encoding="utf-8")
 
     def test_omitted_artifact_path_self_resolves_single_held_claim(self, tmp_path, monkeypatch):
         _init_repo(tmp_path)
@@ -821,11 +824,16 @@ class TestSelfResolutionFromClaimLedger:
         ]
         assert len(d6s) == 2
 
-    def test_missing_claimed_at_falls_back_to_basename_sort(self, tmp_path, monkeypatch):
-        """No durable `claimed_at` ordering signal for at least one held
-        claim (a legacy/hand-seeded claim dir) -- falls back to the
-        pre-existing `sorted()`-by-basename order rather than raising or
-        picking arbitrarily from an unordered set."""
+    def test_missing_claimed_at_falls_back_to_mtime_then_basename_sort(self, tmp_path, monkeypatch):
+        """DR-291: no `claimed_at` at all for either held claim (both sort
+        on the same high sentinel) -- the composite key falls through to
+        `claim_mtime`, and only when THAT also ties does basename decide.
+        Both claim dirs are given an explicit, equal `os.utime` mtime here
+        so basename genuinely is what decides -- pinning basename as the
+        terminal tiebreak under the mtime leg, not the whole fallback as it
+        was pre-DR-291."""
+        import os
+
         _init_repo(tmp_path)
         earlier_by_name = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-aaa.md",
@@ -839,10 +847,328 @@ class TestSelfResolutionFromClaimLedger:
         self._seed_handoff_claim(tmp_path, "sid-multi", earlier_by_name.name)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-multi")
 
+        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        tied_mtime = 1_800_000_000.0
+        for basename in (earlier_by_name.name, later_by_name.name):
+            os.utime(claims_root / basename, (tied_mtime, tied_mtime))
+
         decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
         lineage = decision["artifact"]["lineage"]
         assert lineage["predecessor"] == earlier_by_name.relative_to(tmp_path).as_posix()
         assert lineage["additional_predecessors"] == [later_by_name.relative_to(tmp_path).as_posix()]
+
+    def test_same_second_claimed_at_tie_broken_by_mtime_not_basename(self, tmp_path, monkeypatch):
+        """DR-291 regression: two held claims share an IDENTICAL `claimed_at`
+        (same-second tie). Seeds the alphabetically-LATER basename FIRST so
+        it gets the earlier `claimed_at`-file mtime, then asserts PRIMARY is
+        that first-seeded (earlier-mtime) claim -- proving the tie is broken
+        by `claim_mtime`, not by falling straight to basename. Sets mtimes
+        explicitly with `os.utime` rather than relying on real-time ordering,
+        since `_seed_handoff_claim` may write both files within the same
+        filesystem mtime tick."""
+        import os
+
+        _init_repo(tmp_path)
+        tied = "2026-08-06T08:53:44Z"
+        # Alphabetically later basename, seeded (and mtime-stamped) FIRST.
+        first_seeded = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-zzz-later-name.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-z-1a2b41"],
+        )
+        # Alphabetically earlier basename, seeded (and mtime-stamped) SECOND.
+        second_seeded = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-aaa-earlier-name.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-a-1a2b44"],
+        )
+        self._seed_handoff_claim(tmp_path, "sid-tied", first_seeded.name, claimed_at=tied)
+        self._seed_handoff_claim(tmp_path, "sid-tied", second_seeded.name, claimed_at=tied)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-tied")
+
+        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        earlier_mtime = 1_800_000_000.0
+        later_mtime = 1_800_000_100.0
+        os.utime(
+            claims_root / first_seeded.name / "claimed_at", (earlier_mtime, earlier_mtime)
+        )
+        os.utime(
+            claims_root / second_seeded.name / "claimed_at", (later_mtime, later_mtime)
+        )
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == first_seeded.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [second_seeded.relative_to(tmp_path).as_posix()]
+
+    def test_mixed_claimed_at_presence_prefers_claim_with_known_time(self, tmp_path, monkeypatch):
+        """DR-291: per-claim degradation, not set-wide. One held claim has a
+        `claimed_at`, the other doesn't -- the one WITH a known claim time
+        must be PRIMARY regardless of basename order (the basename here is
+        deliberately alphabetically LATER than the unknown-time claim's, so
+        a basename-driven or set-wide-degraded result would get this wrong)."""
+        _init_repo(tmp_path)
+        known = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-zzz-known.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-known-1a2b42"],
+        )
+        unknown = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-aaa-unknown.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-unknown-1a2b47"],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-mixed", known.name, claimed_at="2026-07-20T09:00:00Z"
+        )
+        self._seed_handoff_claim(tmp_path, "sid-mixed", unknown.name)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-mixed")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == known.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [unknown.relative_to(tmp_path).as_posix()]
+
+    def test_apply_stage_claim_outranks_brief_stage_despite_later_claimed_at(
+        self, tmp_path, monkeypatch
+    ):
+        """AC-8 / D2 (docs/decisions/ new DR): the `stage_rank` leading leg
+        ranks an `apply`-stage claim ahead of a `brief`-stage one even when
+        the `brief`-stage claim's `claimed_at` is EARLIER -- proving
+        `stage_rank` genuinely leads `claimed_at`, not merely breaks a tie
+        under it."""
+        _init_repo(tmp_path)
+        applied = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-applied.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-applied-1a2b60"],
+        )
+        briefed = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-briefed.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-briefed-1a2b61"],
+        )
+        # `briefed` claimed FIRST (earlier claimed_at) but stays `brief` stage
+        # -- a mere reservation. `applied` claimed LATER but is a worked
+        # (`apply`-stage) baton, and must still come out PRIMARY.
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-stage",
+            briefed.name,
+            claimed_at="2026-07-20T09:00:00Z",
+            stage="brief",
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-stage",
+            applied.name,
+            claimed_at="2026-07-20T10:00:00Z",
+            stage="apply",
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-stage")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == applied.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [briefed.relative_to(tmp_path).as_posix()]
+        assert lineage["predecessor_ordering_degraded"] is False
+
+    def test_degradation_signal_absent_on_cleanly_ordered_set(self, tmp_path, monkeypatch):
+        """AC-6: a multi-claim set the composite key actually orders (distinct
+        `claimed_at` values, both `apply`-stage) reports `degraded is False`
+        -- an always-on signal fails this AC, so this direction must be
+        asserted, not just the PRESENT direction below."""
+        _init_repo(tmp_path)
+        first = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-first.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-first-1a2b62"],
+        )
+        second = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-second.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-second-1a2b63"],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-clean", first.name, claimed_at="2026-07-20T09:00:00Z", stage="apply"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-clean", second.name, claimed_at="2026-07-20T10:00:00Z", stage="apply"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-clean")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor_ordering_degraded"] is False
+
+    def test_degradation_signal_present_on_fully_tied_set(self, tmp_path, monkeypatch):
+        """AC-6: two held claims tying on every leg through basename (no
+        readable claim metadata at all -- no `claimed_at`, no `stage`, and an
+        identical claim-dir mtime for both) reports `degraded is True`, so a
+        caller can distinguish this from an ordered pick without re-deriving
+        the key."""
+        import os
+
+        _init_repo(tmp_path)
+        one = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-aaa.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-tied-a-1a2b64"],
+        )
+        two = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-bbb.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-tied-b-1a2b65"],
+        )
+        self._seed_handoff_claim(tmp_path, "sid-tied-all", one.name)
+        self._seed_handoff_claim(tmp_path, "sid-tied-all", two.name)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-tied-all")
+
+        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        tied_mtime = 1_800_000_000.0
+        for basename in (one.name, two.name):
+            os.utime(claims_root / basename, (tied_mtime, tied_mtime))
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor_ordering_degraded"] is True
+
+    # Review: coordinatorstaff-eng-f4ecb2da Finding 4 -- three behaviours the
+    # diff newly introduces were previously unpinned: unknown-stage ranks
+    # with `brief`, a tie among non-primary claims only (pinning the
+    # set-level `degraded` semantics), and per-claim (not set-wide)
+    # application of the stage leg.
+
+    def test_unrecognized_stage_ranks_with_brief(self, tmp_path, monkeypatch):
+        """AC-8: an unrecognized `stage` value (garbage, not merely missing)
+        is NOT privileged into rank 0 -- it ranks with `brief`, same as a
+        missing/unreadable stage file. The garbage-stage claim's `claimed_at`
+        is deliberately EARLIER than the genuinely `apply`-staged claim's, so
+        a bug that treats unknown-stage as rank 0 (or falls through to
+        `claimed_at` alone) would wrongly pick the garbage-stage claim as
+        primary."""
+        _init_repo(tmp_path)
+        garbage = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-garbage.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-garbage-1a2b70"],
+        )
+        applied = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-applied2.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-applied2-1a2b71"],
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-garbage-stage",
+            garbage.name,
+            claimed_at="2026-07-20T09:00:00Z",
+            stage="not-a-real-stage",
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-garbage-stage",
+            applied.name,
+            claimed_at="2026-07-20T10:00:00Z",
+            stage="apply",
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-garbage-stage")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == applied.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [garbage.relative_to(tmp_path).as_posix()]
+
+    def test_degradation_signal_present_when_tie_is_among_non_primary_claims_only(
+        self, tmp_path, monkeypatch
+    ):
+        """AC-6/Finding 2: `degraded` is a SET-LEVEL signal -- it can be True
+        even when the PRIMARY pick itself rests on a real ordering fact, as
+        long as some OTHER adjacent pair in the sorted set ties. Three held
+        claims: one clean `apply`-stage primary with a distinct earliest
+        `claimed_at`, and two `brief`-stage claims that tie on everything
+        (no readable metadata). `degraded` must be True (the tie exists
+        somewhere in the set) while the primary is still cleanly the
+        apply-stage claim, not a tiebreak artifact."""
+        _init_repo(tmp_path)
+        primary = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-primary.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-primary-1a2b72"],
+        )
+        tied_a = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-tied-a.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-tied-a2-1a2b73"],
+        )
+        tied_b = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-tied-b.md",
+            ["deliverable_id: DEL-3", "handoff_id: hnd-tied-b2-1a2b74"],
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-nonprimary-tie",
+            primary.name,
+            claimed_at="2026-07-20T09:00:00Z",
+            stage="apply",
+        )
+        self._seed_handoff_claim(tmp_path, "sid-nonprimary-tie", tied_a.name)
+        self._seed_handoff_claim(tmp_path, "sid-nonprimary-tie", tied_b.name)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-nonprimary-tie")
+
+        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        import os
+
+        tied_mtime = 1_800_000_000.0
+        for basename in (tied_a.name, tied_b.name):
+            os.utime(claims_root / basename, (tied_mtime, tied_mtime))
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == primary.relative_to(tmp_path).as_posix()
+        assert lineage["predecessor_ordering_degraded"] is True
+
+    def test_unreadable_stage_degrades_only_its_own_claim_not_the_whole_set(
+        self, tmp_path, monkeypatch
+    ):
+        """AC-8: the stage leg is applied PER-CLAIM, not set-wide -- one
+        claim with an unreadable `stage` file (here, a directory in place of
+        the file, forcing an OSError on read) must not re-rank the OTHER
+        claims. The other two claims have distinct, cleanly-ordered
+        `apply`-stage `claimed_at` values and must sort correctly between
+        themselves regardless of the third claim's unreadable stage."""
+        _init_repo(tmp_path)
+        earliest = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-earliest.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-earliest-1a2b75"],
+        )
+        latest = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-latest.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-latest-1a2b76"],
+        )
+        unreadable = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-07-20-unreadable.md",
+            ["deliverable_id: DEL-3", "handoff_id: hnd-unreadable-1a2b77"],
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-unreadable-stage",
+            earliest.name,
+            claimed_at="2026-07-20T09:00:00Z",
+            stage="apply",
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-unreadable-stage",
+            latest.name,
+            claimed_at="2026-07-20T10:00:00Z",
+            stage="apply",
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-unreadable-stage",
+            unreadable.name,
+            claimed_at="2026-07-20T08:00:00Z",
+        )
+        # Replace the `stage` file with a directory -- read_text() raises
+        # OSError (IsADirectoryError), the exact unreadable-stage edge.
+        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        (claims_root / unreadable.name / "stage").mkdir()
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-unreadable-stage")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == earliest.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [
+            latest.relative_to(tmp_path).as_posix(),
+            unreadable.relative_to(tmp_path).as_posix(),
+        ]
 
     def test_no_resolvable_session_id_raises(self, tmp_path, monkeypatch):
         _init_repo(tmp_path)
@@ -1464,13 +1790,38 @@ class TestStandaloneHandoffSlugFromTitle:
     def test_empty_artifact_path_and_no_title_falls_back_to_untitled(self, tmp_path):
         """Defect B's 'also handle' case: no title AND no artifact path must
         not produce a dangling `<date>-.md` -- falls back to a deterministic,
-        non-empty slug instead."""
+        non-empty slug instead.
+
+        2026-08-10 PM ruling (`_mint_last_resort_slug`): that terminal slug is
+        `untitled-<8 hex>`, NOT the bare literal `untitled` this test asserted
+        before. The literal was itself a defect -- two standalone handoffs
+        minted on the same date collided on one
+        `state/handoffs/<date>-untitled.md` path and fought over it, and the
+        `<date>_<HHMMSS>_..`/`-N` disambiguation ladder papered over only the
+        same-second half of that. The per-call `secrets.token_hex(4)` nonce is
+        non-colliding by construction. So the expectation asserted here is the
+        SHAPE -- `untitled-` plus a hex nonce -- since the nonce is
+        deliberately not reproducible; the invariant Defect B actually pinned
+        (never a dangling `-.md`, always a non-empty slug) is asserted
+        unchanged."""
         import datetime
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         out_value = ba._compute_fresh_output_path("", tmp_path)
-        assert out_value == (Path("state") / "handoffs" / f"{today}-untitled.md").as_posix()
+        assert re.fullmatch(
+            rf"state/handoffs/{today}-untitled-[0-9a-f]{{8}}\.md", out_value
+        ), out_value
         assert not out_value.endswith("-.md")
+
+    def test_two_standalone_mints_on_one_day_do_not_collide_on_one_path(self, tmp_path):
+        """The defect the 2026-08-10 ruling replaced the literal `untitled`
+        FOR: two same-day standalone mints with nothing at all to derive from
+        must not resolve to the same path. Pins the collision-freedom the
+        nonce buys, so a future simplification back to a literal slug fails
+        here rather than in the fleet."""
+        first = ba._compute_fresh_output_path("", tmp_path)
+        second = ba._compute_fresh_output_path("", tmp_path)
+        assert first != second
 
     def test_nonempty_artifact_path_ignores_title(self, tmp_path):
         """Non-regression: when `artifact_path` DOES resolve to a stem, the

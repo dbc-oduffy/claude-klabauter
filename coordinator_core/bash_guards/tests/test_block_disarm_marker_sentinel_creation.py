@@ -247,7 +247,8 @@ class TestDenyMessageDiscipline:
 
     def test_deny_reason_is_offer_shaped(self):
         reason = _reason(guard.check(_payload("touch %s" % SENTINEL)))
-        assert "!-prefixed prompt" in reason
+        assert "!-prefixed prompt" not in reason
+        assert "bypasses this hook entirely" not in reason
         assert "EM/PM" in reason
 
 

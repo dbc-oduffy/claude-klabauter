@@ -232,7 +232,19 @@ def _emit(records: list[dict], format_: str) -> None:
 
 
 def main() -> int:
-    opts = _parse_args(sys.argv[1:])
+    argv = sys.argv[1:]
+    if "--help" in argv or "-h" in argv:
+        # Handled before any stdin touch (§ entrypoint gate contract: every
+        # scanned entrypoint is launched with `--help` and stdin=DEVNULL —
+        # `sys.stdin.isatty()` is False for DEVNULL too, so without this
+        # early exit `--help` would fall through to the stdin-pipe branch
+        # below and fail on an empty read, misreporting a clean-launch CLI
+        # as broken). No prior code path in this file handled `--help` at
+        # all; this closes that gap the same way every other CLI here does.
+        sys.stdout.write(__doc__ or "")
+        return 0
+
+    opts = _parse_args(argv)
 
     # Determine input source: stdin pipe or direct native self-query.
     stdin_is_pipe = not sys.stdin.isatty()

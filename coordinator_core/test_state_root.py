@@ -40,9 +40,12 @@ def stub_peers(monkeypatch):
 
     ``coordinator_claude_klabauter_root_with_class`` is stubbed to the
     RESOLUTION_LIVE_WORKING_TREE class by default — the overwhelming common
-    case, and the class this module must remain byte-identical for. The
-    class-less ``coordinator_claude_klabauter_root`` is stubbed too since ``print_map``
-    still calls it directly.
+    case, and the class this module must remain byte-identical for.
+    ``print_map`` now also routes through ``coordinator_claude_klabauter_root_with_class``
+    (Gap 1, review-integrator 2026-08-12) rather than the class-less
+    ``coordinator_claude_klabauter_root`` — the latter is stubbed too since it is
+    still used elsewhere in this module (``_doe_state``/``_claude_klabauter_state``
+    peers), even though ``print_map`` no longer calls it.
     """
     monkeypatch.setattr(sr, "coordinator_doe_root", lambda: _DOE)
     monkeypatch.setattr(sr, "coordinator_claude_klabauter_root", lambda: _CLAUDE_KLABAUTER)
@@ -54,6 +57,7 @@ def stub_peers(monkeypatch):
     monkeypatch.setattr(sr, "classify", lambda _p: Subject.DOCTRINE)
     monkeypatch.setattr(sr, "is_meta_repo", lambda _g: False)
     monkeypatch.setattr(sr, "_resolve_git_root", lambda: _SIBLING)
+    monkeypatch.setattr(sr, "published_engine_mirror_path", lambda: None)
     return monkeypatch
 
 
@@ -213,6 +217,35 @@ def test_rule5_sibling_repo_uses_own_state(stub_peers):
     assert sr.coordinator_state_root() == _state(_SIBLING)
 
 
+def test_rule5_sibling_repo_fail_loud_when_it_is_the_published_mirror(stub_peers):
+    # cwd git root IS the registered published-engine mirror clone (e.g. a
+    # claude-klabauter checkout) -- must refuse, not silently treat it as
+    # an ordinary sibling repo's own state root. Bug backlog:
+    # state/bug-backlog/2026-08-13-state-root-rule-5-cannot-tell-a-publishe-fd79452138b2.yaml
+    _MIRROR = "/repos/claude-klabauter"
+    stub_peers.setattr(sr, "_resolve_git_root", lambda: _MIRROR)
+    stub_peers.setattr(sr, "is_meta_repo", lambda _g: False)
+    stub_peers.setattr(sr, "published_engine_mirror_path", lambda: _MIRROR)
+    with pytest.raises(sr.StateRootError) as exc:
+        sr.coordinator_state_root()
+    assert _MIRROR in str(exc.value)
+    # Must NOT silently return a path under the mirror.
+    assert not str(exc.value).startswith(_state(_MIRROR))
+
+
+def test_rule5_sibling_repo_unaffected_when_mirror_registered_elsewhere(stub_peers):
+    # A legitimate sibling repo (e.g. Example-retrieval-repo, example-doctrine-repo) still resolves
+    # normally even when SOME OTHER path is the registered published mirror
+    # -- the guard must not over-fire against every sibling repo, only the
+    # one that actually IS the mirror clone.
+    stub_peers.setattr(sr, "_resolve_git_root", lambda: _SIBLING)
+    stub_peers.setattr(sr, "is_meta_repo", lambda _g: False)
+    stub_peers.setattr(
+        sr, "published_engine_mirror_path", lambda: "/repos/claude-klabauter"
+    )
+    assert sr.coordinator_state_root() == _state(_SIBLING)
+
+
 def test_rule5_fail_loud_on_unresolvable_git_root(stub_peers):
     def _boom():
         raise sr.StateRootError("not a git repo")
@@ -278,11 +311,31 @@ def test_print_map_engine_null_when_claude_klabauter_unresolvable(stub_peers, ca
     def _boom():
         raise RuntimeError("no claude-klabauter")
 
-    stub_peers.setattr(sr, "coordinator_claude_klabauter_root", _boom)
+    stub_peers.setattr(sr, "coordinator_claude_klabauter_root_with_class", _boom)
     parsed = json.loads(sr.print_map())
     assert parsed["subjects"]["engine"] is None
     assert parsed["subjects"]["doctrine"] == _state(_DOE)
     assert "engine root unresolvable" in capsys.readouterr().err
+
+
+def test_print_map_engine_null_when_resolved_engine_is_published_mirror(stub_peers, capsys):
+    """Gap 1 (review-integrator, 2026-08-12): ``print_map`` previously called
+    the class-LESS ``coordinator_claude_klabauter_root()``, bypassing the published-
+    mirror guard ``_claude_klabauter_state()`` applies (Rule 2/4/5) — the diagnostic
+    surface would report a path the resolver itself refuses to hand out for
+    writing. Now routed through ``coordinator_claude_klabauter_root_with_class()`` so
+    a ``RESOLUTION_RESOLVED_ENGINE`` class nulls the engine subject too."""
+    _PUBLISHED_MIRROR = "/repos/claude-klabauter"
+    stub_peers.setattr(
+        sr,
+        "coordinator_claude_klabauter_root_with_class",
+        lambda: (_PUBLISHED_MIRROR, "resolved-engine"),
+    )
+    parsed = json.loads(sr.print_map())
+    assert parsed["subjects"]["engine"] is None
+    assert parsed["subjects"]["doctrine"] == _state(_DOE)
+    err = capsys.readouterr().err
+    assert "published" in err.lower()
 
 
 # --- main() CLI parity: exit codes 0 / 1 / 2 -------------------------------

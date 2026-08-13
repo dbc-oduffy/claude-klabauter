@@ -156,12 +156,48 @@ from coordinator_core.bash_guards._helpers import (
 )
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.git.git_dir import resolve_git_dir
-from coordinator_core.hooks.block_unenumerated_agent_type import resolve_roster
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
     _resolve_subagent_identity,
 )
+
+# DEFERRED, NOT imported at module level (2026-08-13 hot-path import-budget
+# fix): a module-level `from coordinator_core.hooks.block_unenumerated_agent_type
+# import resolve_roster` drags in `coordinator_core.hooks`'s package `__init__`
+# and its full eager registration (18 submodules). This module is reachable
+# from `bash_guards.dispatch` via `block_subagent_plan_body_bash_write`'s
+# `_resolve_subagent_identity` import, so that eager pull lands on the
+# `bash_guards.dispatch` hot path measured by
+# `coordinator_core/tests/test_hot_path_hook_import_budget.py`. Third site of
+# the same defect shape as `bash_guards/_helpers.py` and its
+# `block_subagent_plan_body_bash_write.py` twin -- see the import-budget
+# manifest's `write_guards.engine` note for the 2026-08-10 regression this
+# closes. `_resolve_roster_accessor()` below imports lazily, ONLY when the
+# roster is actually needed. Caches on this module's own `resolve_roster`
+# attribute -- same shape as `coordinator_core.session.core._psutil()` -- which
+# is what keeps `monkeypatch.setattr(guard, "resolve_roster", ...)` working
+# unmodified (see `tests/test_block_subagent_plan_body_write.py`); a private
+# `_resolve_roster_mod` cache would silently break that patch point. DO NOT
+# re-flatten this back to a module-level import.
+_UNRESOLVED = object()
+resolve_roster = _UNRESOLVED  # type: ignore[assignment]
+
+
+def _resolve_roster_accessor():
+    """Lazily import and cache ``resolve_roster`` on this module's own
+    attribute (see the negative-spec comment above this cache's
+    declaration). Returns the callable; never calls it.
+    """
+    global resolve_roster
+    if resolve_roster is _UNRESOLVED:
+        from coordinator_core.hooks.block_unenumerated_agent_type import (
+            resolve_roster as _imported_resolve_roster,
+        )
+
+        resolve_roster = _imported_resolve_roster
+    return resolve_roster
+
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -424,23 +460,29 @@ def _advisory_reason(file_path: str, subagent_type: str = _EXECUTOR_TYPE) -> str
     )
 
 
-def _deny_reason_ambiguous(agent_id: str, file_path: str) -> str:
+def _deny_reason_ambiguous(
+    agent_id: str, file_path: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
     """Compressed from the AMBIGUOUS-branch REASON (no longer byte-for-byte —
     see module docstring); names the blocked file and colliding canonical id
     since this is the guard's unconditional fail-closed branch.
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
         f"BLOCKED {file_path_safe}: ambiguous agent identity ({agent_id}) — "
         "canonical-id collision, failing closed.\n\n"
         "Two dispatches shared one id with different subagent_types. Ask the EM to\n"
-        "re-dispatch cleanly.\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        "re-dispatch cleanly."
+        + ("\n\n" + _note if _note else "")
     )
 
 
 def _deny_reason_executor(
-    agent_id: str, file_path: str, subagent_type: str = _EXECUTOR_TYPE
+    agent_id: str,
+    file_path: str,
+    subagent_type: str = _EXECUTOR_TYPE,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Byte-for-byte port of the coordinator:executor-branch REASON, widened
     2026-07-24 to also name ``docs/problems/**`` ratified problem-sets
@@ -455,6 +497,7 @@ def _deny_reason_executor(
     fix for an unenumerated kind is the roster, not a re-route.
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     if subagent_type != _EXECUTOR_TYPE:
         return (
             "Use instead:\n"
@@ -463,16 +506,16 @@ def _deny_reason_executor(
             "plan/problem-set body. Unenumerated kinds are treated as untrusted here "
             "rather than waved through. If this type is legitimate, add it to the "
             "roster; if the write is your deliverable, ask the EM to dispatch an "
-            "enumerated kind (coordinator:enricher/review-integrator)\n\n"
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            "enumerated kind (coordinator:enricher/review-integrator)"
+            + ("\n\n" + _note if _note else "")
         )
     return (
         "Use instead:\n"
         f"  {file_path_safe}: coordinator:executor may not write this plan/problem-set "
         "body directly. Stamping status? Use the run-report sidecar "
         "state/subagent-share/<provisioned-path>.md instead. Editing the body was your "
-        "deliverable? Ask the EM to route to coordinator:enricher/review-integrator\n\n"
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        "deliverable? Ask the EM to route to coordinator:enricher/review-integrator"
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -572,7 +615,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "block_subagent_plan_body_write", agent_id, git_root, None
             )
             return None
-        roster, _roster_error = resolve_roster()
+        roster, _roster_error = _resolve_roster_accessor()()
         if roster is None or subagent_type in roster:
             return None
 
@@ -581,7 +624,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # call — see module docstring negative-spec).
     if is_ambiguous:
         _write_block_log(git_root, session_id, agent_id or raw_agent_id, file_path)
-        reason = _deny_reason_ambiguous(agent_id or raw_agent_id, file_path)
+        reason = _deny_reason_ambiguous(agent_id or raw_agent_id, file_path, payload)
         result = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -609,7 +652,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # Block confirmed: this IS the plan body being executed.
     _write_block_log(git_root, session_id, agent_id or raw_agent_id, file_path)
-    reason = _deny_reason_executor(agent_id or raw_agent_id, file_path, subagent_type)
+    reason = _deny_reason_executor(agent_id or raw_agent_id, file_path, subagent_type, payload)
 
     result = {
         "hookSpecificOutput": {

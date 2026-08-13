@@ -246,6 +246,10 @@ from coordinator_core.coverage import (  # noqa: E402
     _classify_bookkeeping_shas,
     _commit_touched_paths,
     _derive_dag_chain_set,
+    _resolve_numstat_row_path,
+)
+from coordinator_core.ops.review_brightline_gate import (  # noqa: E402
+    _is_prose_bearing_path,
 )
 from coordinator_core.workstream_complete.chain_partition_verdict_store import (  # noqa: E402
     write_verdict_record,
@@ -941,6 +945,166 @@ def _classify_uncovered_shas(
     return planning, code
 
 
+def _format_capped_overflow_note(total: int, cap: int) -> str:
+    """AC12 (plan C3) — each uncovered-set listing's existing `cap = 10`
+    truncates silently ("+N more" with no count context). Disclose the cap
+    explicitly rather than leaving the reader to guess how many were hidden
+    from what."""
+    return f"    +{total - cap} more (only the first {cap} of {total} shown, cap={cap})"
+
+
+def _group_code_shas_by_directory(
+    shas: list[str], repo_root: str | None,
+) -> tuple[dict[str, list[str]] | None, bool]:
+    """AC4 (plan C3) — a suggested directory/subsystem grouping of `shas`
+    (the already-capped `code_shas_only` slice `cmd_brightline_gate` is
+    about to print), derived by the runner itself: the gate's only channel
+    to this process is one regex-anchored stdout line carrying five
+    integers, no file list, so the grouping cannot be carried on that line
+    and must be computed here (CROSS-PROCESS SEAM CONSTRAINT). One batched
+    `git show --numstat` spawn over the capped set — the same shape as the
+    existing `_describe_uncovered_shas` batched `git log --no-walk` call.
+
+    A touched path `_is_prose_bearing_path` classifies as prose (`.md`/
+    `.yaml`/`.yml`) is excluded from the grouping signal — imported from the
+    gate rather than re-derived, per the HARD REQUIREMENT that this file
+    never author a second, independent code-vs-prose classifier.
+
+    Groups genuinely spanning two top-level directories are NOT forced
+    disjoint — a commit legitimately appears in both buckets when it
+    touches both.
+
+    Returns `(groups, undetermined)`. `groups` is `None` — never a
+    one-item grouping — when the axis would not help: an empty input,
+    fewer than two directories found, or the check could not run at all.
+    `undetermined=True` marks the latter case (unresolved `repo_root`, a
+    spawn failure, or a non-zero `git show` exit) — the check never ran,
+    so the caller must not render this as "checked, they don't separate."
+    `undetermined=False` with `groups=None` means the check ran and found
+    fewer than two directories. A bad suggestion is worse than none."""
+    if not shas:
+        return None, False
+    if not repo_root:
+        return None, True
+    try:
+        proc = subprocess.run(
+            ["git", "show", "--numstat", "--format=%H", *shas],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=repo_root,
+            **no_console_creationflags(),
+        )
+    except OSError:
+        return None, True
+    if proc.returncode != 0:
+        return None, True
+    groups: dict[str, list[str]] = {}
+    current_sha: str | None = None
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.fullmatch(r"[0-9a-f]{40}", line):
+            current_sha = line
+            continue
+        if current_sha is None:
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        _added, _deleted, path = parts
+        if _is_prose_bearing_path(path):
+            continue
+        path = _resolve_numstat_row_path(path)
+        top_dir = path.split("/", 1)[0] if "/" in path else "(root)"
+        bucket = groups.setdefault(top_dir, [])
+        short_sha = current_sha[:7]
+        if short_sha not in bucket:
+            bucket.append(short_sha)
+    if len(groups) < 2:
+        return None, False
+    return groups, False
+
+
+def _basis_weighable_clause(fields: dict) -> str:
+    """AC6 (plan C3) — a human-weighable clause APPENDED to (never
+    replacing) the gate's own machine `basis` string: names WHICH oracle arm
+    drove `reviewers_required`, not just the raw metric triple the
+    BRIGHTLINE stdout line already carries. Must contain no `"` character —
+    `basis` is re-parsed downstream by `_UNWALKED_REPOS_RE`/
+    `_findings_name_unwalked_repo`, whose match terminates on one."""
+    oracles = {
+        "plan_oracle": int(fields.get("plan_oracle") or 0),
+        "chain_oracle": int(fields.get("chain_oracle") or 0),
+        "session_oracle": int(fields.get("session_oracle") or 0),
+    }
+    driver = max(oracles, key=oracles.get)
+    return (
+        f"reviewers_required={fields.get('reviewers_required')} driven by "
+        f"{driver}={oracles[driver]} (plan={oracles['plan_oracle']} "
+        f"chain={oracles['chain_oracle']} session={oracles['session_oracle']})"
+    )
+
+
+def _resolve_broadly_reviewed_shas(
+    trail_records: list[dict],
+    chain_code_shas: list[str],
+    chain_dag_shas: list[str],
+    chain_planning_shas: list[str],
+) -> frozenset[str]:
+    """AC7 (plan C4) — an aiming aid, never a discount (PM ruling: prior
+    review does not reduce what the closing EM owes). Re-runs the same
+    verdict-consuming seam `chain_partition_uncovered_shas` uses for the
+    displayed (narrow) uncovered set, a second time with
+    `narrow_foreign_shas`/`vouched_shas` omitted — the broad membership
+    test, unrestricted by THIS chain's foreign-session/vouching scope
+    (`directives_review._record_membership_shas`). A sha this returns was
+    NOT dropped from the narrow uncovered set here: it carries a real,
+    non-pending/non-waived review-trail verdict recorded somewhere, just
+    not one this chain's narrower rule credits toward discharge — exactly
+    the case an EM benefits from seeing named. Doctrine:
+    docs/wiki/review-scale.md — "consume verdicts, don't re-derive them";
+    this reuses the existing seam rather than writing a second, independent
+    coverage classifier.
+
+    Never read by `chain_partition_uncovered_shas`, `discharged`, or the
+    verdict — this is a second, standalone call whose return value only
+    feeds `_annotate_already_reviewed`'s rendering below. Best-effort:
+    degrades to an empty set (no markers) on any failure rather than
+    raising, mirroring `_describe_uncovered_shas`'s own fail-safe
+    posture — this is a diagnostic amenity, never load-bearing."""
+    try:
+        broad_uncovered = chain_partition_uncovered_shas(
+            trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
+            narrow_foreign_shas=None,
+            vouched_shas=None,
+            chain_planning_shas=chain_planning_shas,
+        )
+    except Exception:
+        return frozenset()
+    return frozenset(chain_code_shas) - frozenset(broad_uncovered)
+
+
+def _annotate_already_reviewed(lines: list[str], broadly_reviewed: frozenset[str]) -> list[str]:
+    """AC7/AC8 (plan C4) — appends a terse, register-conformant marker to
+    each `_describe_uncovered_shas` line (`<short-sha> <subject>`) whose
+    leading short sha prefixes a full sha in `broadly_reviewed`. Text only:
+    changes no list membership, no ordering, no count — the caller's
+    `len()`s and downstream `reviewers_required`/verdict are computed
+    before this function ever runs."""
+    if not broadly_reviewed:
+        return lines
+    annotated = []
+    for line in lines:
+        short_sha = line.split(" ", 1)[0]
+        if any(full.startswith(short_sha) for full in broadly_reviewed):
+            annotated.append(f"{line} [already reviewed elsewhere — not credited to this chain]")
+        else:
+            annotated.append(line)
+    return annotated
+
+
 def _resolve_uncovered_commit_attribution_window(
     shas: list[str], repo_root: str,
 ) -> dict | None:
@@ -1539,6 +1703,19 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
     tier = fields["tier"]
     basis = fields["basis"]
 
+    # AC6 (plan C3) — append a human-weighable clause to the machine basis
+    # BEFORE persistence, so the appended text flows into the same record
+    # `_findings_name_unwalked_repo` regexes and `wsc.brief()`/`wsc.apply()`
+    # read back. APPENDED, never a replacement: the existing metric-triple
+    # substring (including a `tier=A declared-but-unwalked repo(s)=` token,
+    # when present) stays intact and is still the first thing in the string.
+    # `_basis_weighable_clause` always returns a non-empty string — no
+    # guard needed here; a conditional would read as if the clause could
+    # legitimately be absent, which it can't (Review: code-reviewer).
+    weighable_clause = _basis_weighable_clause(fields)
+    basis = f"{basis} {weighable_clause}".strip()
+    fields["basis"] = basis
+
     # Producer/consumer seam (2026-08-03 plan
     # docs/plans/2026-08-03-chain-end-review-scale-wiring.md, C5; persistence
     # half landed 2026-08-04 per cross-repo/inbox/2026-08-04-example-retrieval-repo-em-
@@ -1717,6 +1894,10 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
         chain_dag_shas = _resolve_chain_dag_shas(args.from_handoff)
         dag_resolution_failed = dag_resolved is None
         chain_owes_no_code_review = not dag_resolution_failed and not chain_code_shas
+        # Resolved once, reused by both the uncovered-shas computation
+        # below and the execution-basis-report companion below it — same
+        # `from_handoff` input, same repo state (Review: code-reviewer).
+        chain_planning_shas = _resolve_chain_planning_shas(args.from_handoff)
         if chain_owes_no_code_review:
             uncovered: list[str] = []
             discharged = True
@@ -1726,7 +1907,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
                     narrow_foreign_shas=_resolve_foreign_session_shas,
                     vouched_shas=_resolve_vouched_shas,
-                    chain_planning_shas=_resolve_chain_planning_shas(args.from_handoff),
+                    chain_planning_shas=chain_planning_shas,
                 )
                 if chain_code_shas and chain_dag_shas
                 else []
@@ -1746,7 +1927,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 trail_records, chain_code_shas, chain_dag_shas, _resolve_range_shas,
                 narrow_foreign_shas=_resolve_foreign_session_shas,
                 vouched_shas=_resolve_vouched_shas,
-                chain_planning_shas=_resolve_chain_planning_shas(args.from_handoff),
+                chain_planning_shas=chain_planning_shas,
             )
         except Exception:
             basis_report = None
@@ -1791,6 +1972,16 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 foreign_shas, own_shas = _partition_foreign_uncovered_shas(
                     uncovered, closing_session_id,
                 )
+                # AC7 (plan C4) — an aiming aid only: which of the shas
+                # about to be listed below already carry a discharging
+                # review-trail verdict recorded outside this chain's
+                # narrower (foreign/vouched-scoped) credit rule. Computed
+                # once, read-only, and never fed back into `uncovered`,
+                # `discharged`, `code_shas_only`, or any other count above.
+                broadly_reviewed = _resolve_broadly_reviewed_shas(
+                    trail_records, chain_code_shas, chain_dag_shas,
+                    chain_planning_shas,
+                )
                 if own_shas:
                     print(
                         "HALT: brightline verdict=PARTITION-MANDATORY and "
@@ -1822,20 +2013,70 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                 cap = 10
                 if code_shas_only:
                     print(f"  {len(code_shas_only)} code commit(s):", file=sys.stderr)
-                    for line in _describe_uncovered_shas(code_shas_only[:cap], repo_root):
+                    for line in _annotate_already_reviewed(
+                        _describe_uncovered_shas(code_shas_only[:cap], repo_root),
+                        broadly_reviewed,
+                    ):
                         print(f"    {line}", file=sys.stderr)
                     if len(code_shas_only) > cap:
-                        print(f"    +{len(code_shas_only) - cap} more", file=sys.stderr)
+                        print(
+                            _format_capped_overflow_note(len(code_shas_only), cap),
+                            file=sys.stderr,
+                        )
+                    # AC4/AC5 (plan C3) — a suggested directory/subsystem
+                    # split of THIS bucket only, grouped over the same
+                    # (already-capped) slice just printed above — never
+                    # spanning planning/waived/unwaived, and reusing `cap`
+                    # rather than adding a second display limit. Advisory:
+                    # the division is the EM's call, not a prescription.
+                    reviewers_required = fields.get("reviewers_required")
+                    split_groups, split_undetermined = _group_code_shas_by_directory(
+                        code_shas_only[:cap], repo_root
+                    )
+                    if split_groups:
+                        print(
+                            f"  SUGGESTED SPLIT (advisory — division is your "
+                            f"call, groups may overlap): {len(split_groups)} "
+                            f"directory group(s), {reviewers_required} "
+                            f"reviewer(s) required:",
+                            file=sys.stderr,
+                        )
+                        for directory in sorted(split_groups):
+                            print(
+                                f"    {directory}/: "
+                                f"{', '.join(split_groups[directory])}",
+                                file=sys.stderr,
+                            )
+                    elif split_undetermined:
+                        print(
+                            f"  SUGGESTED SPLIT: could not determine — "
+                            f"directory data unavailable; "
+                            f"{reviewers_required} reviewer(s), undivided.",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(
+                            f"  SUGGESTED SPLIT: none — these commits do not "
+                            f"separate along a directory axis; "
+                            f"{reviewers_required} reviewer(s), undivided.",
+                            file=sys.stderr,
+                        )
                 if planning_shas:
                     print(
                         f"  {len(planning_shas)} planning-artifact "
                         "commit(s) (owe a plan review, not a code review):",
                         file=sys.stderr,
                     )
-                    for line in _describe_uncovered_shas(planning_shas[:cap], repo_root):
+                    for line in _annotate_already_reviewed(
+                        _describe_uncovered_shas(planning_shas[:cap], repo_root),
+                        broadly_reviewed,
+                    ):
                         print(f"    {line}", file=sys.stderr)
                     if len(planning_shas) > cap:
-                        print(f"    +{len(planning_shas) - cap} more", file=sys.stderr)
+                        print(
+                            _format_capped_overflow_note(len(planning_shas), cap),
+                            file=sys.stderr,
+                        )
                 if foreign_shas:
                     # 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-
                     # example-doctrine-repo-em-brightline-unrecordable-narration-is-
@@ -1903,13 +2144,14 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                             "reviewed.",
                             file=sys.stderr,
                         )
-                        for line in _describe_uncovered_shas(
-                            waived_foreign[:cap], repo_root,
+                        for line in _annotate_already_reviewed(
+                            _describe_uncovered_shas(waived_foreign[:cap], repo_root),
+                            broadly_reviewed,
                         ):
                             print(f"    {line}", file=sys.stderr)
                         if len(waived_foreign) > cap:
                             print(
-                                f"    +{len(waived_foreign) - cap} more",
+                                _format_capped_overflow_note(len(waived_foreign), cap),
                                 file=sys.stderr,
                             )
                     if unwaived_foreign:
@@ -1928,13 +2170,14 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                             "to leave the ancestry silently uncovered.",
                             file=sys.stderr,
                         )
-                        for line in _describe_uncovered_shas(
-                            unwaived_foreign[:cap], repo_root,
+                        for line in _annotate_already_reviewed(
+                            _describe_uncovered_shas(unwaived_foreign[:cap], repo_root),
+                            broadly_reviewed,
                         ):
                             print(f"    {line}", file=sys.stderr)
                         if len(unwaived_foreign) > cap:
                             print(
-                                f"    +{len(unwaived_foreign) - cap} more",
+                                _format_capped_overflow_note(len(unwaived_foreign), cap),
                                 file=sys.stderr,
                             )
                 if own_shas:

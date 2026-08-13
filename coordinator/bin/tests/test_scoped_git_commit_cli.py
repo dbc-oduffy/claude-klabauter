@@ -364,6 +364,131 @@ class TestWorktreeExcludedReporting:
         assert "WARNING" not in line
 
 
+class TestUntrackedOmittedReporting:
+    """2026-08-12 fix (state/bug-backlog/2026-08-12-scoped-git-commit-
+    silently-omits-untracked-files-in-a-pathspec.yaml): an untracked file
+    beneath a named directory pathspec must be SAID, not silently dropped.
+    Reporting only -- never changes what got staged or the exit code.
+    """
+
+    @pytest.fixture(scope="module")
+    def note(self):
+        return _load_cli_module()._untracked_omitted_note
+
+    def test_reports_count_paths_and_an_include_invocation(self, note):
+        result = {
+            "committed": True,
+            "sha": "a" * 40,
+            "push_state": "no-remote",
+            "untracked_paths_omitted": {
+                "count": 1,
+                "paths": ["pkg/fresh_module.py"],
+                "truncated": False,
+            },
+        }
+        rendered = note(result, ["pkg"], None)
+        assert "1 untracked" in rendered
+        assert "pkg/fresh_module.py" in rendered
+        assert "scoped-git-commit" in rendered  # names the include invocation
+
+    def test_truncated_sample_shows_and_n_more(self, note):
+        result = {
+            "untracked_paths_omitted": {
+                "count": 25,
+                "paths": ["pkg/a.py", "pkg/b.py"],
+                "truncated": True,
+            }
+        }
+        rendered = note(result, ["pkg"], None)
+        assert "and 23 more" in rendered
+
+    def test_no_key_renders_nothing(self, note):
+        assert note({"committed": True, "sha": "b" * 40}, ["pkg"], None) == ""
+
+    def test_repo_flag_is_threaded_into_the_invocation_hint(self, note):
+        rendered = note(
+            {"untracked_paths_omitted": {"count": 1, "paths": ["p.py"], "truncated": False}},
+            ["pkg"],
+            "/some/other/worktree",
+        )
+        assert "--repo /some/other/worktree" in rendered
+
+
+class TestUntrackedOmittedEndToEnd:
+    """Exercises the real CLI subprocess end to end: a directory pathspec
+    with an untracked sibling still commits the tracked content, still does
+    NOT stage the untracked file, but now names it in both the human line
+    and the `--json` envelope.
+    """
+
+    def test_directory_pathspec_reports_untracked_sibling_and_json_carries_it(
+        self, scratch_repo
+    ):
+        pkg = scratch_repo / "pkg"
+        pkg.mkdir()
+        (pkg / "tracked.txt").write_text("seed\n", encoding="utf-8")
+        _git(scratch_repo, "add", "-A")
+        _git(scratch_repo, "commit", "-qm", "seed pkg")
+        (pkg / "tracked.txt").write_text("changed\n", encoding="utf-8")
+        (pkg / "fresh_module.py").write_text("new module\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["pkg/tracked.txt"])
+
+        result = _run_cli(scratch_repo, "-m", "update pkg", "--", "pkg")
+        assert result.returncode == 0, result.stderr
+        assert "fresh_module.py" in result.stdout
+        assert "untracked" in result.stdout
+        assert "fresh_module.py" not in _git(scratch_repo, "show", "--name-only", "--format=", "HEAD")
+
+        json_result = _run_cli(scratch_repo, "-m", "update pkg again", "--json", "--", "pkg")
+        import json
+
+        payload = json.loads(json_result.stdout)
+        # Nothing left dirty this second run except the still-untracked file,
+        # so this call is the benign no-op -- the field must still be present.
+        assert "untracked_paths_omitted" in payload
+        assert payload["untracked_paths_omitted"]["paths"] == ["pkg/fresh_module.py"]
+
+    def test_repo_flag_from_another_cwd_reports_untracked_sibling(
+        self, scratch_repo, tmp_path
+    ):
+        """The real `--repo <other-worktree>` CLI form: invoked from a cwd
+        OUTSIDE the target repo entirely, with `worktree_root` resolved from
+        the flag rather than an enclosing `.git`. Genuinely exercises the
+        path the deleted `test_repo_form_matches_in_repo_form` (op-level
+        suite) claimed to cover but never did -- see that module's own note
+        on the deletion. Must behave identically to the in-repo form above:
+        commits the tracked change, leaves the untracked sibling unstaged,
+        and reports it.
+        """
+        pkg = scratch_repo / "pkg"
+        pkg.mkdir()
+        (pkg / "tracked.txt").write_text("seed\n", encoding="utf-8")
+        _git(scratch_repo, "add", "-A")
+        _git(scratch_repo, "commit", "-qm", "seed pkg")
+        (pkg / "tracked.txt").write_text("changed\n", encoding="utf-8")
+        (pkg / "fresh_module.py").write_text("new module\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["pkg/tracked.txt"])
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        result = _run_cli(
+            elsewhere,
+            "-m",
+            "update pkg via --repo",
+            "--repo",
+            str(scratch_repo),
+            "--",
+            "pkg",
+        )
+        assert result.returncode == 0, result.stderr
+        assert "committed" in result.stdout
+        assert "fresh_module.py" in result.stdout
+        assert "untracked" in result.stdout
+        assert "fresh_module.py" not in _git(
+            scratch_repo, "show", "--name-only", "--format=", "HEAD"
+        )
+
+
 class TestRefusalReporting:
     """A REFUSAL must not render as a benign no-op (observed live, session
     fb5fa766, 2026-07-31). `commit_scoped` deliberately rejects a directory
@@ -442,6 +567,46 @@ class TestRefusalReporting:
         assert not line.startswith("committed")
         assert line.startswith("PARTIAL")
         assert "DECLINED 1 named path(s)" in line
+
+    def test_untracked_omitted_note_still_renders_on_a_genuine_refusal(
+        self, scratch_repo
+    ):
+        """Review: code-reviewer -- Finding [P2], 2026-08-12. Every prior
+        `untracked_paths_omitted` case (`TestUntrackedOmittedEndToEnd` above)
+        only drove the `committed: True` branch. `main()`'s own print line
+        (`_render(result) + _untracked_omitted_note(result, paths, repo)`) is
+        unconditional, but that structural claim was never pinned by a test
+        that actually reaches a REFUSAL -- exactly where a silent omission
+        hurts most, since a refusal leaves the caller's staged content behind
+        on a shared branch with no report of what else was silently dropped.
+
+        Constructs a directory with ONLY untracked content beneath it (no
+        dirty TRACKED members): `_expand_directory_pathspecs` leaves such a
+        directory element UNCHANGED (nothing to expand to), so it falls
+        through to `commit_scoped`'s hard directory-pathspec rejection --
+        a genuine, deterministic `commit_failed` refusal reached through
+        `run_commit_pipeline`, not a validation-error early return. The
+        untracked probe (`_collect_untracked_omitted`) still runs on the
+        ORIGINAL pathspec before that rejection, so the note must render
+        alongside "REFUSED".
+        """
+        pkg = scratch_repo / "pkg"
+        pkg.mkdir()
+        (pkg / "fresh_module.py").write_text("new module\n", encoding="utf-8")
+
+        result = _run_cli(scratch_repo, "-m", "refuse this", "--", "pkg")
+        assert result.returncode != 0
+        assert "REFUSED" in result.stdout
+        assert "directory pathspec" in result.stdout
+        assert "fresh_module.py" in result.stdout
+        assert "untracked" in result.stdout
+        # Nothing landed and nothing was swept in as a side effect of the
+        # refusal -- the untracked file is still just untracked (plain
+        # `git status --porcelain`, unlike this op's own `--untracked-
+        # files=all` probe, reports a wholly-untracked directory as one
+        # `?? pkg/` line rather than each file beneath it).
+        status = _git(scratch_repo, "status", "--porcelain")
+        assert "?? pkg/" in status
 
     def test_push_declined_note_never_collides_with_a_path_decline(self, render):
         """`push_state == "declined"` (a branch-policy push decline) used to

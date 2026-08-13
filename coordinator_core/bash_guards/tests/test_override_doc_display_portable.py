@@ -110,12 +110,22 @@ class TestOperatorOverrideNoteIsPortable:
     the call site without touching the resolver itself."""
 
     def test_note_contains_no_absolute_path_token(self) -> None:
-        note = h.operator_override_note("COORDINATOR_OVERRIDE_EXAMPLE")
+        note = h.operator_override_note(
+            "COORDINATOR_OVERRIDE_EXAMPLE", payload={"session_id": "sess-c1d-em"}
+        )
         assert not _looks_like_an_absolute_path(note)
 
     def test_note_is_stable_regardless_of_machine_root_state(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        baseline = h.operator_override_note("COORDINATOR_OVERRIDE_EXAMPLE")
+        baseline = h.operator_override_note(
+            "COORDINATOR_OVERRIDE_EXAMPLE", payload={"session_id": "sess-c1d-em"}
+        )
         monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/Users/someoperator/claude-klabauter")
-        assert h.operator_override_note("COORDINATOR_OVERRIDE_EXAMPLE") == baseline
+        assert (
+            h.operator_override_note(
+                "COORDINATOR_OVERRIDE_EXAMPLE",
+                payload={"session_id": "sess-c1d-em"},
+            )
+            == baseline
+        )

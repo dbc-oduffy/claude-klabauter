@@ -972,6 +972,43 @@ class TestArtifactWrite:
         md_files = list(handoffs_dir.glob("*.md"))
         assert len(md_files) == 1, f"expected 1 handoff file, got {md_files}"
 
+    def test_minted_by_stamped_end_to_end_via_creation_door(self, tmp_path, monkeypatch):
+        """C5 (person-identity-primitive-first-slice, re-done): the creation door
+        resolves the operating human ITSELF (via `resolve_operating_person`,
+        monkeypatched here at its import site in this module) and passes the
+        result as `_normalize_one_text`'s caller-supplied `minted_by` param —
+        never resolved from inside the normalizer, which is what the batch
+        sweep also calls (see `test_handoff_normalize.py`'s
+        `test_batch_sweep_never_stamps_minted_by_on_unrelated_handoffs` for the
+        companion regression that pins the sweep side of this contract)."""
+        import coordinator_core.ops.handoff_author_fork as haf
+
+        monkeypatch.setattr(
+            haf, "resolve_operating_person", lambda: {"github": "dbc-example-operator"}
+        )
+        repo_root, result = self._invoke_fork(tmp_path, monkeypatch)
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert "minted_by: dbc-example-operator" in content
+
+    def test_minted_by_absent_via_creation_door_when_resolver_unresolvable(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: coordinator:code-reviewer c71df2b9 (P2) -- the everyday case
+        on a box with no `gh` auth configured: `resolve_operating_person()`
+        returns an empty bundle (`{}`), `.get("github")` is `None`, and
+        `minted_by` must be entirely absent from the written file at the
+        creation-door level (not just proven at the `_normalize_one_text`
+        unit level, see `test_minted_by_omitted_entirely_when_unresolvable`
+        in `test_handoff_normalize.py`)."""
+        import coordinator_core.ops.handoff_author_fork as haf
+
+        monkeypatch.setattr(haf, "resolve_operating_person", lambda: {})
+        repo_root, result = self._invoke_fork(tmp_path, monkeypatch)
+        assert result.get("status") == "ok", f"unexpected: {result}"
+        content = Path(result["handoff_path"]).read_text(encoding="utf-8")
+        assert "minted_by" not in content
+
     def test_result_carries_handoff_path_and_id(self, tmp_path, monkeypatch):
         """Result carries handoff_path (absolute path) and handoff_id (stem)."""
         repo_root, result = self._invoke_fork(tmp_path, monkeypatch)

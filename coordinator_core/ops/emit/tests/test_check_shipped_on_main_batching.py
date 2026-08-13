@@ -27,7 +27,7 @@ from coordinator_core.ops.emit.envelope import main
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
 # residue and is explicitly not the route for a new file --
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -39,9 +39,12 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.fixture
-def repo_with_origin(tmp_path, monkeypatch):
-    """A working repo with a real "origin" remote, one on-main and two off-main commits.
+@pytest.fixture(scope="module")
+def _shared_repo(tmp_path_factory):
+    """Built ONCE per module (~11 spawns total) and reused via `repo_with_origin`
+    below, rather than once per test (~11 spawns * 5 tests) -- Windows process-spawn
+    cost, not wall-clock, is the metric (see this repo's CLAUDE.md § Load norm). Every
+    consuming test only reads via `main()`'s git calls; none mutate this repo.
 
     Layout:
       - bare_origin/         — bare repo acting as "origin"
@@ -50,6 +53,7 @@ def repo_with_origin(tmp_path, monkeypatch):
         - second commit -> local-only, NOT pushed (NOT_ON_MAIN)
         - third commit  -> local-only, NOT pushed (NOT_ON_MAIN)
     """
+    tmp_path = tmp_path_factory.mktemp("check_shipped_on_main_batching")
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
@@ -76,8 +80,13 @@ def repo_with_origin(tmp_path, monkeypatch):
 
     _git(work, "fetch", "origin")
 
-    monkeypatch.chdir(work)
-    return {"on_main": on_main_sha, "off_main": off_main_sha, "off_main_2": off_main_sha_2}
+    return {"work": work, "on_main": on_main_sha, "off_main": off_main_sha, "off_main_2": off_main_sha_2}
+
+
+@pytest.fixture
+def repo_with_origin(_shared_repo, monkeypatch):
+    monkeypatch.chdir(_shared_repo["work"])
+    return _shared_repo
 
 
 def test_main_calls_classify_shas_on_origin_main_exactly_once(repo_with_origin, monkeypatch, capsys):

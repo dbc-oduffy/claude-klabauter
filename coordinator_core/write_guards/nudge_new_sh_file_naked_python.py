@@ -103,15 +103,11 @@ _CARVEOUT_SEGMENTS = frozenset({"tests", "fixtures", "vendor", "node_modules"})
 
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_NEW_SH_PUNT"
 
-_REASON_TEMPLATE = """New .sh: {file_path}. Write as a coordinator_core module instead -- spawns are costly cross-host. (invoking-shell-bash4-probe.sh/claude-machine-local.sh pre-approved.) Genuine third leg? proceed.
-
-{override_note}"""
+_REASON_TEMPLATE = """New .sh: {file_path}. Write as a coordinator_core module instead -- spawns are costly cross-host. (invoking-shell-bash4-probe.sh/claude-machine-local.sh pre-approved.) Genuine third leg? proceed.{override_block}"""
 
 _TRIVIAL_PUNT_REASON_TEMPLATE = """New .sh: {file_path}. Write as a coordinator_core module instead -- spawns are costly cross-host. Genuine third leg? proceed.
 
-[hook] {env_var} set but trivial (< {min_len} chars) -- ignored.
-
-{override_note}"""
+[hook] {env_var} set but trivial (< {min_len} chars) -- ignored.{override_block}"""
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
@@ -166,6 +162,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
 
+        _note = operator_override_note(
+            _ESCAPE_HATCH_ENV_VAR,
+            payload=payload,
+            reason_placeholder="genuinely a third irreducible bash leg",
+        )
+        _override_block = "\n\n" + _note if _note else ""
+
         punt_reason = os.environ.get(_ESCAPE_HATCH_ENV_VAR, "") or ""
         if punt_reason:
             if not _is_trivial_reason(punt_reason):
@@ -174,18 +177,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 file_path=file_path,
                 env_var=_ESCAPE_HATCH_ENV_VAR,
                 min_len=12,
-                override_note=operator_override_note(
-                    _ESCAPE_HATCH_ENV_VAR,
-                    reason_placeholder="genuinely a third irreducible bash leg",
-                ),
+                override_block=_override_block,
             )
         else:
             reason = _REASON_TEMPLATE.format(
                 file_path=file_path,
-                override_note=operator_override_note(
-                    _ESCAPE_HATCH_ENV_VAR,
-                    reason_placeholder="genuinely a third irreducible bash leg",
-                ),
+                override_block=_override_block,
             )
 
         return {

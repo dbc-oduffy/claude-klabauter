@@ -24,7 +24,11 @@ Usage:
     --dry-run    Preview candidates without mutating anything — no git-mv, no
                  shipped_in stamp, no WARN-marker write, no commit. See
                  session.sweep_consumed_handoffs' own dry_run docstring: a preview may
-                 UNDER-count relative to a live run, never over-count.
+                 UNDER-count relative to a live run against act-time terminality drift
+                 only (a candidate going re-live between preview and act), never
+                 over-count that residual. Dest-collision is checked in the preview
+                 itself, so a colliding candidate is excluded from WOULD-archive rather
+                 than being a source of over-count.
     <repo_root>  Optional; defaults to `git rev-parse --show-toplevel`.
 
 Stdout contract: a human-readable summary — archived (or would-archive) count, and every

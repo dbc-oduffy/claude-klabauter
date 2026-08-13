@@ -10,7 +10,10 @@
     "floor_cov": 0.0155,
     "gating_statistic": "min",
     "doc": "PHASE-0-MEASUREMENTS.md",
-    "note": "COMPUTE_ONLY default + overrides are honest budgets set from real distributions (AC6). MUTATING default remains provisional (unmeasured in wave-1 per AC7)."
+    "note": "COMPUTE_ONLY default + overrides are honest budgets set from real distributions (AC6). MUTATING default remains provisional (unmeasured in wave-1 per AC7).",
+    "provenance": "Frozen point-in-time stamp, not a value any code resolves. The live runtime source is coordinator_core/benchmarks/floor.py's measure_floor, persisted by baseline_store.append to the gitignored coordinator_core/benchmarks/baselines/baseline.jsonl.",
+    "remeasurement_tracking": "state/improvement-queue/2026-07-28-benchmarks-budget-manifest-json-cold-sta-1473f67923ab.yaml",
+    "retention": "Retained deliberately: this block is the only committed carrier of this run's run_id/code_sha (baseline.jsonl is gitignored) and is cited by name in plans and audits. Do not delete as dead weight."
   },
   "defaults": {
     "COMPUTE_ONLY": {

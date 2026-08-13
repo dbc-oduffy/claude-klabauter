@@ -1750,6 +1750,39 @@ class TestMisePhase6ReviewScaleVerdict:
         assert directive["metrics"]["surface_count"] == 4
         assert directive["verdict"]["partition_mandatory"] is True
 
+    # -- AC5 (this-chunk regression guard): rename-row resolution shared with
+    # review_brightline_gate.py's `_compute_chain_oracle` fix -------------
+
+    def test_lifecycle_rename_row_resolved_to_destination_and_dropped_as_noise(
+        self, monkeypatch, tmp_path
+    ):
+        # A braced lifecycle/archive rename row must resolve to its
+        # DESTINATION before `_is_noise_path` sees it, and then get dropped
+        # entirely -- same fix as `_compute_chain_oracle`'s (2026-08-12,
+        # `_resolve_numstat_row_path`). Only the real code row should count.
+        self._arrange(
+            monkeypatch,
+            tmp_path,
+            git=_fake_git(
+                commits=2,
+                numstat_rows=[
+                    (
+                        0,
+                        0,
+                        "{state/handoffs => archive/handoffs/2026-08}/x.md",
+                    ),
+                    (9, 2, "coordinator_core/a.py"),
+                ],
+            ),
+        )
+
+        directive = bga.readers_mise_en_place._read_phase_6_review_scale(
+            _MISE_RUN_ID
+        ).directives[0]
+
+        assert directive["metrics"]["gross_loc"] == 11
+        assert directive["metrics"]["surface_count"] == 1
+
     # -- AC5 case 2: below-threshold shallow run -> single reviewer ----------
 
     def test_below_threshold_shallow_run_yields_single_reviewer_with_justification(

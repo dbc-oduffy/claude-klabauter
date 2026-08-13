@@ -42,7 +42,12 @@ class TestAdvisesLedgerEdit:
         assert "priority-set" in reason
         assert "priority.set" in reason
 
-    def test_advisory_reason_leads_with_route_before_the_downside(self):
+    def test_advisory_reason_leads_with_route_and_names_no_override(self):
+        """Inverted (was: `..._leads_with_route_before_the_downside`, which
+        asserted "override" WAS present). Current text ("Use instead:\n
+        ...: run `priority-set`...") has no override mention at all --
+        positively asserts both the route-first ordering AND the absence
+        of "override" anywhere in the reason."""
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -55,7 +60,8 @@ class TestAdvisesLedgerEdit:
         reason = result["hookSpecificOutput"]["additionalContext"]
 
         assert reason.index("priority-set") < reason.index("hand-editing")
-        assert "override" in reason.lower()
+        assert "Use instead" in reason
+        assert "override" not in reason.lower()
 
     def test_edit_to_ledger_entry_advised(self):
         payload = {

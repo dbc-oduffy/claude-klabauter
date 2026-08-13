@@ -142,6 +142,45 @@ class TestVerdictUnresolved:
         result = compute_repo_identity_gate(repo_root, "sess-none")
         assert result["verdict"] == _REPO_IDENTITY_UNRESOLVED
 
+    def test_unresolved_when_registry_populated_but_unparseable(self, tmp_path, monkeypatch):
+        repo_root = tmp_path / "repo"
+        _make_repo(repo_root)
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        # A well-formed file on disk that fails to parse (garbage procStart)
+        # — distinguishable in the reason string from an empty directory.
+        payload = {"sessionId": "sess-garbage", "pid": 999, "procStart": "not-a-date"}
+        (sessions_dir / "999.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        _patch_pid_env(monkeypatch, 999, hit=False)
+
+        result = compute_repo_identity_gate(repo_root, "sess-garbage")
+        assert result["verdict"] == _REPO_IDENTITY_UNRESOLVED
+        assert "registry holds 1 file(s), 0 parsed" in result["message"]
+
+    def test_unresolved_when_registry_populated_and_parsed_but_no_match(self, tmp_path, monkeypatch):
+        repo_root = tmp_path / "repo"
+        _make_repo(repo_root)
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        # Well-formed, parseable records (valid UTC ctime procStart inside
+        # the sanity band) — none carries the sid we look up. Distinguishes
+        # a healthy registry with an ordinary miss from a broken parser: the
+        # message must report the actual parsed count, not "0 parsed".
+        for i, (fname, sid_, pid_) in enumerate(
+            [("111.json", "sess-other-1", 111), ("222.json", "sess-other-2", 222)]
+        ):
+            epoch = time.time() - 60 - i
+            ctime_str = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch))
+            payload = {"sessionId": sid_, "pid": pid_, "procStart": ctime_str}
+            (sessions_dir / fname).write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        _patch_pid_env(monkeypatch, 999, hit=False)
+
+        result = compute_repo_identity_gate(repo_root, "sess-none")
+        assert result["verdict"] == _REPO_IDENTITY_UNRESOLVED
+        assert "registry holds 2 file(s), 2 parsed" in result["message"]
+
     def test_unresolved_on_plausibility_band_degenerate_cwd(self, tmp_path, monkeypatch):
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)

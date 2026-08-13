@@ -479,9 +479,7 @@ def cmd_supersede(handoff_path: str, continued_into: str | None, exclude: list[s
         )
         return 1
 
-    claude_klabauter_root = cc_invoke.resolve_engine_root(__file__)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
+    cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.archival import claimed_or_shipped_at_path
 
     if not claimed_or_shipped_at_path(handoff_path):

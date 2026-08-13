@@ -314,7 +314,9 @@ from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
 from coordinator_core.ops.fleet._common import (
     Move,
+    _REASON_DEST_CONFLICT,
     _TERMINAL_DEPLOYMENT_STATES,
+    _is_identical_duplicate,
     _make_git_env,
     archive_and_commit,
     build_act_result,
@@ -1352,15 +1354,68 @@ async def _handle_act_handoffs(
         is_heir = status_label in _HEIR_STATUS_LABELS and note_or_reason.startswith(
             _HEIR_NOTE_PREFIX
         )
+        # Pre-stamp byte snapshot (heirs only — a non-heir candidate carries no
+        # pre-move mutation, so it needs no restore path).  Held so a genuine
+        # dest-collision skip below (which never builds a Move, so the stamp
+        # this candidate is about to receive would otherwise never be
+        # committed, reverted, or restaged — see the P1 finding this guards
+        # against) can put the source back exactly as _is_terminal last saw
+        # it, keeping the skip idempotent across a second sweep.
+        pre_stamp_bytes: Optional[bytes] = None
         if is_heir:
+            try:
+                pre_stamp_bytes = handoff_path.read_bytes()
+            except OSError as exc:
+                _LOG.warning(
+                    "fleet.archive_completed_handoffs: could not snapshot %s "
+                    "before heir stamp — proceeding without a restore point: %s",
+                    handoff_path, exc,
+                )
             _stamp_heir_shipped(handoff_path)
 
         dst = _archive_dest(worktree, handoff_path)
-        # Review: code-reviewer F3 — dst.exists() guard: consistent with C3's pattern;
-        # closes reversal-failure edge case where dst is present but uncommitted.
+        force = False
         if dst.exists():
-            skipped.append({"id": cid, "reason": "already-archived"})
-            continue
+            if not _is_identical_duplicate(handoff_path, dst):
+                _LOG.warning(
+                    "archive_handoffs: %s NOT archived — a DIFFERENT file already "
+                    "occupies the archive destination %s. Reconcile the two copies "
+                    "before the next sweep.",
+                    cid,
+                    rel_id(dst, worktree),
+                )
+                if is_heir and pre_stamp_bytes is not None:
+                    try:
+                        current_bytes = handoff_path.read_bytes()
+                    except OSError as exc:
+                        failed.append({
+                            "id": cid,
+                            "reason": (
+                                f"{_REASON_DEST_CONFLICT}: could not read {handoff_path} "
+                                f"to verify/restore its pre-stamp content: {exc}"
+                            ),
+                        })
+                        continue
+                    if current_bytes != pre_stamp_bytes:
+                        try:
+                            handoff_path.write_bytes(pre_stamp_bytes)
+                        except OSError as exc:
+                            # An unrestorable source is worse than the original
+                            # defect (a silently-wedged, falsely-shipped live
+                            # handoff) — surface loudly via failed[], never skipped[].
+                            failed.append({
+                                "id": cid,
+                                "reason": (
+                                    f"{_REASON_DEST_CONFLICT}: heir stamp could not be "
+                                    f"reverted on {handoff_path} — source left "
+                                    f"falsely marked shipped: {exc}"
+                                ),
+                            })
+                            continue
+                skipped.append({"id": cid, "reason": _REASON_DEST_CONFLICT})
+                continue
+            # Byte-identical duplicate: converge by archiving over it.
+            force = True
         # restage_src=True for heir candidates ONLY: _stamp_heir_shipped just
         # wrote deployment_state: shipped onto handoff_path (src) above, and
         # archive_and_commit's private index (git mv preserves its
@@ -1370,7 +1425,7 @@ async def _handle_act_handoffs(
         # Non-heir candidates carry no pre-move mutation, so restage_src stays
         # False (default) for them — nothing to pick up, nothing to risk.
         moves.append(Move(
-            src=handoff_path, dst=dst, candidate_id=cid, restage_src=is_heir,
+            src=handoff_path, dst=dst, candidate_id=cid, restage_src=is_heir, force=force,
         ))
 
     if moves:

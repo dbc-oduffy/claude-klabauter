@@ -15,6 +15,19 @@ from pathlib import Path
 
 import pytest
 
+# Declared, not excused: 6 of this file's tests spawn a real git process because the
+# property under test is git's own behaviour -- idempotent annotated-tag cut/push
+# (test_cut_tag_*) and branch/HEAD state after a real recovery-branch dance
+# (test_*_verdict_*), neither reproducible against a mock. Each mutation test needs
+# its own fresh repo (tag-cut idempotency, branch creation, and push-landing checks
+# all depend on starting from a known-clean state), so the per-test
+# `_init_repo_with_origin` fixture is not hoisted to module scope -- see
+# test_verify_shipped.py's docstring for the failure mode that hoisting produces here.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly
+# not the route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).parent.parent
 
 

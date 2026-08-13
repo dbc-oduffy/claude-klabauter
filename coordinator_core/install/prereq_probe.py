@@ -561,7 +561,7 @@ def probe_longpaths() -> str:
 # ---------------------------------------------------------------------------
 def probe_git_lfs() -> str:
     remediation = (
-        "enable Git LFS so LFS-backed repos (e.g. Example-retrieval-repo-ue-addon) clone real objects: "
+        "enable Git LFS so LFS-backed dependent repos clone real objects: "
         "brew install git-lfs (macOS) / winget install GitHub.GitLFS (Windows), then git lfs install"
     )
     if _run(["git", "--version"]) is None:

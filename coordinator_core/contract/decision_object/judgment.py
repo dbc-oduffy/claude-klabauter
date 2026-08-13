@@ -13,6 +13,12 @@ asymmetrically:
   structurally impossible to attach a verdict to that judgment point. This
   is enforced by the function signature, not by a runtime check.
 
+`build_disposition` may additionally carry `guidance` -- per-option text
+describing what a disposition means and how to carry it out. Guidance rides
+on the disposition, never on `recommendation`: it is descriptive, not a
+verdict, and stays evenhanded across every option in a set rather than
+front-loading toward one.
+
 Extracted from the R1 partition-table candidate-general rows (constructor
 contract + compute/apply split shape) -- deliberately excludes any
 pickup-specific gate field.
@@ -63,9 +69,38 @@ def _validate_recommendation(recommendation: Any) -> None:
             )
 
 
-def build_disposition(value: str, resolves: Sequence[str] = ()) -> dict[str, Any]:
-    """Construct one `dispositions` entry: `{value, resolves}`."""
-    return {"value": value, "resolves": list(resolves)}
+def build_disposition(
+    value: str, resolves: Sequence[str] = (), *, guidance: str | None = None
+) -> dict[str, Any]:
+    """Construct one `dispositions` entry: `{value, resolves}`, plus an
+    optional `guidance` string describing what this option means and how to
+    carry it out.
+
+    `guidance` is descriptive, never a verdict -- it rides on the
+    disposition, never on `recommendation` (which stays `None` on an
+    untrusted-gate judgment point regardless of whether its options carry
+    guidance). Omitted from the returned dict entirely when `None`, so every
+    existing no-guidance caller's output stays byte-identical. A non-`str`,
+    non-`None` value raises `ValueError`, matching `_validate_recommendation`'s
+    fail-loud register. An empty or whitespace-only string is likewise
+    rejected -- `None` still means "omit the key"; a supplied-but-vacuous
+    string would leave a present key that says nothing, which is worse than
+    an absent one (Review: code-reviewer -- overridden from `deferred`: this
+    is a shared contract constructor whose purpose is to carry meaning to a
+    reader).
+    """
+    if guidance is not None and not isinstance(guidance, str):
+        raise ValueError(
+            f"build_disposition: guidance must be None or a str, got {type(guidance).__name__}"
+        )
+    if guidance is not None and not guidance.strip():
+        raise ValueError(
+            "build_disposition: guidance must not be empty or whitespace-only"
+        )
+    disposition = {"value": value, "resolves": list(resolves)}
+    if guidance is not None:
+        disposition["guidance"] = guidance
+    return disposition
 
 
 def _build_judgment_point_base(

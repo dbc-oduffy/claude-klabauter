@@ -1113,6 +1113,8 @@ def check_no_verify(
     session_id: str = "",
     *,
     resolved: Optional[List[Any]] = None,
+    hook_payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Deny a git invocation carrying a hook-bypass flag.
 
@@ -1137,6 +1139,19 @@ def check_no_verify(
     cmd = _crlf_strip(cmd)
     flat = re.sub(r"\\n", " ", cmd.replace("\r", "").replace("\n", " "))
 
+    _nv_note = operator_override_note(
+        "COORDINATOR_OVERRIDE_NO_VERIFY", payload=hook_payload, git_root=git_root
+    )
+
+    def _nv_bypass_deny() -> Dict[str, Any]:
+        base = (
+            "BLOCKED: git bypass flag detected. The coordinator doctrine "
+            "prohibits --no-verify, --no-gpg-sign, and -c commit.gpgsign=false."
+        )
+        if _nv_note:
+            base += " If the PM has explicitly authorized bypassing hooks: %s" % _nv_note
+        return _deny(base)
+
     if re.search(r"\bgit\b", flat):
         if resolved:
             # Consume the shared resolver's segmentation via `raw_tokens`
@@ -1155,14 +1170,9 @@ def check_no_verify(
                     break
                 seg_text = " ".join(seg_tokens)
                 if _seg_has_git_bypass_flag(seg_text, pretokenized=seg_tokens):
-                    return _deny(
-                        "BLOCKED: git bypass flag detected. The coordinator doctrine "
-                        "prohibits --no-verify, --no-gpg-sign, and -c commit.gpgsign=false. "
-                        "If the PM has explicitly authorized bypassing hooks: %s"
-                        % operator_override_note("COORDINATOR_OVERRIDE_NO_VERIFY")
-                    )
+                    return _nv_bypass_deny()
             if used_resolved:
-                return _no_verify_rescan_shell_c_and_heredoc(cmd, flat, session_id)
+                return _no_verify_rescan_shell_c_and_heredoc(cmd, flat, session_id, hook_payload, git_root)
 
         # Finding 1 fix (2026-07-29, this-package seventh instance of the
         # split-before-tokenize class): `_split_segments` below is a raw
@@ -1187,30 +1197,24 @@ def check_no_verify(
             # over-block ambiguous prose -- the safe direction for an
             # unparseable command).
             if _BYPASS_RE.search(flat):
-                return _deny(
-                    "BLOCKED: git bypass flag detected. The coordinator doctrine "
-                    "prohibits --no-verify, --no-gpg-sign, and -c commit.gpgsign=false. "
-                    "If the PM has explicitly authorized bypassing hooks: %s"
-                    % operator_override_note("COORDINATOR_OVERRIDE_NO_VERIFY")
-                )
+                return _nv_bypass_deny()
         else:
             for seg_tokens in _bt_segments_from_tokens_simple(bt_tokens):
                 if not seg_tokens:
                     continue
                 seg_text = " ".join(seg_tokens)
                 if _seg_has_git_bypass_flag(seg_text, pretokenized=seg_tokens):
-                    return _deny(
-                        "BLOCKED: git bypass flag detected. The coordinator doctrine "
-                        "prohibits --no-verify, --no-gpg-sign, and -c commit.gpgsign=false. "
-                        "If the PM has explicitly authorized bypassing hooks: %s"
-                        % operator_override_note("COORDINATOR_OVERRIDE_NO_VERIFY")
-                    )
+                    return _nv_bypass_deny()
 
-    return _no_verify_rescan_shell_c_and_heredoc(cmd, flat, session_id)
+    return _no_verify_rescan_shell_c_and_heredoc(cmd, flat, session_id, hook_payload, git_root)
 
 
 def _no_verify_rescan_shell_c_and_heredoc(
-    cmd: str, flat: str, session_id: str
+    cmd: str,
+    flat: str,
+    session_id: str,
+    hook_payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """BX-13/BX-14 rescan legs, shared by every `check_no_verify` return path
     above (the `resolved`-consuming early return included) so migrating the
@@ -1219,12 +1223,16 @@ def _no_verify_rescan_shell_c_and_heredoc(
     `resolved` back in: an unwrapped `sh -c` payload or heredoc body is not a
     segment of the outer `cmd` the caller's `resolved` was computed against,
     so re-running the full self-contained (`resolved=None`) path against
-    each unwrapped payload is correct, not a missed optimization.
+    each unwrapped payload is correct, not a missed optimization. They DO
+    thread `hook_payload`/`git_root` back in (2026-08-13, audience-gated
+    `operator_override_note` migration) -- the unwrapped text is a different
+    COMMAND, not a different CALLER, so the hook envelope this rescan is
+    evaluating on behalf of is unchanged.
     """
     # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted argument
     # is executed, not inert text -- unwrap and re-scan it too.
     for payload in _shell_c_unwrap_payloads(flat):
-        result = check_no_verify(payload, session_id)
+        result = check_no_verify(payload, session_id, hook_payload=hook_payload, git_root=git_root)
         if result is not None:
             return result
 
@@ -1232,7 +1240,7 @@ def _no_verify_rescan_shell_c_and_heredoc(
     # executed, not inert text -- unwrap and re-scan it too. Runs on `cmd`
     # (real newlines), never `flat` -- see `_heredoc_shell_payloads` docstring.
     for payload in _heredoc_shell_payloads(cmd):
-        result = check_no_verify(payload, session_id)
+        result = check_no_verify(payload, session_id, hook_payload=hook_payload, git_root=git_root)
         if result is not None:
             return result
     return None
@@ -1244,10 +1252,25 @@ def _no_verify_rescan_shell_c_and_heredoc(
 # git root. See module docstring / recipe Sec(e).
 # ---------------------------------------------------------------------------
 
-_ORPHAN_OVERRIDE_HINT = (
-    "If this is genuinely intended: %s"
-    % operator_override_note("COORDINATOR_ALLOW_ORPHAN")
-)
+def _orphan_override_hint(payload: Optional[Dict[str, Any]], git_root: Optional[str]) -> str:
+    """Per-call replacement for the former module-level ``_ORPHAN_OVERRIDE_HINT``
+    constant (2026-08-13, audience-gated ``operator_override_note`` migration;
+    tasks/guard-messages-keys/DECISIONS.md D1/D2). A module-level constant
+    built from ``operator_override_note(...)`` was computed once at IMPORT
+    time, before any request-scoped ``payload``/``git_root`` existed to
+    resolve an audience against -- the same no-payload-at-composition-time
+    defect this whole workstream exists to remove, one level up from the
+    per-firing string it wraps. Callers pass their own in-scope ``payload``/
+    ``git_root``; each of the four call sites below applies the SPLICE
+    CONTRACT documented on ``operator_override_note`` itself (gate the
+    trailing sentence on ``bool(...)`` rather than always appending it) --
+    an empty return here means the caller must render NO trailing pointer
+    sentence at all, not a bare "If this is genuinely intended: ".
+    """
+    note = operator_override_note("COORDINATOR_ALLOW_ORPHAN", payload=payload, git_root=git_root)
+    if not note:
+        return ""
+    return "If this is genuinely intended: %s" % note
 
 
 def _new_git_memo() -> Callable[[List[str], Optional[str]], Tuple[int, str]]:
@@ -1507,7 +1530,12 @@ def _seg_confirmed_not_git_invocation(seg: str) -> bool:
     return head in _CHECK2_SAFE_NONSPAWNING_HEADS
 
 
-def check_destructive_git_orphan(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_destructive_git_orphan(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """F0-b (2026-08-05, spawn-count defect): CHECK 1's `rev-parse --verify
     <target>^{commit}` and `rev-list --count <target>..HEAD` probes ran once
     PER SEGMENT even though `target`/`git_cwd` are almost always identical
@@ -1550,6 +1578,7 @@ def check_destructive_git_orphan(cmd: str, session_id: str = "") -> Optional[Dic
     # see `_new_git_memo` docstring for why this is sound and why it is
     # deliberately NOT module-level.
     _memo_run_git = _new_git_memo()
+    _orphan_hint = _orphan_override_hint(payload, git_root)
 
     for seg in _split_segments(cmd):
         if not seg.strip():
@@ -1571,7 +1600,7 @@ def check_destructive_git_orphan(cmd: str, session_id: str = "") -> Optional[Dic
                     "points at.\n\n"
                     "Resolve the ref to a literal first and re-check what it "
                     "would drop:\n  git rev-list --count <resolved-ref>..HEAD"
-                    "\n\n" + _ORPHAN_OVERRIDE_HINT
+                    + ("\n\n" + _orphan_hint if _orphan_hint else "")
                 )
             if not re.search(r"(^|\s)--(\s|$)", after):
                 bare = [
@@ -1610,22 +1639,29 @@ def check_destructive_git_orphan(cmd: str, session_id: str = "") -> Optional[Dic
                             )
                             subjects = "\n".join(subj_out.splitlines()[:5])
                             more = "\n  ... and %d more" % (n - 5) if n > 5 else ""
+                            _reset_trailer = (
+                                "\n\nIf those %d commits are genuinely disposable (or "
+                                "provably safe on another ref), %s" % (n, _orphan_hint)
+                                if _orphan_hint
+                                else ""
+                            )
                             return _deny(
-                                "BLOCKED: 'git reset --hard %s' would drop %d "
-                                "commit(s) from branch '%s'.\n\n"
-                                "These commits are reachable from HEAD but NOT from "
-                                "%s, so the reset orphans them:\n%s%s\n\n"
-                                "This is the 2026-05-28 near-miss shape: a hard reset to "
-                                "a ref that is BEHIND your current work. Before overriding, "
-                                "re-derive the TRUE state yourself (do not trust a "
-                                "remembered count):\n"
-                                "  git rev-list --count %s..HEAD   # commits you "
-                                "would lose; must be 0 to be safe\n"
-                                "  git branch -a --contains HEAD          # other refs "
-                                "that already hold this work\n\n"
-                                "If those %d commits are genuinely disposable (or "
-                                "provably safe on another ref), %s"
-                                % (target, n, cur_branch, target, subjects, more, target, n, _ORPHAN_OVERRIDE_HINT)
+                                (
+                                    "BLOCKED: 'git reset --hard %s' would drop %d "
+                                    "commit(s) from branch '%s'.\n\n"
+                                    "These commits are reachable from HEAD but NOT from "
+                                    "%s, so the reset orphans them:\n%s%s\n\n"
+                                    "This is the 2026-05-28 near-miss shape: a hard reset to "
+                                    "a ref that is BEHIND your current work. Before overriding, "
+                                    "re-derive the TRUE state yourself (do not trust a "
+                                    "remembered count):\n"
+                                    "  git rev-list --count %s..HEAD   # commits you "
+                                    "would lose; must be 0 to be safe\n"
+                                    "  git branch -a --contains HEAD          # other refs "
+                                    "that already hold this work"
+                                    % (target, n, cur_branch, target, subjects, more, target)
+                                )
+                                + _reset_trailer
                             )
 
         # CHECK 2 -- force push
@@ -1686,8 +1722,8 @@ def check_destructive_git_orphan(cmd: str, session_id: str = "") -> Optional[Dic
                     "Use --force-with-lease instead. It refuses the push if the "
                     "remote moved since your last fetch — exactly the protection "
                     "plain --force discards:\n"
-                    "  git push <remote> <branch> --force-with-lease\n\n"
-                    + _ORPHAN_OVERRIDE_HINT
+                    "  git push <remote> <branch> --force-with-lease"
+                    + ("\n\n" + _orphan_hint if _orphan_hint else "")
                 )
 
         # CHECK 3 -- force-delete branch
@@ -1731,18 +1767,25 @@ def check_destructive_git_orphan(cmd: str, session_id: str = "") -> Optional[Dic
                             if line != "refs/heads/%s" % br and not re.match(r"refs/remotes/[^/]*/HEAD", line)
                         ]
                         if not others:
+                            _branch_trailer = (
+                                "\n\nIf '%s' is truly disposable, %s" % (br, _orphan_hint)
+                                if _orphan_hint
+                                else ""
+                            )
                             return _deny(
-                                "BLOCKED: force-deleting branch '%s' would orphan "
-                                "its commits — they live on NO other ref (no local "
-                                "branch, no remote).\n\n"
-                                "'%s' is not contained in any other branch or "
-                                "remote. The lowercase, non-forced 'git branch -d' "
-                                "refuses exactly this case; the force form ('-D', or "
-                                "'-d --force') overrides that safety.\n\n"
-                                "To preserve the work first:\n"
-                                "  git checkout <target> && git merge %s\n\n"
-                                "If '%s' is truly disposable, %s"
-                                % (br, br, br, br, _ORPHAN_OVERRIDE_HINT)
+                                (
+                                    "BLOCKED: force-deleting branch '%s' would orphan "
+                                    "its commits — they live on NO other ref (no local "
+                                    "branch, no remote).\n\n"
+                                    "'%s' is not contained in any other branch or "
+                                    "remote. The lowercase, non-forced 'git branch -d' "
+                                    "refuses exactly this case; the force form ('-D', or "
+                                    "'-d --force') overrides that safety.\n\n"
+                                    "To preserve the work first:\n"
+                                    "  git checkout <target> && git merge %s"
+                                    % (br, br, br)
+                                )
+                                + _branch_trailer
                             )
 
     return None
@@ -2087,6 +2130,38 @@ def check_destructive_rm(cmd: str, session_id: str = "") -> Optional[Dict[str, A
                     "first if not already loaded.)" % tgt
                 )
 
+            # A `*.lock` file under the git store holds no committed data --
+            # git writes a new index to `index.lock` and renames it onto
+            # `index`; unlink the lock mid-flight and that rename FAILS and
+            # the git command errors out loudly, leaving the on-disk index
+            # untouched and still consistent. A second git that acquires a
+            # fresh lock reads that same consistent index. The realistic
+            # worst case is a failed git command, not a damaged repository
+            # -- and the index is regenerable from HEAD plus the working
+            # tree regardless. Hard blocks in this guard are reserved for
+            # irreversible harm; this is not irreversible, so the prior
+            # deny was a wall around the wrong path rather than a cheaper
+            # right one -- an EM must be able to clear a git lock without
+            # human escalation. See cross-repo/inbox/
+            # 2026-08-12-example-retrieval-repo-em-git-index-lock-reaper.md. This leg
+            # must fire FIRST and narrowly (it does not replace the branch
+            # below, which still denies every non-lock git-store path).
+            #
+            # NEGATIVE SPEC -- do NOT turn this into an advisory that names
+            # the reaper, however helpful that reads. `dispatch.py`'s guard
+            # loop returns on the FIRST non-None envelope, so returning
+            # anything here short-circuits every guard registered after this
+            # one for the same command. A silent `continue` is the required
+            # shape; the allow IS the message.
+            is_git_store_target = norm.endswith("/.git") or "/.git/" in norm or os.path.basename(tgt_abs) == ".git"
+            # Review: code-reviewer (dispatch d6708a9c, findings 1-2) -- the
+            # allow is scoped to a lock FILE only; a `.lock`-suffixed
+            # directory has no place in the rename-onto-index safety
+            # argument above and must fall through to the general git-store
+            # deny below.
+            if is_git_store_target and os.path.basename(tgt_abs).endswith(".lock") and os.path.isfile(tgt_abs):
+                continue
+
             # Review: code-reviewer (Finding 4) -- a target whose basename is
             # literally `.git` is caught HERE and denied with the generic
             # git-store message below, before it ever reaches the bare-repo
@@ -2095,7 +2170,7 @@ def check_destructive_rm(cmd: str, session_id: str = "") -> Optional[Dict[str, A
             # less specific message than the root-deny branch's bare-repo
             # wording -- the bare-repo leg is not exercised for every
             # bare-repo shape.
-            if norm.endswith("/.git") or "/.git/" in norm or os.path.basename(tgt_abs) == ".git":
+            if is_git_store_target:
                 if rm_override:
                     continue
                 return _deny(
@@ -2632,7 +2707,12 @@ def _is_loadbearing(path: str, seam_state_root: str = "") -> bool:
     return False
 
 
-def check_destructive_git_clean(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_destructive_git_clean(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
@@ -2679,12 +2759,15 @@ def check_destructive_git_clean(cmd: str, session_id: str = "") -> Optional[Dict
         rc, out = _run_git(oracle_args + (["--", *pathspecs] if pathspecs else []),
                             extra_env={"LC_ALL": "C"})
         if rc == -1:
+            _clean_note = operator_override_note(
+                "COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload, git_root=git_root
+            )
             return _deny(
                 "BLOCKED: git clean safety check timed out (2s) — cannot "
                 "confirm no load-bearing files would be lost.\n\n"
                 "Use instead:\n"
-                "  git clean -nd [your flags]\n\n"
-                "Or: " + operator_override_note("COORDINATOR_OVERRIDE_GIT_CLEAN")
+                "  git clean -nd [your flags]"
+                + ("\n\nOr: " + _clean_note if _clean_note else "")
             )
         if rc != 0:
             continue
@@ -2705,13 +2788,18 @@ def check_destructive_git_clean(cmd: str, session_id: str = "") -> Optional[Dict
         shown_count = len(loadbearing)
         shown = "\n".join("  %s" % p for p in loadbearing[:8])
         more = "\n  ... and %d more (first 8 shown)" % (shown_count - 8) if shown_count > 8 else ""
+        _clean_note2 = operator_override_note(
+            "COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload, git_root=git_root
+        )
         return _deny(
-            "BLOCKED: git clean would delete %d untracked load-bearing "
-            "file(s), unrecoverable (no commit/stash/reflog):\n%s%s\n\n"
-            "Use instead:\n"
-            '  git stash push -u -m "wip" -- <paths>\n\n'
-            "Or: %s"
-            % (shown_count, shown, more, operator_override_note("COORDINATOR_OVERRIDE_GIT_CLEAN"))
+            (
+                "BLOCKED: git clean would delete %d untracked load-bearing "
+                "file(s), unrecoverable (no commit/stash/reflog):\n%s%s\n\n"
+                "Use instead:\n"
+                '  git stash push -u -m "wip" -- <paths>'
+                % (shown_count, shown, more)
+            )
+            + ("\n\nOr: " + _clean_note2 if _clean_note2 else "")
         )
 
     return None
@@ -2721,10 +2809,6 @@ def check_destructive_git_clean(cmd: str, session_id: str = "") -> Optional[Dict
 # 5. check_destructive_git_revert -- block-destructive-git-revert.sh
 # ---------------------------------------------------------------------------
 
-_GR_OVERRIDE_HINT = (
-    "If this revert is genuinely intended:\n\n"
-    + operator_override_note("COORDINATOR_OVERRIDE_GIT_REVERT")
-)
 _GR_BASE_RE = (
     r"^\s*((sudo|command|time|exec|nice|nohup|ionice|timeout|stdbuf|which|type)\s+|"
     r"env\s+(\S+=\S*\s+)*|[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(/\S*/)?git(\s+(-C\s+\S+|"
@@ -2977,7 +3061,10 @@ def _gr_is_revert_segment(seg: str) -> str:
 
 
 def _check_destructive_git_revert_full(
-    cmd: str, session_id: str = ""
+    cmd: str,
+    session_id: str = "",
+    hook_payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """Returns ``(deny_or_none, advisory_or_none)``.
 
@@ -3023,6 +3110,21 @@ def _check_destructive_git_revert_full(
         return None, None
     if _override("COORDINATOR_OVERRIDE_GIT_REVERT"):
         return None, None
+
+    # Per-call replacement for the former module-level `_GR_OVERRIDE_HINT`
+    # constant (2026-08-13, audience-gated `operator_override_note`
+    # migration) -- computed once per call, from THIS call's `hook_payload`/
+    # `git_root`, not at import time. `_gr_note` feeds the five direct
+    # `operator_override_note` call sites below (all now redundant with this
+    # one resolution) and `_gr_hint` mirrors the old constant's own
+    # sentence-prefixed shape for its three former call sites, empty when
+    # `_gr_note` is empty (see `operator_override_note`'s SPLICE CONTRACT).
+    _gr_note = operator_override_note(
+        "COORDINATOR_OVERRIDE_GIT_REVERT", payload=hook_payload, git_root=git_root
+    )
+    _gr_hint = (
+        "If this revert is genuinely intended:\n\n" + _gr_note if _gr_note else ""
+    )
 
     # Advisory floor (2026-08-05): `affected` non-empty but `deny_paths`
     # empty (no load-bearing/peer-claimed path in it) previously fell
@@ -3150,9 +3252,9 @@ def _check_destructive_git_revert_full(
                         "then preserve it:\n"
                         "  git status --porcelain\n"
                         '  git stash push -u -m "before-revert" -- <paths>   '
-                        "# make it recoverable\n\n"
-                        "After preserving the files, re-run. Or:\n%s"
-                        % (verb, _GR_OVERRIDE_HINT)
+                        "# make it recoverable"
+                        % (verb,)
+                        + ("\n\nAfter preserving the files, re-run. Or:\n%s" % _gr_hint if _gr_hint else "")
                     ), None
                 if rc != 0:
                     continue
@@ -3180,8 +3282,8 @@ def _check_destructive_git_revert_full(
                         "then preserve it:\n"
                         "  git status --porcelain\n"
                         '  git stash push -u -m "before-reset" -- <paths>   '
-                        "# make it recoverable\n\n"
-                        "After preserving the files, re-run. Or:\n" + _GR_OVERRIDE_HINT
+                        "# make it recoverable"
+                        + ("\n\nAfter preserving the files, re-run. Or:\n" + _gr_hint if _gr_hint else "")
                     ), None
                 if rc != 0:
                     continue
@@ -3249,8 +3351,8 @@ def _check_destructive_git_revert_full(
                         "out (2 s) — cannot verify the sweep is safe.\n\n"
                         "Safe path first — scope the stash to your own "
                         "paths:\n"
-                        '  git stash push -u -m "before-stash" -- <paths>\n\n'
-                        "Or: " + _GR_OVERRIDE_HINT
+                        '  git stash push -u -m "before-stash" -- <paths>'
+                        + ("\n\nOr: " + _gr_hint if _gr_hint else "")
                     ), None
                 if rc != 0:
                     continue
@@ -3358,13 +3460,11 @@ def _check_destructive_git_revert_full(
                 else:
                     harm = "discard %d uncommitted file(s) git cannot recover"
                 pending_advisory = _advisory(
-                    "ADVISORY: %s would %s.\n\n%s\n\nOr: %s"
-                    % (
-                        verb_label,
-                        harm % len(affected),
-                        offer,
-                        operator_override_note("COORDINATOR_OVERRIDE_GIT_REVERT"),
+                    (
+                        "ADVISORY: %s would %s.\n\n%s"
+                        % (verb_label, harm % len(affected), offer)
                     )
+                    + ("\n\nOr: %s" % _gr_note if _gr_note else "")
                 )
                 _pending_advisory_affected = len(affected)
             continue
@@ -3427,15 +3527,9 @@ def _check_destructive_git_revert_full(
                 # this message back over `MESSAGE_PROSE_CAP_BYTES`.
                 "Preserve it first instead:\n"
                 '  git stash push -u -m "before-reset"\n'
-                "  git reset --hard\n\n%s"
-                % (
-                    verb_label,
-                    shown_count,
-                    shown,
-                    more,
-                    operator_override_note("COORDINATOR_OVERRIDE_GIT_REVERT"),
-                )
-            )
+                "  git reset --hard"
+                % (verb_label, shown_count, shown, more)
+            ) + ("\n\n%s" % _gr_note if _gr_note else "")
         elif verb == "stash":
             # Verb-conditioned for the same reason the advisory harm text
             # above is: a stash is RECOVERABLE (`pop`/`apply`), so the shared
@@ -3447,15 +3541,9 @@ def _check_destructive_git_revert_full(
                 "no session has claimed:\n%s%s\n\n"
                 # See the reset branch on why the cue word is load-bearing.
                 "Scope it to your own paths instead:\n"
-                '  git stash push -u -m "before-stash" -- <your-paths>\n\n%s'
-                % (
-                    verb_label,
-                    shown_count,
-                    shown,
-                    more,
-                    operator_override_note("COORDINATOR_OVERRIDE_GIT_REVERT"),
-                )
-            )
+                '  git stash push -u -m "before-stash" -- <your-paths>'
+                % (verb_label, shown_count, shown, more)
+            ) + ("\n\n%s" % _gr_note if _gr_note else "")
         else:
             deny_reason = (
                 "BLOCKED: '%s' discards %d uncommitted file(s) git cannot "
@@ -3468,15 +3556,9 @@ def _check_destructive_git_revert_full(
                 "  git checkout -- <your-paths>\n"
                 "  git restore -- <your-paths>\n\n"
                 "Or preserve everything first instead:\n"
-                '  git stash push -u -m "before-revert" -- <paths>\n\n%s'
-                % (
-                    verb_label,
-                    shown_count,
-                    shown,
-                    more,
-                    operator_override_note("COORDINATOR_OVERRIDE_GIT_REVERT"),
-                )
-            )
+                '  git stash push -u -m "before-revert" -- <paths>'
+                % (verb_label, shown_count, shown, more)
+            ) + ("\n\n%s" % _gr_note if _gr_note else "")
 
         return _deny(deny_reason), None
 
@@ -3502,7 +3584,9 @@ def _check_destructive_git_revert_full(
     # report). Deny precedence is unaffected either way -- a deny from the
     # rescan still returns immediately, unconditionally, above.
     for payload in _shell_c_unwrap_payloads(cmd):
-        deny_result, advisory_result = _check_destructive_git_revert_full(payload, session_id)
+        deny_result, advisory_result = _check_destructive_git_revert_full(
+            payload, session_id, hook_payload, git_root
+        )
         if deny_result is not None:
             return deny_result, None
         if pending_advisory is None:
@@ -3510,17 +3594,27 @@ def _check_destructive_git_revert_full(
     return None, pending_advisory
 
 
-def check_destructive_git_revert(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_destructive_git_revert(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Hard-deny leg only -- registered in `dispatch.py`'s CONFINEMENT_DENY
     band. Never returns the advisory half; see
     `check_destructive_git_revert_advisory` and
     `_check_destructive_git_revert_full`'s docstring for why the two are
     split (Review: staff-eng, Finding 0)."""
-    deny, _advisory = _check_destructive_git_revert_full(cmd, session_id)
+    deny, _advisory = _check_destructive_git_revert_full(cmd, session_id, payload, git_root)
     return deny
 
 
-def check_destructive_git_revert_advisory(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_destructive_git_revert_advisory(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Advisory-only leg -- registered in `dispatch.py`'s ADVISORY_REWRITE
     band, after every CONFINEMENT_DENY hard-deny guard and before
     `offer-git-c`'s rewrite, so it can never shadow a hard deny.
@@ -3528,7 +3622,7 @@ def check_destructive_git_revert_advisory(cmd: str, session_id: str = "") -> Opt
     revert_full`'s result per dispatch call, so calling both this and
     `check_destructive_git_revert` in the same pass never re-spawns the
     underlying `git status`/`git rev-parse` calls."""
-    _deny, advisory = _check_destructive_git_revert_full(cmd, session_id)
+    _deny, advisory = _check_destructive_git_revert_full(cmd, session_id, payload, git_root)
     return advisory
 
 
@@ -3732,7 +3826,11 @@ def _bt_blanket_add_dash_c_cwd(cmd: str) -> str:
     return os.path.normpath(os.path.join(os.getcwd(), dash_c_val))
 
 
-def check_blanket_git_add(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_blanket_git_add(
+    cmd: str,
+    session_id: str = "",
+    hook_payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
@@ -3871,19 +3969,21 @@ def check_blanket_git_add(cmd: str, session_id: str = "") -> Optional[Dict[str, 
         # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted
         # argument is executed, not inert text -- unwrap and re-scan it too.
         for payload in _shell_c_unwrap_payloads(cmd):
-            result = check_blanket_git_add(payload, session_id)
+            result = check_blanket_git_add(payload, session_id, hook_payload)
             if result is not None:
                 return result
         return None
 
+    _add_note = operator_override_note(
+        "COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload, git_root=git_root
+    )
     reason = (
         "BLOCKED: blanket `git add` sweeps in sibling sessions' edits "
         "(SC-DR-014). Matched: %s\n\n"
         "Use instead:\n"
-        "  git add -- path/to/file\n\n"
-        "Or: %s"
-        % (matched_cmd, operator_override_note("COORDINATOR_OVERRIDE_BLANKET_ADD"))
-    )
+        "  git add -- path/to/file"
+        % (matched_cmd,)
+    ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _deny(reason)
 
 
@@ -4109,7 +4209,12 @@ _TS_PROBE_RE = re.compile(r"(\$\(date|`date|\$EPOCHSECONDS|\$RANDOM)")
 _LEXEME_RE = re.compile(r"(^|[^a-z0-9_])(alive|heartbeat|chan[_-]?ok|still[_-](alive|here|there))([^a-z0-9_]|$)")
 
 
-def check_probe_spray(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_probe_spray(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Advisory-only heuristic nudge (never denies). All scratch-state
     read/write around ring_f/times_f/cool_f below deliberately swallows
     OSError without a diagnostic: this is best-effort /tmp bookkeeping for a
@@ -4261,6 +4366,9 @@ def check_probe_spray(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]
                 # risks re-firing the advisory sooner than _COOLDOWN, not
                 # a correctness break -- the advisory below still fires.
                 pass
+            _ps_note = operator_override_note(
+                "COORDINATOR_PROBE_NUDGE_OFF", payload=payload, git_root=git_root
+            )
             return _advisory(
                 (
                     "PROBE-SPRAY: %d channel-test commands in %ds — the "
@@ -4268,10 +4376,10 @@ def check_probe_spray(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]
                     "(docs/wiki/tool-output-flakiness-protocol.md).\n\n"
                     "Use instead:\n"
                     "  git -C <path> log -1   # one real command, not "
-                    "another probe\n\n"
+                    "another probe"
                     % (count, _WINDOW)
                 )
-                + operator_override_note("COORDINATOR_PROBE_NUDGE_OFF")
+                + ("\n\n" + _ps_note if _ps_note else "")
             )
 
     return None
@@ -4464,7 +4572,12 @@ def _format_owner_token(fact: Optional["OwnerFact"]) -> str:
     return "orphan"
 
 
-def check_validate_commit(cmd: str, session_id: str = "", cwd: str = "") -> Optional[Dict[str, Any]]:
+def check_validate_commit(
+    cmd: str,
+    session_id: str = "",
+    cwd: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     command = _crlf_strip(cmd) if cmd else ""
     if not command:
         return None
@@ -4874,9 +4987,7 @@ def check_validate_commit(cmd: str, session_id: str = "", cwd: str = "") -> Opti
                             "this session's touch list — likely owned by %s.\n\n"
                             "Unstage it (git restore --staged %s) or, if it "
                             "genuinely belongs to this session's work, add it "
-                            "to touched.txt first.\n"
-                            "Set COORDINATOR_SCOPE_STRICT=0 to fall back to "
-                            "warn-only." % (staged_file, owner_sentence, staged_file)
+                            "to touched.txt first." % (staged_file, owner_sentence, staged_file)
                         )
 
                     warnings.append(
@@ -4997,13 +5108,16 @@ def check_validate_commit(cmd: str, session_id: str = "", cwd: str = "") -> Opti
         )
 
     if hard_violation and not _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET"):
+        _budget_note = operator_override_note(
+            "COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload, git_root=_repo_root_for_governance
+        )
         reason = (
             "BLOCKED: staged CLAUDE.md exceeds 40K char limit (Claude Code "
             "perf warning threshold):%s\n\n"
             "Trim before committing: demote a section to docs/wiki/ and "
-            "replace with a pointer.\n\n"
+            "replace with a pointer."
             % hard_violation
-        ) + operator_override_note("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET")
+        ) + ("\n\n" + _budget_note if _budget_note else "")
         return _deny(reason)
 
     if hard_violation and _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET"):
@@ -5113,9 +5227,12 @@ def check_validate_commit(cmd: str, session_id: str = "", cwd: str = "") -> Opti
         if _override("COORDINATOR_OVERRIDE_REGISTRATION_QUAD"):
             warnings.append("REGISTRATION-QUAD-TRIPWIRE (override):\n%s" % registration_quad_violation)
         else:
+            _quad_note = operator_override_note(
+                "COORDINATOR_OVERRIDE_REGISTRATION_QUAD", payload=payload, git_root=_repo_root_for_governance
+            )
             reason = (
-                "%s\n\n" % registration_quad_violation
-            ) + operator_override_note("COORDINATOR_OVERRIDE_REGISTRATION_QUAD")
+                "%s" % registration_quad_violation
+            ) + ("\n\n" + _quad_note if _quad_note else "")
             return _deny(reason)
 
     # Check 13 -- staged-pathspec-divergence -- STAGED-PATHSPEC-DIVERGENCE.
@@ -5126,7 +5243,7 @@ def check_validate_commit(cmd: str, session_id: str = "", cwd: str = "") -> Opti
     # PATHSPEC_DIVERGENCE), unlike Checks 9/10/12 above, so no extra
     # override branch is needed at this call site.
     pathspec_divergence_violation = commit_tripwires.check_staged_pathspec_divergence(
-        command, _cwd, session_id
+        command, _cwd, session_id, payload=payload
     )
     if pathspec_divergence_violation:
         warnings.append(pathspec_divergence_violation)
@@ -5343,7 +5460,12 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
     return "%s -c %s" % (_bt_python3_invocation(), shlex.quote(body))
 
 
-def check_find_exec_rewrite(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_find_exec_rewrite(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """BX-16 shape 1 (flagship) -- `find ... -exec <binary> {} ;` and its
     `for f in $(find ...); do <binary> "$f"; done` sibling both fork ONE
     CHILD PROCESS PER MATCH, which is the exact mechanism behind the
@@ -5392,6 +5514,9 @@ def check_find_exec_rewrite(cmd: str, session_id: str = "") -> Optional[Dict[str
     # an advisory that still names the specific segment, never a full-command
     # replacement of work this function never inspected.
     single_segment = len(segments) == 1
+    _find_exec_note = operator_override_note(
+        "COORDINATOR_ALLOW_FIND_EXEC", payload=payload, git_root=git_root
+    )
     for tokens, _pipe_before in segments:
         if not tokens or not _bt_token_matches_binary(tokens[0], "find"):
             continue
@@ -5402,37 +5527,40 @@ def check_find_exec_rewrite(cmd: str, session_id: str = "") -> Optional[Dict[str
         if rewrite and single_segment:
             return _allow_rewrite(
                 rewrite,
-                "Auto-rewritten: 'find ... -exec %s ... {} ;' forks one "
-                "process PER MATCH (the founding-incident 879-process shape "
-                "on Windows) -> one python3 process, zero per-match forks. "
-                "%s"
-                % (parsed["exec_argv"][0], operator_override_note("COORDINATOR_ALLOW_FIND_EXEC")),
+                (
+                    "Auto-rewritten: 'find ... -exec %s ... {} ;' forks one "
+                    "process PER MATCH (the founding-incident 879-process shape "
+                    "on Windows) -> one python3 process, zero per-match forks."
+                    % (parsed["exec_argv"][0],)
+                )
+                + (" %s" % _find_exec_note if _find_exec_note else ""),
             )
         if rewrite:
             return _advisory(
-                "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) forks "
-                "one process PER MATCH -- the founding-incident 879-process "
-                "shape on Windows. A single python3 -c os.walk(...) loop "
-                "does the same enumeration in one process, but this "
-                "find-exec segment runs alongside OTHER work in the same "
-                "command (a for-loop, a chained command, or both), so no "
-                "full-command auto-rewrite is offered -- replacing the "
-                "whole command would silently drop that other work. "
-                "%s"
-                % (
-                    parsed["exec_argv"][0],
-                    " ".join(tokens),
-                    operator_override_note("COORDINATOR_ALLOW_FIND_EXEC"),
+                (
+                    "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) forks "
+                    "one process PER MATCH -- the founding-incident 879-process "
+                    "shape on Windows. A single python3 -c os.walk(...) loop "
+                    "does the same enumeration in one process, but this "
+                    "find-exec segment runs alongside OTHER work in the same "
+                    "command (a for-loop, a chained command, or both), so no "
+                    "full-command auto-rewrite is offered -- replacing the "
+                    "whole command would silently drop that other work."
+                    % (parsed["exec_argv"][0], " ".join(tokens))
                 )
+                + (" %s" % _find_exec_note if _find_exec_note else "")
             )
         return _advisory(
-            "Advisory: 'find ... -exec %s ... {} ;' forks one process PER "
-            "MATCH -- the founding-incident 879-process shape on Windows. "
-            "A single python3 -c os.walk(...) loop does the same "
-            "enumeration in one process; this exec'd verb has no known "
-            "translation on file, so the rewrite is not offered "
-            "automatically. %s"
-            % (parsed["exec_argv"][0], operator_override_note("COORDINATOR_ALLOW_FIND_EXEC"))
+            (
+                "Advisory: 'find ... -exec %s ... {} ;' forks one process PER "
+                "MATCH -- the founding-incident 879-process shape on Windows. "
+                "A single python3 -c os.walk(...) loop does the same "
+                "enumeration in one process; this exec'd verb has no known "
+                "translation on file, so the rewrite is not offered "
+                "automatically."
+                % (parsed["exec_argv"][0],)
+            )
+            + (" %s" % _find_exec_note if _find_exec_note else "")
         )
     return None
 
@@ -5696,7 +5824,12 @@ def _bt_grep_python_rewrite(parsed: Dict[str, Any]) -> str:
 _GREP_FAMILY_BINARIES_BT = ("grep", "egrep", "fgrep", "rg")
 
 
-def check_grep_via_bash_rewrite(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_grep_via_bash_rewrite(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """BX-16 shape 2 -- `grep`-via-Bash (50.9% of measured forks, the
     single largest shape). Auto-rewrites a "substitutable residue" grep
     invocation (see `_GREP_SUBSTITUTABLE_SHORT_FLAGS`) into a single
@@ -5726,6 +5859,9 @@ def check_grep_via_bash_rewrite(cmd: str, session_id: str = "") -> Optional[Dict
     parsed = _bt_grep_flags_and_operands(tokens)
     if parsed is None:
         return None
+    _grep_note = operator_override_note(
+        "COORDINATOR_ALLOW_GREP_VIA_BASH", payload=payload, git_root=git_root
+    )
     return _allow_rewrite(
         _bt_grep_python_rewrite(parsed),
         # Portability claim, not a fork-count one: GNU and BSD grep disagree
@@ -5738,17 +5874,24 @@ def check_grep_via_bash_rewrite(cmd: str, session_id: str = "") -> Optional[Dict
         # once the in-process answerer has already shadowed everything it
         # can safely answer. The python3 rewrite evaluates the pattern with
         # Python's own `re` engine, so behavior is identical on every host.
-        "Auto-rewritten: 'grep' via Bash spawns a child process, and on "
-        "anchored-alternation patterns (`^a|^b`) GNU and BSD grep disagree "
-        "on anchor position, so host grep can silently match a different "
-        "line set on Mac/BSD than on Linux/GNU. The python3 rewrite uses "
-        "Python's own regex engine, giving identical behavior on every "
-        "host. %s"
-        % operator_override_note("COORDINATOR_ALLOW_GREP_VIA_BASH"),
+        (
+            "Auto-rewritten: 'grep' via Bash spawns a child process, and on "
+            "anchored-alternation patterns (`^a|^b`) GNU and BSD grep disagree "
+            "on anchor position, so host grep can silently match a different "
+            "line set on Mac/BSD than on Linux/GNU. The python3 rewrite uses "
+            "Python's own regex engine, giving identical behavior on every "
+            "host."
+        )
+        + (" %s" % _grep_note if _grep_note else ""),
     )
 
 
-def check_sed_range_read_advise(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_sed_range_read_advise(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """BX-16 shape 3 -- `sed -n 'A,Bp' FILE` reads a line range via a
     subprocess; the Read tool does the identical paged read natively, no
     subprocess. Advisory only -- a Bash-to-Bash `updatedInput` cannot name a
@@ -5784,21 +5927,26 @@ def check_sed_range_read_advise(cmd: str, session_id: str = "") -> Optional[Dict
     start, end = int(start_s), int(tail[:-1])
     if end < start:
         return None
+    _sed_note = operator_override_note(
+        "COORDINATOR_ALLOW_SED_RANGE", payload=payload, git_root=git_root
+    )
     return _advisory(
-        "Advisory: 'sed -n \"%s\"' reads a line range via a subprocess -- "
-        "the Read tool does the same paged read natively: Read(%s, "
-        "offset=%d, limit=%d). %s"
-        % (
-            script,
-            file_arg or "<file>",
-            start,
-            end - start + 1,
-            operator_override_note("COORDINATOR_ALLOW_SED_RANGE"),
+        (
+            "Advisory: 'sed -n \"%s\"' reads a line range via a subprocess -- "
+            "the Read tool does the same paged read natively: Read(%s, "
+            "offset=%d, limit=%d)."
+            % (script, file_arg or "<file>", start, end - start + 1)
         )
+        + (" %s" % _sed_note if _sed_note else "")
     )
 
 
-def check_cat_heredoc_write_advise(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_cat_heredoc_write_advise(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """BX-16 shape 4 -- `cat > FILE <<'EOF' ... EOF` writes a file via a
     subprocess heredoc; the Write tool authors the same file directly, no
     subprocess. Advisory only, for the same reason as the sed check above.
@@ -5829,11 +5977,17 @@ def check_cat_heredoc_write_advise(cmd: str, session_id: str = "") -> Optional[D
     if redir_idx + 1 >= len(seg_tokens):
         return None
     target = seg_tokens[redir_idx + 1]
+    _cat_note = operator_override_note(
+        "COORDINATOR_ALLOW_CAT_HEREDOC", payload=payload, git_root=git_root
+    )
     return _advisory(
-        "Advisory: 'cat %s %s <<EOF ... EOF' writes a file via a subprocess "
-        "heredoc -- the Write tool authors the same file directly, no "
-        "subprocess. %s"
-        % (redir, target, operator_override_note("COORDINATOR_ALLOW_CAT_HEREDOC"))
+        (
+            "Advisory: 'cat %s %s <<EOF ... EOF' writes a file via a subprocess "
+            "heredoc -- the Write tool authors the same file directly, no "
+            "subprocess."
+            % (redir, target)
+        )
+        + (" %s" % _cat_note if _cat_note else "")
     )
 
 
@@ -6513,7 +6667,12 @@ def _bt_c7_index_holds_foreign_paths(
     return bool(full_paths - scoped_paths)
 
 
-def check_git_commit_safe_commit_advise(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_git_commit_safe_commit_advise(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """BX-16 shape 5 -- a `git commit` that names NO scope advised toward
     the ratified scoped-commit default. (Function name predates the offer
     correction below and is kept because it is the registry key; the offer
@@ -6615,34 +6774,36 @@ def check_git_commit_safe_commit_advise(cmd: str, session_id: str = "") -> Optio
         # monotonicity argument and the scope cut. Every other bare-commit
         # shape (no preceding `add`, or `-a`/`-am`/`--all` present) stays
         # advisory, unchanged.
+        _commit_bare_note = operator_override_note(
+            "COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload, git_root=git_root
+        )
         if _bt_c7_index_holds_foreign_paths(seg_tokens, segments, seg_index):
             return _deny(
-                "Deny: the index holds staged paths OUTSIDE this "
-                "command's own 'git add' — a peer's staged work would be "
-                "swept under your subject.\n\n"
+                (
+                    "Deny: the index holds staged paths OUTSIDE this "
+                    "command's own 'git add' — a peer's staged work would be "
+                    "swept under your subject.\n\n"
+                    "Use instead:\n"
+                    "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
+                    "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
+                    "instead:\n"
+                    "  scoped-git-commit -m <same subject> -- <paths>"
+                    % (subject_operand,)
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
+        return _advisory(
+            (
+                "Advisory: this 'git commit' names no scope — commits "
+                "whatever is staged, including a peer's concurrent work.\n\n"
                 "Use instead:\n"
                 "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
                 "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
                 "instead:\n"
-                "  scoped-git-commit -m <same subject> -- <paths>\n\n%s"
-                % (
-                    subject_operand,
-                    operator_override_note("COORDINATOR_ALLOW_GIT_COMMIT_BARE"),
-                )
+                "  scoped-git-commit -m <same subject> -- <paths>"
+                % (subject_operand,)
             )
-        return _advisory(
-            "Advisory: this 'git commit' names no scope — commits "
-            "whatever is staged, including a peer's concurrent work.\n\n"
-            "Use instead:\n"
-            "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
-            "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
-            "instead:\n"
-            "  scoped-git-commit -m <same subject> -- <paths>\n\n"
-            "%s"
-            % (
-                subject_operand,
-                operator_override_note("COORDINATOR_ALLOW_GIT_COMMIT_BARE"),
-            )
+            + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
         )
     return None
 
@@ -6741,7 +6902,12 @@ def _bt_probe_segment_kind(tokens: List[str]) -> Optional[Tuple[str, Optional[st
     return None
 
 
-def check_multiprobe_banner_rewrite(cmd: str, session_id: str = "") -> Optional[Dict[str, Any]]:
+def check_multiprobe_banner_rewrite(
+    cmd: str,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """BX-16 shape 6 (BX-7's rewrite target) -- the multi-probe session-facts
     banner (40.1% of measured forks, second only to grep-via-Bash): a
     banner-marked chain like ``echo "=== SESSION FACTS ==="; git rev-parse
@@ -6977,14 +7143,19 @@ def check_multiprobe_banner_rewrite(cmd: str, session_id: str = "") -> Optional[
             lines.append('print("\\n".join(_status_lines))')
 
     script = "\n".join(lines)
+    _multiprobe_note = operator_override_note(
+        "COORDINATOR_ALLOW_MULTIPROBE_BANNER", payload=payload, git_root=git_root
+    )
     return _allow_rewrite(
         "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
-        "Auto-rewritten: this multi-probe session-facts banner re-derives "
-        "facts the harness already knows, one process PER PROBE (measured "
-        "session-fact re-derivation rates of 89%%/84%%/71%%/49%%). A single "
-        "python3 process reproduces the same facts, batching every git fact "
-        "into ONE 'git status --porcelain=v2 --branch' call. %s"
-        % operator_override_note("COORDINATOR_ALLOW_MULTIPROBE_BANNER"),
+        (
+            "Auto-rewritten: this multi-probe session-facts banner re-derives "
+            "facts the harness already knows, one process PER PROBE (measured "
+            "session-fact re-derivation rates of 89%%/84%%/71%%/49%%). A single "
+            "python3 process reproduces the same facts, batching every git fact "
+            "into ONE 'git status --porcelain=v2 --branch' call."
+        )
+        + (" %s" % _multiprobe_note if _multiprobe_note else ""),
     )
 
 

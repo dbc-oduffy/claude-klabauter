@@ -19,6 +19,7 @@ import textwrap
 import pytest
 
 from coordinator_core import meta_repo_identity
+from coordinator_core import state_root as state_root_mod
 from coordinator_core.ops import generate_exec_summary as mod
 
 
@@ -188,6 +189,55 @@ def test_t9_state_root_rule5_meta_repo_error_faithfully_treated_as_false(repo, m
 
     result = mod._resolve_state_root(str(repo))
     assert result == os.path.join(str(repo), "state")
+
+
+def test_t10_resolved_engine_class_refuses_write_loudly(repo, tmp_path, monkeypatch, capsys):
+    """Spec backlink: commit 5dedf53b9 (state_root's published-mirror guard).
+
+    When the meta-repo branch resolves via `coordinator_claude_klabauter_root_with_class`
+    to a `resolved-engine` class (a published claude-klabauter-style mirror,
+    not a live working tree), the generator must refuse loudly rather than
+    write claude-klabauter state into the mirror. Reuses
+    `coordinator_core.state_root._claude_klabauter_state`'s own guard -- this test
+    monkeypatches `coordinator_claude_klabauter_root_with_class` as SEEN THROUGH
+    `state_root`'s own import binding (not generate_exec_summary's), which is
+    only reachable if the fix actually calls through that shared mechanism
+    rather than a reimplemented copy.
+    """
+    monkeypatch.setattr(meta_repo_identity, "is_meta_repo", lambda _root: True)
+
+    mirror_root = str(tmp_path / "published-mirror-checkout")
+
+    def _fake_with_class():
+        return (mirror_root, "resolved-engine")
+
+    monkeypatch.setattr(state_root_mod, "coordinator_claude_klabauter_root_with_class", _fake_with_class)
+
+    rc = mod.main([])
+    err = capsys.readouterr().err
+
+    assert rc == 1
+    assert "PUBLISHED engine mirror" in err
+    assert not os.path.exists(os.path.join(mirror_root, "state"))
+    assert not os.path.isfile(repo / "docs" / "exec-summary.md")
+
+
+def test_t11_live_working_tree_class_unchanged_behavior(repo, tmp_path, monkeypatch):
+    """Ordinary case: `live-working-tree` class behaves identically to the
+    pre-fix class-less resolution -- the guard only intervenes on
+    `resolved-engine`, never on a genuine working tree."""
+    monkeypatch.setattr(meta_repo_identity, "is_meta_repo", lambda _root: True)
+
+    live_root = str(tmp_path / "live-claude-klabauter-checkout")
+    os.makedirs(live_root, exist_ok=True)
+
+    def _fake_with_class():
+        return (live_root, "live-working-tree")
+
+    monkeypatch.setattr(state_root_mod, "coordinator_claude_klabauter_root_with_class", _fake_with_class)
+
+    result = mod._resolve_state_root(str(repo))
+    assert result == os.path.join(live_root, "state")
 
 
 def test_link_rewriting_prefixes_bare_repo_relative_targets():

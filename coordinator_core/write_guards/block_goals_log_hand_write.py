@@ -109,12 +109,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not _GOALS_LOG_RE.search(file_path_norm):
             return None
 
+        _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = (
             "Use instead:\n"
             f"  {file_path} is append-only disk-truth; a hand-write skips the "
             "goal_id content hash and status/path validation, corrupting "
-            "supersession -- run append-goal-event.py (goal.append) instead.\n\n"
-            + operator_override_note(_OVERRIDE_ENV_VAR)
+            "supersession -- run append-goal-event.py (goal.append) instead."
+            + ("\n\n" + _note if _note else "")
         )
 
         return {

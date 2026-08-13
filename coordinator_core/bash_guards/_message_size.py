@@ -456,19 +456,31 @@ def _data_block_bytes(text: str) -> int:
     return total
 
 
-#: The ONE fixed string `operator_override_note` now renders, regardless of
-#: `env_var`/`reason_placeholder` -- see that function's own docstring,
-#: "RESHAPED AGAIN 2026-08-11" (second reshape the same day as the first).
-#: That reshape stopped interpolating the guard's own env-var name into its
-#: output at all, so there is no longer a per-guard ARGUMENT to recover from
-#: rendered text, and no per-branch prefix to derive either: every call
-#: renders byte-identical output. Computed once at import time (never per
-#: measurement) because the builder is now a pure zero-argument-dependent
-#: constant -- still a LIVE render of the real builder, never a hand-copied
-#: transcription of its prose (same discipline the retired derivation
-#: functions below this comment used to enforce for the old, argument-
-#: dependent shape).
-_OVERRIDE_NOTE_TAIL = operator_override_note("")
+#: The ONE non-empty fixed string `operator_override_note` renders for a
+#: POSITIVELY-RESOLVED-EM audience, regardless of `env_var`/
+#: `reason_placeholder` -- see that function's own docstring, "RESHAPED
+#: AGAIN 2026-08-11" (second reshape) and "AUDIENCE-GATED, 2026-08-13"
+#: (tasks/guard-messages-keys/DECISIONS.md D1/D2). The 2026-08-11 reshape
+#: stopped interpolating the guard's own env-var name into its output at
+#: all, so there is no per-guard ARGUMENT to recover from rendered text for
+#: the EM-audience render; the 2026-08-13 audience gate ADDED a second,
+#: empty-string render for every non-EM audience (the exact regression this
+#: module's cap accounting must not choke on -- an empty tail is simply
+#: absent from any rendered text, so `_tail_bytes` below still finds nothing
+#: to exempt there, which is already correct). This constant therefore
+#: fixes ONE deliberately-constructed, well-formed EM-shaped envelope
+#: (`session_id` present, no `agent_id`/`subagent_type` legs) so
+#: `operator_override_note` resolves its EM branch and this module can
+#: still identify that one non-empty tail BY IDENTITY wherever it appears
+#: in EM-audience-rendered text -- still a LIVE render of the real builder,
+#: never a hand-copied transcription of its prose. Computed once at import
+#: time (never per measurement) because, for a FIXED audience, the builder
+#: is a pure zero-argument-dependent constant; measurement itself does not
+#: know or care which audience originally rendered the text it is capping,
+#: it only needs to recognize the tail's one possible non-empty shape.
+_OVERRIDE_NOTE_TAIL = operator_override_note(
+    "", payload={"session_id": "message-size-measurement"}, git_root=None
+)
 
 
 def _tail_bytes(text: str) -> int:

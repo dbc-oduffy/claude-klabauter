@@ -94,9 +94,7 @@ re-arms the guard suite rather than disarming it further.
 Deny message deliberately never names the marker's basename or path and
 prints no workaround -- same discipline as both sibling sentinel guards'
 own deny-message sections ("an eager agent reading its own bypass in a
-deny message treats it as sanctioned"). Names the two legitimate paths
-instead: the operator creating the marker themselves via the `!`-prefixed
-prompt (which bypasses this hook entirely, per `~/.claude` doctrine), or
+deny message treats it as sanctioned"). Names only the legitimate path:
 escalating to the EM/PM.
 
 Write-surface note (Leg 2 of this guard's own dispatch brief, "a Bash
@@ -179,10 +177,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
             "its payload is delivered through an interpreter, stdin, or "
             "command-assembly indirection this guard cannot examine -- NOT "
             "because the payload was found to touch the blanket-disarm "
-            "marker. This guard denies every shape of this kind by "
-            "construction, regardless of what the payload actually does, "
-            "because one level of interpreter indirection is a confirmed "
-            "bypass for this guard's direct rules.\n\n"
+            "marker.\n\n"
             "Detected shape: %s\n\n"
             "If this command genuinely does not touch the disarm marker: "
             "run its underlying steps directly (not through an "
@@ -196,11 +191,9 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         "[disarm-marker guard] BLOCKED: this command would create or "
         "modify the file that suppresses this guard suite's own bands, "
         "and an agent cannot grant itself that.\n\n"
-        "Instead: the operator can create the marker themselves via the "
-        "!-prefixed prompt (bypasses this hook entirely) if a disarm is "
-        "genuinely warranted. If you believe one is warranted, say so in "
-        "your report and let the EM/PM decide -- do not try to create it "
-        "from inside this session.\n\n"
+        "If you believe a disarm is genuinely warranted, say so in your "
+        "report and let the EM/PM decide -- do not try to create it from "
+        "inside this session.\n\n"
         "Reading or removing an existing marker remains available -- "
         "removal only re-arms the guard suite."
     )

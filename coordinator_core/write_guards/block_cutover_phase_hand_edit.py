@@ -298,11 +298,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not file_path or disk_path is None:
             return None
 
+        _note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
         reason = (
             f"Cutover phase edit on {file_path}: advance via the sanctioned "
             "op instead of a hand-edit, which skips the consumer-coverage "
-            "check. Use instead: `cutover-cli advance <record>`.\n\n"
-            + operator_override_note(_OVERRIDE_ENV)
+            "check. Use instead: `cutover-cli advance <record>`."
+            + ("\n\n" + _note if _note else "")
         )
 
         return {

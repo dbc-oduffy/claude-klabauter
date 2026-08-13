@@ -60,7 +60,13 @@ def _item1_pre_fix_hso(joined_tokens: str) -> dict:
         "facts in one process; this chain carries a probe this "
         "rewrite does not recognize ('%s'), so the rewrite is not "
         "offered automatically. %s"
-        % (joined_tokens, operator_override_note("COORDINATOR_ALLOW_MULTIPROBE_BANNER"))
+        % (
+            joined_tokens,
+            operator_override_note(
+                "COORDINATOR_ALLOW_MULTIPROBE_BANNER",
+                payload={"session_id": "sess-c1d-em"},
+            ),
+        )
     )
     return {
         "hookSpecificOutput": {
@@ -118,7 +124,10 @@ def _item2_pre_fix_footer_text() -> str:
         "tool call -- no subprocess was spawned. Nothing to change on your side: keep "
         "writing grep the way you already do, and searches that can be answered this way "
         "are handled automatically. %s]"
-    ) % operator_override_note("COORDINATOR_DISABLE_INPROCESS_SEARCH")
+    ) % operator_override_note(
+        "COORDINATOR_DISABLE_INPROCESS_SEARCH",
+        payload={"session_id": "sess-c1d-em"},
+    )
 
 
 class TestItem2InProcessSearchFiringShape:

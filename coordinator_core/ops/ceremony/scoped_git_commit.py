@@ -335,11 +335,16 @@ def _resolve_committing_session_id(params: dict, worktree_root: str) -> str:
 #: the-op-level-claim-gate.md`) this wiring is proven against.
 #:
 #: Named as a bare module constant (not inlined at the `consume()` call
-#: site) so `_CLAIM_CONFLICT_REMEDY`'s own `guard-unlock` mention and the
-#: actual wiring can never independently drift -- `test_scoped_git_commit.py`
-#: asserts the two are the identical string, and
-#: `test_claim_cli_remedy_invocations.py` asserts the remedy text names
-#: THIS constant's value, never a hand-copied literal.
+#: site) so the wiring has one name -- `test_scoped_git_commit_ownership.py`
+#: asserts this constant and the `consume()` call are the identical string.
+#:
+#: `_CLAIM_CONFLICT_REMEDY` no longer mentions this name at all (2026-08-13,
+#: docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md, C5):
+#: the remedy is agent-visible text, and naming the guard there handed the
+#: reader an artifact of the enforcement apparatus. The drift this comment
+#: once guarded against cannot occur, because there is no longer a mention to
+#: drift -- `test_claim_cli_remedy_invocations.py` now asserts that ABSENCE
+#: positively rather than asserting the two strings match.
 _CLAIM_CONFLICT_GUARD_NAME = "scoped_git_commit_claim_conflict"
 
 _CLAIM_CONFLICT_REMEDY = (
@@ -349,14 +354,8 @@ _CLAIM_CONFLICT_REMEDY = (
     "show it); the claim clears when that session ends, so either re-run this "
     "commit then, or drop the affected path(s) from the pathspec and commit "
     "the rest now -- there is no rank-based override, an EM re-running the "
-    "same pathspec meets this same refusal; separately, a human operator, "
-    "from a terminal outside this session, can grant a one-shot break-past "
-    "of THIS refusal via DR-260's `guard-unlock scoped_git_commit_claim_conflict` "
-    "sentinel (see coordinator/docs/wiki/guard-unlock-channel.md for how to "
-    "construct and grant it) -- it cannot be granted by this agent, and "
-    "creating it from inside this session is a doctrine violation, not a "
-    "shortcut; the session id this call's refusal was evaluated under is "
-    "named alongside this reason"
+    "same pathspec meets this same refusal; the session id this call's "
+    "refusal was evaluated under is named alongside this reason"
 )
 _UNANSWERABLE_CLAIM_REMEDY = (
     "re-run once the claim index rebuild is unblocked; if `session-claim-cli "
@@ -773,7 +772,81 @@ def _record_claim_conflict_override(
         )
 
 
-def _dirty_tracked_files_under(worktree_root: str, dir_path: str) -> List[str]:
+#: Shared per-directory `git status --porcelain` cache type -- maps a
+#: directory-shaped pathspec element to the porcelain lines last probed for
+#: it (`None` on a git failure), so `_dirty_tracked_files_under` and
+#: `_untracked_files_under` can be handed the SAME cache dict across one
+#: `_handler` invocation and each pay the spawn at most once per directory,
+#: never twice. See `_directory_porcelain_lines`'s own docstring.
+_DirectoryPorcelainCache = Dict[str, Optional[List[str]]]
+
+
+def _directory_porcelain_lines(
+    worktree_root: str, dir_path: str, cache: Optional[_DirectoryPorcelainCache] = None
+) -> Optional[List[str]]:
+    """Return the raw `git status --porcelain --untracked-files=all` output
+    lines for *dir_path*, or `None` on a git failure.
+
+    Review: code-reviewer -- Finding [P2], 2026-08-12. `_dirty_tracked_
+    files_under` and `_untracked_files_under` used to each spawn an
+    IDENTICAL `git status --porcelain -- <dir_path>` subprocess against the
+    same directory -- one classifying everything-but-`??`, the other only
+    `??` -- doubling git spawns on this hot path for every directory-shaped
+    pathspec element (this repo's own load norm sizes every op against
+    50-70 concurrent sessions; doubling here is a real cost, not a
+    micro-optimization). This is the single shared probe: ONE process, TWO
+    classifications derived from its output by the two callers below, kept
+    as separate named functions (not merged into one toggle-driven helper)
+    for the same reason `_untracked_files_under`'s own docstring already
+    gives -- `_dirty_tracked_files_under`'s exclusion of `??` is itself
+    load-bearing, and collapsing the two would put that safety property one
+    accidental flag-flip away from silently inverting.
+
+    `--untracked-files=all` is pinned explicitly (never left to ambient git
+    config) so this probe does not depend on `status.showUntrackedFiles`:
+    with that config set to `no`, plain `--porcelain` emits no `??` lines at
+    all, and `_untracked_files_under` would silently return `[]` -- exactly
+    the class of silent omission the 2026-08-12 fix this module carries
+    exists to close, just moved one config layer down. `=all` over `=normal`
+    is the deliberate choice: `=normal` can report a wholly-untracked
+    subdirectory as a single `<dir>/` line rather than each file beneath it,
+    which would under-report `_untracked_files_under`'s per-file sample and
+    dedup set; `=all` always lists individual files. This flag only affects
+    how UNTRACKED paths are reported -- it does not add, remove, or
+    re-classify any tracked-file XY porcelain code, so it cannot change
+    `_dirty_tracked_files_under`'s classification.
+
+    *cache*, when given, is a `dict` shared across a single `_handler`
+    invocation's `_collect_untracked_omitted` and `_expand_directory_
+    pathspecs` calls (both loop over the SAME directory-shaped pathspec
+    elements, back to back) -- a directory already probed within that call
+    returns its cached lines instead of spawning again. `None` (the
+    default) always spawns fresh, for any caller (e.g. a test) that calls
+    this in isolation.
+
+    Read via `git_native._git` (not a bare `subprocess.run`) for the same
+    `CREATE_NO_WINDOW` reason `_commit_paths_are_clean` is -- this runs on
+    the same commit/session hot path.
+    """
+    if cache is not None and dir_path in cache:
+        return cache[dir_path]
+    probe = git_native._git(
+        [
+            "-c", "core.quotepath=false",
+            "status", "--porcelain", "--untracked-files=all",
+            "--", dir_path,
+        ],
+        cwd=worktree_root,
+    )
+    lines = probe.stdout.splitlines() if probe.ok else None
+    if cache is not None:
+        cache[dir_path] = lines
+    return lines
+
+
+def _dirty_tracked_files_under(
+    worktree_root: str, dir_path: str, cache: Optional[_DirectoryPorcelainCache] = None
+) -> List[str]:
     """Return the dirty TRACKED files `git status --porcelain` currently
     reports beneath *dir_path*, repo-relative, order preserved.
 
@@ -784,22 +857,20 @@ def _dirty_tracked_files_under(worktree_root: str, dir_path: str) -> List[str]:
     (`R  old -> new`, or the analogous `RM`/`MR` staged+worktree pairing)
     reports its NEW path -- the one that will actually exist post-commit.
 
-    Read via `git_native._git` (not a bare `subprocess.run`) for the same
-    `CREATE_NO_WINDOW` reason `_commit_paths_are_clean` is -- this runs on
-    the same commit/session hot path.
+    The underlying probe is shared with `_untracked_files_under` via
+    `_directory_porcelain_lines` (and *cache*, when given) -- see that
+    function's own docstring for why one spawn now serves both
+    classifications.
 
     Fails closed to `[]` (never a discovered-directory content) on any git
     failure -- an unresolvable probe must never be read as "nothing dirty
     here" AND ALSO never invent members that were never actually reported.
     """
-    probe = git_native._git(
-        ["-c", "core.quotepath=false", "status", "--porcelain", "--", dir_path],
-        cwd=worktree_root,
-    )
-    if not probe.ok:
+    lines = _directory_porcelain_lines(worktree_root, dir_path, cache)
+    if lines is None:
         return []
     expanded: List[str] = []
-    for line in probe.stdout.splitlines():
+    for line in lines:
         if len(line) < 4:
             continue
         code = line[:2]
@@ -815,11 +886,127 @@ def _dirty_tracked_files_under(worktree_root: str, dir_path: str) -> List[str]:
     return expanded
 
 
-def _expand_directory_pathspecs(worktree_root: str, paths: List[str]) -> List[str]:
+#: Cap on how many untracked-file paths `_collect_untracked_omitted` reports
+#: by name -- matches `branch_resolution.py`'s own `candidate_plans[:20]`
+#: precedent for a receipt-sized sample rather than an unbounded dump. The
+#: `count`/`truncated` pair always carries the true total regardless of the
+#: cap, so nothing here silently under-counts -- only the printed sample is
+#: bounded.
+_UNTRACKED_OMITTED_CAP = 20
+
+
+def _untracked_files_under(
+    worktree_root: str, dir_path: str, cache: Optional[_DirectoryPorcelainCache] = None
+) -> List[str]:
+    """Return the UNTRACKED (`??`) files `git status --porcelain
+    --untracked-files=all` currently reports beneath *dir_path*,
+    repo-relative, order preserved.
+
+    Mirrors `_dirty_tracked_files_under` exactly except for which porcelain
+    code it keeps (`??` here, everything-but-`??` there) -- the two are
+    deliberately kept as separate functions rather than one parameterized
+    helper: `_dirty_tracked_files_under`'s exclusion of `??` is itself load-
+    bearing (its own docstring: naming a directory must never be a way to
+    launder an untracked file into a commit), and collapsing the two into
+    one toggle-driven helper would put that safety property one accidental
+    flag-flip away from silently inverting. The underlying probe IS shared
+    with `_dirty_tracked_files_under`, via `_directory_porcelain_lines` and
+    *cache* -- see that function's own docstring.
+
+    `.gitignore` is honored for free: `--untracked-files=all` (no
+    `--ignored`) never reports an ignored path as `??` at all, so an ignored
+    file is never a candidate here -- this function does not need its own
+    ignore-filtering logic, and `__pycache__`/`*.pyc` (ignored by this
+    repo's own `.gitignore`) never appear in its output.
+    """
+    lines = _directory_porcelain_lines(worktree_root, dir_path, cache)
+    if lines is None:
+        return []
+    found: List[str] = []
+    for line in lines:
+        if len(line) < 4:
+            continue
+        code = line[:2]
+        if code != "??":
+            continue
+        rest = line[3:].strip()
+        if rest:
+            found.append(rest)
+    return found
+
+
+def _collect_untracked_omitted(
+    worktree_root: str,
+    paths: List[str],
+    cache: Optional[_DirectoryPorcelainCache] = None,
+) -> Optional[Dict[str, Any]]:
+    """Surfacing half of the 2026-08-12 bug-backlog fix (state/bug-backlog/
+    2026-08-12-scoped-git-commit-silently-omits-untracked-files-in-a-
+    pathspec.yaml): a directory element in the caller's own pathspec that
+    has untracked content beneath it is never staged (by design --
+    `_expand_directory_pathspecs`/`_dirty_tracked_files_under` exclude `??`
+    lines on purpose, and that exclusion is NOT changed here), but a caller
+    who never independently runs `git status` afterward has no way to learn
+    the gap exists at all. This is a REPORTING addition only.
+
+    Must be called with the ORIGINAL (pre-`_expand_directory_pathspecs`)
+    pathspec -- expansion replaces each directory element with its dirty
+    tracked member files, at which point there is no longer a directory
+    string here to probe for untracked siblings.
+
+    Returns `None` when no untracked file was found beneath any
+    directory-shaped element of *paths* (the common case -- keeps the
+    response thin, matching `declined_paths`/`worktree_excluded`'s own
+    omit-when-empty convention). Otherwise a dict with the TRUE `count`
+    (never truncated), a `paths` sample capped at `_UNTRACKED_OMITTED_CAP`
+    (sorted, deduplicated across every directory element named), and
+    `truncated` (True iff `count` exceeds the sample length).
+
+    *cache*, when given, is threaded into `_untracked_files_under` -- see
+    `_directory_porcelain_lines`'s own docstring. `_handler` passes the SAME
+    cache dict here and to `_expand_directory_pathspecs` (both loop over the
+    same *paths*), so each directory's `git status` is spawned once total
+    across both calls, not once per call.
+    """
+    seen = set()
+    all_found: List[str] = []
+    for p in paths:
+        try:
+            is_dir = isinstance(p, str) and (Path(worktree_root) / p).is_dir()
+        except OSError:
+            is_dir = False
+        if not is_dir:
+            continue
+        for f in _untracked_files_under(worktree_root, p, cache):
+            if f not in seen:
+                seen.add(f)
+                all_found.append(f)
+    if not all_found:
+        return None
+    all_found.sort()
+    capped = all_found[:_UNTRACKED_OMITTED_CAP]
+    return {
+        "count": len(all_found),
+        "paths": capped,
+        "truncated": len(all_found) > len(capped),
+    }
+
+
+def _expand_directory_pathspecs(
+    worktree_root: str,
+    paths: List[str],
+    cache: Optional[_DirectoryPorcelainCache] = None,
+) -> List[str]:
     """Expand every directory-shaped element of *paths* to its dirty TRACKED
     member files, so the normal classification path (ownership gate,
     clean/dirty partition, staging) sees individual files rather than an
     unclassifiable directory string.
+
+    *cache*, when given, is threaded into `_dirty_tracked_files_under` -- see
+    `_directory_porcelain_lines`'s own docstring. `_handler` passes the SAME
+    cache dict here and to `_collect_untracked_omitted` (both loop over the
+    same, pre-expansion *paths*), so each directory's `git status` is
+    spawned once total across both calls, not once per call.
 
     Live incident this closes (2026-08-06): a caller named a directory of
     125 rewritten tracked JSON records and was refused, because the
@@ -864,7 +1051,7 @@ def _expand_directory_pathspecs(worktree_root: str, paths: List[str]) -> List[st
         if not is_dir:
             _append(p)
             continue
-        members = _dirty_tracked_files_under(worktree_root, p)
+        members = _dirty_tracked_files_under(worktree_root, p, cache)
         if not members:
             _append(p)
             continue
@@ -1028,6 +1215,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         successful commit) or False:
           "declined_paths": [{"path": str, "reason": str}, ...]
 
+        Conditionally present (2026-08-12 fix, state/bug-backlog/2026-08-12-
+        scoped-git-commit-silently-omits-untracked-files-in-a-pathspec.yaml;
+        REPORTING ONLY -- never changes what gets staged, see
+        `_collect_untracked_omitted`'s own docstring): a directory element
+        in the caller's own `paths` that has untracked content beneath it
+        which was NOT staged (untracked files under a directory pathspec
+        are, by design, never swept into the commit) -- present whenever
+        non-empty, regardless of `committed`:
+          "untracked_paths_omitted": {
+            "count":     int,       # true total, never truncated
+            "paths":     [str, ...],# sample, capped at _UNTRACKED_OMITTED_CAP
+            "truncated": bool,      # True iff count exceeds len(paths) above
+          }
+
     On a validation error (missing/empty required param):
         {"committed": False, "sha": None, "pushed": None, "error": str}
 
@@ -1121,6 +1322,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # param itself stays accepted (backward compatibility), it is simply
     # never bound to a local now that there is nothing left for it to gate.
 
+    # 2026-08-12 fix (state/bug-backlog/2026-08-12-scoped-git-commit-
+    # silently-omits-untracked-files-in-a-pathspec.yaml): computed against
+    # the ORIGINAL, unexpanded pathspec -- `_expand_directory_pathspecs`
+    # below replaces each directory element with its dirty TRACKED members,
+    # after which there is no directory string left to probe for untracked
+    # siblings. `None` when nothing was found (the common case).
+    #
+    # `directory_porcelain_cache` is shared with `_expand_directory_
+    # pathspecs` below -- both loop over the SAME directory-shaped elements
+    # of `paths`, and without a shared cache each would spawn its own `git
+    # status` per directory (2026-08-12 fix, P2 finding: doubled git spawns
+    # on this hot path). See `_directory_porcelain_lines`'s own docstring.
+    directory_porcelain_cache: _DirectoryPorcelainCache = {}
+    untracked_omitted = _collect_untracked_omitted(
+        worktree_root, paths, cache=directory_porcelain_cache
+    )
+
     # Directory-pathspec expansion (2026-08-06 fix, live incident -- see
     # `_expand_directory_pathspecs`'s own docstring): a directory element
     # with dirty TRACKED content beneath it is replaced by that content
@@ -1129,7 +1347,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # operates on the expanded pathspec. A directory with nothing to expand
     # to is left unchanged and falls through to the existing hard
     # directory-pathspec rejection unchanged.
-    paths = _expand_directory_pathspecs(worktree_root, paths)
+    paths = _expand_directory_pathspecs(
+        worktree_root, paths, cache=directory_porcelain_cache
+    )
 
     # Sweeping-pathspec rejection (C4c) -- independent of ownership, and
     # evaluated FIRST: a sweeping pathspec is unsafe on a shared branch even
@@ -1360,6 +1580,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "worktree edits to %s were NOT included -- the staged (index) "
             "version was committed instead" % (", ".join(worktree_excluded),)
         )
+
+    # Never silent (2026-08-12 fix, see `_collect_untracked_omitted`'s own
+    # docstring): surfaced unconditionally, on both the committed and
+    # uncommitted branches -- an untracked file beneath a named directory
+    # pathspec was never staged either way, and the caller needs to know
+    # regardless of whether the rest of the pathspec happened to land.
+    # Omitted entirely when nothing was found, keeping the green-path
+    # response byte-identical to today's (matches `declined_paths`/
+    # `worktree_excluded`'s own omit-when-empty convention).
+    if untracked_omitted:
+        response["untracked_paths_omitted"] = untracked_omitted
 
     return response
 

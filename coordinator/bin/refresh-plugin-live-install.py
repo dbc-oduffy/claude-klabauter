@@ -61,7 +61,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -141,6 +140,8 @@ def eprint(*args, **kwargs) -> None:
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
+
+from win_argv import win_safe_shlex_split  # noqa: E402
 
 
 def _import_registry_deps():
@@ -248,57 +249,26 @@ class ArgvCommandError(ValueError):
     """
 
 
-def _win_safe_shlex_split(cmd_str: str) -> list[str]:
-    """``shlex.split`` equivalent that does not mangle backslashes.
-
-    Bare ``shlex.split`` (POSIX mode) treats ``\\`` as a C-style escape
-    character, so a Windows-authored drive-letter path with backslash
-    separators (illustrative example, not a real path: a drive letter,
-    colon, then ``Users``, ``bob``, ``tools``, ``refresh.exe`` joined by
-    backslashes) is silently stripped down to the same segments joined with
-    no separator at all. ``posix=False`` is NOT the fix: it also
-    stops stripping the surrounding quote characters from a quoted token
-    (``"hello world"`` splits to the literal 4-char token ``"hello`` plus
-    ``world"`` retaining the quotes), which regresses the argv-only
-    contract's quoted-token handling that existing callers/tests rely on.
-
-    This keeps posix quote-stripping/whitespace-splitting semantics
-    (identical to ``shlex.split`` for quoting and for unbalanced-quote
-    ``ValueError``\\ s) while disabling backslash escape processing, so
-    backslash path separators pass through untouched.
-
-    Negative-spec — the one deliberate tokenization divergence: a backslash
-    can be an escape character or a path separator, never both, and this
-    repo is Windows-first. So a POSIX-style escaped space (``a\\ b``) is NO
-    longer one token ``a b``; it tokenizes as ``a\\`` and ``b``. An operator
-    escaping spaces that way must quote the value instead (``"a b"``), which
-    works identically on both platforms. Verified equivalent to the sibling
-    copy in ``coordinator-ceremony-hook.py`` across a 20-case corpus
-    covering quoting, globs, unicode, and unbalanced quotes.
-    """
-    lexer = shlex.shlex(cmd_str, posix=True)
-    lexer.whitespace_split = True
-    lexer.escape = ""
-    return list(lexer)
-
-
 def _parse_argv_command(
     cmd_str: str, source_desc: str, resolve_cwd: Path | None = None
 ) -> list[str]:
     """Parse a configured command string into argv, POSIX-shlex rules on every
     platform (portable token splitting only — no shell metacharacter support).
 
-    Windows note: this uses ``_win_safe_shlex_split`` (posix-mode quote
-    stripping/whitespace-splitting, with backslash escaping disabled) rather
-    than bare ``shlex.split`` or ``posix=False`` — see that helper's
+    Windows note: this uses ``win_argv.win_safe_shlex_split`` (posix-mode
+    quote stripping/whitespace-splitting, with backslash escaping disabled)
+    rather than bare ``shlex.split`` or ``posix=False`` — see that helper's
     docstring. Review: bare POSIX-mode ``shlex.split`` silently stripped
     backslashes from a Windows-authored value containing native ``\\`` path
     separators (e.g. a drive-letter path with backslash separators —
     abs-path-ok: illustrative example, not a real path), and the mangled
     path then surfaced verbatim in the ``ArgvCommandError`` diagnostic below
-    — misattributing a path the operator never typed. ``_win_safe_shlex_split``
-    preserves the backslashes; quote-stripping and unbalanced-quote detection
-    are unchanged from POSIX-mode ``shlex.split``.
+    — misattributing a path the operator never typed.
+    ``win_argv.win_safe_shlex_split`` preserves the backslashes; quote
+    stripping and unbalanced-quote detection match POSIX-mode
+    ``shlex.split`` only for backslash-free input. Once a backslash is
+    present the two diverge in both directions — see that helper's
+    docstring for the mechanism and worked examples.
 
     ``resolve_cwd``, if given, is the directory the eventual ``subprocess.run``
     will actually execute under (its ``cwd=``) — used ONLY as a second
@@ -314,7 +284,7 @@ def _parse_argv_command(
     first token.
     """
     try:
-        argv = _win_safe_shlex_split(cmd_str)
+        argv = win_safe_shlex_split(cmd_str)
     except ValueError as exc:
         raise ArgvCommandError(
             f"{source_desc} is not a valid argv-only command ({exc}). "

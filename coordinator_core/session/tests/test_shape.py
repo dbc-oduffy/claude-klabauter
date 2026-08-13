@@ -356,3 +356,167 @@ class TestSessionShapeMagnitude:
         parsed = json.loads(out)
         assert set(parsed) == {"commits_since_start", "files_touched"}
         assert all(isinstance(v, int) for v in parsed.values())
+
+
+# ---------------------------------------------------------------------------
+# producer_set / producer_read
+# ---------------------------------------------------------------------------
+
+
+class TestProducerSet:
+    def test_writes_real_command_name(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "p1")
+        ok = shape.producer_set(
+            "p1", typed_command="/pickup", cwd=str(repo)
+        )
+        assert ok is True
+        data = json.loads(
+            (Path(repo) / ".git" / "coordinator-sessions" / "p1" / "session-shape.json").read_text()
+        )
+        assert data["producer"]["typed_command"] == "/pickup"
+        assert "captured_at" in data["producer"]
+
+    def test_writes_unresolved_sentinel(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "p2")
+        shape.producer_set(
+            "p2", typed_command="unresolved", cwd=str(repo)
+        )
+        data = json.loads(
+            (Path(repo) / ".git" / "coordinator-sessions" / "p2" / "session-shape.json").read_text()
+        )
+        assert data["producer"]["typed_command"] == "unresolved"
+
+    def test_writes_present_null_for_none(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "p3")
+        shape.producer_set(
+            "p3", typed_command=None, cwd=str(repo)
+        )
+        raw = (
+            Path(repo) / ".git" / "coordinator-sessions" / "p3" / "session-shape.json"
+        ).read_text()
+        data = json.loads(raw)
+        # Present key, JSON null -- not an absent key.
+        assert "typed_command" in data["producer"]
+        assert data["producer"]["typed_command"] is None
+        assert '"typed_command":null' in raw or '"typed_command": null' in raw
+
+    def test_three_states_distinguishable_on_disk(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "p4a")
+        _sdir(repo, "p4b")
+        _sdir(repo, "p4c")
+        shape.producer_set("p4a", typed_command="/pickup", cwd=str(repo))
+        shape.producer_set("p4b", typed_command="unresolved", cwd=str(repo))
+        shape.producer_set("p4c", typed_command=None, cwd=str(repo))
+        vals = {
+            sid: shape.producer_read(sid, cwd=str(repo))["typed_command"]
+            for sid in ("p4a", "p4b", "p4c")
+        }
+        assert vals == {"p4a": "/pickup", "p4b": "unresolved", "p4c": None}
+        assert len(set(map(str, vals.values()))) == 3
+
+    def test_rejects_out_of_contract_typed_command(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "p5")
+        with pytest.raises(ValueError):
+            shape.producer_set("p5", typed_command=123, cwd=str(repo))
+        with pytest.raises(ValueError):
+            shape.producer_set("p5", typed_command=["x"], cwd=str(repo))
+
+    def test_rejects_sentinel_typo_near_miss(self, tmp_path):
+        """A near-miss typo of a closed sentinel (e.g. "unresolvd") must be
+        rejected rather than written silently -- it would otherwise render
+        indistinguishably from an ordinary open-vocabulary command name on
+        disk, defeating the three-state distinguishability the design rests
+        on. An exact sentinel and an unrelated real command name must both
+        still pass -- this guard is narrow, not a re-enumeration of example-doctrine-repo's
+        open command vocabulary.
+        """
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "p5b")
+        with pytest.raises(ValueError):
+            shape.producer_set("p5b", typed_command="unresolvd", cwd=str(repo))
+        with pytest.raises(ValueError):
+            shape.producer_set("p5b", typed_command="other-comand", cwd=str(repo))
+        # Exact sentinels and unrelated real command names are unaffected.
+        assert shape.producer_set("p5b", typed_command="unresolved", cwd=str(repo))
+        assert shape.producer_set("p5b", typed_command="/pickup", cwd=str(repo))
+
+    def test_capture_record_carries_exactly_two_keys(self, tmp_path):
+        """The capture-side record is `typed_command` + `captured_at`, and nothing else.
+
+        example-doctrine-repo's landed `session-shape.schema.json` (x-schema-version 1.1.0)
+        declares this object `additionalProperties: false` with both keys
+        required, so an extra key here is a hard validation failure on their
+        side rather than a harmless addition. `op_identity` in particular
+        belongs to the RESOLVED-side record and is resolved at the creation
+        seam, never written into or read back out of session state.
+        """
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "p6")
+        assert shape.producer_set("p6", typed_command="/pickup", cwd=str(repo))
+        record = shape.producer_read("p6", cwd=str(repo))
+        assert set(record) == {"typed_command", "captured_at"}
+        assert "op_identity" not in record
+
+    def test_lock_acquisition_failure_surfaces_as_false(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        sdir = _sdir(repo, "p7")
+        lock = sdir / "session-shape.lock"
+        lock.mkdir()
+        (lock / "claimed_at").write_text(core.now_iso())
+        monkeypatch.setattr(shape.time, "sleep", lambda *_: None)
+        ok = shape.producer_set(
+            "p7", typed_command="/pickup", cwd=str(repo)
+        )
+        assert ok is False
+
+
+class TestProducerRead:
+    def test_round_trip(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "r1")
+        shape.producer_set("r1", typed_command="/pickup", cwd=str(repo))
+        record = shape.producer_read("r1", cwd=str(repo))
+        assert record["typed_command"] == "/pickup"
+        assert "captured_at" in record
+
+    def test_requires_sid(self):
+        with pytest.raises(ValueError):
+            shape.producer_read("")
+
+    def test_missing_file_returns_none(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert shape.producer_read("no-such-session", cwd=str(repo)) is None
+
+    def test_missing_key_returns_none(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _sdir(repo, "r2")
+        shape.session_shape_set("r2", {"pickup": {"x": 1}}, cwd=str(repo))
+        assert shape.producer_read("r2", cwd=str(repo)) is None
+
+    def test_malformed_json_file_raises(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _sdir(repo, "r3")
+        (sdir / "session-shape.json").write_text("{ not json")
+        with pytest.raises(ValueError):
+            shape.producer_read("r3", cwd=str(repo))
+
+    def test_malformed_producer_value_raises(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _sdir(repo, "r4")
+        (sdir / "session-shape.json").write_text(
+            json.dumps({"schema_version": 1, "session_id": "r4", "producer": "not-an-object"})
+        )
+        with pytest.raises(ValueError):
+            shape.producer_read("r4", cwd=str(repo))
+
+    def test_non_object_file_raises(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _sdir(repo, "r5")
+        (sdir / "session-shape.json").write_text("[1,2,3]")
+        with pytest.raises(ValueError):
+            shape.producer_read("r5", cwd=str(repo))

@@ -233,7 +233,7 @@ def test_resolve_roster_doe_root_unresolved_fails_closed() -> None:
     assert roster is None
     assert reason is not None
     assert "MISSING ENTIRELY" in reason
-    assert mod._OVERRIDE_MARKER_PREFIX in reason
+    assert mod._OVERRIDE_MARKER_PREFIX not in reason
 
 
 def test_resolve_roster_policy_yaml_missing_fails_closed_as_missing(tmp_path: Path) -> None:

@@ -310,7 +310,9 @@ def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
     return isinstance(updated, dict) and bool(updated.get("command"))
 
 
-def _outlet_from_seam_result(result: Dict[str, Any]) -> Tuple[str, str]:
+def _outlet_from_seam_result(
+    result: Dict[str, Any], payload: Optional[Dict[str, Any]]
+) -> Tuple[str, str]:
     """Render `(outlet_summary, outlet_example)` from a BX-16 seam check's
     return, for a caller that has ALREADY confirmed (via
     `_seam_confirmed_rewrite`) that this is a genuine `_allow_rewrite`
@@ -346,7 +348,7 @@ def _outlet_from_seam_result(result: Dict[str, Any]) -> Tuple[str, str]:
     # own "  Example:  %s\n  %s\n" convention below in this same module) --
     # an indented line inside a cue window is a counted offer, not counted
     # prose.
-    bypass_note = operator_override_note(_OVERRIDE_ENV)
+    bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload)
     summary = "the seam-confirmed single-process rewrite"
     if isinstance(updated, dict) and updated.get("command"):
         return (summary, "%s\n  %s" % (updated["command"], bypass_note))
@@ -354,7 +356,9 @@ def _outlet_from_seam_result(result: Dict[str, Any]) -> Tuple[str, str]:
     return (summary, "%s\n  %s" % (context, bypass_note))
 
 
-def _generic_advisory(shape_label: str, cmd: str, summary: str, example: str) -> Dict[str, Any]:
+def _generic_advisory(
+    shape_label: str, cmd: str, summary: str, example: str, payload: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
     """Advisory-only-on-every-platform envelope for a command whose shape
     matched but for which the relevant BX-16 seam check returned ``None``
     (no confirmed outlet -- a bare glob for-loop, or an underlying seam
@@ -377,7 +381,13 @@ def _generic_advisory(shape_label: str, cmd: str, summary: str, example: str) ->
         "Use instead: %s\n"
         "  Example:  %s\n"
         "  %s\n"
-        % (shape_label, cmd_safe, summary, example, operator_override_note(_OVERRIDE_ENV))
+        % (
+            shape_label,
+            cmd_safe,
+            summary,
+            example,
+            operator_override_note(_OVERRIDE_ENV, payload=payload),
+        )
     )
     return allow_advisory(_EVENT_NAME, context)
 
@@ -476,7 +486,10 @@ def _verbatim_head_tail_alternative(cmd: str) -> Optional[str]:
 
 
 def _verdict_head_tail(
-    cmd: str, session_id: str, host_is_windows: Optional[bool]
+    cmd: str,
+    session_id: str,
+    host_is_windows: Optional[bool],
+    payload: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Platform-conditioned verdict for a HEAD_TAIL_PLUMBING-primary command,
     consuming `check_head_tail_plumbing_rewrite`'s own confirmation of an
@@ -485,7 +498,7 @@ def _verdict_head_tail(
     or the seam's own override having fired -- degrades to a generic
     advisory rather than a deny toward nothing).
     """
-    seam_result = check_head_tail_plumbing_rewrite(cmd, session_id)
+    seam_result = check_head_tail_plumbing_rewrite(cmd, session_id, payload=payload)
     if not _seam_confirmed_rewrite(seam_result):
         verbatim_alt = _verbatim_head_tail_alternative(cmd)
         if verbatim_alt is not None:
@@ -495,6 +508,7 @@ def _verdict_head_tail(
                 "a single python3 process running the upstream command "
                 "verbatim and slicing head/tail on its stdout in-process",
                 verbatim_alt,
+                payload,
             )
         return _generic_advisory(
             "head-tail-plumbing",
@@ -503,8 +517,9 @@ def _verdict_head_tail(
             "slicing head/tail in-process",
             "python3 -c '...'  # reproduce the generator output and slice "
             "[:N] / [-N:] in-process",
+            payload,
         )
-    summary, example = _outlet_from_seam_result(seam_result)
+    summary, example = _outlet_from_seam_result(seam_result, payload)
     # DR-280 (2026-08-07): the deny leg is retired -- always render the
     # advisory envelope, regardless of `host_is_windows`. See `check()`'s
     # own docstring for why.
@@ -514,7 +529,10 @@ def _verdict_head_tail(
 
 
 def _verdict_for_loop(
-    cmd: str, session_id: str, host_is_windows: Optional[bool]
+    cmd: str,
+    session_id: str,
+    host_is_windows: Optional[bool],
+    payload: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Platform-conditioned verdict for a FOR_LOOP-primary command,
     consuming `check_find_exec_rewrite`'s own confirmation of an outlet.
@@ -527,9 +545,9 @@ def _verdict_for_loop(
     seam_result = check_find_exec_rewrite(cmd, session_id)
     if not _seam_confirmed_rewrite(seam_result):
         return _generic_advisory(
-            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _FOR_LOOP_GENERIC_EXAMPLE
+            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _FOR_LOOP_GENERIC_EXAMPLE, payload
         )
-    summary, example = _outlet_from_seam_result(seam_result)
+    summary, example = _outlet_from_seam_result(seam_result, payload)
     # DR-280 (2026-08-07): the deny leg is retired -- always render the
     # advisory envelope, regardless of `host_is_windows`. See `check()`'s
     # own docstring for why. (In practice this branch is also unreachable
@@ -547,7 +565,10 @@ def _verdict_for_loop(
 
 
 def _verdict_while_read(
-    cmd: str, session_id: str, host_is_windows: Optional[bool]
+    cmd: str,
+    session_id: str,
+    host_is_windows: Optional[bool],
+    payload: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Advisory-only-on-every-platform verdict for a WHILE_READ_LOOP-primary
     command. Goes straight to `_generic_advisory` -- no seam is consulted
@@ -561,12 +582,15 @@ def _verdict_while_read(
     """
     del session_id
     return _generic_advisory(
-        "while-read-loop", cmd, _WHILE_READ_GENERIC_SUMMARY, _WHILE_READ_GENERIC_EXAMPLE
+        "while-read-loop", cmd, _WHILE_READ_GENERIC_SUMMARY, _WHILE_READ_GENERIC_EXAMPLE, payload
     )
 
 
 def _verdict_powershell(
-    cmd: str, session_id: str, host_is_windows: Optional[bool]
+    cmd: str,
+    session_id: str,
+    host_is_windows: Optional[bool],
+    payload: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """PowerShell-dialect leg of `check()` (row 14, docs/reference/
     guard-dialect-coverage.md). HEAD_TAIL_PLUMBING gets the same fix as row
@@ -583,7 +607,7 @@ def _verdict_powershell(
     assert a clean it cannot back up.
     """
     seam_result = check_head_tail_plumbing_rewrite(
-        cmd, session_id, dialect=_dialect.Dialect.POWERSHELL
+        cmd, session_id, dialect=_dialect.Dialect.POWERSHELL, payload=payload
     )
     if seam_result is not None:
         if not _seam_confirmed_rewrite(seam_result):
@@ -594,8 +618,9 @@ def _verdict_powershell(
                 "slicing head/tail in-process",
                 "python3 -c '...'  # reproduce the generator output and "
                 "slice [:N] / [-N:] in-process",
+                payload,
             )
-        summary, example = _outlet_from_seam_result(seam_result)
+        summary, example = _outlet_from_seam_result(seam_result, payload)
         # DR-280 (2026-08-07): the deny leg is retired -- always render the
         # advisory envelope, regardless of `host_is_windows`.
         return platform_verdict_for_shape(
@@ -666,7 +691,7 @@ def check(
         session_id = ""
 
     if dialect is _dialect.Dialect.POWERSHELL:
-        return _verdict_powershell(cmd, session_id, host_is_windows)
+        return _verdict_powershell(cmd, session_id, host_is_windows, payload)
 
     classification = classify_command(cmd)
     if classification.tokens is None:
@@ -677,9 +702,9 @@ def check(
         return None
 
     if primary.shape is Shape.HEAD_TAIL_PLUMBING:
-        return _verdict_head_tail(cmd, session_id, host_is_windows)
+        return _verdict_head_tail(cmd, session_id, host_is_windows, payload)
     if primary.shape is Shape.FOR_LOOP:
-        return _verdict_for_loop(cmd, session_id, host_is_windows)
+        return _verdict_for_loop(cmd, session_id, host_is_windows, payload)
     if primary.shape is Shape.WHILE_READ_LOOP:
-        return _verdict_while_read(cmd, session_id, host_is_windows)
+        return _verdict_while_read(cmd, session_id, host_is_windows, payload)
     return None

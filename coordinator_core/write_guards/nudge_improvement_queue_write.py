@@ -163,8 +163,7 @@ _TRIVIAL_PUNT_HINT = """
 _REASON_TEMPLATE = """No reason given for this {queue_label} entry ({file_path_norm}). Example:
 `justification: <one-sentence reason>` in the entry, then rerun.
 Always-forbidden cases: {five_q_doc}
-{legacy_prose_note}{hint}
-{override_note}"""
+{legacy_prose_note}{hint}{override_block}"""
 
 #: Appended when the matched path is the legacy `.md` prose form (DR-115 §
 #: PM direction (B)) -- the escape instruction above stays YAML-only; this
@@ -316,20 +315,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if fnmatch.fnmatchcase(file_path_norm, "*improvement-queue.md"):
             legacy_prose_note = _LEGACY_PROSE_NOTE.format(queue_dir="improvement-queue")
 
+        # Review: code-reviewer P1 -- COORDINATOR_QUEUE_PUNT is
+        # reason-shaped, not flag-shaped; its own _is_trivial_reason
+        # denylists the literal "1", so the default VAR=1 render would be
+        # refused by the very guard printing it. reason_placeholder
+        # renders the correct VAR="<reason>" syntax instead.
+        _note = operator_override_note(
+            _ESCAPE_HATCH_ENV_VAR,
+            payload=payload,
+            reason_placeholder="<one-sentence reason>",
+        )
         reason = _REASON_TEMPLATE.format(
             queue_label=_QUEUE_LABEL,
             five_q_doc=_FIVE_QUESTIONS_DOC,
             hint=hint,
             legacy_prose_note=legacy_prose_note,
             file_path_norm=file_path_norm,
-            # Review: code-reviewer P1 -- COORDINATOR_QUEUE_PUNT is
-            # reason-shaped, not flag-shaped; its own _is_trivial_reason
-            # denylists the literal "1", so the default VAR=1 render would be
-            # refused by the very guard printing it. reason_placeholder
-            # renders the correct VAR="<reason>" syntax instead.
-            override_note=operator_override_note(
-                _ESCAPE_HATCH_ENV_VAR, reason_placeholder="<one-sentence reason>"
-            ),
+            override_block=("\n" + _note if _note else ""),
         )
 
         return {

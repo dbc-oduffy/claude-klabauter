@@ -408,7 +408,12 @@ def _subagent_script_outlet(
 
 
 def _outlet_from_seam_result(
-    result: Dict[str, Any], *, is_subagent: bool, script_hint: str
+    result: Dict[str, Any],
+    *,
+    is_subagent: bool,
+    script_hint: str,
+    payload: Optional[Dict[str, Any]],
+    git_root: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Render `(outlet_summary, outlet_example)` from `check_multiprobe_
     banner_rewrite`'s return, for a caller that has ALREADY confirmed (via
@@ -427,7 +432,7 @@ def _outlet_from_seam_result(
     """
     hso = result.get("hookSpecificOutput", {}) if isinstance(result, dict) else {}
     updated = hso.get("updatedInput")
-    bypass_note = operator_override_note(_OVERRIDE_ENV)
+    bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
     if isinstance(updated, dict) and updated.get("command"):
         rewrite = updated["command"]
         if is_subagent:
@@ -519,6 +524,7 @@ def check(
     # by construction.
     is_subagent = False
     script_hint = ""
+    git_root: Optional[str] = None
     if payload.get("agent_id") or payload.get("agent_type"):
         git_root = resolve_git_root(payload.get("cwd"))
         is_subagent = resolve_agent_class(payload, git_root) == AGENT_CLASS_SUBAGENT
@@ -526,7 +532,7 @@ def check(
             script_hint = _sandbox_script_hint(git_root, session_id)
 
     summary, example = _outlet_from_seam_result(
-        seam_result, is_subagent=is_subagent, script_hint=script_hint
+        seam_result, is_subagent=is_subagent, script_hint=script_hint, payload=payload, git_root=git_root
     )
     # 2026-08-06 (C19a, guard-class census): `primary.evidence` is only the
     # matched banner-marker SEGMENT (e.g. the bare `echo "=== facts ==="`),

@@ -86,7 +86,20 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
+_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+from cc_invoke import require_engine_on_path  # noqa: E402
+
+# The engine root must be on sys.path before the coordinator_core import
+# below: this file is also published into the claude-klabauter mirror, where
+# coordinator_core is NOT pip-installed and the interpreter's sys.path[0] is
+# this bin/ directory, not the checkout root. Same bootstrap as
+# coordinator/bin/coordinator-lesson-add (9b979ee5f).
+require_engine_on_path(__file__)
+
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs  # noqa: E402
 
 
 def _run(

@@ -526,10 +526,10 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
         Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    pinned = "1.8.0"
+    pinned = "1.14.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
-        f"{pinned!r} — check example-doctrine-repo@54e0576d8 "
+        f"{pinned!r} — check example-doctrine-repo@1fabbc9c3 "
         "(coordinator/schemas/sizing-object.schema.json) for a correspondingly "
         "recorded answer before re-pinning this test."
     )
@@ -541,7 +541,10 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
 # hazard C0 exists to close, the moment example-doctrine-repo bumps any of the other three.
 # Table-driven so a future vendored schema is one row, not a new function.
 _VENDORED_SCHEMA_VERSION_PINS = (
-    ("sizing-object.schema.json", "1.8.0", "example-doctrine-repo@54e0576d8 (coordinator/schemas/sizing-object.schema.json)"),
+    # Re-pinned 1.8.0 -> 1.14.0 on example-doctrine-repo's four-field probe/intent widen
+    # (1fabbc9c3), vendored here at f0085198a. The recorded answer AC1 demands
+    # is memo 2026-08-13-example-doctrine-repo-em-sizing-object-schema-widened-1-14-0.md.
+    ("sizing-object.schema.json", "1.14.0", "example-doctrine-repo@1fabbc9c3 (coordinator/schemas/sizing-object.schema.json)"),
     ("roadmap.schema.json", "1.3.0", "example-doctrine-repo coordinator/schemas/roadmap.schema.json"),
     ("goal.schema.json", "1.2.0", "example-doctrine-repo coordinator/schemas/goal.schema.json"),
     ("initiative.schema.json", "1.1.0", "example-doctrine-repo coordinator/schemas/initiative.schema.json"),

@@ -238,6 +238,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
     build_untrusted_gate_judgment_point,
 )
+from coordinator_core.coverage import _resolve_numstat_row_path  # 2026-08-12: numstat rename-row resolution, shared with review_brightline_gate.py
 from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.check_weekly_staleness import _resolve_state_root
@@ -756,6 +757,13 @@ def _measure_range(repo_root: Path, range_: str) -> Optional[dict[str, int]]:
         if not match:
             continue
         added, deleted, path = match.groups()
+        # 2026-08-12: resolve rename notation (`{old => new}`/`old => new`)
+        # to the destination path before any path predicate sees it — same
+        # fix as `review_brightline_gate._compute_chain_oracle`'s, over
+        # the identical bug (`_is_noise_path`'s anchored lifecycle-prefix
+        # match never fires against the literal rename fragment). See
+        # `_resolve_numstat_row_path`.
+        path = _resolve_numstat_row_path(path)
         if _is_noise_path(path):
             continue
         if added != "-":

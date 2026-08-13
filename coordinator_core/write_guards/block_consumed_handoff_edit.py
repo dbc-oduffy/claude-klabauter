@@ -446,14 +446,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # its own "<verb> instead:" cue so its backtick command lands inside
         # an exempt cue window (coordinator_core.bash_guards._message_size).
         if close_intent:
+            _note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
             reason = (
                 "Claimed-handoff close blocked: hand-editing the terminal "
                 "stamp corrupts the audit trail. Ship instead: "
                 f"`archive-stamp-cli ship-handoff {file_path} --sha <SHA>` "
                 "(stamps shipped_in + deployment_state: shipped; add "
                 "--archive to move now). Ops list: "
-                "`docs/reference/em-callable-ops.md`.\n\n"
-                + operator_override_note(_OVERRIDE_ENV)
+                "`docs/reference/em-callable-ops.md`."
+                + ("\n\n" + _note if _note else "")
             )
         else:
             # Remedies are ordered by applicability to THIS calling session
@@ -538,6 +539,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                         "additionalContext": reason,
                     }
                 }
+            _note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
             reason = (
                 "Claimed handoff: paper trail, not a live journal; edit "
                 "blocked. Not your claim — claim instead via the "
@@ -555,8 +557,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "`docs/wiki/pretooluse-write-guards.md`). Roadmap "
                 "dependency edge instead: `roadmap.link_stubs` (writes "
                 "`blocked_by`/`blocks` on a roadmap baton only). Ops "
-                "list: `docs/reference/em-callable-ops.md`.\n\n"
-                + operator_override_note(_OVERRIDE_ENV)
+                "list: `docs/reference/em-callable-ops.md`."
+                + ("\n\n" + _note if _note else "")
             )
 
         return {

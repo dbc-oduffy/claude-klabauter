@@ -249,16 +249,7 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
         "a stash is GLOBAL -- it sweeps every concurrent session's "
         "uncommitted work, not just yours, and you have no sanctioned way "
         "to undo it (`git stash pop`/`git stash apply` are denied for you).\n\n"
-        "  Command:  %s\n\n"
-        "Confirmed live: a subagent ran what it reported as a scoped push "
-        "on 3 files and instead created a bare 60-file stash holding a "
-        "concurrent peer session's review-trail records, sidecars, and "
-        "lessons -- its own `git stash pop` was then denied, and only 3 of the 60 "
-        "files were recovered by hand.\n\n"
-        "A subagent almost never actually needs a stash -- it needs a "
-        "clean baseline to diff or measure against, which the two "
-        "alternatives above give you without ever touching the shared "
-        "tree."
+        "  Command:  %s\n"
     ) % (deny_kind, cmd_safe)
 
 

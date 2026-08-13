@@ -94,35 +94,16 @@ _SENDMESSAGE_RE = re.compile(r"sendmessage", re.I)
 _MAIN_TARGET_RE = re.compile(r"\bmain\b", re.I)
 
 _ADVISORY = """\
-NAMED DISPATCH — this agent's final text will NOT reach you (advisory; the dispatch is proceeding).
+NAMED DISPATCH — this agent's final text will NOT reach you (advisory; proceeding anyway).
 
-Passing `name` makes this an Agent-teams TEAMMATE (agentId `{name}@session-<short>`), not a plain
-background subagent. A teammate's plain-text output is not delivered to the dispatcher — per the
-SendMessage contract, `SendMessage` to `"main"` is the only channel that reaches you. An UNNAMED
-background agent's final report IS delivered as the Agent tool result; a named one's is not.
+`name` makes this a TEAMMATE (agentId `{name}@session-<short>`) — only `SendMessage` to
+`"main"` reaches you. "Report back: ..." yields an `idle_notification`, report undelivered.
 
-So a brief ending "Report back: ..." yields nothing from this agent. You will get an
-`idle_notification`, the work will be complete, and the report will sit undelivered.
+  (a) No mid-flight contact -> DROP `name`.
+  (b) Mid-flight contact -> KEEP `name`, brief: SendMessage "main" with a POINTER ONLY
+      (sidecar path + one-line verdict, not the report restated).
 
-Two shapes that work — pick by whether you need to message it mid-flight:
-
-  (a) Don't need mid-flight contact -> DROP `name`. An unnamed background agent's report is
-      delivered to you normally. This is the default for fire-and-collect investigation.
-
-  (b) Need mid-flight contact (or want it addressable later) -> KEEP `name` and add to the brief:
-      'Your plain text output is not visible to the dispatcher. When you are done, SendMessage to
-      "main" with a POINTER ONLY — your sidecar path plus a one-line verdict. The findings, the
-      detail, and the exit interview go in the sidecar; do not restate them in the message.'
-
-      A SendMessage carrying the full report pastes it verbatim into the dispatcher's context —
-      the same content it already wrote to its sidecar. That is the report delivered twice, once
-      at the dispatcher's expense. If the dispatch carries a `sidecar_path:`, the body already has
-      a home; the message is an address, not a copy.
-
-Either is fine. What does not work is a named dispatch briefed to "report back".
-
-Observed 2026-07-30 in this repo: two named dispatches -> 4 idle notifications, 0 reports, both
-agents having completed their work; the unnamed dispatch in the same session delivered normally.\
+Either is fine.\
 """
 
 

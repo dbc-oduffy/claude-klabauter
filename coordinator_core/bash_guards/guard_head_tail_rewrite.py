@@ -367,7 +367,9 @@ def _bt_tail_ring_buffer_lines(gen_lines: List[str], kind: str, n: int) -> List[
     return out
 
 
-def _check_head_tail_plumbing_powershell(cmd: str) -> Optional[Dict[str, Any]]:
+def _check_head_tail_plumbing_powershell(
+    cmd: str, payload: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     """PowerShell-dialect leg of `check_head_tail_plumbing_rewrite` (row 13,
     docs/reference/guard-dialect-coverage.md): the `find`/`ls` upstream-
     generator recognition (`_bt_parse_find_census_segment`/
@@ -435,7 +437,9 @@ def _check_head_tail_plumbing_powershell(cmd: str) -> Optional[Dict[str, Any]]:
             % (
                 ht_tokens[0],
                 " ".join(ht_tokens[1:]),
-                operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"),
+                operator_override_note(
+                    "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload
+                ),
             )
         )
 
@@ -489,12 +493,19 @@ def _check_head_tail_plumbing_powershell(cmd: str) -> Optional[Dict[str, Any]]:
         "Auto-rewrite: pipe into '%s' forks twice for one answer -- "
         "replaced with one python3 -c reproducing the same output and "
         "slicing head/tail inside that single subprocess. %s"
-        % (ht_tokens[0], operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING")),
+        % (
+            ht_tokens[0],
+            operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload),
+        ),
     )
 
 
 def check_head_tail_plumbing_rewrite(
-    cmd: str, session_id: str = "", dialect: "Optional[_dialect.Dialect]" = None
+    cmd: str,
+    session_id: str = "",
+    dialect: "Optional[_dialect.Dialect]" = None,
+    payload: Optional[Dict[str, Any]] = None,
+    git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """BX-16 shape 7 (BX-8's rewrite target, head/tail half) -- `... | head
     -n N` / `... | tail -n N` truncates a subprocess's output via ANOTHER
@@ -528,7 +539,7 @@ def check_head_tail_plumbing_rewrite(
         return None
 
     if dialect is _dialect.Dialect.POWERSHELL:
-        return _check_head_tail_plumbing_powershell(cmd)
+        return _check_head_tail_plumbing_powershell(cmd, payload=payload)
 
     classification = _bt_classify_command(cmd)
     if classification.tokens is None:
@@ -569,7 +580,9 @@ def check_head_tail_plumbing_rewrite(
                 ht_tokens[0],
                 ht_tokens[0],
                 " ".join(ht_tokens[1:]),
-                operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"),
+                operator_override_note(
+                    "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload, git_root=git_root
+                ),
             )
         )
 
@@ -652,5 +665,10 @@ def check_head_tail_plumbing_rewrite(
         "Auto-rewrite: pipe into '%s' forks twice for one answer -- "
         "replaced with one python3 -c reproducing the same output and "
         "slicing head/tail inside that single subprocess. %s"
-        % (ht_tokens[0], operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING")),
+        % (
+            ht_tokens[0],
+            operator_override_note(
+                "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload, git_root=git_root
+            ),
+        ),
     )

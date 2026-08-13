@@ -76,6 +76,8 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 import cc_invoke  # noqa: E402
 
+cc_invoke.ensure_engine_on_path(__file__)
+
 _USAGE_FAIL = 2
 _TRANSPORT_FAIL = 3
 _ARCHIVE_DEGRADED = 4

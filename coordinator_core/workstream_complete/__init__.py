@@ -207,6 +207,11 @@ from coordinator_core.ops import list_review_trail_records
 from coordinator_core.ops.review_brightline_gate import classify_surface
 from coordinator_core.ops.review_brightline_gate import _is_noise_path  # C5: code_loc noise exclusion, same predicate as C1
 from coordinator_core.coverage import _is_planning_artifact_path  # review finding P2: planning-artifact LOC de-weight
+from coordinator_core.coverage import (  # 2026-08-12: numstat rename-row resolution, shared with review_brightline_gate.py (see this module's own site below)
+    _REVIEW_SCALE_BARE_RENAME_RE,
+    _REVIEW_SCALE_BRACED_RENAME_RE,
+    _resolve_numstat_row_path,
+)
 from coordinator_core.ops.review_brightline_gate import _PLANNING_LOC_WEIGHT  # review finding P2: same de-weight, same constant
 
 from coordinator_core.contract.decision_object.envelope import build_envelope, emit
@@ -303,6 +308,7 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     "classify_dispatch_plan_file",
     "code_loc",
     "commit_count",
+    "commit_count_scope",
     "executor_dispatched",
     "flags",
     "gross_loc",
@@ -2540,27 +2546,9 @@ def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
-_REVIEW_SCALE_BRACED_RENAME_RE = re.compile(r"^(.*)\{(.*) => (.*)\}(.*)$")
-_REVIEW_SCALE_BARE_RENAME_RE = re.compile(r"^(.*) => (.*)$")
-
-
-def _resolve_numstat_row_path(path: str) -> str:
-    """`git --numstat`'s rename row can name a path as `a/b/{old => new}.c`
-    (compact form, shared prefix/suffix hoisted out of the braces) or as a
-    bare `old/path => new/path` row (no shared prefix/suffix to hoist).
-    `classify_surface` needs the destination path, not the literal rename
-    fragment, to bucket the row correctly — LOC accounting is unaffected
-    either way, since the numstat added/deleted columns already sum the
-    whole row regardless of what this function returns."""
-    braced = _REVIEW_SCALE_BRACED_RENAME_RE.match(path)
-    if braced is not None:
-        prefix, _old, new, suffix = braced.groups()
-        return f"{prefix}{new}{suffix}"
-    bare = _REVIEW_SCALE_BARE_RENAME_RE.match(path)
-    if bare is not None:
-        _old, new = bare.groups()
-        return new
-    return path
+# `_resolve_numstat_row_path` (and its two rename regexes) now live in
+# `coordinator_core.coverage` — see the top-of-file import block, which
+# pulls them in alongside `_is_planning_artifact_path`.
 
 
 def _accumulate_numstat(text: str, surfaces: set[str]) -> int:
@@ -3069,6 +3057,33 @@ def _resolve_review_brightline_floor_kwargs(
     }
 
 
+#: Bound on the caller-supplied `decisions["commit_count_scope"]` free-text
+#: annotation (review-integrator finding, P2, 2026-08-12) — it reaches row
+#: 4's `reason` string verbatim (`directives_review._row4_decision`'s
+#: `scope_note`) with no upstream shape guarantee. Mirrors this module's own
+#: `_QUOTA_WEAK_CORROBORATION_MAX_LEN` convention (`directives_review.py`) of
+#: a plain length cap over a fixed enum — the docstring examples
+#: (`"session-owned"`, "a franker label") are open-ended human labels, not a
+#: closed vocabulary, so an allowlist regex would reject legitimate values.
+_COMMIT_COUNT_SCOPE_MAX_LEN = 80
+#: Strips control characters and the two literal characters (`)`  `=`) a
+#: value could use to forge a second `commits=`/`surfaces=` clause or close
+#: the `reason` string's parenthetical early — the exact spoofing vector the
+#: same finding named. Newlines fall under `\x00-\x1f`.
+_COMMIT_COUNT_SCOPE_UNSAFE_RE = re.compile(r"[\x00-\x1f\x7f()=]")
+
+
+def _sanitize_commit_count_scope(raw: str) -> str:
+    """Bound a caller-supplied `commit_count_scope` free-text value before
+    it is threaded into `decide_review_scale` and, from there, row 4's
+    `reason` string — see `_COMMIT_COUNT_SCOPE_MAX_LEN`/`_UNSAFE_RE` above.
+    Unsafe characters are dropped rather than the whole value rejected: the
+    attestation is already caller-asserted and unverified (see this call
+    site's own `commit_count_scope` comment) — a shape defect in the label
+    should not additionally raise or silently discard the override."""
+    return _COMMIT_COUNT_SCOPE_UNSAFE_RE.sub("", raw)[:_COMMIT_COUNT_SCOPE_MAX_LEN]
+
+
 def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] = None) -> Mapping[str, Any]:
     """Computes the `/workstream-complete` decision object for the current
     (or a caller-supplied) repo root. Read-only throughout; mutates nothing.
@@ -3197,9 +3212,39 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     resolved_gross_loc = decisions.get("gross_loc")
     if resolved_gross_loc is None:
         resolved_gross_loc = measured_gross_loc
+    # C7 (2026-08-12, docs/plans/2026-08-12-review-mandate-guides-the-split.md):
+    # `commit_count_scope` is resolved ONLY on the override path (a caller
+    # supplied `decisions["commit_count"]` directly) — never on the measured
+    # path, where `_measure_session_review_scale_inputs` already guarantees
+    # session-scoping and a scope note would be redundant noise on every
+    # ordinary close. `"unspecified"` (not `None`) when the override is
+    # supplied with no accompanying `decisions["commit_count_scope"]` — the
+    # override itself stays ACCEPTED (this is the pre-authorized scope-
+    # attestation variant, not a refusal), but the reported failure mode
+    # (an EM reading `commits=` off the gate's own unfiltered range line and
+    # passing it through with nothing on disk distinguishing that from a
+    # real measurement) must now leave a visible, honest trace rather than
+    # a silent trust. See `directives_review.decide_review_scale`'s own
+    # `commit_count_scope` docstring paragraph for what this feeds.
     resolved_commit_count = decisions.get("commit_count")
     if resolved_commit_count is None:
         resolved_commit_count = measured_commit_count
+        resolved_commit_count_scope = None
+    else:
+        # ACKNOWLEDGED AND DELIBERATE (review-integrator, 2026-08-12): this
+        # value is RECORDED, never VERIFIED against `_session_owned_shas` —
+        # the override still wins unconditionally regardless of what (or
+        # whether) a scope is supplied. An inaccurate `commit_count_scope`
+        # (dishonest, stale, or careless copy-paste) reproduces the original
+        # peer-commit-inflation incident with the trail record now looking
+        # self-diagnosing instead of silent. Gating the override on scope
+        # verification is a PM call (changes a documented EM hand-supply
+        # interface), not an oversight here.
+        raw_commit_count_scope = decisions.get("commit_count_scope")
+        if raw_commit_count_scope:
+            resolved_commit_count_scope = _sanitize_commit_count_scope(raw_commit_count_scope) or "unspecified"
+        else:
+            resolved_commit_count_scope = "unspecified"
     resolved_surface_count = decisions.get("surface_count")
     if resolved_surface_count is None:
         resolved_surface_count = measured_surface_count
@@ -3224,6 +3269,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         shared_schema_touched=decisions.get("shared_schema_touched"),
         chain_disposition=gate.disposition,
         chain_partition_verdict=chain_partition_verdict,
+        commit_count_scope=resolved_commit_count_scope,
     )
 
     judgment_points: list[dict[str, Any]] = []

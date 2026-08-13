@@ -168,6 +168,8 @@ from coordinator_core.ops.queue_family import (
     normalize_family,
 )
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.person_resolver import resolve_operating_person
+from coordinator_core.session.producer_resolve import resolve_producer_for_creation
 from coordinator_core.session_ledger import (
     SESSION_LEDGER_BLOCK_LINES,
     SESSION_LEDGER_HEADING_RE,
@@ -523,7 +525,18 @@ async def _handler(
             provenance=provenance,
             body=body,
         )
-        norm = _normalize_one_text(content, out_path, carried_deliverable_id)
+        minted_by = resolve_operating_person().get("github")
+        # producer-axis-claude-klabauter-engine-half: op_identity resolved HERE, at this
+        # creation seam. This door is machine (op-minted by construction);
+        # the finer op-minted-vs-EM-initiated distinction is deliberately
+        # dropped — the closed op_identity axis carries only
+        # machine-minted/hand-authored (see ProducerOpIdentity's docstring
+        # and resolve_producer_for_creation's module docstring). Do not
+        # reinvent a third enum member here.
+        producer = resolve_producer_for_creation(op_identity="machine-minted")
+        norm = _normalize_one_text(
+            content, out_path, carried_deliverable_id, minted_by, producer
+        )
         if norm is not None and norm is not _NO_FRONTMATTER:
             rebuilt = norm["rebuilt"]
             # _normalize_one_text only backfills an ABSENT category — ours is always

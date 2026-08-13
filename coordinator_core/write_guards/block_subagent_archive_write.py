@@ -313,7 +313,12 @@ _DAILY_SUMMARY_SHAPED_RE = re.compile(
 )
 
 
-def _deny_reason(agent_id: str, file_path: str, normalized_file_path: str = "") -> str:
+def _deny_reason(
+    agent_id: str,
+    file_path: str,
+    normalized_file_path: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> str:
     """Deny-reason text, routed by what was actually attempted (2026-08-06
     widenings; see module docstring and
     ``cross-repo/inbox/2026-08-06-example-cockpit-repo-em-archive-write-guard-week-changelogs-gap.md``).
@@ -355,12 +360,13 @@ def _deny_reason(agent_id: str, file_path: str, normalized_file_path: str = "") 
             "Use instead: stage your output to your scratchpad and report the "
             "path to your dispatching EM.\n\n"
         )
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
         "BLOCKED: subagent write under archive/ (wrap-up self-log backstop).\n"
         f"  Subagent: {agent_id}\n"
         f"  Target:   {file_path_safe}\n"
-        + use_instead
-        + operator_override_note(_OVERRIDE_ENV_VAR)
+        + use_instead.rstrip("\n")
+        + ("\n\n" + _note if _note else "")
     )
 
 
@@ -440,7 +446,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": _deny_reason(
-                agent_id or raw_agent_id, file_path, normalized
+                agent_id or raw_agent_id, file_path, normalized, payload
             ),
         }
     }

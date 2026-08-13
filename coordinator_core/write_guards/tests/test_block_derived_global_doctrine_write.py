@@ -131,7 +131,12 @@ class TestSilentOnEverythingElse:
 
 
 class TestDenyTextNamesAlternativeAndConsequence:
-    def test_deny_text_names_authoring_alternative(self):
+    def test_deny_text_names_authoring_alternative(self, monkeypatch):
+        monkeypatch.setattr(
+            guard,
+            "registry_get",
+            lambda key: "/opt/some/root" if key == "repos.example_doctrine_repo" else None,
+        )
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "global-doctrine/CLAUDE.md" in reason
@@ -147,10 +152,21 @@ class TestDenyTextNamesAlternativeAndConsequence:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "/Users/alice/.claude/CLAUDE.md" in reason
 
-    def test_deny_text_names_the_override_env(self):
+    def test_deny_text_names_no_override_route_at_all(self):
+        """Inverted (was: `..._routes_to_the_override_doc_not_the_key`,
+        which asserted the override-doc pointer WAS present). The deny text
+        for this default (unregistered-root) payload shape is now a wholly
+        different narrative — "not the authoring source — the authoring
+        root is unregistered here — `machine-local set repos.example_doctrine_repo
+        <path>`" — with no override-doc pointer and no key at all.
+        Positively asserts both the absence of any override-note fragment
+        AND the presence of the real, current unregistered-root remediation
+        text, so this cannot pass vacuously on a reason carrying neither."""
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert guard._OVERRIDE_ENV_VAR in reason
+        assert "guard-override-keys.md" not in reason
+        assert guard._OVERRIDE_ENV_VAR not in reason
+        assert "machine-local set repos.example_doctrine_repo" in reason
 
     def test_deny_text_resolves_authoring_root_via_registry(self, monkeypatch):
         monkeypatch.setattr(
@@ -160,8 +176,13 @@ class TestDenyTextNamesAlternativeAndConsequence:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "/opt/some/example-doctrine-repo/global-doctrine/CLAUDE.md" in reason
 
-    def test_deny_text_falls_back_when_registry_unresolvable(self, monkeypatch):
+    def test_unregistered_root_names_the_key_not_a_fabricated_path(self, monkeypatch):
+        """An unresolvable root renders the registry key the operator sets,
+        never an invented location. A literal fallback here would name a path
+        that exists on no machine — and, if it carried a codename, would
+        publish as a placeholder naming nothing at all."""
         monkeypatch.setattr(guard, "registry_get", lambda key: None)
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "global-doctrine/CLAUDE.md" in reason
+        assert "machine-local set repos.example_doctrine_repo" in reason
+        assert "global-doctrine/CLAUDE.md" not in reason

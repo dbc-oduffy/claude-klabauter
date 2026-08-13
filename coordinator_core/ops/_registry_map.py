@@ -264,6 +264,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "ceremony.update_docs_scan":              "coordinator_core.ops.ceremony.update_docs_scan",
     "tracker.advance_status":                 "coordinator_core.ops.tracker.advance_status",
     "tracker.fold_observed_set":              "coordinator_core.ops.tracker.fold_observed_set",
+    "tracker.mint_person":                    "coordinator_core.ops.tracker.mint_person",
     "priority.set":                           "coordinator_core.ops.priority_set",
     "priority.drain":                         "coordinator_core.ops.priority_drain",
     "write_surface.emit_manifest":            "coordinator_core.ops.write_surface_manifest",

@@ -49,6 +49,7 @@ every sentinel-gated guard relies on.
 from __future__ import annotations
 
 import os
+from typing import Any, Dict, Optional
 
 _PATH_KEYS = ("file_path", "notebook_path", "path")
 
@@ -115,7 +116,11 @@ def is_sentinel_write(target_path: str, sentinel_name: str) -> bool:
 
 
 def sentinel_write_denial(
-    target_path: str, sentinel_name: str, reason: str
+    target_path: str,
+    sentinel_name: str,
+    reason: str,
+    *,
+    payload: Optional[Dict[str, Any]],
 ) -> "dict | None":
     """Returns a PreToolUse deny `hookSpecificOutput` dict if `target_path`
     targets `sentinel_name`, else None.
@@ -123,6 +128,32 @@ def sentinel_write_denial(
     Caller is responsible for invoking this BEFORE any approval-state
     lookup that also consults the same sentinel (see module docstring,
     "Ordering contract").
+
+    ``payload`` (2026-08-13, AUDIENCE-GATED -- docs/plans/2026-08-13-guard-
+    messages-stop-handing-agents-the-keys.md, C4c): a REQUIRED keyword, no
+    default -- a caller missed by this migration must raise ``TypeError``
+    at collection, never silently keep a pre-migration call shape. This
+    module previously composed a deny envelope from a pre-composed
+    ``reason: str`` with NO payload access at all, so it structurally could
+    not resolve audience -- census B named this the "Tier-2 plumbing
+    composer" that needed a signature change to close that gap, mirroring
+    the same fix `bash_guards._helpers.operator_override_note` already
+    received (C1).
+
+    This function does not itself rewrite ``reason`` -- each caller is
+    responsible for composing an audience-safe ``reason`` BEFORE calling
+    here (see `block_disarm_marker_sentinel_write.py` and
+    `block_worktree_sentinel_write.py`, both of which dropped their one
+    mechanism-naming clause unconditionally, for both audiences, once this
+    dispatch's callers were audited; `block_dev_repo_sentinel_write.py`'s
+    advisory sibling already builds its reason via
+    `bash_guards._helpers.operator_override_note(payload=payload)`, which is
+    itself audience-gated). ``payload`` is threaded through and accepted
+    here so this seam has payload access at all -- the structural
+    precondition census B's fix depends on -- and so a future caller/lint
+    (the plan's AC-5 register rule) can rely on every sentinel-write-deny
+    call site actually carrying a payload, rather than a subset doing so
+    and a subset not.
     """
     if not is_sentinel_write(target_path, sentinel_name):
         return None
@@ -136,7 +167,11 @@ def sentinel_write_denial(
 
 
 def sentinel_write_advisory(
-    target_path: str, sentinel_name: str, reason: str
+    target_path: str,
+    sentinel_name: str,
+    reason: str,
+    *,
+    payload: Optional[Dict[str, Any]],
 ) -> "dict | None":
     """Advisory-shaped sibling of `sentinel_write_denial()` -- same
     same-sentinel match, `additionalContext` (never blocks the write)
@@ -152,6 +187,12 @@ def sentinel_write_advisory(
     `guard_settings_json_write.py`) stay hard-deny per AC6, and they all
     call `sentinel_write_denial()` directly -- this function is additive,
     not a replacement, so none of those callers' behaviour changes.
+
+    ``payload`` (2026-08-13, same C4c signature change as
+    `sentinel_write_denial()` above, for the same reason -- REQUIRED
+    keyword, no default): threaded through so this seam has payload access;
+    the caller (`block_dev_repo_sentinel_write._advisory_reason`) already
+    composes its `reason` audience-safely via `operator_override_note`.
     """
     if not is_sentinel_write(target_path, sentinel_name):
         return None

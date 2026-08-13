@@ -1459,10 +1459,20 @@ def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | 
     — the same usability predicate `_resolve_published_engine` applies.
     Checked in this order, first hit wins:
 
-      1. an existing `repos.claude_klabauter` registry value — the common
-         case, and why seeding is idempotent (AC4): if this hits, the value
-         written back is the value already registered, never a different
-         one.
+      1. an existing `repos.claude_klabauter` registry value, PROVIDED it
+         still passes the same validity check below (dir exists AND
+         contains `coordinator_core/`) — the common case, and why seeding
+         is idempotent (AC4): if this hits, the value written back is the
+         value already registered, never a different one. A stale/invalid
+         existing value does NOT hit here: "existing" in AC4 means a value
+         that still resolves. Such a value falls through to steps 2/3 and
+         is self-healed to a working path — deliberate (an unreachable
+         pointer is not a value worth preserving), asserted by
+         `test_discover_klabauter_root_rejects_candidate_without_
+         coordinator_core` in scripts/test_setup.py — Review:
+         code-reviewer 2026-08-12 (P2): AC4's wording and this docstring
+         previously did not distinguish "any existing value" from "valid
+         existing value".
       2. an existing `publish.mirrors.claude_klabauter.path` registry
          value — a real and likely signal (observed live 2026-08-12: this
          box had it set while the resolution key was absent).
@@ -1528,6 +1538,14 @@ def register_claude_klabauter_root(
     identity-resolution root — a `--claude-klabauter-root` override may point somewhere
     with no sibling layout (or AGENTS.md/manifest) at all, but the actual
     on-disk checkout running this script still does.
+
+    `coord_path`/`plugin_root` below are resolved ONCE, before the identity
+    branch, and shared by both `_discover_klabauter_root` (its registry
+    reads) and the later `resolve_machine_local_cli` call — not independent
+    resolutions, even though unused on the `claude-klabauter` branch until
+    that later call (no observable effect there — Review: code-reviewer
+    2026-08-12 nit; confirmed by
+    `test_register_claude_klabauter_root_klabauter_identity_never_calls_discover`).
 
     Guard (both identities): if machine-local is absent (coordinator-claude
     hard-dep not installed), fail loud (exit 90) UNLESS the --skip-dep-check +

@@ -5298,6 +5298,39 @@ def main() -> None:
             _revert_sizing_reverse_edge(_sizing_abs_path, _sizing_reverse_old_text, _write_repo_root)
         raise
 
+    # Author-side plan claim (wires the acquire half of the plan claim
+    # lifecycle whose release half was already wired: /handoff's d5 directive
+    # emits `session-claim-cli release-artifact plan <slug>` against a claim
+    # nothing on the authoring path ever took). Taken only after the write
+    # above lands — never on a doc_type/path that did not actually write a
+    # plan file. Bare stem only (claim_plan rejects a path-shaped slug loud
+    # and non-zero) — plan files are always `docs/plans/<stem>.md` (see
+    # `_default_output_path`). Non-fatal, mirroring `claim_plan`'s own
+    # session-shape.json write: the plan file is the deliverable, the claim
+    # is instrumentation on top of it, so a failure here warns and continues
+    # rather than failing the scaffold. The later re-claim at workstream-
+    # complete's d-claim-plan-execution-lock (same session) is covered by
+    # `claim_artifact`'s plan-class-only re-entrant self-claim branch — this
+    # acquisition does not disturb that.
+    if doc_type == "plan":
+        _ensure_engine_on_path()
+        try:
+            from coordinator_core.session.claims import claim_plan  # noqa: PLC0415
+
+            _plan_stem = os.path.splitext(os.path.basename(out_path))[0]
+            if not claim_plan(_plan_stem, cwd=_write_repo_root):
+                print(
+                    f"coordinator-doc-new: plan claim not taken for {_plan_stem} "
+                    "— scaffold written; reconcile the claim separately",
+                    file=sys.stderr,
+                )
+        except Exception as _claim_exc:  # noqa: BLE001 -- non-fatal, see above
+            print(
+                f"coordinator-doc-new: plan claim not taken for {out_path} "
+                f"({_claim_exc}) — scaffold written; reconcile the claim separately",
+                file=sys.stderr,
+            )
+
     # Success-path-only liveness stamp (completion_scaffold): reached only after the
     # write above completed without raising, and only for --type completion -- every
     # other doc_type's scaffold-write is out of this housekeeping class' remit.

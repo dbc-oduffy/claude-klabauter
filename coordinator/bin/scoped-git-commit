@@ -47,7 +47,10 @@
 #     directory named in <paths> is expanded (2026-08-06) to its dirty
 #     TRACKED files beneath it and each is classified individually — never
 #     untracked content, and a directory with nothing dirty tracked beneath
-#     it still refuses (see the op's own docstring). MUTATING.
+#     it still refuses (see the op's own docstring). Still never STAGES an
+#     untracked file beneath a named directory (2026-08-12) — but now SAYS
+#     SO in the output (count, a capped path sample, and the invocation to
+#     include them explicitly) instead of silently omitting it. MUTATING.
 #   scoped-git-commit --json ...
 #     Emit the op's raw result envelope instead of the human line.
 #
@@ -70,7 +73,7 @@ import sys
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import route_mutation  # noqa: E402
+from cc_invoke import ensure_engine_on_path, route_mutation  # noqa: E402
 
 _OP = "ceremony.scoped_git_commit"
 
@@ -251,6 +254,81 @@ def _parse_args(
     return subject, repo, paths, as_json, include_orphans, deliverable_id, mangled_cr_paths
 
 
+def _preflight_reap_stale_lock(worktree_root: str) -> None:
+    """Best-effort orphaned-`.git/index.lock` self-heal, run once before this
+    CLI's own git call lands on the pre-flight path.
+
+    `guard_reap_stale_git_lock`'s PreToolUse guard only recognizes a bare
+    `git` in command position (`_seg_resolved_git_subcommand`) — a
+    `scoped-git-commit` invocation never matches it, even from the repo
+    root, so the engine's own sanctioned commit wrapper had no self-heal of
+    its own (state/bug-backlog/2026-08-12-scoped-git-commit-is-not-a-raw-
+    git-invoc-f4fff3a626fa.yaml, P1). A guard that pattern-matches command
+    text can never cover every wrapper; the wrapper has to self-heal. This
+    function is that self-heal, calling the SAME reaper
+    (`coordinator_core.ops.reap_stale_locks`) in-process rather than
+    reimplementing any part of its age/stability gate.
+
+    Cheap by construction: the overwhelming common case is "no lock at
+    all", and that case costs exactly one `os.path.exists` stat, no
+    subprocess. The reaper (and its own `git rev-parse` resolution,
+    age/stability re-sample, and exit-code ladder) is only invoked once a
+    lock file is actually present at the cheap-checked candidate path.
+
+    Negative-spec:
+      - Never treats a reaper failure as a commit failure. ANY exception —
+        import failure, subprocess failure, permission error, whatever —
+        is swallowed here; the wrapper proceeds exactly as if this function
+        had never been called. Fail-open is the whole point: a reaper
+        defect must never block a commit that would otherwise succeed.
+      - Never second-guesses or bypasses the reaper's own age/stability
+        gate. `reap_stale_locks.main()`'s exit code 2 (a FRESH index.lock —
+        a live commit may genuinely be in progress) is NOT reaped, and is
+        treated identically to exit 0 here: proceed to the normal git call
+        either way, and let git itself report if it is genuinely blocked.
+        That gate is the only thing standing between this and corrupting a
+        peer's in-flight commit on a shared tree.
+      - Never reimplements `do_reap`/`stale_and_stable`'s lock-selection or
+        removal logic here — the whole-repo sweep in
+        `reap_stale_locks.main()` is called as-is, so `index.lock`,
+        `next-index-*.lock`, and `objects/maintenance.lock` share one
+        reaper implementation regardless of caller.
+      - Never assumes `<worktree_root>/.git` is a directory. In a linked
+        `git worktree` or a submodule it is a FILE (a `gitdir: <path>`
+        pointer to the real git dir elsewhere), so
+        `<worktree_root>/.git/index.lock` can never exist there and a
+        directory-only gate silently never fires — the same narrowing class
+        `guard_reap_stale_git_lock.py` was independently fixed for. This
+        function does NOT parse that pointer file itself (that is
+        git-dir-discovery reimplementation, reserved to the reaper); it
+        pays one `os.stat` to tell directory from file, and for the file
+        case delegates entirely to `reap_stale_locks.main()`, which already
+        resolves the real git dir correctly via `--absolute-git-dir` /
+        `--git-common-dir`.
+    """
+    try:
+        git_entry = os.path.join(worktree_root, ".git")
+        try:
+            is_dir = os.path.isdir(git_entry)
+        except OSError:
+            return
+        if is_dir:
+            lock_path = os.path.join(git_entry, "index.lock")
+            if not os.path.exists(lock_path):
+                return
+        elif not os.path.exists(git_entry):
+            return
+        # else: `.git` is a file (linked worktree / submodule) -- the real
+        # git dir cannot be resolved cheaply, so the sweep is called
+        # unconditionally to let it resolve it correctly.
+        ensure_engine_on_path(os.path.abspath(__file__))
+        from coordinator_core.ops import reap_stale_locks
+
+        reap_stale_locks.main([])
+    except Exception:
+        return
+
+
 def _worktree_root(explicit: str | None) -> str:
     """Explicit `--repo` wins; otherwise the enclosing worktree's own root,
     asked of git rather than assumed to be cwd (an agent frequently runs from
@@ -372,6 +450,44 @@ def _worktree_excluded_note(result: dict) -> str:
     return " — WARNING: worktree edits to %d named path(s) NOT included (staged/index content committed instead): %s" % (
         len(excluded),
         ", ".join(str(p) for p in excluded),
+    )
+
+
+def _untracked_omitted_note(result: dict, paths: list[str], repo: str | None) -> str:
+    """Renders the op's `untracked_paths_omitted` as an operator-facing
+    suffix, or "" when the engine did not send one.
+
+    state/bug-backlog/2026-08-12-scoped-git-commit-silently-omits-
+    untracked-files-in-a-pathspec.yaml: a directory named in the pathspec
+    silently dropped every untracked file beneath it, with nothing in the
+    output saying so -- caught only by an unprompted `git status`
+    afterward, which is not a mechanism. Applied on EVERY branch of
+    `main()`'s printed line (success and refusal alike), mirroring
+    `_declined_note`/`_worktree_excluded_note`'s own "success is where
+    nobody looks" rationale. Reporting only -- untracked files are, by
+    design, never swept into the commit; this never changes exit code.
+    """
+    info = result.get("untracked_paths_omitted")
+    if not isinstance(info, dict):
+        return ""
+    listed = info.get("paths") or []
+    if not listed:
+        return ""
+    count = info.get("count", len(listed))
+    truncated = info.get("truncated", False)
+    shown = ", ".join(str(p) for p in listed)
+    if truncated:
+        shown += " (and %d more)" % (count - len(listed))
+    repo_flag = " --repo %s" % repo if repo else ""
+    include_cmd = 'scoped-git-commit -m "<subject>"%s -- %s %s' % (
+        repo_flag, " ".join(paths), " ".join(str(p) for p in listed)
+    )
+    return (
+        " — NOTE: %d untracked file(s) beneath the named directory "
+        "pathspec were NOT staged (untracked files are never swept into a "
+        "commit by naming their parent directory, by design): %s — to "
+        "include them, name them explicitly, e.g.: %s"
+        % (count, shown, include_cmd)
     )
 
 
@@ -504,6 +620,8 @@ def main(argv: list[str]) -> int:
         print(_USAGE, file=sys.stderr)
         return _EXIT_USAGE
 
+    _preflight_reap_stale_lock(worktree_root)
+
     if mangled_cr_paths:
         # Never silent (see `_parse_args`'s own comment on this strip): the
         # run proceeds with the corrected paths, but the caller's own
@@ -546,7 +664,7 @@ def main(argv: list[str]) -> int:
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
-        print(_render(result))
+        print(_render(result) + _untracked_omitted_note(result, paths, repo))
     return _exit_code_for_result(result)
 
 

@@ -146,15 +146,7 @@ NO exception, same as any other guard message:
      never mentions) is exempted. This is the SAME class as exemption 1,
      generalized to the corpus's own fixtures rather than one specific
      literal.
-  3. ``fallback-authoring-root`` -- `block_derived_global_doctrine_write.
-     _FALLBACK_AUTHORING_ROOT` (``"X:/example-doctrine-repo"``) is a fixed,
-     illustrative, message-text-only fallback used ONLY when a registry
-     lookup fails -- already marked ``abs-path-ok`` at its own definition
-     (never a real filesystem path on this host, same class as
-     `block_home_dir_memo_delivery._FALLBACK_RECEIVER` per that module's
-     own comment). Imported directly here (single point of truth), not
-     hand-copied.
-  4. ``write-guard-corpus-content-literal`` -- two `WRITE_GUARD_ROWS`
+  3. ``write-guard-corpus-content-literal`` -- two `WRITE_GUARD_ROWS`
      fixtures (`guard_message_corpus._wg_concrete_path_citations_fire`,
      `_wg_settings_json_write_fire`) deliberately write FILE CONTENT
      containing a synthetic Windows-shaped path string, specifically to
@@ -168,7 +160,7 @@ NO exception, same as any other guard message:
      literals are named here instead of diffed structurally. Kept to
      exactly the two strings the corpus already documents as synthetic,
      not widened into a pattern.
-  5. ``resolved-interpreter-invocation`` -- the BX-16 auto-rewrite rows
+  4. ``resolved-interpreter-invocation`` -- the BX-16 auto-rewrite rows
      (`check_find_exec_rewrite`/`check_grep_via_bash_rewrite`/
      `check_multiprobe_banner_rewrite`/`check_head_tail_plumbing_rewrite`)
      all prefix their emitted ``updatedInput.command`` with
@@ -210,9 +202,6 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_write_guard_row,
 )
 from coordinator_core.session.guard_unlock_sentinel import annotate_deny
-from coordinator_core.write_guards.block_derived_global_doctrine_write import (
-    _FALLBACK_AUTHORING_ROOT,
-)
 from coordinator_core.write_guards.block_unauthorized_claude_md_write import (
     _grant_cli_invocation,
 )
@@ -285,7 +274,7 @@ _TEMP_ROOT = tempfile.gettempdir()
 #: `_wg_settings_json_write_fire`, both already marked
 #: `abs-path-ok: synthetic fixture, not a real path` at their definition.
 _WRITE_GUARD_CORPUS_CONTENT_LITERALS: Tuple[str, ...] = (
-    "X:\\example-game-workbench-repo",
+    "X:\\some-checkout",  # abs-path-ok: synthetic fixture, not a real path
     "C:\\Users\\someone\\x",
 )
 
@@ -321,9 +310,9 @@ def _is_exempt(
     #    itself, called fresh per assertion (see caller).
     if grant_cli_text and _contains_normalized(grant_cli_text, span):
         return True
-    # 5. Resolved-interpreter-invocation -- exact literal produced by
+    # 4. Resolved-interpreter-invocation -- exact literal produced by
     #    `_bt_python3_invocation()` itself, called fresh per assertion
-    #    (see module docstring item 5 and caller).
+    #    (see module docstring item 4 and caller).
     if interpreter_text and _contains_normalized(interpreter_text, span):
         return True
     # 2. Corpus-fixture echo -- either literally present in the fired
@@ -333,14 +322,7 @@ def _is_exempt(
         return True
     if span.startswith(_TEMP_ROOT):
         return True
-    # 3. Fallback-authoring-root -- fixed, illustrative, message-text-only
-    #    literal, imported from its own already-marked-`abs-path-ok`
-    #    definition (single point of truth, see module docstring item 3).
-    if _contains_normalized(span, _FALLBACK_AUTHORING_ROOT) or _contains_normalized(
-        _FALLBACK_AUTHORING_ROOT, span
-    ):
-        return True
-    # 4. Write-guard corpus content literals -- see module docstring item 4.
+    # 3. Write-guard corpus content literals -- see module docstring item 3.
     for literal in _WRITE_GUARD_CORPUS_CONTENT_LITERALS:
         if _contains_normalized(span, literal) or _contains_normalized(literal, span):
             return True
@@ -469,7 +451,9 @@ def test_override_keys_doc_display_is_portable():
 
 
 def test_operator_override_note_is_portable():
-    note = operator_override_note("COORDINATOR_ALLOW_SOME_GUARD")
+    note = operator_override_note(
+        "COORDINATOR_ALLOW_SOME_GUARD", payload={"session_id": "sess-c1d-em"}
+    )
     assert not _find_absolute_paths(note), (
         "operator_override_note() rendered a machine-absolute path: %r" % note
     )
@@ -477,7 +461,9 @@ def test_operator_override_note_is_portable():
 
 def test_operator_override_note_reason_shaped_is_portable():
     note = operator_override_note(
-        "COORDINATOR_QUEUE_PUNT", reason_placeholder="<reason>"
+        "COORDINATOR_QUEUE_PUNT",
+        payload={"session_id": "sess-c1d-em"},
+        reason_placeholder="<reason>",
     )
     assert not _find_absolute_paths(note), (
         "operator_override_note(reason_placeholder=...) rendered a "

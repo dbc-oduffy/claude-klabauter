@@ -4637,7 +4637,27 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
             record_session_id, record = sid, fallback
 
     if record is None or record_session_id is None:
-        return _verdict(_REPO_IDENTITY_UNRESOLVED, None, "no registry record for this session")
+        # A registry that holds files but parses to nothing is a DIFFERENT
+        # condition from one that parses fine and simply has no row for this
+        # sid — the first is a parser/shape defect (see `harness_registry`'s
+        # `procStart` note: an integer-only parser read every POSIX record as
+        # unparseable and left this gate silently inert fleet-wide), the
+        # second is the ordinary miss this arm was written for. Reporting
+        # both as "0 parsed" would restate the defect's own camouflage.
+        detail = "no registry record for this session"
+        try:
+            registry_dir = _harness_registry.registry_dir()
+            if registry_dir is not None and registry_dir.is_dir():
+                file_count = sum(1 for _ in registry_dir.glob("*.json"))
+                if file_count > 0:
+                    parsed_count = len(_harness_registry.snapshot())
+                    detail = (
+                        f"no registry record for this session "
+                        f"(registry holds {file_count} file(s), {parsed_count} parsed)"
+                    )
+        except Exception:
+            pass
+        return _verdict(_REPO_IDENTITY_UNRESOLVED, None, detail)
 
     # --- 2. trust check (AC10) — sessionId equality (tautological on the
     # snapshot() fallback leg, live on the pid-keyed leg) AND

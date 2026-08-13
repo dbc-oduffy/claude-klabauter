@@ -133,10 +133,22 @@ def test_pickup_tier_wins_claimed_plan_never_consulted(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_claimed_plan_tier_used_when_pickup_empty(tmp_path, monkeypatch):
+    """The tier-(a) shape pointer needs a BACKING tier-(b) claim to be honoured.
+
+    Seeding only ``session-shape.json`` used to be enough here, because tier (a)
+    answered alone. It no longer is: ``claimed_plan._backed_by_claim`` (landed
+    4365117ae) rejects a shape pointer with no claim behind it, on the grounds
+    that ``claims.claim_plan`` writes the claim dir unconditionally BEFORE
+    attempting the best-effort shape write -- so a pointer outside the claim
+    store outlived its own claim and names a shipped or abandoned plan. This
+    fixture therefore seeds both rungs, which is the only shape a live claim
+    ever actually has on disk.
+    """
     repo = _init_repo(tmp_path)
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
     _write_shape(repo, _SID, {"plan": {"path": "docs/plans/example.md"}})
     _write_plan(repo, "docs/plans/example.md", 'deliverable_id: "dlv-plan-value"\n')
+    _write_plan_claim(repo, _SID, "example", "2026-08-13T10:00:00Z")
     msg = _msg_file(repo)
 
     args = compute_missing_trailer_args(msg, repo)

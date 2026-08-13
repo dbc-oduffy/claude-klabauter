@@ -122,6 +122,10 @@ _LIB_DIR = os.path.join(_BIN_DIR, "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cc_invoke  # noqa: E402
+
+cc_invoke.ensure_engine_on_path(__file__)
+
 from cli_shared import claude_klabauter_root  # noqa: E402
 from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402

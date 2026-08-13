@@ -52,6 +52,9 @@ section, for the shared helper's other caller, ``_find_is_find_segment``).
 
 from __future__ import annotations
 
+import os
+import shlex
+
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
@@ -91,6 +94,32 @@ class TestBareCdGitStillDenies:
     def test_bare_cd_and_git_auto_rewrites(self):
         out = guard.check_offer_git_c("cd /repo && git log -1")
         assert _rewritten_command(out) == "git -C /repo log -1"
+
+
+class TestTildeTargetExpandsBeforeQuoting:
+    """example-doctrine-repo memo (2026-08-12): `cd ~/X/peer && git log` was rewritten
+    into `git -C '~/X/peer' log`, which dies with "cannot change to
+    '~/X/peer'" -- `shlex.quote` quotes the tilde, and a quoted tilde is
+    never expanded by the shell that runs the suggestion. The rewrite must
+    carry the expanded absolute path."""
+
+    def test_leading_tilde_is_expanded_not_quoted(self):
+        home = os.path.expanduser("~")
+        out = guard.check_offer_git_c("cd ~/X/peer && git log -1")
+        rewritten = _rewritten_command(out)
+
+        assert "~" not in rewritten
+        assert rewritten == "git -C %s log -1" % shlex.quote(home + "/X/peer")
+
+    def test_bare_tilde_target_is_expanded(self):
+        out = guard.check_offer_git_c("cd ~ && git status")
+        rewritten = _rewritten_command(out)
+
+        assert rewritten == "git -C %s status" % shlex.quote(os.path.expanduser("~"))
+
+    def test_non_tilde_target_is_byte_identical_to_before(self):
+        out = guard.check_offer_git_c("cd /repo/sub && git log -1")
+        assert _rewritten_command(out) == "git -C /repo/sub log -1"
 
 
 class TestEnvPrefixEvasionNowDenies:

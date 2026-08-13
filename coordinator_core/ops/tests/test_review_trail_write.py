@@ -1399,6 +1399,49 @@ class TestForeignSessionScopeGuard:
         assert "coverage-gate" in message or "brightline-gate" in message
         assert "--from-handoff" in message
 
+    def test_foreign_refusal_message_discriminator_precedes_remedy_once(
+        self, tmp_path
+    ) -> None:
+        """Register regression (B2 REPEATED FACT, docs/wiki/guard-messaging.md
+        § Register): the predecessor:none / single-node-walk discriminator
+        must appear BEFORE the gate-before-write remedy is first prescribed —
+        a real peer EM (example-retrieval-repo-em, cross-repo/inbox/2026-08-13-project-
+        rag-em-foreign-session-guard-cannot-see-a-legitimate-successor.md)
+        read the old message, missed the discriminator arriving last, and
+        ran a mint that could not fire for its shape. The ordering assertion
+        below is the load-bearing regression guard and genuinely fails
+        against the old text. The count assertion only guards against the
+        literal remedy sentence being duplicated verbatim; the old defect
+        was the remedy being conceptually restated three times across
+        different phrasings, and this literal-substring count does not by
+        itself prove that broader defect fixed."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        with pytest.raises(ForeignSessionRangeRefused) as exc_info:
+            _write_guarded(repo, f"{base_sha}..{foreign_sha}", scope="session")
+
+        message = str(exc_info.value)
+
+        discriminator_marker = "predecessor: none"
+        remedy_marker = "run the ceremony close coverage gate"
+
+        assert discriminator_marker in message
+        assert remedy_marker in message
+        assert message.index(discriminator_marker) < message.index(remedy_marker), (
+            "discriminator must precede the first gate-before-write remedy "
+            "prescription, not follow it"
+        )
+        assert message.count(remedy_marker) == 1, (
+            "gate-before-write remedy must be prescribed exactly once, "
+            f"got {message.count(remedy_marker)}"
+        )
+
     def test_untrailered_commit_placed_in_scope_by_touched_path_writes_and_logs(
         self, tmp_path, caplog
     ) -> None:

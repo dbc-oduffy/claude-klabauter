@@ -175,14 +175,26 @@ def test_deny_reason_grant_render_carries_reachability_constraint(is_tie: bool) 
 
 
 @pytest.mark.parametrize("is_tie", [True, False])
-def test_deny_reason_grant_render_embeds_the_ssot_note_verbatim(is_tie: bool) -> None:
-    """Stronger than the reachability-marker scan above: proves the render
-    contains `operator_override_note`'s EXACT output, not merely text that
-    happens to satisfy the marker-proximity heuristic -- closing the gap the
-    memo named ("the sibling noted their pre-existing deny-text assertion
-    passed identically on both branches")."""
+def test_deny_reason_grant_render_never_names_an_override_route(is_tie: bool) -> None:
+    """Inverted (was: `..._render_embeds_the_ssot_note_verbatim`, which
+    asserted `operator_override_note`'s output WAS present). The Tier-F
+    escape hatch is now the Tier-U grant-CLI ask, not an env-var override --
+    `_deny_reason_grant`'s current render carries no override-doc pointer at
+    all for this payload shape (`{"session_id": ...}` has no `agent_id`/
+    `subagent_type`, so `resolves_em_audience` is False). Positively asserts
+    both the absence of any override-note fragment AND the presence of the
+    real, current Tier-U grant-ask shape, so this cannot pass vacuously on a
+    render that has neither."""
     rendered = _ctsi._deny_reason_grant("pytest", "pytest tests/", is_tie=is_tie)
-    assert operator_override_note(_ctsi._OVERRIDE_ENV_VAR) in rendered
+    note = operator_override_note(_ctsi._OVERRIDE_ENV_VAR, payload=None)
+    assert note == ""
+    assert _ctsi._OVERRIDE_ENV_VAR not in rendered
+    assert "unsettable from inside this session" not in rendered
+    if is_tie:
+        assert "No Tier-F escape" in rendered
+    else:
+        assert "Ask the PM for a Tier-U authorization grant" in rendered
+    assert 'tier-u-grant-cli grant pm "<verbatim PM utterance>"' in rendered
 
 
 def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:
@@ -260,14 +272,22 @@ def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:
     )
 
 
-def test_deny_reason_subagent_directory_render_carries_reachability_constraint() -> None:
+def test_deny_reason_subagent_directory_render_never_names_an_override_route() -> None:
+    """Inverted (was: `..._render_carries_reachability_constraint`, which
+    asserted `operator_override_note`'s output WAS present). The current
+    render is the directory-arg-refusal shape (DR-088 R9) with no
+    override-doc pointer at all -- positively asserts both the absence of
+    any override-note fragment AND the presence of the real, current
+    refusal text, so this cannot pass vacuously on a render carrying
+    neither."""
     rendered = _ctsi._deny_reason_subagent_directory(
         ["tests/some_dir"], "pytest tests/some_dir", []
     )
-    assert_render_carries_reachability_constraint(
-        rendered, context="_deny_reason_subagent_directory"
-    )
-    assert operator_override_note(_ctsi._OVERRIDE_ENV_VAR) in rendered
+    note = operator_override_note(_ctsi._OVERRIDE_ENV_VAR, payload=None)
+    assert note == ""
+    assert _ctsi._OVERRIDE_ENV_VAR not in rendered
+    assert "unsettable from inside this session" not in rendered
+    assert "Directory arguments are refused for dispatched agents (DR-088 R9" in rendered
 
 
 class TestDetectorSelfTest:
@@ -304,7 +324,9 @@ class TestDetectorSelfTest:
         not merely inferred from `assert_render_carries_reachability_
         constraint` passing over zero matches (AC-5: a gate that passes
         vacuously proves nothing)."""
-        text = "Something happened.\n\n" + operator_override_note("COORDINATOR_OVERRIDE_FOO")
+        text = "Something happened.\n\n" + operator_override_note(
+            "COORDINATOR_OVERRIDE_FOO", payload={"session_id": "sess-c1d-em"}
+        )
         assert not _VIOLATION_RE.search(text), (
             "the real builder's output unexpectedly matched the hand-written-assignment "
             "violation pattern: %r" % text

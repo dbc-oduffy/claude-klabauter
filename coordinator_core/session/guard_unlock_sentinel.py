@@ -61,59 +61,39 @@ Negative-spec:
     - Do NOT write this sentinel from agent-reachable code. It exists to be
       typed by a human operator; this module only resolves and consumes the
       path, it never creates one.
+    - Do NOT re-inline the sentinel's filename shape, its drop location, or
+      the per-firing ``session_id``/``guard_name`` values into
+      ``annotate_deny``'s rendered text. This was tried once (2026-08-12)
+      and reverted (2026-08-13, C3, item 7 in ``annotate_deny``'s
+      docstring) — the recipe stays out; only the wiki/doc pointers render.
+    - Do NOT let ``annotate_deny`` default to EMITTING the unlock block on
+      an unresolved/malformed/exception-raising identity resolution. AC-3
+      (2026-08-13, C3, item 8 in ``annotate_deny``'s docstring) inverted
+      this: only a positively-resolved EM audience
+      (``session.identity.resolves_em_audience``) emits; every other case,
+      including any exception, degrades to terse.
 """
 
 from __future__ import annotations
 
-import functools
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict
-
-from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from typing import Any, Dict, Optional
 
 _SENTINEL_PREFIX = "coordinator-guard-unlock-"
 
-#: Portable, never-resolved pointer for the coordinator-only install (no example-doctrine-repo
-#: checkout on this machine): the settings root is a real, portable path on
-#: every coordinator machine (unlike an in-process-resolved home directory --
-#: see this module's own Negative-spec and ``_helpers.OVERRIDE_KEYS_DOC_
-#: DISPLAY``'s 2026-08-05 history for why an interpolated absolute path is
-#: the wrong shape here). Left as ``~/...`` literally -- never expanded via
-#: ``Path.home()`` or ``os.path.expanduser`` -- because expansion would
-#: reintroduce exactly the machine-specific leak this form exists to avoid.
+#: Portable, never-resolved pointer, unconditional as of this dispatch (the
+#: PM-ratified admission of the dedicated wiki page has not yet landed in
+#: example-doctrine-repo's seed set; see docs/decisions/ for the ruling): the settings root is
+#: a real, portable path on every coordinator machine (unlike an
+#: in-process-resolved home directory -- see this module's own Negative-spec
+#: and ``_helpers.OVERRIDE_KEYS_DOC_DISPLAY``'s 2026-08-05 history for why an
+#: interpolated absolute path is the wrong shape here). Left as ``~/...``
+#: literally -- never expanded via ``Path.home()`` or ``os.path.expanduser``
+#: -- because expansion would reintroduce exactly the machine-specific leak
+#: this form exists to avoid.
 _SETTINGS_ROOT_WIKI_POINTER = "~/.coordinator-claude-settings/coordinator-claude/docs/wiki/"
-
-#: Repo-qualified, relative pointer for a example-doctrine-repo user -- same citation
-#: convention CLAUDE.md already uses for cross-repo references ("example-doctrine-repo
-#: coordinator/docs/wiki/..."), and the same shape as ``_helpers.
-#: OVERRIDE_KEYS_DOC_DISPLAY``. Preferred over the settings-root form when a
-#: example-doctrine-repo checkout is present, per the PM's dual-install ruling: the example-doctrine-repo source
-#: tree is the fresher, editable copy for a example-doctrine-repo user who has both.
-#:
-#: Repointed 2026-08-11 to the dedicated page: example-doctrine-repo landed
-#: ``coordinator/docs/wiki/guard-unlock-channel.md`` (commit fe0919f3b) in
-#: their tree. Safe to name the page (not just the directory) here because
-#: this branch only resolves when a example-doctrine-repo checkout is present on this machine,
-#: and on any such machine the file lands on disk the moment that commit is
-#: pulled -- there is no install/seed step in between for this branch.
-_DOE_SOURCE_WIKI_POINTER = "example-doctrine-repo coordinator/docs/wiki/guard-unlock-channel.md"
-
-#: Deliberately LEFT pointing at the directory, not the page -- do not
-#: repoint this one to ``guard-unlock-channel.md``. Unlike the example-doctrine-repo-source
-#: branch above, this pointer is read on a coordinator-only machine with no
-#: example-doctrine-repo checkout, where the file only ever arrives via example-doctrine-repo's seed-set install
-#: (``~/.coordinator-claude-settings/coordinator-claude/docs/wiki/``). The
-#: page exists in example-doctrine-repo's tree as of 2026-08-11 but is NOT yet in example-doctrine-repo's seed
-#: allowlist (that allowlist doubles as their public OSS publish allowlist,
-#: so admission is now a PM decision on example-doctrine-repo's side, outcome unknown) -- so
-#: naming the page here would hand a 404 to precisely the operator with the
-#: fewest other ways to find the answer. REPOINT HERE once example-doctrine-repo admits the
-#: page to their seed set (see the cross-repo memo dispatched alongside this
-#: change); until then this constant names the wiki DIRECTORY, not a page.
-#: This comment is the single marked place to update when it does; do not
-#: scatter a second reference to this pointer string elsewhere.
 
 _UNSAFE_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
@@ -198,54 +178,6 @@ def consume(session_id: str, guard_name: str) -> bool:
         return False
 
 
-@functools.lru_cache(maxsize=1)
-def _unlock_wiki_pointer() -> "tuple[str, bool]":
-    """Resolve which wiki pointer form ``annotate_deny`` names, paired with
-    whether that pointer is still pending: the example-doctrine-repo source-tree form (page,
-    not pending -- the page landed 2026-08-11) when a example-doctrine-repo checkout is
-    present on this machine, the settings-root form (directory, still
-    pending -- awaiting example-doctrine-repo seed-set admission) otherwise (PM's dual-install
-    ruling, this dispatch).
-
-    Returns ``(pointer, pending)`` rather than the pointer alone so the
-    pending-ness travels with the branch that decided it, instead of
-    ``annotate_deny`` re-deriving "is this pointer a page or a directory"
-    from the string shape -- the resolver already knows which branch fired;
-    string-sniffing the result back out in the caller would be a second,
-    driftable place to encode the same fact this function just decided.
-
-    Cheap and cached: this runs on the PreToolUse hot path on every guard
-    firing (``annotate_deny``'s own contract), so the presence check is a
-    single ``registry_get`` read plus one ``Path.is_dir()`` stat, memoized
-    for the process lifetime via ``lru_cache`` -- the same pattern this
-    codebase already uses for other hot-path, presence-stable resolutions
-    (``machine_resolver._git_user_email_cached``). A example-doctrine-repo checkout does not
-    appear or vanish mid-process, so process-lifetime caching cannot go
-    stale within a single guard-firing session.
-
-    Never raises, and degrades to the settings-root form (pending=True) on
-    ANY doubt (unresolved registry key, missing directory, or any exception
-    along the way) -- ``annotate_deny``'s never-raises contract is absolute,
-    and a crash here would fail a guard OPEN.
-
-    TEST SEAM: this function is process-lifetime memoized via ``lru_cache``,
-    so whichever branch resolves first in a given pytest process is what
-    every later call sees for the rest of that process -- a test asserting
-    on either branch's text (or pending-ness) MUST call
-    ``_unlock_wiki_pointer.cache_clear()`` both before exercising its own
-    monkeypatched state and after (so it does not leak a resolved value into
-    whichever test runs next), rather than relying on import-time or
-    test-order luck.
-    """
-    try:
-        doe_root = read_doe_root_pointer()
-        if doe_root and (Path(doe_root) / "coordinator" / "docs" / "wiki").is_dir():
-            return (_DOE_SOURCE_WIKI_POINTER, False)
-    except Exception:
-        pass
-    return (_SETTINGS_ROOT_WIKI_POINTER, True)
-
-
 def annotate_deny(
     out: Dict[str, Any],
     session_id: str,
@@ -253,6 +185,7 @@ def annotate_deny(
     doc_display: str,
     *,
     agent_id: str = "",
+    git_root: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Append the in-session-unlock block to a firing hard-deny envelope,
     AFTER the guard's own reason.
@@ -336,32 +269,23 @@ def annotate_deny(
     is a doctrine violation (matching this module's own Negative-spec:
     "Do NOT write this sentinel from agent-reachable code").
 
-    The exact `sentinel_path(session_id, guard_name)` literal is
-    deliberately NOT rendered here as of item 3 above — an operator
-    constructs it themselves, following the wiki/doc's documented shape.
-    The bare `session_id`/`guard_name` VALUES are still rendered, though
-    (2026-08-11, second PM pass, same dispatch): removing the assembled
-    path must not also remove the two per-firing data points no static
-    wiki page can ever supply on its own — the RECIPE (a ready-to-paste
-    path, an imperative, create-then-retry sequencing) is what came out;
-    the two bare identifiers are DATA a human still needs to follow the
-    wiki's construction steps, and are named explicitly as such ("the
-    construction steps there need these two values from this firing"),
-    never assembled into a path or paired with an instruction to act on
-    them.
+    The exact `sentinel_path(session_id, guard_name)` literal — the resolved
+    absolute path, including the platform temp directory — is deliberately
+    NOT rendered here: a ready-to-paste path is still the recipe item 3
+    above removed. As of item 7 below, NEITHER the sentinel's filename shape
+    NOR the per-firing `session_id`/`guard_name` values are rendered either
+    — only the wiki/doc pointers are, so an operator takes the extra hop
+    item 3 established rather than being handed the two data points a
+    filename-shape line would let them assemble into the same recipe by
+    hand.
 
     `doc_display` is passed in rather than resolved here: both callers
     already import `bash_guards._helpers._resolve_override_keys_doc_display`,
     and resolving it here would add a `session -> bash_guards` import edge
-    for one string. It is named alongside `_unlock_wiki_pointer()`'s result
-    only when that result's `pending` flag is True — an interim reference
-    for the branch whose dedicated wiki page has not landed on this machine
-    yet (settings-root form, pending on example-doctrine-repo's seed-set admission; see that
-    function's own docstring and the REPOINT comment above its constants).
-    On the non-pending (example-doctrine-repo-source) branch the dedicated page is the whole
-    answer and `doc_display` is dropped from the line — it was never itself
-    the unlock's home, only a stand-in for the page that branch no longer
-    lacks.
+    for one string. It is named as a supporting reference alongside the
+    settings-root wiki pointer — as of item 7 below, the two pointers ARE
+    the payload again; item 6's inlined filename shape and drop-location
+    description is reverted.
 
     A missing/empty ``session_id`` skips the line rather than rendering a
     sentinel path keyed to an empty session — there would be nothing literal
@@ -389,8 +313,9 @@ def annotate_deny(
        calling it here adds no new edge, unlike resolving `doc_display`
        here would.
 
-       FAIL DIRECTION (get this right; it is the safety-critical half of
-       this change): a positively-RESOLVED subagent identity (non-empty
+       FAIL DIRECTION (2026-08-11 as originally written; SUPERSEDED by item 8
+       below — kept verbatim here as the historical record item 8's rebuttal
+       responds to): a positively-RESOLVED subagent identity (non-empty
        return) is the ONLY condition that suppresses the block. Every other
        case emits it, unchanged from before this item:
          - `agent_id` absent/empty -> the EM/main session, where a human IS
@@ -414,7 +339,77 @@ def annotate_deny(
        (empty return = "not a resolved subagent") composed with THIS
        function's fail-open-on-affordance direction (empty/unresolved =
        "emit, don't suppress") — two different fail directions for two
-       different risks, deliberately not the same polarity.
+       different risks, deliberately not the same polarity. See item 8: this
+       fail-open-on-unresolved direction is exactly what AC-3 now reverses.
+    6. (2026-08-12, this dispatch) Branch collapse and instruction inlining
+       — REVERTED by item 7 below, kept here as the historical record: the
+       example-doctrine-repo-source-tree pointer branch is gone — the dedicated wiki page
+       (`guard-unlock-channel.md`) has not landed in example-doctrine-repo's seed set, so the
+       settings-root pointer is now unconditional, and `_unlock_wiki_pointer`
+       (with its process-lifetime cache) is gone with it — nothing is left
+       to resolve between. The pointer alone was insufficient even before
+       this collapse: the settings-root wiki DIRECTORY exists but the page
+       does not, so a live pointer to that directory still did not answer a
+       blocked operator without a second hop. The line below inlines the
+       sentinel's filename shape and drop location directly, descriptively,
+       so a human at a terminal can construct the path without opening
+       anything; the wiki/doc references remain as supporting citations,
+       not the payload. Every register property from items 2–5 (descriptive
+       not imperative, no create-then-retry sequencing, no "not this agent"
+       disclaimer, human-only framing first, `agent_id` suppression and its
+       fail direction, never-raises) is unchanged.
+    7. (2026-08-13, C3, tasks/guard-messages-keys/C3.md Task 1) Revert of
+       item 6: item 6 re-inlined exactly the recipe item 3 removed —
+       the sentinel FILENAME SHAPE, the DROP LOCATION description, and
+       BOTH per-firing identifiers (`session_id`, `guard_name`) as live
+       parameters in the rendered text. Nothing failed when that regression
+       landed (`TestAnnotateDenyInlinesTheUnlockInstruction` in
+       `session/tests/test_guard_unlock_sentinel.py` was authored alongside
+       item 6 to assert the regressed text as correct, rather than a
+       pre-existing negative-spec test asserting those values were ABSENT —
+       there was no ratchet in the other direction for a reader to trip).
+       Item 3's own reasoning (still true, quoted there): the recipe comes
+       out entirely so "an operator reading this message takes one extra
+       hop (the wiki/doc) to construct the path themselves; that hop is the
+       point, not an oversight." This item takes that back out: the block
+       is the settings-root wiki pointer plus `doc_display`, nothing else,
+       matching item 3's original design. The settings-root pointer stays
+       unconditional (item 6's branch collapse is NOT reverted — only the
+       filename-shape/drop-location/identifier inlining is).
+    8. (2026-08-13, C3, tasks/guard-messages-keys/C3.md Task 2, AC-3) Fail
+       direction inverted: item 5's FAIL DIRECTION above reasoned, quoting
+       `state/audits/2026-08-11-guard-text-injection-mechanism-proof.md`
+       § "The fix, and its measurement" — "Fail direction: only a
+       *resolved* subagent suppresses. Absent `agent_id` means the main/EM
+       session where a human is watching — emit. Malformed/unresolvable —
+       emit, because `resolve_subagent_identity` fails closed to `""` and
+       losing the operator's affordance is the worse error." That reasoning
+       predates two things it did not have when it was written: the PM's
+       2026-08-13 audience ruling, and a positive-EM predicate
+       (`identity.resolves_em_audience`). It was choosing between two bad
+       options with no third leg — emit-on-uncertainty (leaks to a
+       structurally-incapable channel; items 2/4 above record the concrete
+       cost, four dispatched agents and two reviewers classifying the block
+       as prompt injection) or suppress-on-uncertainty (loses a real EM's
+       affordance). This plan adds the third leg: a positive-EM signal
+       (`resolves_em_audience`, DECISIONS.md D1) distinguishes "observed a
+       real envelope with no agent identity" (EM — emit) from "could not
+       observe" (degrade to terse), so "unresolved" no longer has to default
+       to either bad option. Both live branches item 5 named as
+       fail-open-to-emit now fail-closed-to-terse instead:
+         - `except Exception: pass` (any exception during identity
+           resolution) -> now returns `out` unchanged (degrade), never
+           falls through to the render block.
+         - the implicit else (absent/empty/malformed `agent_id`,
+           unresolvable envelope) -> routed through `resolves_em_audience`,
+           which is False for all of these (DECISIONS.md D1 contract) ->
+           degrade.
+       `resolve_subagent_identity` stays as the FAST positive-subagent leg
+       (unchanged from item 5: a genuine positive resolution still
+       suppresses immediately, no need to consult the new predicate) — the
+       EM-audience DECISION, not the subagent fast path, is what now routes
+       through `resolves_em_audience(payload, git_root)` instead of
+       defaulting to emit.
 
     Never raises. A malformed envelope is returned unchanged: this function
     only ever runs on a deny that has already been decided, and an
@@ -424,12 +419,28 @@ def annotate_deny(
     if not session_id:
         return out
     try:
-        from coordinator_core.session.identity import resolve_subagent_identity
+        from coordinator_core.session.identity import (
+            resolve_subagent_identity,
+            resolves_em_audience,
+        )
 
+        # Fast positive-subagent leg (item 5, unchanged): a genuine positive
+        # resolution suppresses immediately without consulting the newer
+        # predicate.
         if resolve_subagent_identity(agent_id, session_id):
             return out
+
+        # EM-audience decision (item 8, AC-3): degrade to terse on anything
+        # that is not a positively-resolved EM audience — absent/malformed
+        # agent_id, an unresolvable envelope, or any exception below all
+        # land here as False, never as a fallthrough to emit.
+        payload = {"session_id": session_id, "agent_id": agent_id}
+        if not resolves_em_audience(payload, git_root):
+            return out
     except Exception:
-        pass
+        # Item 8: any exception during identity resolution now degrades to
+        # terse (returns `out` unchanged), never falls through to render.
+        return out
     try:
         hso = out.get("hookSpecificOutput")
         if not isinstance(hso, dict):
@@ -437,22 +448,13 @@ def annotate_deny(
         reason = hso.get("permissionDecisionReason")
         if not isinstance(reason, str):
             return out
-        wiki_pointer, wiki_pending = _unlock_wiki_pointer()
-        pending_clause = (
-            " (wiki page for this channel still pending -- meanwhile also %s)"
-            % doc_display
-            if wiki_pending
-            else ""
-        )
         line = (
             "An in-session unlock exists for this guard, but it is a "
             "human-only affordance: it is granted by a human operator from "
             "a terminal outside this session, it cannot be granted by this "
             "agent, and creating it from inside the session is a doctrine "
-            "violation, not a shortcut. How to construct and grant it is "
-            "documented at %s%s; the construction steps there need these "
-            "two values from this firing: session %s, guard %s."
-            % (wiki_pointer, pending_clause, session_id, guard_name)
+            "violation, not a shortcut. %s and %s document the convention."
+            % (_SETTINGS_ROOT_WIKI_POINTER, doc_display)
         )
         hso["permissionDecisionReason"] = "%s\n\n%s" % (reason, line)
     except Exception:

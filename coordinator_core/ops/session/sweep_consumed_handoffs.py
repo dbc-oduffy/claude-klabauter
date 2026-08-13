@@ -25,9 +25,13 @@ params:
       collapse, byte-identical single-worktree behavior.
   dry_run (bool, optional, default false): preview candidates without mutating anything.
       See _sweep_consumed_handoffs' own dry_run param for the exact behavioral contract —
-      a dry-run preview may UNDER-count relative to a live run (the heir pre-stamp
-      best-effort pass is itself mutating and is skipped under dry_run) but never
-      over-counts, and never writes to disk.
+      a dry-run preview may UNDER-count relative to a live run against act-time
+      terminality drift only (a candidate going re-live between the preview and the
+      act; the heir pre-stamp best-effort pass is itself mutating and is skipped
+      under dry_run) but never over-counts that residual, and never writes to disk.
+      Dest-collision is checked in the preview itself (not deferred to the act
+      path), so a colliding candidate is excluded from the preview's own
+      WOULD-archive set rather than being a source of preview over-count.
 
 Result envelope (own shape, NOT the fleet mode/dry_run/candidates wire envelope — mirrors
 session.boot_sweep's own negative-spec: this is a session.* op, not a fleet.* op):

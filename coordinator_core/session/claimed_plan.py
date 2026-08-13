@@ -87,8 +87,10 @@ Negative-spec:
       the one durable ordering fact; this module's earliest-first sort
       mirrors ``baton_assemble/__init__.py::_resolve_held_handoff_for_session``,
       the handoff-claims analogue of this exact problem, including its
-      name-order fallback when at least one held claim lacks a readable
-      ``claimed_at``.
+      PER-CLAIM (not set-wide) degradation when a held claim lacks a
+      readable ``claimed_at`` (2026-08-13, sedge-15) — a missing timestamp
+      sorts that ONE claim via the high sentinel, it does not collapse the
+      whole set to name order.
 """
 
 from __future__ import annotations
@@ -119,13 +121,19 @@ def list_held_plan_claims(
 
     Ordering mirrors ``baton_assemble/__init__.py::
     _resolve_held_handoff_for_session``'s established precedent for the
-    handoff-claims analogue of this exact problem: when EVERY held claim has
-    a readable ``claimed_at``, order ascending by that value (earliest
-    first). When at least one does not (a legacy or hand-seeded claim dir
-    missing the file), there is no durable ordering signal for this set, and
-    this falls back to ``sorted(iterdir())`` name order — ARBITRARY
-    (alphabetical, not temporal), not a real claim-order fact, but
-    preferable to raising over an ordinary legacy shape.
+    handoff-claims analogue of this exact problem, PER-CLAIM (2026-08-13,
+    sedge-15, bringing tier (b) onto DR-291's own per-claim discipline):
+    each held claim sorts on ``(claimed_at or high-sentinel, basename)`` —
+    a claim with a known ``claimed_at`` always outranks one without,
+    regardless of what else is in the set. A single claim missing
+    ``claimed_at`` therefore no longer collapses the WHOLE set to name
+    order (the pre-2026-08-13 behavior); only that one claim's own position
+    degrades to "sorts after every known timestamp, tied on basename
+    against any other unknown-timestamp claim". This module does not carry
+    a degradation SIGNAL of its own (unlike the baton-side resolver's
+    ``degraded`` return, AC-6) — ``resolve_claimed_plan_path``'s ``str |
+    None`` / never-raises contract has no route to surface one without
+    widening that boundary (AC-7; see that function's own docstring).
 
     Returns ``[]`` — never raises — whenever no plan is claimed, the session
     id is unresolvable, or the repo's git-common-dir is unresolvable (e.g.
@@ -177,12 +185,15 @@ def list_held_plan_claims(
     if not held:
         return []
 
-    # `entries` was already name-sorted by `plan_claims_dir.iterdir()` above,
-    # so `held` (a filtered subset, order-preserving) is already in the
-    # name-order fallback shape. Only re-sort when EVERY held claim has a
-    # readable `claimed_at` — the deterministic, temporally-meaningful order.
-    if all(claimed_at for _, claimed_at in held):
-        held.sort(key=lambda pair: pair[1] or "")
+    # Per-claim sentinel sort (2026-08-13, sedge-15): a claim with a known
+    # `claimed_at` always outranks one without — a missing timestamp sorts
+    # via the high sentinel, tied on basename against any other
+    # unknown-timestamp claim, rather than collapsing the WHOLE set to name
+    # order the way the pre-2026-08-13 set-wide `all(...)` gate did. Mirrors
+    # `baton_assemble/__init__.py::_resolve_held_handoff_for_session`'s own
+    # per-claim `claimed_at_or_sentinel` leg (DR-291).
+    _SENTINEL = "￿"
+    held.sort(key=lambda pair: (pair[1] or _SENTINEL, pair[0]))
 
     return held
 

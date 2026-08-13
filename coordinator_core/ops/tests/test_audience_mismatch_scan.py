@@ -41,7 +41,8 @@ def _sidecar_text(spawned_at: str, answer: str) -> str:
         "- What did you grep, read, or probe that turned out to be a dead end "
         "-- and what were you actually looking for? N/A.\n\n"
         "- Where did your tool access, permissions, or output contract fight "
-        "you? What would you have reached for if it existed? Nothing.\n\n"
+        "you? What was missing that isn't deliberately withheld from this "
+        "role — a guard denial is not a gap. Nothing.\n\n"
         "- Anything you wanted to say and had nowhere to put? No.\n"
     )
 
@@ -193,7 +194,8 @@ def test_empty_answer_does_not_bleed_into_next_question(tmp_path: Path) -> None:
             "- What did you grep, read, or probe that turned out to be a dead "
             "end -- and what were you actually looking for? N/A.\n\n"
             "- Where did your tool access, permissions, or output contract "
-            "fight you? What would you have reached for if it existed? Nothing.\n\n"
+            "fight you? What was missing that isn't deliberately withheld "
+            "from this role — a guard denial is not a gap. Nothing.\n\n"
             "- Anything you wanted to say and had nowhere to put? No.\n",
             encoding="utf-8",
         )

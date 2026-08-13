@@ -25,6 +25,8 @@ import pytest
 
 from coordinator_core.ops import create_github_remote as cgr
 
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

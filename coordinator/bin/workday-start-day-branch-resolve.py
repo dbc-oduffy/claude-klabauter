@@ -81,7 +81,7 @@ from pathlib import Path
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-from cc_invoke import resolve_colocated_claude_klabauter_root, child_env  # noqa: E402
+from cc_invoke import require_colocated_engine_on_path, child_env  # noqa: E402
 
 _GIT_TIMEOUT = 10
 
@@ -89,10 +89,7 @@ _GIT_TIMEOUT = 10
 def _ensure_claude_klabauter_on_path() -> str:
     """Resolve+push this checkout's own root onto sys.path (self-colocated —
     this file lives at coordinator/bin/ inside the claude-klabauter checkout itself)."""
-    claude_klabauter_root = resolve_colocated_claude_klabauter_root(__file__)
-    if claude_klabauter_root not in sys.path:
-        sys.path.insert(0, claude_klabauter_root)
-    return claude_klabauter_root
+    return require_colocated_engine_on_path(__file__)
 
 
 def _no_console_kw() -> dict:

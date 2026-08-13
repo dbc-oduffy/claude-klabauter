@@ -1907,7 +1907,11 @@ def _wg_concrete_path_citations_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) 
     subprocess.run(["git", "init", "-q", str(scratch_dir)], check=True)
     target = scratch_dir / "coordinator" / "skills" / "doc.md"
     target.parent.mkdir(parents=True)
-    offending = "the repo lives at " + "X:" + r"\example-game-workbench-repo"
+    # Neutral stand-in, deliberately not a real codename: this guard echoes the
+    # offending path straight back to the reader, so a codename here renders a
+    # redaction placeholder into the corpus and trips B7 on our own fixture
+    # rather than on anything the engine actually ships.
+    offending = "the repo lives at " + "X:" + r"\some-checkout"
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": str(target), "content": offending},
@@ -2176,6 +2180,23 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_priority_ledger_edit", "control", False, _wg_benign),
     WriteGuardRow("block_subagent_archive_write", "fire", True, _wg_subagent_archive_write_fire),
     WriteGuardRow("block_subagent_archive_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_subagent_grant_record_write",
+        "control",
+        False,
+        _wg_benign,
+        unverified_reason=(
+            "AC2-registration-only: a real fire needs a resolvable git common dir plus a "
+            "coordinator-sessions/<sid>/claude-md-write-grant.json target under it -- more "
+            "environment state than this row is worth per the plan's own lighter-path "
+            "sanction (see block_subagent_grant_record_write.py's own test file for the "
+            "real fixture, reusable by a future chunk that wants it fire-verified). Was "
+            "discovered by write_guards.engine.discover_guard_names() but had NO corpus "
+            "row at all until this dispatch (C7, docs/plans/2026-08-13-guard-messages-"
+            "stop-handing-agents-the-keys.md) -- registering it closes that gap in the "
+            "sweep, per AC-8."
+        ),
+    ),
     WriteGuardRow(
         "block_subagent_plan_body_write", "fire", True, _wg_subagent_plan_body_write_fire
     ),
@@ -2543,7 +2564,11 @@ def _fire_enforce_agent_model_pin() -> Optional[Dict[str, Any]]:
                 {
                     "coordinator:executor": {
                         "model": "sonnet",
-                        "_source_path": "test-fixture:/coordinator/agents/executor.md",
+                        # Deliberately no `<letter>:` before the slash -- the
+                        # Windows-drive-letter guard-message ratchet's
+                        # unanchored predicate would false-fire on the "e:"
+                        # ending "test-fixture:" (AC9-R finding 1).
+                        "_source_path": "test-fixture-source/coordinator/agents/executor.md",
                     }
                 },
                 None,
@@ -3072,6 +3097,97 @@ def fire_hook_row(row: HookRow) -> HookCapture:
 
 
 # ---------------------------------------------------------------------------
+# C8 -- install/ and contract/ single-call-render surfaces.
+#
+# Spec backlink: docs/plans/2026-08-12-message-text-stops-naming-an-
+# unreachable-repo.md, chunk C8. Neither package carries a GuardEntry/
+# write_guard/hook registration seam at all -- `install`/`contract` are
+# plain scripts, not guards -- so these rows are fired with NO dispatch
+# machinery, just a direct call to the one function that renders the whole
+# surface in a single call. `StaticTextRow.text_fn` is invoked at FIRE time
+# only (never at import time), matching this module's own no-import-side-
+# effects discipline.
+#
+# Measured correction of the plan's premise (three executors this session,
+# re-verified here): `install/`/`contract/` do NOT both render their whole
+# message surface via `parser.format_help()` --
+#   - `coordinator_core.install.sandbox_check` has no `parser.format_help()`
+#     (`add_help=False`; `-h`/`--help` is a custom `store_true` `main()`
+#     consumes itself) -- its full help surface renders through exactly one
+#     call, `_usage_text()`, which `main()` prints verbatim. Covers the HELP
+#     surface only -- this module's Reporter check labels (`.ok`/`.bad`/
+#     `.skip`/`.info`) render per-check at runtime, outside `_usage_text()`,
+#     and stay unratcheted (see the residue note in
+#     `guard_message_register_lint.py`'s own module docstring).
+#   - `coordinator_core.install.prereq_probe` has no argparse and no
+#     `--help` at all (`argv` accepted, unused) -- there is no help surface
+#     to capture, so it gets NO row here, deliberately.
+#   - `coordinator_core.contract.emit_memo_schema` DOES render its whole
+#     surface in one call: `emit_schemas()`, one `json.dumps` per entity
+#     (`cross-repo-memo`, `archived-memo`), both entities per call.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StaticTextRow:
+    """One package-level single-call render, fired with no guard/dispatch
+    machinery at all. `package`/`guard`/`row_id` follow the same triad the
+    other row types use for `RegisterViolation`/`RenderedCell` attribution;
+    `text_fn` is a zero-arg callable returning the rendered text."""
+
+    package: str
+    guard: str
+    row_id: str
+    text_fn: Callable[[], str]
+
+
+def _fire_sandbox_check_usage_text() -> str:
+    from coordinator_core.install import sandbox_check
+
+    return sandbox_check._usage_text()
+
+
+def _fire_emit_memo_schema_output() -> str:
+    """`emit_schemas()` side-effects real files (module docstring: writes
+    `<name>.schema.json` per entity) -- fired against a fresh scratch
+    tempdir, never the module's own directory, so this corpus row never
+    touches `coordinator_core/contract/`'s real generated schema files.
+    Rendered text mirrors what the module itself renders: one
+    `json.dumps(schema, indent=2, ensure_ascii=False)` per entity (the
+    same call `emit_schemas()`'s own body makes before writing), both
+    entities joined -- "both entities per call" from this section's own
+    header comment."""
+    import json
+
+    from coordinator_core.contract import emit_memo_schema
+
+    with tempfile.TemporaryDirectory(
+        prefix="guard-message-corpus-emit-memo-schema-"
+    ) as scratch:
+        schemas = emit_memo_schema.emit_schemas(out_dir=scratch)
+    return "\n".join(
+        json.dumps(schema, indent=2, ensure_ascii=False) for schema in schemas.values()
+    )
+
+
+STATIC_TEXT_ROWS: List[StaticTextRow] = [
+    StaticTextRow(
+        "install", "sandbox_check", "sandbox-check-usage-text", _fire_sandbox_check_usage_text
+    ),
+    StaticTextRow(
+        "contract",
+        "emit_memo_schema",
+        "emit-memo-schema-output",
+        _fire_emit_memo_schema_output,
+    ),
+]
+
+
+def fire_static_text_row(row: StaticTextRow) -> str:
+    return row.text_fn()
+
+
+# ---------------------------------------------------------------------------
 # Self-test surface (this chunk's own AC2/AC15 proof over its 16 rows).
 # Deliberately kept in this same file, following `guard_message_capture.py`
 # (C1)'s precedent -- not auto-discovered by the suite's `python_files =
@@ -3282,3 +3398,20 @@ def test_ac2_every_reachable_guard_has_a_corpus_row():
         "write_guards guard(s) reachable from discover_guard_names() with no corpus row: %s"
         % sorted(missing_write)
     )
+
+
+def test_static_text_rows_fire_and_produce_non_empty_text():
+    """C8's own AC7/AC8 proof: both `STATIC_TEXT_ROWS` entries fire without
+    raising and produce non-empty rendered text -- `guard_message_register_
+    lint.run_sweep()` lints whatever this produces, so a silently-empty
+    render here would mean the B7 gate runs over nothing for these two
+    rows while reporting green (the same dark-gate shape C3b's own
+    `test_gate_fails_loud_if_collection_drops_to_zero` guards against for
+    the other three packages)."""
+    assert {row.package for row in STATIC_TEXT_ROWS} == {"install", "contract"}
+    for row in STATIC_TEXT_ROWS:
+        text = fire_static_text_row(row)
+        assert text, "static text row %s/%s fired but produced empty text" % (
+            row.package,
+            row.row_id,
+        )

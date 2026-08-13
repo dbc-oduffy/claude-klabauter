@@ -113,7 +113,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import yaml
 
@@ -124,6 +124,7 @@ from coordinator_core.coverage import (
     _derive_dag_chain_set,
     _is_planning_artifact_path,
     _PLANNING_ARTIFACT_PATH_PREFIXES,
+    _resolve_numstat_row_path,
 )
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops import ownership_index
@@ -184,7 +185,7 @@ _TEST_DIR_RE = re.compile(r"(^|/)tests?/")
 # before/after measurement on this repo.
 # Spec backlink: cross-repo/inbox/2026-08-04-example-retrieval-repo-em-brightline-partition-mandatory-does-not-halt.md
 #   § "Two smaller observations" — `chain_oracle` counts ceremony bookkeeping as reviewable LOC.
-_NOISE_BASENAMES = frozenset({"package-lock.json", "poetry.lock"})
+_NOISE_BASENAMES = frozenset({"package-lock.json", "poetry.lock", "pnpm-lock.yaml", "bun.lockb"})
 _NOISE_SUFFIXES = (".lock", ".pyc", ".min.js", ".min.css")
 _NOISE_PATH_RE = re.compile(
     r"(^|/)("
@@ -228,6 +229,17 @@ _NOISE_TRACKER_RE = re.compile(r"^docs/.*-tracker\.md$")
 # commit is not noise (AC9: the gate stays non-vacuous; a planning artifact
 # still owes a review), it is merely cheaper-per-line than code.
 # Spec backlink: docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C7, AC8
+#
+# SUPERSEDED IN PART (C1a, 2026-08-12): `_is_prose_bearing_path` now runs
+# BEFORE this weight is ever applied (see the `countable` filter in
+# `_compute_chain_oracle`/`_compute_session_oracle_single`/the session-scoped
+# range path) and fully excludes `.md`/`.yaml`/`.yml` — every planning-
+# artifact path in practice, since all four `_PLANNING_ARTIFACT_PATH_PREFIXES`
+# hold only `.md` files today. This weight now only still applies to a
+# hypothetical non-prose-bearing file under a planning prefix (e.g. a binary
+# or `.json` sidecar) — a narrower but not dead case, and left as-is per this
+# module's Anti-scope ("leave `_PLANNING_LOC_WEIGHT`/`_is_planning_artifact_path`
+# exactly as they are").
 _PLANNING_LOC_WEIGHT = 0.2  # 1 planning-artifact LOC counts as 0.2 chain_loc
 
 
@@ -235,6 +247,44 @@ _SHIPPED_IN_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 _CHAIN_SHOW_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _CHAIN_NUMSTAT_RE = re.compile(r"^(-|\d+)\t(-|\d+)\t(.+)$")
+# `git show --raw`'s per-file line: `:oldmode newmode oldsha newsha STATUS[score]\told[\tnew]`.
+# Captures just the single-letter status (A/M/D/R/C) — the similarity score
+# suffix on R/C rows (e.g. `R100`) is discarded. See `_parse_show_numstat`.
+_CHAIN_RAW_STATUS_RE = re.compile(r"^:\d+ \d+ \S+ \S+ (\w)\d*\t")
+
+# AC2/AC3 (C2, 2026-08-12): change-substance weighting for the three
+# accumulation loops factored into `_accumulate_countable_rows` — a row's
+# raw added+deleted LOC is scaled by whether it is a content-identical
+# rename/move (AC2's explicit "breadth without burden" example) or genuine
+# authored content (create/modify/delete/renamed-with-edits), rather than
+# counted uniformly. MEASURED, not invented (AC3): over this branch's own
+# history (`origin/main..HEAD`, 362 commits, 1054 changed-file rows — 522
+# created, 502 modified, 1 deleted, 29 renamed), a three-way created/
+# modified/deleted split produced IDENTICAL totals to this two-way rename/
+# everything-else split (34553 either way): every renamed row in that
+# corpus was itself prose-bearing (`.md`/`.yaml`) and already excluded by
+# `_is_prose_bearing_path` before substance weighting runs, and the single
+# deletion was prose-bearing too. See the C2 dispatch report's AC3 table.
+# TWO constants, not three, per AC3's "do not force three to exist if two
+# suffice." Deletions are NOT exempted by this: a deleted file lands in
+# `_SUBSTANCE_WEIGHT_CONTENT` at full weight, same as a creation or a
+# modification — never zeroed.
+_SUBSTANCE_WEIGHT_RENAME = 0.0  # content-identical rename/move (status "R", 0 added + 0 deleted): already 0 raw LOC — named explicitly so the invariant is a deliberate constant, not an arithmetic accident of a+d
+_SUBSTANCE_WEIGHT_CONTENT = 1.0  # created / modified / deleted / renamed-with-edits: genuine authored change, counted at the code-loc baseline
+
+
+def _substance_weight(status: str, added: int, deleted: int) -> float:
+    """AC2/AC3 change-substance weight for one numstat row. `status` is the
+    single-letter git raw status (`""` if `_parse_show_numstat` could not
+    pair a raw row to this numstat row — treated as content, the safe/
+    never-under-count direction). Only a content-identical rename (status
+    `"R"`, both counts zero) gets the reduced weight: a rename that also
+    edited lines is real authored change and stays at full weight, since
+    the added/deleted counts git reports for a rename already cover only
+    the genuinely changed lines, not the whole moved file."""
+    if status == "R" and added == 0 and deleted == 0:
+        return _SUBSTANCE_WEIGHT_RENAME
+    return _SUBSTANCE_WEIGHT_CONTENT
 
 _JS_EXTS = (".ts", ".js", ".tsx", ".jsx")
 _CONFIG_EXTS = (".json", ".yaml", ".yml", ".toml")
@@ -313,6 +363,42 @@ def _is_noise_path(path: str) -> bool:
     if _NOISE_TRACKER_RE.match(path):
         return True
     return False
+
+
+_PROSE_BEARING_EXTS = (".md", ".markdown", ".yaml", ".yml")
+
+
+def _is_prose_bearing_path(path: str) -> bool:
+    """True iff `path` is markdown or YAML — prose-bearing, not code-bearing.
+
+    Review-MANDATE-scoped only: applied in `_compute_chain_oracle`,
+    `_compute_session_oracle_single`, and the session-scoped range path
+    (C1a) so a change confined to these extensions contributes NOTHING to
+    those arms' loc/commits/surfaces accumulation — stronger than
+    `_PLANNING_LOC_WEIGHT`'s de-weight, which still lets a planning
+    artifact's LOC nudge the count upward. Does NOT touch
+    `_compute_plan_oracle` (C1b's remit, a different input entirely) and is
+    deliberately NOT folded into `_is_noise_path` (Anti-scope) — that
+    predicate serves other consumers (coverage crediting, defensive noise
+    exclusion) that must stay independently editable from this
+    mandate-only exemption.
+
+    JUDGMENT CALL (dispatch brief, 2026-08-12): classification is by
+    EXTENSION ONLY — no carve-out for a `.yaml`/`.yml` under a code
+    directory (e.g. a fixture, or a config the engine reads at runtime).
+    A directory-based carve-out would invent a second, unpinned axis
+    ("which directories count as code") layered on top of this one, which
+    is exactly the wrong-axis file-type bucketing that problem 2 of the
+    ratified problem-set already names as a defect
+    (`docs/problems/2026-08-12-the-brightline-verdict-fires-on-every-ch.md`).
+    The exemption is narrow enough to absorb the risk: it only shrinks the
+    review-COUNT heuristic for these two oracle arms, never suppresses
+    review of the file itself, never touches noise exclusion or coverage
+    crediting, and the plan-oracle arm still mandates review for any plan
+    that declares enough code-bearing rows regardless of what a single
+    close's yaml/md diff looks like.
+    """
+    return path.endswith(_PROSE_BEARING_EXTS)
 
 
 def _sum_loc(text: str) -> Tuple[int, bool]:
@@ -727,25 +813,112 @@ def _compute_plan_oracle(
     }
 
 
-def _parse_show_numstat(text: str) -> Dict[str, List[Tuple[str, str, str]]]:
-    """Parse `git show --numstat --format=%H <shas...>` batched output into
-    `{sha: [(added, deleted, path), ...]}`. A bare 40-hex line is a commit
-    boundary; `added`/`deleted` are `"-"` for binary files (never coerced to
-    an int here — the caller decides how to treat that)."""
-    commits: Dict[str, List[Tuple[str, str, str]]] = {}
+def _parse_show_numstat(text: str) -> Dict[str, List[Tuple[str, str, str, str]]]:
+    """Parse `git show --raw --numstat --format=%H <shas...>` batched output
+    into `{sha: [(added, deleted, path, status), ...]}`. A bare 40-hex line
+    is a commit boundary. Each commit emits a RAW block
+    (`:mode mode sha sha STATUS[score]\\told[\\tnew]`) followed by a NUMSTAT
+    block (`added\\tdeleted\\tpath`) in the SAME per-file order (verified
+    against real multi-file/create/delete/rename commits in this repo,
+    2026-08-12, C2) — rows are paired POSITIONALLY within each commit, never
+    by path string, because the two blocks format a renamed/moved path
+    differently (`old\\tnew` in the raw block vs `{old => new}`/`old => new`
+    in the numstat block; see `_resolve_numstat_row_path`). `status` is the
+    single-letter git status code (A/M/D/R/C) — `""` if a numstat row could
+    not be paired to a raw row (block-length mismatch; not observed in the
+    verification above, but `_substance_weight` treats an empty status as
+    content, the safe/never-under-count direction). `added`/`deleted` are
+    `"-"` for binary files (never coerced to an int here — the caller
+    decides how to treat that)."""
+    commits: Dict[str, List[Tuple[str, str, str, str]]] = {}
     current: Optional[str] = None
+    raw_statuses: List[str] = []
+    numstat_idx = 0
     for line in text.splitlines():
         if _CHAIN_SHOW_SHA_RE.match(line):
             current = line
             commits[current] = []
+            raw_statuses = []
+            numstat_idx = 0
             continue
         if current is None or not line.strip():
+            continue
+        m_raw = _CHAIN_RAW_STATUS_RE.match(line)
+        if m_raw:
+            raw_statuses.append(m_raw.group(1))
             continue
         m = _CHAIN_NUMSTAT_RE.match(line)
         if not m:
             continue
-        commits[current].append((m.group(1), m.group(2), m.group(3)))
+        status = raw_statuses[numstat_idx] if numstat_idx < len(raw_statuses) else ""
+        numstat_idx += 1
+        commits[current].append((m.group(1), m.group(2), m.group(3), status))
     return commits
+
+
+def _accumulate_countable_rows(
+    per_commit: Mapping[str, List[Tuple[str, str, str, str]]],
+    shas: Iterable[str],
+    *,
+    track_files: bool = False,
+) -> Dict[str, object]:
+    """Shared row-accumulation (C2, 2026-08-12) for `_compute_chain_oracle`,
+    `_compute_session_oracle_single`, and the `--session-id` range path in
+    `_session_scoped` — previously three near-duplicate loops over
+    `_parse_show_numstat`'s output, now one. For each sha in `shas`: resolves
+    rename notation to the destination path (`_resolve_numstat_row_path`),
+    drops noise (`_is_noise_path`) and prose-bearing
+    (`_is_prose_bearing_path`, C1a) rows, and — if any row survives — counts
+    the commit and accumulates the survivors' LOC (change-substance-weighted
+    per AC2/AC3's `_substance_weight`, then planning-artifact de-weighted per
+    `_PLANNING_LOC_WEIGHT`, same order as before C2) and surfaces. A commit
+    with zero surviving rows contributes to NEITHER loc, commits, nor
+    surfaces — not merely loc.
+
+    `track_files=True` additionally accumulates a `files` set — the
+    `--session-id` range path's own `files=` metric; the chain/session-single
+    callers don't report it and pass the default."""
+    loc = 0
+    commits = 0
+    surfaces: Set[str] = set()
+    files: Set[str] = set()
+    for sha in shas:
+        rows = per_commit.get(sha, [])
+        resolved = [
+            (a, d, _resolve_numstat_row_path(p), status) for a, d, p, status in rows
+        ]
+        countable = [
+            (a, d, p, status)
+            for a, d, p, status in resolved
+            if not _is_noise_path(p) and not _is_prose_bearing_path(p)
+        ]
+        if not countable:
+            continue
+        commits += 1
+        for added, deleted, path, status in countable:
+            a = int(added) if added.isdigit() else 0
+            d = int(deleted) if deleted.isdigit() else 0
+            # Review: code-reviewer — P3: this two-step truncation (int() here,
+            # then int() again below) is safe from compounding rounding error
+            # ONLY because `_substance_weight` is 0-or-1 valued — the first
+            # `int()` is a no-op whenever weight=1.0 (nothing to truncate) and
+            # collapses row_loc to 0 whenever weight=0.0 (nothing left for the
+            # second int() to round). If a THIRD, fractional substance weight
+            # is ever added to this chain, this two-step shape stops being
+            # equivalent to a single combined multiply and should be
+            # collapsed to one `int()` over the full product at that point.
+            row_loc = int((a + d) * _substance_weight(status, a, d))
+            if _is_planning_artifact_path(path):
+                row_loc = int(row_loc * _PLANNING_LOC_WEIGHT)
+            loc += row_loc
+            surfaces.add(_classify_surface(path))
+            if track_files:
+                files.add(path)
+
+    result: Dict[str, object] = {"loc": loc, "commits": commits, "surfaces": surfaces}
+    if track_files:
+        result["files"] = files
+    return result
 
 
 def _compute_chain_oracle(
@@ -787,7 +960,7 @@ def _compute_chain_oracle(
 
     if chain_shas:
         show_out, rc = _run_git(
-            ["show", "--numstat", "--format=%H", *sorted(chain_shas)]
+            ["show", "--raw", "--numstat", "--format=%H", *sorted(chain_shas)]
         )
         if rc != 0:
             notes.append(
@@ -795,27 +968,14 @@ def _compute_chain_oracle(
                 f"— chain metrics may be incomplete"
             )
         per_commit = _parse_show_numstat(show_out)
-        for sha in chain_shas:
-            files = per_commit.get(sha, [])
-            non_noise = [(a, d, p) for a, d, p in files if not _is_noise_path(p)]
-            if not non_noise:
-                # Fully-noise (or entirely file-less, e.g. an empty/merge)
-                # commit contributes nothing — excluded from every chain
-                # metric, not merely LOC.
-                continue
-            chain_commits += 1
-            for added, deleted, path in non_noise:
-                a = int(added) if added.isdigit() else 0
-                d = int(deleted) if deleted.isdigit() else 0
-                loc = a + d
-                # AC8: planning-artifact LOC (a plan, its own sidecar, or
-                # research/problem-framing prose) is de-weighted, not
-                # excluded — it still nudges chain_loc, just not at code's
-                # full per-line weight. See `_PLANNING_ARTIFACT_PATH_PREFIXES`.
-                if _is_planning_artifact_path(path):
-                    loc = int(loc * _PLANNING_LOC_WEIGHT)
-                chain_loc += loc
-                chain_surfaces.add(_classify_surface(path))
+        # C2: shared row-accumulation (noise/prose filtering, AC2/AC3
+        # change-substance weighting, planning-artifact de-weighting) lives
+        # in `_accumulate_countable_rows` — see its docstring for the full
+        # contract this used to implement inline.
+        accumulated = _accumulate_countable_rows(per_commit, chain_shas)
+        chain_loc = int(accumulated["loc"])  # type: ignore[arg-type]
+        chain_commits = int(accumulated["commits"])  # type: ignore[arg-type]
+        chain_surfaces = accumulated["surfaces"]  # type: ignore[assignment]
 
     chain_oracle = max(
         1 + chain_loc // LOC_THRESHOLD,
@@ -858,34 +1018,16 @@ def _compute_session_oracle_single(
     # Metric-wide noise exclusion (AC2) — same shape as `_compute_chain_oracle`:
     # `--numstat` (not `--stat`) so a per-file noise path can be dropped
     # before LOC/surfaces accumulate, and a fully-noise commit contributes to
-    # NEITHER loc, commits, nor surfaces, rather than only loc.
-    show_out, _rc2 = _run_git(["show", "--numstat", "--format=%H", *filtered_shas], cwd=cwd)
+    # NEITHER loc, commits, nor surfaces, rather than only loc. `--raw`
+    # (C2) additionally recovers each row's git status letter for AC2/AC3
+    # change-substance weighting — see `_accumulate_countable_rows`, the
+    # shared helper this used to duplicate inline.
+    show_out, _rc2 = _run_git(
+        ["show", "--raw", "--numstat", "--format=%H", *filtered_shas], cwd=cwd
+    )
     per_commit = _parse_show_numstat(show_out)
 
-    loc = 0
-    commits = 0
-    surfaces: Set[str] = set()
-    for sha in filtered_shas:
-        files = per_commit.get(sha, [])
-        non_noise = [(a, d, p) for a, d, p in files if not _is_noise_path(p)]
-        if not non_noise:
-            continue
-        commits += 1
-        for added, deleted, path in non_noise:
-            a = int(added) if added.isdigit() else 0
-            d = int(deleted) if deleted.isdigit() else 0
-            line_loc = a + d
-            # Review finding P2, 2026-08-11: planning-artifact LOC is
-            # de-weighted here too, same as `_compute_chain_oracle`'s
-            # `chain_loc` (see that function's AC8 comment) — a large plan
-            # doc must not read at code's full per-line weight when it
-            # feeds this session's `code_loc`.
-            if _is_planning_artifact_path(path):
-                line_loc = int(line_loc * _PLANNING_LOC_WEIGHT)
-            loc += line_loc
-            surfaces.add(_classify_surface(path))
-
-    return {"loc": loc, "commits": commits, "surfaces": surfaces}
+    return _accumulate_countable_rows(per_commit, filtered_shas)
 
 
 def _compute_session_oracle(
@@ -1280,8 +1422,11 @@ def _session_scoped(range_: str, session_id: str) -> int:
     # before loc/files/surfaces accumulate, and a fully-noise commit
     # contributes to NEITHER loc, files, commits, nor surfaces, rather than
     # only loc. Reuses `_parse_show_numstat` (the chain-oracle parser) rather
-    # than a fourth diffstat parser.
-    show_out, rc2 = _run_git(["show", "--numstat", "--format=%H", *filtered_shas])
+    # than a fourth diffstat parser. `--raw` (C2) additionally recovers each
+    # row's git status letter for AC2/AC3 change-substance weighting — see
+    # `_accumulate_countable_rows`, the shared helper this used to duplicate
+    # inline.
+    show_out, rc2 = _run_git(["show", "--raw", "--numstat", "--format=%H", *filtered_shas])
     if rc2 != 0:
         print(
             f"{_PROG}: warning: git show failed over filtered SHAs — "
@@ -1294,30 +1439,11 @@ def _session_scoped(range_: str, session_id: str) -> int:
     if total_raw_rows == 0:
         return 1  # die-silent gate (loc=/files=) — see module negative-spec
 
-    loc = 0
-    commits = 0
-    files_set: Set[str] = set()
-    surfaces_set: Set[str] = set()
-    for sha in filtered_shas:
-        rows = per_commit.get(sha, [])
-        non_noise = [(a, d, p) for a, d, p in rows if not _is_noise_path(p)]
-        if not non_noise:
-            continue
-        commits += 1
-        for added, deleted, path in non_noise:
-            a = int(added) if added.isdigit() else 0
-            d = int(deleted) if deleted.isdigit() else 0
-            line_loc = a + d
-            # Review finding P2, 2026-08-11: planning-artifact LOC is
-            # de-weighted here too, same as `_compute_chain_oracle`'s
-            # `chain_loc` (see that function's AC8 comment) — this is the
-            # `--session-id` CLI path's own accumulator, not merely a
-            # producer for it.
-            if _is_planning_artifact_path(path):
-                line_loc = int(line_loc * _PLANNING_LOC_WEIGHT)
-            loc += line_loc
-            files_set.add(path)
-            surfaces_set.add(_classify_surface(path))
+    accumulated = _accumulate_countable_rows(per_commit, filtered_shas, track_files=True)
+    loc = int(accumulated["loc"])  # type: ignore[arg-type]
+    commits = int(accumulated["commits"])  # type: ignore[arg-type]
+    surfaces_set = accumulated["surfaces"]  # type: ignore[assignment]
+    files_set = accumulated["files"]  # type: ignore[assignment]
 
     files = len(files_set)
     surfaces = len(surfaces_set)

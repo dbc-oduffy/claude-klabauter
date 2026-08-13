@@ -134,7 +134,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.git.divergence import diverging_paths as _diverging_paths
 from coordinator_core.bash_guards._command_tokenizer import (
@@ -849,7 +849,10 @@ def _log_pathspec_divergence_override(cmd: str, cwd: Optional[str], session_id: 
 
 
 def check_staged_pathspec_divergence(
-    cmd: str, cwd: Optional[str] = None, session_id: str = ""
+    cmd: str,
+    cwd: Optional[str] = None,
+    session_id: str = "",
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Advisory (never denies) detail string when `cmd` contains a
     `git commit -- <paths>` whose STAGED (index) content at one or more of
@@ -918,19 +921,18 @@ def check_staged_pathspec_divergence(
         "discard what you staged there and substitute the worktree instead "
         "(SC-DR-015).\n\n"
         "A bare no-pathspec commit is NOT the fix -- the shared index can gain a "
-        "peer's staged file between your check and your commit (that TOCTOU hit "
-        "example-doctrine-repo 726925b2 for real -- 7 files swept, including another "
+        "peer's staged file between your check and your commit (that TOCTOU has "
+        "hit for real -- 7 files swept, including another "
         "session's in-flight agent definitions). Usually simplest: don't "
         "partial-stage on a shared "
         "tree at all -- make the worktree at {paths} match only your change, "
         "then commit normally. Genuinely diverged and need to commit anyway? "
         "Isolate the commit in a private GIT_INDEX_FILE (write-tree + "
-        "commit-tree) rather than the shared index -- recipe in the reference "
-        "below.\n\n"
-        "Reference: docs/wiki/scoped-safety-commits.md § SC-DR-015, "
-        "\"Amendment (2026-07-27, same day)\" (example-doctrine-repo)\n"
+        "commit-tree) rather than the shared index (SC-DR-015).\n\n"
         "{override_note}"
     ).format(
         paths=paths_list,
-        override_note=operator_override_note("COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE"),
+        override_note=operator_override_note(
+            "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", payload=payload
+        ),
     )

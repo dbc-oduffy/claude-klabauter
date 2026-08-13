@@ -837,7 +837,7 @@ def generate(
     if not os.path.isdir(coordinator_root):
         raise GenSettingsHooksError(
             f"Coordinator root does not exist: {coordinator_root}\n"
-            "Remediation: ensure the example-doctrine-repo repo is cloned and has a coordinator/ subdirectory.\n"
+            "Remediation: ensure the coordinator-claude repo is cloned and has a coordinator/ subdirectory.\n"
             f"  Expected: {coordinator_root}"
         )
 

@@ -159,12 +159,12 @@ def _segment_has_raw_pid_liveness_idiom(segment: str) -> Optional[str]:
     return None
 
 
-def _advisory_reason(idiom: str) -> str:
+def _advisory_reason(idiom: str, payload: Optional[Dict[str, Any]] = None) -> str:
     return (
         "%s: dead pid, not a live session. Use instead: "
         "`session-liveness-cli session-live SID` or "
         "`session-liveness-cli claim-holder-live CLAIM_DIR`.\n\n"
-        + operator_override_note(_OVERRIDE_ENV)
+        + operator_override_note(_OVERRIDE_ENV, payload=payload)
     ) % (idiom,)
 
 
@@ -226,7 +226,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "allow",
-                    "additionalContext": _advisory_reason(idiom),
+                    "additionalContext": _advisory_reason(idiom, payload=payload),
                 }
             }
 

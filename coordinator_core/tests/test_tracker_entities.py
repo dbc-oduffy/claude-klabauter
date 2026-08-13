@@ -497,6 +497,37 @@ def test_display_alias_case_sensitive():
     assert normalize_alias("display", "ada") != normalize_alias("display", "ADA")
 
 
+def test_github_alias_accepted_and_casefolded():
+    """`github` is accepted by `reject_invalid_namespace` and, like
+    `email`/`git_author`, is casefolded — GitHub handles are
+    case-insensitive but case-preserving, so presentation case lives in
+    the `display` alias, not here."""
+    reject_invalid_namespace("github", action="add")
+    assert normalize_alias("github", "DBC-example-operator") == "dbc-example-operator"
+
+    payload = person_alias_added("person-x", "github", "DBC-example-operator")
+    assert payload["raw_value"] == "DBC-example-operator"
+    assert payload["normalized_value"] == "dbc-example-operator"
+
+
+def test_github_id_is_its_own_namespace_not_a_github_value():
+    """`github_id` is a namespace in its own right, not a second kind of
+    value riding under `github`.
+
+    The handle renames; the numeric id does not. Collapsing them would let
+    `resolve_alias("github", "240204332")` resolve as though a numeric id
+    were a handle, and would leave no way to ask for the rename-proof id
+    alone. Stripped but not casefolded — casefolding a numeric id is a
+    no-op that would only imply a case-sensitivity question it cannot have.
+    """
+    reject_invalid_namespace("github_id", action="add")
+    assert normalize_alias("github_id", " 240204332 ") == "240204332"
+
+    payload = person_alias_added("person-x", "github_id", "240204332")
+    assert payload["namespace"] == "github_id"
+    assert payload["normalized_value"] == "240204332"
+
+
 def test_invalid_namespace_refused_by_add_and_retract():
     """Both `person_alias_added` and `person_alias_retracted` route through
     the shared `reject_invalid_namespace` guard, mirroring

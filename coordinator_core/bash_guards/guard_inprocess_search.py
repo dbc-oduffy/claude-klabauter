@@ -20,36 +20,70 @@ search-shaped commands, because it can only ever attempt a bare single-segment g
 that is 2.7% of real usage. Answering in-process -- including absorbing the downstream
 `| head` / `| wc -l` stage -- covers 14.65% of the same corpus.
 
-Why the verdict is a deny
--------------------------
-A PreToolUse hook has exactly one channel for returning content to the model, and it is
-`permissionDecisionReason` on a deny. So "deny" here means ALREADY HANDLED, not refused:
-the grep subprocess does not run, and the caller receives the output it would have
-produced -- and the message now LEADS with that answer having already been produced
-(never with a "Denied"/"Refused"/"Blocked" lead a caller reads as a bare refusal),
-mentioning second, but still clearly, that the literal command did not run; see
-"Composed message leads with the contract, not the output" below for why, and the
-`_ANSWERED_MARKER` comment block further down for why the lead word itself changed.
+Why the verdict is a rewrite, not a deny (2026-08-13)
+------------------------------------------------------
+A successful in-process answer is SUCCESS, not a refusal, and it must arrive through a
+channel the harness itself marks as success. This module used to answer via `deny()` +
+`permissionDecisionReason` -- the ONLY channel available before `updatedInput` was
+verified binding on harness 2.1.220 (see `nudge_foreground_agent_dispatch.py`'s own
+2026-07-31 re-land notes) -- which meant a correct, already-computed answer was
+delivered inside the harness's `<error>` framing on every call. A dispatched agent in a
+sibling repo read that framing as "your command was recognized as a search, no
+subprocess spawned, results below are this engine's own answer" wrapped in `<error>`,
+called it "a fabricated banner... not something I recognize as genuine harness output",
+and re-did the work by reading files directly rather than trust results that were
+already correct: `cross-repo/inbox/2026-08-13-example-cockpit-repo-em-guard-advisories-read-
+as-injection-to-subagents.md`, instance 3. `state/audits/2026-08-11-guard-text-
+injection-mechanism-proof.md` records the same trust-erosion class.
 
-This is the `# UNDOCUMENTED-DENY` shape (`hooks._envelope.deny`), spike-verified on
-harness 2.1.193 but not a documented harness contract. That dependency was surfaced to
-the PM and accepted rather than assumed.
+`check()` now answers via `hooks._envelope.rewrite_input` -- Shape (f), documented and
+harness-verified BINDING (2.1.220), not the `# UNDOCUMENTED-DENY` spike-only shape.
+`updated_input` replaces the tool's `command` with `true` (a real, PATH-resolvable
+coreutils no-op: exits 0, no output, no filesystem or network effect -- not the shell
+builtin `:`, which `_alternative_liveness.py`'s guard-message-liveness gate flags DEAD
+since it has no on-PATH binary to resolve) while preserving every other key of the
+original `tool_input`, and the rendered answer plus the footer travel in
+`additionalContext` -- `rewrite_input`'s success channel, never
+`permissionDecisionReason`. The harness runs the no-op in place of the real search, so
+"no subprocess spawned" stays literally true in the sense that matters (no `grep`/`rg`/
+etc. process forks; the trivial `true` costs nothing worth measuring against the search
+this module already computed), and the model reads the answer as ordinary tool output,
+not as an error.
 
-Composed message leads with the contract, not the output (2026-08-11)
------------------------------------------------------------------------
+This module no longer imports `deny()` at all: `_extract_command` already requires
+`tool_input` to be a dict carrying a `command` string before `check()` reaches the
+rewrite branch, so by the time a rewrite is built there is always a complete input
+object to copy and replace `command` in. A caller that reaches this point without a
+well-formed `tool_input` never gets past `_extract_command`'s own `None` return, and
+`check()` falls through to the real command exactly as every other declined shape does.
+
+Composed message leads with the contract, not the output (2026-08-11, envelope changed 2026-08-13)
+-----------------------------------------------------------------------------------------------------
 This module used to compose `rendered + footer` -- the caller's answer first, the
 "already handled" framing last. That shape is what let a genuine leak-shaped read
 happen: `cross-repo/inbox/2026-08-11-example-doctrine-repo-em-guard-unlock-banner-still-reads-
 as-agent-instruction.md` Item 2 reports dispatched reviewers meeting real, correct
 results under what looked like a bare denial and having to infer, from where they
 sat in the text, that the results below were a substitution rather than a leaked
-answer to a refused command. `check()` now composes `footer + rendered` -- the
-already-handled/substitution statement is the FIRST thing in the payload, so an
-agent reading top-to-bottom meets "this is a substitution, not a refusal" before it
-meets anything that could otherwise be misread as a leak. The latched short marker
+answer to a refused command. `check()` composes `footer + rendered` -- the
+already-handled/substitution statement is the FIRST thing in `additionalContext`, so
+an agent reading top-to-bottom meets "this ran as a substitution" before it meets
+anything that could otherwise be misread as a leak. The latched short marker
 (`_ANSWERED_MARKER`, below) carries the identical framing standalone, since after
 the first firing of a session it is the ONLY text an agent gets -- see "Session
 latch" for why the short form still had to say the same thing the paragraph does.
+The ordering rule survived the 2026-08-13 move off `deny()`; only the envelope key
+carrying the composed text changed (`additionalContext`, not
+`permissionDecisionReason`).
+
+Register (docs/wiki/guard-messaging.md § Register, trimmed 2026-08-13)
+--------------------------------------------------------------------------
+The pre-2026-08-13 paragraph closed with "...results below are this engine's own
+answer" -- self-legitimacy work: the more a banner protests its own authenticity,
+the more it reads as an attempt to be believed rather than as an ordinary fact.
+Boring is the trust signal, not reassurance. `_footer()`'s text now states the two
+facts the reader needs (recognized as a search / no subprocess spawned) once each
+and stops -- it does not additionally vouch for itself.
 
 Ordering
 --------
@@ -70,6 +104,16 @@ Negative-spec -- what this module deliberately does NOT do:
   - Does NOT full-latch the footer. See "Session latch on the explanatory paragraph"
     below -- every answered call still carries an unambiguous already-handled signal,
     first call or Nth.
+  - Does NOT ship a successful answer through the harness's error/deny channel. A
+    completed in-process search is SUCCESS -- `check()` returns `rewrite_input`
+    (`updatedInput` + `additionalContext`), never `deny` (`permissionDecisionReason`),
+    for the answered path. `cross-repo/inbox/2026-08-13-example-cockpit-repo-em-guard-
+    advisories-read-as-injection-to-subagents.md` instance 3 is the record of what
+    happens when a correct answer arrives framed as a failure: a dispatched agent
+    distrusted genuinely correct results and redid the work. This property is pinned
+    by `TestSuccessNeverShipsAsError` in this module's own test suite, not by a
+    single string match -- it asserts the shape of every answered `check()` return,
+    not one banner's wording.
 
 Session latch on the explanatory paragraph (AC5, 2026-08-01)
 --------------------------------------------------------------
@@ -165,16 +209,17 @@ _LATCH_MARKER_NAME = "inprocess-search-footer-seen"
 
 #: The one-line invariant marker every answered call carries once the explanatory
 #: paragraph has already fired this session -- register contract (docs/wiki/
-#: guard-messaging.md § Register): one fact, stated once, declaratively. Not a
-#: substring of `_footer`'s full paragraph below -- the paragraph adds
-#: "recognized as a search", which this marker omits; that divergence is what
+#: guard-messaging.md § Register): one fact, stated once, declaratively, no
+#: self-legitimacy ("results below are this engine's own answer" was trimmed
+#: 2026-08-13 -- see the module docstring's "Register" section). Not a substring
+#: of `_footer`'s full paragraph below -- the paragraph adds "recognized as a
+#: search", which this marker omits; that divergence is what
 #: `test_guard_inprocess_search.py::test_first_call_carries_full_paragraph` and
 #: `test_alternative_liveness_gate.py::test_fire_guard_isolates_from_a_pre_
 #: existing_session_latch` key off to assert the marker is absent from a
 #: first-call (full-paragraph) reason.
 _ANSWERED_MARKER = (
-    "[Answered in-process: no subprocess spawned, results below are this "
-    "engine's own answer.]"
+    "[Answered in-process: no subprocess spawned.]"
 )
 
 
@@ -276,8 +321,7 @@ def _footer(cwd: str) -> str:
     # that discriminates this full paragraph from the latched marker; keep it
     # verbatim if this paragraph is edited again.
     full = (
-        "[Answered in-process: your command was recognized as a search, no "
-        "subprocess spawned, results below are this engine's own answer.]"
+        "[Answered in-process: recognized as a search, no subprocess spawned.]"
     )
 
     if sid:
@@ -365,7 +409,7 @@ def check(
         # ones -- so this module must stay import-safe even when
         # `_hook_envelope` or `search.answer` are mid-refactor. `check()`
         # degrades to `return None` (never raises) if either import fails.
-        from coordinator_core._hook_envelope import deny
+        from coordinator_core._hook_envelope import rewrite_input
         from coordinator_core.search.answer import answer
 
         cwd = payload.get("cwd") or os.getcwd()
@@ -378,4 +422,23 @@ def check(
     # first thing an agent reads, before anything that could otherwise be
     # misread as a leaked answer beneath a denial -- see the module
     # docstring's "Composed message leads with the contract, not the output".
-    return deny("PreToolUse", "%s\n\n%s" % (_footer(cwd), rendered))
+    #
+    # `tool_input` is guaranteed a dict with a non-empty `command` here --
+    # `_extract_command` (above) already returned None otherwise, and this
+    # branch is unreachable without a truthy `command`. `updated_input` is a
+    # SHALLOW COPY of the original `tool_input` with only `command` replaced
+    # by `true` (the coreutils no-op: exits 0, no output, negligible fork
+    # cost against the search already computed) -- `rewrite_input` REPLACES
+    # the whole tool input object, so every other key (description, timeout,
+    # run_in_background, ...) must be carried over unchanged. Not the shell
+    # builtin `:` -- `_alternative_liveness.py`'s own guard-message-liveness
+    # gate (`test_alternative_liveness_gate.py`) treats `updatedInput.command`
+    # as a suggested alternative and resolves its argv[0] on PATH; `:` is a
+    # bash builtin with no on-PATH binary and reads DEAD there, while `true`
+    # is a real coreutils binary every supported platform ships.
+    tool_input = payload.get("tool_input") or {}
+    updated_input = dict(tool_input)
+    updated_input["command"] = "true"
+    return rewrite_input(
+        "PreToolUse", updated_input, context="%s\n\n%s" % (_footer(cwd), rendered)
+    )

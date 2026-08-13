@@ -101,13 +101,18 @@ _SENTINEL_NAME = ".coordinator-dev-repo"
 #: variable, covering both legs.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL"
 
-_ADVISORY_REASON = (
-    "[dev-repo guard] This file's mere presence is the dev-vs-OSS "
-    "discriminant; content edits aren't expected -- if you need to change "
-    "it, delete and recreate it instead of editing in place (deletion "
-    "isn't gated on this leg). "
-    + operator_override_note(_OVERRIDE_ENV_VAR)
-)
+def _advisory_reason(payload: Optional[Dict[str, Any]]) -> str:
+    """Per-call reason builder (not a module-level constant): the trailing
+    ``operator_override_note`` call needs this request's ``payload`` to
+    resolve audience, which an import-time constant cannot carry."""
+    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
+    base = (
+        "[dev-repo guard] This file's mere presence is the dev-vs-OSS "
+        "discriminant; content edits aren't expected -- if you need to change "
+        "it, delete and recreate it instead of editing in place (deletion "
+        "isn't gated on this leg)."
+    )
+    return base + (" " + _note if _note else "")
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -132,4 +137,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not target:
         return None
 
-    return sentinel_write_advisory(target, _SENTINEL_NAME, _ADVISORY_REASON)
+    return sentinel_write_advisory(
+        target, _SENTINEL_NAME, _advisory_reason(payload), payload=payload
+    )

@@ -1754,6 +1754,13 @@ _DISPOSITION_FLAGS = {
     "--distill-fate": "distill_fate",
     "--in-repo-capture": "in_repo_capture",
     "--superseded-by": "superseded_by",
+    # Append-only supersede-disposition (both required together) — records a
+    # reversed verdict on an already-actioned/superseded memo WITHOUT
+    # overwriting the original decision/actioned_note/realized_by. See
+    # coordinator_core.ops.memo_transition._handle_supersede.
+    "--supersede-note": "supersede_note",
+    "--supersede-realized-by": "supersede_realized_by",
+    "--supersede-at": "supersede_at",
 }
 
 # Boolean (no-value) disposition flags — distinct from _DISPOSITION_FLAGS above,
@@ -1889,6 +1896,31 @@ def cs_action_memo(memo_path: str, *disposition_args: str, return_result: bool =
             "exit_code": 1,
             "applied": False,
             "error": "--superseded-by and --decision/--actioned-note are mutually exclusive",
+        }
+        return refuse_result if return_result else refuse_result["exit_code"]
+
+    # --supersede-note/--supersede-realized-by are a fourth, append-only shape —
+    # corrects an EXISTING disposition, never combinable with a shape that sets
+    # a fresh one. Same discipline as the --superseded-by check above, applied
+    # here before any op call (no write occurs).
+    if disposition_params.get("supersede_note") and (
+        disposition_params.get("decision")
+        or disposition_params.get("actioned_note")
+        or disposition_params.get("superseded_by")
+    ):
+        print(
+            "cs_action_memo: --supersede-note/--supersede-realized-by are mutually "
+            "exclusive with --decision/--actioned-note/--superseded-by — supersede "
+            "corrects an EXISTING disposition, it does not set a new one",
+            file=sys.stderr,
+        )
+        refuse_result = {
+            "exit_code": 1,
+            "applied": False,
+            "error": (
+                "--supersede-note/--supersede-realized-by are mutually exclusive "
+                "with --decision/--actioned-note/--superseded-by"
+            ),
         }
         return refuse_result if return_result else refuse_result["exit_code"]
 

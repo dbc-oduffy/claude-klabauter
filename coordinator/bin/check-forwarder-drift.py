@@ -154,6 +154,7 @@ def _check_content_axis(fd_module, claude_klabauter_root: str) -> "tuple[list, b
 
     source_dir = _content_axis_source_dir(claude_klabauter_root)
     checked = 0
+    unresolved = 0
     drifted: "list[str]" = []
     lines: "list[str]" = []
     for name in _content_axis_lib_names():
@@ -164,6 +165,7 @@ def _check_content_axis(fd_module, claude_klabauter_root: str) -> "tuple[list, b
             continue
         src = source_dir / name
         if not src.exists():
+            unresolved += 1
             lines.append(
                 f"[warn] {fd_module._PROG} ({label}): could not resolve source-of-truth for "
                 f"{name} at {src} — skipping content comparison"
@@ -173,6 +175,8 @@ def _check_content_axis(fd_module, claude_klabauter_root: str) -> "tuple[list, b
         try:
             same = dst.read_bytes() == src.read_bytes()
         except OSError as exc:
+            unresolved += 1
+            checked -= 1  # counted above the try; this comparison never completed
             lines.append(f"[warn] {fd_module._PROG} ({label}): could not read {name} for comparison: {exc}")
             continue
         if not same:
@@ -185,6 +189,15 @@ def _check_content_axis(fd_module, claude_klabauter_root: str) -> "tuple[list, b
             "advisory-only, exit 0 always — expected transient state between a source edit and the "
             "next re-install, same posture as the name axis' UNCITED population (see module "
             "docstring's CITED-VS-UNCITED SPLIT)."
+        )
+    elif unresolved:
+        # Review: code-reviewer 2026-08-12 (nit): a file that could not be
+        # checked (missing source-of-truth or unreadable) must not be folded
+        # into "0 drifted" as if it were cleared — say so explicitly instead
+        # of letting the summary line imply full coverage.
+        lines.append(
+            f"[ok] {fd_module._PROG} ({label}): {checked} checked, 0 drifted, "
+            f"{unresolved} could not be compared (see [warn] above)"
         )
     else:
         lines.append(f"[ok] {fd_module._PROG} ({label}): {checked} checked, 0 drifted")

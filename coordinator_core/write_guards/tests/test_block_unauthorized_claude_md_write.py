@@ -319,29 +319,38 @@ class TestDenyTextNamesAlternativeAndOverride:
         assert "document-bloat-trim.md names the default fold target" not in reason
         assert "default fold target" not in reason
 
-    def test_deny_text_names_the_grant_cli_override_path(self, monkeypatch):
+    def test_deny_text_no_longer_names_the_grant_cli_override_path(self, monkeypatch):
+        """C4(b), docs/plans/2026-08-13-guard-messages-stop-handing-agents-
+        the-keys.md: the resolved ``grant pm`` invocation is DELETED from
+        the deny text -- a dispatched subagent is, by construction, the one
+        agent forbidden to run it, so rendering it here was a dead affordance
+        the EM ruling removes rather than the thing that made the deny
+        complete."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "coordinator_core.session.claude_md_grant grant pm" in reason
+        assert "coordinator_core.session.claude_md_grant grant pm" not in reason
 
-    def test_deny_text_attributes_the_grant_command_to_the_em_not_the_reader(
+    def test_deny_text_no_longer_attributes_a_grant_command_to_the_em(
         self, monkeypatch
     ):
-        """AC6/AC7: the rendered grant command is still present, but is NOT
-        framed as the reading subagent's own remediation -- it is
-        attributed as what the subagent's EM runs. "Report BLOCKED upward"
-        is the subagent-actionable path.
-        """
+        """The "Unblock (EM runs this, not you):" line and the grant
+        command/precondition beneath it are gone -- "Report BLOCKED to your
+        EM instead" is now the whole remediation; see C4(b)."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "Report BLOCKED to your EM" in reason
-        assert "EM runs this, not you" in reason
-        assert "coordinator_core.session.claude_md_grant grant pm" in reason
+        assert "EM runs this, not you" not in reason
+        assert "coordinator_core.session.claude_md_grant grant pm" not in reason
 
-    def test_deny_text_names_the_rare_use_env_override(self, monkeypatch):
+    def test_deny_text_no_longer_names_the_rare_use_env_override(self, monkeypatch):
+        """The env-override affordance is likewise gone from the rendered
+        deny text (see C4(b)) -- ``_OVERRIDE_ENV_VAR`` stays wired in
+        ``check()`` (checked first, defense-in-depth) but is no longer
+        advertised to the dispatched subagent this deny addresses."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "COORDINATOR_OVERRIDE_CLAUDE_MD_WRITE=1" in reason
+        assert "COORDINATOR_OVERRIDE_CLAUDE_MD_WRITE=1" not in reason
+        assert guard._OVERRIDE_ENV_VAR not in reason
 
     def test_deny_text_names_the_target_path(self, monkeypatch):
         result = guard.check(_payload("coordinator/CLAUDE.md"))
@@ -409,13 +418,17 @@ class TestDenyTextNamesAlternativeAndOverride:
 
     def test_deny_text_never_dead_ends(self, monkeypatch):
         """Nothing dead-ends -- state why, and give the reader a concrete
-        actionable path (binding, design-as-offers). AC7: the deny text
-        names the real path(s) -- report-BLOCKED-upward plus what the EM
-        runs to unblock -- rather than a bare NO with no alternative."""
+        actionable path (binding, design-as-offers). Per the C4(b) ruling
+        (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-
+        keys.md), the alternative IS "report BLOCKED to your EM" -- rung-1
+        familiar, no unfamiliar artifact, no inspection needed -- not a
+        rendered grant-CLI invocation or env-override name. AC7 is
+        discharged by the route, not by a runnable command in the text."""
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "Report BLOCKED to your EM" in reason
-        assert guard._OVERRIDE_ENV_VAR in reason
+        assert "Target:" in reason
+        assert "Reason:" in reason
 
     def test_deny_text_actionable_line_opens_the_shared_cue_window(self, monkeypatch):
         """Regression pin for a P1 review-integration finding: the deny
