@@ -20,7 +20,7 @@ not a fixed literal sequence. Section-boundary assertions below use
 than ``str.split`` against an assumed adjacent header, so they stay correct
 regardless of field order or a future ``EDGE_KIND_META`` addition.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b
 """
 
 from __future__ import annotations

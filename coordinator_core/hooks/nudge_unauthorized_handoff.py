@@ -15,7 +15,7 @@ Translation notes:
     - kind:recovery and install-leg spinoff suppression use first-class frontmatter
       signals (the artifact's own content), not the proxy scrape.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § C6
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C6
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ async def advisory_text(
     Never raises — every suppression path returns "", and the transcript scrape
     is itself fail-open.
 
-    Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § C6
+    Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C6
     """
     # asyncio deferred to first use here (not module scope) — this is the only function
     # in the module touching the asyncio namespace at runtime. Spec:
@@ -217,10 +217,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
         session_id is not yet in the pinned inputs, the silence check is skipped
         entirely until D6 lands.
         STAYS REGISTERED after the postuse fold — the standalone op is the
-        contract for any caller dispatching this method directly; only example-doctrine-repo's
+        contract for any caller dispatching this method directly; only coordinator-claude's
         separate hooks.json registration retires.
 
-    Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § C6
+    Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C6
     """
     text = await advisory_text(
         field(params, "tool_name"),

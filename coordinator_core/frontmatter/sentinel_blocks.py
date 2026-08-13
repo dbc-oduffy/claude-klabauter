@@ -3,7 +3,7 @@ coordinator_core.frontmatter.sentinel_blocks
 
 Extract and replace sentinel-delimited blocks in markdown content.
 
-Spec backlink: example-doctrine-repo `coordinator/bin/lib/sentinel-blocks.js` (144 LoC,
+Spec backlink: coordinator-claude `coordinator/bin/lib/sentinel-blocks.js` (144 LoC,
 zero dependencies). Also traces to archive/specs/2026-05-01-portable-ideas-
 from-obsidian-research.md §W2 (Sentinel-Block Primitives), the original JS
 module's own spec backlink.

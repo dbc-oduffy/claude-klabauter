@@ -8,7 +8,7 @@ idempotent local-config settings (`gc.autoDetach false`, `core.checkStat
 minimal`) that mitigate concurrent-EM index.lock leaks and Git-for-Windows/
 NTFS phantom-dirty-index churn. See the ported module's docstring
 (coordinator_core/ops/configure_git.py) for the full per-setting rationale;
-this file is now a thin example-doctrine-repo-side trampoline, the bash oracle having been
+this file is now a thin coordinator-claude-side trampoline, the bash oracle having been
 fully ported (landed claude-klabauter-side at f5aa81c6).
 
 Usage:

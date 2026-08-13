@@ -7,8 +7,8 @@ contract, and surfaces every JUDGMENT branch as an overridable `judgment_points`
 offer rather than deciding it. The EM's job collapses to resolving the judgment
 residue this module surfaces — see the contract for the full rationale.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
-Branches computed against: example-doctrine-repo coordinator/skills/pickup/SKILL.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
+Branches computed against: coordinator-claude coordinator/skills/pickup/SKILL.md
 Spec backlink: docs/plans/2026-07-23-computed-skills-pickup-beachhead.md, chunk A2
 Registration seam: this module ships no bash veneer and needs none — it is
 consumed directly by the `coordinator/bin/pickup-assemble` trampoline (mirrors
@@ -268,7 +268,7 @@ _RUN_GIT_SPAWN_VERBS = ("status", "diff", "add", "commit")
 # past it).
 #
 # CORRECTED (stamp-integrity investigation, `tasks/mise-findings/stamp-
-# integrity.md`, example-doctrine-repo, 2026-07-30): an earlier revision of this note
+# integrity.md`, coordinator-claude, 2026-07-30): an earlier revision of this note
 # characterized the pickaxe gap as narrow — rename-only. That was false.
 # `_in_process_pickaxe` was directly reproduced disagreeing with real git
 # on a **never-renamed** path too (a TREESAME-to-first-parent merge commit,
@@ -1313,7 +1313,7 @@ def _in_process_pickaxe(common_dir: Path, start_sha: str, needle: str, path: str
     its docstring) — not a guarantee under clock skew.
 
     Both gaps were reproduced disagreeing with real git (stamp-integrity
-    investigation, `tasks/mise-findings/stamp-integrity.md`, example-doctrine-repo,
+    investigation, `tasks/mise-findings/stamp-integrity.md`, coordinator-claude,
     2026-07-30, Root cause B) — including the merge case above with NO
     rename involved, which an earlier revision of this module's negative-
     spec comment incorrectly called "narrow... rename-only." Because that
@@ -1613,7 +1613,7 @@ _SUFFIX_BOUNDARY_CHARS = ("-", "_")
 
 def _basename_has_slug_suffix(candidate_name: str, slug: str) -> bool:
     """True when `candidate_name` (a file's bare basename, e.g.
-    `2026-07-28-example-doctrine-repo-em-foo-bar.md`) ends with `slug` once a trailing
+    `2026-07-28-coordinator-claude-em-foo-bar.md`) ends with `slug` once a trailing
     `.md` is stripped from BOTH sides (2026-07-28 suffix-match tier), AND the
     match starts at a genuine filename-COMPONENT boundary — either index 0
     of the stripped stem, or immediately preceded by a
@@ -3236,7 +3236,7 @@ def compute_claim_gate(repo_root: Path, class_: str, basename: str) -> dict[str,
     if not claims_dir.is_dir():
         # "ok" never appears from this module — this is a READ-ONLY producer
         # (AC3, no `git fetch`); it's reserved for a future fetch-capable
-        # producer per the contract's illustrative example (example-doctrine-repo
+        # producer per the contract's illustrative example (coordinator-claude
         # commit c12825a5).
         return {"fetch_state": "not_performed", "holder": None}
     try:
@@ -3891,7 +3891,7 @@ def compute_liveness_signal(
     deliberately not unified — see this function's call sites for the
     detail.
 
-    Self-session exclusion (2026-07-29, defect 1 of the example-doctrine-repo-em
+    Self-session exclusion (2026-07-29, defect 1 of the coordinator-claude-em
     self-claim-reads-as-live-peer memo): the docstring above has always
     promised "stamp present & this session ... -> a handover, not
     contention, proceed", but `_lineage_related_sessions` never contains the
@@ -4069,6 +4069,34 @@ def compute_competing_claim(
       `none`           — no sibling names a claimed_by/consumed_by/
                          picked_up_by holder at all.
 
+    Each candidate also carries `send_message_address`: a best-effort bare
+    `SendMessage` address for `claimed_by` (`""` when unresolvable, or
+    `"<this session>"` for a self-claim), so the EM reading this brief has
+    somewhere to reach the named holder without a separate lookup (`state/
+    handoffs/2026-08-13-session-owner-reachability-registry.md` § 3;
+    `cross-repo/inbox/2026-08-13-coordinator-claude-em-peer-roster-doctrine-reply.md`
+    § Counter 2). Advisory only: resolved via `reachability.
+    resolve_addresses_bulk` off ONE live-registry snapshot for the whole
+    candidate set, and any resolution failure degrades every candidate's
+    field to `""` without touching `verdict`, `disposition`, or
+    `holder_live` (see the try/except below). A sibling
+    `send_message_address_resolved_at` (UTC ISO-8601) is stamped alongside
+    it on every candidate, resolved or not.
+
+    Negative-spec: `send_message_address` is NOT durable identity and must
+    never be persisted and reused past the instant it was computed — it
+    encodes a live session's socket path, and a dead socket can be reused
+    by an unrelated LATER session, so acting on a stale address risks
+    injecting into the wrong session's context. `claimed_by` (the UUID) is
+    the one durable identity a caller may hold onto; `send_message_address`
+    is valid only for the caller that just computed this brief, and
+    `send_message_address_resolved_at` exists so a reader of a PERSISTED
+    copy of this dict (e.g. `pickup_assemble.apply`'s session-scoped
+    decision-object file, which serializes `gates.competing_claim`
+    verbatim) can tell a stale address apart from a fresh one instead of
+    trusting it silently. This function does not itself read that
+    persisted file back in, so it cannot itself act on a stale value.
+
     Read-only (AC3): reads disk/git state only, never mutates.
     """
     self_resolved = (repo_root / artifact_path).resolve()
@@ -4223,6 +4251,47 @@ def compute_competing_claim(
             candidate["scope_overlap"] = full_evidence.get("scope_overlap")
 
         candidates.append(candidate)
+
+    # Advisory-only cross-session reachability (state/handoffs/2026-08-13-
+    # session-owner-reachability-registry.md § 3; cross-repo/inbox/2026-08-
+    # 13-coordinator-claude-em-peer-roster-doctrine-reply.md § Counter 2): resolved
+    # ONCE for the whole distinct-holder set this scan has already
+    # collected, not once per candidate -- `competing_claim` routinely
+    # carries ~18 candidates on the live corpus, and resolving each one
+    # independently would re-snapshot the live registry 18 times for one
+    # brief (`reachability.resolve_addresses_bulk`'s own docstring). Never
+    # raises, never blocks this scan, and never changes `verdict`,
+    # `disposition`, or `holder_live` on any resolution failure -- a bare
+    # import error or a raising resolver degrades every candidate's
+    # `send_message_address` to `""`, the same value an unresolvable holder
+    # gets on its own merits.
+    #
+    # Negative-spec: the address is NOT durable identity -- never persist-
+    # and-reuse. `claimed_by` (the UUID) is the durable identity this
+    # candidate is keyed on; `send_message_address` is a derived
+    # `sha256("session:" + messagingSocketPath)[:6]`-based name valid ONLY
+    # at the instant it was resolved (a dead socket can be reused by an
+    # unrelated later session, so a stale address is not merely outdated --
+    # it names the WRONG recipient). `send_message_address_resolved_at`
+    # stamps that instant precisely so a reader of a re-loaded brief (e.g.
+    # `pickup_assemble.apply`'s session-scoped decision-object file,
+    # `.git/coordinator-sessions/decisions/<session>__<artifact>.json`,
+    # which persists this dict verbatim) can tell a point-of-use address
+    # from a stale one rather than trusting it silently -- this function
+    # itself never reads that file back, so it cannot itself go stale, but
+    # every OTHER reader must re-derive the address from `claimed_by`
+    # rather than replay this field past the moment `brief()` computed it.
+    holder_sids = sorted({c["claimed_by"] for c in candidates if c.get("claimed_by")})
+    resolved_at = datetime.now(timezone.utc).isoformat()
+    try:
+        from coordinator_core.session import reachability
+
+        address_by_sid = reachability.resolve_addresses_bulk(holder_sids)
+    except Exception:
+        address_by_sid = {}
+    for candidate in candidates:
+        candidate["send_message_address"] = address_by_sid.get(candidate.get("claimed_by") or "", "")
+        candidate["send_message_address_resolved_at"] = resolved_at
 
     if saw_live_peer:
         verdict = "live-peer"
@@ -4547,6 +4616,33 @@ def compute_successor_handoffs(
             }
         )
 
+    # Same shared, once-per-brief resolution as `compute_competing_claim`
+    # above (state/handoffs/2026-08-13-session-owner-reachability-
+    # registry.md § 3) — `compute_successor_handoffs`' candidates carry a
+    # `claimed_by` in the same shape (a `ready_to_fire` candidate's is
+    # frequently empty by AC7/AC8's own contract; `resolve_addresses_bulk`
+    # treats a falsy id as `""` without a lookup). Advisory only: never
+    # raises, never changes `kind`/`status`/`deployment_state`.
+    #
+    # Negative-spec: same as `compute_competing_claim` above -- the address
+    # is NOT durable identity, never persist-and-reuse. `claimed_by` stays
+    # the durable identity; `send_message_address_resolved_at` stamps the
+    # instant this candidate's address was resolved so a later reader of a
+    # persisted decision-object file (`.git/coordinator-sessions/decisions/
+    # <session>__<artifact>.json`) can tell a point-of-use address from a
+    # stale one rather than trusting it silently.
+    holder_sids = sorted({c["claimed_by"] for c in candidates if c.get("claimed_by")})
+    resolved_at = datetime.now(timezone.utc).isoformat()
+    try:
+        from coordinator_core.session import reachability
+
+        address_by_sid = reachability.resolve_addresses_bulk(holder_sids)
+    except Exception:
+        address_by_sid = {}
+    for candidate in candidates:
+        candidate["send_message_address"] = address_by_sid.get(candidate.get("claimed_by") or "", "")
+        candidate["send_message_address_resolved_at"] = resolved_at
+
     return {"candidates": candidates}
 
 
@@ -4720,7 +4816,7 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
     session's harness-level launch anchor against the ceremony's suspect
     `repo_root`, zero-spawn.
 
-    Spec backlink: `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
+    Spec backlink: `pln-a-ceremony-must-not-be-able-to-5e9421`
     § C1 (spike-verified anchor:
     `docs/research/spike-verdicts/2026-08-11-harness-session-registry-as-repo-identity-anchor.md`).
     Fixes the "sender closed a ceremony against the wrong repo after an
@@ -4750,7 +4846,7 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
          could otherwise carry an unrelated session's record. Either check
          failing on both legs is UNRESOLVED, never MATCH — the
          wrongful-takeover shape `harness_registry`'s own negative-spec
-         defends against (`example-doctrine-repo@642195ba` / `88929bea`).
+         defends against (`coordinator-claude@642195ba` / `88929bea`).
       3. compare — CONTAINMENT, not equality: is the anchor `cwd` (at
          arbitrary depth — a launch from `<repo_root>/coordinator_core`
          measures exactly that) contained within `repo_root`? Resolved via
@@ -4886,12 +4982,12 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
 # ---------------------------------------------------------------------------
 # Reply-closure check (2026-07-25 defect)
 #
-# `cross-repo/archive/2026-07-25-example-doctrine-repo-em-test-red-record-contract-
+# `cross-repo/archive/2026-07-25-coordinator-claude-em-test-red-record-contract-
 # consult.md`: an inbound `kind: consult` memo reached `status: actioned`
 # with an `actioned_note` reading "Replied in full under the '## EM
 # Response' heading in the memo body" — but the reply was written into
 # CLAUDE-KLABAUTER'S OWN archived copy of the sender's memo, a file the sender
-# (`example-doctrine-repo-em`) has no way to read. The sender's memo explicitly asked
+# (`coordinator-claude-em`) has no way to read. The sender's memo explicitly asked
 # for a reply naming Q1/Q2/Q3's answers and their plan was blocked on it.
 # Both terminal-memo emit sites in `brief()` reported `coast=clear`,
 # `judgment_points=0`, "Nothing further to do" — the loop was wide open and
@@ -4905,7 +5001,7 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
 #
 # 2026-07-25 re-entry: the first fix landed `from`+`created` co-occurrence
 # as its "evidenced" bar. Run against the live memo above it returned
-# `evidenced` with 28 candidates — every memo we sent `example-doctrine-repo-em` that
+# `evidenced` with 28 candidates — every memo we sent `coordinator-claude-em` that
 # day, because sender-id + date is not a discriminator on a busy fleet day.
 # `evidenced` SUPPRESSES the judgment point, so on any day we sent that
 # sender anything at all, an unanswered consult rendered as closed — the
@@ -4970,8 +5066,8 @@ def _inbound_link_stems(memo_path: str, from_id: str) -> tuple[str, str, str]:
     merely same-day.
 
     Returns `(basename, basename_no_ext, tail_stem)` — e.g. for
-    `2026-07-25-example-doctrine-repo-em-test-red-record-contract-consult.md` sent by
-    `example-doctrine-repo-em`: `("...consult.md", "...consult", "test-red-record-
+    `2026-07-25-coordinator-claude-em-test-red-record-contract-consult.md` sent by
+    `coordinator-claude-em`: `("...consult.md", "...consult", "test-red-record-
     contract-consult")`. `tail_stem` strips the leading `YYYY-MM-DD-` date
     AND the `<from_id>-` sender segment — real replies often cite an
     ELIDED filename (the genuine reply that closed the originating defect
@@ -4992,7 +5088,7 @@ def _inbound_link_stems(memo_path: str, from_id: str) -> tuple[str, str, str]:
 #: no length floor on its needles. `tail_stem` strips the leading
 #: `YYYY-MM-DD-` date AND the sender-id prefix off the basename, so a short
 #: `--topic` slug degrades to a near-empty stem — found empirically when an
-#: agent writing THIS feature's own tests used `2026-07-25-example-doctrine-repo-em-
+#: agent writing THIS feature's own tests used `2026-07-25-coordinator-claude-em-
 #: m.md` as a fixture basename: `tail_stem` came out `"m"`, and `"m" in
 #: candidate_text.lower()` is true of almost any prose, so deliberately
 #: unrelated candidate memos matched as LINKED. Ten characters is the floor:
@@ -5359,7 +5455,7 @@ def build_handoff_directives(
 #: unlike accepted/partial) — every other mapped entry maps to `accepted`
 #: (fully actioned in this pass).
 #:
-#: Renamed 2026-08-03 (PM-ratified, example-doctrine-repo-em cross-repo memo:
+#: Renamed 2026-08-03 (PM-ratified, coordinator-claude-em cross-repo memo:
 #: "escalate to sizing is better than escalate to plan"): the disposition
 #: value formerly named `accept-escalate-to-plan` is now
 #: `accept-escalate-to-sizing`, straight rename with no alias — nothing
@@ -5837,7 +5933,7 @@ def build_shipped_state_judgment_point(evidence_pointer: str, resolves: list[str
 #: that value) while co-location cannot. `_KIND_DISPOSITIONS` entries are
 #: raw dict literals never routed through `build_disposition`
 #: (`contract/decision_object/judgment.py:66`, used only by
-#: `workstream_complete`), and example-doctrine-repo's `schemas/decision-object.schema.json:178`
+#: `workstream_complete`), and coordinator-claude's `schemas/decision-object.schema.json:178`
 #: sets the disposition object `additionalProperties: true` by design for
 #: exactly this kind of per-skill-instance content — no schema change, no
 #: cross-repo round-trip (the Director of Engineering, DR-047 resolved in-repo).
@@ -6080,7 +6176,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
-#: Defect 2 fix (2026-07-29, example-doctrine-repo-em self-claim-reads-as-live-peer
+#: Defect 2 fix (2026-07-29, coordinator-claude-em self-claim-reads-as-live-peer
 #: memo): `ops/memo_transition.py` hard-requires `--realized-by` whenever
 #: `--decision` is `accepted`/`partial` (`memo_transition.py:642-643`), but
 #: nothing an operator reads before `apply` said so — not the disposition
@@ -6153,7 +6249,7 @@ def _archived_open_memo_kind_dispatch(
     artifact_path: str, terminal_fields: dict[str, Any], decisions: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Archived-memo-still-open kind-dispatch assembly (2026-07-27
-    example-doctrine-repo-em memo defect fix, `brief()`'s `classification == "archived"`
+    coordinator-claude-em memo defect fix, `brief()`'s `classification == "archived"`
     branch) — an archived MEMO whose terminal `status` frontmatter field is
     NOT already a terminal disposition (in `_MEMO_TERMINAL_STATUS`) was
     swept into the archive without ever having a disposition stamped on it. Before this
@@ -6399,7 +6495,7 @@ def _find_stamp_commit(repo_root: Path, path: str, stamped_sha: str) -> Optional
 
     Spawns real `git` directly, bypassing `_run_git`'s in-process read-model
     dispatch (stamp-integrity investigation, `tasks/mise-findings/stamp-
-    integrity.md`, example-doctrine-repo, Root cause B). The read-model's own
+    integrity.md`, coordinator-claude, Root cause B). The read-model's own
     `_in_process_pickaxe`/`_walk_commits` reimplementation of this search
     provably disagrees with real git — not only on the documented `--follow`
     rename gap, but also on a merge commit that is TREESAME to one parent on
@@ -6994,7 +7090,7 @@ def brief(
         else:
             reply_jps, narration, next_move = [], base_narration, base_next_move
 
-        # 2026-07-27 example-doctrine-repo-em memo defect fix: an archived MEMO whose
+        # 2026-07-27 coordinator-claude-em memo defect fix: an archived MEMO whose
         # terminal `status` is not already `"actioned"` was swept into the
         # archive without ever having a disposition stamped — until now
         # this branch unconditionally emitted `directives: []` and asserted
@@ -7101,9 +7197,9 @@ def brief(
         # so a ledger-confirmed prior stamp still satisfies the idempotence
         # check even when the mirror has reverted.
         #
-        # Landed-stamp gate (cross-repo/inbox/2026-08-13-example-doctrine-repo-em-pickup-
+        # Landed-stamp gate (cross-repo/inbox/2026-08-13-coordinator-claude-em-pickup-
         # already-satisfied-masks-a-refused-write.md, repairing the memo
-        # 2026-08-11-example-doctrine-repo-em-pickup-claim-never-reaches-frontmatter
+        # 2026-08-11-coordinator-claude-em-pickup-claim-never-reaches-frontmatter
         # fallback below): `claim_state.holder is not None` alone is
         # satisfied by the `brief`-stage reservation `acquire_brief_claim`
         # just took a few lines above (same ledger dir `resolve_claim_state`
@@ -8057,13 +8153,13 @@ def main(argv: list[str]) -> int:
     # usage < transport, i.e. numeric max).
     #
     # This bare-object/bare-array shape is a HARD cross-repo consumer contract:
-    # example-doctrine-repo's `coordinator/hooks/scripts/pickup-autofire.py`
+    # coordinator-claude's `coordinator/hooks/scripts/pickup-autofire.py`
     # `decode_decision_payload()` parses this exact stdout shape — a bare
     # object becomes `[obj]`, a bare array's dict elements are kept as-is,
     # and anything else (including a `{"briefs": [...]}`-style wrapper) is a
     # fail-open `[]` with no error surfaced. Do NOT introduce a wrapper
     # envelope around this payload without first sending a memo to
-    # example-doctrine-repo-em — it would silently break autofire with no exception to
+    # coordinator-claude-em — it would silently break autofire with no exception to
     # catch.
     if len(results) == 1:
         payload: Any = results[0].decision_object

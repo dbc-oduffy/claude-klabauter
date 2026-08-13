@@ -1,20 +1,20 @@
 """
 coordinator_core.frontmatter.schema_drift_watch — cadence watch over the whole
-vendored example-doctrine-repo schema set.
+vendored coordinator-claude schema set.
 
 Purpose: aggregate `check_schema_drift_advisory` across every schema vendored under
 `coordinator_core/frontmatter/schemas/` into ONE non-gating verdict a cadence surface
-can act on ("has example-doctrine-repo moved since our pin?"). This is the wiring that closes the
+can act on ("has coordinator-claude moved since our pin?"). This is the wiring that closes the
 2026-07-22 class defect: the advisory existed but had zero callers, so claude-klabauter's
-vendored `improvement-queue.schema.json` sat ~12h behind example-doctrine-repo and the divergence was
+vendored `improvement-queue.schema.json` sat ~12h behind coordinator-claude and the divergence was
 only discovered when a sibling repo's CLI rejected a value valid on their surface.
 
 Cadence seam: the `claude-klabauter.schema.vendor_drift` doctor probe
 (`bin/claude-klabauter-doctor-probe.py`, manifest entry in `bin/doctor-probes.toml`). That probe
 runs in the `--triage` set, whose envelope writes `state/doctor-last-run.json`, which
-Example-doctrine-repo's `/workday-start` already reads via
+Coordinator-claude's `/workday-start` already reads via
 `coordinator_core.ops.check_claude_klabauter_doctor_sentinel`. Drift therefore surfaces daily
-with NO change to any example-doctrine-repo-owned surface — claude-klabauter owns its probe manifest
+with NO change to any coordinator-claude-owned surface — claude-klabauter owns its probe manifest
 (`bin/doctor-probes.toml`) and its probe script; the consumer contract is the existing
 sentinel JSON.
 
@@ -30,9 +30,9 @@ exactly the failure class it exists to close — an unwatched vendored file.
 Coverage-by-construction is the requirement, so this module globs.
 
 Public seam (2026-07-26, cross-repo ratification — see
-cross-repo/inbox/2026-07-26-example-doctrine-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md):
+cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md):
 `scan_vendored_schema_drift()` is a STABLE, externally-consumable entrypoint. Sibling
-repos (example-doctrine-repo) MAY import and gate on it directly — this is the answer to their
+repos (coordinator-claude) MAY import and gate on it directly — this is the answer to their
 Ask 1 option 3 ("read scan_vendored_schema_drift through a named seam"): this module
 IS that seam, not an internal we'd rather they avoid. Its returned-dict keys are
 additive-only across versions — existing keys never change shape or get removed,
@@ -45,15 +45,15 @@ key below) rather than just one: the sentinel is written on a DAILY cadence
 `_write_doctor_sentinel`), so it is stale-by-construction the moment any commit lands
 between doctor runs. That staleness is fine for a daily nudge; it is NOT fine for a
 commit-time gate, which needs a same-commit-or-newer verdict. A commit-time gate
-(e.g. Example-doctrine-repo's proposed contract-bump RED gate) MUST call `scan_vendored_schema_drift()`
+(e.g. Coordinator-claude's proposed contract-bump RED gate) MUST call `scan_vendored_schema_drift()`
 live, in-process, rather than trust the sentinel's last-triage snapshot — reading the
 sentinel for that purpose would gate a commit against yesterday's answer.
 
 Negative-spec:
-  - NEVER raises. Every path — unresolvable example-doctrine-repo root, absent clone, unreadable schema,
+  - NEVER raises. Every path — unresolvable coordinator-claude root, absent clone, unreadable schema,
     unexpected exception — folds into a returned verdict dict. Callers must not be
     able to fail a suite or a ceremony off this module (the advisory's whole design).
-  - NEVER reports "no drift" for a comparison it could not perform. An unreadable example-doctrine-repo
+  - NEVER reports "no drift" for a comparison it could not perform. An unreadable coordinator-claude
     clone yields INDETERMINATE, never MATCH — and never DRIFT either (indeterminacy
     is not evidence of divergence).
   - Does NOT re-vendor, write, or mutate anything — read-only probe. Re-vendoring is
@@ -64,7 +64,7 @@ Negative-spec:
   - Does NOT spawn a shell. The only subprocess is the advisory's own `git show`
     (naked-Python runtime convention; git is the consumer, not bash).
 
-Spec backlink: CLAUDE.md § Architecture (vendored-schema/example-doctrine-repo boundary);
+Spec backlink: CLAUDE.md § Architecture (vendored-schema/coordinator-claude boundary);
                docs/wiki/claude-klabauter-install-doctor-system.md § Probe clusters.
 """
 
@@ -77,10 +77,10 @@ from typing import Any, Optional
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.frontmatter.schema_validate import check_schema_drift_advisory
 
-# Directory holding claude-klabauter's vendored copies of example-doctrine-repo's canonical schemas.
+# Directory holding claude-klabauter's vendored copies of coordinator-claude's canonical schemas.
 VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
 
-# Path, relative to a example-doctrine-repo clone root, where the canonical schemas live. Mirrors the
+# Path, relative to a coordinator-claude clone root, where the canonical schemas live. Mirrors the
 # `coordinator/schemas/<name>` ref that check_schema_drift_advisory resolves via git.
 DOE_SCHEMAS_SUBPATH = Path("coordinator") / "schemas"
 
@@ -88,12 +88,12 @@ DOE_SCHEMAS_SUBPATH = Path("coordinator") / "schemas"
 # docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C5):
 # cross-repo-memo.schema.json and archived-memo.schema.json are OUT OF SCOPE
 # for this watch by construction, not by omission. This module's whole
-# premise is "has example-doctrine-repo moved since our pin?" — a comparison that only makes
-# sense for a file claude-klabauter VENDORS FROM example-doctrine-repo. Those two memo schemas are now
+# premise is "has coordinator-claude moved since our pin?" — a comparison that only makes
+# sense for a file claude-klabauter VENDORS FROM coordinator-claude. Those two memo schemas are now
 # the reverse: claude-klabauter generates them from its own SSOT
-# (coordinator_core.contract.emit_memo_schema.emit_schemas) and example-doctrine-repo
+# (coordinator_core.contract.emit_memo_schema.emit_schemas) and coordinator-claude
 # CONSUMES the emission, exactly like the cockpit-contract JSON. Comparing
-# them against a example-doctrine-repo `git show` ref would ask "has the consumer moved since
+# them against a coordinator-claude `git show` ref would ask "has the consumer moved since
 # our pin?" — backwards, and not what this watch exists to answer. They are
 # also never written into VENDORED_SCHEMAS_DIR (see emit_memo_schema's
 # module docstring CRITICAL placement note), so the disk glob below never
@@ -134,7 +134,7 @@ def vendored_schema_paths(schemas_dir: Optional[Path] = None) -> list[Path]:
 
 
 def resolve_doe_repo_path() -> Optional[Path]:
-    """Best-effort resolution of the example-doctrine-repo sibling clone root — no subprocess.
+    """Best-effort resolution of the coordinator-claude sibling clone root — no subprocess.
 
     Ladder (first rung that yields a directory containing `coordinator/schemas/` wins):
       1. REPO_EXAMPLE_DOCTRINE_REPO env var — the operator/caller override honoured fleet-wide.
@@ -144,7 +144,7 @@ def resolve_doe_repo_path() -> Optional[Path]:
          already IS the reset-safe, registry-anchored resolution — it does not assume
          any fixed checkout layout.
 
-    Returns None when no rung resolves — the honest "example-doctrine-repo clone not present on this
+    Returns None when no rung resolves — the honest "coordinator-claude clone not present on this
     machine" answer (fresh machine, CI without the sibling checked out, or a machine
     whose registry has no `repos.example_doctrine_repo` entry yet). Deliberately subprocess-free:
     this runs inside a doctor probe on the cheap first-pass triage path, so the
@@ -155,13 +155,13 @@ def resolve_doe_repo_path() -> Optional[Path]:
       - Never raises, and never returns a path lacking `coordinator/schemas/` — a
         wrong-but-present path would produce a wall of false indeterminates.
       - Does NOT walk `Path(__file__).resolve().parents[N]` to guess a flat-sibling
-        `<claude-klabauter repo root>/../example-doctrine-repo` layout. A prior rung 3 did exactly that
+        `<claude-klabauter repo root>/../coordinator-claude` layout. A prior rung 3 did exactly that
         and was retired 2026-07-22: it hardcoded both claude-klabauter's checkout depth from
-        this file AND a flat-sibling directory layout, so it silently reported "example-doctrine-repo
-        clone not present" on any machine where example-doctrine-repo isn't checked out next
+        this file AND a flat-sibling directory layout, so it silently reported "coordinator-claude
+        clone not present" on any machine where coordinator-claude isn't checked out next
         to claude-klabauter — the antipattern `coordinator_core/tests/test_no_hardcoded_paths.py`
         now gates against fleet-wide. `read_doe_root_pointer()`'s registry rung
-        already subsumes the case that depth-walk existed for (a example-doctrine-repo clone
+        already subsumes the case that depth-walk existed for (a coordinator-claude clone
         present but not yet pointer-configured) — once `repos.example_doctrine_repo` or either
         pointer file is populated, which every install-chain walk does, rung 2
         resolves it correctly regardless of checkout layout. No replacement rung is
@@ -196,14 +196,14 @@ def scan_vendored_schema_drift(
     """Run the advisory over every vendored schema and reduce to one non-gating verdict.
 
     Args:
-        doe_repo_path: example-doctrine-repo clone root. None → resolve_doe_repo_path().
+        doe_repo_path: coordinator-claude clone root. None → resolve_doe_repo_path().
         schemas_dir: vendored-schema directory. None → VENDORED_SCHEMAS_DIR.
 
     Returns a dict with keys:
         status (str): one of UNRESOLVED / DRIFT / INDETERMINATE / MATCH.
         doe_repo_path (str | None): the clone root actually used.
         checked (int): number of vendored schemas compared.
-        matched (list[str]): filenames confirmed byte-identical to example-doctrine-repo HEAD.
+        matched (list[str]): filenames confirmed byte-identical to coordinator-claude HEAD.
         drifted (list[dict]): {schema, detail, direction, divergence_kind,
             local_version, doe_version, local_bump_class, doe_bump_class,
             doe_bump_note} per diverged schema.
@@ -221,28 +221,28 @@ def scan_vendored_schema_drift(
             schema_validate._read_schema_version) — passed through verbatim from
             check_schema_drift_advisory, never re-parsed here (see this module's
             "SHAPE TO AVOID" note). Additive keys (2026-07-26, cross-repo
-            schema-version surfacing — see cross-repo/inbox/2026-07-26-example-doctrine-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md).
+            schema-version surfacing — see cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md).
             local_bump_class/doe_bump_class are the two sides' top-level
             `x-bump-class` values (str | None each, via
             schema_validate._read_bump_class) — closed vocabulary
             `top-level-array-additive` / `nested-field-additive` / `major` on the
             producer side, but this watch does not validate membership and derives
             NO hold/no-hold verdict from it (holding is axis-dependent — DR-097 §
-            Reconciliation — and out of scope here). doe_bump_note is example-doctrine-repo HEAD's
+            Reconciliation — and out of scope here). doe_bump_note is coordinator-claude HEAD's
             optional one-line `x-bump-note` (str | None, via
             schema_validate._read_bump_note). All three: passed through verbatim
             from check_schema_drift_advisory, never re-parsed here (see this
             module's "SHAPE TO AVOID" note); None is the ordinary case while
             upstream adoption is partial, never an error. Additive keys
             (2026-07-27, bump-class surfacing — see
-            cross-repo/inbox/2026-07-27-example-doctrine-repo-em-bump-class-shipped-and-a-correction.md).
+            cross-repo/inbox/2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md).
         indeterminate (list[dict]): {schema, detail} per schema whose comparison
             could NOT be performed.
         summary (str): one-line operator-facing sentence.
 
     Status precedence — DRIFT outranks INDETERMINATE outranks MATCH, so a partially
     unreadable clone can never mask a real divergence that WAS observed. UNRESOLVED is
-    the distinct "no example-doctrine-repo clone at all" case: not applicable rather than not working,
+    the distinct "no coordinator-claude clone at all" case: not applicable rather than not working,
     and the caller SKIPs on it instead of nagging a machine that has no sibling repo.
 
     Negative-spec: never raises — an unexpected exception is reported as
@@ -346,7 +346,7 @@ def _scan(
     if drifted:
         # Named + directioned, one segment per drifted file — the skimmable line a
         # daily cadence surface reads without opening the doctor-probe dump: WHAT
-        # drifted, WHICH DIRECTION (we-are-ahead / we-are-behind / both), and example-doctrine-repo's
+        # drifted, WHICH DIRECTION (we-are-ahead / we-are-behind / both), and coordinator-claude's
         # declared bump class alongside it (verbatim surface only — no hold/no-hold
         # verdict is derived here; see the docstring's negative-spec).
         named = ", ".join(
@@ -360,19 +360,19 @@ def _scan(
             else ""
         )
         status, summary = STATUS_DRIFT, (
-            f"{len(drifted)}/{checked} vendored schema(s) diverge from example-doctrine-repo HEAD: "
-            f"{named}{extra}. Example-doctrine-repo has moved since the pin — re-vendor."
+            f"{len(drifted)}/{checked} vendored schema(s) diverge from coordinator-claude HEAD: "
+            f"{named}{extra}. Coordinator-claude has moved since the pin — re-vendor."
         )
     elif indeterminate:
         names = ", ".join(d["schema"] for d in indeterminate)
         status, summary = STATUS_INDETERMINATE, (
             f"INDETERMINATE — could not compare {len(indeterminate)}/{checked} vendored "
-            f"schema(s) against example-doctrine-repo HEAD at {resolved_doe}: {names}. This is NOT a "
+            f"schema(s) against coordinator-claude HEAD at {resolved_doe}: {names}. This is NOT a "
             "drift finding and NOT a clean bill of health; the check did not run."
         )
     else:
         status, summary = STATUS_MATCH, (
-            f"All {checked} vendored schema(s) match example-doctrine-repo HEAD at {resolved_doe}."
+            f"All {checked} vendored schema(s) match coordinator-claude HEAD at {resolved_doe}."
         )
 
     return {

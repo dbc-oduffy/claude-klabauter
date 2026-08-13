@@ -49,7 +49,7 @@ Spec backlinks:
   - Oracle: state/audits/2026-07-22-command-payload-inventory/distinct-ops-new.tsv row "assert-doctrine-cross-reference-counts"
   - Classification: state/audits/2026-07-22-command-payload-inventory/op-classification.tsv row "assert-doctrine-cross-reference-counts"
   - Fence example (read-only reference, not ported verbatim):
-    coordinator/skills/plan/SKILL.md § Test Surface (example-doctrine-repo, AC3 grep-assert)
+    coordinator/skills/plan/SKILL.md § Test Surface (coordinator-claude, AC3 grep-assert)
 
 Idempotency (AC7): read-only count assertion, no state mutation — a repeat
 invocation with identical params re-reads the same files and returns the same

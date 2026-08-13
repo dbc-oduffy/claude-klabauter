@@ -1,12 +1,12 @@
 """Characterization tests for coordinator_core.ops.detect_existing_claude_home.
 
-Mirrors Port of: detect-existing-claude-home.test.sh (example-doctrine-repo 6fb5fb37,
+Mirrors Port of: detect-existing-claude-home.test.sh (coordinator-claude 6fb5fb37,
 2026-07-22) (16 scenarios, T1-T7) plus a handful of Python-port-specific
 edge cases (HOME fallback, filesystem-error swallowing, glob-pattern
 fidelity of `_is_cc_managed_entry`).
 
-Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md
-Port of: detect-existing-claude-home.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
+Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md [DEAD-CITATION: plan file never committed to this repo]
+Port of: detect-existing-claude-home.sh (coordinator-claude 6fb5fb37, 2026-07-22)
 """
 from __future__ import annotations
 

@@ -7,9 +7,9 @@ path). ``created`` is truncated to date-only (schema IsoDate rejects a full date
 missing a required field or carrying an off-enum status quarantine to
 ``malformed_records.trackers``.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) § SECTION 8.9 —
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) § SECTION 8.9 —
   TrackerSummary. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P13
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P13
 
 Node-subprocess retirement: this section originally shelled out to ``node
 "$COORDINATOR_ROOT/bin/query-records.js" --type tracker --limit 0 --format json``

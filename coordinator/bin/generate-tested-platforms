@@ -2,7 +2,7 @@
 """
 generate-tested-platforms — derive `tested_platforms` from platform-outcome records.
 
-MECHANISM (DR-047: example-doctrine-repo owns the generator; claude-klabauter owns the confirming engine — that
+MECHANISM (DR-047: coordinator-claude owns the generator; claude-klabauter owns the confirming engine — that
 half is C3b, out of scope here). `tested_platforms` is a DERIVED field: this script
 reads `state/platform-outcomes/<platform>/<machine>/<surface>.yaml` records (C1's
 schema — coordinator/schemas/platform-outcome.schema.json) and computes the set of
@@ -32,7 +32,7 @@ TWO SAFETY BEHAVIORS (mandatory — prevent a D1 grandfather regression):
      that has ZERO backing entry-point-surface records (not "zero passing records" —
      literally no record of that surface kind exists for it yet) is PRESERVED, with an
      advisory line ("grandfathered: <platform> has no backing records"), never silently
-     demoted for lack of evidence. This is what keeps example-doctrine-repo's pre-record macos/linux
+     demoted for lack of evidence. This is what keeps coordinator-claude's pre-record macos/linux
      claims intact until real records exist. A platform that DOES have entry-point
      records but none passing/fresh is legitimately demoted (the demotion rule, per
      the point-4 subsection C3a2 documents) — grandfather only protects claims with
@@ -96,7 +96,7 @@ REQUIRED_RECORD_FIELDS = [
 ]
 
 # Two known layouts for the manifest, relative to repo root:
-#   - example-doctrine-repo:  coordinator/docs/install/agent-install-manifest.json
+#   - coordinator-claude:  coordinator/docs/install/agent-install-manifest.json
 #   - claude-klabauter:      docs/install/agent-install-manifest.json
 # `--repo-root` lets this tool probe either shape, so a single hardcoded
 # relative path cannot serve both (review: carried loose end, slice-3 review).

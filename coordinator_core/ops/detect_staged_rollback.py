@@ -208,7 +208,7 @@ OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
 # pre-commit tree, matching what this module measures at commit time), found
 # exactly one commit at ratio 1.0 (the incident itself, 18,506/18,506) and a
 # clear runner-up at ratio 0.505 (1,709/3,382 — `e6783a68bd0`, "prune(reclaim):
-# drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by example-doctrine-repo", a deliberate,
+# drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by coordinator-claude", a deliberate,
 # legitimate bulk prune). Every other commit with >=15 deletions in the same
 # sweep sits at ratio <= 0.102. There is no commit anywhere between 0.505 and
 # 1.0 — the two shapes (largest legitimate prune vs. the incident) are not

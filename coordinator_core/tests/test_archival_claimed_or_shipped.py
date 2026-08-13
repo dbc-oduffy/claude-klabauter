@@ -3,7 +3,7 @@ Tests for coordinator_core.archival::claimed_or_shipped / claimed_or_shipped_at_
 — the ledger-first widening of the DR-242 "was this ever claimed or shipped"
 predicate.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C10 (AC15).
 
 AC15 requires a property test over a fixture corpus of claimed and unclaimed

@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.handoff_close_origin_stub — "handoff.close_origin_stub" op.
 
-Purpose: Python port + join-fix of example-doctrine-repo's close-origin-stub-on-ship.sh
-(Port of: close-origin-stub-on-ship.sh, example-doctrine-repo 394c8b64, 2026-07-19). A
+Purpose: Python port + join-fix of coordinator-claude's close-origin-stub-on-ship.sh
+(Port of: close-origin-stub-on-ship.sh, coordinator-claude 394c8b64, 2026-07-19). A
 ``kind: spinoff``/``spinoff-roadmap``
 origin stub in ``state/handoffs/`` is authored ``deployment_state:
 ready_to_fire`` and its work is often executed through a SEPARATE plan/baton
@@ -14,7 +14,7 @@ stub_id)`` pair the governing plan / consumed handoff / roadmap-baton
 ancestor already carries.
 
 Spec backlink: cross-repo/archive/2026-07-14-claude-klabauter-em-wsc-close-origin-stub-join-and-session-shape-pickup-immutability.md
-Also mirrors: coordinator-handoff-archive.sh (example-doctrine-repo c47b0268, 2026-07-19) ``--stamp-only`` path
+Also mirrors: coordinator-handoff-archive.sh (coordinator-claude c47b0268, 2026-07-19) ``--stamp-only`` path
 DR:            DR-059 (break-class script-surface bugs route to claude-klabauter migration,
                 docs/decisions/2026-07-14-break-class-script-surface-bugs-route-to-claude-klabauter-migration.md)
 M1 spec backlink (in_flight liveness-gated admission + legible skip):
@@ -822,7 +822,7 @@ async def _try_close(
             }
 
     if sha:
-        # kind="ship-commit" (DR-096, example-doctrine-repo 2026-07-26/27 ruling): `sha`
+        # kind="ship-commit" (DR-096, coordinator-claude 2026-07-26/27 ruling): `sha`
         # here is the caller-supplied "shipping-commit SHA" documented on
         # this op's own `sha` param (see _handler's docstring below) -- it
         # arrives verbatim from the CLI trampoline's `--sha` flag

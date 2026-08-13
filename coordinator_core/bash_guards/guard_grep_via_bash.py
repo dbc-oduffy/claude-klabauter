@@ -466,7 +466,7 @@ def _partial_pipe_rewrite(tokens: list) -> Optional[str]:
     rewrite `check()`'s final branch offers. It is nonetheless a REAL
     alternative for the single largest bucket of otherwise-untouched
     grep-via-Bash traffic (state/audits/2026-07-29-guard-module-ladder-
-    worklist.md Row G2, example-doctrine-repo repo) -- unlike that bucket's prior
+    worklist.md Row G2, coordinator-claude repo) -- unlike that bucket's prior
     prose-only advisory, this names something the caller can actually run.
 
     Returns ``None`` for anything outside this narrow shape: not exactly

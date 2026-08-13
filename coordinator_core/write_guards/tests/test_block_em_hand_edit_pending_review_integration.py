@@ -2,7 +2,7 @@
 coordinator_core.write_guards.block_em_hand_edit_pending_review_integration
 -- the review-integrator-required guard (see the module's own docstring).
 
-Spec backlink: example-doctrine-repo
+Spec backlink: coordinator-claude
   docs/plans/2026-07-27-claude-md-altitude-triage.md § C14
   (chunk id REVIEW-INTEGRATOR-REQUIRED-GUARD)
 """

@@ -15,7 +15,7 @@ Performance target: ≤60s wall-clock over the full ~/.claude transcript set (~6
 Achieves this via line-by-line streaming (never json.load a whole file) and a single O(n)
 pass per transcript.
 
-Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C1
+Spec backlink: pln-ccos-6-rehome-attribution-python-9966da § C1
 Ported from: plugins/coordinator-claude/coordinator/bin/lib/file-attribution/project.mjs
 
 Performance cache (2026-07-29): a full re-scan (read + regex + json.loads every

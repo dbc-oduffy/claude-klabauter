@@ -1,7 +1,7 @@
 """
 Pytest for coordinator_core.ops.workday_complete_backfill_scan.
 
-Port of: workday-complete-backfill-scan.test.sh (example-doctrine-repo 3a561713, 2026-07-22) —
+Port of: workday-complete-backfill-scan.test.sh (coordinator-claude 3a561713, 2026-07-22) —
 mirrors the load-bearing subset of that bash fixture suite. This pytest exercises
 the SAME logic paths natively in-process via `main()` so the port has its own
 fast, claude-klabauter-resident regression net.
@@ -16,7 +16,7 @@ covers the per-day predicate (AC1/AC2), the full-day union span (AC3/DEC-3),
 and the DEC-5 semantic-shift case explicitly.
 
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-Spec backlink: docs/plans/2026-07-19-de-machine-backfill-scan-per-day.md § C2
+Spec backlink: pln-de-machine-workday-complete-ba-f1b7e6 § C2
 """
 
 from __future__ import annotations

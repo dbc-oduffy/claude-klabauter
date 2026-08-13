@@ -17,7 +17,7 @@ the "already-spawned session" case, same phantom-session-dir assertion
 shape for the C6-guard case (here: AC6's phantom-live-peer guard, ported
 per § Key mechanism facts).
 
-Spec backlink: docs/plans/2026-08-05-in-process-writers-declare-their-writes.md § C3
+Spec backlink: pln-in-process-engine-writers-decl-33016a § C3
 Module under test: coordinator_core/workstream_complete/chain_partition_verdict_store.py
 """
 

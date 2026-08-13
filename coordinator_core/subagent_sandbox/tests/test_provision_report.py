@@ -9,7 +9,7 @@ resolve_git_root behaves like production) -- mirrors test_engine.py's
 git_repo/policy_path fixture conventions and _write_backpointer helper for
 the subagent_type back-pointer leg.
 
-Spec backlink: docs/plans/2026-07-13-subagent-run-report-autoprovision.md (C4)
+Spec backlink: pln-claude-klabauter-subagent-run-report-aut-f51428 (C4)
 Module under test: coordinator_core/subagent_sandbox/provision_report.py
 """
 
@@ -728,7 +728,7 @@ def test_build_doc_text_divergence_is_object_not_array() -> None:
 
 # ---------------------------------------------------------------------------
 # divergence-field flow-style regression (cross-repo/inbox/
-# 2026-07-25-example-doctrine-repo-em-provision-report-divergence-flow-style.md)
+# 2026-07-25-coordinator-claude-em-provision-report-divergence-flow-style.md)
 # ---------------------------------------------------------------------------
 
 #: Each entry is (label, doc_text_producer, divergence_field_name). The
@@ -764,11 +764,11 @@ def test_divergence_field_parses_as_object_under_restricted_yaml_parser(
     label: str, doc_text_fn, field_name: str
 ) -> None:
     """Regression net for the flow-style ``divergence: {diverged: false}``
-    defect (cross-repo/inbox/2026-07-25-example-doctrine-repo-em-provision-report-
+    defect (cross-repo/inbox/2026-07-25-coordinator-claude-em-provision-report-
     divergence-flow-style.md): this repo's restricted YAML parser
     (``coordinator_core.frontmatter.schema_validate.parse_yaml``) does NOT
     support flow-style mappings -- it parses ``{diverged: false}`` as a raw
-    string rather than a dict, tripping example-doctrine-repo's run-report schema's
+    string rather than a dict, tripping coordinator-claude's run-report schema's
     object-shaped ``divergence``/``divergence_from_plan`` check
     (``type: object``, ``required: [diverged]``) on every spawn-provisioned
     sidecar. Block style (key on its own line, nested ``diverged:`` indented
@@ -781,7 +781,7 @@ def test_divergence_field_parses_as_object_under_restricted_yaml_parser(
     NOTE: ``test_build_doc_text_divergence_is_object_not_array`` above uses
     ``yaml.safe_load`` (full-spec PyYAML), which DOES support flow-style
     mappings and would pass even on the pre-fix flow-style emission -- it was
-    not exercising the restricted parser that actually gates example-doctrine-repo's schema
+    not exercising the restricted parser that actually gates coordinator-claude's schema
     validation. This test uses ``parse_yaml`` directly instead.
     """
     text = doc_text_fn()
@@ -806,7 +806,7 @@ def test_dispatch_feed_field_is_block_style_and_parses_as_object() -> None:
     that the field parses -- a flow-style ``dispatch_feed: {...}`` would
     still happen to parse under full-spec ``yaml.safe_load`` but silently
     fail the restricted parser, exactly the defect class recorded at
-    cross-repo/archive/2026-07-25-example-doctrine-repo-em-provision-report-
+    cross-repo/archive/2026-07-25-coordinator-claude-em-provision-report-
     divergence-flow-style.md.
     """
     text = _build_doc_text(agent_type=REPORT_SIDECAR_TYPE, spawned_at="2026-07-13T00:00:00Z")

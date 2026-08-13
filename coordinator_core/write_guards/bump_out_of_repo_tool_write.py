@@ -2,7 +2,7 @@
 write-confinement speed bump's tool-surface leg: `Write`/`Edit`/`MultiEdit`/
 `NotebookEdit`.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
 repo], chunk C7, "Tool-surface guard — Write/Edit/MultiEdit".
 
 THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY. Read the plan's "Design
@@ -33,7 +33,7 @@ staying soft. That theory was never actually true: `bump_foreign_repo_write.
 check_bump_foreign_repo_write` composes its own `_deny()` envelope --
 `permissionDecision: "deny"`, a REAL block -- for exactly the payload shape
 this module handles, verified by driving both surfaces through the live
-seam (example-doctrine-repo repo's `coordinator/hooks/scripts/preuse-write-dispatch.py`
+seam (coordinator-claude repo's `coordinator/hooks/scripts/preuse-write-dispatch.py`
 -- abs-path-ok: illustrative prose naming the verification entry point, not
 a runtime path reference) with an identical foreign-repo target in the SAME
 session. `GuardBand.
@@ -67,7 +67,7 @@ matter -- none of them required staying advisory:
      beyond the marker `touch` below.
 
 THE HARD-DENY CLASS IS A NAMED ONE-OFF RULING UNDER DR-277, NOT A CARVE-OUT
-(ruled 2026-08-11, example-doctrine-repo, PM-delegated). DR-277
+(ruled 2026-08-11, coordinator-claude, PM-delegated). DR-277
 (`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`) makes
 guards advisory by default and reserves hard-deny for three named carve-outs;
 this guard clears NONE of them, and the parity argument below is explicitly
@@ -159,7 +159,7 @@ VERIFYING THIS GUARD BY HAND? IT NEEDS A REAL SESSION-START RECORD FIRST.
 `check()`'s verdict runs through the SAME `bump_applies`/`resolve_launch_
 anchor` gate the Bash siblings use (see "ONE CLEAR, ONE SET OF HATCHES"
 below): a hand-typed `session_id` that was never passed through the
-SessionStart hook (`session-start-write-bump-anchor.py`, example-doctrine-repo repo)
+SessionStart hook (`session-start-write-bump-anchor.py`, coordinator-claude repo)
 has no anchor record and no live `CLAUDE_PROJECT_DIR`, so `resolve_launch_
 anchor` returns `None` and this guard ALLOWS -- correctly, by the same
 fail-open contract every function in `_write_bump_applicability.py`/
@@ -238,7 +238,7 @@ Both branches are gated first by `bump_applies()` (the `~/.claude`
 fleet-recovery hatch and the unresolvable-anchor case), exactly as both Bash
 guards are.
 
-SETTINGS HOME IS NOT A FOREIGN REPO (example-doctrine-repo finding #2, parity). A target that
+SETTINGS HOME IS NOT A FOREIGN REPO (coordinator-claude finding #2, parity). A target that
 resolves to NO git repo AND sits under the settings home
 (`trusted_root_guard._settings_home_dir_from_env`) never bumps -- the same
 AC9 "always-allowed destination" the Bash-surface `bump_outside_repo_write.py`
@@ -259,9 +259,9 @@ LESSONS-OUTBOX IS NOT A MISWRITE, EVEN THOUGH IT IS A FOREIGN REPO
 (cross-repo write-bump false positive, observed live 2026-08-03).
 `coordinator-lesson-promote` (`ops/queue_promote.py`, `queue.promote`) writes
 a universal lesson's durable home to `<doe_root>/state/lessons-outbox/
-<id>.yaml` BY DESIGN -- example-doctrine-repo is the central lessons repo, not the
+<id>.yaml` BY DESIGN -- coordinator-claude is the central lessons repo, not the
 session's own repo, and there is no in-repo alternative destination (see
-`queue_promote.py`'s own module docstring, "example-doctrine-repo is the central
+`queue_promote.py`'s own module docstring, "coordinator-claude is the central
 lessons repo"). Before this fix, every `Edit` to a freshly-promoted
 lessons-outbox record tripped this guard and pointed the agent at
 `cross-repo-memo` -- advice that is WRONG for this artifact class: a memo
@@ -276,7 +276,7 @@ deliberately NOT gated on which repo the segment resolves inside (contrast
 below, both of which fire only when the target has NO git repo). The whole
 point of this exemption is that the target IS a foreign repo -- gating it on
 "no repo" would exempt nothing real, since `queue.promote` always writes
-into an actual example-doctrine-repo checkout.
+into an actual coordinator-claude checkout.
 
 DO NOT WIDEN THIS TO `cross-repo/inbox/` OR `cross-repo/outbox/`. Those
 paths are the memo channel, and this repo's own CLAUDE.md is explicit that
@@ -293,7 +293,7 @@ PARITY -- BASH SURFACE DOES NOT YET EXEMPT THIS CASE. As of this fix,
 consume) carries no lessons-outbox exemption of its own, so a Bash-surface
 `echo >> <doe_root>/state/lessons-outbox/<id>.yaml` still bumps while this
 tool-surface guard now stands down for the equivalent `Edit`/`Write`. This
-mirrors the SAME shape as the settings-home fix immediately below (example-doctrine-repo
+mirrors the SAME shape as the settings-home fix immediately below (coordinator-claude
 finding #2) BEFORE that fix landed here -- a real, currently-open parity
 gap, not a false alarm. Closing it is out of scope for this module: it
 belongs in the shared `_write_bump_applicability.py` module, which was
@@ -613,7 +613,7 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     immediately below, this predicate is NOT gated on `target_gitdir is
     None` -- the whole point of this exemption is the target IS a foreign
     repo (`coordinator-lesson-promote` always writes into an actual
-    example-doctrine-repo checkout), so requiring "no repo" would exempt nothing real.
+    coordinator-claude checkout), so requiring "no repo" would exempt nothing real.
 
     Path-shape only, via a simple casefolded split -- matches a subdirectory
     under `state/lessons-outbox/` too (e.g. the `drained/` subdirectory
@@ -677,7 +677,7 @@ def _target_is_under_settings_home(
 ) -> bool:
     """True iff `file_path` resolves to no git repo AND sits under the
     settings home -- see module docstring, "SETTINGS HOME IS NOT A FOREIGN
-    REPO" (example-doctrine-repo finding #2, parity with the Bash-surface AC9 exemption).
+    REPO" (coordinator-claude finding #2, parity with the Bash-surface AC9 exemption).
 
     Same conjunctive shape as `_target_is_bare_temp_scratch` immediately
     above: `target_gitdir` is accepted purely as an already-resolved
@@ -713,7 +713,7 @@ def _resolve_target_gitdir(
     file_path: str, payload_cwd: Optional[str]
 ) -> Optional[Path]:
     """Resolve the target write's git-dir, walking UP to the nearest
-    EXISTING directory ancestor first (example-doctrine-repo finding #1). `resolve_gitdir`
+    EXISTING directory ancestor first (coordinator-claude finding #1). `resolve_gitdir`
     shells out with the candidate as `cwd`, which requires an existing
     directory -- a `Write`/`Edit` target's containing directory is very
     often not yet created (`Write` to `<own-repo>/newdir/file.txt` where
@@ -726,7 +726,7 @@ def _resolve_target_gitdir(
     than a third, independently-derived ancestor walk.
 
     `payload_cwd` is threaded through explicitly rather than left ambient
-    (example-doctrine-repo finding #3): `nearest_existing_ancestor` calls `os.path.isdir()`,
+    (coordinator-claude finding #3): `nearest_existing_ancestor` calls `os.path.isdir()`,
     which resolves a non-absolute candidate against WHATEVER cwd is live at
     call time. Relying on the coordinator engine process's own cwd for that
     resolution would make a bare relative `file_path` (e.g. `"file.txt"`,
@@ -1006,11 +1006,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         # NOTE: correctness here depends on `target_gitdir` already
-        # reflecting the ancestor-walked resolution above (example-doctrine-repo finding #1) --
+        # reflecting the ancestor-walked resolution above (coordinator-claude finding #1) --
         # this conjunctive exemption and that resolution order are described
         # as independent chunks in the governing plan but share this one
         # call's `target_gitdir` value; an isolated future edit to either
-        # could silently break the other's assumption (example-doctrine-repo finding #4).
+        # could silently break the other's assumption (coordinator-claude finding #4).
         if _target_is_under_settings_home(translated_file_path or "", target_gitdir):
             return None
 

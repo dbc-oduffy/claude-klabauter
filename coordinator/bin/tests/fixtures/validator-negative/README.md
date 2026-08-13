@@ -10,7 +10,7 @@ fixture in this directory with a consistent error shape.
 ## How to run the full negative corpus
 
 The corpus loader is `coordinator/bin/tests/test_validator_negative_corpus.py` — a Python
-re-port of the retired `testNegativeCorpus(fixturesDir, schemasDir)` from example-doctrine-repo
+re-port of the retired `testNegativeCorpus(fixturesDir, schemasDir)` from coordinator-claude
 `coordinator/bin/lib/schema.js` (deleted in `480ad8f8`, "D1: retire claude-klabauter oracle .js +
 bin/lib/*.js"). It is the ONLY consumer of this directory in this repo.
 

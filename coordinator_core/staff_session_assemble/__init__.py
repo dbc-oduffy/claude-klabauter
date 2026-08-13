@@ -11,9 +11,9 @@ over a frozen contract) rather than the tables living as prose the operator
 self-navigates (the "deterministic table in a markdown fence" defect
 `invisible-doctrine.md` realization #6 forbids).
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
-DR-090 (example-doctrine-repo docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
-Spec backlink: example-doctrine-repo docs/plans/2026-07-24-computed-skills-b5-planning-cluster.md,
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
+DR-090 (coordinator-claude docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
+Spec backlink: coordinator-claude docs/plans/2026-07-24-computed-skills-b5-planning-cluster.md,
 chunk C11 (Design Option A, AC17)
 Registration seam: this module ships no bash veneer and needs none — it is
 consumed directly by the `coordinator/bin/staff-session-assemble` trampoline
@@ -24,13 +24,13 @@ consumed directly by the `coordinator/bin/staff-session-assemble` trampoline
 resolver READS it, it does not own/hardcode it as new engine-side data.**
 The three tables formerly hardcoded at `staff-session/SKILL.md:72-78`
 (domain-signal -> default pair), `:89-98` (slug -> agent-file), and
-`:169-178` (slug -> subagent_type) fold to example-doctrine-repo's `coordinator/
+`:169-178` (slug -> subagent_type) fold to coordinator-claude's `coordinator/
 routing.md` (AC7(a)/C9 — the single home). This module has no compiled-in
 roster dict; every call re-reads and re-parses `routing.md` fresh
 (recompute-never-trust-caller, same discipline as `pickup_assemble`).
 
 **Doctrine-side read contract (what C9 must land in routing.md).** This
-module expects THREE markdown pipe-tables in example-doctrine-repo's
+module expects THREE markdown pipe-tables in coordinator-claude's
 `coordinator/routing.md`, each immediately preceded by an exact H3 heading
 line (see `_HEADING_DOMAIN_PAIR` / `_HEADING_AGENT_FILE` /
 `_HEADING_SUBAGENT_TYPE` below) — table shape mirrors the three tables as
@@ -50,7 +50,7 @@ Negative-spec:
       read+compute function.
     - Do NOT hardcode a roster dict as a module-level constant. The whole
       point of the F1 reconciliation is that the roster DATA lives in
-      example-doctrine-repo's `routing.md`, not in a second engine-owned copy here —
+      coordinator-claude's `routing.md`, not in a second engine-owned copy here —
       a hardcoded fallback dict would silently reintroduce the very
       duplication AC7(a)/AC17 close.
     - Do NOT resolve `the Director of Engineering` as a debater slug — he is the staff-session
@@ -84,9 +84,9 @@ class StaffSessionAssembleError(ValueError):
 def _resolve_content_root() -> str:
     """Resolves the coordinator content root via the shared
     resolve-coordinator-clone `--for-content` resolver — works on a pure OSS
-    install (no example-doctrine-repo clone present), unlike the former
+    install (no coordinator-claude clone present), unlike the former
     `read_doe_root_pointer()`-based resolution which only ever resolved a
-    example-doctrine-repo clone and left `/staff-session` roster resolution unreachable on an
+    coordinator-claude clone and left `/staff-session` roster resolution unreachable on an
     OSS-only machine."""
     from coordinator_core.resolve_coordinator_clone import (
         ResolveCoordinatorCloneError,

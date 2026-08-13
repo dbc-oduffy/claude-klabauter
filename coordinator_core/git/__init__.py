@@ -9,5 +9,5 @@ independently-driftable copies of the same three-git-call computation.
 
 Negative-spec: keep this file minimal -- a thin namespace marker only.
 
-Spec backlink: docs/plans/2026-07-27-commit-mechanism-selection.md § C1
+Spec backlink: docs/plans/2026-07-27-commit-mechanism-selection.md § C1 [DEAD-CITATION: plan file never committed to this repo]
 """

@@ -2,11 +2,11 @@
 coordinator_core.state_root — canonical state-root seam resolver.
 
 Purpose: single entry point for resolving the coordinator state directory root.
-Encodes the ratified state-placement taxonomy and example-doctrine-repo/claude-klabauter plane routing so
+Encodes the ratified state-placement taxonomy and coordinator-claude/claude-klabauter plane routing so
 every state-writing caller resolves a root through one seam instead of
 open-coding a root variable.
 
-Port of: coordinator-state-root.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
+Port of: coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22).
 
 COMPOSED — this module does NOT reimplement the four sibling resolver ladders. It
 dispatches the 5-rule state-root routing on top of the already-native peers:
@@ -24,7 +24,7 @@ Five routing rules (verbatim from the bash oracle's header):
 
   Rule 1  central=True, subject="doctrine"
             -> <coordinator_doe_root()>/state
-            Fail-loud (StateRootError) if the example-doctrine-repo root cannot resolve. Does NOT
+            Fail-loud (StateRootError) if the coordinator-claude root cannot resolve. Does NOT
             fall back to claude-klabauter.
 
   Rule 2  central=True, subject="engine"
@@ -32,7 +32,7 @@ Five routing rules (verbatim from the bash oracle's header):
 
   Rule 3  central=True, artifact=<path>
             -> classify(<path>); map result:
-                 doctrine      -> example-doctrine-repo state   (Rule 1)
+                 doctrine      -> coordinator-claude state   (Rule 1)
                  engine        -> claude-klabauter state (Rule 2)
                  cross-cutting -> fail-loud: raise CrossCuttingStateRoot (rc 2),
                                   do NOT return a state path.
@@ -97,7 +97,7 @@ Argument rules (mirror the bash oracle):
 Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
     - Does NOT write any state; only resolves the path.
     - Does NOT fall back silently when git root is missing (Rule 5) — fail-loud.
-    - Does NOT fall back to claude-klabauter when doctrine example-doctrine-repo root fails (Rule 1).
+    - Does NOT fall back to claude-klabauter when doctrine coordinator-claude root fails (Rule 1).
     - Does NOT auto-route a cross-cutting artifact (Rule 3) — fail-loud rc 2.
     - Does NOT reimplement any of the four sibling resolver ladders.
 """
@@ -161,11 +161,11 @@ def _state_of(root: str) -> str:
 
 
 def _doe_state() -> str:
-    """Rule 1 helper: example-doctrine-repo doctrine state root. Fail-loud; no claude-klabauter fallback."""
+    """Rule 1 helper: coordinator-claude doctrine state root. Fail-loud; no claude-klabauter fallback."""
     doe = coordinator_doe_root()
     if not doe:
         raise StateRootError(
-            "coordinator_state_root: cannot resolve example-doctrine-repo doctrine root — "
+            "coordinator_state_root: cannot resolve coordinator-claude doctrine root — "
             "repos.example_doctrine_repo is not set. Does NOT fall back to claude-klabauter for the "
             "doctrine subject. Remediate: machine-local set repos.example_doctrine_repo "
             "<path>, or re-run /coordinator:install."

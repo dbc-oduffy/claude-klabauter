@@ -16,7 +16,7 @@ Runs bash-free: `python3 test_prune_closed_improvements.py` (or via the
 coordinator test runner).  Exit 0 = all tests pass; non-zero = at least one
 failure.
 
-Spec backlink: coordinator/commands/update-docs.md (example-doctrine-repo) § Phase 11i
+Spec backlink: coordinator/commands/update-docs.md (coordinator-claude) § Phase 11i
 Spec backlink: docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 """
 from __future__ import annotations

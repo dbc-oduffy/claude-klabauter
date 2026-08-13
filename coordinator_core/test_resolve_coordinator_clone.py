@@ -1,14 +1,14 @@
 """
 Tests for coordinator_core.resolve_coordinator_clone — native CLI-mode peer.
 
-Port of: resolve-coordinator-clone.sh (example-doctrine-repo 290997c7, 2026-07-22)
+Port of: resolve-coordinator-clone.sh (coordinator-claude 290997c7, 2026-07-22)
 
 Covers: the dev-vs-oss mode selector (passthrough / explicit / marker
 auto-discovery / ambiguity), the 5-rung clone-root ladder, the 7-rung
 content-root ladder, the durable-then-legacy .doe-root pointer read, the
 numeric-compare versioned-cache picker, and the CLI wrapper's exit codes.
 
-Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C11/C2
+Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C11/C2
 """
 
 from __future__ import annotations

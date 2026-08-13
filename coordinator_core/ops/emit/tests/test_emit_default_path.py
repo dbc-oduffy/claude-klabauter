@@ -6,7 +6,7 @@ responsibility, not a producer-side gate. This file retains the default-path wri
 regression proof and the contract-declared backlog_history integration proof, both now
 exercised WITHOUT any sentinel involved.
 
-Spec backlink: docs/plans/2026-07-08-producer-emit-hold-removal-reader-first-consumer-owned.md § C1
+Spec backlink: pln-producer-emit-hold-removal-rea-48bd64 § C1
 """
 
 from __future__ import annotations

@@ -21,7 +21,7 @@ Reads the live registration via the engine's own private `_discover_guards()`
 directly rather than through a public re-export) -- `check()` closures are
 never invoked here, so this stays a STRUCTURAL registration check.
 
-Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, under
+Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, under
 DR-277 (docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md).
 DR-277 REPLACES the B5-era irreversible-harm-only hard-deny bar this
 docstring previously argued for: the ruling is guards are advisory BY
@@ -81,7 +81,7 @@ carve-out-3 paraphrase (above) would also require. The parity argument
 below is real and worth keeping on its own terms; it is not, as written,
 covered by DR-277.
 
-RULED 2026-08-11 (example-doctrine-repo, PM-delegated). This guard stays hard-deny by a
+RULED 2026-08-11 (coordinator-claude, PM-delegated). This guard stays hard-deny by a
 NAMED ONE-OFF RULING OUTSIDE THE THREE CARVE-OUTS -- not pending, not
 implied, and not a fourth carve-out. DR-277 records the ruling in its own
 § "Not a carve-out: cross-surface parity", verbatim: "A sibling guard's

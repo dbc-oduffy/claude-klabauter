@@ -11,7 +11,7 @@ vendor-pin requirement, no subprocess.  _query_roadmap_records is patched to inj
 in-memory fixture records; ctx.assembler_dag is patched to control DAG payloads and
 assert call behaviour.
 
-Spec backlink: docs/plans/2026-07-06-roadmap-dag-emit-switch.md § C2 / F4
+Spec backlink: pln-emit-first-class-roadmap-dag-i-137a28 § C2 / F4
 """
 
 from __future__ import annotations

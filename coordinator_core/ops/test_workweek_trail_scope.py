@@ -2,7 +2,7 @@
 test_workweek_trail_scope.py — pytest unit tests for
 coordinator_core.ops.workweek_trail_scope.
 
-Port of: workweek-trail-scope.test.sh (example-doctrine-repo 3a561713, 2026-07-22), bash-oracle
+Port of: workweek-trail-scope.test.sh (coordinator-claude 3a561713, 2026-07-22), bash-oracle
 regression net — reauthored here as direct in-process calls against the ported
 Python module (`main(argv)`, cwd-relative, same fixture shape: a git repo with a
 local bare "origin" remote so `origin/main..HEAD` resolves).

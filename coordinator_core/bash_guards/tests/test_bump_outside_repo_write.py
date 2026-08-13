@@ -1,7 +1,7 @@
 """Tests for coordinator_core.bash_guards.bump_outside_repo_write -- the
 Bash-surface OUTSIDE-REPO write-confinement speed bump (C5).
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
 repo], chunk C5 "Outside-repo detection, inline-interpreter classification,
 sandbox reroute".
 
@@ -168,7 +168,7 @@ def _clean_bump_env(monkeypatch, tmp_path):
     also reads `os.environ` directly, never an injected `env` dict.
 
     `COORDINATOR_SETTINGS_HOME` is `setenv`'d to an isolated `tmp_path`
-    subdirectory rather than `delenv`'d (binds AC13, example-doctrine-repo finding-#6-adjacent
+    subdirectory rather than `delenv`'d (binds AC13, coordinator-claude finding-#6-adjacent
     test-isolation gap): with it and `CLAUDE_HOME`/`HOME`/`USERPROFILE` all
     absent, `_settings_home_dir_from_env` returns `""`, which -- now that
     C1/C2 have landed the settings-home anchor -- would make that anchor
@@ -195,7 +195,7 @@ def _clean_bump_env(monkeypatch, tmp_path):
     living directly under `/tmp` (Linux with no `TMPDIR` set), the shared
     classifier's unconditional `os.path.realpath("/tmp")` candidate would
     otherwise still catch every fixture path regardless of the
-    `gettempdir()` patch. Example-doctrine-repo finding #6 describes this exact hazard as
+    `gettempdir()` patch. Coordinator-claude finding #6 describes this exact hazard as
     reproducing in this fixture ("patches ONE of two candidates"); it does
     NOT reproduce here -- both `gettempdir()` and `_posix_tmp_literal()`
     were already repointed together before this dispatch (see the two
@@ -227,7 +227,7 @@ def _clean_bump_env(monkeypatch, tmp_path):
 def _set_anchor(monkeypatch, env, session_id: str, extra: dict | None = None) -> None:
     """Establishes applicability the same way a real session does -- a
     settings-home `write_session_start_record`, not `CLAUDE_PROJECT_DIR`
-    (example-doctrine-repo finding #5 / AC5). Mirrors `test_bump_foreign_repo_write._set_anchor`
+    (coordinator-claude finding #5 / AC5). Mirrors `test_bump_foreign_repo_write._set_anchor`
     exactly -- see that helper's own docstring for the full rationale.
     `CLAUDE_PROJECT_DIR` is left unset throughout; `HOME` is still set (to an
     unrelated scratch dir) so `_anchor_is_under_claude_home` resolves to "not

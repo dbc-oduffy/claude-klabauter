@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """bin/tests/test_workday_complete_step1_validate.py
 
 Purpose: Unit tests for the abort-time process-group teardown wiring in
@@ -11,7 +9,7 @@ test_validate_fast_and_packageability.py's `ProcessGroupTeardownTest`; this
 file closes the gap left on this module, mirroring that file's structure
 and conventions rather than inventing new ones.
 
-Spec backlink: docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md,
+Spec backlink: pln-reap-orphaned-execnet-gateways-398c2c,
 chunk C1.
 
 Test coverage:

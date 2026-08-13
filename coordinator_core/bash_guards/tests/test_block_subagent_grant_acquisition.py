@@ -13,7 +13,7 @@ module's own docstring (AC10, DR-104).
 Pure Python -- no shell spawns, no git repo required.
 
 Spec backlink: coordinator_core/bash_guards/block_subagent_grant_acquisition.py
-Spec backlink: docs/plans/2026-08-08-discriminate-the-caller-on-the-write-grant.md, chunk C3
+Spec backlink: pln-discriminate-the-caller-on-the-bf406b, chunk C3
 """
 
 from __future__ import annotations

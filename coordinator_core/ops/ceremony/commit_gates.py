@@ -57,10 +57,10 @@ diagnostics list, mirroring the bash originals' "print diagnostics, set exit
 code" shape rather than a Python exception flow (the caller, `commit_pipeline`
 C4, decides how to surface a failed gate to the op's result envelope).
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C3 (AC10).
-Provenance: ported from `example-doctrine-repo:coordinator/bin/check-workstream-complete-deletion-blocks.sh`
-  and `example-doctrine-repo:coordinator/bin/dirty-tree-gate.sh` (both still present on disk at
-  `/Users/example-operator/X/example-doctrine-repo/coordinator/bin/` at port time -- not yet deleted
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C3 (AC10).
+Provenance: ported from `coordinator-claude:coordinator/bin/check-workstream-complete-deletion-blocks.sh`
+  and `coordinator-claude:coordinator/bin/dirty-tree-gate.sh` (both still present on disk at
+  `/Users/example-operator/X/coordinator-claude/coordinator/bin/` at port time -- not yet deleted
   by the kill list at the time this chunk was authored).
 
 Negative-spec (hard-won, preserved from the bash originals):
@@ -513,7 +513,7 @@ def _build_known_scope(worktree_root: Path) -> Set[str]:
     its scope) when `coordinator_core.claim_state.resolve_claim_state`
     reports a live holder -- ledger-first, frontmatter mirror as fallback.
 
-    Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+    Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
     § C3 / AC4. Before this fix, a live ledger claim with a branch-reverted
     mirror (no `claimed_by`/`consumed_by`) dropped its `scope:` paths from
     `known_scope` entirely, reclassifying the claim holder's own in-progress
@@ -574,7 +574,7 @@ def _diff_name_only_worktree(cwd: Union[str, Path], paths: Sequence[str]) -> Git
     can never CLEAR phantom-dirty state -- only a real lock-taking write
     does. Adding it here would leave every phantom permanently dirty and
     re-filtered on each ceremony (the flapping-count symptom in
-    example-doctrine-repo's bash-on-windows-gotchas.md § 11) -- this omission is
+    coordinator-claude's bash-on-windows-gotchas.md § 11) -- this omission is
     deliberate, not an oversight; do not "fix" it back in to match the
     house read-wrapper idiom.
 

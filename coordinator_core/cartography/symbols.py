@@ -29,7 +29,7 @@ Negative-spec:
     or, failing that, elided with ``value_elided: true`` plus a per-file
     ``"error"`` naming the path (``_serializable_entry``).
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C4 (cartography.symbols).
 """
 

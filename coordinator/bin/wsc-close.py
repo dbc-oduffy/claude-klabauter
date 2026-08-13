@@ -9,7 +9,7 @@ tail-args
     Assemble the OPTIONAL `--deleted-paths` / `--kept-entries` /
     `--review-*` flags for the `wsc-tail.py` Step 3 call, omitting a flag
     entirely when its backing value is empty/absent. This mirrors bash
-    conditional-array logic the example-doctrine-repo `workstream-complete/SKILL.md`
+    conditional-array logic the coordinator-claude `workstream-complete/SKILL.md`
     used to inline (`_deleted_paths_flag` / `_kept_entries_flag` /
     `_review_trail_flags`) — genuinely necessary because `wsc-tail.py`'s own
     `--deleted-paths`/`--kept-entries` argparse flags are `nargs="+"`
@@ -44,7 +44,7 @@ archive-session
     sid; this CLI checks the same precondition before the call so the error
     message names the CLI, not a bare Python traceback).
 
-    Caller: example-doctrine-repo's SessionEnd hook,
+    Caller: coordinator-claude's SessionEnd hook,
     `coordinator/hooks/scripts/sessionend-archive-session.py` (wired via
     `hooks.json`) — the SOLE archival occasion in the system as of
     `e510140a` (`ceremony.wsc_tail`'s own `tail_ops.cs_archive` call site
@@ -54,10 +54,10 @@ archive-session
     subcommand mid-session; it must fire only at SessionEnd, after the
     session's own work (including receipt emit and sentinel clear) is done.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md (WSC-3 chunk —
-port residual bash logic OUT of example-doctrine-repo's `workstream-complete/SKILL.md`
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 (WSC-3 chunk —
+port residual bash logic OUT of coordinator-claude's `workstream-complete/SKILL.md`
 Step 3/3.5 into a naked-Python CLI here).
-Spec backlink (source bash this ports): example-doctrine-repo
+Spec backlink (source bash this ports): coordinator-claude
 `coordinator/skills/workstream-complete/SKILL.md` lines ~2085-2099 (tail-arg
 assembly) and ~2350-2358 (session-scope archive-on-exit).
 """
@@ -175,7 +175,7 @@ def _build_tail_args(
         # _verify_reviewer_evidence` requires it for every reviewer except
         # `wsc-auto-adjudication`, so dropping it here severs the correlation
         # that gate exists to establish while the caller still reads as having
-        # supplied it. Spec: cross-repo/inbox/2026-08-13-example-doctrine-repo-em-wsc-tail-
+        # supplied it. Spec: cross-repo/inbox/2026-08-13-coordinator-claude-em-wsc-tail-
         # ipc-timeout-and-reviewer-evidence-drop.md § 2.
         if review_reviewer_evidence:
             args.extend(["--review-reviewer-evidence", review_reviewer_evidence])

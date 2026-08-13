@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.gen_claude_doe_launcher — Port of: gen-claude-doe-launcher.sh
-(example-doctrine-repo b5a4192c, 2026-07-20).
+(coordinator-claude b5a4192c, 2026-07-20).
 
 Purpose: on Windows, the Git-for-Windows shell bin directories and %USERPROFILE%\\bin
 (jq, used by gen-settings-hooks on every launch) are NOT on the Windows PATH, so the
@@ -42,7 +42,7 @@ passed; the host is not Windows (os.name != "nt"); or the `claude` CLI the
 launchers wrap is not on PATH. --check-only never smokes (it never writes a live
 file to execute). Default is smoke ON (opt out with --no-smoke).
 
-Spec backlink: X:/example-doctrine-repo/tasks/2026-07-20-install-dogfood-friction.md section F17
+Spec backlink: X:/coordinator-claude/tasks/2026-07-20-install-dogfood-friction.md section F17
 
 Negative-spec:
     - Does NOT implement the bash >= 4 version guard from the oracle (DR-148
@@ -69,7 +69,7 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-claude-doe-launcher.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
+_PROG = "gen-claude-doe-launcher.sh"  # literal program-name prefix, matches the coordinator-claude filename
 
 _USAGE = """\
 Usage: gen-claude-doe-launcher.sh [OPTIONS]
@@ -233,15 +233,15 @@ def main(argv: List[str]) -> int:
     if template_dir_override:
         tmpl_dir = template_dir_override
     else:
-        # This module has no co-located example-doctrine-repo-side script path to derive the oracle's
-        # `${_script_dir}/../templates/bin` default from — the example-doctrine-repo trampoline resolves
+        # This module has no co-located coordinator-claude-side script path to derive the oracle's
+        # `${_script_dir}/../templates/bin` default from — the coordinator-claude trampoline resolves
         # that default itself (relative to its own on-disk location) and always passes
         # `--template-dir` explicitly, so this branch is reached only when a caller
         # invokes main() directly without one. Fail loud rather than guess a cwd-relative
         # path that would silently pick up the wrong templates in the wrong directory.
         print(
             f"{_PROG}: --template-dir not supplied and no default resolvable "
-            "(the example-doctrine-repo trampoline should always pass one explicitly).",
+            "(the coordinator-claude trampoline should always pass one explicitly).",
             file=sys.stderr,
         )
         return 1
@@ -348,7 +348,7 @@ def main(argv: List[str]) -> int:
                 print(
                     "  Remediation: edit the template, not the rendered copy -- "
                     "coordinator/templates/bin/claude-doe-launcher."
-                    f"{'ps1' if dest == ps1_dest else 'cmd'}.tmpl (in the example-doctrine-repo clone).",
+                    f"{'ps1' if dest == ps1_dest else 'cmd'}.tmpl (in the coordinator-claude clone).",
                     file=sys.stderr,
                 )
                 return 1

@@ -50,7 +50,7 @@ hand-rolling a second one, and the package's shared quote-aware tokenizer
 regex over raw command text -- same reuse posture ``guard_offer_git_c.py``'s
 own docstring calls out for its own segmentation.
 
-Spec backlink: docs/plans/2026-08-07-git-index-lock-contention-campaign.md
+Spec backlink: docs/plans/2026-08-07-git-index-lock-contention-campaign.md [DEAD-CITATION: plan file never committed to this repo]
 (fleet-wide lock-contention campaign) -- this guard is the mechanical leg of
 that campaign; doctrine prose alone was assessed insufficient (see this
 module's own opening paragraph).

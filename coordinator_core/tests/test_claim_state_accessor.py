@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.claim_state — the ledger-first claim accessor.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C1 (AC1, AC2).
 """
 

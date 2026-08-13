@@ -21,7 +21,7 @@ Schema source: docs/wiki/daily-summary-procedure.md § "Health Ledger Entry
 Schema" — two audit clocks above a per-system table; all system grades start
 at "?".
 
-Port of: setup-seed-health-ledger.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
+Port of: setup-seed-health-ledger.sh (coordinator-claude 6fb5fb37, 2026-07-22)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 State-root seam: the bash original routes a meta-repo REPO_ROOT through the
@@ -30,7 +30,7 @@ guards — a check that is only ever true when the calling shell had already
 sourced coordinator-is-meta-repo.sh/coordinator-claude-klabauter-root.sh, which never
 happens for THIS script's actual invocation (skills/repo-setup/SKILL.md always
 runs it as a bare `bash <path>` subprocess — confirmed via grep, no
-`export -f` of either function exists anywhere in the example-doctrine-repo tree). This port
+`export -f` of either function exists anywhere in the coordinator-claude tree). This port
 performs the equivalent redirection unconditionally instead of gating on a
 shell-function-existence probe that has no Python analogue — same intent,
 strictly more correct than the always-false bash gate. Local

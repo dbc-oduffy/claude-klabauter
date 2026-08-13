@@ -78,7 +78,7 @@ class TestCrashDenyMessageIsActionableWithoutBash:
 
 
 class TestCrashDenyResolutionClass:
-    """`resolution_class` (2026-08-05): threads example-doctrine-repo's opaque engine-
+    """`resolution_class` (2026-08-05): threads coordinator-claude's opaque engine-
     resolution signal into the crash-deny envelope so it names WHICH ENGINE
     crashed. Must be backward compatible byte-for-byte when unsupplied or
     unrecognized -- see `_crash_deny`'s own docstring section."""
@@ -127,7 +127,7 @@ class TestCrashDenyResolutionClass:
 
 
 class TestEvaluatePayloadJsonFeatureDetection:
-    """example-doctrine-repo's `preuse-bash-dispatch.py` feature-detects `resolution_class` via
+    """coordinator-claude's `preuse-bash-dispatch.py` feature-detects `resolution_class` via
     `inspect.signature(evaluate_payload_json).parameters` and passes the
     kwarg ONLY if present -- this is the whole contract this change exists
     to satisfy."""
@@ -139,7 +139,7 @@ class TestEvaluatePayloadJsonFeatureDetection:
 
     def test_call_without_resolution_class_is_unaffected(self):
         # Same payload, called both ways -- must be byte-identical, since
-        # every pre-existing caller (and example-doctrine-repo's own feature-detect miss path)
+        # every pre-existing caller (and coordinator-claude's own feature-detect miss path)
         # omits this kwarg entirely.
         payload = '{"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "session_id": "s", "cwd": "/tmp"}'
         omitted = evaluate_payload_json(payload)

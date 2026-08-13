@@ -14,7 +14,7 @@ CLI:
     python3 query-file-attribution.py --file <path>  [--project <root>]
     python3 query-file-attribution.py --session <id> --file <path>  [--project <root>]
 
-Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C2
+Spec backlink: pln-ccos-6-rehome-attribution-python-9966da § C2
 Replaces:      plugins/coordinator-claude/coordinator/bin/query-file-attribution.mjs
 
 --file matching: accepts an absolute path or a path relative to --project (or

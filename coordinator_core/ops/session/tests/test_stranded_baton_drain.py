@@ -26,7 +26,7 @@ candidate-selection layer (_stranded_supersede_candidates) — no mutation is
 ever attempted for these three shapes, so there is nothing for a git-backed
 integration test to additionally prove.
 
-Spec backlink: docs/plans/2026-08-05-stranded-baton-drainage-make-the-detecto.md § C3
+Spec backlink: pln-stranded-baton-drainage-make-t-f4a679 § C3
 
 Negative-spec:
   - Does NOT re-test baton_drift_sweep.py's own STRANDED/HELD/TIP classification

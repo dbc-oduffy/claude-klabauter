@@ -6,7 +6,7 @@ per DEC-4 — same AST-walk machinery, same by-(file, call)-tuple exemption
 granularity, same plant-a-violation self-test discipline, copied rather than
 reinvented.
 
-Spec backlink: `docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md`
+Spec backlink: `pln-coordinator-ops-buildout-from--903224`
 § PM-binding constraints (2), § DEC-4, chunk C0c, AC3.
 
 Constraint (2), restated: every op this plan builds must be first-class on

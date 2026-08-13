@@ -6,9 +6,9 @@ NOT bare basename — same-named specs across different date-prefixed subdirs mu
 not collide) that have never been recorded as harvested in the canonical
 distillation log. Harvested means the path appears in at least one log row whose
 disposition/action is in HARVESTED_DISPOSITIONS — either a canonical-format row
-(DISTILLED/PROMOTE, per the example-doctrine-repo canonical format parsed by
+(DISTILLED/PROMOTE, per the coordinator-claude canonical format parsed by
 coordinator_core.distill._common.parse_distillation_log) or an action-table row
-(harvested/deleted, per the example-doctrine-repo schema-header `date | action | path | ...`
+(harvested/deleted, per the coordinator-claude schema-header `date | action | path | ...`
 format found live on sibling repos, e.g. Example-cockpit-repo — see
 HARVESTED_DISPOSITIONS for why both vocabularies exist). This is the
 deterministic mechanical half of the old "did we distill this spec?" judgment
@@ -32,7 +32,7 @@ Negative-spec: this module performs no writes and does not mutate the log or
 archive/specs. It computes and returns; the CLI (bin/distill-harvest-debt.py)
 is responsible for stdout/JSON emission only.
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C4
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C4
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ HARVESTED_DISPOSITIONS = frozenset(
         # (run: <id>)` rows under `## Run` headers — the format _common's parser reads).
         "DISTILLED",
         "PROMOTE",
-        # Action-table tokens from the example-doctrine-repo schema-header format
+        # Action-table tokens from the coordinator-claude schema-header format
         # (`date | action | path | last_sha | belongs_to_spec | reason`), which is
         # what sibling repos' live logs actually carry (verified on example-cockpit-repo
         # 2026-07-23: 52 `harvested` + 120 `deleted` rows). Both vocabularies exist
@@ -68,13 +68,13 @@ HARVESTED_DISPOSITIONS = frozenset(
     }
 )
 """Dispositions/actions that count as "harvested" for harvest-debt purposes —
-both the canonical-format disposition vocabulary and the example-doctrine-repo schema-header
+both the canonical-format disposition vocabulary and the coordinator-claude schema-header
 action-table vocabulary (see inline comments for why both exist). The other
 canonical dispositions (EPHEMERAL, SKIP, PRESERVE) do NOT count — a row logged
 under one of those is a recorded decision NOT to fold the spec into the wiki,
 not evidence of harvest."""
 
-# One action-table data row of the example-doctrine-repo schema-header format:
+# One action-table data row of the coordinator-claude schema-header format:
 #   date | action | path | last_sha | belongs_to_spec | reason
 # Anchored on the leading ISO date cell so schema-header comment lines ("# Columns:
 # date | action | ...") and canonical-format rows ("- <path> -> ...") never match.

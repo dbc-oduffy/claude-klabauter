@@ -37,7 +37,7 @@ resolution failure, `_resolve_plugin_root` returns "" — the caller treats this
 oracle's own fail-loud ERROR path.
 
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-Port of: sync-plugin-wiki.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: sync-plugin-wiki.sh (coordinator-claude b5a4192c, 2026-07-20)
 
 Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-port):
     - `--check-only` is accepted but is a pure no-op (kept only for caller

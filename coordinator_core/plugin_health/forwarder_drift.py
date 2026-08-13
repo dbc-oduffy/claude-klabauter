@@ -91,7 +91,7 @@ Contract:
 
 CITED-VS-UNCITED SPLIT (2026-07-31 sharpening; exit contract split
 2026-08-12) — a missing settings-home/bin forwarder is reported (and now
-gated) in one of two registers depending on whether any example-doctrine-repo prompt
+gated) in one of two registers depending on whether any coordinator-claude prompt
 surface actually tells an agent to invoke it:
   - UNCITED: nothing in the corpus names this CLI. Today's framing is
     correct as-is — this is exactly "an install ran before the current
@@ -116,23 +116,23 @@ surface actually tells an agent to invoke it:
     non-empty `cited_missing` fails the CLI's exit code; the UNCITED
     population never does.
 
-  Names are drawn from example-doctrine-repo's `coordinator/{agents,skills,commands,
+  Names are drawn from coordinator-claude's `coordinator/{agents,skills,commands,
   snippets,pipelines}/**/*.md` (excluding `tests/`/`fixtures/` segments,
   same five trees and same exemption as
   `coordinator/hooks/scripts/_prompt_surface_citations.py::PROMPT_SURFACE_DIRS`
   in that repo). Re-derived here, not imported: claude-klabauter must not depend on
-  example-doctrine-repo's test tree (a sibling repo that may not even be checked out
+  coordinator-claude's test tree (a sibling repo that may not even be checked out
   on this machine — see below), so `_ENTRYPOINT_RE` and the five-tree scan
   are a deliberate, small, standalone copy of the shape
   `coordinator/tests/test_prompt_surfaces_cite_installed_entrypoints.py`
-  (example-doctrine-repo, committed 2026-07-31, b507bf1a2076) already validated against
+  (coordinator-claude, committed 2026-07-31, b507bf1a2076) already validated against
   the corpus — including that module's own documented non-greedy-`.*?`
   subtlety: `[^}]*` cannot cross the inner `}` of the
   `${CLAUDE_HOME:-$HOME}` fallback spelling and silently matches nothing on
   that shape, so `_ENTRYPOINT_RE` uses `.*?` for the same reason that
   module does.
 
-  example-doctrine-repo may legitimately be absent on this machine (OSS consumer, CI,
+  coordinator-claude may legitimately be absent on this machine (OSS consumer, CI,
   a machine with no `repos.example_doctrine_repo` registered) — resolved via the same
   registry seam `coordinator_core.ops.coordinator_doe_root.
   coordinator_doe_root()` uses elsewhere (never a hardcoded path), and any
@@ -204,7 +204,7 @@ _PROG = "forwarder-drift"
 _FORWARDER_MARKER = "# coordinator-claude bin forwarder for "
 
 # Minimum remedy (AC5): `python3 -m coordinator_core.install.substrate`
-# requires CLAUDE_PLUGIN_ROOT pointed at the example-doctrine-repo clone's coordinator/
+# requires CLAUDE_PLUGIN_ROOT pointed at the coordinator-claude clone's coordinator/
 # dir and fails loud without it (no self-derivation) — that is the whole
 # forwarder-regeneration step, without the maximalist orchestrator's broader
 # scope (settings.json hook blocks, shell shims, the claude-doe wrapper, the
@@ -216,7 +216,7 @@ _FORWARDER_MARKER = "# coordinator-claude bin forwarder for "
 # cannot preview this drift.
 _REMEDY = (
     "run `python3 -m coordinator_core.install.substrate` (requires CLAUDE_PLUGIN_ROOT set to the "
-    "example-doctrine-repo coordinator/ dir) as the minimum remedy, or /coordinator:install "
+    "coordinator-claude coordinator/ dir) as the minimum remedy, or /coordinator:install "
     "(coordinator/scripts/install-maximalist.py) as the guided superset, to regenerate forwarders"
 )
 
@@ -233,7 +233,7 @@ _ADVISORY_LINE = (
 # read its counts as live drift against an actively-maintained location.
 _COMPAT_BIN_LABEL = "~/.claude/bin (legacy-mirror residue — compat producer retired 2026-07-24)"
 
-# Deliberate standalone copy of example-doctrine-repo's
+# Deliberate standalone copy of coordinator-claude's
 # `coordinator/tests/test_prompt_surfaces_cite_installed_entrypoints.py::_ENTRYPOINT_RE`
 # (committed 2026-07-31, b507bf1a2076) — see module docstring's CITED-VS-UNCITED
 # SPLIT section for why this is copied, not imported. Non-greedy `.*?` so this
@@ -242,7 +242,7 @@ _COMPAT_BIN_LABEL = "~/.claude/bin (legacy-mirror residue — compat producer re
 # module this was copied from).
 _ENTRYPOINT_RE = re.compile(r"\$\{COORDINATOR_SETTINGS_HOME:-.*?\}/bin/([A-Za-z0-9_.-]+)")
 
-# Same five trees, same tests/fixtures exemption, as example-doctrine-repo's
+# Same five trees, same tests/fixtures exemption, as coordinator-claude's
 # `coordinator/hooks/scripts/_prompt_surface_citations.py::PROMPT_SURFACE_DIRS`
 # — re-derived rather than imported for the same reason as `_ENTRYPOINT_RE`.
 _DOE_PROMPT_SURFACE_SUBDIRS = ("agents", "skills", "commands", "snippets", "pipelines")
@@ -262,7 +262,7 @@ class ForwarderDriftResult:
     `cited_missing` (new 2026-08-12, AC1) is the machine-readable form of the
     CITED-VS-UNCITED SPLIT (see module docstring): `{settings-home-bin CLI
     name: [citing-site, ...]}` for every missing settings-home/bin forwarder
-    that is ALSO named by a live example-doctrine-repo prompt-surface invocation. Empty
+    that is ALSO named by a live coordinator-claude prompt-surface invocation. Empty
     dict in every other case — uncited-only drift, orphan-only drift, skip,
     or clean. This is the field `check-forwarder-drift.py` gates on
     (non-empty -> non-zero exit); everything else about this result stays
@@ -294,7 +294,7 @@ def _resolve_compat_bin() -> Path:
 
 
 def _resolve_doe_root() -> Optional[Path]:
-    """example-doctrine-repo's repo root, via the same registry seam
+    """coordinator-claude's repo root, via the same registry seam
     `coordinator_core.ops.coordinator_doe_root` uses elsewhere — never a
     hardcoded path. `coordinator_doe_root()` itself never raises (folds every
     rung's failure to None, see that module's docstring); this wrapper adds
@@ -313,7 +313,7 @@ def _cited_entrypoint_sites(doe_root: Path) -> Dict[str, List[str]]:
     """{settings-home-bin CLI name: [ "<rel-path-from-doe-root>:<line>", ... ]}
     for every settings-home `bin/<name>` citation — the
     `${COORDINATOR_SETTINGS_HOME:-...}` expansion form — across
-    example-doctrine-repo's five prompt-surface trees (see module docstring). Best-effort
+    coordinator-claude's five prompt-surface trees (see module docstring). Best-effort
     per file — an unreadable file is skipped, never a hard failure."""
     sites: Dict[str, List[str]] = {}
     for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
@@ -389,7 +389,7 @@ def _diff_one_location(
 
     ``cited_sites`` (see module docstring's CITED-VS-UNCITED SPLIT) is the
     ``{name: [site, ...]}`` map from `_cited_entrypoint_sites`, or None when
-    example-doctrine-repo was unresolvable on this machine — in which case every missing
+    coordinator-claude was unresolvable on this machine — in which case every missing
     name renders in the plain, undifferentiated register (today's wording),
     since there is nothing to differentiate against."""
     installed = _installed_forwarder_names(bin_dir)
@@ -447,7 +447,7 @@ def check_forwarder_drift(
     forwarder_drift` op. Every param is an explicit override for tests; a
     caller that omits one gets the real resolution ladder (see module
     docstring). ``doe_root`` (new 2026-07-31) overrides `_resolve_doe_root`
-    for the CITED-VS-UNCITED SPLIT — omitted, it resolves example-doctrine-repo via the
+    for the CITED-VS-UNCITED SPLIT — omitted, it resolves coordinator-claude via the
     registry seam; unresolvable there degrades to the undifferentiated
     wording (see `_diff_one_location`), never a hard failure."""
     resolved_agent_bin = agent_bin if agent_bin is not None else _resolve_agent_bin()

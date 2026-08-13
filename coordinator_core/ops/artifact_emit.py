@@ -17,7 +17,7 @@ injected by ipc.py for common_dir-scoped ops) and passes it directly to
 envelope.resolve_context(). Fail-loud when repo_root is None (AC5 — unresolvable key is a
 corruption risk; no silent meta-repo fallback).
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C1 / C2
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C1 / C2
 Amendment:     docs/plans/2026-07-07-per-repo-emission-cutover.md § C4a
 """
 

@@ -1,7 +1,7 @@
 """
 bin/claude-klabauter-revendor-handoff-schema.py — repeatable handoff-schema re-vendor.
 
-Purpose: fail-closed, repeatable re-vendor of example-doctrine-repo's active-handoff schema pair
+Purpose: fail-closed, repeatable re-vendor of coordinator-claude's active-handoff schema pair
 (`handoff.schema.json` + `handoff-archived.schema.json`) into claude-klabauter's vendored
 path at coordinator_core/frontmatter/schemas/.
 
@@ -9,27 +9,27 @@ MECHANISM RELOCATED (2026-07-28). Everything this script used to implement inlin
 now lives in `bin/claude-klabauter-revendor-schema.py`, the general named-schema re-vendor;
 this file is the fixed-schema-set convenience entrypoint over it. The generalization
 was forced by a real defect: the `claude-klabauter.schema.vendor_drift` doctor probe's
-remediation told operators to `cp` example-doctrine-repo's file in by hand, which satisfies the
-ADVISORY drift check (against example-doctrine-repo HEAD) while breaking the GATING tamper-check
+remediation told operators to `cp` coordinator-claude's file in by hand, which satisfies the
+ADVISORY drift check (against coordinator-claude HEAD) while breaking the GATING tamper-check
 (against a per-schema pinned SHA) — see
 state/audits/2026-07-28-windows-install-dogfood-friction.md § F3. The probe now
 names the general script, and the general script re-vendors and re-pins together.
 
 The handoff pair is HEAD-TRACKED, not pin-tracked: there is no `_QUEUE_SCHEMA_PINS`
-entry for either file, so the "pin" is whatever example-doctrine-repo HEAD resolves to at run-time,
-exactly as `check_schema_drift` compares against example-doctrine-repo HEAD at test-time. The general
+entry for either file, so the "pin" is whatever coordinator-claude HEAD resolves to at run-time,
+exactly as `check_schema_drift` compares against coordinator-claude HEAD at test-time. The general
 script discovers that classification from the pin registry itself rather than being
 told, so this entrypoint's behavior is unchanged by the relocation.
 
 Contract (unchanged, now enforced by the shared mechanism):
-  - Fail-closed if the example-doctrine-repo clone is absent or `git show` fails (never silently no-ops).
+  - Fail-closed if the coordinator-claude clone is absent or `git show` fails (never silently no-ops).
   - Byte-for-byte overwrite (no reformatting) — mirrors the byte-identity contract
     the drift test enforces (`.prettierignore` guards it upstream).
   - Idempotent: re-running when already in sync makes no changes and exits 0.
   - Post-vendor verify via check_schema_drift() (the same function the test suite
     calls) — the vendor is not done until the drift check itself is green, and a
     failed verify rolls the tree back rather than leaving it half-applied.
-  - example-doctrine-repo clone resolved via resolve_doe_clone() (machine-local registry), with a
+  - coordinator-claude clone resolved via resolve_doe_clone() (machine-local registry), with a
     stale-local-clone warning when the clone is behind its upstream.
 
 Usage:
@@ -90,7 +90,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="claude-klabauter-revendor-handoff-schema.py",
         description=(
-            "Re-vendor example-doctrine-repo HEAD's handoff.schema.json + handoff-archived.schema.json "
+            "Re-vendor coordinator-claude HEAD's handoff.schema.json + handoff-archived.schema.json "
             "into claude-klabauter's vendored path. Fail-closed, byte-identical, idempotent, "
             "verified via check_schema_drift(). Thin entrypoint over "
             "bin/claude-klabauter-revendor-schema.py."
@@ -98,12 +98,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  # Standard re-vendor from example-doctrine-repo HEAD:\n"
+            "  # Standard re-vendor from coordinator-claude HEAD:\n"
             "  python3 bin/claude-klabauter-revendor-handoff-schema.py\n\n"
             "  # Dry-run — report what would change without writing anything:\n"
             "  python3 bin/claude-klabauter-revendor-handoff-schema.py --dry-run\n\n"
-            "  # Override the example-doctrine-repo clone path:\n"
-            "  python3 bin/claude-klabauter-revendor-handoff-schema.py --doe-clone /path/to/example-doctrine-repo\n\n"
+            "  # Override the coordinator-claude clone path:\n"
+            "  python3 bin/claude-klabauter-revendor-handoff-schema.py --doe-clone /path/to/coordinator-claude\n\n"
             "  # Any other vendored schema (incl. every pin-tracked one):\n"
             "  python3 bin/claude-klabauter-revendor-schema.py <name> --dry-run\n"
         ),
@@ -112,7 +112,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--doe-clone",
         metavar="PATH",
         help=(
-            "Override the example-doctrine-repo clone path. Default: resolve via machine-local registry "
+            "Override the coordinator-claude clone path. Default: resolve via machine-local registry "
             "(repos.example_doctrine_repo in registry.local.toml / registry.toml). "
             "Reuses resolve_doe_clone() — never re-implements registry parsing."
         ),
@@ -122,7 +122,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Report which vendored files would change (if any) without writing "
-            "anything. Resolves the example-doctrine-repo clone and diffs bytes, but never touches disk."
+            "anything. Resolves the coordinator-claude clone and diffs bytes, but never touches disk."
         ),
     )
     return p.parse_args(argv)

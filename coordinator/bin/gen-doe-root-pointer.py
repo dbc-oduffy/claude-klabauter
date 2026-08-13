@@ -5,8 +5,8 @@ gen-doe-root-pointer.py — CLI trampoline over claude-klabauter coordinator_cor
 Finish-strangler port (DOE-PORT R1, variant #1 — pristine, no claude-klabauter shim borrows this
 script): the bash implementation (reads repos.example_doctrine_repo from the machine-local registry,
 writes ~/.claude/.doe-root, --check-only dry-run mode) has been fully ported to
-coordinator_core/ops/gen_doe_root_pointer.py per DR-047 (example-doctrine-repo owns contract/generator,
-Claude-klabauter owns engine). This file is now a thin example-doctrine-repo-side (contract) trampoline over that
+coordinator_core/ops/gen_doe_root_pointer.py per DR-047 (coordinator-claude owns contract/generator,
+Claude-klabauter owns engine). This file is now a thin coordinator-claude-side (contract) trampoline over that
 Claude-klabauter (engine) module.
 
 Spec backlink: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § C1

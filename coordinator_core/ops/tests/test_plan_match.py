@@ -25,7 +25,7 @@ Coverage:
 Fixture approach: real on-disk Markdown files with YAML frontmatter in a tmp_path
 directory — matches the production ``docs/plans/*.md`` shape.
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C2
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C2
 """
 
 from __future__ import annotations

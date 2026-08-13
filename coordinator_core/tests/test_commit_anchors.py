@@ -11,7 +11,7 @@ _handler is a sync def (F1 AC-3 Gap-3 fix — converted from async def). _run() 
 both sync results and legacy coroutines so tests remain usable across both shapes.
 No pytest-asyncio dependency (engine is stdlib-only; prefer no test-infra additions).
 
-Spec backlink: docs/plans/2026-07-04-claude-klabauter-commit-anchor-stamper.md § C1-op
+Spec backlink: pln-claude-klabauter-commit-anchor-stamper-q-29b891 § C1-op
 """
 
 from __future__ import annotations

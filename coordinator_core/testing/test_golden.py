@@ -8,7 +8,7 @@ depends on: (1) a missing golden is a hard `GoldenMissingError`, never a skip; (
 normalized (parsed-object equality), not a literal-text diff.
 
 Port source: none — net-new (2026-07-21 de-node Gate A).
-Spec backlink: docs/plans/2026-07-21-parity-suites-freeze-to-goldens.md § C0
+Spec backlink: pln-freeze-the-6-node-oracle-parit-6a21ab § C0
 
 Negative-spec: every fixture this suite exercises is written under pytest's
 `tmp_path`, never committed to disk — `_resolve_goldens_dir` is monkeypatched to

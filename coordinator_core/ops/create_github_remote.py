@@ -50,9 +50,9 @@ Op contract (C0a manifest row `create-and-push-github-remote`):
     -> {created: bool, already_existed: bool, pushed: bool}
     scope: common_dir (writes `.git/config`, shared across linked worktrees)
 
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § A3
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § A3
                docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
-Fence source: skills/new-project/SKILL.md:127 (example-doctrine-repo)
+Fence source: skills/new-project/SKILL.md:127 (coordinator-claude)
 """
 
 from __future__ import annotations

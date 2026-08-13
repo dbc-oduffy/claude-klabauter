@@ -25,12 +25,12 @@ constants (``_VENDOR_CONTRACT``, ``PIN_SHA_FILE``) are monkeypatched to isolated
 dirs. No network calls. No on-disk sentinel file is used anywhere in this suite — the
 gate is inline-only (``--ack-major``).
 
-Negative-spec (2026-07-21): this suite no longer exercises src/ or dist/ — upstream example-doctrine-repo
+Negative-spec (2026-07-21): this suite no longer exercises src/ or dist/ — upstream coordinator-claude
 commit 7cca4d4c deleted the cockpit-contract TS/Zod toolchain, and the script now vendors
 schema/ only. Do not reintroduce src/ fixtures, pnpm/node mocks, or a dist/ functional-
 verify test here; see the script's module docstring negative-spec.
 
-Spec backlink: docs/plans/2026-07-08-producer-emit-hold-removal-reader-first-consumer-owned.md § C3
+Spec backlink: pln-producer-emit-hold-removal-rea-48bd64 § C3
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def _git_local(clone: Path, *args: str) -> CompletedProcess:
 
 
 def _init_fake_clone(path: Path) -> None:
-    """Initialise a bare-bones git repo for use as a fake example-doctrine-repo clone."""
+    """Initialise a bare-bones git repo for use as a fake coordinator-claude clone."""
     subprocess.run(["git", "init", "-b", "main", str(path)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(path), "config", "user.email", "test@test.local"], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(path), "config", "user.name", "Test CI"], check=True, capture_output=True)
@@ -206,7 +206,7 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def base_fake_clone(tmp_path: Path):
-    """Fake example-doctrine-repo clone with v2.4.0 schema committed; returns (clone_path, sha_v240).
+    """Fake coordinator-claude clone with v2.4.0 schema committed; returns (clone_path, sha_v240).
 
     Negative-spec (2026-07-21): no src/ tree — upstream commit 7cca4d4c deleted the
     TS/Zod toolchain; only schema/ is committed in the fake clone.

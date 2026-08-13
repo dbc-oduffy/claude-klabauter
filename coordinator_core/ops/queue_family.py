@@ -9,7 +9,7 @@ delegates every record-collection/parse/skip-unparseable concern to that
 seam. Per-family required-field differences are a lookup table over the
 records ``query_records`` already returns — never a second file-loading path.
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C1
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C1
 
 Negative-spec:
   - Does NOT glob, walk directories, or parse YAML/frontmatter itself — all

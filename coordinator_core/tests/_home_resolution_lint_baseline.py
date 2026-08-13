@@ -142,7 +142,7 @@ COLON_JOIN_BASELINE: list[tuple[str, int, str]] = []
 # full per-site reasoning:
 #   coordinator_core/install/scaffold_structure.py:99 -- `self.path` is a
 #     manifest-authored string from `canonical-structure.yaml`
-#     (example-doctrine-repo-owned, forward-slash by schema convention), never a live
+#     (coordinator-claude-owned, forward-slash by schema convention), never a live
 #     OS-supplied filesystem path. Folding backslash here would be
 #     inert (the manifest never contains one) at best, and would
 #     misinterpret a literal backslash in a future template name as a
@@ -205,7 +205,7 @@ FORWARD_SLASH_BASELINE: list[tuple[str, int, str]] = [
 ]
 
 # 2026-07-29 update: 13 of the original 18 BARE_OR_BASELINE sites fixed --
-# see cross-repo memo / example-doctrine-repo judgment-half dispatch for the home-
+# see cross-repo memo / coordinator-claude judgment-half dispatch for the home-
 # resolution defect class (bare_home_or_chain rule). The 4 remaining entries
 # below are CONFIRMED FALSE POSITIVES of this AST rule's +/-3-line
 # "nearby window" Windows-rung detector, not live bugs -- each already

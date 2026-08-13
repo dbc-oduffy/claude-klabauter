@@ -1,6 +1,6 @@
 """Characterization tests for coordinator_core.ops.ensure_doe_clone.
 
-Port source: coordinator/commands/install.md (example-doctrine-repo) Step 3.5a, the two
+Port source: coordinator/commands/install.md (coordinator-claude) Step 3.5a, the two
 literal bash fences at lines 731 and 747.
 Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9
 """
@@ -141,7 +141,7 @@ def test_live_clone_succeeds_with_resolved_url(tmp_path, monkeypatch, capsys, _f
     bin_dir = _make_fake_bin(tmp_path)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/bin" + os.pathsep + "/usr/bin")
     monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(clone))
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO_URL", "https://example.invalid/example-doctrine-repo.git")
+    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO_URL", "https://example.invalid/coordinator-claude.git")
 
     rc = main([])
 

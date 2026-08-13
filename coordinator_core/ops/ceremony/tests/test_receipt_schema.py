@@ -562,7 +562,7 @@ def test_valid_node_types_covers_all_defined_types() -> None:
 # ---------------------------------------------------------------------------
 # C3 — structured failure-class discriminator (failed_critical[])
 #
-# Spec backlink: docs/plans/2026-07-07-wsc-commit-ceremony-tail-hardening.md § C3
+# Spec backlink: pln-wsc-commit-ceremony-tail-harde-6c393d § C3
 # ---------------------------------------------------------------------------
 
 

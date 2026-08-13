@@ -2,7 +2,7 @@
 """verify-orientation-cache-sync.py — Schema verifier for state/orientation_cache.md.
 
 Trampoline over claude-klabauter coordinator_core.ops.verify_orientation_cache_sync
-(DR-047: example-doctrine-repo owns contract/generator, claude-klabauter owns engine). Resolves
+(DR-047: coordinator-claude owns contract/generator, claude-klabauter owns engine). Resolves
 REPO_ROOT/STATE_ROOT/CACHE_FILE and owns the `--list` / no-cache-file no-op;
 the schema-check logic (frontmatter, heading allowlist, per-section shape
 regexes, UE-detector-regression guard) lives in the claude-klabauter op module. No
@@ -12,11 +12,11 @@ bin/regenerate-orientation-cache.
 # verify-orientation-cache-sync.py — Schema verifier for state/orientation_cache.md.
 #
 # Trampoline over claude-klabauter coordinator_core.ops.verify_orientation_cache_sync
-# (DR-047: example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+# (DR-047: coordinator-claude owns contract/generator, claude-klabauter owns engine).
 #
 # Spec backlink: docs/plans/2026-05-18-orientation-cache-authoring-discipline.md
 # Schema:       plugins/coordinator-claude/coordinator/pipelines/workday-start-internals.md § 5.5
-# Producer:     plugins/coordinator-claude/coordinator/bin/regenerate-orientation-cache (still example-doctrine-repo bash)
+# Producer:     plugins/coordinator-claude/coordinator/bin/regenerate-orientation-cache (still coordinator-claude bash)
 # Port source:  coordinator/bin/verify-orientation-cache-sync.py (this file, prior bash body; see git log)
 # Spec backlink (port): docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 #

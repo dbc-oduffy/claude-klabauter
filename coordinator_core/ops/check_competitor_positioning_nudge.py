@@ -11,7 +11,7 @@ competitors[] array. Suppressed (design-as-offers decline-memory) when the PM ha
 declined within the last _COOLDOWN_DAYS days — an unconditional offer that
 resurfaces unchanged twice a week reads as a nag by week 3-4, not an offer.
 
-Port of: check-competitor-positioning-nudge.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-competitor-positioning-nudge.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: coordinator/docs/plans/2026-07-14-self-description-competitor-marking-deliverable.md
 
 Negative-spec (fidelity to the bash oracle — do NOT "fix" these mid-port):

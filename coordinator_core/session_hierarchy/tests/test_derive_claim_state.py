@@ -9,7 +9,7 @@ ledger claim whose tracked-frontmatter mirror reverted to `open`) no longer
 makes the session node, and its children's `parent_session_id`, vanish from
 this projection.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C6b (AC5).
 
 Negative-spec:

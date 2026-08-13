@@ -2,7 +2,7 @@
 coordinator_core.session.liveness — the coordinator session hub's LIVENESS
 module.
 
-Port of: liveness.sh (example-doctrine-repo 6aa77d4b, 2026-07-21).
+Port of: liveness.sh (coordinator-claude 6aa77d4b, 2026-07-21).
 
 This is a PURE IN-PROCESS LIBRARY, not an IPC op — it self-registers nothing
 and touches none of the shared op-registry files. It provides the two-layer
@@ -98,7 +98,7 @@ Negative-spec:
       ``live_session_ids``' hot consumers.
     - Do NOT let a meta-less/unparseable-meta session dir read confirmed-DEAD
       by defaulting its recency to epoch-0 — that let a peer wrongfully take
-      over a session that was merely mid-write (example-doctrine-repo 642195ba, follow-up
+      over a session that was merely mid-write (coordinator-claude 642195ba, follow-up
       88929bea; ``_dir_recency_fallback_epoch``, ``session_live``'s Layer 2).
       This is a recency-SOURCE substitution, not a threshold change — a
       genuinely stale meta-less dir must still read DEAD.
@@ -222,7 +222,7 @@ def is_session_live(pid="", elapsed_sec=0) -> bool:
 
 def _dir_recency_fallback_epoch(sdir: str) -> int:
     """Meta-less/unparseable recency fallback for ``session_live``'s Layer 2
-    (example-doctrine-repo 642195ba, follow-up 88929bea) -- see the call site's comment for the
+    (coordinator-claude 642195ba, follow-up 88929bea) -- see the call site's comment for the
     wrongful-takeover rationale this closes.
 
     Returns the newest mtime among ``sdir``'s top-level REGULAR files (reusing
@@ -289,7 +289,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
         EMPTY (no meta.json, unparseable meta.json, or the field itself is
         missing/null -- ``read_meta_field`` returns "" on all three),
         ``last_epoch`` is substituted via ``_dir_recency_fallback_epoch``
-        (example-doctrine-repo 642195ba / 88929bea) rather than defaulting to epoch-0 -- see
+        (coordinator-claude 642195ba / 88929bea) rather than defaulting to epoch-0 -- see
         that helper's docstring. A ``last_activity`` value that IS present
         but fails ISO parsing (e.g. corrupt-but-non-empty) is NOT covered by
         this fallback and still reads DEAD, unchanged from before.
@@ -364,7 +364,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     last_iso = core.read_meta_field(sdir, "last_activity")
     last_epoch = core.iso_to_epoch(last_iso)
     if not last_iso:
-        # Wrongful-takeover fallback (example-doctrine-repo 642195ba, follow-up 88929bea): a
+        # Wrongful-takeover fallback (coordinator-claude 642195ba, follow-up 88929bea): a
         # session dir with NO meta.json, an unparseable meta.json, or a
         # meta.json missing ``last_activity`` makes ``read_meta_field``
         # return "" -> ``iso_to_epoch("")`` returns 0 -> elapsed would be
@@ -648,7 +648,7 @@ def live_session_verdicts(
         fallthrough (A-F1), using ``session_live``'s CLAMPED elapsed
         arithmetic (``elapsed = max(now - last_epoch, 0)``), with the
         meta-less/mid-write recency-SOURCE substitution
-        (``_dir_recency_fallback_epoch``, example-doctrine-repo 642195ba/88929bea) when
+        (``_dir_recency_fallback_epoch``, coordinator-claude 642195ba/88929bea) when
         ``last_activity`` is empty/unparseable.
       - ``stable_pid`` absent -> ``live_session_ids``'s OWN Layer-2 arm, using
         the SAME UNCLAMPED ``elapsed = now - last_epoch`` it uses today (the

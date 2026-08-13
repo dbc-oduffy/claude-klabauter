@@ -1,7 +1,7 @@
 """coordinator_core.bash_guards.tests.guard_message_exemptions -- the
 written-reason exemption manifest for guard message-size discipline.
 
-Spec backlink: docs/plans/2026-08-02-guard-message-size-discipline.md,
+Spec backlink: pln-runtime-measured-message-size--0669ac,
 chunk C4, AC6, and the "Enriched Dispatch Stubs" C4 section.
 
 `GUARD_MESSAGE_EXEMPTIONS` is the one and only sanctioned escape hatch from

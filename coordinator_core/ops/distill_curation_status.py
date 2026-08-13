@@ -32,7 +32,7 @@ Self-registration: importing this module calls register_op("distill.curation_sta
 as a side-effect (same pattern as ops/artifact_emit.py). coordinator_core.ops.__init__
 imports it so the registration fires at start_server() time (AC14).
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C11 (DEC-1)
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C11 (DEC-1)
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
 """
 

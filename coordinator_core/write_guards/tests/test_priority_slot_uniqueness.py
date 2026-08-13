@@ -24,7 +24,7 @@ whichever happens to iterate first out of `pkgutil.iter_modules` (filesystem
 / import order) -- not a declared, reviewable precedence. This test makes
 that latent non-determinism fail loudly instead of shipping silently.
 
-Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, AC9.
+Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, AC9.
 """
 from __future__ import annotations
 

@@ -24,7 +24,7 @@ contract + compute/apply split shape) -- deliberately excludes any
 pickup-specific gate field.
 
 Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md (Wave 1,
-chunk W1-A2).
+chunk W1-A2). [DEAD-CITATION: plan file never committed to this repo]
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 #: `recommendation` carries exactly these two string fields when non-null —
-#: matches the example-doctrine-repo schema-of-record's object-shaped `recommendation` (AC-13
+#: matches the coordinator-claude schema-of-record's object-shaped `recommendation` (AC-13
 #: cross-slice correction; see `coordinator_core.pickup_assemble`'s
 #: `_RECOMMENDATION_FIELDS` for the pre-existing sibling shape this mirrors).
 _RECOMMENDATION_FIELDS = frozenset({"disposition", "rationale"})
@@ -46,7 +46,7 @@ def _validate_recommendation(recommendation: Any) -> None:
     rationale}`) or `None` — never a bare string. A plain string used to be
     accepted here; that was wrong (Review: code-reviewer — cross-slice
     correction from S3, verified against `pickup_assemble.build_judgment_point`
-    and the example-doctrine-repo `decision-object.schema.json` schema-of-record).
+    and the coordinator-claude `decision-object.schema.json` schema-of-record).
     """
     if recommendation is None:
         return

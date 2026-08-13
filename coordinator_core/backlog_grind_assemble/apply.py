@@ -17,7 +17,7 @@ apply.py most closely (a cadence/mode-selected brief, no single claimed
 artifact path, `Path.cwd()`-resolved repo root, its own `_run_git`) rather
 than `pickup_assemble`'s artifact-path-resolved shape.
 
-Contract: example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
 chunk C4. D-3 (the granularity policy this module's commit verbs
 implement) and the Hard-constraints review-gate risk constraint (bug-

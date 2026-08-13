@@ -1,14 +1,14 @@
 """
 coordinator_core.testing.test_collect — scoped tests for the collect.py engine.
 
-Purpose: hermetic (no example-doctrine-repo dependency) proof that `discover()` classifies all four
+Purpose: hermetic (no coordinator-claude dependency) proof that `discover()` classifies all four
 families and excludes bundled-venv `test_*.py` decoys (DEC-2); plus a guarded
-Example-doctrine-repo-present integration smoke that asserts classification integrity (non-empty
+Coordinator-claude-present integration smoke that asserts classification integrity (non-empty
 discovery, valid family, correct runner_kind) against the real sibling tree —
 not that tree's content mix, which this repo does not own.
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C1 (AC1, AC9-partial)
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C1 (AC1, AC9-partial)
 
 Negative-spec: the committed `test_*.py` modules under `coordinator_core/testing/`
 are the allow-listed set in `_REAL_TEST_MODULES` below (this module plus the runner
@@ -91,14 +91,14 @@ def test_no_stray_test_py_files_committed_under_testing_package() -> None:
 _DOE_ROOT, _DOE_PRESENT = doe_root_and_present()
 
 
-@pytest.mark.skipif(not _DOE_PRESENT, reason="example-doctrine-repo repo root not resolvable on this machine")
+@pytest.mark.skipif(not _DOE_PRESENT, reason="coordinator-claude repo root not resolvable on this machine")
 def test_doe_integration_discovers_and_classifies_real_tree() -> None:
     # Negative-spec (2026-07-25): this test formerly asserted lower-bound
     # COUNTS per family (js-prefix >= 13, js-suffix >= 30, py-native >= 40,
-    # py-nonnative >= 15) against the sibling example-doctrine-repo clone. Those floors
+    # py-nonnative >= 15) against the sibling coordinator-claude clone. Those floors
     # asserted the SIBLING REPO'S CONTENT — a tree this repo neither owns nor
-    # controls — not this repo's own logic, and drifted twice as example-doctrine-repo mutated
-    # its own suite mix (most recently example-doctrine-repo deliberately retiring its JS/TS
+    # controls — not this repo's own logic, and drifted twice as coordinator-claude mutated
+    # its own suite mix (most recently coordinator-claude deliberately retiring its JS/TS
     # corpus in commits 1750bb79 / b069e8f2, driving js-prefix to 0 here). A
     # same-day guard (commit 0a940fce) papered over the js-prefix collapse
     # with a `pytest.skip()`, which also silently hid that js-suffix (17/30)
@@ -107,7 +107,7 @@ def test_doe_integration_discovers_and_classifies_real_tree() -> None:
     # contract this test exists to protect — every family found, every suite
     # tagged with the right runner_kind — is already covered hermetically by
     # `test_all_four_families_discovered_and_classified` above against a
-    # `fixture_tree`, which is unaffected by what example-doctrine-repo's tree happens to
+    # `fixture_tree`, which is unaffected by what coordinator-claude's tree happens to
     # contain on any given day. This test now asserts only that `discover()`
     # runs cleanly against a REAL tree and classifies whatever it finds
     # correctly — not what that tree's suite mix happens to be.

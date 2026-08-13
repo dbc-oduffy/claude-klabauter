@@ -42,7 +42,7 @@ this plan's instruction not to lean on `tracker.advance_status`'s comment,
 which explicitly disclaims being precedent for a differently-shaped
 `tracker.*` op).
 
-Spec backlink: docs/plans/2026-07-28-sat-01b-observed-set-fold-actuator.md
+Spec backlink: pln-sat-01b-observed-set-fold-actu-8b3f7a
   § Tasks C5, § Acceptance Criteria AC10/AC10b/AC14.
 Spec backlink: docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
   § Amendment (2026-07-28) — the five-bound affirmation this op's

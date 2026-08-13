@@ -5,9 +5,9 @@ last-commit metadata, and the ``work/<machine>/<date>`` name parse into machine_
 date_hint. Compare-derived fields (merge_base_sha / ahead_by / behind_by) are LEFT null —
 they are the D9 "compare not run in single-repo emit" nulls, not enrich-derived.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 8, Branch.
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8, Branch.
   Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P08
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P08
 """
 
 from __future__ import annotations

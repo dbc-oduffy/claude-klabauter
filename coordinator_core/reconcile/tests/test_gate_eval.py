@@ -1,7 +1,7 @@
 """
 coordinator_core.reconcile.tests.test_gate_eval — C3 unified gate evaluator fixtures.
 
-Spec backlink: docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C3
+Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C3
 
 Covers the plan's required scenario matrix:
   - all blocked_by shipped -> clear
@@ -31,7 +31,7 @@ distinct `review-due` status excluded from the AND-reduce toward `freed`
 (D3a).
 
 C5 (`continued_into` terminus-chase) coverage, modeled on the REAL
-`lifecycle-vocab` corpus shape (`example-doctrine-repo/archive/handoffs/2026-07/
+`lifecycle-vocab` corpus shape (`coordinator-claude/archive/handoffs/2026-07/
 2026-07-08_144205_roadmap-lvv-05.md`, `state/handoffs/2026-07-08_144206_
 roadmap-lvv-06.md`, and the dr084 successor `archive/handoffs/2026-07/
 2026-07-22_152437_dr084-skill-layer-dual-read.md`) rather than a synthetic
@@ -59,7 +59,7 @@ clear. Covers:
     terminus lacking any `blocks:[...]` back-reference to the original
     dependent — only the NAMED blocker's own `blocks:` is consulted.
 
-Spec backlink: docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C3
+Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb § C3
 """
 
 from __future__ import annotations
@@ -1235,7 +1235,7 @@ class TestGateEvidenceEmptyLegsMalformedIndeterminate:
 
 
 def _real_spinoff_with_lineage_and_no_structured_gate() -> dict:
-    """Modeled on the real, on-disk baton `example-doctrine-repo/state/handoffs/
+    """Modeled on the real, on-disk baton `coordinator-claude/state/handoffs/
     2026-07-08_160001_roadmap-oaxis-01.md` (verified 2026-07-27) — one of the
     30-of-33 live `awaiting_gate` batons carrying a non-`none` `predecessor`
     and/or a populated `origin_*` field, per the live-corpus sweep cited in
@@ -1566,7 +1566,7 @@ class TestC5ContinuedIntoPathFallback:
         terminus = _terminus(
             "shipped",
             shipped_in=_TERMINUS_SHA,
-            path="/Users/alice/X/example-doctrine-repo/archive/handoffs/2026-07/"
+            path="/Users/alice/X/coordinator-claude/archive/handoffs/2026-07/"
             "2026-07-22_152437_dr084-skill-layer-dual-read.md",
         )
 

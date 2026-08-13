@@ -28,7 +28,7 @@ PRIORITY / check(payload) per INTERFACE.md) and evaluates a PreToolUse payload:
 Every guard's own failure is contained (a raising check is treated as no-op
 ALLOW for advisories; hard guards that intend to fail-closed do so inside their
 own check() by returning a deny — the engine never fabricates a deny on a guard
-crash, matching the example-doctrine-repo dispatcher's per-check isolation).
+crash, matching the coordinator-claude dispatcher's per-check isolation).
 
 Stateless / spawn-per-call (DR-215). stdin-based (no argv params) so it is not
 exposed to the Windows ARG_MAX / fcntl regressions that affect argv/locked_rmw
@@ -62,7 +62,7 @@ _PKG_DIR = str(Path(__file__).resolve().parent)
 # (coordinator_core.subagent_sandbox) was removed from this engine — it
 # surprised EMs and dispatched subagents by hard-denying legitimate writes
 # outside a narrow sandbox. The `policy_path` param below is retained (accepted
-# but unused) so the example-doctrine-repo dispatcher needs no change. Other write guards
+# but unused) so the coordinator-claude dispatcher needs no change. Other write guards
 # (illegal-filename, tracker-edit, consumed-handoff, etc.) are unaffected.
 
 _VALID_CLASSES = {"hard-deny", "advisory"}
@@ -101,7 +101,7 @@ def _discover_guards() -> Tuple[List[_Guard], List[str]]:
             mod = importlib.import_module(f"{_PKG_NAME}.{name}")
         except Exception:
             # A broken guard module must never take the whole engine down —
-            # it is simply absent (fail-open for that guard), matching the example-doctrine-repo
+            # it is simply absent (fail-open for that guard), matching the coordinator-claude
             # dispatcher's source-time isolation. Its name is still collected
             # so callers can surface the omission instead of it being silent.
             import_failed.append(name)
@@ -127,7 +127,7 @@ def discover_guard_names() -> Tuple[List[str], List[str]]:
     Runtime-visible half of the silent-omission fix (docs/plans/2026-07-29-
     hook-fan-in-write-path.md C12): a guard module that fails to import is no
     longer just absent — its name comes back in `import_failed` so a caller
-    (the example-doctrine-repo PreToolUse dispatcher) can emit an operator-visible signal instead
+    (the coordinator-claude PreToolUse dispatcher) can emit an operator-visible signal instead
     of the omission being silent. Pairs with
     `write_guards/tests/test_guard_registry_manifest.py`, the CI-visible half
     (a manifest mismatch fails a test instead of vanishing quietly) — that test
@@ -160,7 +160,7 @@ def evaluate(
 
     `skipped_out`, if given a list, is populated in-place with the names of
     guard modules that raised on import during THIS call's discovery pass —
-    lets a caller (the example-doctrine-repo dispatcher) get the same signal
+    lets a caller (the coordinator-claude dispatcher) get the same signal
     `discover_guard_names()` would return without triggering a second,
     independent `_discover_guards()` pass (a duplicated directory-scan +
     import-probe over all guard modules) on every write.

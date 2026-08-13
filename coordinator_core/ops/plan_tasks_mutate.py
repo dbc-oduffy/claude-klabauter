@@ -8,10 +8,10 @@ verbs `add-task` (append a chunk row, fail-loud on duplicate `id`), `stamp`
 (write a row's `disposition`/`disposition_ref`/`disposition_detail` atomically,
 refusing an ungated closed disposition — D4). Zero-spawn hot-path: validates
 rows in-process against the vendored `_PLAN_TASKS_SCHEMA`
-(coordinator_core.frontmatter.schema_validate) — no runtime shell-out to example-doctrine-repo's
+(coordinator_core.frontmatter.schema_validate) — no runtime shell-out to coordinator-claude's
 schema-cli.js.
 
-Spec backlink: docs/plans/2026-07-10-pcli-need-1-plan-tasks-engine-plane.md § C3
+Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
     (add-task/stamp); docs/plans/2026-07-27-plan-line-item-resolution-model.md
     § C4 (resolve verb + stamp's reserved-field refusal); § C5 (resolve
     --backlogged delegates to coordinator-harvest-deferrals' own row-routing).
@@ -63,7 +63,7 @@ Verb contracts:
     authorization signal clears — mirrors
     `coordinator_core.ops.handoff_carry_gate`'s refuse-on-ungated-state
     pattern (D4). `spun_off` does NOT enter this gate in EITHER mode, as
-    of example-doctrine-repo's 2026-08-05 ruling ("the EM self-issues it now" — no
+    of coordinator-claude's 2026-08-05 ruling ("the EM self-issues it now" — no
     governed-plan carve-out in the ruling's text): moving a row to another
     plan drops no work, so there is no scope cut for the PM to ratify
     (AC2). It also occupies its own grouping as of C3 (split out of
@@ -100,7 +100,7 @@ Verb contracts:
     would satisfy it (e.g. "stamp pm_approved: true first"), which is the
     write guard's own key printed back at whoever hit the gate — see the
     retired `_PM_APPROVAL_OFFER` banner below for the full excision. The
-    LEGACY refusal DOES name `pm_approved`, and must (example-doctrine-repo ruling 2026-08-12,
+    LEGACY refusal DOES name `pm_approved`, and must (coordinator-claude ruling 2026-08-12,
     exit 1): the excision's reasoning holds only where the impossibility
     claim is true, and on a per-row boolean the same agent can stamp it
     never was — see `_LEGACY_PM_APPROVAL_HINT`'s own banner for why naming
@@ -483,7 +483,7 @@ def _validate_row(row: dict, *, governed: bool = False) -> list:
     repo-wide (one test only), and the write guards each inline their own
     copy of this same shape-then-cross-field sequence instead of calling it.
     Nor can they: `check_plan_tasks_source` hardcodes claude-klabauter's own vendored
-    schema, while the write guards deliberately resolve example-doctrine-repo's vendored
+    schema, while the write guards deliberately resolve coordinator-claude's vendored
     corpus copy (which its own docstring notes has drifted from claude-klabauter's),
     and it short-circuits on the first error where the guards need every
     row's errors. So this is genuinely THREE independent copies of
@@ -759,7 +759,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 # well-meaning EM to satisfy the field, which reproduces this exact defect
 # one layer up.
 #
-# Contract: cross-repo/archive/2026-07-29-example-doctrine-repo-em-grouping-approval-contract.md
+# Contract: cross-repo/archive/2026-07-29-coordinator-claude-em-grouping-approval-contract.md
 # (actioned; moved from inbox/ to archive/) § "And a hard requirement on your
 # refusal messages."
 
@@ -768,8 +768,8 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 # above describes machinery that does not exist on the plan this branch
 # fires for (Review: code-reviewer Finding 4).
 #
-# REWRITTEN 2026-08-12 (example-doctrine-repo ruling, exit 1 —
-# cross-repo/inbox/2026-08-12-example-doctrine-repo-em-legacy-refusal-honesty-ruling.md;
+# REWRITTEN 2026-08-12 (coordinator-claude ruling, exit 1 —
+# cross-repo/inbox/2026-08-12-coordinator-claude-em-legacy-refusal-honesty-ruling.md;
 # tripwire A-REFUSAL-MAY-NOT-CLAIM-IMPOSSIBILITY-IT-CANNOT-ENFORCE). The
 # prior text carried the governed branch's impossibility claim ("there is
 # deliberately no command that satisfies this from inside the session") onto
@@ -950,7 +950,7 @@ def _to_repo_relative(path: str, worktree: Path) -> str:
     (DR-096: a single repo-relative path, enforced by
     `_cf_plan_tasks_disposition_shape`'s `_is_single_repo_relative_path`
     check). Falls back to `path` unchanged when it is not under `worktree`
-    — a central-scope (claude-klabauter) or lessons-outbox (example-doctrine-repo) write can legitimately
+    — a central-scope (claude-klabauter) or lessons-outbox (coordinator-claude) write can legitimately
     land in a different repo than the plan's own; an absolute cross-repo path
     is still a single, unambiguous referent, just not one relative to THIS
     plan's own worktree.
@@ -975,7 +975,7 @@ def _dispatch_spun_off(task_id: str, disposition_ref: Optional[str], worktree: P
     This does NOT create the spinoff artifact itself — that write lands
     separately, before `resolve` is ever called for this row (the `/spinoff`
     authoring surface; see `coordinator/bin/spinoff-deliverable-and-commit.py`
-    in example-doctrine-repo). What this function computes is the VERIFIED, canonical
+    in coordinator-claude). What this function computes is the VERIFIED, canonical
     repo-relative form of the ref: it resolves the caller-supplied path
     against `worktree`, confirms a real file exists there, and re-derives the
     ref via `_to_repo_relative` rather than trusting the literal string —
@@ -1331,7 +1331,7 @@ def _resolve(
         # grouping touched, even when several rows in the batch land in the
         # same grouping (or the batch spans more than one grouping).
         #
-        # Narrowed 2026-08-05 (example-doctrine-repo ruling) to `backlogged`/`wont_do` only,
+        # Narrowed 2026-08-05 (coordinator-claude ruling) to `backlogged`/`wont_do` only,
         # in BOTH governed and legacy mode — `spun_off` no longer requires
         # any PM ratification at all: "the EM self-issues it now," with no
         # governed-plan carve-out in the ruling's own text. `spun_off` also

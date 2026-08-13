@@ -12,7 +12,7 @@ Exports:
   _TIME_SEG_RE            — filename timestamp-segment matcher (review_trail + rollups).
   _validate_review_trail_file — shared quarantine filter returning (record_dict, reason).
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b
 """
 
 from __future__ import annotations

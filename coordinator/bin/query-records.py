@@ -2,10 +2,10 @@
 
 Finish-strangler restoration (BIG_PORT Wave, 2026-07-24): the retired
 `coordinator/bin/query-records.js` had zero surviving Python entrypoint after
-Claude-klabauter's c79e66cd deletion, breaking example-doctrine-repo fleet callers (the fleet-scope
+Claude-klabauter's c79e66cd deletion, breaking coordinator-claude fleet callers (the fleet-scope
 regression this plan's C1/D1 gate exists to prevent — see
 `docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md` § A2).
-This trampoline services the example-doctrine-repo-used flag subset only — `--type --where
+This trampoline services the coordinator-claude-used flag subset only — `--type --where
 --since --older-than --format --status --root --list-schemas
 --include-archived` — over the
 already-working `coordinator/bin/lib/records_query.py` transport
@@ -18,7 +18,7 @@ translates a CLI flag surface into the op's params dict.
 Two capabilities this trampoline adds that lib/records_query.py's own CLI
 does not expose:
   --status  sugar for an `AND status=<value>` where-clause conjunct (the
-            spelling example-doctrine-repo fences actually use, e.g.
+            spelling coordinator-claude fences actually use, e.g.
             `query-records --type debt --status open`).
   --root    overrides the worktree root the op resolves records against
             (query-records.js's `detectRoot`) — lib/records_query.py's
@@ -43,11 +43,11 @@ an explicit "not ported — claude-klabauter BIG_PORT" message — NEVER a silen
 serviced or fail-louded here; confirmed via grep it never appears on a
 query-records fence.) Any OTHER flag not in this file's supported set (e.g.
 `--unattached`, `--limit`, `--sort` — real query-records.js flags, but not in
-this chunk's example-doctrine-repo-used flag list) is left to argparse's own "unrecognized
+this chunk's coordinator-claude-used flag list) is left to argparse's own "unrecognized
 arguments" rejection, which is already fail-loud by construction — no bespoke
 handling needed for flags outside both named lists.
 
-Spec backlink: docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md § A2
+Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A2
 Prior node implementation: coordinator/bin/query-records.js (kept on disk
 pending D1's fleet-scope-gated delete pass — not retired by this port).
 """
@@ -156,7 +156,7 @@ _STATUS_TOKEN_RE = re.compile(r"^[\w-]+$")
 def _compose_where(where: str, status: str | None) -> str:
     """AND a `--status` value into `where` as a `status=<value>` conjunct.
 
-    `--status` is example-doctrine-repo-fence sugar (e.g. `--type debt --status open`) for what
+    `--status` is coordinator-claude-fence sugar (e.g. `--type debt --status open`) for what
     the engine's own grammar already expresses via `--where "status=open"`;
     this trampoline does not invent a new op-side param, it composes onto the
     existing `where` string before dispatch.

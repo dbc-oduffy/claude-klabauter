@@ -1,15 +1,15 @@
 """workweek-complete-close.py — closing-orchestration CLI for /workweek-complete.
 
 Ports the residual imperative logic that was still hand-authored inline as
-bash fences in example-doctrine-repo `coordinator/commands/workweek-complete.md` (M3
+bash fences in coordinator-claude `coordinator/commands/workweek-complete.md` (M3
 chunk WWC-4, the bash-kill campaign). It is a composite entrypoint over
 several concerns — one subcommand per concern — rather than N separate
-scripts, matching the multi-concern chunk convention: the example-doctrine-repo ceremony step
+scripts, matching the multi-concern chunk convention: the coordinator-claude ceremony step
 will invoke this CLI by subcommand name once D2 repoints the fence.
 
 Subcommands:
   week-start        Extract the "Week starting:" date from HEADER.md
-                     (example-doctrine-repo workweek-complete.md Step 9.1's inline
+                     (coordinator-claude workweek-complete.md Step 9.1's inline
                      `grep -m1 ... | sed ...` derivation, ported verbatim
                      as a reusable function — several ceremony steps need
                      this same value).
@@ -43,7 +43,7 @@ are the D1/D2 repoint's concern directly; wrapping them here would just be
 re-indirection, not a port. See the WWC-4 dispatch brief's "what to port vs
 leave" rule.
 
-Spec backlink: example-doctrine-repo coordinator/commands/workweek-complete.md
+Spec backlink: coordinator-claude coordinator/commands/workweek-complete.md
     § Step 9.1 (week-start derivation, lines ~3337-3339)
     § Step 9.1.5 (reconcile sweep, lines ~3358-3505)
     § Step 13 (archive + reset + commit + push, lines ~3762-3903)
@@ -252,7 +252,7 @@ def _bin_dir() -> Path:
 def derive_week_start(header_path: Path) -> str:
     """Extract the `**Week starting:** YYYY-MM-DD` value from HEADER.md.
 
-    Port of the example-doctrine-repo bash fence's `grep -m1 '\\*\\*Week starting:\\*\\*'
+    Port of the coordinator-claude bash fence's `grep -m1 '\\*\\*Week starting:\\*\\*'
     state/week-changelog/HEADER.md | sed 's/.*\\*\\*Week starting:\\*\\*[[:space:]]*//'`.
 
     Divergence from the bash oracle (deliberate, noted in the WWC-4 executor

@@ -38,7 +38,7 @@ committed. A wrap that swept a peer's file would satisfy "leaves none of
 the four classes dirty" while being exactly the cross-session sweep
 incident this plan exists to prevent (see the plan's Anti-scope section).
 
-Spec backlink: docs/plans/2026-08-05-in-process-writers-declare-their-writes.md § C7 (AC9)
+Spec backlink: pln-in-process-engine-writers-decl-33016a § C7 (AC9)
 """
 
 from __future__ import annotations

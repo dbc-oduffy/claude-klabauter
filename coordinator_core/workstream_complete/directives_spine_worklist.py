@@ -7,7 +7,7 @@ Purpose: a plan-tasks spine row that never reaches a terminal
 `disposition` has five honest ends, reachable via `coordinator/bin/
 plan-tasks-resolve` — do it now (`disposition: coded`, no PM word), spin
 it off or move it to an existing plan (`disposition: spun_off`, no PM
-word — relaxed at example-doctrine-repo `bd0475fd5`, schema 1.4.0), backlog it to the
+word — relaxed at coordinator-claude `bd0475fd5`, schema 1.4.0), backlog it to the
 improvement queue (`disposition: backlogged`, a PM word required), or
 rule it won't-do (`disposition: wont_do`, a PM word required) — plus the
 legitimate non-terminal choice of leaving it genuinely `open` and
@@ -19,12 +19,12 @@ still-open rows on the session's governing plan at close time, closing
 that silent dishonest exit — it does NOT write anything, and it never
 blocks (see Negative-spec).
 
-Spec backlink: docs/plans/2026-08-05-wsc-open-spine-row-worklist.md,
-chunk C1. Design provenance: C13 of example-doctrine-repo's
+Spec backlink: pln-workstream-complete-names-its-dc94b7,
+chunk C1. Design provenance: C13 of coordinator-claude's
 docs/plans/2026-07-29-pm-approved-provenance-write-time-closure-gate.md,
 PM-ratified, handed over via docs/plans/2026-08-05-leg-a-closing-aid-
 terminal-statuses.md and delivered as ask 5 of source memo
-2026-08-05-example-doctrine-repo-em-leg-a-ac-checkbox-divestment.md.
+2026-08-05-coordinator-claude-em-leg-a-ac-checkbox-divestment.md.
 
 Mirrors `directives_session_hygiene.py`'s Step 2.96 completeness-
 checklist gate shape (`FREE_VALUE_KEYS`, an item NamedTuple, a gate

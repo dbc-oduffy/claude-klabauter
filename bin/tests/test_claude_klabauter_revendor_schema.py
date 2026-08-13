@@ -5,7 +5,7 @@ the general named-schema re-vendor + re-pin entrypoint.
 Purpose: prove the property the script exists for — that a re-vendor moves the vendored
 BYTES and the gating PIN together, or moves neither. The defect this closes is a fresh
 installer following `cp`-shaped remediation prose, satisfying the advisory drift probe
-(which compares against example-doctrine-repo HEAD) while breaking the gating tamper-check (which compares
+(which compares against coordinator-claude HEAD) while breaking the gating tamper-check (which compares
 against `_QUEUE_SCHEMA_PINS`) — see
 state/audits/2026-07-28-windows-install-dogfood-friction.md § F3.
 
@@ -25,7 +25,7 @@ Coverage:
      overrides it, the decline self-expires once the incoming version moves past the
      declined one, a decline for a different schema never blocks, and `_write_decline`
      round-trips a record `_decline_gate_reasons` can then read back. Includes a
-     regression reproducing the 2026-08-13 incident this feature responds to: example-doctrine-repo moves
+     regression reproducing the 2026-08-13 incident this feature responds to: coordinator-claude moves
      a schema's validation shape while leaving `x-schema-version` unchanged, an operator
      backs it out and records the decline, and a second re-vendor attempt at the same
      shape+version is refused without `--ack-declined`.
@@ -107,7 +107,7 @@ def _git(clone: Path, *args: str) -> None:
 
 @pytest.fixture
 def fake_clone(tmp_path: Path) -> Path:
-    """A real local git repo shaped like example-doctrine-repo (coordinator/schemas/<name>.schema.json)."""
+    """A real local git repo shaped like coordinator-claude (coordinator/schemas/<name>.schema.json)."""
     clone = tmp_path / "fake-doe"
     (clone / "coordinator" / "schemas").mkdir(parents=True)
     _git_init = ["git", "init", "-q", str(clone)]
@@ -211,9 +211,9 @@ class TestRewritePinRegistry:
         reg = _write_pin_registry(tmp_path / "r.py")
         pins = _mod._load_pin_registry(reg)
         src = _mod._rewrite_pin_registry(
-            reg, [(pins["beta"], "f" * 40)], "HEAD", "example-doctrine-repo landed the widened enum"
+            reg, [(pins["beta"], "f" * 40)], "HEAD", "coordinator-claude landed the widened enum"
         )
-        assert "example-doctrine-repo landed the widened enum" in src
+        assert "coordinator-claude landed the widened enum" in src
         assert "bin/claude-klabauter-revendor-schema.py" in src
         ast.parse(src)  # still valid Python
 
@@ -370,7 +370,7 @@ class TestDeclineGate:
     ) -> None:
         """Reproduces the 2026-08-13 incident: same version, shape moved, previously
         declined — a second re-vendor attempt at the identical shape must refuse."""
-        declined_shape = _handoff_like_schema(False)  # example-doctrine-repo's shape-narrowing edit
+        declined_shape = _handoff_like_schema(False)  # coordinator-claude's shape-narrowing edit
         _commit_schema(fake_clone, "alpha", _dump(declined_shape))
         (sandbox["schemas"] / "alpha.schema.json").write_bytes(_dump(_handoff_like_schema(True)))
 
@@ -422,7 +422,7 @@ class TestDeclineGate:
             backout_sha="a" * 40,
         )
 
-        # example-doctrine-repo resolves it: same shape, but bumped past the declined version (8.0.0).
+        # coordinator-claude resolves it: same shape, but bumped past the declined version (8.0.0).
         moved_shape = dict(declined_shape)
         moved_shape["x-schema-version"] = "8.0.0"
         _commit_schema(fake_clone, "alpha", _dump(moved_shape))
@@ -431,7 +431,7 @@ class TestDeclineGate:
             schema_names=["alpha"],
             doe_clone_arg=str(fake_clone),
             ack_major=True,
-            reason="example-doctrine-repo resolved the shape narrow by bumping to 8.0.0",
+            reason="coordinator-claude resolved the shape narrow by bumping to 8.0.0",
         )
         assert rc == 0, "a decline must not block once upstream moved the version"
         assert (sandbox["schemas"] / "alpha.schema.json").read_bytes() == _dump(moved_shape)
@@ -459,7 +459,7 @@ class TestDeclineGate:
             schema_names=["alpha"],
             doe_clone_arg=str(fake_clone),
             ack_major=True,
-            reason="example-doctrine-repo resolved the shape narrow by bumping to 8.0.0",
+            reason="coordinator-claude resolved the shape narrow by bumping to 8.0.0",
         )
         assert rc == 0
         out = capsys.readouterr().out

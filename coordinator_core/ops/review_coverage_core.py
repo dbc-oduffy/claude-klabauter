@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.review_coverage_core — Port of: review-coverage-core.sh
-(example-doctrine-repo c187f5b9, 2026-07-21) — BIG_PORT Wave C, direct-import trampoline,
+(coordinator-claude c187f5b9, 2026-07-21) — BIG_PORT Wave C, direct-import trampoline,
 template-variant #1.
 
 Purpose: shared coverage-computation core for review-trail gates. Exposes two
@@ -68,7 +68,7 @@ Spec backlink: docs/plans/2026-06-23-chain-end-review-coverage-gate.md § C2
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Central-reg: this op is a PLAIN MODULE (no @register_op) — direct-import
-trampoline variant (template-variant #1; see example-doctrine-repo
+trampoline variant (template-variant #1; see coordinator-claude
 tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1).
 NOT wired into ops/__init__.py / _registry_map.py / ipc.py /
 authz/classification.py — no registration action needed.
@@ -248,8 +248,8 @@ def _classify_shape(rec: dict, warn: bool = True) -> Optional[Tuple[str, str, st
     read of the same records (`classify_pending_records`) that must not duplicate
     the crediting path's stderr.
 
-    Spec backlink: docs/plans/2026-08-03-open-review-loops-are-a-named-gap.md § C2
-    Spec backlink (kind): docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C6
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C2
+    Spec backlink (kind): pln-planning-artifacts-are-a-third-77111f § C6
     """
     sha_range = rec.get("sha_range", "")
     artifact = rec.get("artifact", "<unknown>")
@@ -618,7 +618,7 @@ def classify_pending_records(
           silently here (`_classify_shape(warn=False)`) because the crediting
           path already warned about the same records.
 
-    Spec backlink: docs/plans/2026-08-03-open-review-loops-are-a-named-gap.md § C2
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C2
     """
     pending: List[Tuple[str, str]] = []
     non_pending: List[Tuple[str, str]] = []
@@ -718,7 +718,7 @@ def classify_pending_records(
 # --segments-json result as data (no subprocess, no JSON round-trip). Used by
 # coordinator_core.ops.workweek_trail_scope, which used to shell out to this
 # module's own CLI trampoline (coordinator/lib/review-coverage-core.sh,
-# example-doctrine-repo) via `bash <script> --segments-json --on-unresolvable-ref skip`;
+# coordinator-claude) via `bash <script> --segments-json --on-unresolvable-ref skip`;
 # now a same-process call now that both live in coordinator_core.
 # ---------------------------------------------------------------------------
 

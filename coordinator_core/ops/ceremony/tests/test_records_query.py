@@ -10,7 +10,7 @@ Coverage:
   (e) limit truncation in readdir order.
   (f) consumed-marker normalization applies to handoff/handoff-archived before filtering.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8a
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8a
 """
 
 from __future__ import annotations

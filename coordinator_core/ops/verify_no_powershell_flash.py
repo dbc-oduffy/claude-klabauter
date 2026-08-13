@@ -7,7 +7,7 @@ lives in `verify-no-console-flash.py` (bin/) — this module does
 NOT reimplement any guard logic; it locates and re-invokes the canonical
 guard script alongside the caller, forwarding argv and exit code verbatim.
 
-Port of: verify-no-powershell-flash.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: verify-no-powershell-flash.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-05-29-windows-console-flash-elimination.md § Chunk 3
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
@@ -16,9 +16,9 @@ Negative-spec:
       original `.sh` was itself a thin `exec "$SCRIPT_DIR/verify-no-console-flash.sh"
       "$@"` shim ("Do NOT add logic here"), and this port preserves that
       division of labor exactly; the canonical guard is a separate port item.
-    - The sibling script path is resolved by the CALLER (the example-doctrine-repo-side
+    - The sibling script path is resolved by the CALLER (the coordinator-claude-side
       polyglot trampoline), not derived here — this module has no
-      example-doctrine-repo-repo-topology knowledge of its own. `bin_dir` is a required,
+      coordinator-claude-repo-topology knowledge of its own. `bin_dir` is a required,
       caller-supplied directory (the directory the trampoline itself lives
       in), mirroring the original's own `$SCRIPT_DIR` self-relative lookup.
     - On POSIX, invokes the sibling by literal path (not `bash <path>`) so the

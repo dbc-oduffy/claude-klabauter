@@ -2664,7 +2664,7 @@ def test_settings_home_bin_env_wrapped_other_variable_still_advises():
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-28 `git mv` CARVE-OUT DECLINED (example-doctrine-repo memo 2026-07-25 P2) -- the
+# 2026-07-28 `git mv` CARVE-OUT DECLINED (coordinator-claude memo 2026-07-25 P2) -- the
 # verdict is unchanged (still denied); what changed is that `mv` is now
 # classified by name so the deny message can offer the `mv`-plus-report
 # forward path instead of the generic unrecognized-verb text. These tests
@@ -2763,7 +2763,7 @@ def test_unrecognized_git_verb_still_default_denies_generically():
 
 
 def test_git_show_sha_path_allows():
-    # example-doctrine-repo memo's second P2 ask (read-only `git show <sha>:<path>` for a
+    # coordinator-claude memo's second P2 ask (read-only `git show <sha>:<path>` for a
     # before/after diff) needed no change -- `show` was already safe-listed.
     # Pinned so a future allowlist edit cannot silently retract it.
     payload = _payload(

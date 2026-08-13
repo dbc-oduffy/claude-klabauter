@@ -1,5 +1,5 @@
 """
-CoordinatorRoot — the unit of work-state. Pydantic port of example-doctrine-repo
+CoordinatorRoot — the unit of work-state. Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/coordinator-root.ts` (Zod source).
 
 Keyed on `(repo, coordinator_root_path)`, NOT `repo` alone (the Data Science Reviewer P2-D7): a

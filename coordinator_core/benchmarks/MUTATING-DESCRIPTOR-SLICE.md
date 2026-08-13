@@ -1,6 +1,6 @@
 # MUTATING op neutralization descriptor — Phase-0-sized follow-slice
 
-> Spec backlink: `docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md` chunk C10.
+> Spec backlink: `pln-qsub-01-per-op-end-to-end-late-53ff10` chunk C10.
 > This document **defines** a descriptor schema for safely including MUTATING ops in the
 > latency-benchmark harness. It enumerates all 30 live MUTATING ops and classifies each by
 > neutralization envelope. **It does not implement anything** — no code, no smoke test, no

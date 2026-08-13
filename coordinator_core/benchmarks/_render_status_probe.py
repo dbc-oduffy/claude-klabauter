@@ -18,7 +18,7 @@ internal timing of its own -- exactly as `_read_events_probe.py` does not --
 so the measured wall-clock band matches the real cold-start shape a caller
 would experience.
 
-Spec backlink: docs/plans/2026-08-11-sat-03-event-sourced-completion-core.md
+Spec backlink: pln-sat-03-event-sourced-completio-c270a1
 § Tasks C10 (AC16, AC17).
 """
 

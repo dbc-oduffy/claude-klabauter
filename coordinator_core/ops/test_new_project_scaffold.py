@@ -24,7 +24,7 @@ _REAL_REGISTER_REPO = new_project_scaffold._register_repo
 def _write_render_template_tree_sh(bin_dir: Path) -> Path:
     """A minimal, faithful-enough stand-in for render-template-tree.py's CLI contract
     (<src> <dst> [KEY=VALUE]...) -- plain-copy + naive {{KEY}} substitution, without
-    depending on the real example-doctrine-repo clone or a real render-template.py being present on the
+    depending on the real coordinator-claude clone or a real render-template.py being present on the
     test machine."""
     script = bin_dir / "render-template-tree.py"
     script.write_text(
@@ -118,7 +118,7 @@ def test_empty_template_no_smoke(tmp_path, monkeypatch):
 
 
 def test_next_app_template_renders_and_seeds(tmp_path, monkeypatch, doe_root):
-    # Force the example-doctrine-repo-root fallback rung: co-located resolution now wins
+    # Force the coordinator-claude-root fallback rung: co-located resolution now wins
     # unconditionally, so this test's fixture-authored render-template-tree.py
     # (staged under doe_root) would otherwise never run.
     monkeypatch.setattr(new_project_scaffold, "_co_located_render_tree", lambda: None)
@@ -235,7 +235,7 @@ def test_occupied_nonempty_target_dir_fails(tmp_path):
 
 
 def test_next_app_missing_doe_root_fails(tmp_path, monkeypatch):
-    # No REPO_EXAMPLE_DOCTRINE_REPO, no machine-local on PATH -> example-doctrine-repo root unresolvable.
+    # No REPO_EXAMPLE_DOCTRINE_REPO, no machine-local on PATH -> coordinator-claude root unresolvable.
     monkeypatch.setenv("PATH", "")
     parent = tmp_path / "parent"
     parent.mkdir()

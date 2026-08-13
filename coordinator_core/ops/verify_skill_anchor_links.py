@@ -15,15 +15,15 @@ Invoked from `/update-docs` Phase 11h; on non-zero exit the caller surfaces to
 the PM (does NOT auto-fix, does NOT halt `/update-docs`).
 
 History: this gate previously resolved every citation against one hardcoded
-file, `<plugin_root>/CLAUDE.md`. Example-doctrine-repo retired that file on 2026-07-27 and
+file, `<plugin_root>/CLAUDE.md`. Coordinator-claude retired that file on 2026-07-27 and
 doctrine fanned out from a single file into a *set* of surfaces; the gate then
 returned exit 2 ("could not check") on every run for a week while reading as a
 mere gate failure. Path-directed resolution replaces single-file resolution;
-the surface set is example-doctrine-repo-supplied DATA (see "The manifest" below), never a list
+the surface set is coordinator-claude-supplied DATA (see "The manifest" below), never a list
 hardcoded here.
 
 Spec backlink: coordinator/commands/update-docs.md § Phase 11h
-Origin: verify-skill-anchor-links.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Origin: verify-skill-anchor-links.sh (coordinator-claude b5a4192c, 2026-07-20)
 
 Exit codes (parity-critical — the whole point of the 2026-07-27 incident):
   0 — CHECKED, no dead anchors (may still be nonzero OK/QUALIFIED/UNRESOLVED)
@@ -69,7 +69,7 @@ Negative-spec:
       citations (`OVERVIEW.md § <cluster>`) and placeholders exist; they are
       counted and reported separately so they stay visible without being
       fatal.
-    - The doctrine surface set is example-doctrine-repo-supplied data. Do NOT hardcode a file
+    - The doctrine surface set is coordinator-claude-supplied data. Do NOT hardcode a file
       list here — a hardcoded list is the same defect as the hardcoded path
       with more entries and more ways to half-rot.
     - Does NOT walk the whole repo for SKILL.md files — the consumer list is
@@ -93,7 +93,7 @@ Negative-spec:
       with no path in front of it on a line that has an earlier citation
       carries that citation's path forward (`… § A … and § B` cites one file
       twice) — it is NOT re-resolved against a different surface. A CARRIED
-      citation is a weaker signal than a path-naming one: example-doctrine-repo's prose puts
+      citation is a weaker signal than a path-naming one: coordinator-claude's prose puts
       the file after the section as often as before it (`§ Operating
       Assumptions (global ~/.claude/CLAUDE.md)`), so a carried citation that
       misses on a global-qualified line is QUALIFIED, not DEAD. A citation
@@ -101,7 +101,7 @@ Negative-spec:
     - `(formerly § Old Heading)` is a rename-history annotation, NOT a live
       anchor — skipped, counted as `historical` in the summary. Checking it
       would report DEAD for the rename the sentence exists to document, and
-      example-doctrine-repo's skills carry one of these beside most live citations; a gate
+      coordinator-claude's skills carry one of these beside most live citations; a gate
       wrong on most of its findings gets ignored wholesale.
 """
 
@@ -177,13 +177,13 @@ def _plugin_root() -> str:
     <doe_root>/coordinator.
 
     This does NOT derive from this module's own __file__ location. This
-    module migrated from example-doctrine-repo to claude-klabauter (DOE-PORT R2-R6,
+    module migrated from coordinator-claude to claude-klabauter (DOE-PORT R2-R6,
     commit b644d5a9 there / 8a28a6ca here) while coordinator/skills/ stayed
-    in example-doctrine-repo — self-location now resolves to
+    in coordinator-claude — self-location now resolves to
     <claude-klabauter>/coordinator_core/ops/, a directory with no skills/ at all,
     which previously produced a false "CLAUDE.md not found" error instead of
     a loud, correctly-diagnosed resolution failure. `coordinator_doe_root()`
-    is the correct authority for "where is the example-doctrine-repo repo," independent
+    is the correct authority for "where is the coordinator-claude repo," independent
     of where THIS module happens to run from. A future reader must not
     "restore" __file__-based resolution to regain the old bash-oracle-adjacent
     shape — that is precisely what caused this break (see
@@ -192,7 +192,7 @@ def _plugin_root() -> str:
 
     Fails loud with exit 2 (COULD NOT CHECK) if coordinator_doe_root() cannot
     resolve: this is a gate invoked from `/update-docs`, not a never-block
-    hook, and an unresolvable example-doctrine-repo root means the gate examined nothing — which
+    hook, and an unresolvable coordinator-claude root means the gate examined nothing — which
     must never be reported with the same code as a clean run.
     """
     env = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -234,7 +234,7 @@ def _is_qualified_global(line: str) -> bool:
 def _candidate_roots(plugin_root: str, citing_file: Optional[str]) -> List[str]:
     """Resolution roots, in priority order, for a cited relative path.
 
-    repo_root first: example-doctrine-repo citations name repo-relative paths
+    repo_root first: coordinator-claude citations name repo-relative paths
     (`coordinator/snippets/...`), which would otherwise collide with
     plugin-relative ones (`skills/plan/SKILL.md`).
     """
@@ -258,7 +258,7 @@ def _resolve_cited_path(
         return None
     if os.path.isabs(cited):
         return cited if os.path.isfile(cited) else None
-    # Review: code-reviewer — `cited` is trusted-content-derived (example-doctrine-repo's own
+    # Review: code-reviewer — `cited` is trusted-content-derived (coordinator-claude's own
     # first-party doctrine prose, not adversarial input) and is joined
     # against `_candidate_roots` with no post-join containment check. No
     # guard is added here deliberately; this comment records that the trust

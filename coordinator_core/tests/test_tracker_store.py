@@ -34,7 +34,7 @@ docs/plans/2026-07-28-sat-01-sovereign-tracker-substrate.md):
   AC8  — no POSIX-only assumption in path construction, newline handling, or
          lock backend (inherited from locked_rmw; asserted here too).
 
-Spec backlink: docs/plans/2026-07-28-sat-01-sovereign-tracker-substrate.md § C3
+Spec backlink: pln-sat-01-sovereign-tracker-subst-a66742 § C3
 
 Read first: coordinator_core/tests/test_locked_write.py — the sleep-widened
 synthetic cross-process writer technique borrowed for AC1/AC2 below.

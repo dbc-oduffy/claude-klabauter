@@ -20,14 +20,14 @@ from __future__ import annotations
 #       negative-spec docstring)
 #   3 — schema_version present but unsupported (not 1 or 2)
 #   4 — DEDICATED transport-failure code (PORTER-BRIEF-ADDENDUM § 3b): the
-#       coordinator-root / CLAUDE_KLABAUTER_ROOT resolution failed, the example-doctrine-repo repo
+#       coordinator-root / CLAUDE_KLABAUTER_ROOT resolution failed, the coordinator-claude repo
 #       root (which owns snippets/registry.toml) was unresolvable, or
 #       coordinator_core.snippet_sync.verify_registry_consistency was not
 #       importable. Distinct from business code 2 ("missing dep or file not
 #       found" — a repo-content problem) so a caller can tell "claude-klabauter link is
 #       down" apart from "registry.toml is missing on disk".
 #
-# Port of: verify-snippet-registry-consistency.sh (example-doctrine-repo 93887f6f, 2026-07-17)
+# Port of: verify-snippet-registry-consistency.sh (coordinator-claude 93887f6f, 2026-07-17)
 # Spec backlinks:
 #   - docs/plans/2026-06-15-snippet-sync-consumer-registry.md § Dispatch Ledger C4, C8
 #   - docs/decisions/2026-06-15-snippet-registry-shape.md § Schema amendments — the Staff Engineer C2
@@ -54,9 +54,9 @@ def _resolve_plugin_root() -> str:
 
     This does NOT derive from this script's own __file__ location. b644d5a9
     migrated this executable to claude-klabauter while snippets/ (and
-    registry.toml) stayed in example-doctrine-repo — self-location now resolves to
+    registry.toml) stayed in coordinator-claude — self-location now resolves to
     <claude-klabauter>/coordinator, which has no snippets/ at all. doe_root() is the
-    correct authority for "where is the example-doctrine-repo repo," independent of
+    correct authority for "where is the coordinator-claude repo," independent of
     where THIS script happens to run from. Do not "restore" __file__-based
     resolution to regain byte-parity with the retired bash oracle — that
     parity is exactly what caused the break once this file moved repos.
@@ -72,7 +72,7 @@ def _resolve_plugin_root() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            "verify-snippet-registry-consistency: cannot resolve the example-doctrine-repo repo root "
+            "verify-snippet-registry-consistency: cannot resolve the coordinator-claude repo root "
             f"({exc}). Set repos.example_doctrine_repo in the machine-local registry, or set "
             "the DOE_ROOT env var, or set CLAUDE_PLUGIN_ROOT directly.",
             file=sys.stderr,

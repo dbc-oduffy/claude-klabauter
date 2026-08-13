@@ -14,7 +14,7 @@ scope) — this chunk (C5) owns exactly `backlog_grind_assemble/apply.py`,
 `contract/apply_base.py`, and `test_git_lock_retry.py` plus any new test
 file added for AC-7.
 
-Spec backlink: docs/plans/2026-08-13-commit-seams-inherit-lock-reap-and-retry.md,
+Spec backlink: pln-commit-seams-inherit-lock-reap-612e55,
 chunk C5.
 """
 from __future__ import annotations

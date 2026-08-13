@@ -15,7 +15,7 @@ minimal `docs/architecture/file-index.md` + `docs/architecture/systems/*.md`
 pair per case — never by re-running the architecture survey or hand-editing
 this repo's own recorded atlas (plan Anti-scope).
 
-Spec backlink: docs/plans/2026-08-06-churn-emergent-detection-file-granularity.md
+Spec backlink: pln-cartography-churn-emergent-det-8f59ce
 § chunk C4 (AC1, AC1b, AC2/AC5 denominator, AC7, AC8).
 """
 

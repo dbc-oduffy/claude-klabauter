@@ -28,12 +28,12 @@ call sites' docstrings too):
   - ``hand-authored``: the record was hand-edited, independent of what (if
     anything) the session typed to get there — its truth-condition does not
     depend on the ``typed_command`` axis.
-  - Matches example-doctrine-repo's vendored enum exactly (``machine-minted`` /
+  - Matches coordinator-claude's vendored enum exactly (``machine-minted`` /
     ``hand-authored``) — this is a closed, fail-closed cross-repo contract;
     the two sides must not drift.
 
 Spec backlink: docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md § C6a.
-Spec backlink (perf extraction): docs/plans/2026-08-12-agent-facing-messages-not-apology.md
+Spec backlink (perf extraction): pln-agent-facing-messages-read-as-658f5c
 """
 
 from __future__ import annotations

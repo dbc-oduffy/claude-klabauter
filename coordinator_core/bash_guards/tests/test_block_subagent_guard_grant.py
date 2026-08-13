@@ -11,7 +11,7 @@ NOT denied), and the dispatch-chain wiring.
 Pure Python -- no shell spawns, no git repo required.
 
 Spec backlink: coordinator_core/bash_guards/block_subagent_guard_grant.py
-Spec backlink: docs/plans/2026-08-13-em-exercisable-in-band-grant-route.md, chunk C3
+Spec backlink: pln-an-em-exercisable-in-band-gran-6bfb4a, chunk C3
 """
 
 from __future__ import annotations

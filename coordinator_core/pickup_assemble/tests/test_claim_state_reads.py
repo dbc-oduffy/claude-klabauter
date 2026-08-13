@@ -124,7 +124,7 @@ def _make_ledger_claim(
     `stamped` (default False) controls whether the claim dir also carries
     the `session.claims.mark_claim_stamped` durable marker — the fact
     `pickup_assemble`'s `stamp_evidence` fallback now reads (cross-repo/inbox/
-    2026-08-13-example-doctrine-repo-em-pickup-already-satisfied-masks-a-refused-write.md),
+    2026-08-13-coordinator-claude-em-pickup-already-satisfied-masks-a-refused-write.md),
     in place of the old (unsound) `claim_stage(...) == CLAIM_STAGE_APPLY`
     inference. A bare ledger claim with no `stamped` marker is exactly the
     "reservation taken, stamp never confirmed" state that invariant was
@@ -221,6 +221,148 @@ def test_compute_competing_claim_ledger_only_sibling_is_a_candidate(tmp_path, mo
     assert "sibling-sid" in holders
 
 
+def test_compute_competing_claim_send_message_address_resolves(tmp_path, monkeypatch):
+    """`state/handoffs/2026-08-13-session-owner-reachability-registry.md`
+    § 3; `cross-repo/inbox/2026-08-13-coordinator-claude-em-peer-roster-doctrine-
+    reply.md` § Counter 2 — a candidate whose holder resolves gets a
+    populated `send_message_address`."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "self.md", scope=["coordinator_core/foo.py"])
+    _seed_handoff(repo, "sibling.md", scope=["coordinator_core/foo.py"])
+    _make_ledger_claim(repo, "sibling.md", "sibling-sid")
+
+    monkeypatch.setattr(
+        pa._liveness,
+        "live_session_verdicts",
+        lambda root: {"sibling-sid": (True, "meta")},
+    )
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk",
+        lambda sids: {"sibling-sid": "claude-klabauter-57 [b2afcd]"},
+    )
+
+    fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
+    result = pa.compute_competing_claim(repo, fm, "state/handoffs/self.md")
+
+    by_holder = {c["claimed_by"]: c for c in result["candidates"]}
+    assert by_holder["sibling-sid"]["send_message_address"] == "claude-klabauter-57 [b2afcd]"
+
+
+def test_compute_competing_claim_send_message_address_empty_when_unresolvable(
+    tmp_path, monkeypatch
+):
+    """A holder the resolver cannot place gets `""`, never absent, and the
+    verdict/disposition are unaffected."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "self.md", scope=["coordinator_core/foo.py"])
+    _seed_handoff(repo, "sibling.md", scope=["coordinator_core/foo.py"])
+    _make_ledger_claim(repo, "sibling.md", "sibling-sid")
+
+    monkeypatch.setattr(
+        pa._liveness,
+        "live_session_verdicts",
+        lambda root: {"sibling-sid": (True, "meta")},
+    )
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk",
+        lambda sids: {},
+    )
+
+    fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
+    result = pa.compute_competing_claim(repo, fm, "state/handoffs/self.md")
+
+    assert result["verdict"] == "live-peer"
+    by_holder = {c["claimed_by"]: c for c in result["candidates"]}
+    assert by_holder["sibling-sid"]["send_message_address"] == ""
+
+
+def test_compute_competing_claim_address_resolution_failure_leaves_brief_unchanged(
+    tmp_path, monkeypatch
+):
+    """Negative-spec: advisory only, never load-bearing. An import failure
+    or a raising resolver must degrade every `send_message_address` to `""`
+    without touching `verdict`, `disposition`, or `holder_live`."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "self.md", scope=["coordinator_core/foo.py"])
+    _seed_handoff(repo, "sibling.md", scope=["coordinator_core/foo.py"])
+    _make_ledger_claim(repo, "sibling.md", "sibling-sid")
+
+    monkeypatch.setattr(
+        pa._liveness,
+        "live_session_verdicts",
+        lambda root: {"sibling-sid": (True, "meta")},
+    )
+
+    def _raise(sids):
+        raise RuntimeError("simulated resolution failure")
+
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk", _raise
+    )
+
+    fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
+    baseline_fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk",
+        lambda sids: {"sibling-sid": "claude-klabauter-57 [b2afcd]"},
+    )
+    baseline = pa.compute_competing_claim(repo, baseline_fm, "state/handoffs/self.md")
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk", _raise
+    )
+    result = pa.compute_competing_claim(repo, fm, "state/handoffs/self.md")
+
+    assert result["verdict"] == baseline["verdict"]
+    by_holder = {c["claimed_by"]: dict(c) for c in result["candidates"]}
+    baseline_by_holder = {c["claimed_by"]: dict(c) for c in baseline["candidates"]}
+    for sid, candidate in by_holder.items():
+        assert candidate["send_message_address"] == ""
+        other = dict(baseline_by_holder[sid])
+        other.pop("send_message_address")
+        other.pop("send_message_address_resolved_at")
+        this = dict(candidate)
+        this.pop("send_message_address")
+        this.pop("send_message_address_resolved_at")
+        assert this == other
+
+
+def test_compute_competing_claim_send_message_address_resolved_at_is_stamped(
+    tmp_path, monkeypatch
+):
+    """`send_message_address_resolved_at` is the staleness-detection field
+    the EM asked for: the address is not durable identity, so a reader of a
+    PERSISTED brief must be able to see WHEN it was resolved rather than
+    trust it silently. Stamped on every candidate, resolved or not."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "self.md", scope=["coordinator_core/foo.py"])
+    _seed_handoff(repo, "sibling.md", scope=["coordinator_core/foo.py"])
+    _make_ledger_claim(repo, "sibling.md", "sibling-sid")
+
+    monkeypatch.setattr(
+        pa._liveness,
+        "live_session_verdicts",
+        lambda root: {"sibling-sid": (True, "meta")},
+    )
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk",
+        lambda sids: {"sibling-sid": "claude-klabauter-57 [b2afcd]"},
+    )
+
+    fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
+    before = pa.datetime.now(pa.timezone.utc)
+    result = pa.compute_competing_claim(repo, fm, "state/handoffs/self.md")
+    after = pa.datetime.now(pa.timezone.utc)
+
+    by_holder = {c["claimed_by"]: c for c in result["candidates"]}
+    stamp = by_holder["sibling-sid"]["send_message_address_resolved_at"]
+    parsed = pa.datetime.fromisoformat(stamp)
+    assert before <= parsed <= after
+
+
 # ---------------------------------------------------------------------------
 # Row 19 — live-successor candidate scan (compute_successor_handoffs)
 # ---------------------------------------------------------------------------
@@ -245,6 +387,67 @@ def test_compute_successor_handoffs_ledger_only_in_flight_survives(tmp_path, mon
 
     kinds_by_holder = {c["claimed_by"]: c["kind"] for c in result["candidates"]}
     assert kinds_by_holder.get("successor-sid") == "in_flight_live"
+
+
+def test_compute_successor_handoffs_send_message_address_resolves(tmp_path, monkeypatch):
+    """Same field, same shared resolution core as `compute_competing_claim`
+    (state/handoffs/2026-08-13-session-owner-reachability-registry.md § 3)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "self.md")
+    _seed_handoff(
+        repo,
+        "successor.md",
+        status="open",
+        deployment_state="in_flight",
+        predecessor="state/handoffs/self.md",
+    )
+    _make_ledger_claim(repo, "successor.md", "successor-sid")
+
+    monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "successor-sid")
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk",
+        lambda sids: {"successor-sid": "claude-klabauter-11 [aaaaaa]"},
+    )
+
+    result = pa.compute_successor_handoffs(repo, "state/handoffs/self.md")
+
+    by_holder = {c["claimed_by"]: c for c in result["candidates"]}
+    assert by_holder["successor-sid"]["send_message_address"] == "claude-klabauter-11 [aaaaaa]"
+    assert by_holder["successor-sid"]["send_message_address_resolved_at"]
+
+
+def test_compute_successor_handoffs_address_resolution_failure_leaves_kind_unchanged(
+    tmp_path, monkeypatch
+):
+    """Negative-spec: a raising resolver degrades `send_message_address` to
+    `""` without touching `kind`/`status`/`deployment_state`."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "self.md")
+    _seed_handoff(
+        repo,
+        "successor.md",
+        status="open",
+        deployment_state="in_flight",
+        predecessor="state/handoffs/self.md",
+    )
+    _make_ledger_claim(repo, "successor.md", "successor-sid")
+
+    monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "successor-sid")
+
+    def _raise(sids):
+        raise RuntimeError("simulated resolution failure")
+
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk", _raise
+    )
+
+    result = pa.compute_successor_handoffs(repo, "state/handoffs/self.md")
+
+    by_holder = {c["claimed_by"]: c for c in result["candidates"]}
+    assert by_holder["successor-sid"]["send_message_address"] == ""
+    assert by_holder["successor-sid"]["kind"] == "in_flight_live"
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +490,7 @@ def test_classify_no_ledger_claim_and_dropped_deployment_state_stays_ambiguous(t
 def test_brief_self_claimed_ledger_only_stamped_marks_d2_already_satisfied(
     tmp_path, monkeypatch
 ):
-    """Row 35, repaired for cross-repo/inbox/2026-08-13-example-doctrine-repo-em-pickup-
+    """Row 35, repaired for cross-repo/inbox/2026-08-13-coordinator-claude-em-pickup-
     already-satisfied-masks-a-refused-write.md: ledger-sourced stamp evidence
     now requires the durable `stamped` marker (`session.claims.
     mark_claim_stamped`), not merely `claim_stage(...) == CLAIM_STAGE_APPLY`

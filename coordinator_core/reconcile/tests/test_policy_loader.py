@@ -1,7 +1,7 @@
 """
 coordinator_core.reconcile.tests.test_policy_loader -- C9 fail-closed loader fixtures.
 
-Spec backlink: docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C9
+Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C9
 
 Covers the plan's required scenario matrix:
   - valid fixture policy -> loaded verbatim, no warning
@@ -199,3 +199,353 @@ def test_policy_report_fields_absent_with_no_resolvable_candidate_is_none_path(
     fields = policy_report_fields(result)
 
     assert fields == {"policy_source": "absent", "policy_path": None}
+
+
+# ---------------------------------------------------------------------------
+# C2: repo-resident overlay discovery + key-by-key merge (plan
+# `2026-08-13-repo-resident-policy-overlay-discovery-and-merge.md`).
+#
+# NEVER write `auto-reconcile-policy.local.yaml` under the real repo root --
+# every fixture below lives under `tmp_path`, with `monkeypatch.chdir` used
+# to establish repo identity via a fixture `.git` directory. A stray overlay
+# at claude-klabauter's own root would arm this repo's auto-reconcile the moment the
+# route resolves it.
+# ---------------------------------------------------------------------------
+
+_FULL_FLOOR = {
+    "three_signal": {},
+    "mechanical_commit_denylist": [
+        "pickup:",
+        "reclaim(docs)",
+        "session-init",
+        "memo:",
+        "handoff.transition",
+    ],
+    "cross_handoff_attribution": True,
+    "dry_run": True,
+}
+
+
+def _make_repo(tmp_path: Path) -> Path:
+    """A fixture repo root: a directory with a `.git` marker, nothing else."""
+    (tmp_path / ".git").mkdir()
+    return tmp_path
+
+
+def _clear_policy_env(monkeypatch) -> None:
+    monkeypatch.delenv("AUTO_RECONCILE_POLICY", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+
+
+def test_overlay_route_precedence_below_explicit_path(tmp_path: Path, monkeypatch) -> None:
+    """AC1: explicit `policy_path` wins over a discovered overlay."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, _FULL_FLOOR)
+
+    explicit_path = tmp_path / "explicit.yaml"
+    _write_policy(explicit_path, _VALID_POLICY)
+
+    result = load_policy(str(explicit_path))
+
+    assert result.resolved_path == str(explicit_path)
+    assert result.source == "loaded"
+
+
+def test_overlay_route_precedence_below_env_var(tmp_path: Path, monkeypatch) -> None:
+    """AC1: `AUTO_RECONCILE_POLICY` env var wins over a discovered overlay."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, _FULL_FLOOR)
+
+    env_path = tmp_path / "env.yaml"
+    _write_policy(env_path, _VALID_POLICY)
+    monkeypatch.setenv("AUTO_RECONCILE_POLICY", str(env_path))
+
+    result = load_policy(None)
+
+    assert result.resolved_path == str(env_path)
+    assert result.source == "loaded"
+
+
+def test_overlay_route_precedence_above_plugin_root_default(tmp_path: Path, monkeypatch) -> None:
+    """AC1: a discovered overlay wins over the `CLAUDE_PLUGIN_ROOT` floor default."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, _FULL_FLOOR)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, _VALID_POLICY)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    result = load_policy(None)
+
+    assert result.resolved_path == str(overlay_path)
+    assert result.source == "loaded"
+
+
+def test_overlay_absent_falls_through_to_plugin_root_default(tmp_path: Path, monkeypatch) -> None:
+    """AC1/AC3: no overlay present -> route 4 (`CLAUDE_PLUGIN_ROOT` default) resolves,
+    byte-unchanged from today's behaviour."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, _VALID_POLICY)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    result = load_policy(None)
+
+    assert result.resolved_path == str(floor_path)
+    assert result.source == "loaded"
+
+
+def test_repo_root_resolves_from_nested_cwd(tmp_path: Path, monkeypatch) -> None:
+    """AC2: repo identity resolves via a `.git` walk-up from a nested cwd
+    inside the fixture repo, with no `git` subprocess involved."""
+    repo = _make_repo(tmp_path)
+    nested = repo / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+    _clear_policy_env(monkeypatch)
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, _FULL_FLOOR)
+
+    result = load_policy(None)
+
+    assert result.resolved_path == str(overlay_path)
+    assert result.source == "loaded"
+
+
+def test_no_subprocess_import_in_policy_loader() -> None:
+    """AC2: no `subprocess`/`resolve_git_root` import added to the module --
+    repo identity is a pathlib walk-up, spawn-free."""
+    import coordinator_core.reconcile.policy_loader as policy_loader_module
+
+    assert "subprocess" not in vars(policy_loader_module)
+    assert not hasattr(policy_loader_module, "resolve_git_root")
+    source = Path(policy_loader_module.__file__).read_text(encoding="utf-8")
+    assert "import subprocess" not in source
+
+
+def test_overlay_partial_merges_over_floor_key_by_key(tmp_path: Path, monkeypatch) -> None:
+    """AC4: floor with all four keys + overlay restating only `dry_run` ->
+    merged carries the floor's other three keys unchanged."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, _FULL_FLOOR)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, {"dry_run": False})
+
+    result = load_policy(None)
+
+    assert result.policy["mechanical_commit_denylist"] == _FULL_FLOOR["mechanical_commit_denylist"]
+    assert result.policy["cross_handoff_attribution"] == _FULL_FLOOR["cross_handoff_attribution"]
+    assert result.policy["three_signal"] == _FULL_FLOOR["three_signal"]
+    assert result.policy["dry_run"] is False
+
+
+def test_overlay_dry_run_only_merges_as_loaded_not_malformed(tmp_path: Path, monkeypatch) -> None:
+    """AC5: the `dry_run`-only overlay merges validly and loads as
+    `source == "loaded"`, not `malformed`, because validation runs against
+    the merged result."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, _FULL_FLOOR)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, {"dry_run": False})
+
+    result = load_policy(None)
+
+    assert result.source == "loaded"
+    assert result.warning is None
+
+
+def test_merged_result_still_missing_required_key_is_malformed(tmp_path: Path, monkeypatch) -> None:
+    """AC5: a floor-plus-overlay pair still missing a required key after
+    merge is `malformed`."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    incomplete_floor = dict(_FULL_FLOOR)
+    del incomplete_floor["mechanical_commit_denylist"]
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, incomplete_floor)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, {"dry_run": False})
+
+    result = load_policy(None)
+
+    assert result.source == "malformed"
+    assert result.warning is not None
+    assert "mechanical_commit_denylist" in result.warning
+
+
+def test_overlay_cannot_arm_auto_ship_by_omission(tmp_path: Path, monkeypatch) -> None:
+    """AC6: overlay `{dry_run: false}` over a floor that never mentions
+    `auto_ship_enabled` -- `auto_ship_enabled` stays `False`, fail-closed."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, _FULL_FLOOR)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, {"dry_run": False})
+
+    result = load_policy(None)
+
+    assert result.policy["auto_ship_enabled"] is False
+
+
+def test_overlay_resolved_path_and_source_reported(tmp_path: Path, monkeypatch) -> None:
+    """AC7: `resolved_path` names the overlay when one was discovered, and
+    `source` is `loaded`."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, _FULL_FLOOR)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, {"dry_run": False})
+
+    result = load_policy(None)
+
+    assert result.resolved_path == str(overlay_path)
+    assert result.source == "loaded"
+
+
+def test_overlay_with_malformed_floor_is_fail_closed_loud(tmp_path: Path, monkeypatch) -> None:
+    """A floor that exists but fails to parse must NOT be silently treated as
+    absent (merged over `{}`) -- that would risk the merged-plus-overlay
+    result passing grammar validation on the overlay's own keys alone and
+    reporting `source="loaded"`, losing the malformed-floor signal `source`
+    exists to carry. This must surface loud, like any other malformed
+    branch."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    floor_path.write_text("this: [is not, valid: yaml", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, _FULL_FLOOR)
+
+    result = load_policy(None)
+
+    assert result.source == "malformed"
+    assert result.warning is not None
+    assert str(floor_path) in result.warning
+    assert result.policy["auto_ship_enabled"] is False
+
+
+def test_overlay_with_non_mapping_floor_is_fail_closed_loud(tmp_path: Path, monkeypatch) -> None:
+    """A floor file whose parsed root isn't a mapping is malformed, not
+    silently absorbed as an absent-equivalent empty floor."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    floor_path.write_text(yaml.safe_dump(["not", "a", "mapping"]), encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, _FULL_FLOOR)
+
+    result = load_policy(None)
+
+    assert result.source == "malformed"
+    assert result.warning is not None
+    assert result.policy["auto_ship_enabled"] is False
+
+
+def test_overlay_absent_floor_still_falls_closed_silent(tmp_path: Path, monkeypatch) -> None:
+    """Sanity check the malformed-floor fix didn't regress the genuinely
+    absent-floor case: no floor file at all still merges over `{}`
+    (byte-unchanged prior behaviour), not treated as malformed."""
+    repo = _make_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    overlay_path = repo / "auto-reconcile-policy.local.yaml"
+    _write_policy(overlay_path, _FULL_FLOOR)
+
+    result = load_policy(None)
+
+    assert result.source == "loaded"
+    assert result.warning is None
+
+
+def test_overlay_absent_no_git_root_falls_through(tmp_path: Path, monkeypatch) -> None:
+    """AC3: no `.git` ancestor at all (unresolvable repo root) falls
+    straight through to the existing default, no overlay route taken."""
+    no_repo = tmp_path / "no_repo"
+    no_repo.mkdir()
+    monkeypatch.chdir(no_repo)
+    _clear_policy_env(monkeypatch)
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    floor_path = plugin_root / "auto-reconcile-policy.yaml"
+    _write_policy(floor_path, _VALID_POLICY)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+    result = load_policy(None)
+
+    assert result.resolved_path == str(floor_path)
+    assert result.source == "loaded"

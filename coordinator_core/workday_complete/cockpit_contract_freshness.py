@@ -3,10 +3,10 @@ coordinator_core.workday_complete.cockpit_contract_freshness — computes the
 `gates.cockpit_contract_freshness` OBSERVABILITY row `brief.py` emits on
 EVERY `/workday-complete` run, in every repo (not just claude-klabauter's).
 
-Purpose: example-doctrine-repo's ceremony Step 10 Final Summary line surfaces whether the
+Purpose: coordinator-claude's ceremony Step 10 Final Summary line surfaces whether the
 `cockpit-contract-release` tag (the published pin every repo re-vendors from)
-is FRESH against the newest commit touching example-doctrine-repo's
-`coordinator/cockpit-contract/schema/` in the local example-doctrine-repo clone. This row
+is FRESH against the newest commit touching coordinator-claude's
+`coordinator/cockpit-contract/schema/` in the local coordinator-claude clone. This row
 GATES NOTHING and triggers no publish — it is read-only signal.
 
 Verdict semantics:
@@ -15,16 +15,16 @@ Verdict semantics:
               schema change has landed since the last publish).
     DIVERGED  any other relationship (behind, unrelated, or diverged
               histories) — a human must reconcile.
-    UNKNOWN   could not determine (no example-doctrine-repo clone on this machine, network
+    UNKNOWN   could not determine (no coordinator-claude clone on this machine, network
               unavailable, unexpected error). NOT an error — the common
-              case on a consumer machine with no example-doctrine-repo clone.
+              case on a consumer machine with no coordinator-claude clone.
 
 Cost contract (load-bearing — this runs in every repo's daily ceremony on
-every machine): the example-doctrine-repo clone root is resolved LOCALLY FIRST, with ZERO
+every machine): the coordinator-claude clone root is resolved LOCALLY FIRST, with ZERO
 network calls (`_resolve_doe_root_local`, reusing
 `coordinator_core.ops.emit.doe_drift.resolve_doe_clone`'s bootstrap-safe
 direct-TOML-read registry ladder — no `machine-local` CLI subprocess, no
-`__file__`/git-toplevel self-location). Only when a example-doctrine-repo clone resolves
+`__file__`/git-toplevel self-location). Only when a coordinator-claude clone resolves
 locally does this module ever shell out, and then exactly ONE bounded
 `git ls-remote` with an explicit small timeout
 (`_LS_REMOTE_TIMEOUT_SECONDS`). Every subsequent git call in the happy path
@@ -33,12 +33,12 @@ check) — no further network.
 
 Candidate-scope negative-spec (Review: code-reviewer F1 — candidate was
 implicitly scoped to bare `HEAD`, so the verdict depended on whichever
-branch the example-doctrine-repo clone happened to be checked out to):
-    - The candidate query is explicitly scoped to the example-doctrine-repo clone's current
+branch the coordinator-claude clone happened to be checked out to):
+    - The candidate query is explicitly scoped to the coordinator-claude clone's current
       `HEAD` — never a hardcoded canonical ref like `origin/main`. This is a
       deliberate choice, not an oversight: as of this writing NO
-      cockpit-contract schema commit has ever reached example-doctrine-repo's `origin/main`
-      (`docs/wiki/cockpit-contract-revendor.md` — example-doctrine-repo's schema work lives on
+      cockpit-contract schema commit has ever reached coordinator-claude's `origin/main`
+      (`docs/wiki/cockpit-contract-revendor.md` — coordinator-claude's schema work lives on
       a work branch, 4 minors ahead of `origin/main`), so scoping to
       `origin/main` would report STALE/DIVERGED forever and make the gate
       permanently useless.
@@ -59,20 +59,20 @@ branch the example-doctrine-repo clone happened to be checked out to):
       contract.
     - Does NOT read claude-klabauter's own
       `coordinator_core/contract/cockpit_schema/emit_schema.py` literal for
-      any version number — that is what claude-klabauter emits NEXT, not what example-doctrine-repo has
+      any version number — that is what claude-klabauter emits NEXT, not what coordinator-claude has
       published. Both `published.contract_version` and
-      `candidate.contract_version` are read from the example-doctrine-repo clone's own git
+      `candidate.contract_version` are read from the coordinator-claude clone's own git
       history via `git show <sha>:coordinator/cockpit-contract/schema/
       cockpit-contract.schema.json`.
-    - Every git call here targets the example-doctrine-repo clone, which is a DIFFERENT
+    - Every git call here targets the coordinator-claude clone, which is a DIFFERENT
       repository from the one this ceremony is running in. `git -C` alone does
       NOT scope to it — an inherited `GIT_DIR` (git exports one to every hook
       it runs, often as a relative `"."`) still wins over discovery, and the
       probe then computes a FRESH/STALE/DIVERGED verdict against the LOCAL
-      repo while every emitted field names example-doctrine-repo. Every call therefore runs with
+      repo while every emitted field names coordinator-claude. Every call therefore runs with
       `coordinator_core.git_scope.scoped_git_env()`, and `_compute` gates the
       whole probe on `foreign_repo_unusable_reason(doe_root)` — which also
-      confirms the resolved git dir lies inside the example-doctrine-repo tree — so an
+      confirms the resolved git dir lies inside the coordinator-claude tree — so an
       unanswerable probe degrades to UNKNOWN instead of emitting a confident
       DIVERGED about somebody else's history. See `coordinator_core/git_scope.py`
       for the 2026-08-03 incident that makes this a correctness defect.
@@ -81,7 +81,7 @@ branch the example-doctrine-repo clone happened to be checked out to):
       degrades to `UNKNOWN` with the exception summary in `reason`. A broken
       freshness probe must never break the daily ceremony in any repo.
 
-Spec backlink: example-doctrine-repo ceremony Step 10 Final Summary line (2026-07-25 ask)
+Spec backlink: coordinator-claude ceremony Step 10 Final Summary line (2026-07-25 ask)
 """
 
 from __future__ import annotations
@@ -103,12 +103,12 @@ from coordinator_core.git_scope import (
 from coordinator_core.ops.emit import doe_drift
 
 # Bounded ls-remote timeout (seconds) — the ONE network call this module ever
-# makes, and only when a example-doctrine-repo clone resolved locally first. Kept deliberately
+# makes, and only when a coordinator-claude clone resolved locally first. Kept deliberately
 # small: this runs on every repo's daily ceremony on every machine.
 _LS_REMOTE_TIMEOUT_SECONDS = 5
 
 # Every other subprocess this module runs is a LOCAL git call against the
-# already-resolved example-doctrine-repo clone (peel, log, show, merge-base) — bounded the same
+# already-resolved coordinator-claude clone (peel, log, show, merge-base) — bounded the same
 # way for symmetry, though none of them touch the network.
 #
 # Review: code-reviewer (F6, nit) — per-call timeouts bound each hop but not
@@ -203,7 +203,7 @@ def _resolve_doe_root_local() -> Optional[Path]:
 
     Returns None — never raises for this case — only when BOTH env vars are
     unset and the registry itself can't resolve a clone; that is the common,
-    cheap, expected path on a consumer machine with no example-doctrine-repo clone. Raises
+    cheap, expected path on a consumer machine with no coordinator-claude clone. Raises
     `_FreshnessProbeError` (caught by the caller, folded into UNKNOWN) when an
     env override is set but bad — never silently substitutes a different
     clone for the one the operator named.
@@ -232,7 +232,7 @@ def _resolve_doe_root_local() -> Optional[Path]:
 
 def _ls_remote_release_tag(doe_root: Path) -> str:
     """One bounded `git ls-remote origin refs/tags/cockpit-contract-release`
-    against the example-doctrine-repo clone. Returns the raw ls-remote SHA (a TAG-OBJECT sha
+    against the coordinator-claude clone. Returns the raw ls-remote SHA (a TAG-OBJECT sha
     for an annotated tag — callers must peel before using it as a commit).
 
     Raises `_FreshnessProbeError` on timeout, non-zero exit, missing git, or
@@ -252,23 +252,23 @@ def _ls_remote_release_tag(doe_root: Path) -> str:
     except subprocess.TimeoutExpired as exc:
         raise _FreshnessProbeError(
             f"git ls-remote timed out after {_LS_REMOTE_TIMEOUT_SECONDS}s "
-            "probing example-doctrine-repo origin for cockpit-contract-release"
+            "probing coordinator-claude origin for cockpit-contract-release"
         ) from exc
     except OSError as exc:
         raise _FreshnessProbeError(
-            f"git ls-remote could not run against the example-doctrine-repo clone: {exc}"
+            f"git ls-remote could not run against the coordinator-claude clone: {exc}"
         ) from exc
 
     if result.returncode != 0:
         raise _FreshnessProbeError(
             "git ls-remote returned exit "
-            f"{result.returncode} probing example-doctrine-repo origin: {result.stderr.strip()}"
+            f"{result.returncode} probing coordinator-claude origin: {result.stderr.strip()}"
         )
 
     output = result.stdout.strip()
     if not output:
         raise _FreshnessProbeError(
-            f"'{_RELEASE_REF}' is not published yet on the example-doctrine-repo origin"
+            f"'{_RELEASE_REF}' is not published yet on the coordinator-claude origin"
         )
     return output.split()[0]
 
@@ -280,7 +280,7 @@ def _peel_to_commit(doe_root: Path, sha: str) -> str:
     always, before any ancestry comparison.
 
     Review: code-reviewer (F2) — if the tag object `ls-remote` reported isn't
-    yet in the example-doctrine-repo clone's local object database (the ordinary state right
+    yet in the coordinator-claude clone's local object database (the ordinary state right
     after a tag is cut, before the next fetch), `rev-parse` exits non-zero.
     Mirroring `doe_drift.probe_freshness_ref`'s documented graceful fallback
     (`coordinator_core/ops/emit/doe_drift.py:359`), this returns the raw sha
@@ -317,7 +317,7 @@ def _peel_to_commit(doe_root: Path, sha: str) -> str:
 
 def _current_ref_label(doe_root: Path) -> str:
     """Human-readable label naming what `_candidate_sha` resolved its answer
-    from — the example-doctrine-repo clone's current HEAD, as an explicit branch name when on
+    from — the coordinator-claude clone's current HEAD, as an explicit branch name when on
     one, or the literal `"HEAD (detached)"` otherwise. Never raises; folds
     any resolution failure into a literal `"HEAD (unresolvable)"` label
     rather than aborting the probe, since this is a best-effort annotation,
@@ -349,8 +349,8 @@ def _current_ref_label(doe_root: Path) -> str:
 # ---------------------------------------------------------------------------
 
 def _candidate_sha(doe_root: Path) -> str:
-    """Newest commit touching example-doctrine-repo's `coordinator/cockpit-contract/schema/`,
-    reachable from the example-doctrine-repo clone's current `HEAD` — explicitly, not by the
+    """Newest commit touching coordinator-claude's `coordinator/cockpit-contract/schema/`,
+    reachable from the coordinator-claude clone's current `HEAD` — explicitly, not by the
     absence of a ref argument. See the module's candidate-scope negative-spec
     for why `HEAD` (not a hardcoded canonical ref) is the deliberate choice
     here, and `_current_ref_label` for how that scope is surfaced to
@@ -378,7 +378,7 @@ def _candidate_sha(doe_root: Path) -> str:
     sha = result.stdout.strip()
     if not sha:
         raise _FreshnessProbeError(
-            f"no commit found touching {_SCHEMA_DIR_RELPATH} in the example-doctrine-repo clone"
+            f"no commit found touching {_SCHEMA_DIR_RELPATH} in the coordinator-claude clone"
         )
     return sha
 
@@ -425,7 +425,7 @@ def _is_ancestor(doe_root: Path, ancestor_sha: str, descendant_sha: str) -> Opti
 
     Delegates the exit-code mapping to `git_scope.git_predicate` so the 0/1/other
     tri-state (and the stripped repo-scoping environment that makes `-C` actually
-    scope to the example-doctrine-repo clone) is the shared implementation rather than a local
+    scope to the coordinator-claude clone) is the shared implementation rather than a local
     re-derivation.
     """
     verdict, _reason = git_predicate(
@@ -439,7 +439,7 @@ def _is_ancestor(doe_root: Path, ancestor_sha: str, descendant_sha: str) -> Opti
 
 
 def _doe_clone_unusable_reason(doe_root: Path) -> Optional[str]:
-    """None when `doe_root` is readable AS the example-doctrine-repo clone, else why it is not.
+    """None when `doe_root` is readable AS the coordinator-claude clone, else why it is not.
 
     A thin named seam over `git_scope.foreign_repo_unusable_reason` — same
     module-function stubbing convention every other git hop in this file
@@ -464,23 +464,23 @@ def _compute(checked_at: str) -> dict[str, Any]:
     if doe_root is None:
         return _unknown(
             checked_at,
-            "no example-doctrine-repo clone resolvable on this machine (checked DOE_ROOT, "
+            "no coordinator-claude clone resolvable on this machine (checked DOE_ROOT, "
             "REPO_EXAMPLE_DOCTRINE_REPO, and the machine-local repos.example_doctrine_repo "
             "registry) — freshness check skipped; this is the expected, "
-            "zero-network path on a consumer machine with no example-doctrine-repo clone",
+            "zero-network path on a consumer machine with no coordinator-claude clone",
         )
 
-    # Gate the whole probe on the example-doctrine-repo clone actually being readable AS the example-doctrine-repo
+    # Gate the whole probe on the coordinator-claude clone actually being readable AS the coordinator-claude
     # clone. Without this, an inherited GIT_DIR (or a .git file pointing
     # elsewhere) lets every call below succeed against the WRONG repository and
-    # emit a confident FRESH/STALE/DIVERGED verdict labelled with example-doctrine-repo's path.
+    # emit a confident FRESH/STALE/DIVERGED verdict labelled with coordinator-claude's path.
     # Un-answerable is its own outcome — see the module's git-scoping
     # negative-spec and `coordinator_core/git_scope.py`.
     unusable = _doe_clone_unusable_reason(doe_root)
     if unusable is not None:
         return _unknown(
             checked_at,
-            f"the example-doctrine-repo clone at {doe_root} could not be read as a git repository "
+            f"the coordinator-claude clone at {doe_root} could not be read as a git repository "
             f"({unusable}) — freshness could not be determined; this is NOT a "
             "claim that the published tag is stale or diverged",
         )
@@ -567,7 +567,7 @@ def _compute(checked_at: str) -> dict[str, Any]:
         checked_at,
         "candidate is NOT a strict descendant of the published peel (behind, "
         "unrelated, or diverged history) — human required to reconcile",
-        "a human must reconcile the example-doctrine-repo clone's "
+        "a human must reconcile the coordinator-claude clone's "
         f"{_SCHEMA_DIR_RELPATH} history against the published "
         "cockpit-contract-release tag before the next publish",
         published_peel=published_peel,

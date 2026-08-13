@@ -198,7 +198,7 @@ class TestBrief:
 
     def test_inspection_gather_is_one_show_spawn_for_all_commits(self, monkeypatch, tmp_path):
         """The gather is `count × 1` git spawns, not `count × 1` per commit --
-        a git spawn is ~100ms on Windows (example-doctrine-repo spawn-cost memo, 2026-08-08)."""
+        a git spawn is ~100ms on Windows (coordinator-claude spawn-cost memo, 2026-08-08)."""
         calls = []
         run_git = self._stub(
             monkeypatch,
@@ -361,3 +361,22 @@ class TestDeleteBranchLocalLeg:
 
         assert detail["local_deleted"] == "has-local"
         assert ["branch", "-d", "has-local"] in calls
+
+
+class TestMainBriefTransportFailure:
+    """`main()`'s brief-half transport-failure branch: exit 3 means compute
+    never ran, so stdout must stay empty (no fabricated/partial decision
+    object) and the diagnostic goes to stderr only."""
+
+    def test_transport_failure_leaves_stdout_empty(self, monkeypatch, capsys):
+        def _boom():
+            raise RuntimeError("git binary not found")
+
+        monkeypatch.setattr(consolidate_assemble, "brief", _boom)
+
+        exit_code = consolidate_assemble.main(["brief"])
+
+        captured = capsys.readouterr()
+        assert exit_code == consolidate_assemble.EXIT_TRANSPORT_FAIL
+        assert captured.out == ""
+        assert "git binary not found" in captured.err

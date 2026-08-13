@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.verify_dist_publish_repo_sync.
 
-Port of: verify-dist-publish-repo-sync.sh (example-doctrine-repo b5a4192c, 2026-07-20),
+Port of: verify-dist-publish-repo-sync.sh (coordinator-claude b5a4192c, 2026-07-20),
 snapshotted 2026-07-17. Positive corpus = a synthetic
 plugin_root/publish_repo_root pair built under tmp_path (identical files,
 one MISMATCH, one MISSING, one IGNORED). Negative corpus = missing source
@@ -301,7 +301,7 @@ def test_check_pair_byte_diff_not_shallow(tmp_path):
 
 
 def test_module_docstring_and_drift_message_have_no_dead_publish_sh_command():
-    # Regression pin: setup/publish.sh was retired repo-wide by example-doctrine-repo's
+    # Regression pin: setup/publish.sh was retired repo-wide by coordinator-claude's
     # percolate-python-port work (2026-07-21/22). Neither the module
     # docstring's "no --fix mode" rationale nor the runtime drift-detected
     # remediation may still name the dead bash command.

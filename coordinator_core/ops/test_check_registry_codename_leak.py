@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.check_registry_codename_leak.
 
-Port of: check-registry-codename-leak.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-registry-codename-leak.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 
@@ -188,13 +188,13 @@ def _example_doctrine_repo_fixture(tmp_path):
     d = tmp_path / "doe-em"
     d.mkdir()
     (d / "notes.md").write_text(
-        "This tree references example-doctrine-repo-em in a role-id context.\n"
+        "This tree references coordinator-claude-em in a role-id context.\n"
     )
     return d
 
 
 def test_no_exempt_absent_example_doctrine_repo_still_exempt_today(tmp_path, capsys):
-    """AC2 pin: fixture tree containing example-doctrine-repo-em, NO re-admission ->
+    """AC2 pin: fixture tree containing coordinator-claude-em, NO re-admission ->
     exits 0. Regression guard on the global default (example_doctrine_repo stays kept
     unless a target explicitly re-admits it)."""
     d = _example_doctrine_repo_fixture(tmp_path)
@@ -254,17 +254,17 @@ def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
 def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys):
     """AC2 shape correction (NOT a status-quo pin): re-admitting a slug that
     is not an exact KEEPSET member must raise loud, not silently no-op. A
-    `example-doctrine-repo` (hyphen) authoring slip against the `example_doctrine_repo` (underscore)
+    `coordinator-claude` (hyphen) authoring slip against the `example_doctrine_repo` (underscore)
     KEEPSET entry must not re-admit nothing and produce a green publish."""
     d = _example_doctrine_repo_fixture(tmp_path)
     rc = main(
-        ["--no-exempt", "example-doctrine-repo", str(d)],
+        ["--no-exempt", "coordinator-claude", str(d)],
         env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.example_doctrine_repo"),
     )
     assert rc == 2
     captured = capsys.readouterr()
     assert "not in KEEPSET" in captured.err
-    assert "example-doctrine-repo" in captured.err
+    assert "coordinator-claude" in captured.err
     # error message names the valid KEEPSET members
     assert "example_retrieval_repo" in captured.err
     assert "example_doctrine_repo" in captured.err

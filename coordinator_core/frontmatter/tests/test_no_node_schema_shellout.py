@@ -1,18 +1,18 @@
 """Standing tripwire (C8, absorbs C6 verification; widened 2026-07-22 to cover
-all example-doctrine-repo JS oracles; CLOSED to zero known violations 2026-07-22 when
+all coordinator-claude JS oracles; CLOSED to zero known violations 2026-07-22 when
 verify_schema_registry_sync.py's `_type_recognised` was ported off its
-query-records.js node spawn — see that module's docstring): no example-doctrine-repo-JS-oracle
+query-records.js node spawn — see that module's docstring): no coordinator-claude-JS-oracle
 Node shell-out survives in coordinator_core/ PRODUCTION (non-test) code.
 
-Context: the DR-210 native-tooling-ownership strangler is porting the example-doctrine-repo JS
-oracles (example-doctrine-repo coordinator/bin/**/*.js) to Python one at a time. Each
+Context: the DR-210 native-tooling-ownership strangler is porting the coordinator-claude JS
+oracles (coordinator-claude coordinator/bin/**/*.js) to Python one at a time. Each
 port retires a `subprocess.run(["node", "<oracle>.js", ...])` style shell-out
 in favor of an in-process call. This test is the regression gate that keeps a
 future edit from silently reintroducing a node shell-out to ANY of those
 oracles -- not just the schema pair the gate originally covered.
 
-Example-doctrine-repo JS oracle inventory this gate matches (verified against
-Example-doctrine-repo/coordinator/bin on 2026-07-22):
+Coordinator-claude JS oracle inventory this gate matches (verified against
+Coordinator-claude/coordinator/bin on 2026-07-22):
   - still alive: schema.js, schema-cli.js, query-records.js,
     walk-handoff-dag.js, emit-artifact-shape-contract.js
   - already deleted (a reintroduced call to one of these is worse than a call
@@ -25,13 +25,13 @@ of the substring "schema.js" in doc/comment backlinks to the JS oracle
 many legitimate, unrelated uses of the word "node" (a `node` install
 prerequisite probe, a `.js` -> `node` launchable-extension map, a
 graph-node `kind="node"` token in the roadmap-DAG emitter, and multiple
-parity-test oracles that deliberately still spawn the example-doctrine-repo JS implementation
+parity-test oracles that deliberately still spawn the coordinator-claude JS implementation
 as ground truth). So the assertion here is narrowly scoped:
 
     No literal subprocess spawn call (subprocess.run/Popen/check_output/
     call/check_call -- attribute or `from subprocess import ...` form) in a
     NON-TEST coordinator_core/ file passes an argument list/string that
-    references BOTH a `node` invocation AND a example-doctrine-repo-JS-oracle script target
+    references BOTH a `node` invocation AND a coordinator-claude-JS-oracle script target
     (see _DOE_JS_ORACLE_SUBSTRINGS below).
 
 Implemented via `ast` (not regex) specifically so comments and docstrings
@@ -65,13 +65,13 @@ _SPAWN_CALL_NAMES = {"run", "Popen", "check_output", "call", "check_call"}
 # Substrings that mean "this argument is invoking the node binary".
 _NODE_TOKENS = {"node"}
 
-# Substrings that mean "this argument targets a example-doctrine-repo JS oracle script".
+# Substrings that mean "this argument targets a coordinator-claude JS oracle script".
 # Covers both still-alive oracles (a live dependency this gate must keep off
 # the production hot path) and already-deleted ones (a reintroduced call to
 # a deleted script is an even worse regression than one to a live script,
 # since the target doesn't even exist). See module docstring for provenance.
 _DOE_JS_ORACLE_SUBSTRINGS = (
-    # still alive (example-doctrine-repo/coordinator/bin, verified 2026-07-22)
+    # still alive (coordinator-claude/coordinator/bin, verified 2026-07-22)
     "schema-cli.js",
     "schema.js",
     "query-records.js",
@@ -84,7 +84,7 @@ _DOE_JS_ORACLE_SUBSTRINGS = (
     "stamp-shipped-in.js",
     # ported 2026-07-22 (de-node query/read-layer cutover) -- each had its
     # last production spawn replaced by an in-process call; a reintroduced
-    # spawn would resurrect a dependency example-doctrine-repo is clear to delete
+    # spawn would resurrect a dependency coordinator-claude is clear to delete
     "sentinel-blocks-cli.js",
     "render-handoff-tracker.js",
     "exec-bit.test.js",
@@ -197,7 +197,7 @@ def _referenced_oracle_scripts(strings: list[str]) -> set[str]:
 
 class DoeJsOracleShellout(ast.NodeVisitor):
     """Collects (lineno, argument-strings, matched-oracle-scripts) for every
-    node+example-doctrine-repo-JS-oracle subprocess spawn call found in one parsed module."""
+    node+coordinator-claude-JS-oracle subprocess spawn call found in one parsed module."""
 
     def __init__(self) -> None:
         self.violations: list[tuple[int, list[str], set[str]]] = []
@@ -215,7 +215,7 @@ class DoeJsOracleShellout(ast.NodeVisitor):
 def find_doe_js_oracle_shellouts(root: Path) -> list[tuple[str, int, list[str], set[str]]]:
     """Walk root for .py files (excluding tests/ and test_*.py) and return
     every (relpath, lineno, argv-strings, matched-oracle-scripts) tuple that
-    is a literal node+example-doctrine-repo-JS-oracle subprocess spawn call, skipping
+    is a literal node+coordinator-claude-JS-oracle subprocess spawn call, skipping
     allowlisted paths and (file, oracle-script)-exempted calls.
 
     Used both against the real coordinator_core/ tree (the standing gate)
@@ -255,7 +255,7 @@ def find_doe_js_oracle_shellouts(root: Path) -> list[tuple[str, int, list[str], 
 
 def test_no_doe_js_oracle_node_shellout_in_production_code():
     """Standing gate: coordinator_core/ non-test code must contain zero
-    literal node+example-doctrine-repo-JS-oracle subprocess spawns, except the explicit,
+    literal node+coordinator-claude-JS-oracle subprocess spawns, except the explicit,
     narrow, dated exemption(s) in _EXEMPT_NODE_ORACLE_CALLS. Every ported
     oracle (schema_validate.py/schema_cli.py from schema.js/schema-cli.js,
     and so on) is the sole canonical implementation once ported -- neither
@@ -264,7 +264,7 @@ def test_no_doe_js_oracle_node_shellout_in_production_code():
     """
     violations = find_doe_js_oracle_shellouts(_SCAN_ROOT)
     assert violations == [], (
-        "Found example-doctrine-repo-JS-oracle node shell-out(s) in coordinator_core/ "
+        "Found coordinator-claude-JS-oracle node shell-out(s) in coordinator_core/ "
         "production code (should be in-process only, or explicitly "
         f"exempted in _EXEMPT_NODE_ORACLE_CALLS): {violations}"
     )
@@ -300,7 +300,7 @@ def test_gate_detects_a_planted_query_records_node_shellout(tmp_path):
 
 
 def test_gate_detects_a_planted_deleted_oracle_node_shellout(tmp_path):
-    """A call targeting an ALREADY-DELETED example-doctrine-repo JS oracle (e.g.
+    """A call targeting an ALREADY-DELETED coordinator-claude JS oracle (e.g.
     handoff-transition.js) is worse than one targeting a live oracle -- the
     target doesn't even exist -- and must still be flagged.
     """

@@ -27,7 +27,7 @@ parsing, SKIP-sentinel emission) has been fully ported to
 coordinator_core/ops/fold_execution_record.py (claude-klabauter), with independent
 coverage in the co-located pytest
 (coordinator_core/ops/test_fold_execution_record.py). This file is now a thin
-Example-doctrine-repo-side trampoline over that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo owns
+Coordinator-claude-side trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
 contract/generator, claude-klabauter owns engine) and the bash-kill campaign
 (coordinator.local.md).
 
@@ -35,16 +35,16 @@ plan_slug derivation contract (CRITICAL SEMANTIC COUPLING): the ported module
 and coordinator/bin/fan-out-dispatch.py derive plan_slug via the IDENTICAL
 Python idiom — strip a leading "YYYY-MM-DD-" date prefix from the plan's
 basename, then strip a trailing ".md" suffix. This equivalence is asserted by
-Example-doctrine-repo's coordinator/tests/run-report-provision-key-flattening.bats (parity
+Coordinator-claude's coordinator/tests/run-report-provision-key-flattening.bats (parity
 test), which greps both scripts for their respective idiom fragments — same
 input MUST yield a byte-identical slug on both sides, or provisioning (write
 side) and folding (read side) silently mislocate each other's sidecars.
 
-Unlike emit-artifact-shape-contract (which hands the ported module a example-doctrine-repo-side
+Unlike emit-artifact-shape-contract (which hands the ported module a coordinator-claude-side
 coordinator-root env var because it reads coordinator/schemas/), this op reads
 and writes purely repo-relative state (the plan file's own repo, resolved via
 `git rev-parse --show-toplevel` from the plan's own directory, inside the
-ported module) — no example-doctrine-repo-side path needs to be handed across the trampoline
+ported module) — no coordinator-claude-side path needs to be handed across the trampoline
 boundary.
 
 Usage:

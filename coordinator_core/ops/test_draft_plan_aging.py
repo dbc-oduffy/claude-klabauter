@@ -954,7 +954,7 @@ def test_list_orphaned_terminal_status_excluded_from_population(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Non-plan population exclusion (cross-repo memo
-# 2026-08-03-example-doctrine-repo-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
+# 2026-08-03-coordinator-claude-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
 # § 1): frontmatter presence, structurally, is the discriminator — NOT a
 # filename denylist and NOT a probe for a particular key like status:.
 # ---------------------------------------------------------------------------
@@ -1400,7 +1400,7 @@ def test_ac10_cli_end_to_end_exit_code_sanity(tmp_path):
 # ---------------------------------------------------------------------------
 # C6 (AC9, AC10) — the canonicalized deliverable_id join `resolve_plan_owner`
 # and `list_orphaned` now perform via `deliverable_equivalence.canonicalize`.
-# Spec backlink: docs/plans/2026-08-03-deliverable-id-carry-plan-handoff-agree.md
+# Spec backlink: pln-deliverable-id-carry-make-the--8ae256
 # § C6 (AC9, AC10); the join itself lands in C5's draft_plan_aging.py edits,
 # reusing deliverable_equivalence.py's own C4a contract (see
 # coordinator_core/ops/tests/test_deliverable_equivalence.py for that
@@ -1549,7 +1549,7 @@ def test_plan_deliverable_ids_reverse_index_preserves_both_paths_on_canonicaliza
 
 
 # ---------------------------------------------------------------------------
-# Status-partition totality and disjointness. Example-doctrine-repo ruling 80b0b29fb struck
+# Status-partition totality and disjointness. Coordinator-claude ruling 80b0b29fb struck
 # "landed" from PLAN_ORPHAN_TERMINAL_STATUS; a value that is neither terminal
 # NOR listed in _KNOWN_NON_TERMINAL_PLAN_STATUSES falls into the
 # unrecognized_status bucket, which is the false-report class that made every

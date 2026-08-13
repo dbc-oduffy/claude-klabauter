@@ -1,7 +1,7 @@
 """
 DayRollup and WeekRollup — deterministic aggregation is the SSOT; narrative is
 a regenerable VIEW over the deterministic numbers (the Data Science Reviewer P1-D4).
-Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/entities/rollup.ts`
+Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/rollup.ts`
 (Zod source).
 
 Rule: deterministic aggregation (GROUP-BY over the completion-log `chain` key)

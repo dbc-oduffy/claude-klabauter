@@ -44,8 +44,8 @@ Exit codes:
 Read-only contract: this module MUST NOT create, modify, or delete anything
 in the target directory. Idempotent: identical output on repeated runs.
 
-Port of: detect-existing-claude-home.sh (example-doctrine-repo 6fb5fb37, 2026-07-22, 221 lines)
-Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md
+Port of: detect-existing-claude-home.sh (coordinator-claude 6fb5fb37, 2026-07-22, 221 lines)
+Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md [DEAD-CITATION: plan file never committed to this repo]
 
 Negative-spec / faithful-oracle notes:
     - `_is_cc_managed_entry` reproduces the bash `case` statement's glob

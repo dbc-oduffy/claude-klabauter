@@ -3,7 +3,7 @@ coordinator_core.ops.run_pip_audit — JSON-RPC "ci.run_pip_audit" operation:
 run pip-audit against a lock file, optionally passing --extra-index-url for
 a detected non-PyPI wheel source (e.g. PyTorch CUDA wheels).
 
-Purpose: replaces the fence at example-doctrine-repo agents/dep-cve-auditor.md:68, which
+Purpose: replaces the fence at coordinator-claude agents/dep-cve-auditor.md:68, which
 shelled out to a bare `pip-audit -r <lockfile> [--extra-index-url <url>]`
 invocation. This op is a direct external-tool wrapper — spawning the
 `pip_audit` package as a subprocess of the CURRENT interpreter IS the op's
@@ -57,9 +57,9 @@ Self-registration: importing this module calls register_op("ci.run_pip_audit",
 (_EAGER_OP_MODULES / _OP_KEY_SCOPE / _registry_map.py) lands in the separate
 EM-serial registration pass, per this chunk's write-scope restriction.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 § Wave 2 (run cluster)
-Port source: example-doctrine-repo agents/dep-cve-auditor.md:68
+Port source: coordinator-claude agents/dep-cve-auditor.md:68
 
 Negative-spec (hard-won):
   - Does NOT resolve lockfile_path itself (no worktree/repo-root default) —

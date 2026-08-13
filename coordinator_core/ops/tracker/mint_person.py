@@ -103,7 +103,7 @@ were a handle, and would leave no way to ask for the rename-proof id alone —
 `(namespace, normalized_value)` distinctness prevents a collision, not a
 category error.
 
-Spec backlink: docs/plans/2026-08-12-person-identity-primitive-first-slice.md
+Spec backlink: pln-person-identity-primitive-firs-dbc797
   § Tasks C4, § Acceptance Criteria AC1.
 Spec backlink: docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
   § D2 — Bounds of the sanction; § Amendment (2026-08-11) — the person-registry

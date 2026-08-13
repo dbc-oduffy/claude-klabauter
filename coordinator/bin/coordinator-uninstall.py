@@ -20,7 +20,7 @@ keeps working unchanged — the sh/python polyglot shebang below makes
 SAME file.
 
 Fail-loud-on-ambiguity doctrine (prior-art Compatible #6): this
-  orchestrator's aggregation instantiates example-doctrine-repo's
+  orchestrator's aggregation instantiates coordinator-claude's
   coordinator/docs/wiki/implementation-standards-by-domain.md § Cross-cutting
   standards, "Detect-then-silently-pick is a footgun — refactor to
   detect-then-fail-loud on ambiguity" (coordinator/CLAUDE.md § Implementation

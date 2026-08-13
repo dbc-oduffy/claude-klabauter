@@ -2,7 +2,7 @@
 Tests for coordinator_core.install.substrate's Python port of
 claude-machine-local.sh's key-normalization + export-resolution loop.
 
-Port source: coordinator/templates/bin/claude-machine-local.sh [example-doctrine-repo
+Port source: coordinator/templates/bin/claude-machine-local.sh [coordinator-claude
 repo]. The .sh remains sourced-only (unported, unchanged) — these tests
 cover the standalone Python helper only, not a trampoline.
 """

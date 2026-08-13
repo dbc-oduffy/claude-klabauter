@@ -113,7 +113,7 @@ non-destructive peek) and the housekeeping-liveness stamps
 report — renders a ``## Housekeeping`` section, inserted immediately before the (always-last)
 ``## Pinboard`` section so `patch_pinboard_only`'s "Pinboard is the LAST section" invariant is
 undisturbed. This is the retargeted AC5 surfacing occasion: session boot's own SessionStart
-hook stdout is NOT context-injected (example-doctrine-repo hooks.json), but the orientation-cache FILE this
+hook stdout is NOT context-injected (coordinator-claude hooks.json), but the orientation-cache FILE this
 module writes IS read and injected at every session start by the retained ``async: false``
 injector (hooks.json:13) — so a failure recorded during session N's ceremony work reaches the
 EM at the START of session N+1, satisfying "within one session boundary." The failures log is
@@ -128,7 +128,7 @@ third write path that re-derives and embeds Housekeeping content and had silentl
 cross-repo/inbox/2026-07-28-example-retrieval-repo-em-orientation-cache-housekeeping-flood.md Defect 1).
 The ``--pinboard-only`` fast path (C18) DOES re-derive this ONE section (fixed 2026-07-23, see
 negative-spec below) — every other section still stays byte-identical, zero re-derive, exactly
-as C18 shipped it. Housekeeping is the sole named exception because example-doctrine-repo adopted
+as C18 shipped it. Housekeeping is the sole named exception because coordinator-claude adopted
 ``--pinboard-only`` at BOTH mid-session call sites (`/workstream-complete`, `/handoff`) — the two
 hottest mid-session cache-touch occasions — which meant a failure recorded between two FULL
 regens (potentially a day, `/workday-start` to `/workday-start`) would not reach the EM until
@@ -162,7 +162,7 @@ dependency. The op registration exists for future daemon-RPC callers, not as
 the CLI's own invocation path.
 
 Spec backlink: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 2
-Port of: regenerate-orientation-cache.sh (example-doctrine-repo 60489ea9, 2026-07-16)
+Port of: regenerate-orientation-cache.sh (coordinator-claude 60489ea9, 2026-07-16)
 """
 
 from __future__ import annotations
@@ -594,7 +594,7 @@ def emit_branch_line(repo_root: Path) -> str:
 # Recent commits (leg 3, 2026-07-29) -- git log recency, absent from the cache
 # schema entirely until now despite 89% of fleet sessions re-deriving it at
 # boot via their own git log call (state/audits/2026-07-29-orientation-cache-
-# boot-facts.md, example-doctrine-repo). This adds ONE git spawn to build_cache -- an
+# boot-facts.md, coordinator-claude). This adds ONE git spawn to build_cache -- an
 # explicitly cold, ceremony/machine-invoked path (~10 spawns already) with no
 # hot-path spawn-tax concern (constraint 7 does not apply here; see module
 # docstring's own "no hot-path spawn-tax concern" framing for build_cache as a

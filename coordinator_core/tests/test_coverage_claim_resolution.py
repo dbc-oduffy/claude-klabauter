@@ -2,7 +2,7 @@
 Tests for coordinator_core.coverage's claim resolution routing through the
 canonical ledger-first accessor (coordinator_core.claim_state.resolve_claim_state).
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C2 (AC3).
 
 AC3 requires proving a ledger-only claim (mirror reverted to open) resolves

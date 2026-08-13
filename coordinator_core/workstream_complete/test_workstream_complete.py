@@ -8,7 +8,7 @@ Scope (per dispatch brief, chunk W2-B1): the assembler emits a schema-valid
 constructors, and the untrusted-gate ones carry no `recommendation`.
 
 Run scoped only: `python -m pytest coordinator_core/workstream_complete/test_workstream_complete.py -q`
-Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md, chunk W2-B1
+Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md, chunk W2-B1 [DEAD-CITATION: plan file never committed to this repo]
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from coordinator_core.ceremony_common import apply_halt
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
 
 # Real git spawn is load-bearing: terminal-status coverage tests read the
-# example-doctrine-repo repo's real HEAD `plan.schema.json` via `git show` to pin the
+# coordinator-claude repo's real HEAD `plan.schema.json` via `git show` to pin the
 # schema enum against the actual on-disk oracle, and the no-commit-row guard
 # builds real per-test commit history — no mock stands in for either.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -231,7 +231,7 @@ _BRIGHTLINE_DIRECTIVE_IDS = frozenset(
 
 
 def test_every_disposition_computes_some_brightline_gate_directive(monkeypatch, tmp_path):
-    """The invariant the 2026-08-03 example-doctrine-repo-em memo found violated: a
+    """The invariant the 2026-08-03 coordinator-claude-em memo found violated: a
     chain-terminal close skipped the session-scoped brightline gate (right
     scope call) and substituted nothing, leaving the close that caps an
     entire lineage's diff as the ONLY one with no brightline gate at all.
@@ -997,7 +997,7 @@ def test_brief_reading_persisted_verdict_still_mutates_nothing(monkeypatch, tmp_
 # (`scope.archive()`) is a once-per-SESSION-END operation. Emitting the
 # archive directive here archived a still-live session mid-session,
 # destroying once-per-session sentinels and the dispatch-evidence file.
-# Archival is now wired to session END (a SessionEnd hook, example-doctrine-repo repo),
+# Archival is now wired to session END (a SessionEnd hook, coordinator-claude repo),
 # not this assembly. `d-emit-cadence` previously depended on the removed
 # directive; it must still have a satisfiable dependency after the removal.
 # ---------------------------------------------------------------------------
@@ -1494,9 +1494,9 @@ def test_consumed_handoff_completeness_leg_a_indeterminate_when_heading_present_
 
 
 # ---------------------------------------------------------------------------
-# Leg A, kind: session-handoff — cross-repo/inbox/2026-08-03-example-doctrine-repo-em-
+# Leg A, kind: session-handoff — cross-repo/inbox/2026-08-03-coordinator-claude-em-
 # wsc-leg-a-session-handoff-kind-blind.md: that kind never carries its own
-# `## Acceptance criteria` (0/34 in example-doctrine-repo's corpus, 0/22 in claude-klabauter's),
+# `## Acceptance criteria` (0/34 in coordinator-claude's corpus, 0/22 in claude-klabauter's),
 # so leg A joins its `deliverable_id` frontmatter to the governing plan's own
 # `deliverable_id` instead — the retired `plan:` frontmatter pointer's
 # replacement, per PM ruling R2 (docs/plans/2026-08-04-terminal-state-
@@ -1538,8 +1538,8 @@ def _write_session_handoff_plan(
 @functools.lru_cache()
 def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     """Mirrors `test_leg_a_terminal_plan_status_covers_every_terminal_member_
-    of_the_schema_enum`'s own schema-fetch mechanism (example-doctrine-repo HEAD `git show`,
-    `None` on an unregistered/missing example-doctrine-repo repo -- the caller turns that into
+    of_the_schema_enum`'s own schema-fetch mechanism (coordinator-claude HEAD `git show`,
+    `None` on an unregistered/missing coordinator-claude repo -- the caller turns that into
     a `pytest.skip`), but for the complement set: every `plan.schema.json`
     `status` enum member NOT in `_LEG_A_TERMINAL_PLAN_STATUS`. Enum-pinned
     so a future schema change that reclassified e.g. `landed` cannot pass
@@ -1558,9 +1558,9 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
         timeout=30,
     )
     # Review: coordinator:code-reviewer -- mirror the terminal-arm test's
-    # hard failure on a git-show error against a *present* example-doctrine-repo checkout;
-    # only "no example-doctrine-repo repo" collapses to None/skip, not a broken checkout.
-    assert result.returncode == 0, f"Cannot read example-doctrine-repo HEAD plan.schema.json: {result.stderr.strip()}"
+    # hard failure on a git-show error against a *present* coordinator-claude checkout;
+    # only "no coordinator-claude repo" collapses to None/skip, not a broken checkout.
+    assert result.returncode == 0, f"Cannot read coordinator-claude HEAD plan.schema.json: {result.stderr.strip()}"
     doe_plan_schema = json.loads(result.stdout)
     schema_enum = set(doe_plan_schema["properties"]["status"]["enum"])
     return sorted(schema_enum - wsc._LEG_A_TERMINAL_PLAN_STATUS)
@@ -1580,7 +1580,7 @@ def pytest_generate_tests(metafunc):
     metafunc.parametrize(
         "status",
         statuses
-        or [pytest.param("draft", marks=pytest.mark.skip(reason="example-doctrine-repo repo not registered/found on this machine"))],
+        or [pytest.param("draft", marks=pytest.mark.skip(reason="coordinator-claude repo not registered/found on this machine"))],
     )
 
 
@@ -1838,10 +1838,10 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
     mechanically from `enum`."""
     doe_root = resolve_doe_root()
     if not doe_root:
-        pytest.skip("example-doctrine-repo repo not registered on this machine")
+        pytest.skip("coordinator-claude repo not registered on this machine")
     doe_repo = Path(doe_root)
     if not doe_repo.exists():
-        pytest.skip(f"example-doctrine-repo repo not found at {doe_repo}")
+        pytest.skip(f"coordinator-claude repo not found at {doe_repo}")
 
     result = subprocess.run(
         ["git", "-C", str(doe_repo), "show", "HEAD:coordinator/schemas/plan.schema.json"],
@@ -1850,7 +1850,7 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
         encoding="utf-8",
         timeout=30,
     )
-    assert result.returncode == 0, f"Cannot read example-doctrine-repo HEAD plan.schema.json: {result.stderr.strip()}"
+    assert result.returncode == 0, f"Cannot read coordinator-claude HEAD plan.schema.json: {result.stderr.strip()}"
     doe_plan_schema = json.loads(result.stdout)
     schema_enum = set(doe_plan_schema["properties"]["status"]["enum"])
 
@@ -3695,8 +3695,8 @@ def test_decisions_template_lands_under_preflight_never_a_9th_envelope_key(monke
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-30 example-doctrine-repo-em cross-repo memo (`cross-repo/archive/2026-07-30-
-# example-doctrine-repo-em-wsc-review-trail-passthrough-and-memo-attribution.md`), item
+# 2026-07-30 coordinator-claude-em cross-repo memo (`cross-repo/archive/2026-07-30-
+# coordinator-claude-em-wsc-review-trail-passthrough-and-memo-attribution.md`), item
 # 1 -- directives_memo_lifecycle.compute_memo_resolution_attribution's three
 # signals (picked_up_by / realized_by / archive_rename) and their union, plus
 # judgments.build_memo_resolution_attribution_judgment_point's move from
@@ -3843,7 +3843,7 @@ def test_memo_resolution_attribution_judgment_point_recommends_resolved_with_sig
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-30 example-doctrine-repo-em cross-repo memo, item 2 -- an unrecognized flat
+# 2026-07-30 coordinator-claude-em cross-repo memo, item 2 -- an unrecognized flat
 # `review_*` key on `decisions` now gets a loud stderr diagnostic instead of
 # a silent drop; a legitimately absent `review` dict stays quiet.
 # ---------------------------------------------------------------------------
@@ -3894,7 +3894,7 @@ def test_build_close_tail_args_directive_no_diagnostic_when_review_present_corre
 
 
 # ---------------------------------------------------------------------------
-# 2026-08-03 example-doctrine-repo-em-wsc-tail-review-metadata-dropped -- the transport
+# 2026-08-03 coordinator-claude-em-wsc-tail-review-metadata-dropped -- the transport
 # hole: `build_wsc_tail_directive` documented that `depends_on=
 # "d-close-tail-args"` spliced the producer's stdout into this directive's
 # argv, but no token ever expressed that splice. `apply._resolve_arg_tokens`'s
@@ -4016,7 +4016,7 @@ def test_build_close_tail_args_directive_list_review_emits_one_slice_per_qualify
 
 
 def test_build_close_tail_args_directive_forwards_reviewer_evidence_scalar():
-    """Regression (example-doctrine-repo memo 2026-08-13 § 2): `reviewer_evidence` was
+    """Regression (coordinator-claude memo 2026-08-13 § 2): `reviewer_evidence` was
     accepted in `decisions["review"]`, never emitted here, and the op-side gate
     (`review_trail_write._verify_reviewer_evidence`) then warned that the field
     was missing — the correlation it checks was severed one layer above it."""
@@ -4236,7 +4236,7 @@ def test_open_spine_row_gate_fires_and_names_every_open_row_with_five_exits(monk
     named in `warn_text`, the five exits stated verbatim (the two
     PM-gated ones marked, plus the runnable `plan-tasks-resolve`
     command) per the five-exits ruling
-    (cross-repo/inbox/2026-08-05-example-doctrine-repo-em-plan-tasks-five-exits-
+    (cross-repo/inbox/2026-08-05-coordinator-claude-em-plan-tasks-five-exits-
     ruling.md)."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     _write_plan_with_spine(

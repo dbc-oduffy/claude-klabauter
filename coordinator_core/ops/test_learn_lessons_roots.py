@@ -70,7 +70,7 @@ sys.exit(_main())
 def _env_for(tmp_path: Path) -> dict:
     env = dict(os.environ)
     env["CLAUDE_HOME"] = str(tmp_path)  # CLAUDE_HOME overrides $HOME, per oracle
-    # No example-doctrine-repo content root in these tests -- _coordinator_state_root_central()
+    # No coordinator-claude content root in these tests -- _coordinator_state_root_central()
     # degrades to "" (script not found), config_path becomes bogus and is
     # correctly skipped (isfile() False) -- exercises the negative-spec path.
     env.pop("COORDINATOR_ROOT", None)

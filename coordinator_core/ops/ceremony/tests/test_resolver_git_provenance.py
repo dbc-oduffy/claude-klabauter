@@ -48,7 +48,7 @@ Coverage:
 
 Spec backlink:
   cross-repo/inbox/2026-07-22-claude-central-em-wsc-tail-cutover-contract.md Ask 2
-  example-doctrine-repo/coordinator/skills/workstream-complete/SKILL.md Step 0 (Detector B
+  coordinator-claude/coordinator/skills/workstream-complete/SKILL.md Step 0 (Detector B
   + 2026-07-22 foreign-consumer/restoration-commit spoof guard)
   state/lessons/2026-07-22-shared-index-commits-never-bare-git-comm-e04e7a2d648a.yaml
 """

@@ -34,7 +34,7 @@ probe checks `example-retrieval-repo status` on PATH.
 Exit codes (parity-critical -- matches the bash oracle's contract exactly):
     0  Decision resolved and action taken (or dry-run completed).
     1  Usage error or unambiguous-detection failure (fail-loud).
-    2  RESERVED for the example-doctrine-repo trampoline's own claude-klabauter-link/import failure
+    2  RESERVED for the coordinator-claude trampoline's own claude-klabauter-link/import failure
        (CLAUDE_KLABAUTER_ROOT resolution / ImportError) -- never returned by this
        module's own main(); documented here so the two layers' exit-code
        tables stay disjoint (rule: transport-failure code must not collide
@@ -56,7 +56,7 @@ Environment overrides (for tests, mirrors the bash oracle):
                                         unbounded-hang class bug fixed here
                                         per the porter-brief addendum rule 2)
 
-Port of: setup-rag-decision.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
+Port of: setup-rag-decision.sh (coordinator-claude 6fb5fb37, 2026-07-22)
 Spec backlink: docs/plans/2026-06-23-setup-time-substrate-completeness.md § C1c (AC3)
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -65,13 +65,13 @@ Negative-spec:
       standalone/sourced CLI contract, `source setup-rag-decision.sh` then
       call `setup_rag_decision ...`). This is a deliberate, non-regressive
       scope narrowing, not a silent drop: the sole live caller
-      (coordinator/skills/repo-setup/SKILL.md) invokes the example-doctrine-repo-side
+      (coordinator/skills/repo-setup/SKILL.md) invokes the coordinator-claude-side
       trampoline ONLY as a subprocess (`bash setup-rag-decision.sh --root
       ...`) and its own doc explicitly forbids sourcing ("every helper is
       fail-loud and calls exit on ambiguity, so sourcing would terminate the
       repo-setup shell... sourcing it bare silently no-ops the decision
       block") -- sourced invocation was never a live-used path. Converting
-      the example-doctrine-repo trampoline to the sh/python polyglot shape makes sourcing
+      the coordinator-claude trampoline to the sh/python polyglot shape makes sourcing
       actively unsafe (the polyglot re-exec line would replace the sourcing
       shell), so this port intentionally does not preserve it.
     - Does NOT reproduce the bash oracle's `BASH_VERSINFO[0] < 4` guard --

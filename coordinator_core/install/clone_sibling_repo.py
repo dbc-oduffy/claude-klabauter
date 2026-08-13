@@ -3,7 +3,7 @@ coordinator_core.install.clone_sibling_repo — JSON-RPC "install.clone_idempote
 operation.
 
 Purpose: idempotent native git-clone-a-sibling-repo primitive. Port of the
-fence at example-doctrine-repo `commands/install.md:1142`
+fence at coordinator-claude `commands/install.md:1142`
 (``[[ ! -d "$DOE_CLONE/.git" ]] && git clone ...``): checks for an existing
 `.git` directory at the target before invoking `git clone`, so a second
 invocation against an already-cloned target is a true no-op rather than a
@@ -52,7 +52,7 @@ commit. <!-- Review: code-reviewer — Finding 3, docstring previously
 claimed wiring was a separate pending pass; it shipped in this same
 commit. -->
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § Wave 2
+Spec backlink: pln-coordinator-ops-buildout-from--903224 § Wave 2
 Oracle backlink: state/audits/2026-07-22-command-payload-inventory/{op-classification,distinct-ops-new}.tsv
 """
 

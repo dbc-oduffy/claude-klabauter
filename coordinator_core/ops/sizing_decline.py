@@ -66,7 +66,7 @@ Negative-spec:
   - Does NOT accept `sized`/`draft`/`superseded`/`shipped` as the pre-transition
     state — only `routed` (or `declined` itself, for the idempotent no-op).
 
-Spec backlink: docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2
+Spec backlink: pln-a-terminal-status-for-a-declin-2bb298 § C2
 """
 
 from __future__ import annotations

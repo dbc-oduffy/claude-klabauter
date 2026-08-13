@@ -2,14 +2,14 @@
 emit_memo_schema — generates cross-repo-memo.schema.json + archived-memo.schema.json
 as JSON Schema PROJECTIONS of claude-klabauter's own cross-repo-memo SSOT, mirroring the
 `coordinator_core.contract.cockpit_schema.emit_schema.emit_schemas(out_dir=...)`
-precedent that is the SOLE canonical regeneration path for example-doctrine-repo's frozen
+precedent that is the SOLE canonical regeneration path for coordinator-claude's frozen
 Cockpit-contract JSON.
 
 Ownership context (Decision-0, RATIFIED 2026-07-24): DR-210 previously held the
-two memo schema JSONs example-doctrine-repo-side permanently ("contract, not implementation").
-The 2026-07-24 example-doctrine-repo proposal reverses that, but the reversal is one of
+two memo schema JSONs coordinator-claude-side permanently ("contract, not implementation").
+The 2026-07-24 coordinator-claude proposal reverses that, but the reversal is one of
 BEHAVIOR-ownership, not a hand-authored-file relocation — claude-klabauter's engine
-never consumed the example-doctrine-repo JSON for validation in the first place (memos are
+never consumed the coordinator-claude JSON for validation in the first place (memos are
 validated cross-field-only, no schema file — see
 `coordinator_core.frontmatter.schema_validate.validate_memo_cross_fields`);
 the real SSOT for required-ness is the send-time gate in
@@ -17,8 +17,8 @@ the real SSOT for required-ness is the send-time gate in
 `_self_validate_frontmatter_fields`), and the cross-field lifecycle rules live
 in `coordinator_core.frontmatter.schema_validate._MEMO_CROSS_FIELD_RULES`. So
 these two JSON Schema documents are DERIVED artifacts describing that
-behavior for example-doctrine-repo's routing hook / the legacy JS `query-records` CLI to
-consume — not a second hand-owned copy of static JSON. Example-doctrine-repo's hook becomes a
+behavior for coordinator-claude's routing hook / the legacy JS `query-records` CLI to
+consume — not a second hand-owned copy of static JSON. Coordinator-claude's hook becomes a
 pure consumer of the artifact this module emits, exactly as the
 Cockpit-contract hook already is a pure consumer of `emit_schema.emit_schemas`.
 
@@ -39,9 +39,9 @@ nothing in this module (or anywhere else — see
 `coordinator_core/ops/verify_schema_registry_sync.py` and
 `coordinator_core/frontmatter/schema_drift_watch.py`, updated in lockstep)
 registers the emitted files into `_byGlob` or `_byKind`. They are
-drift-reference / example-doctrine-repo-consumer artifacts only.
+drift-reference / coordinator-claude-consumer artifacts only.
 
-Spec backlink: docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C5 / Decision-0
+Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C5 / Decision-0
 Negative-spec: this module does NOT vendor a hand-authored static JSON file —
 every field description below is assembled in code and re-derived on every
 `emit_schemas()` call from the SSOT constants it imports
@@ -59,7 +59,7 @@ from typing import Any
 from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KINDS
 
 # ---------------------------------------------------------------------------
-# x-schema-version — bumped independently of example-doctrine-repo's prior vendored "1.0.0"
+# x-schema-version — bumped independently of coordinator-claude's prior vendored "1.0.0"
 # pin. This is a NEW emission lineage (generated-from-SSOT, not
 # hand-authored-and-vendored); the version literal lives in exactly this one
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
@@ -68,13 +68,13 @@ from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KIND
 MEMO_SCHEMA_VERSION = "1.5.0"
 
 # ---------------------------------------------------------------------------
-# x-bump-class / x-bump-note — example-doctrine-repo's bump-class annotation (memo
-# 2026-07-27-example-doctrine-repo-em-bump-class-shipped-and-a-correction.md), sibling
+# x-bump-class / x-bump-note — coordinator-claude's bump-class annotation (memo
+# 2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md), sibling
 # keys to x-schema-version. Closed vocabulary per that memo:
 # top-level-array-additive | nested-field-additive | major. Non-behavioural
 # (an `x-` annotation key changes no record's validity) so it does NOT bump
 # MEMO_SCHEMA_VERSION — this pair only records how the CURRENT version
-# (1.0.0 -> 1.2.0) changed shape, mirroring example-doctrine-repo's own hand-added values so
+# (1.0.0 -> 1.2.0) changed shape, mirroring coordinator-claude's own hand-added values so
 # their vendored copy and this emission converge rather than drift again.
 # Single definition each, consumed at both emission sites below.
 # ---------------------------------------------------------------------------
@@ -317,7 +317,7 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
 
     Field set + cross-field-rule pointers mirror
     `coordinator_core.frontmatter.schema_validate._MEMO_CROSS_FIELD_RULES`
-    (the claude-klabauter-native SSOT, ported from example-doctrine-repo's now-superseded
+    (the claude-klabauter-native SSOT, ported from coordinator-claude's now-superseded
     `bin/lib/schema.js` CROSS_FIELD_RULES['cross-repo-memo']). `required`
     lists only the base structural fields memo_send.py's
     `_self_validate_frontmatter_fields` enforces unconditionally

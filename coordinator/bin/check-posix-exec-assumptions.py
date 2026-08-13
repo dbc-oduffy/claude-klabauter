@@ -8,10 +8,10 @@ fails on any NEW violation or on the baseline file itself having grown.
 
 This file lives colocated inside claude-klabauter, so it imports
 coordinator_core directly (no cross-repo resolution needed here). A sibling
-repo (e.g. Example-doctrine-repo) invokes the SAME engine module via cross-repo import
+repo (e.g. Coordinator-claude) invokes the SAME engine module via cross-repo import
 (`_claude_klabauter_root.resolve_claude_klabauter_root()`) from its own test tier instead of
 shelling out to this CLI — see that repo's own wiring for the reason
-(DR-047: example-doctrine-repo owns contract, claude-klabauter owns engine; a cross-repo subprocess call
+(DR-047: coordinator-claude owns contract, claude-klabauter owns engine; a cross-repo subprocess call
 to a sibling's bin/ script is not the sanctioned transport).
 
 Usage:
@@ -29,7 +29,7 @@ Exit codes:
         assumptions module docstring § Anchor choice).
 
 Spec backlink: coordinator_core/ops/check_posix_exec_assumptions.py (source-
-  of-truth engine module docstring, itself backlinked to example-doctrine-repo
+  of-truth engine module docstring, itself backlinked to coordinator-claude
   coordinator/docs/wiki/foreign-platform-path-guard.md)
 """
 

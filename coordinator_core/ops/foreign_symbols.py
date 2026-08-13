@@ -45,7 +45,7 @@ Negative-spec:
     ``build_foreign_symbols`` returns a distinct ``{"unavailable": ...}``
     dict, checked first and always, by every caller of this seam.
 
-Spec backlink: docs/plans/2026-08-08-cartography-consumes-symbol-extract.md
+Spec backlink: pln-cartography-consumes-symbol-ex-3fc0a8
 § chunk C1.
 """
 

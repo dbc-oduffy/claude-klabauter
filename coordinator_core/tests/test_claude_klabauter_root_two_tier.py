@@ -9,7 +9,7 @@ reimplementing the published-engine-vs-live-working-tree gate — agrees with
 the shim itself, and that install's derived forwarder name set resolves
 under both resolution classes.
 
-Spec backlink: docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md § C4 (wrapper half)
+Spec backlink: pln-two-tier-engine-root-resolutio-024269 § C4 (wrapper half)
 
 Negative-spec: does NOT re-derive or hardcode the forwarder count (351 on
 this tree at authoring time) — `_derive_agent_helper_target_map` is called
@@ -251,7 +251,7 @@ def test_exhaustive_forwarder_target_map_two_tier_shape():
 
 # --- C5: engine/edit skew advisory ------------------------------------------
 #
-# Spec backlink: docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md § C5
+# Spec backlink: pln-two-tier-engine-root-resolutio-024269 § C5
 #
 # Fully synthetic registry fixture below (own settings-home under tmp_path,
 # never the machine's real registry) — deliberately does NOT carry the
@@ -509,7 +509,7 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
 
 # --- C4b: per-target existence gate on the published-engine rung -----------
 #
-# Spec backlink: docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md
+# Spec backlink: pln-two-tier-engine-root-resolutio-024269
 # (chunk C4, the `exec_cli` half) + tasks/two-tier-engine-root-exec/briefs/C4b.md
 #
 # `exec_cli` only ever exercises Windows' `_run_target_in_process` leg in
@@ -528,7 +528,7 @@ def test_wrapper_skew_advisory_kill_switch(_skew_fixture, monkeypatch, capsys):
 # working repo while `.claude-klabauter-root` is ALSO present, which is exactly the
 # defect's reproduction shape (see plan § Problem).
 #
-# Spec backlink: docs/plans/2026-08-12-arm-the-klabauter-dual-boot-the-wrapper.md
+# Spec backlink: pln-arm-the-klabauter-dual-boot-th-f7169a
 
 
 @pytest.fixture

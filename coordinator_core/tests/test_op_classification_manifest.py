@@ -11,7 +11,7 @@ red-on-drift proof the plan's own AC13 mandates: the manifest is continuously re
 ops, and any manifest edit that drops a row, adds a stray row, blanks a required cell, or
 collides two op-keys fails this test rather than silently drifting from the oracle.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § AC13
+Spec backlink: pln-coordinator-ops-buildout-from--903224 § AC13
 """
 
 from __future__ import annotations

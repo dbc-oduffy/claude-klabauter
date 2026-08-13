@@ -1,21 +1,21 @@
 """
-coordinator_core.ops.ensure_doe_clone — example-doctrine-repo-clone resolution + idempotent
+coordinator_core.ops.ensure_doe_clone — coordinator-claude-clone resolution + idempotent
 clone-if-absent, ported from coordinator/commands/install.md Step 3.5a
-(the two literal bash fences at lines 731 and 747 of the example-doctrine-repo source).
+(the two literal bash fences at lines 731 and 747 of the coordinator-claude source).
 
-Purpose: resolve the local example-doctrine-repo clone path (``REPO_EXAMPLE_DOCTRINE_REPO`` env
+Purpose: resolve the local coordinator-claude clone path (``REPO_EXAMPLE_DOCTRINE_REPO`` env
 override, then ``machine-local get repos.example_doctrine_repo``) and, if the resolved
 directory does not yet contain a ``.git`` (i.e. is not actually cloned),
 perform the clone. Emits the exact ``doe_clone: <status>`` contract row the
-Example-doctrine-repo doc's Phase 7 status table expects on every exit path — this collapses
+Coordinator-claude doc's Phase 7 status table expects on every exit path — this collapses
 install.md's own status-row echo/if wrapper into the CLI (M3/D9 pattern,
 docs/plans/2026-07-23-skills-carry-no-code-extirpation.md).
 
-Division of labor (unchanged from every other example-doctrine-repo-clone-resolving op in this
+Division of labor (unchanged from every other coordinator-claude-clone-resolving op in this
 slice, e.g. ``gen_doe_root_pointer``): resolution order is env override,
 then the ``machine-local`` registry. This module additionally resolves a
 clone URL (``REPO_EXAMPLE_DOCTRINE_REPO_URL`` env override, then ``machine-local get
-repos.example_doctrine_repo_url``) — a widening over the example-doctrine-repo doc block's own literal
+repos.example_doctrine_repo_url``) — a widening over the coordinator-claude doc block's own literal
 text, which read ``DOE_REPO_URL="<operator-supplied or coordinated from
 repos.example_doctrine_repo_url registry key>"`` (a placeholder comment, not runnable
 shell). A real CLI has to resolve an actual URL to invoke ``git clone``, so
@@ -122,7 +122,7 @@ def main(argv: List[str]) -> int:
         # then re-invoke.
         print(
             "doe_clone: skipped (repos.example_doctrine_repo not set — run the interactive "
-            "example-doctrine-repo-clone prompt, then re-invoke)"
+            "coordinator-claude-clone prompt, then re-invoke)"
         )
         return 1
 

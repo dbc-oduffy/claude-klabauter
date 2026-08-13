@@ -15,7 +15,7 @@ canonical-resolution-engine library (`coordinator_core.resolution.facade`,
 `coordinator_core.contract.decision_object.{envelope,judgment}`) rather than
 reimplementing them — see the negative-spec below.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C5
 
 Consumes-manifest (C4 census, plan § Tasks C4 body) — orchestrates,
@@ -65,9 +65,9 @@ must never be a wire key/value/enum member (state/sizings/2026-08-04-persona-
 wire-vocabulary-rename.yaml; docs/decisions/DR-262 Amendment cl.3). The
 `question` field's human-facing "the Staff Engineer" reference is left as-is by design —
 persona names remain legal as presentation prose (a publish-time scrub swaps
-them), only the identifier moved. Coordinated with example-doctrine-repo via cross-repo
-memo (cross-repo/inbox/2026-08-04-example-doctrine-repo-em-correction-the-shard-key-
-coupling-is-three-keys-five-files.md) — example-doctrine-repo's reader site moves in the same
+them), only the identifier moved. Coordinated with coordinator-claude via cross-repo
+memo (cross-repo/inbox/2026-08-04-coordinator-claude-em-correction-the-shard-key-
+coupling-is-three-keys-five-files.md) — coordinator-claude's reader site moves in the same
 window, no back-compat/dual-spelling transition.
 """
 

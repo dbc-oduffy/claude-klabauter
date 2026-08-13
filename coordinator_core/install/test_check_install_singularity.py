@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.install.check_install_singularity.
 
-Independently re-derives the oracle's own AC coverage (example-doctrine-repo
+Independently re-derives the oracle's own AC coverage (coordinator-claude
 coordinator/lib/tests/test-check-install-singularity.sh T1-T12) against a
 synthetic ~/.claude layout, rather than re-asserting the port's own
 transcription — each test builds a fresh filesystem fixture representing one
@@ -325,11 +325,11 @@ def test_to_plugin_root_leaves_non_coordinator_basename():
 # not advised as "remove a stray tree" (which would delete half a repo).
 # ===========================================================================
 def test_has_parent_child_pair_detects_offset_shape():
-    assert sut._has_parent_child_pair(["X:/example-doctrine-repo", "X:/example-doctrine-repo/coordinator"])
+    assert sut._has_parent_child_pair(["X:/coordinator-claude", "X:/coordinator-claude/coordinator"])
 
 
 def test_has_parent_child_pair_false_for_genuinely_distinct_trees():
-    assert not sut._has_parent_child_pair(["X:/example-doctrine-repo", "X:/other/coordinator-claude"])
+    assert not sut._has_parent_child_pair(["X:/coordinator-claude", "X:/other/coordinator-claude"])
 
 
 def test_parent_child_split_remediation_names_offset_shape_not_deletion(home, monkeypatch):
@@ -377,7 +377,7 @@ def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch):
 # ===========================================================================
 # F8 (2026-07-28 machine-a install dogfood) — `_to_plugin_root` itself.
 # Pre-fix it tested for a trailing "/coordinator" using forward slashes
-# only, so a native-Windows `CLAUDE_PLUGIN_ROOT` (`X:\example-doctrine-repo\coordinator`)
+# only, so a native-Windows `CLAUDE_PLUGIN_ROOT` (`X:\coordinator-claude\coordinator`)
 # was never normalized to plugin-root level while the registry's
 # forward-slashed `live_path` for the SAME tree WAS -- making one clone look
 # like two trees and hard-failing a correct install.
@@ -386,9 +386,9 @@ def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch):
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")
 def test_to_plugin_root_windows_backslash_normalizes_like_forward_slash():
-    forward = sut._to_plugin_root("X:/example-doctrine-repo/coordinator")
-    backslash = sut._to_plugin_root("X:\\example-doctrine-repo\\coordinator")
-    assert backslash == forward == "X:/example-doctrine-repo"
+    forward = sut._to_plugin_root("X:/coordinator-claude/coordinator")
+    backslash = sut._to_plugin_root("X:\\coordinator-claude\\coordinator")
+    assert backslash == forward == "X:/coordinator-claude"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")

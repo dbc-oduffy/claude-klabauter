@@ -28,7 +28,7 @@ Coverage:
       have zero influence on last_run_id/last_run_age_seconds; only the canonical
       log is consulted
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C11
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C11
 """
 
 from __future__ import annotations

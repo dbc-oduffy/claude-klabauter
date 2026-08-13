@@ -26,7 +26,7 @@ test_emit_default_path.py does) to avoid a live git remote requirement in CI / f
 The coordinator_roots section always emits at least one self-report record, making the
 provenance assertions directly testable on the output JSON.
 
-Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C7 / AC6 / AC10
+Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C7 / AC6 / AC10
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 coordinator_core.pickup_assemble.tests.test_repo_identity_gate — C1 Part 2
 scoped test suite for `compute_repo_identity_gate`.
 
-Spec backlink: docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md § C1
+Spec backlink: pln-a-ceremony-must-not-be-able-to-5e9421 § C1
 
 AC6: every wrong-repo/verdict case is constructed with REAL files on disk
 (registry JSON records under a fabricated `<claude-config>/sessions/` dir,

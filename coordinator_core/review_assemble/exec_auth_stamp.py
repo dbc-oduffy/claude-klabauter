@@ -2,7 +2,7 @@
 coordinator_core.review_assemble.exec_auth_stamp — mutating assembler for the
 `/review` skill's execution-authorization stamp.
 
-Purpose: `/review`'s "Cross-reference exit" gate (example-doctrine-repo
+Purpose: `/review`'s "Cross-reference exit" gate (coordinator-claude
 `coordinator/skills/review/SKILL.md` L197-200) narrates a three-step ORDINAL
 sequence in prose -- land every plan-body edit the approval entails FIRST,
 THEN compute the plan-body hash, THEN write the four

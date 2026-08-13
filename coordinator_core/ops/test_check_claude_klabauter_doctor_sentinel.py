@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.check_claude_klabauter_doctor_sentinel.
 
-Port of: check-claude-klabauter-doctor-sentinel.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-claude-klabauter-doctor-sentinel.sh (coordinator-claude b5a4192c, 2026-07-20)
 Golden-oracle corpus captured against the original bash script (positive +
 negative cases) before authoring this module; assertions below mirror that
 oracle's stdout+exit-code behavior line-for-line.
@@ -140,7 +140,7 @@ def test_tolerant_of_sentinel_lacking_vendor_drift_key(tmp_path, monkeypatch, ca
     """Old-shape sentinel (pre-2026-07-26, no `vendor_drift` key at all) parses
     identically to today's — this module never requires the additive key.
 
-    Spec backlink: cross-repo/inbox/2026-07-26-example-doctrine-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md
+    Spec backlink: cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
     """
     _write_sentinel(
         tmp_path,

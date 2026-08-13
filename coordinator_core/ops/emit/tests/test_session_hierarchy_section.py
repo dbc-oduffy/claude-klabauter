@@ -16,7 +16,7 @@ single emission; the first-admitted entry wins and every later duplicate is quar
 ``malformed``, whether the duplicate lives in the same source file or a different one, and
 without shadowing an entry's own pre-existing validation failure.
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P16
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P16
 """
 
 from __future__ import annotations

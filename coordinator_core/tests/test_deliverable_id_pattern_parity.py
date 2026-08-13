@@ -4,16 +4,16 @@ handoff.schema.json's `deliverable_id` pattern and
 coverage.py::_DELIVERABLE_ID_RE against a shared case table so the two
 cannot silently drift apart.
 
-Spec backlink: docs/plans/2026-08-05-author-the-dlv-pattern-for-deliverable-i.md
+Spec backlink: pln-author-the-dlv-pattern-for-del-704e32
 (C4). Companion to C3 (coverage.py widening).
 
 BOUNDARY CORRECTION (2026-08-05, after C2 was executed and reverted): that
 plan's C2 directed the schema half to be authored HERE. That was wrong.
 `handoff.schema.json` under `coordinator_core/frontmatter/schemas/` is a
-VENDORED copy of example-doctrine-repo's `coordinator/schemas/handoff.schema.json`;
+VENDORED copy of coordinator-claude's `coordinator/schemas/handoff.schema.json`;
 `schema_validate.check_schema_drift` is a byte-for-byte tamper-check against
-Example-doctrine-repo HEAD, so a local edit here reads as corruption, not as authorship. The
-`dlv-` pattern is example-doctrine-repo's to land and claude-klabauter's to re-vendor. Only the
+Coordinator-claude HEAD, so a local edit here reads as corruption, not as authorship. The
+`dlv-` pattern is coordinator-claude's to land and claude-klabauter's to re-vendor. Only the
 coverage.py half (C3) was ever claude-klabauter-owned, and it stands on its own merits:
 `_DELIVERABLE_ID_RE` did not admit `.`, which misclassified a live
 Example-retrieval-repo-ue-addon id in a guard whose whole job is avoiding a false COVERED.
@@ -53,11 +53,11 @@ _SCHEMA_PATH = (
 def _load_schema_pattern() -> str | None:
     """The vendored schema's `deliverable_id` pattern, or None if absent.
 
-    `handoff.schema.json` is a VENDORED copy of example-doctrine-repo's
+    `handoff.schema.json` is a VENDORED copy of coordinator-claude's
     `coordinator/schemas/handoff.schema.json` — claude-klabauter does not author it
     (`schema_validate.check_schema_drift` is a byte-for-byte tamper-check
-    against example-doctrine-repo HEAD, and a local edit here fails it as corruption). The
-    `dlv-` pattern is therefore example-doctrine-repo's to land; this repo picks it up on the
+    against coordinator-claude HEAD, and a local edit here fails it as corruption). The
+    `dlv-` pattern is therefore coordinator-claude's to land; this repo picks it up on the
     next re-vendor.
 
     Returning None rather than raising is what lets the parity pins below
@@ -76,7 +76,7 @@ _PENDING_REVENDOR = pytest.mark.skipif(
     _load_schema_pattern() is None,
     reason=(
         "deliverable_id carries no pattern in the vendored handoff.schema.json yet — "
-        "example-doctrine-repo authors it (memo 2026-08-05-claude-klabauter-em-dlv-pattern-taking-it-"
+        "coordinator-claude authors it (memo 2026-08-05-claude-klabauter-em-dlv-pattern-taking-it-"
         "but-23-of-your-ids-would-strand.md); this pin activates on re-vendor."
     ),
 )

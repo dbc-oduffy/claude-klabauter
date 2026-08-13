@@ -3,7 +3,7 @@ coordinator_core.ops.write_surface_manifest — JSON-RPC "write_surface.emit_man
 operation.
 
 Purpose: the C4 emission op the writer-declared write-surface manifest plan exists to
-produce — the single artifact a sibling repo (example-doctrine-repo) reads in their lockstep test, walked
+produce — the single artifact a sibling repo (coordinator-claude) reads in their lockstep test, walked
 FROM the writers' `WRITE_SURFACE` declarations (`coordinator_core.install.
 write_surface.WriteSurfaceDeclaration`), never hand-transcribed (Anti-scope: "the manifest
 is emitted *from* the declarations").
@@ -83,7 +83,7 @@ by still emitting every entry from a bad declaration, each carrying its own
 `"validation_errors"` list (empty when clean) rather than dropping the writer.
 
 Deletions count: an entry from a `clause`/`entry` pair where either carries
-`effect="delete"` is emitted with `"effect": "delete"`, never filtered — example-doctrine-repo ruled
+`effect="delete"` is emitted with `"effect": "delete"`, never filtered — coordinator-claude ruled
 2026-08-06 that "every declared entry carries a named disposition" is the enforced
 property, and a delete slots into that unchanged.
 
@@ -95,7 +95,7 @@ wave. This module does NOT change the protocol. It adds a normalized SIBLING fie
 `discovered_by`, purely as an emission-time convenience for a consumer that wants
 exact-match grouping without inheriting the free-text drift risk on the raw field.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md, chunk C4
+Spec backlink: pln-writer-declared-write-surface-49d3bd, chunk C4
 
 Negative-spec — this module does NOT:
     - author, edit, or hand-transcribe any writer's declared entries — every emitted
@@ -107,7 +107,7 @@ Negative-spec — this module does NOT:
       (COMPUTE_ONLY: reads writer modules' declarations and returns a computed value;
       no coordinator substrate is written);
     - validate that a declared surface matches what a writer's source actually does at
-      runtime (a lockstep/drift check example-doctrine-repo owns on their side);
+      runtime (a lockstep/drift check coordinator-claude owns on their side);
     - filter out `effect="delete"` entries, or drop an undeclared/duplicate module from
       the output;
     - recurse into nested directories (e.g. a `tests/` subpackage) under a scan root —
@@ -452,7 +452,7 @@ def discover_declarations(
 
     Deliberately does NOT touch `_collect_manifest_entries`/`build_manifest`
     below -- that function keeps its own independent scan loop so the
-    already-frozen, externally-consumed manifest emission shape (example-doctrine-repo's
+    already-frozen, externally-consumed manifest emission shape (coordinator-claude's
     cockpit schema) stays provably byte-for-byte unchanged by this seam's
     addition. Both scans call the identical `_candidate_modules`/
     `_load_candidate` primitives, so they can never disagree on WHICH

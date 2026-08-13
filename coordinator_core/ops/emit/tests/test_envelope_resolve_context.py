@@ -9,7 +9,7 @@ Note: the former AC12 top-level ``coordinator_root_path`` skeleton scalar was re
 2026-07-21 (zero readers; forbidden by the SnapshotEnvelope schema's additionalProperties:false),
 so the tests that asserted its presence were removed with it.
 
-Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C2 / AC12
+Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C2 / AC12
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ class TestResolveContextLegacyNoArg:
 class TestNoTopLevelCoordinatorRootPathScalar:
     """The removed AC12 top-level coordinator_root_path scalar must not reappear.
 
-    Regression guard: the scalar had zero readers (rag/example-doctrine-repo read only the schema'd PER-RECORD
+    Regression guard: the scalar had zero readers (rag/coordinator-claude read only the schema'd PER-RECORD
     field) and is a forbidden key under the SnapshotEnvelope schema's additionalProperties:false.
     """
 

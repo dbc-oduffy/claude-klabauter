@@ -1,10 +1,10 @@
 """test_scoped_git_commit_cli.py — the `scoped-git-commit` CLI's contract.
 
 `coordinator/bin/scoped-git-commit` is the caller-reachable entrypoint for
-`ceremony.scoped_git_commit`, the op example-doctrine-repo doctrine routes ordinary scoped
+`ceremony.scoped_git_commit`, the op coordinator-claude doctrine routes ordinary scoped
 commits to. The op was registered and correct for a week with NO entrypoint,
 which is what let a scoped-commit advisory point at `coordinator-safe-commit`
-instead (example-doctrine-repo-em, 2026-07-29). These tests hold the two properties that
+instead (coordinator-claude-em, 2026-07-29). These tests hold the two properties that
 made adding it worth doing:
 
   1. It has NO unscoped mode. A missing `-- <paths>` is a usage error, never
@@ -301,7 +301,7 @@ def render():
 
 class TestPushReporting:
     """The line a human reads must never render an UNCONFIRMED push as a FAILED
-    one (example-doctrine-repo-em, 2026-07-30). The old two-valued map printed
+    one (coordinator-claude-em, 2026-07-30). The old two-valued map printed
     `(not pushed)` on three commits that had all pushed, because the op's own
     push had lost the race to the detached auto-push. A reader told a commit
     did not push reaches for a re-push, an amend, or a force-push — and on an

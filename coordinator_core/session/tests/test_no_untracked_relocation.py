@@ -69,7 +69,7 @@ Negative-spec -- scope of this guard, read before extending it:
       routed through one of them escapes this scan the same way the
       pre-fix aliasing blind spot did.
 
-Spec backlink: ``docs/plans/2026-08-06-relocation-re-declares-the-touch-claim.md``
+Spec backlink: ``pln-a-relocated-file-re-declares-i-b9d010``
 (C6), its `## Site classification` section (the provenance for every
 allow-list entry below), and
 ``coordinator_core.test_no_bare_argv0_script_launch`` (the house pattern

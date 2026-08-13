@@ -34,7 +34,7 @@ OUTPUT: a per-goal proposed-status report (string, mirrors the bash script's std
 plus (non-dry-run only) a rewritten proposed-re-assessment comment block appended to
 each active goal artifact with movement KRs. Does NOT overwrite the live `status` field.
 
-KR-suggestion source (DR-130, example-doctrine-repo:coordinator/schemas/kr-suggestion.schema.json):
+KR-suggestion source (DR-130, coordinator-claude:coordinator/schemas/kr-suggestion.schema.json):
 a fourth, fully optional signal — any producer resident in this repo may drop a
 ``state/kr-suggestions/<date>-<slug>.yaml`` record ahead of a weekly re-assessment run.
 Unlike the three sources ``_gather_signal`` folds into ``all_signal_text`` for keyword
@@ -52,8 +52,8 @@ state access; the trampoline resolves both paths itself, exactly as the original
 script derived SCRIPT_DIR/REPO_ROOT from its own BASH_SOURCE location).
 
 Spec backlink: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C6
-Port of: coordinator/bin/reassess-goal-krs.sh (example-doctrine-repo)
-Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 1 (example-doctrine-repo)
+Port of: coordinator/bin/reassess-goal-krs.sh (coordinator-claude)
+Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 1 (coordinator-claude)
 
 Negative-spec (hard-won, preserve exactly):
   - Does NOT overwrite the goal artifact's live `status:` field — writes only a

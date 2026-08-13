@@ -44,7 +44,7 @@ Negative-spec:
 
     hookEventName is REQUIRED in every non-empty shape — never omit it.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § D2
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § D2
 """
 
 from __future__ import annotations

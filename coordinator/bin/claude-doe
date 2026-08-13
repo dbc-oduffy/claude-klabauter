@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# claude-doe — persistent launch wrapper for the example-doctrine-repo-maximalist coordinator delivery shape.
+# claude-doe — persistent launch wrapper for the coordinator-claude-maximalist coordinator delivery shape.
 #
-# Purpose: resolve the example-doctrine-repo clone, validate its coordinator/ sub-directory, then exec claude
+# Purpose: resolve the coordinator-claude clone, validate its coordinator/ sub-directory, then exec claude
 # with --plugin-dir pointing at that coordinator dir so skills/agents resolve live-external.
 #
 # 2026-07-22: ported from bash to naked Python 3 (mega-gate wave, plan row 6) — extensionless
@@ -28,10 +28,10 @@
 # Mechanism record: docs/wiki/external-plugin-live-resolution.md § Documented behavior row 4
 #   (--plugin-dir skill leg). The hook-delivery leg formerly documented here no longer applies.
 #
-# Resolution order for example-doctrine-repo clone root:
+# Resolution order for coordinator-claude clone root:
 #   0. --doe-root <path> / --doe-root=<path> argv flag (highest — explicit
 #      caller override, consumed, never forwarded to claude). Argv seam per
-#      example-doctrine-repo DR-087 — lets the example-doctrine-repo shim pass a pointer-derived root through
+#      coordinator-claude DR-087 — lets the coordinator-claude shim pass a pointer-derived root through
 #      argv instead of injecting it into the REPO_EXAMPLE_DOCTRINE_REPO rung-1
 #      authority slot (a value that CAN diverge from the registry). A
 #      missing value, an explicitly-empty value (either form), or a value
@@ -252,14 +252,14 @@ def _resolve_home_for_clone_shim() -> str | None:
 
 
 def _clone_root_from_live_path(live_path: str) -> str:
-    """Normalize a plugin.mirrors.coordinator-claude.live_path value to the example-doctrine-repo
+    """Normalize a plugin.mirrors.coordinator-claude.live_path value to the coordinator-claude
     clone ROOT.
 
     live_path points at the live PLUGIN dir — the coordinator/ subdirectory
     (<clone>/coordinator) that --plugin-dir consumes — NOT the clone root, which
     is what repos.example_doctrine_repo holds and what the caller then appends "/coordinator"
     to. Strip one trailing "coordinator" segment when present (the standard nested
-    example-doctrine-repo layout); a value without it (a flat OSS layout where the plugin IS the
+    coordinator-claude layout); a value without it (a flat OSS layout where the plugin IS the
     repo root) is returned unchanged. Separator-agnostic (Windows live_path values
     carry mixed / and \\ ).
     """
@@ -425,7 +425,7 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
     else:
         sys.stderr.write(
             "claude-doe: repos.example_doctrine_repo and plugin.mirrors.coordinator-claude.live_path "
-            "are both empty — example-doctrine-repo clone not registered\n"
+            "are both empty — coordinator-claude clone not registered\n"
         )
         sys.stderr.write("  Remediation: machine-local set repos.example_doctrine_repo <path>  then /coordinator:install\n")
     return None
@@ -484,14 +484,14 @@ def main(argv: list[str]) -> int:
     # Validate clone and coordinator sub-directory
     # -------------------------------------------------------------------
     if not os.path.isdir(doe_clone):
-        sys.stderr.write(f'claude-doe: example-doctrine-repo clone not found at "{doe_clone}"\n')
-        sys.stderr.write(f'  Remediation: git clone <example-doctrine-repo-repo-url> "{doe_clone}"\n')
+        sys.stderr.write(f'claude-doe: coordinator-claude clone not found at "{doe_clone}"\n')
+        sys.stderr.write(f'  Remediation: git clone <coordinator-claude-repo-url> "{doe_clone}"\n')
         sys.stderr.write("  Then run: /coordinator:install\n")
         return 1
 
     doe_coordinator = os.path.join(doe_clone, "coordinator")
     if not os.path.isdir(doe_coordinator):
-        sys.stderr.write(f'claude-doe: example-doctrine-repo coordinator/ dir not found at "{doe_coordinator}"\n')
+        sys.stderr.write(f'claude-doe: coordinator-claude coordinator/ dir not found at "{doe_coordinator}"\n')
         sys.stderr.write("  Remediation: run /coordinator:install (W4.2 cutover required to populate coordinator/)\n")
         return 1
 

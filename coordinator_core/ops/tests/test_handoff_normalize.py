@@ -27,7 +27,7 @@ DIRECTORIES on disk, never git objects, so this file monkeypatches
 `tmp_path`-rooted `coordinator-sessions` dir instead -- no `git init`
 anywhere in this module.
 
-Spec backlink: docs/plans/2026-08-10-a-commit-trailer-that-names-the-session.md § C1b
+Spec backlink: pln-a-commit-trailer-that-names-th-ce8a2e § C1b
 
 C5 ADDITION (2026-08-12, person-identity-primitive-first-slice § C5, re-done):
 the `minted_by` stamping cases below drive `_normalize_one_text` directly
@@ -49,7 +49,7 @@ below, drives the `handoff.normalize` batch-sweep handler directly (mirroring
 `test_handoff_normalize_carry_scope.py`'s real-`git init` fixture pattern) to
 assert the two-door hazard itself cannot recur.
 
-Spec backlink (C5): docs/plans/2026-08-12-person-identity-primitive-first-slice.md § C5
+Spec backlink (C5): pln-person-identity-primitive-firs-dbc797 § C5
 """
 from __future__ import annotations
 

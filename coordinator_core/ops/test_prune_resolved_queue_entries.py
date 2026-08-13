@@ -1,7 +1,7 @@
 """Tests for coordinator_core.ops.prune_resolved_queue_entries.
 
-Port of: prune-resolved-queue-entries.sh (example-doctrine-repo b5a4192c, 2026-07-20),
-regression-net-ported from prune-resolved-queue-entries.test.sh (example-doctrine-repo 3a561713,
+Port of: prune-resolved-queue-entries.sh (coordinator-claude b5a4192c, 2026-07-20),
+regression-net-ported from prune-resolved-queue-entries.test.sh (coordinator-claude 3a561713,
 2026-07-22, 447 LoC, 8-rule fixture-diff suite) — every named fixture below carries the
 same case name/comment as its bash counterpart for cross-referencing.
 """

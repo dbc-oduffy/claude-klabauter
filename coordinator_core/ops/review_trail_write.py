@@ -4,7 +4,7 @@ coordinator_core.ops.review_trail_write — per-session review-trail entry write
 Purpose: writes a JSON review-trail entry (additive-create) under
 ``<worktree>/state/review-trail/<timestamp>-<session_id_short>.json``.
 
-Port of: coordinator-write-review-trail.sh (example-doctrine-repo 30f4c5fc, 2026-07-19).
+Port of: coordinator-write-review-trail.sh (coordinator-claude 30f4c5fc, 2026-07-19).
 
 JSON record shape (key order is canonical; hand-serialized for byte-parity):
     {"sha_range":"A..B","reviewer":"code-reviewer","scope":"chain","scope_kind":"diff",
@@ -82,7 +82,7 @@ Classified ``OpClass.MUTATING`` in authz/classification.py (separate EM chunk).
 ``_OP_KEY_SCOPE: common_dir`` — handler receives ``git_common_dir(caller_worktree)`` via
 ipc.py; derives worktree via ``main_worktree_root(repo_root)`` before any path construction.
 
-Spec backlink: docs/plans/2026-07-06-strang-10-residual-writer-strangle-command-type.md § C3
+Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C3
 DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
 
 Negative-spec:
@@ -386,7 +386,7 @@ def _sidecar_evidence_exists(evidence: str, caller_worktree: Path) -> bool:
 #: Section heading the sidecar templates in
 #: ``coordinator_core.subagent_sandbox.provision_report`` scaffold
 #: (``## Execution capability``), and the literal read-only fallback string
-#: example-doctrine-repo's producer side landed at ``2cb87e464``. Matched case-sensitively --
+#: coordinator-claude's producer side landed at ``2cb87e464``. Matched case-sensitively --
 #: this is a fixed contract string, not free prose to fuzzy-match.
 _EXECUTION_CAPABILITY_HEADING_RE = re.compile(
     r"^##\s+Execution capability\s*$", re.MULTILINE,
@@ -1311,7 +1311,7 @@ def _guard_foreign_session_range(
         )
         return frozenset()
 
-    # DEFECT 2 fix (2026-08-07 example-doctrine-repo-em memos: case3-remedy-is-not-
+    # DEFECT 2 fix (2026-08-07 coordinator-claude-em memos: case3-remedy-is-not-
     # performable / review-trail-guard-remedy-unreachable, CONFIRMED-LIVE per
     # state/audits/2026-08-12-inbox-blitz-dominant-verify-wave-b.md items
     # 11/12): when sha_range is ALREADY a single commit, "supply a narrower

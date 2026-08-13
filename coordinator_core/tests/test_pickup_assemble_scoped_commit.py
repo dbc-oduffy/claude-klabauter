@@ -18,7 +18,7 @@ These tests build throwaway `git init` fixtures with real `git` and exercise
 against the pre-fix module and pass once `add`/`commit` spawn real git and the
 read-model resolves `rev-parse HEAD`.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-24-canonical-resolution-engine.md
+Spec backlink: coordinator-claude docs/plans/2026-07-24-canonical-resolution-engine.md
 task W0-2 (the refactor whose caller sweep this test closes).
 """
 

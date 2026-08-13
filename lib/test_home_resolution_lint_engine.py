@@ -291,7 +291,7 @@ def test_bare_or_chain_with_genuine_path_home_terminal_is_exempt(tmp_path):
 def test_bare_or_chain_ternary_path_home_terminal_is_exempt(tmp_path):
     """A `Path.home()` reached through a ternary (`X if cond else
     Path.home()`) is a correct terminal rung -- required cross-repo shape
-    (example-doctrine-repo `host_probes.py:1118`)."""
+    (coordinator-claude `host_probes.py:1118`)."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -551,7 +551,7 @@ def test_dedup_function_reported_once_not_twice(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Cross-repo fixtures (example-doctrine-repo@9e0fb5c44 shapes, verbatim) -- required so
+# Cross-repo fixtures (coordinator-claude@9e0fb5c44 shapes, verbatim) -- required so
 # C2's structural terminal detection is proven against them before this
 # ladder-extraction widening lands. Every one terminates in `Path.home()`
 # and must stay exempt against an EMPTY baseline.
@@ -559,7 +559,7 @@ def test_dedup_function_reported_once_not_twice(tmp_path):
 
 
 def test_cross_repo_guard_ladder_return_path_home_is_exempt(tmp_path):
-    """example-doctrine-repo shape 1: a guard-ladder `return Path.home()`, with each guard's
+    """coordinator-claude shape 1: a guard-ladder `return Path.home()`, with each guard's
     test/return value bound to a preceding local variable -- exercises
     `_extract_guard_ladder`'s name-binding resolution, not just the trivial
     direct-call form."""
@@ -580,7 +580,7 @@ def test_cross_repo_guard_ladder_return_path_home_is_exempt(tmp_path):
 
 
 def test_cross_repo_ternary_over_locally_bound_env_read_is_exempt(tmp_path):
-    """example-doctrine-repo shape 2: a ternary over a locally-bound env read terminating in
+    """coordinator-claude shape 2: a ternary over a locally-bound env read terminating in
     `Path.home()` -- NOT extracted as a ladder site at all (the declared
     known miss), so it naturally produces no finding and "stays exempt" by
     virtue of being invisible to this rule, not by being classified as
@@ -599,7 +599,7 @@ def test_cross_repo_ternary_over_locally_bound_env_read_is_exempt(tmp_path):
 
 
 def test_cross_repo_boolop_or_str_path_home_is_exempt(tmp_path):
-    """example-doctrine-repo shape 3: `os.environ.get('CLAUDE_HOME') or str(Path.home())`."""
+    """coordinator-claude shape 3: `os.environ.get('CLAUDE_HOME') or str(Path.home())`."""
     engine = _engine_for(
         tmp_path,
         "import os\n"
@@ -616,8 +616,8 @@ def test_cross_repo_boolop_or_str_path_home_is_exempt(tmp_path):
 # no fixture here branches on bootstrap-vs-contents kind before scoring
 # order. Spec: `docs/plans/2026-08-07-home-resolution-gate-family-reference-
 # rule.md`, `## Tasks` / `- id: C5`; transcribed from
-# `example-doctrine-repo@coordinator/docs/wiki/portability-gates-spec.md` spec_version
-# 1.3.0 Home-resolution gate family (read at `example-doctrine-repo@9e0fb5c44`).
+# `coordinator-claude@coordinator/docs/wiki/portability-gates-spec.md` spec_version
+# 1.3.0 Home-resolution gate family (read at `coordinator-claude@9e0fb5c44`).
 # ---------------------------------------------------------------------------
 
 
@@ -670,7 +670,7 @@ def test_rung_order_literal_tilde_terminal_is_reported(tmp_path):
 
 
 def test_rung_order_unguarded_expanduser_is_a_warn_not_a_violation(tmp_path):
-    """C5d fix, per `example-doctrine-repo@coordinator/docs/wiki/portability-gates-spec.md`
+    """C5d fix, per `coordinator-claude@coordinator/docs/wiki/portability-gates-spec.md`
     spec_version 1.3.0, "Terminal rung": "An unguarded `expanduser` is a
     **warn**." -- distinct from a literal `"~"` (still a violation). Must NOT
     appear in `find_rung_order_violations`; must appear in the WARN-tier

@@ -12,7 +12,7 @@ venv build.
 
 `COORDINATOR_PLUGIN_ROOT_TRUSTED=1` bypasses `coordinator_trusted_root_guard`
 (fail-loud on an untrusted root) so an arbitrary tmp_path plugin_root can be
-used without registering it as a real coordinator/example-doctrine-repo/claude-klabauter anchor.
+used without registering it as a real coordinator/coordinator-claude/claude-klabauter anchor.
 """
 from __future__ import annotations
 

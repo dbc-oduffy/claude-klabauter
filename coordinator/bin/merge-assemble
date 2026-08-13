@@ -5,7 +5,7 @@
 # (template-variant #1, mirrors coordinator/bin/pickup-assemble): a plain
 # in-process function call after resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop.
 #
-# Contract: example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+# Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
 # Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C6
 #
 # Subcommands:

@@ -5,12 +5,12 @@ Purpose: Mechanical subagent tool-use counting, Stage 1 (write side). Counts
 `tool_use` content blocks in the subagent's own transcript JSONL
 (`agent_transcript_path`) and, ONLY on a verified count, appends one durable record to
 this session's per-session store. This is the write/decision-logic half of a
-cross-repo contract with example-doctrine-repo — example-doctrine-repo owns the thin plumbing shim (hook
+cross-repo contract with coordinator-claude — coordinator-claude owns the thin plumbing shim (hook
 registration, the "has unsurfaced" sentinel, the surfaced-cursor) under the DR-047
 transport-seam carve-out; this op owns the counting and the durable write.
 
-Naming note (per example-doctrine-repo's 2026-07-25 finding, see
-cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-store-records-every-count.md):
+Naming note (per coordinator-claude's 2026-07-25 finding, see
+cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-store-records-every-count.md):
 despite the `zero_tool_use` module/op name and the record's `kind: "zero-tool-use"`
 field, this op writes ONE RECORD PER VERIFIED COUNT, not only zero. There is no
 `if tool_use_count != 0` gate here, deliberately — see "Deliberately no zero-gate"
@@ -18,7 +18,7 @@ below. The name and `kind` identify the DETECTOR that produced the record (this
 module owns exactly one kind, "zero-tool-use", per the future-multi-kind design
 below), not a filter on the record's content. A verified zero is one value
 `tool_use_count` can hold among many, not the thing that makes a record eligible to
-be written. Any reader — this repo's or example-doctrine-repo's — that treats `kind == "zero-tool-use"`
+be written. Any reader — this repo's or coordinator-claude's — that treats `kind == "zero-tool-use"`
 as synonymous with "this agent did zero tool calls" will silently misreport every
 healthy agent as a zero-tool-use detection; filter on the `tool_use_count` field
 explicitly instead (see hooks.subagent_zero_tool_use_surface and
@@ -27,7 +27,7 @@ hooks.subagent_zero_tool_use_resolve, which do this).
 The counting mechanism is spike-proven, not re-derived here: a deliberately-toolless
 agent counted 0 `tool_use` blocks; a one-call agent counted 1 — both exactly reproduced
 the harness notification's own `tool_uses` field. See
-cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-detection-verdict-viable.md.
+cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-verdict-viable.md.
 
 Negative-spec:
     Deliberately no zero-gate: do NOT add `if tool_use_count != 0` before the
@@ -46,12 +46,12 @@ Negative-spec:
     the COMMON case, not an edge case. On UNKNOWN this op writes NOTHING to the store
     and returns an envelope that cannot be confused with a verified 0.
 
-    Do NOT register or handle a `TaskCompleted` case — example-doctrine-repo evaluated and rejected it
+    Do NOT register or handle a `TaskCompleted` case — coordinator-claude evaluated and rejected it
     (no `agent_id`, no transcript pointer in that payload); a handler here would be a
     dead trigger, never fired.
 
     Do NOT mark anything "surfaced" and do NOT perform "dispatched but no record
-    arrived" reconciliation — both are deliberately example-doctrine-repo-side (their own per-session
+    arrived" reconciliation — both are deliberately coordinator-claude-side (their own per-session
     cursor and dispatch-tracking loop already own those concerns end-to-end; see the
     contract memo). This op's only job is: count, and durable-write on a verified
     count.
@@ -76,7 +76,7 @@ Store location: `<git_common_dir>/coordinator-sessions/<session_id>/subagent-zer
 — a sibling of the `dispatched-agents.txt` / `push-failures-cursor.txt` per-session
 convention this tree already uses (track_dispatched_agents.py, auto_push.py).
 
-Spec backlink: cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-engine-op-contract.md
 """
 
 from __future__ import annotations

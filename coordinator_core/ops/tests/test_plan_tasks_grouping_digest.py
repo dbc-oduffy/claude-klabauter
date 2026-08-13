@@ -182,7 +182,7 @@ def test_digest_matches_resolve_guards_own_prospective_computation(tmp_path, mon
     `_apply_cut` and `plan_tasks_mutate._resolve`'s own `_prospective_rows`
     closure would have gone uncaught — this test's whole reason to exist.
 
-    Uses `backlogged` rather than `spun_off` (2026-08-05): example-doctrine-repo's ruling gave
+    Uses `backlogged` rather than `spun_off` (2026-08-05): coordinator-claude's ruling gave
     `spun_off` its own ungated grouping, fully exempt from
     `grouping_approvals` — a governed resolve to `spun_off` succeeds
     regardless of the digest on file (verified live: swapping the approved
@@ -321,7 +321,7 @@ def test_digest_computed_for_wrong_cut_set_is_rejected_by_resolve(tmp_path):
 
     # Digest approved for closing ONLY C1 — a narrower cut than the write
     # below (which also closes C3) will actually produce. Uses `backlogged`
-    # rather than `spun_off` (2026-08-05): example-doctrine-repo's ruling gave `spun_off` its
+    # rather than `spun_off` (2026-08-05): coordinator-claude's ruling gave `spun_off` its
     # own ungated grouping, so a `defer`-grouping digest computed over
     # `spun_off` rows would hash an empty set — a degenerate, not a
     # narrower, cut-set. `backlogged` remains gated into `defer` and is the
@@ -468,7 +468,7 @@ def test_digest_changes_when_row_enters_grouping_scoped_to_that_grouping():
     """Cutting C1 into 'defer' changes 'defer'’s digest but leaves 'do' and
     'ruled_out' untouched.
 
-    Uses `backlogged` rather than `spun_off` (2026-08-05): example-doctrine-repo's ruling gave
+    Uses `backlogged` rather than `spun_off` (2026-08-05): coordinator-claude's ruling gave
     `spun_off` its own ungated grouping (`_PLAN_TASKS_GROUPING_BY_DISPOSITION`
     maps it to `'spun_off'`, not `'defer'`), so cutting a row to `spun_off`
     no longer touches `defer`'s membership at all. `backlogged` is the

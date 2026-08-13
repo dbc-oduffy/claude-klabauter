@@ -6,7 +6,7 @@ provenance auto-populated at spawn time — the only moment ``origin_session`` /
 ``origin_handoff`` / ``origin_plan_id`` / ``origin_goal_id`` are cheaply knowable (an
 hour later you are backfilling null).
 
-This is the primitive the (example-doctrine-repo-owned) ``/spinoff`` skill invokes.  It does NOT enforce
+This is the primitive the (coordinator-claude-owned) ``/spinoff`` skill invokes.  It does NOT enforce
 the PM spinoff gate (that responsibility stays skill-layer); it is a MUTATING primitive
 reachable over the UDS whose caller is responsible for any gate-checking.
 
@@ -50,7 +50,7 @@ PROVENANCE_FIELD_MAP
 ---------------------
 Module-level dict mapping logical names → ratified frontmatter key names, cardinality,
 and serialisation type.  Field names and cardinalities are ratified per the
-spinoff-provenance-ancestry contract (example-doctrine-repo C6 ratification memo
+spinoff-provenance-ancestry contract (coordinator-claude C6 ratification memo
 ``cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md``).  No key swap
 needed — the current ``origin_*`` names match the ratified shape exactly.
 
@@ -70,12 +70,12 @@ Blocking FS I/O wrapped in ``asyncio.to_thread``.
 ``_OP_KEY_SCOPE: common_dir`` — handler receives ``git_common_dir(caller_worktree)`` via
 ipc.py; derives worktree via ``main_worktree_root(repo_root)`` before any path construction.
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C3
 DR authority:  docs/decisions/DR-208-invoke-op-authz-model.md § 5
 
 Negative-spec:
     - Does NOT enforce the PM spinoff gate — this is a primitive; gate-enforcement is the
-      calling skill's responsibility (``/spinoff`` SKILL.md, example-doctrine-repo-owned).
+      calling skill's responsibility (``/spinoff`` SKILL.md, coordinator-claude-owned).
     - Does NOT git-commit.  Pure new-file creation only.
     - Does NOT write outside ``state/handoffs/`` in the caller's worktree.
     - Does NOT use ``liveness.resolve_live_session_ids()`` to resolve origin_session —
@@ -155,10 +155,10 @@ _LOG = logging.getLogger(__name__)
 # PROVENANCE_FIELD_MAP
 #
 # RATIFIED field names and cardinalities — spinoff-provenance-ancestry contract
-# (example-doctrine-repo C6 ratification memo: cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md).
+# (coordinator-claude C6 ratification memo: cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md).
 # The current ``origin_*`` keys already match the ratified shape — that part needed no
 # rename.  It DID leave a gap, though: ``origin_handoff_id``, the C2 ID-companion for
-# ``origin_handoff`` (example-doctrine-repo schema, ``docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md``
+# ``origin_handoff`` (coordinator-claude schema, ``docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md``
 # § C2), is included below because this op is the schema-designated author-time stamp
 # point — ``origin_handoff`` is a path and paths are mutable (every baton is eventually
 # archived to ``archive/handoffs/YYYY-MM/``); ``origin_handoff_id`` is the path-independent

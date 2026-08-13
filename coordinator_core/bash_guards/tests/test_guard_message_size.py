@@ -2,7 +2,7 @@
 three-leg gate over C3's corpus: this is the suite the whole plan exists
 to produce.
 
-Spec backlink: docs/plans/2026-08-02-guard-message-size-discipline.md,
+Spec backlink: pln-runtime-measured-message-size--0669ac,
 chunk C5. Satisfies AC3, AC4, AC5, AC7, AC9, AC13, AC14.
 
 THE THREE LEGS (each corrected during plan review -- see the plan's own

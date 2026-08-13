@@ -20,7 +20,7 @@ external node whose session is "live" per sweep 1's snapshot and "dead" per swee
 its second call. Only a per-sweep re-resolution can observe that transition and
 correctly mark the second ancestor coverable.
 
-Routed from cross-repo/inbox/2026-07-24-example-doctrine-repo-em-chain-derivation-reliability-
+Routed from cross-repo/inbox/2026-07-24-coordinator-claude-em-chain-derivation-reliability-
 defects.md §2 (DAG false-COVERED/false-UNCOVERED on shared branches) — this repro
 targets the false-UNCOVERED direction specifically.
 """

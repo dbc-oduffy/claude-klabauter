@@ -2,10 +2,10 @@
 always-loaded doctrine surfaces unless a PM-created approval sentinel is
 present and unexpired.
 
-Ported from example-doctrine-repo
+Ported from coordinator-claude
 `coordinator/hooks/scripts/guard-doctrine-surface-edits.py` (faithful port —
 see `write_guards/INTERFACE.md`). CLASS is hard-deny and fail-closed; this
-is the one guard in the example-doctrine-repo source tree that deliberately differs from every
+is the one guard in the coordinator-claude source tree that deliberately differs from every
 sibling guard's fail-open posture — see "Fail-closed is DELIBERATE" below,
 carried over verbatim from the source docstring.
 
@@ -138,9 +138,9 @@ site clears no DR-277 carve-out, so the verdict is recorded and never
 consulted by the allow/deny decision below, on MISMATCH or any other
 verdict. Do not "finish the job" by wiring a refusal off it.
 
-Spec backlink: example-doctrine-repo
+Spec backlink: coordinator-claude
   coordinator/hooks/scripts/guard-doctrine-surface-edits.py
-Spec backlink (C4 addendum): docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md
+Spec backlink (C4 addendum): pln-a-ceremony-must-not-be-able-to-5e9421
 """
 
 from __future__ import annotations
@@ -233,7 +233,7 @@ def _sentinel_state(repo_root: "str | None") -> str:
     posture -- see module docstring).
 
     A DIRECTORY at the sentinel path is treated identically to an ABSENT
-    sentinel (2026-07-30 forge-closure fix, ported from the example-doctrine-repo-side
+    sentinel (2026-07-30 forge-closure fix, ported from the coordinator-claude-side
     source). `os.path.getmtime` succeeds on a directory exactly as it does
     on a regular file, so `mkdir <sentinel>` used to read as a real,
     honoured approval -- this guard's read side never actually checked

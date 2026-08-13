@@ -4,7 +4,7 @@ coordinator_core.ops.ceremony.wsc_disposition
 Single source of truth for the WSC ("workstream-complete") consumed-handoff
 disposition set: SINGLE_SESSION, PREDECESSOR_CONSUMED, and MEMO_PREDECESSOR.
 
-Spec backlink: chunk C1, docs/plans/2026-08-01-wsc-completeness-gate-and-pickup-successor.md.
+Spec backlink: chunk C1, pln-wsc-completeness-gate-pickup-s-9793ca.
 MEMO_PREDECESSOR was added by chunk C1,
 docs/plans/2026-08-05-memo-predecessor-representable-outcome.md, following the
 DR-084 additive-enum-only precedent already cited below: widen the recognised

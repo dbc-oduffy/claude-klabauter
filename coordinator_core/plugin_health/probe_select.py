@@ -9,18 +9,18 @@ run mode (closes a subprocess spawn site that fired on every doctor-sentinel inv
 under the bash oracle — that script shelled out to this file, itself once-Python, as a
 separate `python doctor-probe-select.py` process).
 
-`git mv` port of example-doctrine-repo coordinator/bin/doctor-probe-select.py: logic is otherwise
+`git mv` port of coordinator-claude coordinator/bin/doctor-probe-select.py: logic is otherwise
 unchanged (it was already pure, portable Python with no shell dependency) — only the
 manifest-path default changed from "sibling to this file" (coordinator/bin/) to an
 explicit caller-supplied `manifest_path` argument, since this module's own directory is
-no longer the directory the manifest actually lives in (the manifest is example-doctrine-repo-side data,
+no longer the directory the manifest actually lives in (the manifest is coordinator-claude-side data,
 this module is claude-klabauter-side code — see plugin_health/__init__.py negative-spec).
 
 CARGO-CULT GUARD: this selector operates on the fired-probe manifest only. P-7a is
 EM-native and NOT in the manifest; --probe P-7a / select_probe(probes, "P-7a") exits 2.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g2
-Port of:       coordinator/bin/doctor-probe-select.py (example-doctrine-repo repo)
+Port of:       coordinator/bin/doctor-probe-select.py (coordinator-claude repo)
 """
 
 from __future__ import annotations
@@ -40,9 +40,9 @@ def _default_manifest_path() -> Path:
     """Resolve the manifest path when the caller supplies none.
 
     Env override first (DOCTOR_PROBES_MANIFEST — mirrors the bash oracle's
-    DOCTOR_PROBES_MANIFEST override), else the historical example-doctrine-repo bin/ location.
+    DOCTOR_PROBES_MANIFEST override), else the historical coordinator-claude bin/ location.
     CLI-mode callers that need a real doctor-probes.toml should always pass
-    manifest_path explicitly (the example-doctrine-repo trampoline knows its own sibling-file
+    manifest_path explicitly (the coordinator-claude trampoline knows its own sibling-file
     location); this fallback exists for parity/test convenience only.
     """
     override = os.environ.get("DOCTOR_PROBES_MANIFEST")

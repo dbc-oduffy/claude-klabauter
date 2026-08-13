@@ -6,7 +6,7 @@ sample), and a mocked exit-0 whose stdout is a JSON-RPC error envelope
 ({"error": ...}) is likewise REJECTED. All subprocess calls are mocked via
 unittest.mock -- no real child processes are spawned here.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C8 (AC9).
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C8 (AC9).
 """
 
 from __future__ import annotations

@@ -30,7 +30,7 @@ disk, does not register the emitted module anywhere (no `authz/
 classification.py`, no `ops/_registry_map.py`, no `bin/` trampoline) — that
 is explicitly out of scope for this chunk (C4's surface).
 
-Spec backlink: docs/plans/2026-08-13-compute-layer-scaffolder.md, chunk C1.
+Spec backlink: pln-the-compute-layer-scaffolder-e-90d036, chunk C1.
 """
 
 from __future__ import annotations
@@ -78,8 +78,12 @@ def _docstring_safe(value: str) -> str:
     """Escapes `value` for safe interpolation inside a `\"\"\"`-delimited
     docstring: backslashes first (else a later-inserted backslash could
     itself be escaped), then breaks up any `\"\"\"` run so it cannot
-    terminate the enclosing docstring early, then neutralizes newlines so
-    the header always renders as a single visual line.
+    terminate the enclosing docstring early, then neutralizes newlines/
+    line-separator characters so the header always renders as a single
+    visual line. Raises `ValueError` if `value` contains a NUL byte — CPython's
+    `compile()`/`ast.parse()` refuses source text containing an embedded NUL
+    outright, so no escaping strategy can make it safe; reject it fail-loud
+    instead of emitting text guaranteed not to parse.
 
     Review: coordinator:code-reviewer — caller-supplied `skill_name` reached
     `compose_producer_module`'s docstring unescaped (every sibling value
@@ -89,10 +93,22 @@ def _docstring_safe(value: str) -> str:
     robustness defect (the malformed module fails to parse, since the
     docstring is emitted ahead of the mandatory `from __future__ import
     annotations`), not a confirmed code-execution path.
+
+    Review: coordinator:code-reviewer — a NUL byte survived all three
+    `.replace()` calls unchanged and the resulting text always fails to
+    parse (`SyntaxError` on this interpreter); and CR / CRLF / U+2028 /
+    U+2029 survived unescaped, each rendering as a line break and violating
+    this function's own single-visual-line contract.
     """
+    if "\x00" in value:
+        raise ValueError("_docstring_safe: value must not contain a NUL byte")
     escaped = value.replace("\\", "\\\\")
     escaped = escaped.replace('"""', '\\"\\"\\"')
+    escaped = escaped.replace("\r\n", "\\n")
+    escaped = escaped.replace("\r", "\\n")
     escaped = escaped.replace("\n", "\\n")
+    escaped = escaped.replace(" ", "\\u2028")
+    escaped = escaped.replace(" ", "\\u2029")
     return escaped
 
 

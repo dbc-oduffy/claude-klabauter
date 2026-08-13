@@ -31,7 +31,7 @@ no-implicit-cwd bridge for in-process callers (``routine_signals.py``) that must
 depend on process cwd; absent ``--root``, behaviour is unchanged (cwd-based
 resolution, as documented below).
 
-Port of: check-weekly-staleness.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-weekly-staleness.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: archive/specs/2026-05-04-workweek-cadence-split.md § Trigger Doctrine
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
                state/improvement-queue/2026-07-21-routine-signals-ac5-gate-vs-dr079-inprocess-design-conflict.yaml
@@ -202,7 +202,7 @@ def _parse_root_arg(argv) -> Optional[str]:
 
 def _resolve_state_root() -> Optional[str]:
     """Resolve the coordinator state root — mirrors `coordinator_state_root`
-    (Rule 5: bare call, no flags) from coordinator-state-root.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
+    (Rule 5: bare call, no flags) from coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22).
 
     Test seam: CWS_TEST_STATE_ROOT, if set, is returned verbatim (bypasses
     git/meta-repo resolution entirely) — used by the co-located pytest.

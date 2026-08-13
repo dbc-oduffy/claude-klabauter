@@ -51,7 +51,7 @@ Negative-spec:
   - Does NOT call any LLM — deterministic partition only.
   - Does NOT judge whether a ``residue`` memo's eventual fate SHOULD be ratification/
     commitment/ephemeral — that judgment belongs to the LLM specialist wave this op's
-    ``residue`` bucket feeds (memo.triage / example-doctrine-repo's C6 cascade), not this mechanical prefilter.
+    ``residue`` bucket feeds (memo.triage / coordinator-claude's C6 cascade), not this mechanical prefilter.
   - Does NOT delete, mutate-in-place, or commit anything — one whole-JSON create-or-
     overwrite of its own run-scoped shard, full stop (DR-228 § D6).
   - Does NOT write outside ``state/scratch/artifact-distillation/<run_id>/`` — a sibling
@@ -60,7 +60,7 @@ Negative-spec:
   - Does NOT re-derive the ratification/in_repo_capture format rule — composes
     ``schema_validate._memo_cf_distill_fate`` (F1 reuse) rather than re-implementing it.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C16
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C16
 Authority:     docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
 """
 

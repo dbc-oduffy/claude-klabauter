@@ -6,7 +6,7 @@ coordinator_core.distill.ripe_filter.
 Purpose: claude-klabauter's first DR-047 distill-ceremony engine script. Scans a spec directory's
 Markdown frontmatter (recursing into subdirectories, so a month-foldered
 `archive/specs/YYYY-MM/` layout is one invocation) and emits a JSON partition of
-harvest-ripe vs skip-worthy specs on stdout, for the example-doctrine-repo distill Workflow/skill to consume.
+harvest-ripe vs skip-worthy specs on stdout, for the coordinator-claude distill Workflow/skill to consume.
 
 Usage:
     coordinator/bin/distill-ripe-filter.py <spec-dir>
@@ -14,7 +14,7 @@ Usage:
 Output (stdout, JSON): {"harvest": [...], "skip": [{"path", "status", "reason"}, ...]}
 
 Negative-spec: no LLM calls, no writes, no coupling to the canonical distillation log or
-Example-doctrine-repo's distill_fate schema — pure frontmatter scan. All logic lives in
+Coordinator-claude's distill_fate schema — pure frontmatter scan. All logic lives in
 coordinator_core.distill.ripe_filter; this file is argv/stdout plumbing only.
 
 Relocated from bin/distill-ripe-filter.py (DEC-3, 2026-07-23
@@ -28,8 +28,8 @@ unset) and accepted once it probes as a real claude-klabauter checkout; the mach
 registry lookup is a fallback reached only if that probe misses (this file has been
 published/vendored to a location outside the claude-klabauter checkout).
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C1
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C6
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C1
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C6
 """
 
 from __future__ import annotations

@@ -1,12 +1,12 @@
 """coordinator_core.write_guards.nudge_tasks_state_folder_split — advisory guard.
 
-Spec: example-doctrine-repo docs/plans/2026-07-27-claude-md-altitude-triage.md § C14
+Spec: coordinator-claude docs/plans/2026-07-27-claude-md-altitude-triage.md § C14
 Discharges (partly — see module tail): the "state/ vs tasks/" placement rule
-in example-doctrine-repo's always-on global-doctrine/CLAUDE.md, and the C3 ledger's own
+in coordinator-claude's always-on global-doctrine/CLAUDE.md, and the C3 ledger's own
 Row 7 ("central-state-in-claude-klabauter routing sentence" — ACCEPT-UNENFORCED,
 naming this guard as what was owed).
 
-Motivation: example-doctrine-repo's ``state/`` holds always-on session substrate
+Motivation: coordinator-claude's ``state/`` holds always-on session substrate
 (orientation_cache, lessons, handoffs, trackers, queues, ledgers, memos,
 review-trail, week-changelog, audits, recovery, scratch, the *-backlog and
 improvement-queue dirs); ``tasks/`` is UUID flight-recorder dirs, dated
@@ -18,7 +18,7 @@ adds tool-boundary friction (an OFFER, not a block) the moment such a write
 is attempted, rather than leaving the mistake to be discovered only after
 the next sweep has already run.
 
-This is a NEW guard, not a port of a example-doctrine-repo reference ``.sh`` hook — grepped
+This is a NEW guard, not a port of a coordinator-claude reference ``.sh`` hook — grepped
 absent from ``write_guards/*.py`` before authoring (the C3 ledger's own Row 7
 independently records the same absence). It follows the module-shape
 convention set by ``nudge_baton_body_bar.py`` (advisory CLASS, path-gate-

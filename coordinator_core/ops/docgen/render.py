@@ -61,8 +61,8 @@ injection, ``created``/``dispatched_at`` redaction) is C5's surface, and
 byte-identity conformance against the live oracle is C6's — this module is
 tested here only for structural/idiom correctness (``test_doc_render.py``).
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C4 (AC6)
-Oracle: /coordinator/bin/coordinator-doc-new (example-doctrine-repo clone) — every ``_scaffold_*`` fn's
+Spec backlink: pln-strang-12-document-generation--75a7eb § C4 (AC6)
+Oracle: /coordinator/bin/coordinator-doc-new (coordinator-claude clone) — every ``_scaffold_*`` fn's
 own value-resolution-then-builder-call shape.
 """
 
@@ -88,8 +88,8 @@ def _yaml_quote(value: Any) -> str:
 
     Byte-for-byte mirror of the oracle's ``bin/lib/memo_compose._yaml_quote`` —
     always double-quotes, never bare. Kept local (not imported cross-repo) since
-    this module must not depend on the example-doctrine-repo clone at render time; C6's harness is
-    the only surface permitted to resolve into the example-doctrine-repo tree.
+    this module must not depend on the coordinator-claude clone at render time; C6's harness is
+    the only surface permitted to resolve into the coordinator-claude tree.
     """
     s = str(value)
     escaped = (

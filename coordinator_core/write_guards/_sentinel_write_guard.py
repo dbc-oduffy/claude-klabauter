@@ -2,7 +2,7 @@
 file (a file whose mere ABSENCE gates a guarded capability) from being
 created or modified through Write/Edit/MultiEdit/NotebookEdit.
 
-Ported from example-doctrine-repo `coordinator/hooks/scripts/_sentinel_write_guard.py`
+Ported from coordinator-claude `coordinator/hooks/scripts/_sentinel_write_guard.py`
 (faithful port -- see `write_guards/INTERFACE.md`). The underscore prefix is
 load-bearing: `engine.py::_discover_guards()` explicitly skips modules whose
 name starts with `_`, which is exactly why this is the correct home for it --
@@ -82,12 +82,12 @@ def reconstruct_after(tool_name: str, tool_input: dict, before: str) -> "str | N
     reconstructed confidently -- a guard that cannot compute its own input
     has no basis to deny, so callers treat `None` as fail-open.
 
-    Consolidated home for an idiom six example-doctrine-repo guards (`guard-oss-
+    Consolidated home for an idiom six coordinator-claude guards (`guard-oss-
     payload-locality.py`, `guard-prompt-surface-citations.py`,
     `guard-doctrine-changelog-prose.py`, `guard-test-tree-git-fixture-
     spawn.py`, `nudge-plan-test-surface-tier.py`,
     `guard-python-syntax-on-write.py`) each hand-copied a local
-    `_reconstruct_after` for, per DR-047 (claude-klabauter owns guard logic, example-doctrine-repo owns
+    `_reconstruct_after` for, per DR-047 (claude-klabauter owns guard logic, coordinator-claude owns
     plumbing). Diffed byte-for-byte against all six before writing this: they
     are semantically identical today -- differing only in docstrings, a
     stale review comment on two of them (`guard-prompt-surface-citations.py`

@@ -24,7 +24,7 @@ rule 10's `<pkg>` -> system table is actually scanned out of the doc body
 (`package_systems`), since that table's membership is the part expected to
 grow over time.
 
-Spec backlink: docs/plans/2026-08-06-churn-emergent-detection-file-granularity.md
+Spec backlink: pln-cartography-churn-emergent-det-8f59ce
 § chunk C2 (atlas_record — parse and expand file-index.md's recorded mapping
 rule into a frozen catalogued set); § "Decision — source of the catalogued
 set" (ruled: derive from the artifact, not the mapping-rule implementation).

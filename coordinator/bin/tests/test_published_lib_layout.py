@@ -31,7 +31,7 @@ proves nothing (see coordinator/bin/cruft-sweep's own prologue, ~line 203 for
                         and `identity-cli`'s `_LIB_DIR` (session/identity) —
                         the leg C4's new row actually fixes.
 
-Spec backlink: docs/plans/2026-08-08-the-engine-root-s-own-codename-ladder-an.md
+Spec backlink: pln-the-engine-root-s-own-codename-708d23
 chunk C4.
 """
 from __future__ import annotations

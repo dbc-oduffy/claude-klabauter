@@ -6,7 +6,7 @@ tree walk" convention that was living as a duplicated frozenset literal in
 ``coordinator_core/ops/cartography_stack.py`` and
 ``coordinator_core/ops/detect_primary_languages.py`` (found duplicated during
 the ``cartography.chunk_table`` build — see
-``cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-chunk-table-producer-
+``cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-chunk-table-producer-
 seam.md``). Both call sites now import ``SKIP_DIR_NAMES`` from here instead
 of each declaring their own copy.
 
@@ -24,7 +24,7 @@ Negative-spec:
     many repos, not vendor/build noise; test-artifact exclusion is a
     filename/path-shaped predicate elsewhere, not a directory-name skip.
 
-Spec backlink: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-chunk-table-producer-seam.md
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-chunk-table-producer-seam.md
 """
 
 from __future__ import annotations

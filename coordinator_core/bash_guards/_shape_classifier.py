@@ -2,7 +2,7 @@
 classifier for the six ranked bash-spawn shapes identified by the
 1,389-transcript / 62,487-call fork-tax measurement
 (``state/plan-sidecars/2026-07-28-bash-tax-negative-space.md``,
-Example-doctrine-repo ``docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md`` C2, AC-2):
+Coordinator-claude ``docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md`` C2, AC-2):
 grep-via-Bash (50.9% of forks), multi-probe banner commands (40.1%),
 head/tail plumbing (25%), for-loops (9.0%), ``find -exec``/``xargs``
 (3.5%), and while-read loops (unmeasured in that sample -- see

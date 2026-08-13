@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.ceremony.tests.test_wsc_tail_outer_empty_claim_contradiction
 
-cross-repo/inbox/2026-08-11-example-doctrine-repo-em-pickup-claim-never-reaches-frontmatter.md:
+cross-repo/inbox/2026-08-11-coordinator-claude-em-pickup-claim-never-reaches-frontmatter.md:
 a full `/pickup` -> work -> `/workstream-complete` cycle can leave a handoff's
 frontmatter never advanced past `ready_to_fire` (a separate, `pickup_assemble`-
 side bug) while the closing session's claim-record LEDGER still shows a live

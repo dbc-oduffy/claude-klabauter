@@ -55,7 +55,7 @@ def _make_claude_home(tmp_path: Path, receiver_repos: dict[str, Path]) -> Path:
 
 
 def _install_doe_manifest(claude_home: Path, doe_root: Path, manifest: dict) -> None:
-    """Install a example-doctrine-repo registry manifest at `doe_root`, reachable via the DR-071 ladder.
+    """Install a coordinator-claude registry manifest at `doe_root`, reachable via the DR-071 ladder.
 
     Points the ladder's durable rung (`<settings-home>/machine-local/.doe-root`)
     at `doe_root`. The pre-2026-07-28 fixture wrote `<CLAUDE_HOME>/.doe-root` —
@@ -189,9 +189,9 @@ class TestRegistryHomeHonorsMachineLocalImpl:
         """An override NOT under a `bin/` directory carries no settings-home
         information, so settings-home resolution stays authoritative.
 
-        Sibling fixtures (example-doctrine-repo's cross-repo-memo-roundtrip.test.py, cross-repo-
+        Sibling fixtures (coordinator-claude's cross-repo-memo-roundtrip.test.py, cross-repo-
         memo.test.py) point MACHINE_LOCAL_IMPL at a bare `<tmpdir>/_mock_machine_
-        local.py` to redirect the example-doctrine-repo-side SPAWN target only. Deriving
+        local.py` to redirect the coordinator-claude-side SPAWN target only. Deriving
         `parent.parent` from that climbs one level ABOVE the tmpdir and resolves
         the registry to an unrelated directory — every receiver then reads as
         "not registered in the machine-local registry", which is how the CLI-path
@@ -265,7 +265,7 @@ class TestAmbiguousCentralReceiver:
     ):
         """Two distinct central ids both registered to DIFFERENT repos → fail loud.
 
-        Manifest declares centralReceiverIds = ['central-em', 'example-doctrine-repo-em']; if the
+        Manifest declares centralReceiverIds = ['central-em', 'coordinator-claude-em']; if the
         machine-local registry has BOTH 'repos.central' and 'repos.example_doctrine_repo' populated
         (a genuine misconfiguration/disagreement), the pre-C3 implementation picked one
         arbitrarily via unordered set iteration. Post-C3: raise, don't guess.
@@ -274,19 +274,19 @@ class TestAmbiguousCentralReceiver:
             tmp_path,
             {
                 "central": tmp_path / "central-repo",
-                "example_doctrine_repo": tmp_path / "example-doctrine-repo-repo",
+                "example_doctrine_repo": tmp_path / "coordinator-claude-repo",
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         # repos.example_doctrine_repo is registered, so the DR-071 ladder's registry rung
-        # resolves the example-doctrine-repo root — the manifest must live there.
+        # resolves the coordinator-claude root — the manifest must live there.
         _install_doe_manifest(
             claude_home,
-            tmp_path / "example-doctrine-repo-repo",
+            tmp_path / "coordinator-claude-repo",
             {
                 "identity": {
-                    "centralReceiverIds": ["central-em", "example-doctrine-repo-em"],
+                    "centralReceiverIds": ["central-em", "coordinator-claude-em"],
                     "repoAliases": [],
                 }
             },
@@ -300,23 +300,23 @@ class TestAmbiguousCentralReceiver:
     def test_single_central_id_registered_resolves_cleanly(self, tmp_path, monkeypatch):
         """Only one central id has a registered repo → resolves without ambiguity."""
         claude_home = _make_claude_home(
-            tmp_path, {"example_doctrine_repo": tmp_path / "example-doctrine-repo-repo"}
+            tmp_path, {"example_doctrine_repo": tmp_path / "coordinator-claude-repo"}
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         _install_doe_manifest(
             claude_home,
-            tmp_path / "example-doctrine-repo-repo",
+            tmp_path / "coordinator-claude-repo",
             {
                 "identity": {
-                    "centralReceiverIds": ["central-em", "example-doctrine-repo-em"],
+                    "centralReceiverIds": ["central-em", "coordinator-claude-em"],
                     "repoAliases": [],
                 }
             },
         )
 
         inbox_dir, receiver_repo_path, all_repos = resolve_receiver_inbox("central-em")
-        assert receiver_repo_path == tmp_path / "example-doctrine-repo-repo"
+        assert receiver_repo_path == tmp_path / "coordinator-claude-repo"
 
 
 class TestConventionAndAliasMapping:
@@ -374,7 +374,7 @@ class TestSuggestNearestReceiver:
         claude_home.mkdir()
         _install_doe_manifest(
             claude_home,
-            tmp_path / "example-doctrine-repo-repo",
+            tmp_path / "coordinator-claude-repo",
             {
                 "identity": {
                     "centralReceiverIds": [],
@@ -422,34 +422,34 @@ class TestCanonicalReceiverId:
         )
 
     def test_central_alias_canonicalizes_to_registered_key(self, tmp_path, monkeypatch):
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": tmp_path / "example-doctrine-repo-repo"})
+        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": tmp_path / "coordinator-claude-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            doe_root=tmp_path / "example-doctrine-repo-repo",
-            central_ids=["claude-central-em", "central-em", "central", "example-doctrine-repo-em"],
+            doe_root=tmp_path / "coordinator-claude-repo",
+            central_ids=["claude-central-em", "central-em", "central", "coordinator-claude-em"],
         )
 
-        for alias in ("claude-central-em", "central-em", "central", "example-doctrine-repo-em"):
-            assert canonical_receiver_id(alias) == "example-doctrine-repo-em", alias
+        for alias in ("claude-central-em", "central-em", "central", "coordinator-claude-em"):
+            assert canonical_receiver_id(alias) == "coordinator-claude-em", alias
 
     def test_redirect_alias_canonicalizes_to_same_central_id(self, tmp_path, monkeypatch):
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": tmp_path / "example-doctrine-repo-repo"})
+        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": tmp_path / "coordinator-claude-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            doe_root=tmp_path / "example-doctrine-repo-repo",
-            central_ids=["claude-central-em", "example-doctrine-repo-em"],
+            doe_root=tmp_path / "coordinator-claude-repo",
+            central_ids=["claude-central-em", "coordinator-claude-em"],
             redirect_aliases=[".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em"],
         )
 
         for redirect in (".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em"):
-            assert canonical_receiver_id(redirect) == "example-doctrine-repo-em", redirect
+            assert canonical_receiver_id(redirect) == "coordinator-claude-em", redirect
 
     def test_non_central_receiver_returned_unchanged(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": tmp_path / "rag-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        self._make_manifest(tmp_path, claude_home, central_ids=["example-doctrine-repo-em"])
+        self._make_manifest(tmp_path, claude_home, central_ids=["coordinator-claude-em"])
 
         assert canonical_receiver_id("example-retrieval-repo-em") == "example-retrieval-repo-em"
 
@@ -468,13 +468,13 @@ class TestCanonicalReceiverId:
         as resolve_receiver_inbox's own ambiguity contract."""
         claude_home = _make_claude_home(
             tmp_path,
-            {"central": tmp_path / "central-repo", "example_doctrine_repo": tmp_path / "example-doctrine-repo-repo"},
+            {"central": tmp_path / "central-repo", "example_doctrine_repo": tmp_path / "coordinator-claude-repo"},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            doe_root=tmp_path / "example-doctrine-repo-repo",
-            central_ids=["central-em", "example-doctrine-repo-em"],
+            doe_root=tmp_path / "coordinator-claude-repo",
+            central_ids=["central-em", "coordinator-claude-em"],
         )
 
         with pytest.raises(AmbiguousReceiverError):
@@ -486,10 +486,10 @@ class TestCanonicalReceiverId:
         (machine_local / "registry.toml").write_text("not [ valid toml =", encoding="utf-8")
         claude_home = tmp_path / "claude-home"
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        self._make_manifest(tmp_path, claude_home, central_ids=["example-doctrine-repo-em"])
+        self._make_manifest(tmp_path, claude_home, central_ids=["coordinator-claude-em"])
 
         with pytest.raises(RegistryReadError):
-            canonical_receiver_id("example-doctrine-repo-em")
+            canonical_receiver_id("coordinator-claude-em")
 
     def test_central_alias_with_no_registered_repo_passes_through(self, tmp_path, monkeypatch):
         """Central alias declared in the manifest, but nothing registered anywhere
@@ -497,9 +497,9 @@ class TestCanonicalReceiverId:
         authority that turns this into a fail-loud setup error at send-time)."""
         claude_home = _make_claude_home(tmp_path, {"unrelated": tmp_path / "unrelated-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        self._make_manifest(tmp_path, claude_home, central_ids=["example-doctrine-repo-em"])
+        self._make_manifest(tmp_path, claude_home, central_ids=["coordinator-claude-em"])
 
-        assert canonical_receiver_id("example-doctrine-repo-em") == "example-doctrine-repo-em"
+        assert canonical_receiver_id("coordinator-claude-em") == "coordinator-claude-em"
 
 
 class TestResolveSelfEmId:
@@ -534,7 +534,7 @@ class TestResolveSelfEmId:
 
     def test_matches_aliased_registered_repo(self, tmp_path, monkeypatch):
         """2026-07-26 review finding 1: an aliased repo must resolve to the
-        SAME id the example-doctrine-repo CLI's `repo_key_to_em_id` produces
+        SAME id the coordinator-claude CLI's `repo_key_to_em_id` produces
         (`example_game_workbench_repo` -> `example-game-repo` -> `example-game-repo-em`), not the
         naive underscore->dash convention (`example-game-workbench-repo-em`)."""
         self_repo = tmp_path / "example-game-workbench-repo"
@@ -549,12 +549,12 @@ class TestResolveSelfEmId:
         assert resolve_self_em_id(self_repo) == "example-game-repo-em"
 
     def test_matches_repos_example_doctrine_repo(self, tmp_path, monkeypatch):
-        self_repo = tmp_path / "example-doctrine-repo"
+        self_repo = tmp_path / "coordinator-claude"
         self_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": self_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        assert resolve_self_em_id(self_repo) == "example-doctrine-repo-em"
+        assert resolve_self_em_id(self_repo) == "coordinator-claude-em"
 
     def test_unregistered_repo_falls_back_to_basename_convention(self, tmp_path, monkeypatch):
         self_repo = tmp_path / "some-unregistered-repo"

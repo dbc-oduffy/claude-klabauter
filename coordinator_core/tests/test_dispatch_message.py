@@ -17,7 +17,7 @@ Tests:
 Handlers use asyncio.run() in sync test functions — no pytest-asyncio dependency
 (engine is stdlib-only; same pattern as test_hooks_roundtrip.py).
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C1 / C1b
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C1 / C1b
 """
 
 from __future__ import annotations
@@ -323,7 +323,7 @@ def test_params_checked_before_method():
 
 # ---------------------------------------------------------------------------
 # C1a — _ORIGIN_WORKTREE_FIELD constant and wire-level acceptance
-# Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1a
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1a
 # ---------------------------------------------------------------------------
 
 def test_origin_worktree_field_constant_defined():
@@ -372,7 +372,7 @@ def test_dispatch_missing_origin_worktree():
 
 # ---------------------------------------------------------------------------
 # C1b-ii — resolve_request_repo + per-request repo threading
-# Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1b
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1b
 # ---------------------------------------------------------------------------
 
 def test_resolve_request_repo_present():
@@ -438,7 +438,7 @@ def test_handler_receives_none_repo_when_absent():
 
 # ---------------------------------------------------------------------------
 # C1c — AC-1b op-keying table + AC-1c fail-loud
-# Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1c
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1c
 # ---------------------------------------------------------------------------
 
 def test_keying_missing_origin_worktree_for_common_dir_op():
@@ -772,7 +772,7 @@ def test_op_key_scope_table_covers_all_registered_ops():
 # ---------------------------------------------------------------------------
 # C3 — AC-3: request-level fault containment
 # Tests: per-request timeout, blocking-handler isolation, BaseException absorption
-# Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C3
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
 # ---------------------------------------------------------------------------
 
 def test_timeout_poison_request():

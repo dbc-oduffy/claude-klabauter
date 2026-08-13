@@ -12,8 +12,8 @@ push helper — branch-case canonicalization, 9-class push-error classification,
 retry/backoff, forensic stderr capture) has been fully ported to
 coordinator_core/hooks/auto_push.py (619 lines, 22 tests in test_auto_push.py)
 per state/handoffs/2026-07-15_164501_auto-push-naked-python-reimpl.md. This file
-is now a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module,
-per DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module,
+per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, and correct
 for this shape. On Windows, this file's co-located `.cmd` twin wins via
@@ -21,9 +21,9 @@ for this shape. On Windows, this file's co-located `.cmd` twin wins via
 macOS/Linux `python3` is the right interpreter. Caution: callers must invoke
 via the extensionless name or a resolved-interpreter prefix, never a bareword
 `.py` through git-bash — git-bash DOES honor the shebang and would exec-127
-with no `python3` present. See the carve-out in example-doctrine-repo's
+with no `python3` present. See the carve-out in coordinator-claude's
 coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
-this wiki lives in the example-doctrine-repo repo, not here).
+this wiki lives in the coordinator-claude repo, not here).
 
 Always exits 0 — auto-push must never block a commit. auto_push.main() already
 enforces this internally (broad except + best-effort logging); this trampoline

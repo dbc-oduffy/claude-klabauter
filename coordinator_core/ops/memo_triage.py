@@ -7,12 +7,12 @@ doctrine (``docs/decisions/``, ``CLAUDE.md``, lessons/auto-memory) — for a
 downstream LLM triage wave to confirm. This op is COMPUTE_ONLY and purely
 mechanical: frontmatter scoring + an "already-captured" cross-check + legacy
 backfill + observability counters. It does NOT call Haiku/Sonnet and does NOT
-decide final promotion — that judgment belongs to example-doctrine-repo's C6 background-Workflow
+decide final promotion — that judgment belongs to coordinator-claude's C6 background-Workflow
 LLM triage wave, which consumes this op's candidate list as its input, not a
 replacement for it.
 
 Two-tier read model:
-  1. If a memo's frontmatter already carries ``distill_fate`` (example-doctrine-repo's C2 schema:
+  1. If a memo's frontmatter already carries ``distill_fate`` (coordinator-claude's C2 schema:
      one of ``ephemeral`` | ``commitment`` | ``ratification``), that value is
      read verbatim and used to place the memo directly into the outcome bucket
      (``ratification``/``commitment`` → promote; ``ephemeral`` → not promoted)
@@ -23,7 +23,7 @@ Two-tier read model:
      ``docs/decisions/**`` file cites it — excluding ``commitment`` from the
      promote set therefore created a permanent deletion deadlock (never
      promoted → never harvested → never cited → Guard 7 blocks forever). This
-     is a thin forward-compatible read; conformance-recheck when example-doctrine-repo's
+     is a thin forward-compatible read; conformance-recheck when coordinator-claude's
      distill_fate schema lands for real.
   2. Otherwise (the common case today — no memo in the wild carries
      ``distill_fate`` yet), the deterministic pre-filter scores the memo:
@@ -35,7 +35,7 @@ Two-tier read model:
      reachable pre-disqualification values) are candidates for promotion.
      This intentionally targets a single-digit promote set out of the live
      corpus — a wide-net keyword matcher is explicitly the wrong shape (that
-     is example-doctrine-repo's cascade's job, not this pre-filter's).
+     is coordinator-claude's cascade's job, not this pre-filter's).
 
 Already-captured cross-check (SPEC ALTITUDE, not "grep the terms"): the
 candidate terms are the memo's *distinctive* tokens — DR-id-shaped /
@@ -111,7 +111,7 @@ fate-stamped memos demanded promotion). Deliberately fail-loud, not a
 correctly on every run for a month while every downstream consumer read the
 debt number as truth regardless.
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C5
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C5
 """
 
 from __future__ import annotations
@@ -138,7 +138,7 @@ class MemoTriageContradictionError(RuntimeError):
     gate). Fail-loud, not a "degraded"-style flag on the return dict — a
     softened warning has a measured track record of going unconsumed."""
 
-# distill_fate values (example-doctrine-repo's forward C2 schema) that count as a promote signal.
+# distill_fate values (coordinator-claude's forward C2 schema) that count as a promote signal.
 # ``commitment`` MUST stay in this set — see the module docstring's Guard 7
 # deadlock rationale (delete_guard.py's check_harvest_provenance blocks a
 # commitment candidate's deletion until a docs/wiki or docs/decisions file

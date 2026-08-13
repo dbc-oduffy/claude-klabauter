@@ -1,7 +1,7 @@
 """
 coordinator_core.cartography.tests.test_atlas_record — tests for atlas_record.
 
-Spec backlink: docs/plans/2026-08-06-churn-emergent-detection-file-granularity.md
+Spec backlink: pln-cartography-churn-emergent-det-8f59ce
 § chunk C2.
 """
 

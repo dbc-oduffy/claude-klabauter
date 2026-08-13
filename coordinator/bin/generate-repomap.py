@@ -4,7 +4,7 @@ generate-repomap.py — CLI trampoline over claude-klabauter
 coordinator_core.ops.generate_repomap.
 
 Thin wrapper around the Python repomap generator (bin/repomap/generate-repomap.py,
-Example-doctrine-repo-resident, NOT ported — this trampoline only replaces the bash argument-
+Coordinator-claude-resident, NOT ported — this trampoline only replaces the bash argument-
 building/interpreter-resolution/trust-guard shell, not the generator itself).
 Contains NO RAG-gating logic — callers gate via bin/check-rag-state.py before
 invoking this. Full gating doctrine: docs/wiki/repomap-rag-gating.md.
@@ -28,8 +28,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Fail-loud convention: the original .sh exits 1 on every resolution failure

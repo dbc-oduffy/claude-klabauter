@@ -1,6 +1,6 @@
 """
 Goal — the one net-new WRITABLE entity in the cockpit, modelled as an
-append-only event record (the Data Science Reviewer P1-D6, R3). Pydantic port of example-doctrine-repo
+append-only event record (the Data Science Reviewer P1-D6, R3). Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/goal.ts` (Zod source).
 
 Goals are mutable, low-frequency, single-author-per-edit but MULTI-MACHINE

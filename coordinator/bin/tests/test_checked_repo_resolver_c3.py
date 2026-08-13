@@ -1,7 +1,7 @@
 """test_checked_repo_resolver_c3.py -- C3 test surface for the sweep/reap
 scripts and the ceremony hook repointed onto the C1 checked resolver.
 
-Spec backlink: docs/plans/2026-08-11-one-checked-resolver-for-the-bin-family.md
+Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C3 / AC2-AC5, AC10.
 
 This module is C3's own -- no other chunk in this wave writes to it. C1's

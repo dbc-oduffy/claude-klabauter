@@ -6,7 +6,7 @@ path.
 
 Purpose: close the upstream half of the live/archive handoff duplication hole
 documented in ``state/audits/2026-07-26-handoff-live-archive-duplication-
-origin.md`` (example-doctrine-repo). That investigation ruled out archival itself, the
+origin.md`` (coordinator-claude). That investigation ruled out archival itself, the
 stale-index restore fix, and the DR-084 migration's own write primitive as
 the creator of a duplicate, and narrowed the remaining candidates to
 unconditional-create writers reachable in a shared working tree. It could not
@@ -35,7 +35,7 @@ Two independent match bases, either one sufficient to trip the guard:
     frontmatter scalar already exists on an archived record — the durable,
     path-independent identity ``docs/plans/2026-07-08-lifecycle-vocab-c2-
     durable-links-rollup.md`` § C1 introduced, and the same basis
-    ``coordinator/tests/test_handoff_id_uniqueness.py`` (example-doctrine-repo) checks
+    ``coordinator/tests/test_handoff_id_uniqueness.py`` (coordinator-claude) checks
     after the fact.
 
 Negative-spec: no ``force``/escape parameter. There is no legitimate reason

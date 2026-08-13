@@ -101,22 +101,22 @@ class TestFiresOnDerivedLiveCopy:
 
 class TestSilentOnEverythingElse:
     def test_authoring_surface_allowed(self):
-        """example-doctrine-repo's own authoring copy — writes here are correct."""
-        _allow("/Users/alice/repos/example-doctrine-repo/global-doctrine/CLAUDE.md")
+        """coordinator-claude's own authoring copy — writes here are correct."""
+        _allow("/Users/alice/repos/coordinator-claude/global-doctrine/CLAUDE.md")
 
     def test_repo_root_project_claude_md_allowed(self):
         _allow("/Users/alice/repos/some-project/CLAUDE.md")
 
     def test_dev_repo_coordinator_claude_md_allowed(self):
-        """example-doctrine-repo's own coordinator/CLAUDE.md plugin-doctrine authoring
+        """coordinator-claude's own coordinator/CLAUDE.md plugin-doctrine authoring
         surface — a DIFFERENT CLAUDE.md-class surface, not derived."""
-        _allow("/Users/alice/repos/example-doctrine-repo/coordinator/CLAUDE.md")
+        _allow("/Users/alice/repos/coordinator-claude/coordinator/CLAUDE.md")
 
     def test_snippet_surface_allowed(self):
-        _allow("/Users/alice/repos/example-doctrine-repo/coordinator/snippets/em-operating-doctrine.md")
+        _allow("/Users/alice/repos/coordinator-claude/coordinator/snippets/em-operating-doctrine.md")
 
     def test_other_snippet_surface_allowed(self):
-        _allow("/Users/alice/repos/example-doctrine-repo/coordinator/snippets/agent-role-dispatched.md")
+        _allow("/Users/alice/repos/coordinator-claude/coordinator/snippets/agent-role-dispatched.md")
 
     def test_settings_json_allowed(self):
         _allow("/Users/alice/.claude/settings.json")
@@ -170,11 +170,11 @@ class TestDenyTextNamesAlternativeAndConsequence:
 
     def test_deny_text_resolves_authoring_root_via_registry(self, monkeypatch):
         monkeypatch.setattr(
-            guard, "registry_get", lambda key: "/opt/some/example-doctrine-repo" if key == "repos.example_doctrine_repo" else None
+            guard, "registry_get", lambda key: "/opt/some/coordinator-claude" if key == "repos.example_doctrine_repo" else None
         )
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "/opt/some/example-doctrine-repo/global-doctrine/CLAUDE.md" in reason
+        assert "/opt/some/coordinator-claude/global-doctrine/CLAUDE.md" in reason
 
     def test_unregistered_root_names_the_key_not_a_fabricated_path(self, monkeypatch):
         """An unresolvable root renders the registry key the operator sets,

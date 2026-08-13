@@ -21,7 +21,7 @@ Every record is assigned a `baseline_id` (`<code_sha>:<op>:<run_id>`) before
 it is appended, so each persisted store entry is independently addressable
 even though the store itself never collapses history on write.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C7.
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C7.
 """
 
 from __future__ import annotations

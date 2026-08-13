@@ -14,7 +14,7 @@ longer carries it at all. ``resolve_priority`` now has exactly one caller
 (the emission path below), which makes the cross-check moot rather than
 failing — nothing left to fork a second walk into.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § Acceptance Criteria
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § Acceptance Criteria
   (AC2, AC9, AC16).
 """
 

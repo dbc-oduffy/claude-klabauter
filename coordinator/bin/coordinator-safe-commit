@@ -107,7 +107,7 @@ Usage forms:
   coordinator-safe-commit "<subject>" -- <path> [<path>...]  # pathspec — delegates to
                                                                # scoped-git-commit
 
-2026-08-06 (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-safe-commit-pathspec-
+2026-08-06 (cross-repo/inbox/2026-08-06-coordinator-claude-em-safe-commit-pathspec-
 and-allowlist-naming.md, Defect 1): the `-- <paths>` form above is a
 passthrough — it shells out to `scoped-git-commit -m "<subject>" -- <paths>`
 (coordinator_core/ops/ceremony/scoped_git_commit.py) rather than
@@ -185,7 +185,7 @@ BLANKET_ALLOWED_COMMANDS = frozenset(
 # the ceremony's own dispatch-prompt naming, not a `.md` file. "distill.md"
 # is the actual skill file (coordinator/commands/distill.md) — the natural
 # `CLAUDE_INVOKING_COMMAND=distill` value was refused by neither marker
-# before this fix (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-safe-commit-
+# before this fix (cross-repo/inbox/2026-08-06-coordinator-claude-em-safe-commit-
 # pathspec-and-allowlist-naming.md, Defect 2).
 BLANKET_ALLOWED_PPID_MARKERS = (
     "workstream-start.md",
@@ -335,7 +335,7 @@ def parse_args(argv: Sequence[str]) -> Args:
                 raise UsageError("--include-orphans requires at least one pathspec argument.")
         elif tok == "--":
             # Pathspec-passthrough separator (Defect 1,
-            # cross-repo/inbox/2026-08-06-example-doctrine-repo-em-safe-commit-
+            # cross-repo/inbox/2026-08-06-coordinator-claude-em-safe-commit-
             # pathspec-and-allowlist-naming.md): everything after `--` is a
             # path handed to `scoped-git-commit`, mirroring `git commit`'s
             # own `-m <subject> -- <paths>` shape. The subject is whatever
@@ -402,7 +402,7 @@ def parse_args(argv: Sequence[str]) -> Args:
 
 
 def do_pathspec(args: "Args") -> None:
-    """Port of Defect 1's fix (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-
+    """Port of Defect 1's fix (cross-repo/inbox/2026-08-06-coordinator-claude-em-
     safe-commit-pathspec-and-allowlist-naming.md): delegates a `-- <paths>`
     invocation to `scoped-git-commit -m "<subject>" -- <paths>`
     (coordinator_core/ops/ceremony/scoped_git_commit.py) — a subprocess
@@ -531,7 +531,7 @@ def _scoped_commit_suggestion(subject: str, host_is_windows: Optional[bool] = No
     2026-07-29 fix (round 1): the bareword `python3 -m coordinator_core.
     invoke` above only resolves when `coordinator_core` is already on
     `sys.path` — true in claude-klabauter's own tree, false in every OTHER caller repo
-    (example-doctrine-repo foremost), where it dies with `ModuleNotFoundError` the
+    (coordinator-claude foremost), where it dies with `ModuleNotFoundError` the
     instant it's copy-pasted. Fixed by resolving claude-klabauter's root at emit time
     via `cc_invoke.resolve_engine_root()` directly (module-level import, line
     ~159). This is a resolve-only site — it wants the root as a value and
@@ -1560,10 +1560,10 @@ def do_scoped(
     # as-is, falling back to `git add -A` only when nothing was pre-staged
     # (2026-07-25 fix — see do_override docstring).
     #
-    # NOT --scope-from <handoff> (2026-07-29 fix, example-doctrine-repo audit
+    # NOT --scope-from <handoff> (2026-07-29 fix, coordinator-claude audit
     # state/audits/2026-07-29-safe-commit-scope-from-defect.md): the
     # /handoff skill stopped emitting the `scope:` frontmatter block
-    # --scope-from parses (2026-07-25, example-doctrine-repo 1d5aa82b) and every
+    # --scope-from parses (2026-07-25, coordinator-claude 1d5aa82b) and every
     # handoff written since fails it on arrival — a named alternative that
     # is inoperative in the situation the caller is actually in is worse
     # than none (docs/wiki/bash-guard-threat-model.md). `_scoped_commit_
@@ -1908,7 +1908,7 @@ def do_scoped(
         # has partial-staged one of these paths. Replaces the prior
         # `_git_add` + pathspec-less `git commit`, which committed THE
         # INDEX and could silently absorb a concurrent sibling's staged
-        # file (example-doctrine-repo 726925b2). Scope COMPUTATION above (my_scope,
+        # file (coordinator-claude 726925b2). Scope COMPUTATION above (my_scope,
         # orphan_claimed_paths) is unchanged; only the write mechanism is
         # repointed. sys.path already carries claude_klabauter_root at this point
         # (main() runs _import_session() before dispatching to do_scoped).
@@ -2127,7 +2127,7 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
         # has partial-staged one of these paths. Replaces the prior
         # `_git_add` + pathspec-less `git commit`, which committed THE
         # INDEX and could silently absorb a concurrent sibling's staged
-        # file (example-doctrine-repo 726925b2) -- the same horn do_scoped's no-orphan
+        # file (coordinator-claude 726925b2) -- the same horn do_scoped's no-orphan
         # sibling branch was closed against. Scope COMPUTATION above
         # (my_scope) is unchanged; only the write mechanism is repointed.
         # sys.path already carries claude_klabauter_root at this point (main() runs

@@ -1,6 +1,6 @@
 """
 SnapshotEnvelope — the top-level shape of every emitted cockpit snapshot.
-Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/entities/snapshot-envelope.ts`
+Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/snapshot-envelope.ts`
 (Zod source).
 
 Spec backlink: state/roadmap/cockpit-contract-ext-2026-06-22/COORDINATOR-RESOLUTIONS.md
@@ -206,7 +206,7 @@ class SnapshotEnvelope(BaseModel):
     # Initiative summaries — lightweight parent entities for work identity
     # (D2). Present-but-empty until C4 emitter wires the initiatives SECTION
     # (D9).
-    # Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D2, C1.
+    # Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2, C1.
     initiatives: list[InitiativeSummary]
     # Executive summaries — per-repo "why this project matters" briefs (one
     # per repo). Present-but-empty until SECTION 8.17 emitter wires
@@ -232,7 +232,7 @@ class SnapshotEnvelope(BaseModel):
     # Backlog-trend time series (cockpit panel). Required non-null block;
     # claude-klabauter's presence probe reads
     # $defs['snapshot-envelope']['properties']['backlog_history'] and
-    # self-activates on this concrete shape. Example-doctrine-repo emits a stub
+    # self-activates on this concrete shape. Coordinator-claude emits a stub
     # (generated_at:null, series:[]); claude-klabauter populates real series
     # post-parity (D19 pattern).
     # No MalformedRecords bucket — singleton object block, not an

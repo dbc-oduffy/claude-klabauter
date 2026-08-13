@@ -175,7 +175,7 @@ def discover_files(roots: Path | list[Path]) -> list[str]:
     """Discover in-scope `.doe-root` cat-read sites under one or more roots.
 
     Accepts either a single Path (back-compat) or a list of Paths — the
-    latter unions claude-klabauter's own coordinator/ tree with the example-doctrine-repo-resident
+    latter unions claude-klabauter's own coordinator/ tree with the coordinator-claude-resident
     coordinator/ tree (see _resolve_scan_roots()), deduping by resolved
     path so a root nested inside another root's walk is not double-counted.
     """
@@ -310,11 +310,11 @@ def _resolve_scan_roots() -> list[Path]:
 
     (i) claude-klabauter's own coordinator/ tree (via _resolve_plugin_root() — either
     CLAUDE_PLUGIN_ROOT or this script's own parent directory), and (ii) the
-    example-doctrine-repo-resident coordinator/ tree (<doe_root()>/coordinator), since
+    coordinator-claude-resident coordinator/ tree (<doe_root()>/coordinator), since
     coordinator/ content post-migration is split across both repos and a
     `.doe-root` cat-read site can live in either half.
 
-    If doe_root() is unresolvable (no example-doctrine-repo clone on this machine), the example-doctrine-repo
+    If doe_root() is unresolvable (no coordinator-claude clone on this machine), the coordinator-claude
     half is WARN+skipped — this gate must still run standalone on a
     claude-klabauter-only checkout, not hard-fail for lacking a sibling clone.
     """
@@ -323,8 +323,8 @@ def _resolve_scan_roots() -> list[Path]:
         doe_coordinator = Path(doe_root()) / "coordinator"
     except _DoeUnresolvable as exc:
         print(
-            f"verify-doe-root-seam-sync.py: WARNING — example-doctrine-repo repo root "
-            f"unresolvable ({exc}); skipping the example-doctrine-repo-resident coordinator/ "
+            f"verify-doe-root-seam-sync.py: WARNING — coordinator-claude repo root "
+            f"unresolvable ({exc}); skipping the coordinator-claude-resident coordinator/ "
             "tree half of the scan.",
             file=sys.stderr,
         )

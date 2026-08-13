@@ -6,12 +6,12 @@ Consumed via coordinator/bin/lib/sentinel-blocks-cli.js, which `require()`s
 the sentinel-blocks.js module this file ports. The .js module is NOT invoked
 directly as an executable (no shebang, no main-execution path) — it is a
 sourced library consumed via require() by sentinel-blocks-cli.js, so this
-port has no example-doctrine-repo-side trampoline; the .js file and its CLI wrapper are left
+port has no coordinator-claude-side trampoline; the .js file and its CLI wrapper are left
 untouched.
 
 Spec backlink: archive/specs/2026-05-01-portable-ideas-from-obsidian-research.md
 §W2 (Sentinel-Block Primitives)
-Port recipe pattern: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/
+Port recipe pattern: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-normalize-snippet.md (byte-parity port discipline)
 
 Exports:

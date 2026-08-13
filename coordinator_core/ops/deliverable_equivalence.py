@@ -31,7 +31,7 @@ invariant is C3b's authoring obligation, not this module's to enforce by walking
 this loader only guards against a malformed artifact silently masquerading as a clean map
 (see `_build_equivalence_map`'s duplicate-loser handling below).
 
-Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (AC6, AC6b, AC9, AC12)
+Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC6b, AC9, AC12)
 
 Second responsibility — the close-out ledger (sedge-06)
 ---------------------------------------------------------
@@ -620,7 +620,7 @@ def _normalize_extracted_deliverable_id(raw: Optional[str]) -> Optional[str]:
     skip-guard fires exactly as it does for a truly missing field. A well-formed
     bare id passes through unchanged.
 
-    Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C2
+    Spec backlink: pln-archive-side-corpus-remediatio-3ff30d § C2
     """
     if raw is None:
         return None

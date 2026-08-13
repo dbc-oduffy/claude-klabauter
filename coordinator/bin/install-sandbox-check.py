@@ -3,7 +3,7 @@
 
 Runs Tier 1 filesystem checks, the Tier 1b maximalist-install-shape regression
 net, and Tier 1c publish-repo clean-install parameterization checks against a
-fresh-machine ~/.claude + cloned-example-doctrine-repo + wired-wrapper install. Tier 2
+fresh-machine ~/.claude + cloned-coordinator-claude + wired-wrapper install. Tier 2
 (running-in-Claude-Code) cannot execute inside a subagent, so it is printed
 as a DEFERRED manual gate. The validator logic lives claude-klabauter-side in
 coordinator_core.install.sandbox_check; this file resolves COORDINATOR_ROOT
@@ -17,22 +17,22 @@ and hands it to that module.
 # maximalist-install-shape regression net, Tier 1c publish-repo clean-install
 # parameterization contract) has been fully ported to
 # coordinator_core/install/sandbox_check.py (claude-klabauter repo) with a co-located
-# pytest (test_sandbox_check.py). This file is now a thin example-doctrine-repo-side (contract)
-# trampoline over that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo owns
+# pytest (test_sandbox_check.py). This file is now a thin coordinator-claude-side (contract)
+# trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
 # contract/generator, claude-klabauter owns engine).
 #
 # This validator drives several dependency scripts (claude-doe and
-# example-doctrine-repo's generator/resolver set) via subprocess, mirroring the
+# coordinator-claude's generator/resolver set) via subprocess, mirroring the
 # original bash oracle's invocation shape. This trampoline's only job is
 # to resolve the default
 # COORDINATOR_ROOT and hand it to the claude-klabauter module, which cannot self-locate
-# inside the example-doctrine-repo clone.
+# inside the coordinator-claude clone.
 #
 # COORDINATOR_ROOT resolution is NOT self-location (dirname(script_dir)).
 # b644d5a9 migrated THIS FILE into claude-klabauter's coordinator/bin/ while
 # coordinator/templates/ (which COORDINATOR_ROOT must point at — see
 # sandbox_check.py's claude-doe-shim.sh.tmpl read) stayed behind in
-# example-doctrine-repo. The old bash oracle's `SCRIPT_DIR="$(cd "$(dirname
+# coordinator-claude. The old bash oracle's `SCRIPT_DIR="$(cd "$(dirname
 # "${BASH_SOURCE[0]}")" && pwd)"` self-location was correct only while this
 # executable and coordinator/templates/ lived in the same repo; that
 # assumption no longer holds post-migration. The default now resolves via
@@ -45,7 +45,7 @@ and hands it to that module.
 # subagent/this process — it is printed as a DEFERRED manual gate at the end
 # of every run, unchanged from the bash oracle.
 # Spec backlink: docs/plans/2026-07-04-doe-maximalist-execution-plugin-dir.md § W4.1
-#   AC-W4.1: "Sandbox clean-install produces thin ~/.claude + cloned example-doctrine-repo + wired wrapper"
+#   AC-W4.1: "Sandbox clean-install produces thin ~/.claude + cloned coordinator-claude + wired wrapper"
 # Doctrine: docs/wiki/install-surface-completeness.md § Running-in-Claude-Code
 #
 # Exit codes (unchanged contract from the bash oracle, PLUS a new dedicated
@@ -59,7 +59,7 @@ and hands it to that module.
 # the failing builtin produced); this is a flagged behavioral improvement,
 # not a silent one — a caller can now tell "checks ran, some failed" (1)
 # apart from "checks could not run at all, e.g. cold machine with
-# CLAUDE_KLABAUTER_ROOT/example-doctrine-repo root unresolvable" (3).
+# CLAUDE_KLABAUTER_ROOT/coordinator-claude root unresolvable" (3).
 from __future__ import annotations
 import os
 import sys
@@ -74,29 +74,29 @@ _TRANSPORT_FAILURE_RC = 3
 
 
 def _resolve_coordinator_root() -> str:
-    """Resolve the default --coordinator-root (the example-doctrine-repo-owned coordinator/
+    """Resolve the default --coordinator-root (the coordinator-claude-owned coordinator/
     tree holding templates/, e.g. templates/shell/claude-doe-shim.sh.tmpl).
 
     This does NOT derive from this script's own __file__ location. b644d5a9
     migrated this trampoline into claude-klabauter while coordinator/templates/
-    stayed in example-doctrine-repo — self-location (dirname(script_dir)) now resolves
+    stayed in coordinator-claude — self-location (dirname(script_dir)) now resolves
     to <claude-klabauter>/coordinator, which has no templates/ tree at all, and the
     downstream sandbox_check module would silently read from a directory
     that never existed. doe_root() is the correct authority for "where is
-    the example-doctrine-repo repo," independent of where THIS script happens to run
+    the coordinator-claude repo," independent of where THIS script happens to run
     from. A future reader must not "restore" __file__-based resolution to
     regain oracle parity with the retired bash script — that is precisely
     what caused this break.
 
     Fails loud (sys.exit(_TRANSPORT_FAILURE_RC)) if doe_root() cannot
     resolve — this is a gate script, not a never-block hook, so an
-    unresolvable example-doctrine-repo root must not degrade to a silent no-op default.
+    unresolvable coordinator-claude root must not degrade to a silent no-op default.
     """
     try:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            f"install-sandbox-check: cannot resolve the example-doctrine-repo repo root ({exc}). "
+            f"install-sandbox-check: cannot resolve the coordinator-claude repo root ({exc}). "
             "Set repos.example_doctrine_repo in the machine-local registry, or set the "
             "REPO_EXAMPLE_DOCTRINE_REPO (or legacy DOE_ROOT) env var, or pass --coordinator-root "
             "explicitly.",
@@ -132,9 +132,9 @@ def main() -> None:
 
     # Resolve the default COORDINATOR_ROOT via doe_root() (see
     # _resolve_coordinator_root() docstring) — the claude-klabauter module cannot do
-    # this itself since it does not live inside the example-doctrine-repo clone. This is NOT
+    # this itself since it does not live inside the coordinator-claude clone. This is NOT
     # self-location: this file lives in claude-klabauter (coordinator/bin/),
-    # not inside the example-doctrine-repo clone, so dirname(script_dir) no longer points at
+    # not inside the coordinator-claude clone, so dirname(script_dir) no longer points at
     # the tree that owns templates/. An explicit --coordinator-root on argv
     # still wins verbatim and skips this resolution entirely.
     argv = list(sys.argv[1:])

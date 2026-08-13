@@ -1,5 +1,5 @@
 """
-EmissionScope — pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/emission-scope.ts`
+EmissionScope — pydantic port of coordinator-claude `coordinator/cockpit-contract/src/emission-scope.ts`
 (Zod source). The scope discriminator every ingestable cockpit emission entity
 declares, and the per-case envelope invariant it forces (DECISIONS.md § D25).
 

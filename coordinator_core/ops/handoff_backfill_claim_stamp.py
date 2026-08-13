@@ -19,7 +19,7 @@ Reported by example-retrieval-repo-em (source_memo:
 both this gap and the `baton_assemble` predecessor_id defect (this plan's C2,
 a separate module) in one chain.
 
-Spec backlink: docs/plans/2026-08-11-a-claim-stamp-backfill-verb-and-the-lega.md,
+Spec backlink: pln-a-claim-stamp-backfill-verb-an-a345d2,
 chunk C1, AC1-AC7.
 
 Writes exactly three frontmatter fields via `locked_rmw`: `claimed_at`,
@@ -143,7 +143,7 @@ def _validate_backfilled_fields(fm_text: str) -> list:
     Deliberately does NOT call `coordinator_core.frontmatter.schema_validate`
     or any full-document validator — see this op module's docstring, "Why
     not shared validation": `schema_validate.py` is a hard external
-    dependency (example-doctrine-repo imports `validate_frontmatter_obj` by path) and its
+    dependency (coordinator-claude imports `validate_frontmatter_obj` by path) and its
     leniency is contract; narrowing that path would be a global behaviour
     change under one caller's remit. This function is local to THIS op and
     checks nothing beyond what THIS op actually writes.

@@ -16,8 +16,8 @@ assertion against the constant does not. Empirical trigger: the 2026-07-28
 Divergence 8 false positives (unquoted `|` and `2>/dev/null` denied) went
 unreported for days partly because the deny message described a rule the code
 did not implement, so reviewers reading it had no reason to suspect the guard
-rather than their own command (example-doctrine-repo cross-repo memo
-``2026-07-28-example-doctrine-repo-em-reviewer-bash-guard-pipeline-carveout.md``, which
+rather than their own command (coordinator-claude cross-repo memo
+``2026-07-28-coordinator-claude-em-reviewer-bash-guard-pipeline-carveout.md``, which
 landed the carve-outs and flagged this residual back to this repo).
 
 Scope note -- coherence is asserted against the DEFAULT ruleset

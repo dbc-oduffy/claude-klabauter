@@ -2957,7 +2957,7 @@ class TestRepairArchivedDeploymentState:
     parsing itself (covered separately, mock-only, in
     coordinator/bin/tests/test_archive_stamp_cli_repair_archived_deployment_state.py).
 
-    Spec backlink: example-doctrine-repo cross-repo memo, 2026-07-26 — 13 archived
+    Spec backlink: coordinator-claude cross-repo memo, 2026-07-26 — 13 archived
     handoffs stuck at deployment_state: in_flight, hand-edited because
     ship-handoff's state/handoffs/-only containment refuses archive/handoffs/
     paths. This is the AC the whole verb exists to satisfy: an archived

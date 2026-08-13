@@ -3,7 +3,7 @@ point all three write-confinement bump guards (`bump_foreign_repo_write.py`
 [C4], `bump_outside_repo_write.py` [C5], `write_guards.bump_out_of_repo_tool_write`
 [C7]) consult before deciding whether to bump at all.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
 repo], chunk C2, "Applicability -- anchor on a value agents cannot move,
 resolve the two no-bump conditions".
 
@@ -75,7 +75,7 @@ RESOLUTION PRIMITIVES -- REUSED, NEVER REIMPLEMENTED.
     carries, including its Windows-without-`HOME`-set fix) rather than a
     literal `os.path.join(os.environ["HOME"], ".claude")`. This module does
     NOT call `trusted_root_guard.is_trusted()` -- that predicate also trusts
-    the example-doctrine-repo and claude-klabauter anchors, which would wrongly hand the
+    the coordinator-claude and claude-klabauter anchors, which would wrongly hand the
     fleet-recovery hatch to every session launched in either of THIS
     plan's own two working repos. Only the home-resolution helper is
     reused; the trust decision itself is this module's own, narrower one.
@@ -213,7 +213,7 @@ _PUBLISH_OWNER_SUFFIX = ".owner"
 _APPLICABILITY_LOG_FILENAME = "write_bump_applicability_log"
 
 
-#: AC11 / merged-in example-doctrine-repo source numbering C9 (see plan's § "Substrate
+#: AC11 / merged-in coordinator-claude source numbering C9 (see plan's § "Substrate
 #: re-verification" and drift D9) landed the extended-length-prefix strip
 #: as a private helper scoped to THIS module's own comparison only ("not a
 #: repo-wide sweep ... that sweep is the sibling anchor plan's own proposed

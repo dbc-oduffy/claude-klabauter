@@ -49,7 +49,7 @@ Row-matching contract (the "conservative reading" — see Ambiguity note below):
     guessing at a shape this op has no on-disk example of.
 
 Ambiguity note (Bar: "implement the conservative reading and state the ambiguity"):
-  - No tracker README on disk anywhere in example-doctrine-repo or claude-klabauter was found
+  - No tracker README on disk anywhere in coordinator-claude or claude-klabauter was found
     at authoring time (both repos greped clean for `Pending enrichment` /
     `Enrichment in progress` table rows) — the table shape above is reconstructed
     from doctrine prose plus the ONE concrete row delegate-execution.md quotes, not
@@ -96,7 +96,7 @@ Write-target classification — ratified (write target) / still provisional
   carve-outs covers (DR-216's `docs/plans/*.md` carve-out is append-only
   session records via `plan.append_session`; a tracker README status-cell flip
   is an in-place REWRITE of existing content, the opposite semantic) — is now a
-  PM-ratified, authorized mutating carve-out per `example-doctrine-repo
+  PM-ratified, authorized mutating carve-out per `coordinator-claude
   docs/decisions/DR-094-tracker-advance-status-write-target-carveout.md`
   (PM-ratified 2026-07-25). DR-094 ratifies the write **as this module is
   currently built, no wider**: exactly one caller-supplied, path-contained
@@ -128,10 +128,10 @@ Write-target classification — ratified (write target) / still provisional
   the op itself, until/unless a future, separate DR sanctions handler-issued
   commits for this noun.
 
-Spec backlink: example-doctrine-repo coordinator/skills/enrich-and-review/SKILL.md § Phase 2.5/4.5/6
-Spec backlink: example-doctrine-repo coordinator/docs/wiki/delegate-execution.md § Phase 1.5, Re-dispatch budget
-Spec backlink: example-doctrine-repo commit f83fbb52 (names this op; documents the prior-art gap)
-Spec backlink: example-doctrine-repo docs/decisions/DR-094-tracker-advance-status-write-target-carveout.md
+Spec backlink: coordinator-claude coordinator/skills/enrich-and-review/SKILL.md § Phase 2.5/4.5/6
+Spec backlink: coordinator-claude coordinator/docs/wiki/delegate-execution.md § Phase 1.5, Re-dispatch budget
+Spec backlink: coordinator-claude commit f83fbb52 (names this op; documents the prior-art gap)
+Spec backlink: coordinator-claude docs/decisions/DR-094-tracker-advance-status-write-target-carveout.md
   (write-target ratification; see "Write-target classification" above for bounds)
 
 Negative-spec:

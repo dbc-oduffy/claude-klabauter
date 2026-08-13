@@ -22,7 +22,7 @@ Exit codes:
     port reproduces that unreachability rather than "fixing" it into a live
     exit-2 path.)
 
-Port of: decode-claude-projects-dir.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: decode-claude-projects-dir.sh (coordinator-claude b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
                (clean-slate residual migration, R1 DOE-PORT wave)
 

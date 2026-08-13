@@ -39,7 +39,7 @@ Exit codes:
         out-of-enum target_kind/priority, schema-validation MutateAbort, lock
         timeout, or malformed envelope).
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § C3
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C3
 """
 
 from __future__ import annotations

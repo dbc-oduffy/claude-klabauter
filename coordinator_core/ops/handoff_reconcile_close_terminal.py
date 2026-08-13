@@ -34,7 +34,7 @@ harder to reach for than the audit-authoring step already is.
 Composition (pure reuse of tested single-verb internals — same pattern as
 `handoff_ship_archive.py`'s ship+archive composite):
   0. `handoff_children._handoff_has_live_children` (2026-08-10 fix, cross-
-     repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-
+     repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-
      key.md § 2) — the SAME live-lineage-edge guard step 2's chain-mode call
      runs internally, reused here BEFORE step 1 so a live successor edge
      refuses the call outright instead of letting step 1 stamp closed_reason:
@@ -88,7 +88,7 @@ handoff.ship_and_archive's own precedent.
 
 Spec backlink: cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
 terminal-state-not-cleared-programmatically.md, defect 1, item 2. Also
-cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-
+cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-
 scrub-key.md § 1-2 (pickup_ready + live-lineage-edge fixes).
 
 Negative-spec:
@@ -333,7 +333,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     rel_id = _wire_rel_id(contained_live, worktree)
 
     # --- Step 0: live-lineage-edge guard (defect 2, cross-repo/inbox/2026-
-    # 08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-key.md § 2) ---
+    # 08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-key.md § 2) ---
     # The handoff schema's own closed_reason description is explicit:
     # "displaced = replaced with NO lineage edge (with an edge it's
     # continued, not closed)". This op's `reason` param defaults callers

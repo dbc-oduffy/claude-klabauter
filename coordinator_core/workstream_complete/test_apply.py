@@ -972,7 +972,7 @@ def test_apply_halts_before_wsc_tail_via_real_brief_against_a_stood_down_chain_e
 
 
 # ---------------------------------------------------------------------------
-# No-commit row guard (C13, example-doctrine-repo docs/plans/2026-07-29-pm-approved-
+# No-commit row guard (C13, coordinator-claude docs/plans/2026-07-29-pm-approved-
 # provenance-write-time-closure-gate.md) — a task-spine row this session's
 # commit-coverage oracle (close_out_and_stamp._determine_shipped, reused not
 # reimplemented) found no covering commit for must not resolve to a silent
@@ -1353,7 +1353,7 @@ def test_resolve_arg_tokens_unrecognized_token_shape_fails_loud() -> None:
 
 # ---------------------------------------------------------------------------
 # Residual backstop is NAME-shaped, not BRACE-shaped (2026-08-13
-# example-doctrine-repo-em-wsc-review-list-collides-with-token-syntax) —
+# coordinator-claude-em-wsc-review-list-collides-with-token-syntax) —
 # `directives_commit_tail.build_close_tail_args_directive` serializes a
 # per-slice review entry with `json.dumps(payload, sort_keys=True)` into
 # `--review-slice <json>`. That flat JSON object is brace-delimited but
@@ -1463,7 +1463,7 @@ def test_resolve_arg_tokens_landed_field_fails_loud_when_producer_never_landed()
 # `.argv` token — the whole-arg, list-expanding field
 # (`directives_commit_tail.build_wsc_tail_directive`'s
 # `"{d-close-tail-args.argv}"`) that closes the 2026-08-03
-# example-doctrine-repo-em-wsc-tail-review-metadata-dropped hole: `d-close-tail-args`
+# coordinator-claude-em-wsc-tail-review-metadata-dropped hole: `d-close-tail-args`
 # (`wsc-close tail-args`) prints one argv token per line on stdout, and this
 # field is what actually splices those tokens into `d-run-wsc-tail`'s own
 # argv -- `depends_on` alone only orders the two directives.

@@ -14,7 +14,7 @@ No-rename gate note: uses positional constructor args throughout to keep the
 coordinator_core/ grep-count for the state-root field identifier unchanged (value-only
 edit — no rename permitted per-repo-emission-cutover gate spec).
 
-Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C1 / AC5
+Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C1 / AC5
 """
 
 from __future__ import annotations

@@ -1,10 +1,10 @@
 """
 coordinator_core.ops.session.hook_delivery_manifest — reader for the
-hook-delivery manifest block example-doctrine-repo's carriers embed inside `hooks.json`.
+hook-delivery manifest block coordinator-claude's carriers embed inside `hooks.json`.
 
 Purpose: `guard_settings_integrity.detect_hook_delivery_duplication`
 compares hook-delivery surfaces by raw script filename. That comparison
-went blind the moment example-doctrine-repo's fan-in carriers started delivering many guards
+went blind the moment coordinator-claude's fan-in carriers started delivering many guards
 under one filename (`preuse-write-dispatch.py`,
 `postuse-stop-family-dispatch.py`, `postuse-advisory-dispatch.py`) — a
 `settings.json` entry naming a carrier-delivered guard directly shares no
@@ -14,7 +14,7 @@ lets the comparator (C3, `guard_settings_integrity.py`) difference
 EFFECTIVE GUARD SETS instead of filenames. Full contract:
 `docs/reference/hook-delivery-manifest.md` (C1).
 
-Spec backlink: `docs/plans/2026-08-07-detector-effective-guard-sets.md`,
+Spec backlink: `pln-hook-delivery-duplication-dete-baf712`,
 task C2, AC2.
 
 Negative spec (SessionStart boot path, same discipline as this file

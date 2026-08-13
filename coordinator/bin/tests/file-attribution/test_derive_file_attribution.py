@@ -1,7 +1,7 @@
 """
 test_derive_file_attribution.py — Golden test for derive-file-attribution.py.
 
-Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C1 test surface
+Spec backlink: pln-ccos-6-rehome-attribution-python-9966da § C1 test surface
 
 Tests:
   1. Synthetic fixture transcript covering Read, Read(partial), Edit, Write(create),

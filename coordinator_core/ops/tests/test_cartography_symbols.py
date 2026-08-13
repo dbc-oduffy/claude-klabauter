@@ -25,7 +25,7 @@ installed here — every non-corpus-fact arm is exercised by monkeypatching
 imports them through, mirroring `test_foreign_symbols.py`'s own injection
 strategy. No skip guards on anything reachable by injection.
 
-Spec backlink: docs/plans/2026-08-08-cartography-consumes-symbol-extract.md
+Spec backlink: pln-cartography-consumes-symbol-ex-3fc0a8
 § chunk C3.
 """
 

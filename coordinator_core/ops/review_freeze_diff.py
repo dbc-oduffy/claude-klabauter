@@ -6,7 +6,7 @@ plus the freeze-time HEAD sha to
 Purpose: registers ``review.freeze_diff``. coordinator:code-reviewer's Bash is
 allowlist-confined by ``coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist``
 (fail-closed, no escape hatch, correctly so) — it cannot run `git diff` itself.
-Five non-weekly example-doctrine-repo review-dispatch gates each grew a hand-written
+Five non-weekly coordinator-claude review-dispatch gates each grew a hand-written
 ``git diff <range> -- <paths> > state/review-trail/diffs/<slice-id>.diff``
 fenced shell block to work around that — a command payload an EM reads out of
 a markdown fence and retypes into a shell (unlintable, untestable, invisible
@@ -23,7 +23,7 @@ argv to parse); this module owns everything past "range + slice_id + paths
 have been extracted from the caller".
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-review-diff-freeze-op-wanted.md
-Prior pattern: coordinator/skills/parallel-code-review/SKILL.md (example-doctrine-repo) — the
+Prior pattern: coordinator/skills/parallel-code-review/SKILL.md (coordinator-claude) — the
 existing frozen-diff + head.sha shape this op generalizes to the other five
 non-weekly review-dispatch gates.
 Sibling op: coordinator_core.ops.ceremony.snapshot_diff_and_head

@@ -7,7 +7,7 @@ frontmatter lineage. See ``derive.py`` for the pure transform and
 atomic write) that composes it.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3
-Port of: derive-session-hierarchy.sh (example-doctrine-repo f0aa2d56, 2026-07-16)
+Port of: derive-session-hierarchy.sh (coordinator-claude f0aa2d56, 2026-07-16)
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ doc's own "What is enforced here" section for the `bash_payload(...)` seam
 that would be needed to make the general case decidable, and why that is a
 future chunk's shape, not this one's.
 
-Spec backlink: docs/plans/2026-08-07-guard-suite-back-to-a-gate.md chunk C7,
+Spec backlink: pln-make-the-bash-guards-suite-a-g-2f81d6 chunk C7,
 AC7.
 
 Scope

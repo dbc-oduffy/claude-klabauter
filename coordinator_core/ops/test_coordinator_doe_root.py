@@ -7,7 +7,7 @@ Scenarios are driven the same way the bash tests drive them: a fake
 `machine-local` stub placed first on PATH, environment variables scoped per-test via
 monkeypatch, and a fresh `os.environ["REPO_EXAMPLE_DOCTRINE_REPO"]` state.
 
-Port of: coordinator-doe-root.test.sh (example-doctrine-repo 09e5e5f9, 2026-07-19)
+Port of: coordinator-doe-root.test.sh (coordinator-claude 09e5e5f9, 2026-07-19)
 
 NOTE (2026-07-21): the module is no longer process-global-state-bearing via
 `os.environ` — the bash oracle's `export` was retired because it leaked across the
@@ -73,7 +73,7 @@ def test_t1_env_short_circuit_no_machine_local_call(tmp_path, monkeypatch):
 def test_t2_registry_resolution(tmp_path, monkeypatch):
     stubdir = tmp_path / "t2-stub"
     stubdir.mkdir()
-    expected = "/x/example-doctrine-repo"
+    expected = "/x/coordinator-claude"
     _write_stub(str(stubdir), f"print({expected!r})\n")
     monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
@@ -114,15 +114,15 @@ def test_t4_memo_idempotency_second_call_skips_machine_local(tmp_path, monkeypat
         str(stubdir),
         "with open(" + repr(str(sentinel)) + ", 'a') as _f:\n"
         "    _f.write('called\\n')\n"
-        "print('/x/example-doctrine-repo')\n",
+        "print('/x/coordinator-claude')\n",
     )
     monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
     first = mod.coordinator_doe_root()
     second = mod.coordinator_doe_root()
 
-    assert first == "/x/example-doctrine-repo"
-    assert second == "/x/example-doctrine-repo"
+    assert first == "/x/coordinator-claude"
+    assert second == "/x/coordinator-claude"
     # B1 review fix (2026-08-08): the stub resolves rung 2 (repos.example_doctrine_repo)
     # immediately, so neither the codename-free ladder (now rung 2.75, tried
     # only when rungs 2/2.5 both fail) nor rung 2.5 itself is ever reached on
@@ -246,7 +246,7 @@ def test_c1b_codename_free_rung_resolves_with_registry_unreachable(tmp_path, mon
 
 
 def test_c1b_codename_free_rung_private_manifest_layout(tmp_path, monkeypatch):
-    """Same rung, private example-doctrine-repo-repo manifest shape (`coordinator/schemas/...`)
+    """Same rung, private coordinator-claude-repo manifest shape (`coordinator/schemas/...`)
     instead of the OSS-flat one -- both published layouts must be probed."""
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
@@ -347,7 +347,7 @@ def test_c1e_plugin_root_content_root_normalized_to_repo_root(tmp_path, monkeypa
 
 
 def test_b5_plugin_root_normalizes_without_marketplace_marker(tmp_path):
-    """B5 review fix (2026-08-08): the private example-doctrine-repo repo root may not carry
+    """B5 review fix (2026-08-08): the private coordinator-claude repo root may not carry
     `.claude-plugin/plugin.json` (the C1E fix's marker was an unverified
     premise). With no marketplace marker ANYWHERE, a candidate whose basename
     is "coordinator" and whose parent has the manifest at

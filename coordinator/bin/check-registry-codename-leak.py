@@ -8,8 +8,8 @@ guard — greps a target dir for private-repo codenames from the machine-local
 registry's repos.* keys, after subtracting the D1 keep-set) has been fully
 ported to coordinator_core/ops/check_registry_codename_leak.py (co-located
 pytest: test_check_registry_codename_leak.py). This file is now a thin
-Example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
-(example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+Coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
+(coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 Fail-loud exit convention: this is a gate script (publish-tree leak guard) —
 on claude-klabauter-link failure, exit 2 (usage/internal-error code, matching the
@@ -24,8 +24,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Spec backlink: docs/plans/2026-06-27-genericize-provenance-sweeper.md § C4 / AC11

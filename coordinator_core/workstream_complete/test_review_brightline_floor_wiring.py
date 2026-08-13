@@ -4,7 +4,7 @@ production-caller-side wiring for `directives_review.
 build_review_brightline_gate_directive`'s four range-floor kwargs
 (`trail_records`/`chain_tip_sha`/`is_ancestor`/`session_start_sha`).
 
-Spec backlink: docs/plans/2026-08-08-the-second-close-re-measures-the-first-c.md.
+Spec backlink: pln-the-second-close-re-measures-t-bc6263.
 The predecessor session in this plan's chain landed the builder-side
 capability (`directives_review.build_review_brightline_gate_directive`'s
 four optional kwargs, delegating to its own `resolve_mid_chain_review_

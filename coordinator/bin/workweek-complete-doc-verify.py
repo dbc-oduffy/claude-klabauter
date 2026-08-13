@@ -28,7 +28,7 @@ Exits 3 if CLAUDE_KLABAUTER_ROOT cannot be resolved (see stderr) before ever rea
 `main()`; otherwise exit code and stdout/stderr are exactly
 `coordinator_core.ops.doc_content_verify.main`'s.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C2, AC12
+Spec backlink: coordinator-claude docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C2, AC12
 Spec backlink: claude-klabauter coordinator_core/ops/doc_content_verify.py
 
 Negative-spec: does NOT parse or reinterpret argv itself — forwards verbatim

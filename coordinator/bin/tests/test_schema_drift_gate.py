@@ -83,7 +83,7 @@ def test_drift_exits_1_and_names_schema_and_direction(tmp_path):
             "ok": False,
             "status": "DRIFT",
             "drifted": [{"schema": "cockpit-contract.json", "direction": "we-behind"}],
-            "message": "1 vendored schema(s) diverge from example-doctrine-repo HEAD: cockpit-contract.json [we-behind].",
+            "message": "1 vendored schema(s) diverge from coordinator-claude HEAD: cockpit-contract.json [we-behind].",
         }
 
     rc, out, _err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
@@ -164,7 +164,7 @@ def test_unresolved_exits_0_but_says_unverifiable(tmp_path):
             "ok": True,
             "status": "UNRESOLVED",
             "drifted": [],
-            "message": "no example-doctrine-repo clone resolved; drift not determinable",
+            "message": "no coordinator-claude clone resolved; drift not determinable",
         }
 
     rc, out, err = _run_main_capturing(mod, fake_route=fake_route, fake_repo_root=str(tmp_path))
@@ -174,7 +174,7 @@ def test_unresolved_exits_0_but_says_unverifiable(tmp_path):
     else:
         _fail("UNRESOLVED: exit 0", f"got rc={rc}")
 
-    if "UNRESOLVED" in err and "no example-doctrine-repo clone" in err:
+    if "UNRESOLVED" in err and "no coordinator-claude clone" in err:
         _pass("UNRESOLVED: stderr names the unverifiable status + reason")
     else:
         _fail("UNRESOLVED: stderr names the unverifiable status + reason", f"stderr: {err!r}")

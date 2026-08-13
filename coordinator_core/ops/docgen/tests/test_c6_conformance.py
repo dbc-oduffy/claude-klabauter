@@ -3,7 +3,7 @@ harness against the LIVE ``coordinator-doc-new`` oracle (C6, AC5).
 
 Purpose: for every one of the 22 extracted doc types, invoke this repo's own
 in-tree ``coordinator-doc-new`` CLI (``coordinator/bin/coordinator-doc-new`` —
-migrated in from example-doctrine-repo by commit b644d5a9; resolved repo-root-relative to this
+migrated in from coordinator-claude by commit b644d5a9; resolved repo-root-relative to this
 test file, no cross-repo clone lookup, so both sides cannot drift together
 unnoticed) with a fixed set of caller-supplied inputs, invoke this repo's
 internal ``render.render_document`` with the SAME inputs, redact the closed
@@ -13,7 +13,7 @@ assert byte-identical remainder.
 This is a round-trip CONFORMANCE test, not a happy-path smoke test (DR-210
 anti-drift discipline) — every extracted type gets its own assertion, and a
 type that cannot be made byte-identical is reported as a per-type finding
-(oracle text vs. rendered text diff, plus the example-doctrine-repo-HEAD commit of the template
+(oracle text vs. rendered text diff, plus the coordinator-claude-HEAD commit of the template
 surface), not silently skipped or loosened to structural-similarity.
 
 Determinism strategy (mirrors C5's hybrid contract):
@@ -48,11 +48,11 @@ Determinism strategy (mirrors C5's hybrid contract):
     a code-review pass closed the gap in the real registry instead, per
     ``volatility.py``'s module docstring.)
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C6 (AC5)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5)
 Oracle: coordinator/bin/coordinator-doc-new (in-repo, resolved repo-root-relative)
 Negative-spec: this module does not vendor a copy of the oracle CLI or any
 template text — every run re-resolves and re-invokes the in-repo CLI at its
-current on-disk state. The oracle CLI is no longer cross-repo (example-doctrine-repo commit
+current on-disk state. The oracle CLI is no longer cross-repo (coordinator-claude commit
 b644d5a9 migrated the executable surface into this repo); a missing oracle at
 the expected path is therefore a broken checkout, not an unavailable optional
 dependency — this module fails loud on that condition rather than skipping.
@@ -74,7 +74,7 @@ from coordinator_core.ops.docgen.render import render_document
 
 # ---------------------------------------------------------------------------
 # Oracle resolution (module-scoped — repo-root-relative, no cross-repo clone
-# lookup). The oracle CLI lives in THIS repo as of example-doctrine-repo commit b644d5a9; a
+# lookup). The oracle CLI lives in THIS repo as of coordinator-claude commit b644d5a9; a
 # missing oracle at the expected path is a broken checkout, not an
 # unavailable optional dependency, so resolution failure fails the whole
 # module loudly rather than skipping.
@@ -87,7 +87,7 @@ if not _ORACLE_PATH.is_file():
     pytest.fail(
         f"oracle CLI not found at {_ORACLE_PATH} (resolved repo-root-relative "
         f"from {__file__}) — this is a broken checkout, not an unavailable "
-        "optional dependency; the oracle has lived in-repo since example-doctrine-repo commit "
+        "optional dependency; the oracle has lived in-repo since coordinator-claude commit "
         "b644d5a9",
         pytrace=False,
     )

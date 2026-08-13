@@ -81,7 +81,7 @@ REUSE, NOT RE-IMPLEMENTATION, WITHOUT THE FAIL-OPEN (the Staff Engineer F7):
 Windows + macOS both first-class: `pathlib.Path` joins only, no POSIX
 separators, no shell.
 
-Spec backlink: docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C2
+Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb § C2
 """
 
 from __future__ import annotations

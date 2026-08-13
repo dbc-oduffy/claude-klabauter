@@ -1,6 +1,6 @@
 """Parity net for C9's ``envelope._resolve_central_state_root`` native port.
 
-Port of: coordinator-state-root.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)'s
+Port of: coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22)'s
 ``coordinator_state_root --central`` (Rule 4,
 the backward-compat default: no ``--subject``/``--artifact``) — resolves to
 ``$(_csr_claude_klabauter_root)/state``. The bash lib's own docstring documents ``_csr_claude_klabauter_root``
@@ -8,7 +8,7 @@ as ITSELF a native bridge onto ``coordinator_core.claude_klabauter_root.coordina
 this port calls that same native resolver in-process instead of spawning
 ``bash -c "source ... && coordinator_state_root --central"``.
 
-Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C9
+Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C9
 """
 
 from __future__ import annotations

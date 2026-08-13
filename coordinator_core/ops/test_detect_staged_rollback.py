@@ -340,7 +340,7 @@ def test_ratio_at_or_above_production_threshold_fires(tmp_path):
 def test_ratio_matching_historical_legitimate_prune_does_not_fire(tmp_path):
     """Calibration check: the largest legitimate single-commit deletion ratio
     ever observed in this repo's own history (`e6783a68bd0`, "prune(reclaim):
-    drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by example-doctrine-repo") was 1,709/3,382
+    drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by coordinator-claude") was 1,709/3,382
     ~= 0.505. Reproduced here at fixture scale (10/20 files, same ratio) —
     this must NOT fire, or the threshold would have blocked that real,
     PM-legitimate commit."""

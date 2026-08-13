@@ -4,7 +4,7 @@ Characterization tests for coordinator_core.ops.detect_project_runtime.
 Golden-oracle corpus captured via manual filesystem fixtures — see
 docs/plans/2026-07-16-bash-clean-slate-residual-migration.md port notes.
 
-Port of: detect-project-runtime.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: detect-project-runtime.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 

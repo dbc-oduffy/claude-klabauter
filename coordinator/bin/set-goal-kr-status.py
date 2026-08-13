@@ -40,7 +40,7 @@ Exit codes:
         unknown kr_id or a missing status: field, missing goal file, lock
         timeout, malformed envelope).
 
-Spec backlink: docs/plans/2026-07-25-goal-kr-status-provenance-and-bin-door.md
+Spec backlink: docs/plans/2026-07-25-goal-kr-status-provenance-and-bin-door.md [DEAD-CITATION: plan file never committed to this repo]
 Source memo: cross-repo/inbox/2026-07-25-example-market-data-repo-em-goal-engine-seams-and-kr-status-provenance.md
 """
 

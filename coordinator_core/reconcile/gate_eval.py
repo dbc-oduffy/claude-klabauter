@@ -12,9 +12,9 @@ only caller authorized to act on a `clear`/`narrow` verdict, via C8's
 `gate-cascade-clear` verb.
 
 STRUCTURED-PATH LOAD-BEARING RULES (converges with
-`example-doctrine-repo/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70's
+`coordinator-claude/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70's
 gate-cascade design; rule 3 sourced from the tc-4 regression lesson
-`example-doctrine-repo/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`):
+`coordinator-claude/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`):
     (1) CLEAR predicate = ALL `blocked_by` members are `shipped` SPECIFICALLY, not
         merely terminal ({shipped, abandoned, continued, closed} is the terminal set
         for stopping re-evaluation, but abandoned/continued/closed never count toward
@@ -406,7 +406,7 @@ satisfied is the gate `freed`. An empty `legs` list is a malformed
 `indeterminate`, never vacuously freed — vacuous-freed is reserved for the
 genuinely-ungated `blocked_by: []`-and-no-gate_evidence case below.
 
-Spec backlink: docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C3,
+Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C3,
 docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C3
 
 LINEAGE IS NOT GATING (PM ruling 2026-07-26, settled — the resolver's input set
@@ -432,7 +432,7 @@ ready until X is done" — would gate every spinoff on its own origin baton,
 exactly backwards from the roadmap-fork design: spinoffs exist precisely so
 their work can proceed independently of the parent session's continued
 progress, not chained behind it. Live-corpus verification (2026-07-27): 30 of
-33 gated (`awaiting_gate`) batons under `example-doctrine-repo/state/handoffs/` carry a
+33 gated (`awaiting_gate`) batons under `coordinator-claude/state/handoffs/` carry a
 non-`none` `predecessor` and/or a non-null `origin_*` field — 91% of the live
 corpus would trip a naive implementation that conflated lineage with gating.
 
@@ -612,7 +612,7 @@ _NON_SHIPPED_TERMINAL_STATES: frozenset = frozenset(
 #: silently clearing it instead of leaving it dangling — the false-clear class
 #: `handoff.schema.json`'s narrow closes only at schema-validation time, not at
 #: this compute-time resolver. See
-#: cross-repo/inbox/2026-08-05-example-doctrine-repo-em-placeholder-id-minting-fix-unfiled.md.
+#: cross-repo/inbox/2026-08-05-coordinator-claude-em-placeholder-id-minting-fix-unfiled.md.
 _HANDOFF_ID_PATTERN = re.compile(r"^hnd-(?!placeholder-replace-with)[a-z0-9-]+-[0-9a-f]{6}$")
 
 
@@ -773,7 +773,7 @@ def _has_asymmetry(
     never match in that case, firing false asymmetry on every symmetric edge. Testing
     `{stub_id, id} & blocker_blocks` mirrors the index's own dual-key fallback rather
     than inventing a third convention. Does NOT normalise `id` at ingestion — that
-    would change the `handoff_id` example-doctrine-repo's renderer keys on in `surfaced[]` (riskier).
+    would change the `handoff_id` coordinator-claude's renderer keys on in `surfaced[]` (riskier).
     """
     handoff_ids = {v for v in (handoff.get("stub_id"), handoff.get("id")) if isinstance(v, str) and v}
     if not handoff_ids:
@@ -1423,7 +1423,7 @@ def _evaluate_prose_gate(
     - Zero candidates -> surface (no concrete pointer given, do not guess).
     - Exactly one candidate whose deployment_state == shipped -> clear.
     - Exactly one candidate not yet shipped -> surface (still-gated is EM judgment
-      for prose gates per example-doctrine-repo alignment reply #3 — the op never auto-transitions a
+      for prose gates per coordinator-claude alignment reply #3 — the op never auto-transitions a
       prose-path verdict regardless of clear/surface).
     - More than one candidate -> surface (ambiguous resolution, never guess).
     """
@@ -2162,7 +2162,7 @@ _EVIDENCE_EQUALITY_KINDS = frozenset({"file-exists", "frontmatter-field"})
 #: original member; the C6 four (`test-node-id`, `probe-op-key`, `commit-sha`,
 #: `sibling-commitment-ref`) join it unchanged from
 #: `coordinator/schemas/cutover.schema.json`'s already-ratified
-#: `confirmed_consumers[].verified_by.kind` discriminated union (example-doctrine-repo,
+#: `confirmed_consumers[].verified_by.kind` discriminated union (coordinator-claude,
 #: docs/plans/2026-07-25-cutover-state-machine.md) — this module adopts the
 #: SAME four names rather than inventing a parallel vocabulary for the same
 #: "re-verifiable evidence, not free prose" concept. Resolution (running the
@@ -2364,7 +2364,7 @@ def evaluate_gate_triage(
     backwards (letting structured satisfaction alone produce `freed`) would
     auto-declare-freed a handoff whose REAL precondition is the untested
     prose clause — e.g. `strang-03`'s `gate_dependency` names "claude-klabauter action
-    layer live" / "example-doctrine-repo-maximalist cutover W4.2 landed" as the actual gate,
+    layer live" / "coordinator-claude-maximalist cutover W4.2 landed" as the actual gate,
     with `blocked_by` merely tracking the pattern-proof siblings; shipping
     those siblings says nothing about the cutover. A prose gate never
     resolves to `freed` by construction (per the brief) whether or not it

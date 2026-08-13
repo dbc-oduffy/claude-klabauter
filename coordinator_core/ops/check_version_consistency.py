@@ -27,8 +27,8 @@ Exit codes (parity-critical — the trampoline and callers branch on these):
   1 — mismatch, OR a required surface missing/unparseable (fail-loud)
   2 — unrecognised CLI argument
 
-Port of: check-version-consistency.sh (example-doctrine-repo 894d4bc6, 2026-07-22)
-Spec backlink: docs/wiki/versioning-convention.md (example-doctrine-repo)
+Port of: check-version-consistency.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Spec backlink: docs/wiki/versioning-convention.md (coordinator-claude)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Negative-spec:

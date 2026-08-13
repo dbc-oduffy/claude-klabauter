@@ -1,7 +1,7 @@
 """test_merge_gate_and_pr — pytest tests for merge-gate-and-pr.py.
 
-Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md
-  (M3 chunk MTM-2). Source: example-doctrine-repo
+Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md [DEAD-CITATION: plan file never committed to this repo]
+  (M3 chunk MTM-2). Source: coordinator-claude
   coordinator/skills/merging-to-main/SKILL.md §§ Step 1.5, Step 1.65, Step 4.
 
 Coverage (C10, docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md

@@ -15,7 +15,7 @@ these writers emit *tracked* artifacts: review-trail records, PM-vouch waivers,
 ceremony lock files. A mode-less ``os.open`` therefore manufactures new ratchet
 debt on every ceremony run, forever, and the ratchet's own remediation advice
 (fix the file) is useless because the next run recreates it. Observed
-2026-07-28: 48 of example-doctrine-repo's tracked ``state/review-trail/*.json`` records
+2026-07-28: 48 of coordinator-claude's tracked ``state/review-trail/*.json`` records
 were 100755, all of them born that way, and the growth was mistaken for a
 baseline-widening incident rather than a producer defect.
 

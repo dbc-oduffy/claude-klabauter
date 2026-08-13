@@ -3,7 +3,7 @@ coordinator_core.ops.fleet.memo_draft — memo.draft native UDS op handler.
 
 Purpose: Stage a NEW schema-valid outbox draft memo (status: draft) into the
 CALLING repo's own state/memo-outbox/ tree — a local, non-cross-tree write.
-Ported from the example-doctrine-repo cross-repo-memo CLI's `draft` verb per the 2026-07-17
+Ported from the coordinator-claude cross-repo-memo CLI's `draft` verb per the 2026-07-17
 DR-210 Option-A boundary move (claude-klabauter owns receiver-resolution + compose/
 draft/list, not just send). UDS-only (no HTTP surface). Registered as
 "memo.draft" via @register_op; classification and _OP_KEY_SCOPE entry are
@@ -13,7 +13,7 @@ Spec backlink:
     docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C5 (AC5)
     DR-210: docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md
         § Amendment 2026-07-21 (receiver-resolution + compose/draft/list move)
-    Parity source: example-doctrine-repo coordinator/bin/cross-repo-memo _cmd_draft /
+    Parity source: coordinator-claude coordinator/bin/cross-repo-memo _cmd_draft /
         _compose_outbox_frontmatter (~line 1900-2090); footgun #4 source:
         cross-repo/inbox/2026-07-17-example-retrieval-repo-em-cross-repo-memo-cli-footguns.md
 
@@ -28,7 +28,7 @@ Negative-spec:
   - Does NOT validate --to against the receiver registry by default — the
     portable-draft default (classify_receiver absent or False) is UNCHANGED: a
     draft is still creatable when the receiver is unresolved on this machine,
-    mirroring the example-doctrine-repo CLI's own "unresolved receivers still draft" fallthrough
+    mirroring the coordinator-claude CLI's own "unresolved receivers still draft" fallthrough
     (a portable draft is valid on a machine where 'to' doesn't yet resolve).
     OPTIONAL receiver classification (classify_receiver: true) reuses the SAME
     resolution authority memo.send uses (_memo_resolver.resolve_receiver_inbox)
@@ -37,7 +37,7 @@ Negative-spec:
     caller-opt-in hardening, not a change to the default: memo.list's own
     enumeration/near-match surface (C2/C4) is unaffected.
   - Does NOT overwrite an existing draft of the same topic — O_EXCL fail-loud
-    (mirrors example-doctrine-repo _cmd_draft; memo.compose is the edit path for an existing draft).
+    (mirrors coordinator-claude _cmd_draft; memo.compose is the edit path for an existing draft).
   - Does NOT commit into the calling repo's tree — plain local file write,
     same non-committing posture as memo.send's receiver-side write.
   - Does NOT silently drop `scoped_to` (2026-07-21 break-class fix — memo.draft
@@ -93,21 +93,21 @@ from coordinator_core.ops.fleet.memo_send import (
 
 _MODE = "draft"
 
-# Outbox path components — mirrors example-doctrine-repo's state/memo-outbox/<topic>.md convention
+# Outbox path components — mirrors coordinator-claude's state/memo-outbox/<topic>.md convention
 # (coordinator_core/ops/workday_start_cross_repo_memo_outbox_surface.py resolves
 # the SAME directory for its stale-draft nudge; do not diverge from that path).
 _OUTBOX_DIRNAME = ("state", "memo-outbox")
 
 # Placeholder body written into a fresh draft — guides the human/agent toward
-# memo.compose (fill in body) then memo.send (deliver). Mirrors example-doctrine-repo's
+# memo.compose (fill in body) then memo.send (deliver). Mirrors coordinator-claude's
 # _cmd_draft placeholder comment.
 #
 # The summary-cap sentence below (2026-07-26 draft-time-discoverability fix,
-# cross-repo/inbox/2026-07-26-example-doctrine-repo-em-memo-send-summary-cap-
+# cross-repo/inbox/2026-07-26-coordinator-claude-em-memo-send-summary-cap-
 # discoverable-at-draft-time.md) surfaces `_SUMMARY_MAX_CHARS` in the body the
 # author is actually editing. A trailing YAML comment on the `summary:` line
 # itself (the memo's first-suggested shape) was tried and rejected: both
-# `coordinator_core.frontmatter.primitives.read_fm_field` and example-doctrine-repo's
+# `coordinator_core.frontmatter.primitives.read_fm_field` and coordinator-claude's
 # `cross-repo-memo` CLI `_parse_outbox_file` are line-oriented, no-comment-
 # aware parsers — a trailing `# ...` on the summary line reads back as part
 # of the field's VALUE (verified: `read_fm_field` returns
@@ -234,7 +234,7 @@ def _validate_scoped_to(dry_run: bool, value: Any):
 # ---------------------------------------------------------------------------
 
 #: rejection_class enum — the ONLY four values this module ever emits on the
-#: `rejection_class` envelope key (2026-07-21 cross-repo split, example-doctrine-repo
+#: `rejection_class` envelope key (2026-07-21 cross-repo split, coordinator-claude
 #: claude-central-em consult; ambiguous-receiver added same day after PM
 #: review caught the invariant gap in the initial three-value cut — an
 #: undiscriminated fourth branch made "present iff classification rejection"
@@ -278,18 +278,18 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
 
       - PUBLISH-TARGET REJECTED (rejection_class="publish_target_rejected"):
         `to` resolves to a publish.mirrors.* owner (an outward OSS
-        distribution mirror, not an EM working tree) — mirrors example-doctrine-repo
-        cross-repo-memo's _cmd_draft publish-target rejection (example-doctrine-repo: exit 1).
+        distribution mirror, not an EM working tree) — mirrors coordinator-claude
+        cross-repo-memo's _cmd_draft publish-target rejection (coordinator-claude: exit 1).
       - UNKNOWN RECEIVER (rejection_class="unknown_receiver"): `to` does not
         resolve to any registered receiver on this machine (nor auto-accept
         to a unique did-you-mean candidate — see the `str` case above), and
-        is not a publish-target — mirrors example-doctrine-repo's unknown-receiver rejection
-        (example-doctrine-repo: exit 2), including the same "did you mean?" nearest-match
+        is not a publish-target — mirrors coordinator-claude's unknown-receiver rejection
+        (coordinator-claude: exit 2), including the same "did you mean?" nearest-match
         suggestion resolve_receiver_inbox's sibling suggest_nearest_receiver
         already produces for memo.send/memo.list.
       - REGISTRY ERROR (rejection_class="registry_error"): the machine-local
-        registry file(s) exist but could not be read/parsed — mirrors example-doctrine-repo's
-        registry-error rejection (example-doctrine-repo: exit 3).
+        registry file(s) exist but could not be read/parsed — mirrors coordinator-claude's
+        registry-error rejection (coordinator-claude: exit 3).
       - AMBIGUOUS RECEIVER (rejection_class="ambiguous_receiver"): `to`
         resolves to more than one candidate in the machine-local registry —
         _resolve_receiver_inbox raised AmbiguousReceiverError. This IS a
@@ -299,7 +299,7 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
         iff classification rejection" invariant below (a real defect caught
         in PM review of the initial 3-value cut).
 
-    Publish-target is checked FIRST (mirrors example-doctrine-repo's _classify_receiver
+    Publish-target is checked FIRST (mirrors coordinator-claude's _classify_receiver
     ordering): mirrors were removed from repos.* by the 2026-06-30
     registry-publish-vs-working-targets migration, so in practice the two
     checks never overlap — but ordering publish-target first keeps the
@@ -576,7 +576,7 @@ def compose_draft_frontmatter(
     already carries (and memo.compose's resolved_summary, already validated
     <= cap by the time it reaches here, never exercises it either).
 
-    Mirrors example-doctrine-repo cross-repo-memo._compose_outbox_frontmatter. topic lives in
+    Mirrors coordinator-claude cross-repo-memo._compose_outbox_frontmatter. topic lives in
     the filename, NOT in frontmatter (same convention as _compose_memo).
     """
     resolved_summary = summary if summary is not None else SUMMARY_PLACEHOLDER
@@ -622,7 +622,7 @@ def _write_draft_file(target_path: Path, content: str) -> None:
 
     Raises:
         FileExistsError: if target_path already exists — fail-loud (mirrors
-            example-doctrine-repo _cmd_draft: an existing draft is edited via memo.compose or
+            coordinator-claude _cmd_draft: an existing draft is edited via memo.compose or
             removed via discard, never silently clobbered by a second draft call).
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -721,15 +721,15 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
 
         On a classify_receiver:true rejection, the exit_code:1 setup-error
         envelope carries an ADDITIONAL `rejection_class` wire field (str,
-        2026-07-21 addition — example-doctrine-repo claude-central-em consult: their CLI
+        2026-07-21 addition — coordinator-claude claude-central-em consult: their CLI
         previously mapped these to distinct process exit codes and could not
         reconstruct the split once collapsed to a single exit_code:1). One of:
             "publish_target_rejected" — `to` resolves to a publish.mirrors.*
-                owner (example-doctrine-repo's prior exit 1).
+                owner (coordinator-claude's prior exit 1).
             "unknown_receiver"        — `to` does not resolve to any
-                registered receiver (example-doctrine-repo's prior exit 2).
+                registered receiver (coordinator-claude's prior exit 2).
             "registry_error"          — the machine-local registry could not
-                be read/parsed (example-doctrine-repo's prior exit 3).
+                be read/parsed (coordinator-claude's prior exit 3).
             "ambiguous_receiver"      — `to` resolves to more than one
                 candidate in the machine-local registry
                 (AmbiguousReceiverError).

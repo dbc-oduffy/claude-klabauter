@@ -25,7 +25,7 @@ Exit codes (parity-critical):
        not read every candidate file (fail-closed — see _scan_dangling)
   2 -- --fix requested but the `perl` binary is not on PATH
 
-Port of: assert-no-dangling-plan-backlinks.sh (example-doctrine-repo b5a4192c, 2026-07-20).
+Port of: assert-no-dangling-plan-backlinks.sh (coordinator-claude b5a4192c, 2026-07-20).
 Spec backlink: archive/specs/2026-06/2026-06-23-programmatic-terminal-plan-archival.md § AC9 / C6
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 

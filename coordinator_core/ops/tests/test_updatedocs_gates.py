@@ -23,7 +23,7 @@ Coverage:
       + rollup for a `params["gates"]` subset
   (i) unknown gate id in params["gates"] raises ValueError (no silent skip)
 
-Spec backlink: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-updatedocs-gates-
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-updatedocs-gates-
   structured-verdicts.md
 """
 

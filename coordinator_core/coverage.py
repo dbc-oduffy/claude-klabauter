@@ -1,11 +1,11 @@
 """
 coverage.py
 
-Port of: review-coverage-core.sh (example-doctrine-repo c187f5b9, 2026-07-21) — SAFE_RANGE validator,
+Port of: review-coverage-core.sh (coordinator-claude c187f5b9, 2026-07-21) — SAFE_RANGE validator,
 JSON/JSONL trail parser, verdict filter (pending excluded; ok/warn/blocked/
 waived/absent included), per-record git rev-list union → reviewed_set, batched
 git calls.
-Port of: review-coverage-gate.sh (example-doctrine-repo d9ac8232, 2026-07-19) — arg-parse,
+Port of: review-coverage-gate.sh (coordinator-claude d9ac8232, 2026-07-19) — arg-parse,
 DAG-vs-flat mode, fixpoint, segment attribution -M100%, asymmetric scope
 filter, INDETERMINATE-fails-verdict, verdict-line emit.
 
@@ -65,7 +65,7 @@ Negative-spec:
     - The archival.reverse_membership body is filled by C4; NotImplementedError at call-time
       is expected in Wave 2 before C4 lands. Import resolves cleanly (C0 seam design).
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C3
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C3
 """
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ def _record_range_has_stored_head(sha_range: str) -> bool:
 
     Does NOT reject other symbolic refs (branch names, tags, "origin/main")
     — those are not the reproduced/observed shape (100% of the ~20 known-bad
-    on-disk records use literal "HEAD" specifically; see example-doctrine-repo
+    on-disk records use literal "HEAD" specifically; see coordinator-claude
     state/review-trail/*.json), and rejecting them would risk excluding
     legitimately-scoped historical records this fix has no evidence exist.
     """
@@ -4147,7 +4147,7 @@ def _render_dag_ancestry_notes(
 
 #: The four end-state tokens, emitted VERBATIM in the diagnosis note. Consumed
 #: by coordinator/tests/test_review_coverage_gate.py (plan § C4) and by the
-#: outbound cross-repo memo to example-doctrine-repo-em that this vocabulary was promised
+#: outbound cross-repo memo to coordinator-claude-em that this vocabulary was promised
 #: to (plan § C5) — renaming one is a cross-repo contract break, not a local
 #: rewording.
 _OPEN_LOOP_NEVER_REVIEWED = "never-reviewed"
@@ -4214,7 +4214,7 @@ def _make_chain_range_resolver(
           read-only spawn, only on the UNCOVERED path, is the deliberate price
           of keeping this chunk notes-only (AC4).
 
-    Spec backlink: docs/plans/2026-08-03-open-review-loops-are-a-named-gap.md § C3
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C3
     """
     if not graph_range or not SAFE_RANGE.match(graph_range):
         return None
@@ -4301,7 +4301,7 @@ def _reach_ancestors(
     that collapse guards a caller-supplied foreign endpoint, and every seed here
     is read out of the map's own parent lists.
 
-    Spec backlink: docs/plans/2026-08-03-open-review-loops-are-a-named-gap.md § C3c
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C3c
     """
     seen: Set[str] = set()
     stack: List[str] = list(seeds)
@@ -4381,7 +4381,7 @@ def _dag_frontier_ancestry(
           landing after a review inside ONE session's segment) is intra-node and
           invisible at that granularity.
 
-    Spec backlink: docs/plans/2026-08-03-open-review-loops-are-a-named-gap.md § C3c
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C3c
     """
     if not reviewed_in_chain or not uncovered_set:
         return None
@@ -4503,7 +4503,7 @@ def _diagnose_open_review_loop(
     degrades to a single note naming the failure. A diagnostic must not be able
     to break the gate it annotates.
 
-    Spec backlink: docs/plans/2026-08-03-open-review-loops-are-a-named-gap.md § C3
+    Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C3
     """
     # Lazy import: coordinator_core.ops.review_coverage_core imports this
     # module's SAFE_RANGE/_parse_trail_file/_verdict_counts at module scope, so
@@ -4731,7 +4731,7 @@ def _unresolved_pending_note(pending_entries: List[Dict[str, object]]) -> List[s
 # and _decide_review_scale). That is a distinct verdict over a distinct
 # question (was the REQUIRED review scale discharged at all, not what
 # fraction of commits carry a trail record) with its own live incident
-# (example-doctrine-repo, 2026-08-05: a workstream reached a clean terminal stamp having
+# (coordinator-claude, 2026-08-05: a workstream reached a clean terminal stamp having
 # run zero reviews). Fixing that gap is tracked separately at
 # state/sizings/2026-08-06-partition-mandatory-must-refuse-the-chai.yaml and
 # is explicitly NOT folded into this ratio/warn change.

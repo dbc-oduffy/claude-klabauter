@@ -30,7 +30,7 @@ this box runs 50-70 concurrent sessions, so ``_unique_sid(prefix)`` mints
 ``f"{prefix}-{uuid.uuid4().hex[:12]}"``; (2) every sentinel this file mints
 is removed in a ``finally:``, best-effort, swallowing ``OSError``.
 
-Spec backlink: docs/plans/2026-08-13-em-exercisable-in-band-grant-route.md § C1
+Spec backlink: pln-an-em-exercisable-in-band-gran-6bfb4a § C1
 Precedent: coordinator_core/session/tests/test_claude_md_grant.py
 Precedent: coordinator_core/ops/ceremony/tests/test_scoped_git_commit_ownership.py
 """
@@ -130,32 +130,43 @@ class TestWriteEmGuardGrantValidation:
 
 class TestWriteEmGuardGrantRecord:
     def test_reason_stored_verbatim(self, tmp_path, monkeypatch):
-        _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid = _unique_sid("s1")
+        guard_name = "bump-foreign-repo-write"
+        _FakeSessionSeam(monkeypatch, tmp_path, sid)
         weird = "  crossing into ../sibling-repo for a joint fix\ttab\nnewline  "
-        ok = eg.write_em_guard_grant("bump-foreign-repo-write", weird, session_id="s1")
-        assert ok is True
-        record = eg.read_em_guard_grant(session_id="s1")
-        assert record["reason"] == weird
-        assert record["guard_name"] == "bump-foreign-repo-write"
-        assert record["granted_by"] == "em"
-        assert record["session_id"] == "s1"
-        assert "granted_at" in record
+        try:
+            ok = eg.write_em_guard_grant(guard_name, weird, session_id=sid)
+            assert ok is True
+            record = eg.read_em_guard_grant(session_id=sid)
+            assert record["reason"] == weird
+            assert record["guard_name"] == guard_name
+            assert record["granted_by"] == "em"
+            assert record["session_id"] == sid
+            assert "granted_at" in record
+        finally:
+            _cleanup_sentinel(sid, guard_name)
 
     def test_atomic_write_no_temp_file_left_behind(self, tmp_path, monkeypatch):
-        seam = _FakeSessionSeam(monkeypatch, tmp_path, "s1")
-        eg.write_em_guard_grant("bump-foreign-repo-write", "ask", session_id="s1")
-        sdir = Path(seam._session_dir("s1"))
-        leftovers = [p for p in sdir.iterdir() if p.name.startswith(eg._GRANT_FILENAME + ".")]
-        assert leftovers == []
+        sid = _unique_sid("s1")
+        guard_name = "bump-foreign-repo-write"
+        seam = _FakeSessionSeam(monkeypatch, tmp_path, sid)
+        try:
+            eg.write_em_guard_grant(guard_name, "ask", session_id=sid)
+            sdir = Path(seam._session_dir(sid))
+            leftovers = [p for p in sdir.iterdir() if p.name.startswith(eg._GRANT_FILENAME + ".")]
+            assert leftovers == []
+        finally:
+            _cleanup_sentinel(sid, guard_name)
 
     def test_record_written_before_sentinel(self, tmp_path, monkeypatch):
         """The record must exist on disk before the sentinel is minted --
         pin the ORDER directly by asserting the record is readable the
         instant the sentinel first appears (a crash between the two must
         never leave a sentinel with no record)."""
-        seam = _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid = _unique_sid("s1")
+        seam = _FakeSessionSeam(monkeypatch, tmp_path, sid)
         guard_name = "bump-foreign-repo-write"
-        sentinel = guard_unlock_sentinel.sentinel_path("s1", guard_name)
+        sentinel = guard_unlock_sentinel.sentinel_path(sid, guard_name)
         observed = {}
 
         real_touch = Path.touch
@@ -163,28 +174,29 @@ class TestWriteEmGuardGrantRecord:
         def _tracking_touch(self, *a, **k):
             if self == sentinel:
                 observed["record_present_at_sentinel_mint"] = (
-                    eg.read_em_guard_grant(session_id="s1") is not None
+                    eg.read_em_guard_grant(session_id=sid) is not None
                 )
             return real_touch(self, *a, **k)
 
         monkeypatch.setattr(Path, "touch", _tracking_touch)
         try:
-            ok = eg.write_em_guard_grant("bump-foreign-repo-write", "ask", session_id="s1")
+            ok = eg.write_em_guard_grant("bump-foreign-repo-write", "ask", session_id=sid)
             assert ok is True
             assert observed["record_present_at_sentinel_mint"] is True
         finally:
-            _cleanup_sentinel("s1", guard_name)
+            _cleanup_sentinel(sid, guard_name)
         del seam
 
     def test_sentinel_lands_exactly_where_sentinel_path_computes(self, tmp_path, monkeypatch):
-        _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid = _unique_sid("s1")
+        _FakeSessionSeam(monkeypatch, tmp_path, sid)
         guard_name = "bump-outside-repo-write"
-        expected = guard_unlock_sentinel.sentinel_path("s1", guard_name)
+        expected = guard_unlock_sentinel.sentinel_path(sid, guard_name)
         try:
-            eg.write_em_guard_grant(guard_name, "ask", session_id="s1")
+            eg.write_em_guard_grant(guard_name, "ask", session_id=sid)
             assert expected.is_file()
         finally:
-            _cleanup_sentinel("s1", guard_name)
+            _cleanup_sentinel(sid, guard_name)
 
 
 # ---------------------------------------------------------------------------
@@ -194,48 +206,53 @@ class TestWriteEmGuardGrantRecord:
 
 class TestReadCheckEmGuardGrant:
     def test_round_trip_grant_then_check_true(self, tmp_path, monkeypatch):
-        _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid = _unique_sid("s1")
+        _FakeSessionSeam(monkeypatch, tmp_path, sid)
         guard_name = "bump-foreign-repo-write"
         try:
-            eg.write_em_guard_grant(guard_name, "ask", session_id="s1")
-            granted, record = eg.check_em_guard_grant(guard_name, session_id="s1")
+            eg.write_em_guard_grant(guard_name, "ask", session_id=sid)
+            granted, record = eg.check_em_guard_grant(guard_name, session_id=sid)
             assert granted is True
             assert record["guard_name"] == guard_name
         finally:
-            _cleanup_sentinel("s1", guard_name)
+            _cleanup_sentinel(sid, guard_name)
 
     def test_check_wrong_guard_name_reads_ungranted(self, tmp_path, monkeypatch):
-        _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid = _unique_sid("s1")
+        _FakeSessionSeam(monkeypatch, tmp_path, sid)
         try:
-            eg.write_em_guard_grant("bump-foreign-repo-write", "ask", session_id="s1")
-            granted, record = eg.check_em_guard_grant("bump-outside-repo-write", session_id="s1")
+            eg.write_em_guard_grant("bump-foreign-repo-write", "ask", session_id=sid)
+            granted, record = eg.check_em_guard_grant("bump-outside-repo-write", session_id=sid)
             assert granted is False
             assert record is not None
         finally:
-            _cleanup_sentinel("s1", "bump-foreign-repo-write")
+            _cleanup_sentinel(sid, "bump-foreign-repo-write")
 
     def test_dead_session_grant_reads_ungranted(self, tmp_path, monkeypatch):
-        seam = _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid = _unique_sid("s1")
+        seam = _FakeSessionSeam(monkeypatch, tmp_path, sid)
         guard_name = "bump-foreign-repo-write"
         try:
-            eg.write_em_guard_grant(guard_name, "ask", session_id="s1")
-            seam.kill("s1")
-            granted, record = eg.check_em_guard_grant(guard_name, session_id="s1")
+            eg.write_em_guard_grant(guard_name, "ask", session_id=sid)
+            seam.kill(sid)
+            granted, record = eg.check_em_guard_grant(guard_name, session_id=sid)
             assert granted is False
             assert record is not None
         finally:
-            _cleanup_sentinel("s1", guard_name)
+            _cleanup_sentinel(sid, guard_name)
 
     def test_sibling_session_grant_does_not_authorize_caller_no_glob(self, tmp_path, monkeypatch):
-        _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid_sibling = _unique_sid("s-sibling")
+        sid_caller = _unique_sid("s-caller")
+        _FakeSessionSeam(monkeypatch, tmp_path, sid_sibling)
         guard_name = "bump-foreign-repo-write"
         try:
-            eg.write_em_guard_grant(guard_name, "sibling's own ask", session_id="s-sibling")
-            granted, record = eg.check_em_guard_grant(guard_name, session_id="s-caller")
+            eg.write_em_guard_grant(guard_name, "sibling's own ask", session_id=sid_sibling)
+            granted, record = eg.check_em_guard_grant(guard_name, session_id=sid_caller)
             assert granted is False
             assert record is None
         finally:
-            _cleanup_sentinel("s-sibling", guard_name)
+            _cleanup_sentinel(sid_sibling, guard_name)
 
     def test_absent_file_reads_ungranted(self, tmp_path, monkeypatch):
         _FakeSessionSeam(monkeypatch, tmp_path, "s1")
@@ -279,14 +296,15 @@ class TestConsumeRoundTripOneShot:
     write this grant authorizes."""
 
     def test_consume_returns_true_once_then_false(self, tmp_path, monkeypatch):
-        _FakeSessionSeam(monkeypatch, tmp_path, "s1")
+        sid = _unique_sid("s1")
+        _FakeSessionSeam(monkeypatch, tmp_path, sid)
         guard_name = "bump-foreign-repo-write"
         try:
-            eg.write_em_guard_grant(guard_name, "ask", session_id="s1")
-            assert guard_unlock_sentinel.consume("s1", guard_name) is True
-            assert guard_unlock_sentinel.consume("s1", guard_name) is False
+            eg.write_em_guard_grant(guard_name, "ask", session_id=sid)
+            assert guard_unlock_sentinel.consume(sid, guard_name) is True
+            assert guard_unlock_sentinel.consume(sid, guard_name) is False
         finally:
-            _cleanup_sentinel("s1", guard_name)
+            _cleanup_sentinel(sid, guard_name)
 
 
 # ---------------------------------------------------------------------------

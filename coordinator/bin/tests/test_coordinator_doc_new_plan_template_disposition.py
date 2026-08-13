@@ -12,7 +12,7 @@ emits `disposition` rows, mentions `case_against` (the strongest-honest-case
 field required on `backlogged`/`wont_do`), and that the emitted sample rows
 still validate against the vendored plan-tasks schema (1.6.0).
 
-Spec backlink: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-deferral-both-sides-adopted-three-legs-for-you.md
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-deferral-both-sides-adopted-three-legs-for-you.md
 Spec backlink: coordinator_core/frontmatter/schemas/plan-tasks.schema.json (x-schema-version 1.6.0)
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since

@@ -1,8 +1,8 @@
 """
 coordinator_core.cartography.chunk_table — tree -> caller-bucketed chunk table.
 
-Purpose: the reduction example-doctrine-repo's ``/coordinator:architecture-survey`` Phase-0.5
-gate actually needs (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-
+Purpose: the reduction coordinator-claude's ``/coordinator:architecture-survey`` Phase-0.5
+gate actually needs (cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-
 chunk-table-producer-seam.md): repo tree -> filter to source files -> exclude
 build/vendor/test artifacts -> bucket by CALLER-SUPPLIED system boundaries ->
 slice into fixed-size chunks. On the 3831-tracked-file repo that prompted the
@@ -50,7 +50,7 @@ Negative-spec:
     ``coordinator_core.ops.cartography_chunk_table`` (the DR-228 § D6
     scratch-tier writer).
 
-Spec backlink: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-chunk-table-producer-seam.md
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-chunk-table-producer-seam.md
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
 """
 
@@ -112,7 +112,7 @@ TEST_DIR_NAMES = frozenset({"tests", "test", "__tests__", "spec"})
 #: Filename patterns that mark a single file as a test artifact even when it
 #: is not under a TEST_DIR_NAMES directory (e.g. a same-directory
 #: ``test_foo.py`` colocated with its module, or a ``*.test.ts`` sibling
-#: file — both real-world conventions this repo and example-doctrine-repo's own tree use).
+#: file — both real-world conventions this repo and coordinator-claude's own tree use).
 _TEST_FILENAME_RE = re.compile(
     r"^(test_.*\.py|.*_test\.py|conftest\.py|.*\.(test|spec)\.(ts|tsx|js|jsx))$"
 )
@@ -155,7 +155,7 @@ def bucket_by_boundaries(relpath: str, systems: dict[str, list[str]]) -> str | N
     `relpath`, or None when no boundary matches ("unbucketed").
 
     `systems` is the caller-supplied ``{system_name: [path_prefix, ...]}``
-    map (the load-bearing param example-doctrine-repo's memo asks for) — NOT
+    map (the load-bearing param coordinator-claude's memo asks for) — NOT
     ``cartography.file_index.system_for_path``'s first-path-component rule,
     which this function deliberately does not reuse (that rule is documented
     as intentionally coarse and is the exact shape the memo's defect

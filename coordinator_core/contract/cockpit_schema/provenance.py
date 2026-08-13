@@ -1,6 +1,6 @@
 """
 ProvenanceEnvelope — the mandatory source-grounding record on every cockpit
-fact. Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/provenance.ts`
+fact. Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/provenance.ts`
 (Zod source) — see that file's doc-comments for the full D9/DR-301 design
 rationale this port preserves byte-decision-identical.
 
@@ -19,7 +19,7 @@ key) and drops the field from the emitted JSON Schema `required` array
 `entity_anchor`) is deliberately written with no default for this reason.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
-Freeze: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/freeze-provenance-envelope.md
+Freeze: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/freeze-provenance-envelope.md
 (the 4 allOf/if/then conditional clauses this model's 3 model_validators
 runtime-enforce are pinned there verbatim; JSON-Schema-level re-injection of
 those clauses is the `emit-schema.ts`-equivalent entrypoint port, T4e-c —

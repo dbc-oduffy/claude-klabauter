@@ -10,7 +10,7 @@ mirroring `coordinator_core/coverage.py`'s `_resolve`/`pool.map` idiom) —
 never `ProcessPoolExecutor`/`multiprocessing`.
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C2 (DEC-3..8, DEC-10, Finding 5)
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C2 (DEC-3..8, DEC-10, Finding 5)
 
 Negative-spec:
     - Does NOT spawn one subprocess per py-native file — all `test_*.py`

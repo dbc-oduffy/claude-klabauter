@@ -7,7 +7,7 @@ and one still-blank sidecar, then asserts the harvester includes the
 answered one's content, excludes the blank one's, and reports exactly one
 skipped-empty.
 
-Spec backlink: docs/plans/2026-07-13-subagent-run-report-autoprovision.md
+Spec backlink: pln-claude-klabauter-subagent-run-report-aut-f51428
 (the sidecar this module reads); this test covers the harvest leg of
 coordinator baton G0 (agent citizenship), leg (c).
 Module under test: coordinator_core/subagent_sandbox/harvest_exit_interviews.py

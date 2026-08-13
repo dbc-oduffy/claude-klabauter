@@ -1,7 +1,7 @@
 """
 PriorityLedgerEntry — the AUTHORED priority-ledger record `priority.set` writes at
 `<central-state-root>/priority-ledger/<target_id>.yaml`, one file per target,
-projected into the cockpit contract. Pydantic port of example-doctrine-repo
+projected into the cockpit contract. Pydantic port of coordinator-claude
 `coordinator/schemas/priority-ledger.schema.json` (this repo carries no
 `cockpit-contract/src/entities/*.ts` Zod twin for this entity — the TS source
 tree was already retired by the T4e migration before this entity existed;
@@ -30,12 +30,12 @@ registered in `ENTITY_SCHEMAS` (cockpit_schema/__init__.py) and re-exported
 from `entities/__init__.py`, matching the `FinancialMetricSummary` precedent
 (`092cfa95`) for "add a new authored entity + ride an existing
 `CONTRACT_VERSION` bump" — NOT the `CommitClosure` precedent (`852e2169`),
-which stays OUT of `ENTITY_SCHEMAS` by design because it has no example-doctrine-repo-hosted
+which stays OUT of `ENTITY_SCHEMAS` by design because it has no coordinator-claude-hosted
 contract counterpart and is validated shape-based instead
-(`validate.py:440-467`). This entity DOES need a example-doctrine-repo-hosted contract
+(`validate.py:440-467`). This entity DOES need a coordinator-claude-hosted contract
 counterpart: `state/cross-repo-commitments/2026-07-26-doe-owns-durable-
-priority-ledger-for-cockpit.yaml` commits example-doctrine-repo to publishing the ledger shape
-to cockpit, so `ENTITY_SCHEMAS` membership (and the example-doctrine-repo-side JSON-schema
+priority-ledger-for-cockpit.yaml` commits coordinator-claude to publishing the ledger shape
+to cockpit, so `ENTITY_SCHEMAS` membership (and the coordinator-claude-side JSON-schema
 re-vendor it implies, tracked the same way `092cfa95`'s spinoff baton
 tracked `FinancialMetricSummary`'s) is the correct shape, not the excluded
 one.
@@ -58,7 +58,7 @@ consumer gap for a collector to bridge yet. Wiring an actual
 concern (not named by any chunk in the priority-ledger plan) and must not be
 inferred from this registration.
 
-Spec backlink: coordinator/schemas/priority-ledger.schema.json (example-doctrine-repo repo)
+Spec backlink: coordinator/schemas/priority-ledger.schema.json (coordinator-claude repo)
 Spec backlink: docs/plans/2026-07-26-priority-ledger.md § C6b
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
 """

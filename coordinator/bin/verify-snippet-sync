@@ -36,10 +36,10 @@ Exit codes:
   0  — verify: all consumers match / --fix: no unhandled errors / --list: printed
   1  — business outcome (verify: at least one consumer MISSING/MISMATCH), OR a
        transport failure: CLAUDE_KLABAUTER_ROOT resolution, coordinator_core.snippet_sync.verify
-       import failure, or an unresolvable example-doctrine-repo repo root (see _resolve_plugin_root()).
+       import failure, or an unresolvable coordinator-claude repo root (see _resolve_plugin_root()).
   2  — CLI usage error (missing/`--help` argv)
 
-Spec backlink: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
+Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
 """
 from __future__ import annotations
 
@@ -76,14 +76,14 @@ def _resolve_plugin_root() -> Path:
 
     This does NOT derive from this script's own __file__ location. b644d5a9
     migrated this executable to claude-klabauter while snippets/ (and every
-    registry-driven consumer prompt) stayed in example-doctrine-repo — self-location
+    registry-driven consumer prompt) stayed in coordinator-claude — self-location
     now resolves to <claude-klabauter>/coordinator, which has no snippets/ at all. Do
     not "restore" __file__-based resolution to regain parity with the
     pre-migration layout — that parity is exactly what caused the break
     once this file moved repos.
 
     Fails loud (sys.exit(1)) if doe_root() cannot resolve: this is a gate
-    script, not a never-block hook, so an unresolvable example-doctrine-repo root must not
+    script, not a never-block hook, so an unresolvable coordinator-claude root must not
     degrade to a silent scan of the wrong tree.
     """
     env = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -93,7 +93,7 @@ def _resolve_plugin_root() -> Path:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            "verify-snippet-sync: cannot resolve the example-doctrine-repo repo root "
+            "verify-snippet-sync: cannot resolve the coordinator-claude repo root "
             f"({exc}). Set repos.example_doctrine_repo in the machine-local registry, or set "
             "the DOE_ROOT env var, or set CLAUDE_PLUGIN_ROOT directly.",
             file=sys.stderr,

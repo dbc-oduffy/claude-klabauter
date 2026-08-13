@@ -22,8 +22,8 @@ shebang is never read there; on macOS/Linux `python3` is the right
 interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash —
 git-bash DOES honor the shebang and would exec-127 with no `python3` present.
-See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md
-§ Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not here).
+See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md
+§ Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not here).
 
 Port source: this file's own pre-port bash body (109 lines).
 Ported logic + tests: coordinator_core/ops/central_run_due.py (claude-klabauter),

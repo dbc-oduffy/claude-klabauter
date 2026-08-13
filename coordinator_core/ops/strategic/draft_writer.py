@@ -22,7 +22,7 @@ constructs that filename. The only path this module ever opens for writing is `D
 resolved under the caller-supplied `repo_root`. Reconciling draft into canonical is a separate,
 human-invoked ceremony (coordinator:strategic-self-description-refresh), never this op.
 
-Spec backlink: docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md § C1 (stub) / § C4 (hardening)
+Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C1 (stub) / § C4 (hardening)
 """
 
 from __future__ import annotations

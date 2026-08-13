@@ -1,9 +1,9 @@
 """Characterization tests for coordinator_core.ops.verify_subagent_sandbox_preamble_sync.
 
-Built against the example-doctrine-repo-side bash original — see the port's own module
+Built against the coordinator-claude-side bash original — see the port's own module
 docstring for the byte-parity/negative-spec ledger.
 
-Port of: verify-subagent-sandbox-preamble-sync.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: verify-subagent-sandbox-preamble-sync.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 
@@ -178,8 +178,8 @@ def test_missing_end_sentinel_reported(env):
 
 
 def test_extract_block_parity_with_sentinel_blocks_js_oracle(tmp_path):
-    """Parity check against the example-doctrine-repo oracle's exact contract (`coordinator/bin/
-    lib/sentinel-blocks-cli.js` `extract`, example-doctrine-repo repo, lines 32-56): the
+    """Parity check against the coordinator-claude oracle's exact contract (`coordinator/bin/
+    lib/sentinel-blocks-cli.js` `extract`, coordinator-claude repo, lines 32-56): the
     block is the text strictly between the marker LINES (marker lines
     themselves excluded), byte-identical to slicing the fixture by hand from
     the newline immediately after BEGIN up to the start of the END marker

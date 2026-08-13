@@ -5,7 +5,7 @@
 (`coordinator_core.workstream_complete._measure_session_review_scale_inputs`
 / `brief()`'s backfill of `gross_loc`/`commit_count`/`surface_count`).
 
-Spec backlink: docs/plans/2026-08-03-chain-end-review-scale-wiring.md,
+Spec backlink: pln-chain-end-review-scale-wire-de-23a81a,
 chunk C1(b). Pins the tri-state-input contract that chunk introduces: every
 row-4/5/6 input (`gross_loc`, `code_loc`, `commit_count`, `surface_count`,
 `executor_dispatched`, `shared_schema_touched`, `chain_partition_verdict`)

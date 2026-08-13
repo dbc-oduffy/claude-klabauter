@@ -44,7 +44,7 @@ Coverage:
 Import guard: ``import coordinator_core.ops`` MUST precede all test functions so that ALL op
 registrations fire (CBR #12 — import-ordering floor).
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C3
 """
 
 from __future__ import annotations
@@ -1369,7 +1369,7 @@ class TestArchivedTwinGuard:
     already-archived record's filename — see
     coordinator_core.handoff_creation_guard for the shared invariant this
     delegates to. Spec backlink: state/audits/2026-07-26-handoff-live-archive-
-    duplication-origin.md (example-doctrine-repo)."""
+    duplication-origin.md (coordinator-claude)."""
 
     def test_refuses_when_filename_collides_with_archived_record(self, tmp_path, monkeypatch):
         """out_path's filename already exists under archive/handoffs/ -> error, no write."""

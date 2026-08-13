@@ -1,7 +1,7 @@
 """coordinator_core.write_guards.nudge_new_sh_file_naked_python — advisory
 guard.
 
-Discharges example-doctrine-repo CLAUDE.md § Runtime conventions: "Multi-OS support is
+Discharges coordinator-claude CLAUDE.md § Runtime conventions: "Multi-OS support is
 P0 -- macOS, Windows, Linux all first-class. Process spawns are cheap on
 some hosts and brutally expensive on others, so structural bash is a defect
 to be ported to claude-klabauter naked Python -- author new logic as naked Python,
@@ -10,11 +10,11 @@ extension ``.sh`` -- ``nudge_windows_subprocess_popup`` classifies file
 CONTENT for shell-token/``creationflags`` shapes, it never asks "are you
 creating a new ``.sh`` file"; there is no near-miss to fold this into.
 
-This is a NEW guard, not a port of a example-doctrine-repo reference ``.sh`` hook. It follows
+This is a NEW guard, not a port of a coordinator-claude reference ``.sh`` hook. It follows
 the module-shape convention set by ``nudge_tasks_state_folder_split.py``
 (advisory CLASS, path-gate-only, no content reconstruction needed) and the
 NAMED-EXCEPTION TABLE shape from ``coordinator/hooks/scripts/
-_oss_operative_strings.py`` / ``guard-oss-payload-locality.py`` (example-doctrine-repo
+_oss_operative_strings.py`` / ``guard-oss-payload-locality.py`` (coordinator-claude
 repo) -- a small, deliberately-edited table with the rationale carried
 alongside each entry, rather than an inline suppression marker.
 
@@ -36,7 +36,7 @@ condition below -- porting bash to Python is a workstream, not something to
 interrupt an in-flight edit over.
 
 NAMED-EXCEPTION TABLE (``_IRREDUCIBLE_SH_BASENAMES``): the two bash legs
-Example-doctrine-repo doctrine itself names as physics, not preference --
+Coordinator-claude doctrine itself names as physics, not preference --
 ``invoking-shell-bash4-probe.sh`` (a child process cannot observe the
 invoking shell's own version -- must itself be a shell script to introspect
 the parent shell) and ``claude-machine-local.sh`` (must be ``source``d into
@@ -68,7 +68,7 @@ Negative-spec:
     failure, returns ``None`` (ALLOW/no-op) -- a guard that cannot resolve
     its own detection state has no basis to advise.
 
-Spec backlink: example-doctrine-repo CLAUDE.md § Runtime conventions
+Spec backlink: coordinator-claude CLAUDE.md § Runtime conventions
 Grep anchors: NEW-SH-FILE-NAKED-PYTHON
 """
 
@@ -87,7 +87,7 @@ CLASS = "advisory"
 MATCHERS = ["Write"]
 PRIORITY = 160  # deny-offer band; next slot after 110/120/130/140/150 (see nudge_terminal_artifact_edit.py)
 
-#: The two irreducible bash legs example-doctrine-repo doctrine names as physics, not
+#: The two irreducible bash legs coordinator-claude doctrine names as physics, not
 #: preference -- see module docstring NAMED-EXCEPTION TABLE. Case-folded
 #: basename match, regardless of directory.
 _IRREDUCIBLE_SH_BASENAMES = frozenset(

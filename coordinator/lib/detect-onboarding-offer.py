@@ -22,7 +22,7 @@ from __future__ import annotations
 # currency probe) is fully ported to
 # coordinator_core/ops/detect_onboarding_offer.py — this file's only remaining
 # job is: resolve CLAUDE_KLABAUTER_ROOT, tell the engine module where THIS file lives on
-# disk (a example-doctrine-repo-side/contract-only fact the engine cannot derive itself — used to
+# disk (a coordinator-claude-side/contract-only fact the engine cannot derive itself — used to
 # default plugin_root when neither a CLI flag nor an env var supplies one), and
 # forward argv/exit code.
 #
@@ -90,7 +90,7 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(0)
-    # default_plugin_root is a example-doctrine-repo-side/contract-only fact (where THIS file
+    # default_plugin_root is a coordinator-claude-side/contract-only fact (where THIS file
     # lives on disk) the engine module cannot derive itself — see module
     # docstring. Only used when neither --plugin-root nor the env var is given.
     sys.exit(op_main(sys.argv[1:], default_plugin_root=_PLUGIN_ROOT))

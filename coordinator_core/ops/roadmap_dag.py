@@ -38,7 +38,7 @@ main_worktree_root precision (lesson: common-dir-keyed-ops-must-derive-the-wor):
 callers must pass worktree_root as the result of main_worktree_root(common_dir) — NOT
 ctx.repo_root.  See roadmap_serve.py.
 
-Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C3/C4
+Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C3/C4
 
 Negative-spec:
   - Does NOT register any op.

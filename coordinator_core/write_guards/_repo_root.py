@@ -33,7 +33,7 @@ Not built here: a cross-process cache. That is a different, larger design
 with staleness questions this module does not open (see
 docs/plans/2026-08-07-no-window-subprocess-primitive.md, chunk C3).
 
-Spec backlink: docs/plans/2026-08-07-no-window-subprocess-primitive.md § C3
+Spec backlink: pln-no-window-subprocess-primitive-750d2d § C3
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ the hand-curated atlas) — this primitive is the RAG-absent-fallback substrate
 layer the atlas's Opus synthesis judgment then refines, not a replacement for
 that judgment (§ Problem-2 "extraction vs. judgment" framing).
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md § C2
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e § C2
 
 Negative-spec:
   - Does NOT compute per-system file counts or cross-system connections — this

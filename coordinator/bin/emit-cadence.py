@@ -4,7 +4,7 @@
 Purpose: routes emit.cadence — claude-klabauter's composite op (backlog.record THEN
 artifact.emit aggregation, in that order, as a claude-klabauter-internal invariant)
 through cc_invoke.route_mutation. This is the per-repo cadence TRIGGER fired
-from `-complete` ceremonies: example-doctrine-repo owns the cadence (WHEN emission fires),
+from `-complete` ceremonies: coordinator-claude owns the cadence (WHEN emission fires),
 Claude-klabauter owns the op (backlog.record -> artifact.emit ordering, and everything
 the op does internally).
 
@@ -41,7 +41,7 @@ Exit codes:
 Negative-spec (retired patterns — DO NOT reintroduce):
     - No bash fallback emitter body. The pre-campaign strangler facade's
       State-1 legacy_cadence() only ever printed a fail-loud message and
-      returned 1 (example-doctrine-repo never carried a real bash emission body for this op);
+      returned 1 (coordinator-claude never carried a real bash emission body for this op);
       this port preserves that fail-loud contract by raising instead.
     - No local --bare/cc_invoke ladder. Imports route_mutation from
       coordinator/bin/lib/cc_invoke.py (Wave 1a) rather than re-inlining one.
@@ -138,7 +138,7 @@ def _resolve_repo_root() -> str:
 def legacy_cadence() -> None:
     """State-1 fallback — fails loud. emit.cadence's composite
     backlog.record -> artifact.emit ordering lives entirely in claude-klabauter's
-    engine; example-doctrine-repo never carried a bash body for this op. No fallback emission
+    engine; coordinator-claude never carried a bash body for this op. No fallback emission
     is fired when the claude-klabauter control plane is absent on disk.
     """
     raise _SeamAbsentError(

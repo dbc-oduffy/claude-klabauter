@@ -5,7 +5,7 @@ payload on stdin, evaluates all Write/Edit guards, writes the single
 hookSpecificOutput envelope to stdout on a deny/advisory (nothing on allow),
 exit 0 always (hook contract — ALLOW/DENY conveyed via stdout, never exit code).
 
-Primary consumer is example-doctrine-repo's naked-Python PreToolUse dispatcher, which imports
+Primary consumer is coordinator-claude's naked-Python PreToolUse dispatcher, which imports
 `evaluate_payload_json` IN-PROCESS (no subprocess). This CLI entry exists for
 parity with subagent_sandbox and for standalone testing.
 """

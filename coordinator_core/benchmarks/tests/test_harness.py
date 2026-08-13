@@ -12,7 +12,7 @@ to the same interpolated value, so a broken implementation that just returns
 with an N>=5 adversarial case plus a warmup-discard call-count/return-length
 assertion, both fully mocked -- no real subprocess spawning.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C6.
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C6.
 """
 
 from __future__ import annotations

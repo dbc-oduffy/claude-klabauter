@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.find_polluter — ported from coordinator/bin/find-polluter.sh
-(DOE-PORT R2-R6, variant #1 — pristine, no registered op, example-doctrine-repo keeps the .sh filename
+(DOE-PORT R2-R6, variant #1 — pristine, no registered op, coordinator-claude keeps the .sh filename
 as a polyglot trampoline over this module).
 
 Purpose: bisection-style test-pollution finder. Given a filesystem path that should
@@ -64,7 +64,7 @@ from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
-_PROG = "find-polluter.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
+_PROG = "find-polluter.sh"  # literal program-name prefix, matches the coordinator-claude filename
 
 
 def _existence_detail(path: str) -> str:

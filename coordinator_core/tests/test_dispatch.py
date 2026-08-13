@@ -13,7 +13,7 @@ Review: code-reviewer (S2-F1/F2/F3 + S4-F2) — plan C3 deliverable: dispatch te
 the 3 reclassified emit ops receive non-None repo_root when _origin_worktree is present and
 return INVALID_PARAMS when absent. Neither path was covered before this file.
 
-Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C3 / AC1
+Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C3 / AC1
 """
 
 from __future__ import annotations

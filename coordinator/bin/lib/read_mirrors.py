@@ -1,6 +1,6 @@
 """lib/read_mirrors.py — plugin.mirrors registry parser.
 
-Port of: read-mirrors.sh (example-doctrine-repo 721a71f4, 2026-07-21). Single source of truth
+Port of: read-mirrors.sh (coordinator-claude 721a71f4, 2026-07-21). Single source of truth
 for parsing plugin.mirrors entries out of a machine-local registry TOML.
 
 Spec backlink: docs/plans/2026-05-28-reverse-drift-gate-meta-repo-coverage.md §Chunk 3a

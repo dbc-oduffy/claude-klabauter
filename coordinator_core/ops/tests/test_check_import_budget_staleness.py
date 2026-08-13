@@ -17,7 +17,7 @@ AC2 is discharged by `test_main_exits_nonzero_on_stale_manifest`: a stale
 verdict must make `main()`'s exit code nonzero, a genuinely failing signal,
 not merely a printed line.
 
-Spec backlink: docs/plans/2026-08-13-import-budget-manifest-staleness-tell.md § C3
+Spec backlink: pln-a-staleness-tell-for-the-impor-531a50 § C3
 """
 
 from __future__ import annotations

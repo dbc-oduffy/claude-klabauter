@@ -24,9 +24,9 @@ Coverage:
   (f) swept_rename_parsing          -- valid parse + all four bash-original
                                         rejection cases.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C2 (AC4).
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C2 (AC4).
 Provenance: golden fixture text recovered from
-  `example-doctrine-repo:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`
+  `coordinator-claude:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`
   (deleted 2026-07-15 by the wsc-commit kill; recovered per the plan's C2
   provenance instruction).
 """

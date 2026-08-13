@@ -1,6 +1,6 @@
 """Tests for `install_shell_init_guard_seam.WRITE_SURFACE`.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C3f.
 
 Purpose: proves the declaration's markers are DERIVED from `SENTINEL` /

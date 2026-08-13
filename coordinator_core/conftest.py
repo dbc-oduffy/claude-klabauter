@@ -179,7 +179,7 @@ _REAL_USER_SITE = site.getusersitepackages()
 
 
 def _capture_real_doe_root() -> str:
-    """Resolve the sibling example-doctrine-repo checkout ONCE, at collection time, under
+    """Resolve the sibling coordinator-claude checkout ONCE, at collection time, under
     the real (un-quarantined) HOME — used ONLY to locate the manifest to copy
     into a throwaway stub (see ``_STUB_DOE_ROOT`` below). The real path itself
     is never seeded into a quarantined test's ``.doe-root`` pointer.
@@ -187,7 +187,7 @@ def _capture_real_doe_root() -> str:
     Same capture-before-quarantine shape as ``_REAL_USER_SITE`` above, for the
     same class of reason. ``coordinator/bin/lib/coordinator_registry.py``
     resolves its manifest (``coordinator/schemas/coordinator-registry.manifest
-    .json``, which DR-047 keeps in example-doctrine-repo while this repo owns the engine)
+    .json``, which DR-047 keeps in coordinator-claude while this repo owns the engine)
     at IMPORT time, through a ladder whose every live rung is home-anchored:
     the ``.doe-root`` pointer files, the marketplace-cache probe, the flat
     plugin-layout probe, and the machine-local registry CLI all hang off
@@ -198,7 +198,7 @@ def _capture_real_doe_root() -> str:
     ``baton_assemble.apply._load_doc_new_module`` does, or as a spawned
     subprocess inheriting this environment) dies before reaching its assertion.
 
-    Returns "" when nothing resolves — on a machine with no example-doctrine-repo checkout
+    Returns "" when nothing resolves — on a machine with no coordinator-claude checkout
     the seeding below is skipped and behavior is unchanged.
     """
     try:
@@ -218,14 +218,14 @@ _REAL_DOE_MANIFEST_RELPATH = os.path.join(
 
 
 def _build_stub_doe_root(base_dir: str) -> str:
-    """Build a throwaway example-doctrine-repo STUB under ``base_dir`` and return its path.
+    """Build a throwaway coordinator-claude STUB under ``base_dir`` and return its path.
 
     Copies only the one file quarantined tests actually need to READ —
     ``coordinator/schemas/coordinator-registry.manifest.json`` — out of the
     real checkout captured by ``_capture_real_doe_root`` above. Nothing else
     from the real repo is copied or referenced.
 
-    This is the fix for a P1: seeding the REAL example-doctrine-repo path into a
+    This is the fix for a P1: seeding the REAL coordinator-claude path into a
     quarantined test's ``.doe-root`` pointer made the manifest READ succeed,
     but ``coordinator_registry.py::doe_root()`` is also the documented anchor
     other call sites join WRITE targets onto (``state/lessons-outbox``,
@@ -250,7 +250,7 @@ def _build_stub_doe_root(base_dir: str) -> str:
 
     import shutil
 
-    stub_root = os.path.join(base_dir, "example-doctrine-repo-stub")
+    stub_root = os.path.join(base_dir, "coordinator-claude-stub")
     stub_manifest = os.path.join(stub_root, _REAL_DOE_MANIFEST_RELPATH)
     os.makedirs(os.path.dirname(stub_manifest), exist_ok=True)
     shutil.copyfile(real_manifest, stub_manifest)

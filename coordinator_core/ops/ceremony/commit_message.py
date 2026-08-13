@@ -3,7 +3,7 @@ coordinator_core.ops.ceremony.commit_message -- native port of the deleted
 wsc-commit.sh commit-message composer + dual path-set computation.
 
 Purpose: reconstructs, byte-for-byte, the message-composition logic the OLD
-`wsc-commit.sh` (recovered for behavior from `example-doctrine-repo:85006468^:coordinator/bin/wsc-commit.sh`,
+`wsc-commit.sh` (recovered for behavior from `coordinator-claude:85006468^:coordinator/bin/wsc-commit.sh`,
 since deleted by the 2026-07-15 kill) implemented in bash. Pure functions only --
 no I/O, no subprocess, no git. This is the C2 chunk of the `wsc_tail` rebuild
 (docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
@@ -49,7 +49,7 @@ gate-scoping rule (skip-gate-when-empty):
     gate_paths   = commit_paths_in + deleted_paths      (EM-authored only)
     commit_paths = gate_paths + swept_srcs + swept_dsts (full rename included)
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C2 (AC4).
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C2 (AC4).
 
 Negative-spec (hard-won, preserved from the bash original):
   - Does NOT re-derive git trailers -- `commit.anchors` is the sole trailer source.

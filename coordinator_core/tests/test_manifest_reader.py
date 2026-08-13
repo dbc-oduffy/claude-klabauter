@@ -5,7 +5,7 @@ against synthetic fixtures — positive (both layouts, v1/v2/v3 manifests) and
 negative (missing file, corrupt JSON, missing required field, bad version,
 non-array direct_deps, no repo_root supplied).
 
-Port of: manifest_reader.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
+Port of: manifest_reader.sh (coordinator-claude 6fb5fb37, 2026-07-22)
 Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase-b.md §7 C3
 """
 from __future__ import annotations
@@ -113,7 +113,7 @@ def test_resolve_manifest_path_neither_layout_raises(tmp_path):
 
 
 def test_resolve_manifest_path_remediation_has_no_dead_publish_sh_command(tmp_path):
-    # Regression pin: setup/publish.sh was retired repo-wide by example-doctrine-repo's
+    # Regression pin: setup/publish.sh was retired repo-wide by coordinator-claude's
     # percolate-python-port work (2026-07-21/22). The remediation text must
     # not tell an operator to run a dead command, and must not shell out via
     # bash (naked-Python-only convention — see project CLAUDE.md § Runtime
@@ -274,14 +274,14 @@ def test_manifest_read_ndjson_never_silently_defaults_ok(tmp_path):
 # Operator-facing remediation text — regression guard for the defect class
 # where a remediation string tells the operator to run a file that install
 # tooling has since deleted. `setup/publish.sh` (the bash percolate engine)
-# was retired wholesale by example-doctrine-repo's percolate-python-port (2026-07-21/22,
+# was retired wholesale by coordinator-claude's percolate-python-port (2026-07-21/22,
 # commits 16302166 / 2c5ddf15) in favour of the native `coordinator/bin/
 # publish.py` driver; a stale `bash setup/publish.sh` remediation string sends
 # an operator who is already stuck on a corrupt-manifest error down a dead
 # end. Scans the whole module source rather than pinning one string/line, so
 # the same class of drift trips this guard no matter which remediation block
 # it recurs in. A true "does the referenced path exist on disk" check isn't
-# viable here: the remediation targets example-doctrine-repo's tree, a sibling repo this
+# viable here: the remediation targets coordinator-claude's tree, a sibling repo this
 # test environment has no guaranteed checkout of.
 # ---------------------------------------------------------------------------
 
@@ -298,7 +298,7 @@ def test_no_remediation_string_references_deleted_bash_percolate_engine(pattern)
     assert not re.search(pattern, _MANIFEST_READER_SRC), (
         f"manifest_reader.py contains text matching {pattern!r} — the bash "
         "percolate engine (setup/publish.sh and friends) was deleted by "
-        "example-doctrine-repo's percolate-python-port; operator-facing remediation must "
+        "coordinator-claude's percolate-python-port; operator-facing remediation must "
         "name the current coordinator/bin/publish.py driver instead."
     )
 

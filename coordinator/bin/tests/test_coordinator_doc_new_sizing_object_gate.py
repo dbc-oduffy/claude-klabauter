@@ -31,8 +31,8 @@ separately):
 5. `--sizing-object` and `--no-sizing-object` together exit 1 as mutually
    exclusive, writing no file (AC3 of the absence plan).
 
-Spec backlink: docs/plans/2026-08-06-plan-sizing-citation-gate.md § C2, AC2, AC3
-Spec backlink: docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md § C1, AC1-AC4
+Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C2, AC2, AC3
+Spec backlink: pln-sizing-citation-gate-make-abse-9495d8 § C1, AC1-AC4
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`
@@ -342,7 +342,7 @@ class ScaffoldSizingMintsDeliverableIdTest(unittest.TestCase):
     `deliverable_id` via the CLI's `--type sizing-object` path, reusing
     `_mint_deliverable_id` -- never a second mint formula.
 
-    Spec backlink: docs/plans/2026-08-10-a-sizing-mints-the-join-key-that-closes-it.md § C1
+    Spec backlink: pln-a-sizing-mints-the-join-key-th-8eaca3 § C1
     """
 
     def test_full_cli_emits_real_deliverable_id_and_validates(self):

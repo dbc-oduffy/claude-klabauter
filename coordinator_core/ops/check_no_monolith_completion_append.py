@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.check_no_monolith_completion_append — static-grep tripwire
-port of example-doctrine-repo's check-no-monolith-completion-append.sh trampoline.
+port of coordinator-claude's check-no-monolith-completion-append.sh trampoline.
 
 Purpose: detects unauthorized writes to the legacy monolith completion-log path
 `archive/completed/YYYY-MM.md` on the coordinator surface (skills/, commands/,
@@ -28,7 +28,7 @@ Six allowed exceptions (excluded from firing), evaluated per matched line:
      self-test fixtures (and any other test file exercising the legacy
      monolith shape as fixture input) carry literal monolith-path strings as
      test INPUT, not write calls. Widened from the bash-era
-     `/hooks/scripts/tests/` (that dir stayed example-doctrine-repo-resident post-2026-07-22
+     `/hooks/scripts/tests/` (that dir stayed coordinator-claude-resident post-2026-07-22
      executable-surface migration and no longer holds this tripwire's own
      Python/JS self-tests, which now live at `coordinator/tests/` and
      `coordinator/bin/tests/` under claude-klabauter) to the general `/tests/` segment
@@ -42,10 +42,10 @@ Six allowed exceptions (excluded from firing), evaluated per matched line:
      exact two-location scoping.
 
 Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
-import from the example-doctrine-repo polyglot trampoline (template-variant #1, mirrors
+import from the coordinator-claude polyglot trampoline (template-variant #1, mirrors
 coordinator-auto-push / handoff-gate-aging).
 
-Port of: check-no-monolith-completion-append.sh (example-doctrine-repo 894d4bc6, 2026-07-22)
+Port of: check-no-monolith-completion-append.sh (coordinator-claude 894d4bc6, 2026-07-22)
 Spec backlink: docs/plans/2026-05-19-completion-log-phase1-foundational-loop.md § Chunk 10
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
@@ -74,11 +74,11 @@ Negative-spec:
       migration actually populated under a claude-klabauter-side `--root`
       (`bin`, `lib`, `scripts`, `tests`) — each only included if it exists,
       mirroring the bash SEARCH_DIRS population loop. The discovery-surface
-      five stayed example-doctrine-repo-resident (coordinator-claude) post-migration and so
+      five stayed coordinator-claude-resident (coordinator-claude) post-migration and so
       never exist under claude-klabauter's own `coordinator/`; the four
       executable-surface dirs are where a monolith-append write would
       actually land on THIS side of the split. Both sets are named so a
-      caller pointing `--root` at either a example-doctrine-repo-resident (co-located, pre-
+      caller pointing `--root` at either a coordinator-claude-resident (co-located, pre-
       split) tree or a claude-klabauter-resident (post-split) tree gets a live scan
       either way — this is additive, not a replacement of the original list.
     - Exit code 2 fires on: unknown/malformed CLI arg, `--root` given no
@@ -206,7 +206,7 @@ def scan(coordinator_root: str) -> Tuple[List[str], List[str], int]:
 def _default_root() -> str:
     # Mirrors the bash script's own-two-levels-up default: this module has no
     # analogous "own path" to derive from (it's a claude-klabauter-side import, not the
-    # example-doctrine-repo trampoline file), so callers MUST pass --root explicitly. Kept as a
+    # coordinator-claude trampoline file), so callers MUST pass --root explicitly. Kept as a
     # named function for parity documentation, not a real fallback.
     raise RuntimeError("check-no-monolith-completion-append: --root is required")
 

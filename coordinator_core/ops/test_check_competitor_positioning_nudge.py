@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.check_competitor_positioning_nudge.
 
-Port of: check-competitor-positioning-nudge.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-competitor-positioning-nudge.sh (coordinator-claude b5a4192c, 2026-07-20)
 Golden-oracle parity cases captured against the bash original before porting;
 each test below mirrors one oracle case 1:1.
 """

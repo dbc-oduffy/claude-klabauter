@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.normalize_claimed_frontmatter.
 
-Port source: coordinator/bin/normalize-consumed-frontmatter.js (example-doctrine-repo)
+Port source: coordinator/bin/normalize-consumed-frontmatter.js (coordinator-claude)
 
 Review: code-reviewer -- A6 finding: this file-mutating op shipped with zero
 test coverage. Covers the 8 cases the reviewer enumerated: status/deployment

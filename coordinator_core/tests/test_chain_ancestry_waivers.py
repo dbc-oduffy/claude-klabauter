@@ -15,7 +15,7 @@ the archived-handoff `deployment_state` read. See that module's own
 docstring for the full dual-detector contract this predicate rides on top
 of.
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § W1
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § W1
 
 Negative-spec:
   - Does NOT exercise the reaper (W2) — that op does not exist yet and this

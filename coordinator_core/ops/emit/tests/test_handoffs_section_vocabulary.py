@@ -17,7 +17,7 @@ recognized and still maps to ``claimed`` — a SEPARATE, permanently-
 grandfathered 2026-06-26 retirement, not part of the DR-084 axis this module
 covers.
 
-Spec backlink: docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md § C7
+Spec backlink: pln-handoff-lifecycle-vocabulary-o-22ada6 § C7
 """
 
 from __future__ import annotations

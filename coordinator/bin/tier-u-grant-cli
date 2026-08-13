@@ -8,7 +8,7 @@
 # coordinator_core.session.liveness the same way that CLI does, so the two
 # stay structurally identical).
 #
-# example-doctrine-repo's ceremonies (/workday-complete, /workweek-complete, /merging-to-main)
+# coordinator-claude's ceremonies (/workday-complete, /workweek-complete, /merging-to-main)
 # and skills invoke this BY NAME as an entrypoint — per the 2026-07-22 ruling
 # that a skill links to an entrypoint rather than carrying a command payload
 # (see the memo this CLI is specced from). The DR-088 layer-5 PreToolUse(Bash)

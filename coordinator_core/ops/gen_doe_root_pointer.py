@@ -1,9 +1,9 @@
 """
 coordinator_core.ops.gen_doe_root_pointer — Port of: gen-doe-root-pointer.sh
-(example-doctrine-repo b5a4192c, 2026-07-20).
+(coordinator-claude b5a4192c, 2026-07-20).
 
 Purpose: reads `repos.example_doctrine_repo` (env override first, then the `machine-local` registry)
-and writes `<settings-home>/machine-local/.doe-root` (one line, the example-doctrine-repo repo root, no
+and writes `<settings-home>/machine-local/.doe-root` (one line, the coordinator-claude repo root, no
 trailing junk) so cold-terminal consumers (the `claude()` shim, inline resolver
 fallbacks) can `cat` the pointer with zero tool dependency.
 
@@ -18,7 +18,7 @@ Spec backlink: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § 
 Design: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § Design decisions
         (pointer is a projected cache; registry = source of truth; dry-run lesson cited)
 
-Resolution order for the example-doctrine-repo clone root (unchanged from the bash oracle):
+Resolution order for the coordinator-claude clone root (unchanged from the bash oracle):
   1. REPO_EXAMPLE_DOCTRINE_REPO env var (operator override, also used by install sandbox tests)
   2. `machine-local get repos.example_doctrine_repo`  (registry — primary)
   3. fail-loud with remediation
@@ -39,7 +39,7 @@ Fail-loud contract: if repos.example_doctrine_repo is unset/empty in both the en
 registry, `main()` returns non-zero with a stderr message and a remediation hint.
 
 Negative-spec:
-    - Does NOT clone the example-doctrine-repo repo, does NOT edit any registry key, does NOT write any
+    - Does NOT clone the coordinator-claude repo, does NOT edit any registry key, does NOT write any
       file other than the live pointer (and a temp file discarded in --check-only mode).
     - Does NOT reimplement the machine-local registry.toml/registry.local.toml parser —
       shells out to the `machine-local` CLI (PATH-resolved) exactly like the bash oracle's
@@ -66,7 +66,7 @@ from typing import List, Optional
 from coordinator_core._settings_home import machine_local_dir
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-doe-root-pointer.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
+_PROG = "gen-doe-root-pointer.sh"  # literal program-name prefix, matches the coordinator-claude filename
 
 
 def _resolve_machine_local() -> Optional[str]:
@@ -75,7 +75,7 @@ def _resolve_machine_local() -> Optional[str]:
 
 
 def _resolve_doe_root() -> "tuple[Optional[str], int]":
-    """Resolve the example-doctrine-repo clone root. Returns (root_or_None, exit_code_on_failure).
+    """Resolve the coordinator-claude clone root. Returns (root_or_None, exit_code_on_failure).
 
     On success returns (root, 0). On failure returns (None, 1) after printing a
     stderr diagnostic + remediation hint, mirroring the bash oracle's two-tier
@@ -149,7 +149,7 @@ def _pointer_file() -> str:
     — was exactly such a place: `~/.claude` is a git working tree that is
     committed and pushed across machines, and `.doe-root` was a TRACKED file in
     it, so a Windows-written pointer would land on macOS (and back) and resolve
-    the example-doctrine-repo clone to a path that does not exist on the reading machine.
+    the coordinator-claude clone to a path that does not exist on the reading machine.
 
     This is a move, not a new rung: `_doe_root`'s resolution order already ranked
     `<settings-home>/machine-local/.doe-root` as rung 2 (durable mirror) above

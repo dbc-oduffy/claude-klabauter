@@ -23,11 +23,11 @@ the Claude Code built-in /deep-research skill in favour of
 
 CHECK_ONLY mode: when the CHECK_ONLY environment variable is non-empty
 (exported by coordinator:install --check-only at Step 1b), passes
---check-only to the example-doctrine-repo-resident bin/seed-skill-overrides.py helper so no
+--check-only to the coordinator-claude-resident bin/seed-skill-overrides.py helper so no
 writes are performed — only a delta report is printed.
 
 The actual settings.json merge logic lives in bin/seed-skill-overrides.py
-(example-doctrine-repo-resident, NOT ported — this trampoline only replaces the bash
+(coordinator-claude-resident, NOT ported — this trampoline only replaces the bash
 trust-guard/arg-building/subprocess-invoke shell, not the helper itself).
 
 Exit codes:

@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.handoff_phase_stamp — JSON-RPC "handoff.stamp_phase" operation.
 
-Purpose: claude-klabauter's generation-stamp mechanism for the example-doctrine-repo-landed ``handoff_phase``
-schema contract (example-doctrine-repo ``coordinator/schemas/handoff.schema.json``, plan
+Purpose: claude-klabauter's generation-stamp mechanism for the coordinator-claude-landed ``handoff_phase``
+schema contract (coordinator-claude ``coordinator/schemas/handoff.schema.json``, plan
 ``docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md``). Stamps
 ``handoff_phase: {continuation|execution}`` onto a target ``state/handoffs/*.md``
 baton and, when ``phase=execution``, the four-field authorization stamp
@@ -11,7 +11,7 @@ frontmatter (``plan_path``, the SOLE v1 value-source; see Decision D1,
 ``docs/plans/2026-07-17-claude-klabauter-handoff-phase-execution-emit-leg.md``). Per the
 PM's ruling ("claude-klabauter owns the marking, the skill just carries the invocation" —
 DR-210 § Decision 1), this op is claude-klabauter's authoritative write path for the
-execution-baton overlay; the example-doctrine-repo ``/handoff`` SKILL.md invokes it rather than
+execution-baton overlay; the coordinator-claude ``/handoff`` SKILL.md invokes it rather than
 writing the fields itself.
 
 Fourth addition to the DR-212 sanctioned ``handoff.*`` in-place frontmatter-
@@ -38,7 +38,7 @@ kind-gate (H-CROSS-EXEC-2, ``kind != "session-handoff"``) is checked before,
 and independently of, this convergence check — a kind mismatch always fails
 loud, even on an otherwise-already-converged target.
 
-Spec backlink: docs/plans/2026-07-17-claude-klabauter-handoff-phase-execution-emit-leg.md § C4/D1
+Spec backlink: pln-claude-klabauter-emit-leg-handoff-phase--e1ccf4 § C4/D1
 DR-212 compliance: docs/decisions/DR-212-handoff-lifecycle-inplace-frontmatter-mutation-carveout.md § D2
 
 Self-registration: importing this module fires ``@register_op("handoff.stamp_phase",
@@ -101,7 +101,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
-#: The two sanctioned handoff_phase values (example-doctrine-repo contract; schema enum).
+#: The two sanctioned handoff_phase values (coordinator-claude contract; schema enum).
 _VALID_PHASES = ("continuation", "execution")
 
 #: The four-field execution-authorization stamp, byte-identical to the

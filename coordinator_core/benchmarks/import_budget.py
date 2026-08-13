@@ -41,7 +41,7 @@ ceilings would blur two independently-evolving conventions (op latency SLA vs. i
 regrowth tripwire) behind one ambiguous schema. A sibling file with its own small resolver keeps
 both conventions legible and independently versionable.
 
-Spec backlink: docs/plans/2026-08-06-windows-hot-path-less-work-per-interpreter.md chunk C4
+Spec backlink: pln-windows-hot-path-cost-less-wor-0ec8ea chunk C4
 (AC9, AC11).
 """
 

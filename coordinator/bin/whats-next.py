@@ -13,7 +13,7 @@ Output is plaintext for the EM to frame. No clustering or narrative.
 Exit codes: 0 in normal operation; 1 only when not inside a git repository.
 Missing files produce "(not found)" notices, not errors.
 
-Port of: whats-next.sh (example-doctrine-repo 8fa54776, 2026-07-21) — Windows-first de-bash:
+Port of: whats-next.sh (coordinator-claude 8fa54776, 2026-07-21) — Windows-first de-bash:
 zero bash anywhere on the reporter's critical path. State-root resolution
 shells out to `python3 -m coordinator_core.state_root` (the same native
 module the improved bash oracle itself called), not bash.
@@ -130,14 +130,14 @@ def main() -> int:
     # Section 1: Coordinator improvement queue — top 5 central entries
     # -----------------------------------------------------------------------
     print("== Improvement queue (top 5 central) ==")
-    # Graceful-degradation: --subject doctrine fails loud on non-example-doctrine-repo machines.
+    # Graceful-degradation: --subject doctrine fails loud on non-coordinator-claude machines.
     doctrine_root, rc = _resolve_state_root("--central", "--subject", "doctrine")
     if rc == 0 and doctrine_root:
         queue_dir = os.path.join(doctrine_root, "improvement-queue")
     else:
         sys.stderr.write(
             "  WARN: central doctrine state root unresolvable — skipping "
-            "improvement queue (non-example-doctrine-repo machine)\n"
+            "improvement queue (non-coordinator-claude machine)\n"
         )
         queue_dir = ""
 

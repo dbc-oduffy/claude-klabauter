@@ -15,7 +15,7 @@ baton, is now correctly recognized (non-blocking ``additionalContext`` leg);
 a GENUINE non-holder is still hard-denied exactly as before. This suite pins
 both directions.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
   § Tasks, chunk C6b (AC5), split C6b1 (write_guards half).
 
 Negative-spec:

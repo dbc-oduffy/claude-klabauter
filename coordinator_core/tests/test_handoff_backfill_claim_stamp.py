@@ -5,7 +5,7 @@ Coverage for the "handoff.backfill_claim_stamp" op — reconstructs a missing
 claim stamp (claimed_at/claimed_by) on a handoff that was worked but never
 formally claimed, from caller-supplied, git-verified evidence.
 
-Spec backlink: docs/plans/2026-08-11-a-claim-stamp-backfill-verb-and-the-lega.md,
+Spec backlink: pln-a-claim-stamp-backfill-verb-an-a345d2,
 chunk C1, AC1-AC7.
 
 Deliberately placed alongside

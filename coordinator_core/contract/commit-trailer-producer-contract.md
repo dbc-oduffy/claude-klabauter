@@ -21,7 +21,7 @@
 > **Status: FROZEN — co-design closed 2026-07-05, v1.0.** All three freeze-gate items are
 > resolved (see § 0, Freeze-gate items): item 1 (rag↔cockpit `workstate-query` v8 alignment)
 > closed bilaterally by rag + cockpit; item 2 (`source_kind: git_commit` enum) notify-at-freeze
-> → example-doctrine-repo/central; item 3 (claude-klabauter `commit.anchors` op + invocation shim) shipped. Sibling EMs
+> → coordinator-claude/central; item 3 (claude-klabauter `commit.anchors` op + invocation shim) shipped. Sibling EMs
 > build against this frozen schema. Post-freeze changes follow the reader-widen-before-writer-flips
 > co-ratified bump protocol (§ 5.2); consumers are notified via cross-repo memo before any
 > breaking change.
@@ -79,7 +79,7 @@
 > - **2026-07-05 (FROZEN, v1.0):** co-design closed — all three freeze-gate items resolved.
 >   Item 1 (rag↔cockpit `workstate-query` v8 alignment) closed bilaterally (rag `d5370eeab`
 >   trailer-edge-query-spec + `4bff8ce43` trailer-edge-key-pin; cockpit confirmed; DR §7 resolved).
->   Item 2 (`source_kind: git_commit`) notify-at-freeze → example-doctrine-repo/central (ships with rag surface (b)).
+>   Item 2 (`source_kind: git_commit`) notify-at-freeze → coordinator-claude/central (ships with rag surface (b)).
 >   Item 3 (claude-klabauter `commit.anchors` op + shim) shipped (`043b214` C1–C4, `9f3ad55` shim,
 >   `da13148` workstream-complete). Trigger memo:
 >   `cross-repo/inbox/2026-07-05-cockpit-rag-alignment-closed-freeze-gate-a.md`.
@@ -95,7 +95,7 @@
 > - Tri-plane boundary: `docs/decisions/2026-07-03-tri-plane-ownership-boundary.md` (superseded
 >   on read-model ownership / dual-write ban by
 >   `docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md`)
-> - example-doctrine-repo ratification memo: `cross-repo/inbox/2026-07-04-claude-klabauter-stamper-ratify-and-wedge-closed.md`
+> - coordinator-claude ratification memo: `cross-repo/inbox/2026-07-04-claude-klabauter-stamper-ratify-and-wedge-closed.md`
 > - rag co-design reply: `cross-repo/inbox/2026-07-04-rag-consumed-subset-trailer-contract.md`
 
 ---
@@ -104,7 +104,7 @@
 
 Claude-klabauter's `commit.anchors` op (`COMPUTE_ONLY` — see plan D2, AC2) derives a structured git trailer
 block from the live operational read-model and returns it as text. The existing
-`coordinator-prepare-commit-msg` hook (example-doctrine-repo surface) stamps that block onto every coordinator-session
+`coordinator-prepare-commit-msg` hook (coordinator-claude surface) stamps that block onto every coordinator-session
 commit, extending the already-in-use `Session-Id:` trailer injection.
 
 The result is a set of **six trailer keys** per commit — five derived by claude-klabauter, one already-in-place
@@ -141,8 +141,8 @@ is worse than none — cockpit renders it with confidence as a false edge.
 | # | Item | Owner | Status |
 |---|------|-------|--------|
 | 1 | **rag ↔ cockpit `workstate-query` v8 alignment** — rag exposes trailer edges keyed on logical-repo identity so cockpit adds one query-mapping entry, not a second transport. | rag + cockpit bilateral | **RESOLVED** — closed bilaterally (rag `d5370eeab` + `4bff8ce43`; cockpit confirmed; DR §7 resolved 2026-07-05) |
-| 2 | **`source_kind: git_commit`** provenance enum extension — rag needs a new `source_kind` value for the commit stream; the enum is coordinator-owned and routes via example-doctrine-repo/central on freeze notification. | coordinator (example-doctrine-repo surface, notified at freeze) | **notify-at-freeze** — example-doctrine-repo/central notified at freeze; ships with rag surface (b), not a pre-freeze blocker |
-| 3 | **claude-klabauter ships `commit.anchors` op + invocation shim + finalizes this contract** (plan AC1/AC2/AC7) → example-doctrine-repo wires the `prepare-commit-msg` hook (gated on this delivery). | claude-klabauter (op + shim) → example-doctrine-repo (hook wiring) | **SHIPPED** — `043b214` C1–C4, `9f3ad55` shim, `da13148` workstream-complete |
+| 2 | **`source_kind: git_commit`** provenance enum extension — rag needs a new `source_kind` value for the commit stream; the enum is coordinator-owned and routes via coordinator-claude/central on freeze notification. | coordinator (coordinator-claude surface, notified at freeze) | **notify-at-freeze** — coordinator-claude/central notified at freeze; ships with rag surface (b), not a pre-freeze blocker |
+| 3 | **claude-klabauter ships `commit.anchors` op + invocation shim + finalizes this contract** (plan AC1/AC2/AC7) → coordinator-claude wires the `prepare-commit-msg` hook (gated on this delivery). | claude-klabauter (op + shim) → coordinator-claude (hook wiring) | **SHIPPED** — `043b214` C1–C4, `9f3ad55` shim, `da13148` workstream-complete |
 
 *Sibling EMs build against this frozen schema. Any post-freeze key-set delta surfaces through the
 reader-widen path (§ 5) — no breaking change, no re-dispatch.*
@@ -190,7 +190,7 @@ DR-207's deliverable-spine initiative. Consumers join commit→deliverable on th
 independent producers of this one FK (2026-08-10 correction — a prior revision of this paragraph
 said TWO): `commit.anchors` (`coordinator_core/ops/commit_anchors.py`, staged plan frontmatter,
 ceremony path), `coordinator/bin/coordinator-prepare-commit-msg` (session-shape, every commit —
-Example-doctrine-repo's hook), and `coordinator_core/git/commit_trailers.py`'s `compute_missing_trailer_args`,
+Coordinator-claude's hook), and `coordinator_core/git/commit_trailers.py`'s `compute_missing_trailer_args`,
 invoked by `coordinator_core/ops/ceremony/git_native.py::commit_scoped`'s diverged branch (which
 routes through `_commit_scoped_private_index` and commits via `git commit-tree` directly). That
 last path fires **no git hooks at all**, so the hook-based producer never runs there — this is
@@ -470,7 +470,7 @@ to rag's ingest mechanics — the following are **rag-internal** and are NOT par
 
 **`source_kind: git_commit` (freeze-gate item 2).** rag requires a new provenance `source_kind`
 value for the commit stream. The `source_kind` enum is coordinator-owned (lives in the
-`artifact-shape-contract/`); example-doctrine-repo/central will be notified at contract freeze so the enum can be
+`artifact-shape-contract/`); coordinator-claude/central will be notified at contract freeze so the enum can be
 extended additively. This extension follows reader-widen-before-writer-flips — rag widens its
 validator to accept `git_commit` before claude-klabauter emits it.
 
@@ -588,14 +588,14 @@ this contract**:
 - **cockpit's display UI and query-mapping entries** — filter facets, intent→reality graph rendering,
   the single query-mapping entry cockpit adds to join rag's workstate-query surface. Example-cockpit-repo's
   own design surface.
-- **The example-doctrine-repo append-hook wiring** — editing `coordinator-prepare-commit-msg` to call `commit.anchors`
-  and inject the returned block. Example-doctrine-repo surface (`coordinator-prepare-commit-msg` lives in
-  `example-doctrine-repo/coordinator/bin/`); claude-klabauter proposes via memo + PM-relay per
-  `CLAUDE.md § Cross-repo writes`. The hook wiring is the example-doctrine-repo consultation deliverable (AC6 ratified).
+- **The coordinator-claude append-hook wiring** — editing `coordinator-prepare-commit-msg` to call `commit.anchors`
+  and inject the returned block. Coordinator-claude surface (`coordinator-prepare-commit-msg` lives in
+  `coordinator-claude/coordinator/bin/`); claude-klabauter proposes via memo + PM-relay per
+  `CLAUDE.md § Cross-repo writes`. The hook wiring is the coordinator-claude consultation deliverable (AC6 ratified).
 - **`commit.anchors` op implementation** — handler code, DD#1 freshness cross-check mechanics,
   subject-prefix taxonomy lookup, `OP_CLASSIFICATION` and `_OP_KEY_SCOPE` registration entries.
   Implementation slices C1-op and C2-register.
-- **The claude-klabauter invocation shim** (`bin/claude-klabauter-commit-anchors`) — the fail-open shim the example-doctrine-repo hook
+- **The claude-klabauter invocation shim** (`bin/claude-klabauter-commit-anchors`) — the fail-open shim the coordinator-claude hook
   execs. Implementation slice C3-shim.
 - **Historical backfill** — stamping trailers onto commits predating this feature. Possible follow-on;
   slice-1 is stamp-going-forward only.

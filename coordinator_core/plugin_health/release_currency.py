@@ -12,10 +12,10 @@ additionally treats an `ImportError` on this module, or any unexpected exception
 escaping `release_currency_probe`, as "logic unavailable" (mapped to the `_absent`
 ProbeNote) — see plan AC C3 (the Staff Engineer F6).
 
-Port source: example-doctrine-repo coordinator/lib/release-currency.sh (`release_currency_probe`)
+Port source: coordinator-claude coordinator/lib/release-currency.sh (`release_currency_probe`)
 at HEAD 0d9f70a4 — the `bash -c "source ..."` per-invocation subprocess this module
 retires. sentinel.py's `probe_p19` now calls this in-process.
-Spec backlink: docs/plans/2026-07-17-retire-doe-bash-bridges-native-python.md § Port C.
+Spec backlink: pln-retire-claude-klabauter-s-doe-bash-bridg-5ab742 § Port C.
 
 Negative-spec:
   - Highest-tag selection is a numeric-major.minor.patch **zero-padded** compare, NOT

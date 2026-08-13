@@ -501,7 +501,7 @@ class TestMovedTo(unittest.TestCase):
         self.assertEqual(resolve_params["disposition_detail"], "folded into bar")
 
     def test_moved_to_records_the_written_id_not_the_proposed_one(self):
-        """Defends the example-doctrine-repo ruling's explicit instruction: `resolve` must
+        """Defends the coordinator-claude ruling's explicit instruction: `resolve` must
         record the id add-task ACTUALLY wrote, never the caller's proposed
         id, because add-task may legitimately mint a non-colliding one.
         """

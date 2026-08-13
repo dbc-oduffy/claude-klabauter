@@ -32,7 +32,7 @@ Negative-spec (RAG-bait):
     (imported verbatim from `assert_no_dangling_plan_backlinks.py`, not
     re-authored) is what distinguishes a citation from incidental prose.
 
-Spec backlink: docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C3
+Spec backlink: pln-spec-backlinks-cite-a-stable-d-451b3e § C3
 """
 from __future__ import annotations
 
@@ -50,17 +50,57 @@ PathLike = Union[str, Path]
 
 # Resolver contract (C1, coordinator_core.ops.spec_backlink_resolve): a
 # callable taking the cited docs/plans/...md path and returning a
-# JSON-serializable dict with an "outcome" key of "HIT" / "MISS" /
-# "AMBIGUITY". On "HIT" the dict also carries "plan_id" and
-# "deliverable_id" (either may be None/absent -- "real" means present,
-# non-None, and non-empty after stripping).
+# JSON-serializable dict with an "outcome" key of "hit" / "miss" /
+# "ambiguity" (case-insensitive on read here -- the stub-based unit tests in
+# this file's test module pin uppercase "HIT"/"MISS"/"AMBIGUITY" values, C1's
+# real resolver emits lowercase; both must keep working unchanged). On a hit
+# the dict also carries "plan_id" and "deliverable_id" (either may be
+# None/absent -- "real" means present, non-None, and non-empty after
+# stripping). C1's real values already carry their own `pln-`/`dlv-` prefix
+# on disk (e.g. `plan_id: "pln-foo-451b3e"`) -- `_emit_id` below must not
+# double-prefix.
 Resolver = Callable[[str], Dict[str, object]]
 
 
-def _default_resolver() -> Resolver:
-    """Lazily import C1's resolver so this module stays importable even if
-    `spec_backlink_resolve.py` has not landed yet in a given wave."""
-    from coordinator_core.ops.spec_backlink_resolve import resolve as _resolve
+def _default_resolver(worktree_root: PathLike) -> Resolver:
+    """Bind C1's real `resolve_path_with_index` (index+path -> ids) into the
+    1-arg `Resolver` shape this module calls (`resolver(cited_path)`). Lazily
+    imported so this module stays importable even if `spec_backlink_resolve.py`
+    has not landed yet in a given wave.
+
+    The index is built exactly ONCE here (`build_index(worktree_root)`), at
+    resolver-construction time, and closed over for every subsequent
+    `resolver(cited_path)` call this resolver instance serves -- NOT rebuilt
+    per lookup. This is the fix for the measured defect: `rewrite_file`
+    (single-file) and `rewrite_spec_backlinks` (multi-file batch) both
+    construct exactly one `_default_resolver` per invocation and reuse it
+    across every candidate on every line of every file, so one invocation
+    over N files with M total citations does ONE corpus walk, not N or M.
+
+    Cache-lifetime choice: this index is scoped to the resolver closure, not
+    memoised at module level or cached across process invocations. Each
+    fresh call to `rewrite_file`/`rewrite_spec_backlinks` (a fresh process,
+    or a fresh COMPUTE_ONLY op invocation) gets its own `_default_resolver`
+    and therefore its own freshly-built index -- deliberately, because
+    `backfill_deliverable_spine` mutates the very frontmatter this index
+    reads (stamping `plan_id`/`deliverable_id` onto records), so a
+    process-global or cross-invocation cache would risk serving ids from
+    before a spine-stamping run landed. No invalidation logic is needed
+    because there is nothing to invalidate: the index's lifetime is exactly
+    one invocation's worth of lookups, matching the plan's "build once per
+    invocation" requirement verbatim (not "once per process").
+
+    `resolve_path_with_index`/`resolve_path` are the INVERSE of C1's id ->
+    path `resolve()` -- this module has a cited PATH, not an id, and needs
+    that record's ids back.
+    """
+    from coordinator_core.ops.spec_backlink_resolve import build_index, resolve_path_with_index
+
+    root = Path(worktree_root)
+    index = build_index(root)
+
+    def _resolve(cited_path: str) -> Dict[str, object]:
+        return resolve_path_with_index(index, root, cited_path)
 
     return _resolve
 
@@ -74,15 +114,23 @@ def _is_real_id(value: object) -> bool:
     return True
 
 
+def _with_single_prefix(value: str, prefix: str) -> str:
+    """Prepend `prefix` unless `value` already carries it -- C1's real id
+    values are already fully prefixed on disk (`plan_id: "pln-foo-451b3e"`),
+    so a bare `f"{prefix}{value}"` would double-prefix into `pln-pln-...`."""
+    value = value.strip()
+    return value if value.startswith(prefix) else f"{prefix}{value}"
+
+
 def _emit_id(outcome: Dict[str, object]) -> Optional[str]:
     """Apply the pln->dlv preference order to a HIT outcome dict. Returns
     None if the record carries neither id as a real value (unresolvable)."""
     plan_id = outcome.get("plan_id")
     if _is_real_id(plan_id):
-        return f"pln-{plan_id}"
+        return _with_single_prefix(str(plan_id), "pln-")
     deliverable_id = outcome.get("deliverable_id")
     if _is_real_id(deliverable_id):
-        return f"dlv-{deliverable_id}"
+        return _with_single_prefix(str(deliverable_id), "dlv-")
     return None
 
 
@@ -91,7 +139,7 @@ def resolve_citation(cited_path: str, resolver: Resolver) -> Optional[str]:
     replacement string, or None if unresolvable (MISS, AMBIGUITY, or a HIT
     with neither id real)."""
     outcome = resolver(cited_path)
-    if outcome.get("outcome") != "HIT":
+    if str(outcome.get("outcome", "")).lower() != "hit":
         return None
     return _emit_id(outcome)
 
@@ -99,6 +147,7 @@ def resolve_citation(cited_path: str, resolver: Resolver) -> Optional[str]:
 def rewrite_file(
     full_path: PathLike,
     resolver: Optional[Resolver] = None,
+    worktree_root: Optional[PathLike] = None,
 ) -> Dict[str, object]:
     """Rewrite path-form spec-backlink citations to id-form in one file, in
     place. Only lines passing the two-stage filter (spec.?backlink AND the
@@ -113,7 +162,7 @@ def rewrite_file(
     An unresolvable citation leaves the line untouched (AC4) and is reported,
     never dropped or guessed.
     """
-    resolver = resolver or _default_resolver()
+    resolver = resolver or _default_resolver(worktree_root or Path.cwd())
     full_path = str(full_path)
 
     with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -167,6 +216,7 @@ def rewrite_file(
 def rewrite_spec_backlinks(
     paths: List[PathLike],
     resolver: Optional[Resolver] = None,
+    worktree_root: Optional[PathLike] = None,
 ) -> Dict[str, object]:
     """Batch entry point over an explicit file list (C4 fans this out across
     executors on disjoint directory scopes -- this function does not walk
@@ -176,7 +226,7 @@ def rewrite_spec_backlinks(
       {"rewritten": {<path>: [<cited_path>, ...]},
        "unresolvable": {<path>: [<cited_path>, ...]}}
     """
-    resolver = resolver or _default_resolver()
+    resolver = resolver or _default_resolver(worktree_root or Path.cwd())
     rewritten: Dict[str, List[str]] = {}
     unresolvable: Dict[str, List[str]] = {}
     for path in paths:

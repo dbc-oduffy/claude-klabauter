@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claude-klabauter/coordinator_core/contract/conversion-census.schema.json",
   "title": "Conversion-census row",
-  "description": "Shape of one row in example-doctrine-repo's conversion census — the per-step classification of converting a skill into a computed skill. Example-doctrine-repo owns the procedure and tooling that produces rows; this schema defines only the shape a producing row must conform to, so claude-klabauter's compute-layer scaffolder can read a conforming census and know what to generate versus stub, without further co-design on the claude-klabauter side. Spec: coordinator_core/contract/conversion-census-producer-contract.md.",
+  "description": "Shape of one row in coordinator-claude's conversion census — the per-step classification of converting a skill into a computed skill. Coordinator-claude owns the procedure and tooling that produces rows; this schema defines only the shape a producing row must conform to, so claude-klabauter's compute-layer scaffolder can read a conforming census and know what to generate versus stub, without further co-design on the claude-klabauter side. Spec: coordinator_core/contract/conversion-census-producer-contract.md.",
   "type": "object",
   "additionalProperties": false,
   "required": ["step_id", "classification"],

@@ -388,7 +388,7 @@ _INSTALLED_SHIM_PATH = _resolve_installed_shim_path()
 
 # ---------------------------------------------------------------------------
 # DR-132 two-tier ladder — `resolve_claude_klabauter_root_with_class()`. Mirrors
-# example-doctrine-repo `coordinator/hooks/scripts/_engine_root.py`'s
+# coordinator-claude `coordinator/hooks/scripts/_engine_root.py`'s
 # `resolve_claude_klabauter_root_with_class()` step order; a conformance fixture
 # (chunk C8) drives both implementations against the same registry-state
 # cases, so drift here WILL be caught cross-repo.

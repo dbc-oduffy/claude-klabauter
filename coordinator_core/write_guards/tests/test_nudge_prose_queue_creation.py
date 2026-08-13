@@ -7,7 +7,7 @@ Windows-separator and case-variation robustness, silence when the target
 already exists, silence under archive/, silence on non-queue-shaped and
 content-free writes, and the operator override.
 
-Spec: example-doctrine-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec: coordinator-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 Spec: docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md
 """
 

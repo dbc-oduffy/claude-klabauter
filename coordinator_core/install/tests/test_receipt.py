@@ -5,7 +5,7 @@ Behavioural tests for the install receipt (coordinator_core.install.receipt)
 — derivation of concrete on-this-machine facts from a writer's declared
 write surface.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C5
 """
 
@@ -84,14 +84,14 @@ def test_shaped_clause_with_resolution_derives_the_pinned_down_entries() -> None
         0: ClauseResolution(
             entries=(
                 WriteSurfaceEntry(kind="machine-local-key", key="repos.claude-klabauter"),
-                WriteSurfaceEntry(kind="machine-local-key", key="repos.example-doctrine-repo"),
+                WriteSurfaceEntry(kind="machine-local-key", key="repos.coordinator-claude"),
             ),
         ),
     }
     entries = derive_receipt_entries(decl, resolutions)
     assert entries == (
         ReceiptEntry(writer_id="register-discovered-repos", kind="machine-local-key", key="repos.claude-klabauter"),
-        ReceiptEntry(writer_id="register-discovered-repos", kind="machine-local-key", key="repos.example-doctrine-repo"),
+        ReceiptEntry(writer_id="register-discovered-repos", kind="machine-local-key", key="repos.coordinator-claude"),
     )
 
 

@@ -2,12 +2,12 @@
 coordinator_core.ops.tests.test_cutover_gate_schema_resolution
 
 Standalone unit tests for coordinator_core.ops.cutover_gate.resolve_cutover_schema
-— the cross-repo example-doctrine-repo schema resolution seam (C4c). Distinct from
+— the cross-repo coordinator-claude schema resolution seam (C4c). Distinct from
 test_cutover_gate_derivation.py, which covers the C4a derivation function
 only; this file never imports or exercises `derive`.
 
-Every test builds its own throwaway git repo shaped like a example-doctrine-repo clone
-under tmp_path — nothing here touches the real example-doctrine-repo clone or the real
+Every test builds its own throwaway git repo shaped like a coordinator-claude clone
+under tmp_path — nothing here touches the real coordinator-claude clone or the real
 vendored/authored cutover.schema.json.
 
 Coverage:
@@ -57,10 +57,10 @@ def _git(repo: Path, *args: str) -> None:
 
 @pytest.fixture()
 def fake_doe(tmp_path: Path) -> Path:
-    """A throwaway git repo shaped like a example-doctrine-repo clone: coordinator/schemas/cutover.schema.json at HEAD."""
+    """A throwaway git repo shaped like a coordinator-claude clone: coordinator/schemas/cutover.schema.json at HEAD."""
     if shutil.which("git") is None:
         pytest.skip("git not available")
-    repo = tmp_path / "example-doctrine-repo-fake"
+    repo = tmp_path / "coordinator-claude-fake"
     schemas = repo / "coordinator" / "schemas"
     schemas.mkdir(parents=True)
     (schemas / "cutover.schema.json").write_text(
@@ -122,7 +122,7 @@ def test_not_a_git_repo_raises(tmp_path: Path) -> None:
 def test_malformed_json_at_ref_raises(tmp_path: Path) -> None:
     if shutil.which("git") is None:
         pytest.skip("git not available")
-    repo = tmp_path / "example-doctrine-repo-malformed"
+    repo = tmp_path / "coordinator-claude-malformed"
     schemas = repo / "coordinator" / "schemas"
     schemas.mkdir(parents=True)
     (schemas / "cutover.schema.json").write_text("{not valid json", encoding="utf-8")

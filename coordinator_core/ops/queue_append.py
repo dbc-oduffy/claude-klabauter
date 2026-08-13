@@ -7,14 +7,14 @@ supported queue schemas: debt-backlog, bug-backlog, improvement-queue, lessons,
 cross-repo-commitment. The trailing ``-<digest12>`` filename component is a content
 digest (DR-213 D2(i) amendment, 2026-07-08) — see § Content digest below.
 
-Byte-parity target: ``[example-doctrine-repo] coordinator/bin/coordinator-queue-append``. NOTE:
+Byte-parity target: ``[coordinator-claude] coordinator/bin/coordinator-queue-append``. NOTE:
 byte parity covers file *content*, not filename — the digest component is an
 intentional, documented divergence from the bash oracle's ``<date>-<slug>.yaml`` shape.
 
 Schema routing (contract-derived, ``_output_dir_for_schema``): the output directory for
-each schema is DERIVED from the example-doctrine-repo schema contract (``schema_validate.describe(<schema>)``
+each schema is DERIVED from the coordinator-claude schema contract (``schema_validate.describe(<schema>)``
 → ``applies_to`` glob → dirname), not a hand-maintained table. Illustrative
-examples of the current 5-schema set (any queue schema the example-doctrine-repo contract defines is
+examples of the current 5-schema set (any queue schema the coordinator-claude contract defines is
 supported — the set is no longer enumerated here by hand):
     debt-backlog          → state/debt-backlog/<date>-<slug>-<digest12>.yaml
     bug-backlog           → state/bug-backlog/<date>-<slug>-<digest12>.yaml
@@ -35,7 +35,7 @@ entirely from in-hand params (DR-213 D4).
 ``_SCHEMA_CLI_NAME`` alias: ``lessons`` → ``lesson-entry`` (schema-cli.js name).
 
 Store schemas (``workstream``, ``workstream-event``): field acceptance for these
-two schemas (and any future example-doctrine-repo schema field not in the base ~30-param hand list)
+two schemas (and any future coordinator-claude schema field not in the base ~30-param hand list)
 is CONTRACT-DERIVED via ``append_queue_entry(**schema_fields)`` — only fields
 ``schema_validate.describe(<schema>)`` actually declares (required or optional)
 for the given schema are accepted, never a second hand-maintained field-name
@@ -53,7 +53,7 @@ Neither uses the content-digest guard below (see ``_output_path``'s own
 comment for why). ``workstream_id``/``workstream``/``session`` are validated
 against a path-traversal-safe allowlist (``_validate_workstream_identifier``,
 AC14) before any path construction.
-Spec backlink: docs/plans/2026-08-03-queue-append-workstream-store-schemas.md § C4
+Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4
 
 Output path precedence:
     1. ``QUEUE_APPEND_OUTPUT_ROOT`` env var (test isolation).
@@ -84,13 +84,13 @@ Negative-spec (DR-213 § D2):
       overwrites (idempotent, one file). Same date+slug with DISTINCT content →
       different digest → different filename (both survive, no overwrite). Dedup for
       near-duplicate-but-not-identical entries lives in the coordinator-lesson-add
-      wrapper, preserved example-doctrine-repo-side.
+      wrapper, preserved coordinator-claude-side.
     - NO rag store write (dual-write ban).
     - NO HTTP route (Gate 6; UDS-only).
     - NO cwd-based repo resolution; always uses caller_worktree from repo_root param.
 
-Spec backlink: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § C1
-Parity oracle: [example-doctrine-repo] coordinator/bin/coordinator-queue-append
+Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § C1
+Parity oracle: [coordinator-claude] coordinator/bin/coordinator-queue-append
 DR authority: docs/decisions/DR-213-queue-write-substrate-carveout.md
 """
 
@@ -151,7 +151,7 @@ class _ClaudeKlabauterUnresolvable(RuntimeError):
     """Raised when CLAUDE_KLABAUTER_ROOT cannot be resolved via env var or machine-local registry.
 
     Callers catch this and degrade gracefully (WARN+skip, exit 0) per AC6.
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
 
 
@@ -213,9 +213,9 @@ def _output_dir_for_schema(schema_name: str) -> str:
     """Derive the state/<queue> output dir from the schema contract's applies_to glob.
 
     Replaces the former hardcoded _SCHEMA_OUTPUT_DIRS table (removed) — the engine now
-    consumes example-doctrine-repo's schema contract (schema-cli --describe applies_to) rather than keeping a
+    consumes coordinator-claude's schema contract (schema-cli --describe applies_to) rather than keeping a
     private hand-copy that drifted from it (2026-07-11 cross-repo-commitment gap). Adding a
-    new queue schema in example-doctrine-repo now propagates here for free — zero recurring claude-klabauter work.
+    new queue schema in coordinator-claude now propagates here for free — zero recurring claude-klabauter work.
 
     applies_to shape is a uniform ``state/<dir>/*.yaml`` glob; the output dir is its dirname.
     Raises ValueError when describe fails (surfacing the underlying cause) or applies_to
@@ -661,7 +661,7 @@ def _validate_workstream_identifier(param_name: str, value: str) -> None:
     ``os.makedirs``, or either write-primitive helper below) — see the call site
     in ``append_queue_entry``.
 
-    Spec backlink: docs/plans/2026-08-03-queue-append-workstream-store-schemas.md § C4, AC14
+    Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4, AC14
     """
     # Review: coordinator:code-reviewer — .match() against a `$`-anchored
     # pattern lets a trailing "\n" through (Python's `$` is satisfied before a
@@ -725,7 +725,7 @@ def _claude_klabauter_root() -> Optional[str]:
         2. ``machine-local get repos.claude_klabauter``.
         3. Returns None when unresolvable; callers degrade gracefully (WARN+skip).
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
     override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
     if override:
@@ -794,9 +794,9 @@ def _output_path(
     still dedups to one file (same digest, same filename, ``os.replace`` overwrite).
     See ``_content_digest`` for digest mechanics.
 
-    Spec backlink: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § C1 / AC13
-    Spec backlink (content-keying): docs/plans/2026-07-08-concurrency-safe-strangled-op-writes.md § C1
-    Spec backlink (store-schema filename keying): docs/plans/2026-08-03-queue-append-workstream-store-schemas.md § C4
+    Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § C1 / AC13
+    Spec backlink (content-keying): pln-concurrency-safe-writes-for-th-c7ca9f § C1
+    Spec backlink (store-schema filename keying): pln-teach-the-native-queue-append--8bd701 § C4
     """
     output_dir = _output_dir_for_schema(schema_name)
     override_root = os.environ.get(_QUEUE_APPEND_OUTPUT_ROOT_ENV)
@@ -937,7 +937,7 @@ def _write_out_path_overwrite(out_path: str, content: str) -> str:
     survive under distinct filenames); overwrite semantics here would
     silently drop one event's history.
 
-    Spec backlink: docs/plans/2026-08-03-queue-append-workstream-store-schemas.md § C4
+    Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4
     Parity oracle: coordinator/bin/coordinator-queue-append._write_out_path_overwrite
     """
     directory = os.path.dirname(out_path) or "."
@@ -981,7 +981,7 @@ def _write_out_path_excl(out_path: str, content: str) -> str:
     Returns the actual path written (== ``out_path`` unless a collision suffix
     was used).
 
-    Spec backlink: docs/plans/2026-08-03-queue-append-workstream-store-schemas.md § C4
+    Spec backlink: pln-teach-the-native-queue-append--8bd701 § C4
     Parity oracle: coordinator/bin/lib/cli_shared.write_path_excl
     """
     root, ext = os.path.splitext(out_path)
@@ -1067,7 +1067,7 @@ def append_queue_entry(
     ``**schema_fields`` — CONTRACT-DERIVED plumbing for fields the base ~30-param
     hand list above does not name (workstream_id, workstream, field, value,
     sequence, session, deliverables, specs, dependency_annotations, supersedes,
-    coordinator_root_path, and any future example-doctrine-repo schema field). Only keys the
+    coordinator_root_path, and any future coordinator-claude schema field). Only keys the
     contract actually declares (``describe(schema).required``/``.optional``) for
     THIS ``schema`` are accepted into the emitted entry; anything else is
     silently dropped here (with a WARN log, see the merge loop below) — a
@@ -1121,7 +1121,7 @@ def append_queue_entry(
         session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
 
     # Resolve from_repo fallback. cross-repo-commitment forbids from_repo entirely
-    # (it uses committed_by for the sibling identity instead) — mirrors the example-doctrine-repo
+    # (it uses committed_by for the sibling identity instead) — mirrors the coordinator-claude
     # CLI's explicit strip of from_repo for this schema.
     if from_repo is None and schema != "cross-repo-commitment":
         if caller_worktree is not None:
@@ -1336,7 +1336,7 @@ def _queue_append_handler(
     before any ``state/`` path construction (F1 / AC13 — never daemon cwd).
 
     Required params:
-        schema  (str) — any queue schema the example-doctrine-repo schema contract defines (output dir
+        schema  (str) — any queue schema the coordinator-claude schema contract defines (output dir
             is contract-derived via schema-cli --describe applies_to, not a hardcoded
             list). Current schemas: debt-backlog, bug-backlog, improvement-queue,
             lessons, cross-repo-commitment, workstream, workstream-event.
@@ -1360,7 +1360,7 @@ def _queue_append_handler(
 
         Any OTHER param name not listed above is passed through to
         ``append_queue_entry`` generically (as ``**schema_fields``) and accepted
-        only if the example-doctrine-repo contract declares it for the given ``schema`` — e.g.
+        only if the coordinator-claude contract declares it for the given ``schema`` — e.g.
         workstream_id, workstream, field, value, sequence, session, deliverables,
         specs, dependency_annotations, supersedes, coordinator_root_path for the
         workstream/workstream-event schemas. This handler deliberately does not
@@ -1396,7 +1396,7 @@ def _queue_append_handler(
     # explicitly (below) plus "tags" (parsed above). Anything else in `params`
     # (workstream_id, workstream, field, value, sequence, session, deliverables,
     # specs, dependency_annotations, supersedes, coordinator_root_path, or any
-    # future example-doctrine-repo schema field) passes through generically via **schema_fields —
+    # future coordinator-claude schema field) passes through generically via **schema_fields —
     # contract-derived acceptance happens inside append_queue_entry itself, not
     # here (see its docstring). Deliberately NOT a hand-maintained field list.
     _NAMED_PARAM_KEYS = frozenset(

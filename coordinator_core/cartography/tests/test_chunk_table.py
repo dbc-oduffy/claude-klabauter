@@ -10,7 +10,7 @@ Coverage:
   (b) is_build_or_test_artifact — SKIP_DIR_NAMES/TEST_DIR_NAMES path components,
       test-filename patterns, and the negative case (ordinary source file)
   (c) bucket_by_boundaries — caller-supplied boundaries actually govern bucketing
-      (the regression example-doctrine-repo's memo describes), longest-prefix tie-break, no-match ->
+      (the regression coordinator-claude's memo describes), longest-prefix tie-break, no-match ->
       None ("unbucketed")
   (d) chunk_list — deterministic fixed-size slicing
   (e) compute_chunk_table — end-to-end reduction over a tmp_path git fixture:
@@ -19,7 +19,7 @@ Coverage:
   (f) op wrapper — schema_version-pinned atomic write, unknown-forward-version
       read fails loud, matching-version silent; import-guard + registry
 
-Spec backlink: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-chunk-table-producer-seam.md
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-chunk-table-producer-seam.md
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ def test_is_build_or_test_artifact_false_for_ordinary_source():
 
 
 def test_bucket_by_boundaries_governs_bucketing_not_top_level_directory():
-    # Regression: example-doctrine-repo's memo defect was bucketing by top-level directory
+    # Regression: coordinator-claude's memo defect was bucketing by top-level directory
     # name (cartography.file_index.system_for_path shape) instead of
     # caller-supplied boundaries. Here the caller names "svc" to cover a
     # nested path unrelated to its own top-level directory component.
@@ -321,7 +321,7 @@ def test_op_handler_emit_writes_file(git_repo):
 def test_op_handler_emit_reply_omits_the_bulk_payload(git_repo):
     """An emitting call must NOT echo buckets/unbucketed back in the reply.
 
-    This is the whole point of the producer seam: example-doctrine-repo's pipeline broke when a
+    This is the whole point of the producer seam: coordinator-claude's pipeline broke when a
     ~515KB reply was offloaded to a pointer object by their harness. Emitting
     the artifact and ALSO returning it would leave that failure mode intact.
     The reduction is read back from chunk_table_path; the reply stays small.

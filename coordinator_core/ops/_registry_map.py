@@ -17,7 +17,7 @@ incomplete map degrades to today's correctness, never to a broken dispatch. Keep
 this in sync with coordinator_core/ops/__init__.py's import list on a best-effort
 basis; the fallback is the enforcement mechanism, not a hand-audit.
 
-Spec backlink: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C4
+Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C4
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.rollup":                     "coordinator_core.ops.deliverable_rollup",
     # spec_backlink.resolve / spec_backlink.rewrite — one module registers both ops,
     # same shared-value shape as the hooks.* block above.
-    # Spec: docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C1
+    # Spec: pln-spec-backlinks-cite-a-stable-d-451b3e § C1
     "spec_backlink.resolve":                  "coordinator_core.ops.spec_backlink_resolve",
     "spec_backlink.rewrite":                  "coordinator_core.ops.spec_backlink_resolve",
     "deliverable.cascade_terminal":            "coordinator_core.ops.deliverable_cascade",

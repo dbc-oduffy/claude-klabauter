@@ -13,7 +13,7 @@ point (halt contract, per `workday_complete.apply`); and
 
 Run scoped only:
     python3 -m pytest coordinator_core/workday_complete/test_brief_goal_close_day.py -q
-Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C4
+Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C4
 """
 
 from __future__ import annotations

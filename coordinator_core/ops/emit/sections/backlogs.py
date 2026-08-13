@@ -9,9 +9,9 @@ outside the ``P0..P3`` enum are also quarantined (non-fatal, B-F1).
 Emit-DERIVED fields are not applicable to this entity — the shape is fully parsed from
 frontmatter, so nothing is left for C3/enrich to stamp here.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 2,
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 2,
   BacklogItemSummary. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P02
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P02
 
 Node-subprocess retirement: this section originally shelled out to
 ``node COORDINATOR_ROOT/bin/query-records.js --type <t> --limit 0 --format json``

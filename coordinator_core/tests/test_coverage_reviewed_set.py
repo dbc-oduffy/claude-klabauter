@@ -10,7 +10,7 @@ older commit's parent is a negative → it is excluded. Only the newest tip
 survives. The per-record loop unions each range independently and returns all
 reviewed SHAs correctly.
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C3
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C3
 Bug fix: build_reviewed_set batched git rev-list discarded all but newest SHA
          on interleaved single-commit sha_range records (coverage.py Phase 2).
 """
@@ -1593,7 +1593,7 @@ def test_build_reviewed_set_session_scope_credits_untrailered_commit(tmp_path: P
 def test_build_reviewed_set_stored_head_does_not_grow_with_new_commits(tmp_path: Path) -> None:
     """A record citing '<sha>..HEAD' must not silently credit commits landed
     AFTER the record was written — reproduces the exact live defect
-    (example-doctrine-repo 2026-07-25, work/machine-a/2026-07-21: chain_commits=70
+    (coordinator-claude 2026-07-25, work/machine-a/2026-07-21: chain_commits=70
     covered=70 uncovered=0 off 8 ..HEAD records).
 
     Sequence: C0 (base) -> C1 (reviewed, tip at write time) -> record cites

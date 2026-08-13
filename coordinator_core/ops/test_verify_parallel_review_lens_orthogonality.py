@@ -1,7 +1,7 @@
 """Characterization tests for
 coordinator_core.ops.verify_parallel_review_lens_orthogonality.
 
-Port of: verify-parallel-review-lens-orthogonality.sh (example-doctrine-repo b5a4192c, 2026-07-20);
+Port of: verify-parallel-review-lens-orthogonality.sh (coordinator-claude b5a4192c, 2026-07-20);
 parity confirmed against the bash oracle across a positive+negative corpus
 (no-args, valid/colliding/missing/empty chunk manifest, unknown arg, missing
 --chunk-manifest value) before this file was written — see the port's
@@ -39,7 +39,7 @@ _GOOD_SKILL_MD = """\
 
 
 def _make_repo(tmp_path: Path, skill_md: str = _GOOD_SKILL_MD) -> Path:
-    """Build a minimal example-doctrine-repo-shaped tree: coordinator/skills/... + coordinator/agents/*.md"""
+    """Build a minimal coordinator-claude-shaped tree: coordinator/skills/... + coordinator/agents/*.md"""
     skills_dir = tmp_path / "coordinator" / "skills" / "parallel-code-review"
     skills_dir.mkdir(parents=True)
     (skills_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
@@ -228,7 +228,7 @@ def test_run_missing_chunk_manifest_value_goes_to_stderr(tmp_path):
 def test_run_unresolvable_doe_root_fails_with_business_code(tmp_path):
     stdout, stderr, rc = run([], doe_root="")
     assert rc == 1
-    assert any("could not resolve the example-doctrine-repo repo root" in line for line in stdout)
+    assert any("could not resolve the coordinator-claude repo root" in line for line in stdout)
 
 
 def test_main_prints_stdout_to_stdout_and_returns_rc(tmp_path, monkeypatch, capsys):

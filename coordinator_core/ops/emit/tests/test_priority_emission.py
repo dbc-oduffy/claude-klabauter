@@ -14,7 +14,7 @@ real files, so a record's mocked ``_query_records`` frontmatter and its
 on-disk file content must agree — same discipline as
 ``test_priority_resolve.py``'s ``_write_node`` fixtures.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § C6a.
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C6a.
 """
 
 from __future__ import annotations

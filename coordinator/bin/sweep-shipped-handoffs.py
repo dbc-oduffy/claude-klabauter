@@ -82,7 +82,7 @@ bash fallback — a genuinely seam-absent install surfaces as a transport
 failure (RuntimeError), caught below and logged (best-effort ceremony),
 candidates retained for the next sweep.
 
-Spec backlink: docs/plans/2026-07-01-shipped-handoff-archive-sweep.md
+Spec backlink: pln-shipped-handoff-archive-sweep-d61d01
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 Wraps: fleet.archive_completed_handoffs (native op, bulk primitive)
 

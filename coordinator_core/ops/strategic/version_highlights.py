@@ -16,7 +16,7 @@ from repo history. Signal readers, in priority order:
   3. **Neither tags nor changelog data** — bounded `git log` subject window as last resort.
 
 Pinned return shape (frozen schema, generatable subset — see
-Example-doctrine-repo/coordinator/schemas/strategic-self-description.schema.json):
+Coordinator-claude/coordinator/schemas/strategic-self-description.schema.json):
     list[{
         "label":      str,               # short human-readable version/period label
         "date":       str,               # "YYYY-MM-DD" (schema format:date)
@@ -30,7 +30,7 @@ Never crashes on a repo with no history signal at all — degrades to a typed []
 result (AC2), not a silent/ambiguous empty pass on a repo that DOES have changelog data (i.e. []
 is returned only when genuinely no signal exists across all three readers).
 
-Spec backlink: docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md § C2
+Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C2
 """
 
 from __future__ import annotations

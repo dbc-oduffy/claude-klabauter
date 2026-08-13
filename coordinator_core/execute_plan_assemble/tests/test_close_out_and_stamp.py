@@ -428,7 +428,7 @@ class TestCloseOutReachesSharedCascadeEntrypoint:
     _run_cascade` for its `implemented` stamp, rather than hand-rolling a
     second cascade trigger of its own (this module's own "Composition, not
     duplication" docstring section) -- so this close-out path and the
-    example-doctrine-repo-side polyglot trampoline's direct `plan-status-transition
+    coordinator-claude-side polyglot trampoline's direct `plan-status-transition
     stamp-implemented` invocation both fire the SAME `deliverable.
     cascade_terminal` op, never two independent implementations that could
     disagree (mirrors `test_cockpit_ground_truth_regression.
@@ -1407,13 +1407,13 @@ class TestDefect2ChunkCommitDetection:
         """Defect fix, 2026-08-06: a review-time chunk split can mint an
         apostrophe-bearing id (`C9'`, from splitting `C9`). Live repro:
         commit `9ffbaa505b54`'s exact subject `C9': deliver the manifest
-        to example-doctrine-repo ...` was invisible to `missing_chunk_ids` before this fix --
+        to coordinator-claude ...` was invisible to `missing_chunk_ids` before this fix --
         `_CHUNK_SUBJECT_RE`'s character class never admitted `'`, so the
         id group before `:` could not match at all and `_extract_chunk_ids`
         returned `[]` for the whole subject.
         """
         ids = coas._extract_chunk_ids(
-            "C9': deliver the manifest to example-doctrine-repo", spine_ids=["C9'"]
+            "C9': deliver the manifest to coordinator-claude", spine_ids=["C9'"]
         )
         assert ids == ["C9'"]
         assert coas._committed_id_covers_spine_id("C9'", "C9'") is True
@@ -1421,7 +1421,7 @@ class TestDefect2ChunkCommitDetection:
     def test_apostrophe_chunk_id_commit_scan_end_to_end(self, tmp_path):
         """Same defect, exercised through the real `_committed_chunk_ids`
         git-log scan this op actually calls -- the live repro's exact
-        subject shape (`C9': deliver the manifest to example-doctrine-repo ...`) must be
+        subject shape (`C9': deliver the manifest to coordinator-claude ...`) must be
         found as evidence, mirroring commit `9ffbaa505b54` on plan
         `2026-08-06-writer-declared-write-surface-manifest`.
         """
@@ -1436,7 +1436,7 @@ class TestDefect2ChunkCommitDetection:
                 "commit",
                 "-q",
                 "-m",
-                "C9': deliver the manifest to example-doctrine-repo with the correspondence "
+                "C9': deliver the manifest to coordinator-claude with the correspondence "
                 "property restated",
                 "-m",
                 f"Deliverable-Id: {_DLV_VALID_SPINE}",
@@ -2693,7 +2693,7 @@ class TestDeliverableIdMismatchDiagnostic:
 # established convention on the shared workstream branch; the prior parser
 # only recognized `,` and mis-split nothing at all on a `+`/`/`-joined
 # subject, silently crediting zero of the named ids. Corpus evidence for the
-# separator set (`git log --format='%s'` over both example-doctrine-repo and
+# separator set (`git log --format='%s'` over both coordinator-claude and
 # claude-klabauter, 2026-07-27): `,`, `, ` (comma with trailing space, seen
 # live -- `C2, C7b: ...`), `+` (`C3+C2b: ...`), `/` (`C8a-doe/C8p: ...`).
 # ===========================================================================
@@ -3555,7 +3555,7 @@ class TestScopeSiblingPrefixRegexGrammar:
         """THE FIX, reproduced directly: `<repo-id>:<path>` with NO space
         after the colon -- the form every real plan actually writes (see
         `grep -rhoE '^\\s+- [a-z0-9-]+:[^ ]+' docs/plans/*.md` in
-        example-doctrine-repo) -- must match."""
+        coordinator-claude) -- must match."""
         match = coas._SCOPE_SIBLING_PREFIX_RE.match(
             "claude-klabauter:coordinator_core/dag.py"
         )

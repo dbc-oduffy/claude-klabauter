@@ -80,7 +80,7 @@ prefix is a graceful-skip (treated as accepted, not rejected) — this guard
 exists to catch obviously-wrong future dates (a mis-generated or hand-typed
 filename), NOT to police timezone offset or clock drift. Filename timestamp
 prefixes are producer-dependent and this guard cannot know which producer
-wrote a given filename: example-doctrine-repo's `/handoff` and `/spinoff` skills
+wrote a given filename: coordinator-claude's `/handoff` and `/spinoff` skills
 (`coordinator/skills/handoff/SKILL.md`, ~line 146) stamp LOCAL wall-clock
 time via `$(date +%Y-%m-%d)_$(date +%H%M%S)`, while this repo's own
 `coordinator_core/ops/handoff_author_fork.py` `_fork_handoff_filename`
@@ -110,7 +110,7 @@ Row 6's companion fix (`_ship_with_cas`) makes the stamp/ship pair safe
 against an interleaved peer write via a CAS on the exact text the stamp
 write produced, without merging the two writes into one lock acquisition.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C5.
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C5.
 Spec backlink (Row 6/Row 7 fix): 2026-07-28 handoff-write-cas spinoff,
 `docs/research/2026-07-28-is-the-jettisoned-ceremony-lock-outer-ho.md` § (b).
 
@@ -228,7 +228,7 @@ _FUTURE_DATE_SKEW = timedelta(minutes=5)
 
 #: R3 plausibility-guard timezone-ambiguity allowance — filename date/time
 #: prefixes are producer-dependent and the guard cannot know, from the
-#: filename alone, which producer wrote a given one: example-doctrine-repo's
+#: filename alone, which producer wrote a given one: coordinator-claude's
 #: `/handoff` and `/spinoff` skills (`coordinator/skills/handoff/SKILL.md`,
 #: ~line 146) stamp LOCAL wall-clock time (`$(date +%Y-%m-%d)_$(date
 #: +%H%M%S)`), while this repo's own `handoff_author_fork.py`
@@ -301,7 +301,7 @@ def reject_future_dated(
 
     ``tz_ambiguity`` (default ``_FILENAME_TZ_AMBIGUITY``) exists because
     filename date/time prefixes are producer-dependent (LOCAL time from
-    example-doctrine-repo's `/handoff`+`/spinoff` skills vs. UTC from this repo's own
+    coordinator-claude's `/handoff`+`/spinoff` skills vs. UTC from this repo's own
     `handoff_author_fork.py`) — see the module-level constant's docstring
     for the full rationale and the confirmed real-world case it fixes.
     ``skew`` (default ``_FUTURE_DATE_SKEW``) remains the separate, small
@@ -404,8 +404,8 @@ def _already_terminal_and_archived(relpath: str, fm: dict[str, Any]) -> bool:
     case where `shipped_in: <sha>` MUST NOT be written — the work was not
     delivered — so the correct outcome there is the same no-op skip, never a
     containment failure that reports a soft-fail for correct on-disk state.
-    Reported as a real defect by example-doctrine-repo-em (2026-08-13,
-    `cross-repo/inbox/2026-08-13-example-doctrine-repo-em-wsc-tail-consumed-stamp-refuses-archived-baton.md`).
+    Reported as a real defect by coordinator-claude-em (2026-08-13,
+    `cross-repo/inbox/2026-08-13-coordinator-claude-em-wsc-tail-consumed-stamp-refuses-archived-baton.md`).
 
     Deliberately narrow on the shipped branch: an archived handoff claiming
     `deployment_state: shipped` with NO `shipped_in` is not a completed

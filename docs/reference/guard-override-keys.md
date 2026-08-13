@@ -21,25 +21,35 @@ of the 2026-08-11 key-removal pass it states no per-key fact at all,
 pointing here instead (see this doc's contract note above). See each
 builder's own docstring for the full rationale. Every route below remains a
 human-only affordance in substance for a dispatched subagent — only the
-framing that said so changed. **Reversed for the EM specifically (PM
-ruling, 2026-08-13):** the EM is now a granting role for the wiki pointer —
-it may be routed to the doc/wiki describing these locks, on an agent's
-behalf, mid-session, and keep that pointer without handing it to the
-subagent. See § "Human-only affordances" immediately below for the precise
-scope of that reversal.
+framing that said so changed. <!-- Review: code-reviewer (slice 4) — P1: this
+paragraph's original claim (the EM as a granting role holding a rendered
+wiki pointer at deny time) never shipped; item 10 (2026-08-13) removed all
+deny-time rendering for every audience, so this is now historical context,
+not a current carve-out. --> A PM ruling on 2026-08-13 proposed reversing
+this for the EM specifically — the EM would be routed to a wiki pointer
+describing these locks, on an agent's behalf, mid-session, and hold that
+pointer without handing it to the subagent — but that narrower render
+tripped `message_register._rules` rule B8 leg (d), and item 10
+(2026-08-13) removed deny-time rendering entirely, for every audience,
+rather than carve out an exception. See § "Human-only affordances"
+immediately below and § "Exact deny-message wording" for what actually
+shipped.
 
 ## Human-only affordances — an in-session agent cannot exercise these
 
 None of the routes below are actions a dispatched agent can take — they are
-what a human operator, watching the session, can do. **As of the PM's
-2026-08-13 ruling this is no longer true of the EM in one specific respect:**
-the EM, acting on a dispatched agent's behalf mid-session, may itself be
-routed to the wiki pointer describing these locks (never the key, path, or
-command — see AC-2) and hold it as EM-only context. The EM is a granting
-role for that pointer, not a route by which the subagent gains anything —
-the subagent-audience message stays the terse form regardless of what the
-EM sees. Every route below otherwise remains exactly what it says: a human
-operator, not any agent (EM or subagent), still has to be the one who
+what a human operator, watching the session, can do. <!-- Review:
+code-reviewer (slice 4) — P1: dropped the "EM as granting role for a
+rendered wiki pointer" claim; no deny-time render exists for any audience,
+EM included, post-item-10. --> The PM's 2026-08-13 ruling proposed a narrow
+exception for the EM — being routed to the wiki pointer describing these
+locks (never the key, path, or command — see AC-10), on a dispatched
+agent's behalf mid-session — but that narrower render never shipped: it
+tripped `message_register._rules` rule B8 leg (d), and item 10
+(2026-08-13) removed deny-time rendering entirely, for every audience,
+instead of carving out an EM-only exception. See § "Exact deny-message
+wording" below. Every route below otherwise remains exactly what it says: a
+human operator, not any agent (EM or subagent), still has to be the one who
 actually creates a marker, sets a pre-launch var, or types the `!`-prefixed
 prompt.
 
@@ -229,7 +239,7 @@ deliberate while being reachable, which the env var was not.
 
 So the norm is real even though the enforcement is not: this sentinel exists to
 be typed by a human operator. A dispatched agent writing one on its own behalf
-is defecting, not clever — the same way the example-doctrine-repo executor that noticed
+is defecting, not clever — the same way the coordinator-claude executor that noticed
 `block_dev_repo_sentinel_write` had no `Bash` matcher, and declined to route
 around it anyway, was not being naive. That restraint is the behaviour this
 whole design assumes and depends on.
@@ -448,7 +458,7 @@ operator-facing (marked as such).
 | `COORDINATOR_OVERRIDE_DERIVED_GLOBAL_DOCTRINE_WRITE` | `block-derived-global-doctrine-write` | `coordinator_core/write_guards/block_derived_global_doctrine_write.py` | Rare-use escape hatch permitting a direct Write/Edit/MultiEdit/NotebookEdit to a derived global-doctrine surface that this guard otherwise redirects to the authoring surface |
 | `COORDINATOR_OVERRIDE_SUBAGENT_GRANT_RECORD_WRITE` | `block-subagent-grant-record-write` | `coordinator_core/write_guards/block_subagent_grant_record_write.py` | Rare-use escape hatch permitting a direct Write/Edit/MultiEdit/NotebookEdit to a subagent grant-record file that this guard otherwise blocks |
 | `COORDINATOR_OVERRIDE_POWERSHELL_VIA_BASH_GUARD` | `powershell-via-bash` | `coordinator_core/bash_guards/guard_powershell_via_bash.py` | Bypasses the guard entirely for a Bash call invoking a `powershell`/`pwsh` binary |
-| `COORDINATOR_OVERRIDE_FSIZE_CAP` | shell-init `ulimit -f` cap emitter | `bin/shell-init-guard.py` | Not a guard bypass but a sizing knob: sets the shell's file-size ulimit cap (GiB, or `unlimited`) instead of the 8 GiB default — DR-047 cross-repo seam with example-doctrine-repo's `~/.bashrc` |
+| `COORDINATOR_OVERRIDE_FSIZE_CAP` | shell-init `ulimit -f` cap emitter | `bin/shell-init-guard.py` | Not a guard bypass but a sizing knob: sets the shell's file-size ulimit cap (GiB, or `unlimited`) instead of the 8 GiB default — DR-047 cross-repo seam with coordinator-claude's `~/.bashrc` |
 
 Excluded from the table above (found by the sweep, deliberately not rostered):
 
@@ -551,7 +561,7 @@ here is the defect the register lint (B8/AC-5) catches.
 | Marker | Guard | What it does |
 |---|---|---|
 | `COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE` | `hooks/block_unenumerated_agent_type.py` | A `COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE: <reason>` line, own line, non-empty reason, read off the dispatch prompt (`tool_input`, never `dispatched-agents.txt`) — short-circuits the unenumerated-`subagent_type` hard deny before the roster lookup runs. Not disclosed in the rendered deny text (2026-08-13): this marker is agent-writable bypass text the denied dispatcher pastes into its own next prompt, so announcing it in the deny message would hand the bypass to the agent in the same breath the guard refused it. |
-| `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD` | `coordinator/hooks/scripts/block-dispatch-suite-invocation.py` (example-doctrine-repo, peer repo — not present under `coordinator_core/` in this repo) | Same pattern, named in `block_unenumerated_agent_type.py`'s own docstring as the precedent this module's marker reuses ("no new pattern per PM constraint"): a `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD: <reason>` line short-circuits that guard's own dispatch-suite-invocation deny. |
+| `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD` | `coordinator/hooks/scripts/block-dispatch-suite-invocation.py` (coordinator-claude, peer repo — not present under `coordinator_core/` in this repo) | Same pattern, named in `block_unenumerated_agent_type.py`'s own docstring as the precedent this module's marker reuses ("no new pattern per PM constraint"): a `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD: <reason>` line short-circuits that guard's own dispatch-suite-invocation deny. |
 | `.COORDINATOR-OVERRIDE-WORKTREE-GUARD` | `coordinator_core/write_guards/block_worktree_sentinel_write.py` (case-folded basename match; also referenced by `coordinator_core/bash_guards/block_worktree_sentinel_creation.py`'s sibling Bash-leg guard) | An ordinary dotfile sentinel — `_SENTINEL_NAME = ".coordinator-override-worktree-guard"` — whose presence (case-insensitively matched by basename, Windows-safe) short-circuits the guard that otherwise blocks a Write/Edit into the worktree-sentinel path. Same `XREPO_MARKER_IS_ORDINARY_FILE` posture as the cross-repo write markers above: an ordinary file, no identity gating, no expiry — this table adds it to the registry, it does not harden the mechanism. |
 
 Members are resolved by grepping `coordinator_core/` for the literal marker
@@ -560,7 +570,7 @@ below for the sweep that produced it. A member whose guard does not exist in
 this tree yet (or has moved) is a defect in this table, not a defect to
 paper over silently.
 
-Spec backlink: `docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md`
+Spec backlink: `pln-guard-messages-stop-handing-ag-549b61`
 § C9 (this table is C9's precondition of C6/AC-5 — C6 widens
 `message_register._override_keys._FAMILY_RE` to match the hyphenated shape
 and enumerates FROM this table, not from a hand-kept list).

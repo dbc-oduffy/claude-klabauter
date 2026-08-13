@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claude-klabauter/coordinator_core/contract/schema-decline-record.schema.json",
   "title": "Vendored-schema decline record",
-  "description": "A deliberate, session-surviving refusal to re-vendor an upstream example-doctrine-repo schema shape, recorded by `bin/claude-klabauter-revendor-schema.py --decline` at `state/schema-decline-records/<schema>.json` and read back by `_decline_gate_reasons` to block a re-vendor that reproduces the declined shape. Self-expires the moment EITHER the incoming `x-schema-version` or the incoming shape hash moves off what was declined (see `declared_schema_version`'s description) — an operator never has to hand-clear a decline upstream already resolved.",
+  "description": "A deliberate, session-surviving refusal to re-vendor an upstream coordinator-claude schema shape, recorded by `bin/claude-klabauter-revendor-schema.py --decline` at `state/schema-decline-records/<schema>.json` and read back by `_decline_gate_reasons` to block a re-vendor that reproduces the declined shape. Self-expires the moment EITHER the incoming `x-schema-version` or the incoming shape hash moves off what was declined (see `declared_schema_version`'s description) — an operator never has to hand-clear a decline upstream already resolved.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -44,12 +44,12 @@
     "declared_ref": {
       "type": "string",
       "minLength": 1,
-      "description": "The git ref (branch, tag, or SHA) the operator resolved against example-doctrine-repo when recording this decline, e.g. 'main' or 'HEAD'. Kept alongside `declared_doe_sha` (its resolved form) so the record shows both what was asked for and what was actually read."
+      "description": "The git ref (branch, tag, or SHA) the operator resolved against coordinator-claude when recording this decline, e.g. 'main' or 'HEAD'. Kept alongside `declared_doe_sha` (its resolved form) so the record shows both what was asked for and what was actually read."
     },
     "declared_doe_sha": {
       "type": "string",
       "pattern": "^[0-9a-f]{7,40}$",
-      "description": "The example-doctrine-repo commit SHA that `declared_ref` resolved to at decline time — the exact commit the declined schema bytes were read from."
+      "description": "The coordinator-claude commit SHA that `declared_ref` resolved to at decline time — the exact commit the declined schema bytes were read from."
     },
     "declared": {
       "type": "string",

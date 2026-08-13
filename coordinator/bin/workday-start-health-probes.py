@@ -1,22 +1,22 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """workday-start-health-probes.py — day-start health-probe imperative logic,
-ported off example-doctrine-repo's `coordinator/commands/workday-start.md`.
+ported off coordinator-claude's `coordinator/commands/workday-start.md`.
 
 Several `/workday-start` steps wrapped a single sibling CLI invocation in
 genuine bash imperative logic (rc-branching, regex date extraction, path
 canonicalization, conditional dir/exec checks, capture-then-conditionally-
 print) that lived nowhere lintable/testable — a `.md` fence is invisible to
 ShellCheck, the test registry, and the coverage-of-the-coverage gate (see
-Example-doctrine-repo `CLAUDE.local.md` § "A skill must LINK to an entrypoint"). This
-CLI is the naked-Python home for that residual logic; the example-doctrine-repo-side fence
+Coordinator-claude `CLAUDE.local.md` § "A skill must LINK to an entrypoint"). This
+CLI is the naked-Python home for that residual logic; the coordinator-claude-side fence
 shrinks to a single call to this file plus the shared `_cc_trusted`/
 `_cc_claude_klabauter` resolution preamble (unchanged — that preamble is D1/D2's
 concern, not this chunk's).
 
 Because this file lives co-located with its sibling probes under
 `coordinator/bin/`, it resolves them via `os.path.dirname(__file__)` rather
-than re-running the example-doctrine-repo-side CLAUDE_KLABAUTER_ROOT resolution ladder a second time —
-the example-doctrine-repo fence already did that resolution once to find *this* file.
+than re-running the coordinator-claude-side CLAUDE_KLABAUTER_ROOT resolution ladder a second time —
+the coordinator-claude fence already did that resolution once to find *this* file.
 
 Subcommands (argv[1] selects):
   observer-sidecar-scan [--dir <path>]
@@ -56,7 +56,7 @@ Subcommands (argv[1] selects):
 
   working-repo-registration [--fix]
       Confirms `engine.working_repos.claude_klabauter` (the machine-local
-      registry key `_is_engine_working_repo()` — example-doctrine-repo
+      registry key `_is_engine_working_repo()` — coordinator-claude
       `coordinator/hooks/scripts/_engine_root.py` — consults to decide
       whether an engine-repo session resolves the LIVE engine working
       tree or the PUBLISHED engine mirror) is registered and matches this
@@ -66,7 +66,7 @@ Subcommands (argv[1] selects):
       published engine instead (edits to `coordinator_core` stop
       executing), and the live-tree fallback rungs do not rescue it because
       the working-repo gate short-circuits first. Governing record: DR-132
-      (example-doctrine-repo `docs/decisions/DR-132-engine-working-repos-is-its-own-
+      (coordinator-claude `docs/decisions/DR-132-engine-working-repos-is-its-own-
       namespace-not-a-repos-star-inference.md`). Currently inert —
       `_resolve_published_engine()` returns None while
       `repos.claude_klabauter` is unregistered on this machine — and ARMS
@@ -82,7 +82,7 @@ Subcommands (argv[1] selects):
       working-repo discriminant), so running this subcommand from such a
       clone must never report the key "missing" and instruct the operator
       to register that clone's root — that is the false-positive
-      registration example-doctrine-repo's `.coordinator-dev-repo` guard exists to prevent,
+      registration coordinator-claude's `.coordinator-dev-repo` guard exists to prevent,
       pointed at THIS key instead. When the current root does not resolve
       as the engine repo, this subcommand is a silent, zero-cost no-op
       (exit 0) for the bare detector; `--fix` additionally refuses to WRITE
@@ -118,7 +118,7 @@ Subcommands (argv[1] selects):
       `machine-local set` spawn errored or returned non-zero — surfaced so
       whatever applied the directive knows the fix did not land).
 
-Spec backlink: example-doctrine-repo `coordinator/commands/workday-start.md` §§
+Spec backlink: coordinator-claude `coordinator/commands/workday-start.md` §§
   Step 1.10.64 (Orphaned Observer Sidecar Sweep), Step 1.10.9 (Claude-Klabauter-Bin
   Sentinel Probe), Step 5.6 (Project Post-Ceremony Command Hook).
 Port backlink: M3 chunk WDS-5 (bash-kill campaign, structural-bash-to-

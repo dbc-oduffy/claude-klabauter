@@ -33,7 +33,7 @@ Two repo_root shapes are required by the 14 ops (verified against
     fixture worktree root directly (it passes ``repo_root`` straight through to
     ``coordinator_core.coverage.run_coverage_gate`` with no ``.parent`` derivation).
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C4
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C4
 """
 
 from __future__ import annotations

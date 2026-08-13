@@ -13,7 +13,7 @@ only in this one place.
 Review: code-reviewer (F7) — extracted from conftest.py / invoke/tests/conftest.py
 to remove identical duplicate implementations.
 
-Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C9
+Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C9
 """
 
 from __future__ import annotations

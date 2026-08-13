@@ -15,7 +15,7 @@ from the CONTRACT module (`coordinator_core.contract.decision_object.
 judgment`), never re-derived and never `pickup_assemble`'s own
 same-named-but-incompatible constructor — see the signature warning below.
 
-Contract: example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
 chunk C2. D-1..D-6 (esp. D-3, the granularity policy this module encodes)
 live in that plan's "Key decisions" section — read them before changing

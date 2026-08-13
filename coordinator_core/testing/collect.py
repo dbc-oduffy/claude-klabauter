@@ -8,7 +8,7 @@ site-packages subtrees in-place during the walk (DEC-2). Read-only — no
 subprocess invocation (that lives in `run.py`, C2).
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C1 (DEC-2..6)
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C1 (DEC-2..6)
 
 Negative-spec:
     - Does NOT filter excluded directories via a path glob or a post-collection
@@ -16,7 +16,7 @@ Negative-spec:
       excluded subtree (e.g. a newly-added `.venv/`) is never descended into in
       the first place, not merely filtered out of the result after the fact.
     - Does NOT classify by directory location or full path — family matching is
-      an exact-basename `fnmatch` glob, portable to any repo (not example-doctrine-repo-hardcoded).
+      an exact-basename `fnmatch` glob, portable to any repo (not coordinator-claude-hardcoded).
     - Does NOT invoke `subprocess` — `discover()` never runs a suite, only finds
       and classifies it.
 """
@@ -51,7 +51,7 @@ ALL_FAMILIES: frozenset[str] = frozenset(FAMILY_GLOBS)
 # DEC-2: exact-basename frozenset, matched against directory BASENAMES only
 # (never a path glob), pruned in-place during os.walk so excluded subtrees are
 # never descended. Forward-safe against a newly-added venv and portable to
-# other repos (not a example-doctrine-repo-specific two-path hardcode).
+# other repos (not a coordinator-claude-specific two-path hardcode).
 EXCLUDED_DIRNAMES: frozenset[str] = frozenset(
     {".git", "node_modules", ".venv", "site-packages", ".coordinator-venv"}
 )

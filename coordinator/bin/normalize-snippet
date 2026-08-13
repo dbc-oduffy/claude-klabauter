@@ -4,7 +4,7 @@ normalize-snippet — CLI trampoline over claude-klabauter coordinator_core.text
 
 Reads a snippet body on stdin, strips leading/trailing blank lines and
 per-line trailing whitespace (byte-parity port of the retired
-normalize-snippet.sh::normalize() awk/sed pipeline — Port of: example-doctrine-repo 67202df6,
+normalize-snippet.sh::normalize() awk/sed pipeline — Port of: coordinator-claude 67202df6,
 2026-07-16), and
 writes the result to stdout with NO trailing newline (matches the original
 `printf '%s' "$1"` semantics — callers that need a newline append one
@@ -16,9 +16,9 @@ for this shape. On Windows, this file's co-located `.cmd` twin wins via
 macOS/Linux `python3` is the right interpreter. Caution: callers must invoke
 via the extensionless name or a resolved-interpreter prefix, never a bareword
 `.py` through git-bash — git-bash DOES honor the shebang and would exec-127
-with no `python3` present. See the carve-out in example-doctrine-repo's
+with no `python3` present. See the carve-out in coordinator-claude's
 coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
-this wiki lives in the example-doctrine-repo repo, not here).
+this wiki lives in the coordinator-claude repo, not here).
 
 Usage (stdin, not argv — avoids arg-length limits and quoting hazards on
 multi-line/special-char snippets that argv would mangle):

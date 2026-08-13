@@ -15,7 +15,7 @@ These tests exercise ``sections.roadmaps.collect()`` directly — no full emit()
 vendor-pin requirement, no subprocess. ``_query_roadmap_records`` is patched to inject
 in-memory fixture records, matching the idiom in ``test_roadmaps_scalars.py``.
 
-Spec backlink: docs/plans/2026-07-06-roadmap-dag-emit-switch.md § C2 (deliverable-spine
+Spec backlink: pln-emit-first-class-roadmap-dag-i-137a28 § C2 (deliverable-spine
 facets read present-as-null from frontmatter, D9).
 """
 

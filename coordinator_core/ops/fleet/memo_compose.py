@@ -8,7 +8,7 @@ first sentence of actual prose (footgun #4 — the prior heading-first
 derivation could emit a `##`-prefixed line as the summary). An explicit
 `summary` param always wins over derivation. Local-tree write only (edits the
 CALLING repo's own state/memo-outbox/<topic>.md in place) — never touches a
-receiver's cross-repo/inbox/. Ported from the example-doctrine-repo cross-repo-memo CLI's
+receiver's cross-repo/inbox/. Ported from the coordinator-claude cross-repo-memo CLI's
 `compose` verb per the 2026-07-17 DR-210 Option-A boundary move. UDS-only
 (no HTTP surface). Registered as "memo.compose" via @register_op;
 classification and _OP_KEY_SCOPE entry are wired in C7.
@@ -17,8 +17,8 @@ Spec backlink:
     docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C5 (AC5)
     DR-210: docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md
         § Amendment 2026-07-21 (receiver-resolution + compose/draft/list move)
-    Parity source: example-doctrine-repo coordinator/bin/cross-repo-memo _cmd_compose (~line 2615)
-        — NOTE: example-doctrine-repo's compose is an editor-open helper (os.execvp $EDITOR), which
+    Parity source: coordinator-claude coordinator/bin/cross-repo-memo _cmd_compose (~line 2615)
+        — NOTE: coordinator-claude's compose is an editor-open helper (os.execvp $EDITOR), which
         has no engine-side analog (spawn-per-call, non-interactive). This native
         op instead takes the finished body as a wire param and performs the
         actual content fill-in that a human would otherwise type into $EDITOR —
@@ -54,7 +54,7 @@ Negative-spec:
     2026-07-22-claude-central-em-snippet-sync-adoption-and-body-drop-
     verdict.md). A DERIVED summary (the `summary` param omitted) is
     untouched — `derive_prose_summary` already self-caps. Deliberate
-    divergence from any clamp/truncate behavior in example-doctrine-repo's mirror
+    divergence from any clamp/truncate behavior in coordinator-claude's mirror
     (`cross-repo-memo:1810-1830`'s parity note) — the former silent
     `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is exactly the defect the routed
     memo root-caused.

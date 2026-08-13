@@ -23,7 +23,7 @@ directly — this module has no mutation opinion of its own; every directive
 here names an existing atomic `cli` this package's own `apply.py` dispatch
 table resolves.
 
-Contract: example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C8
 
 `brief()` routes every construction through the shipped
@@ -216,8 +216,8 @@ def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[s
     sha git prints. Per-commit bytes are unchanged from the per-commit call
     this replaces.
 
-    A git spawn on Windows costs ~100ms (example-doctrine-repo memo
-    `cross-repo/inbox/2026-08-08-example-doctrine-repo-em-engine-side-git-spawn-cost.md`,
+    A git spawn on Windows costs ~100ms (coordinator-claude memo
+    `cross-repo/inbox/2026-08-08-coordinator-claude-em-engine-side-git-spawn-cost.md`,
     7-rep median), so the per-commit shape cost `unique_commits × ~100ms` on
     every consolidation.
     """
@@ -488,8 +488,10 @@ def main(argv: list[str]) -> int:
     try:
         decision_object = brief()
     except Exception as exc:  # noqa: BLE001 - transport-failure backstop
+        # Exit 3 means compute never ran: there is no decision object to
+        # honestly emit, so the diagnostic goes to stderr and stdout stays
+        # empty rather than carrying a fabricated or partial JSON object.
         print(f"consolidate-assemble: transport failure: {exc}", file=sys.stderr)
-        print(json.dumps({"error": str(exc), "transport_failure": True}))
         return EXIT_TRANSPORT_FAIL
 
     print(json.dumps(decision_object))

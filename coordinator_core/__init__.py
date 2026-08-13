@@ -8,7 +8,7 @@ invoke coordinator_core.invoke to route ops without a resident daemon or socket.
 Resident-daemon transport (UDS server, start_server) retired by DR-215.
 Command-type dispatch: see coordinator_core.invoke.__main__
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb
 DR-215:        docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
 
 Negative-spec:
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import importlib
 
-# Op-scope parity surface — re-exported for cross-repo contract consumers (e.g. Example-doctrine-repo shim).
+# Op-scope parity surface — re-exported for cross-repo contract consumers (e.g. Coordinator-claude shim).
 # DR § AC-1b: importable as `from coordinator_core import OP_KEY_SCOPE, WORKTREE_SCOPED_OPS`.
 # Sourced from the dependency-free op_scopes module (not coordinator_core.ipc) so that
 # `import coordinator_core` does not transitively pull in ipc.py's top-level `import asyncio` —
@@ -53,7 +53,7 @@ __all__ = [
 # diagnostic aid. The asymmetry predates the lazy change and is intentional.
 
 # Cache primitives and auth-seam read surface — re-exported for pcore-06/10/11 consumers
-# and the example-doctrine-repo-shim auth-seam consumer, respectively, but resolved LAZILY (PEP 562
+# and the coordinator-claude-shim auth-seam consumer, respectively, but resolved LAZILY (PEP 562
 # module-level __getattr__) rather than imported at module load. coordinator_core.cache
 # and coordinator_core.authz.token are each ~3-6ms of cold-import cost that only pays off
 # for callers who actually touch these names; `import coordinator_core` itself never needs

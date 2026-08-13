@@ -417,7 +417,7 @@ def test_ac11_enumerates_all_repos_star_entries_not_just_two_named_keys(tmp_path
     third_party_root.mkdir()
     _write_registry(
         reg_dir,
-        example_doctrine_repo=str(tmp_path / "example-doctrine-repo-placeholder"),
+        example_doctrine_repo=str(tmp_path / "coordinator-claude-placeholder"),
         claude_klabauter=str(tmp_path / "claude-klabauter-placeholder"),
         some_third_repo=str(third_party_root),
     )
@@ -750,7 +750,7 @@ def test_ac2_unresolvable_registry_withholds_only_the_publish_carveout(
 
 
 def test_ac11_extended_length_prefix_normalizes_same_as_the_bare_path(tmp_path, monkeypatch):
-    """AC11 / merged-in example-doctrine-repo source numbering C9 -- a Windows extended-length-
+    """AC11 / merged-in coordinator-claude source numbering C9 -- a Windows extended-length-
     prefixed path and its bare equivalent must resolve to the identical
     case-folded string, closing the desync on the comparison helper C1 is
     already adding a call site to (`_resolve_path`, consumed by

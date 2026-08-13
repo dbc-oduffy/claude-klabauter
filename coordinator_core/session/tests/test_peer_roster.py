@@ -48,12 +48,12 @@ class TestCwdFiltering:
     def test_named_sibling_repo_filters_correctly(self, monkeypatch):
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
-            "sid-b": _record("other-12", "/sock/b.sock", cwd="/repo/example-doctrine-repo"),
+            "sid-b": _record("other-12", "/sock/b.sock", cwd="/repo/coordinator-claude"),
         }
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
-        rows = peer_roster.build_roster("/repo/example-doctrine-repo")
+        rows = peer_roster.build_roster("/repo/coordinator-claude")
         assert {r.session_id for r in rows} == {"sid-b"}
 
     def test_subdirectory_cwd_is_contained(self, monkeypatch):

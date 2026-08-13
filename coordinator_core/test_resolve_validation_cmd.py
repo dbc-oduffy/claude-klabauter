@@ -2,7 +2,7 @@
 test_resolve_validation_cmd.py — pytest coverage for
 coordinator_core.resolve_validation_cmd.
 
-Port of: coordinator-resolve-validation-cmd.sh (example-doctrine-repo c187f5b9, 2026-07-21)
+Port of: coordinator-resolve-validation-cmd.sh (coordinator-claude c187f5b9, 2026-07-21)
 """
 
 from __future__ import annotations

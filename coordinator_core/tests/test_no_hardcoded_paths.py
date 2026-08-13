@@ -13,12 +13,12 @@ gate as the mechanized enforcement of constraint (3) ("no hardcoded paths").
 The live violation this gate was scoped to catch:
 `coordinator_core/frontmatter/schema_drift_watch.py::resolve_doe_repo_path`
 used to walk `Path(__file__).resolve().parents[2]` to derive "claude-klabauter repo
-root", then guessed `claude_klabauter_root.parent / "example-doctrine-repo"` as the sibling
+root", then guessed `claude_klabauter_root.parent / "coordinator-claude"` as the sibling
 clone's location — hardcoding both the checkout depth from this file AND a
 flat-sibling directory layout. Retired 2026-07-22 in the same change that
 added this gate; the fix delegates entirely to
 `coordinator_core.doe_root_pointer.read_doe_root_pointer()` (registry-first,
-DR-071), which resolves the example-doctrine-repo root without any assumption about checkout
+DR-071), which resolves the coordinator-claude root without any assumption about checkout
 layout. See that module's docstring for the retirement negative-spec.
 
 Two independently-triggered teeth, per DEC-4's "teeth-tightening" of the
@@ -84,7 +84,7 @@ Rationale for keeping Tooth 1 production-only: the 2026-07-25 fallout
 measurement (running the naively-widened, both-teeth scan before landing
 the per-tooth split) found ZERO new Tooth 2 hits and 45 unique Tooth 1 hits
 in test code, of which 43 were ordinary mock/placeholder literals
-(`/tmp/...`, `/fake/...`, `X:/example-doctrine-repo`, etc.) handed as arguments to
+(`/tmp/...`, `/fake/...`, `X:/coordinator-claude`, etc.) handed as arguments to
 functions under test — not portability defects, just fixture data. A
 root-anchored literal is the hazardous SHAPE only when it's a real
 resolution the running code depends on; as a mock input to a function being
@@ -99,9 +99,9 @@ input where any placeholder would do — fixed directly to
 `/fake/home/.claude`, no gate exemption needed since it's simply no longer a
 real-looking path. `test_settings_home.py`'s
 `test_normalize_native_path_is_noop_on_posix` pairs a root literal with the
-`example-doctrine-repo` token but is a pure string-mount-form fixture for
+`coordinator-claude` token but is a pure string-mount-form fixture for
 `normalize_native_path` (mirroring the sibling msys/cygdrive tests' use of
-the same `"/x/example-doctrine-repo"` literal) with no `__file__` climb anywhere in
+the same `"/x/coordinator-claude"` literal) with no `__file__` climb anywhere in
 reach — adjudicated as a genuine fixture, not a sibling-resolution site, and
 left as-is.
 
@@ -148,7 +148,7 @@ Negative-spec:
     actual production violation this gate was built to catch, which was a
     two-statement same-function same-module split:
     `claude_klabauter_root = Path(__file__).resolve().parents[2]` then
-    `claude_klabauter_root.parent / "example-doctrine-repo"`). A violation split across module
+    `claude_klabauter_root.parent / "coordinator-claude"`). A violation split across module
     boundaries, or reconstructed through a function call, is a false
     negative this gate accepts — same class of accepted tradeoff
     `test_no_node_schema_shellout.py`'s docstring names for dynamic string
@@ -176,10 +176,10 @@ _SCAN_ROOT = _REPO_ROOT / "coordinator_core"
 # they co-occur, in one path-construction expression, with a __file__-anchored
 # directory climb. Deliberately a closed, small list — not "every repo name
 # ever seen" — per the dispatch brief's minimum set plus the plan's own seed
-# set (DEC-4 names example-doctrine-repo and claude-klabauter; .claude is the third anchor
+# set (DEC-4 names coordinator-claude and claude-klabauter; .claude is the third anchor
 # CLAUDE.md § Runtime conventions and trusted_root_guard.py both treat as a
 # trust/resolution boundary).
-_SIBLING_REPO_TOKENS = {"example-doctrine-repo", "claude-klabauter", "example-retrieval-repo", ".claude"}
+_SIBLING_REPO_TOKENS = {"coordinator-claude", "claude-klabauter", "example-retrieval-repo", ".claude"}
 
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
@@ -485,7 +485,7 @@ def test_gate_detects_a_planted_parents_sibling_shellout(tmp_path):
         "from pathlib import Path\n"
         "\n"
         "def resolve_sibling():\n"
-        "    return Path(__file__).resolve().parents[2].parent / \"example-doctrine-repo\"\n",
+        "    return Path(__file__).resolve().parents[2].parent / \"coordinator-claude\"\n",
         encoding="utf-8",
     )
 
@@ -496,7 +496,7 @@ def test_gate_detects_a_planted_parents_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_parents_sibling.py")
     assert lineno == 4
-    assert detail == "example-doctrine-repo"
+    assert detail == "coordinator-claude"
 
 
 def test_gate_detects_a_planted_split_statement_sibling_shellout(tmp_path):
@@ -509,7 +509,7 @@ def test_gate_detects_a_planted_split_statement_sibling_shellout(tmp_path):
         "\n"
         "def resolve_sibling():\n"
         "    claude_klabauter_root = Path(__file__).resolve().parents[2]\n"
-        "    return claude_klabauter_root.parent / \"example-doctrine-repo\"\n",
+        "    return claude_klabauter_root.parent / \"coordinator-claude\"\n",
         encoding="utf-8",
     )
 
@@ -520,7 +520,7 @@ def test_gate_detects_a_planted_split_statement_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_split_taint.py")
     assert lineno == 5
-    assert detail == "example-doctrine-repo"
+    assert detail == "coordinator-claude"
 
 
 def test_gate_detects_a_planted_dirname_join_sibling_shellout(tmp_path):
@@ -551,7 +551,7 @@ def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_
     """Proves Tooth 2 catches the EXACT single-expression shape
     test_step_zero_emit.py's `_FIXTURE_CANDIDATES` carried: one
     `os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
-    "..", "example-doctrine-repo", ...)` call, string-segment `".."` climb style rather
+    "..", "coordinator-claude", ...)` call, string-segment `".."` climb style rather
     than pathlib `.parents[n]`, with the climb marker and the sibling token
     co-occurring directly in the same construction (no intermediate
     variable needed)."""
@@ -562,7 +562,7 @@ def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_
         "def resolve_fixture():\n"
         "    return os.path.join(\n"
         "        os.path.dirname(os.path.abspath(__file__)),\n"
-        '        "..", "..", "..", "example-doctrine-repo",\n'
+        '        "..", "..", "..", "coordinator-claude",\n'
         '        "coordinator", "tests", "fixtures", "step-zero-conformance.json",\n'
         "    )\n",
         encoding="utf-8",
@@ -574,7 +574,7 @@ def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_
     assert len(matches) == 1
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_dirname_join_str_segments.py")
-    assert detail == "example-doctrine-repo"
+    assert detail == "coordinator-claude"
 
 
 def test_gate_detects_a_planted_multi_hop_taint_sibling_shellout(tmp_path):
@@ -593,7 +593,7 @@ def test_gate_detects_a_planted_multi_hop_taint_sibling_shellout(tmp_path):
         "def find_lib():\n"
         "    here = os.path.dirname(os.path.abspath(__file__))\n"
         '    claude_klabauter_root = os.path.abspath(os.path.join(here, "..", ".."))\n'
-        '    return os.path.join(os.path.dirname(claude_klabauter_root), "example-doctrine-repo")\n',
+        '    return os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-claude")\n',
         encoding="utf-8",
     )
 
@@ -604,7 +604,7 @@ def test_gate_detects_a_planted_multi_hop_taint_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_multi_hop_taint.py")
     assert lineno == 6
-    assert detail == "example-doctrine-repo"
+    assert detail == "coordinator-claude"
 
 
 def test_gate_detects_a_planted_root_anchored_literal(tmp_path):
@@ -636,7 +636,7 @@ def test_gate_detects_a_planted_windows_drive_literal(tmp_path):
         "import os\n"
         "\n"
         "def hardcoded_home():\n"
-        "    return os.path.join(\"C:\\\\example-doctrine-repo\", \"coordinator\")\n",
+        "    return os.path.join(\"C:\\\\coordinator-claude\", \"coordinator\")\n",
         encoding="utf-8",
     )
 
@@ -654,10 +654,10 @@ def test_gate_ignores_in_repo_only_climbing_and_doc_comment_mentions(tmp_path):
     with no sibling token is Tooth-1-eligible ONLY, not Tooth 2."""
     fixture = tmp_path / "fixture_benign.py"
     fixture.write_text(
-        '"""Uses Path(__file__).resolve().parents[4] / "example-doctrine-repo" in prose only."""\n'
+        '"""Uses Path(__file__).resolve().parents[4] / "coordinator-claude" in prose only."""\n'
         "from pathlib import Path\n"
         "\n"
-        "# A comment mentioning example-doctrine-repo and parents[2] together is not code.\n"
+        "# A comment mentioning coordinator-claude and parents[2] together is not code.\n"
         "def repo_root():\n"
         "    return Path(__file__).resolve().parents[2]\n"
         "\n"

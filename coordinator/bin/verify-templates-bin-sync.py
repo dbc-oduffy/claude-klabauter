@@ -17,7 +17,7 @@ from __future__ import annotations
 # coordinator_core/ops/verify_templates_bin_sync.py (co-located test:
 # coordinator_core/tests/test_verify_templates_bin_sync.py). This file is now
 # a thin contract-plane trampoline over that engine-plane module, per DR-047
-# (example-doctrine-repo owns contract/generator, the engine plane owns it). The filename KEEPS
+# (coordinator-claude owns contract/generator, the engine plane owns it). The filename KEEPS
 # its `.sh` extension (unlike `coordinator-auto-push`/`handoff-gate-aging`,
 # which dropped it) so `coordinator/bin/tests/test-claude-home-contract.sh`
 # and any other caller that hardcodes the `.sh` suffix needs zero edits — the
@@ -30,9 +30,9 @@ from __future__ import annotations
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# example-doctrine-repo repo, not here).
+# coordinator-claude repo, not here).
 #
 # CLI contract:
 #     verify-templates-bin-sync.sh          # verify mode (default)
@@ -48,8 +48,8 @@ from __future__ import annotations
 # engine-link failure below also exits 1, not 0).
 #
 # Plugin-root resolution is reproduced HERE (not delegated to the engine
-# module) because it is example-doctrine-repo-repo topology knowledge (CLAUDE_PLUGIN_ROOT env
-# var, else the example-doctrine-repo repo root's coordinator/ subdir, resolved via the shared
+# module) because it is coordinator-claude-repo topology knowledge (CLAUDE_PLUGIN_ROOT env
+# var, else the coordinator-claude repo root's coordinator/ subdir, resolved via the shared
 # doe_root() registry helper) — NOT this script's own parent directory (see
 # _resolve_plugin_root() docstring below for why self-location broke when
 # this executable migrated to the engine repo), then passed to the module as
@@ -78,18 +78,18 @@ def _resolve_plugin_root() -> str:
     <doe_root()>/coordinator.
 
     This does NOT derive from this script's own __file__ location. That
-    used to be correct when this executable lived in example-doctrine-repo
+    used to be correct when this executable lived in coordinator-claude
     (coordinator/bin/.. IS the plugin root there), but this file has since
     migrated to the engine repo while coordinator/templates/bin/ stayed put
-    in example-doctrine-repo — self-location now resolves to a directory with no
+    in coordinator-claude — self-location now resolves to a directory with no
     templates/ at all, silently producing five TMPL_MISSING lines instead
     of a loud failure. doe_root() is the correct authority for "where is
-    the example-doctrine-repo repo," independent of where THIS script happens to run
+    the coordinator-claude repo," independent of where THIS script happens to run
     from. A future reader must not "restore" __file__-based resolution to
     regain oracle parity — that is precisely what caused this break.
 
     Fails loud (sys.exit(1)) if doe_root() cannot resolve: this is a gate
-    script, not a never-block hook, so an unresolvable example-doctrine-repo root must not
+    script, not a never-block hook, so an unresolvable coordinator-claude root must not
     degrade to an exit-0 no-op.
     """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -99,7 +99,7 @@ def _resolve_plugin_root() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            "verify-templates-bin-sync.py: cannot resolve the example-doctrine-repo repo root "
+            "verify-templates-bin-sync.py: cannot resolve the coordinator-claude repo root "
             f"({exc}). Set repos.example_doctrine_repo in the machine-local registry, or set "
             "the DOE_ROOT env var, or set CLAUDE_PLUGIN_ROOT directly.",
             file=sys.stderr,

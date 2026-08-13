@@ -2,7 +2,7 @@
 coordinator_core.roadmap.tests.test_number_stubs — independent parity regression
 net for coordinator_core.roadmap.number_stubs, re-derived from the CLI-smoke
 acceptance criteria (AC9) in the oracle's own test file
-(coordinator/bin/tests/test-roadmap-graph.js, example-doctrine-repo) plus a direct oracle run
+(coordinator/bin/tests/test-roadmap-graph.js, coordinator-claude) plus a direct oracle run
 (``node coordinator/bin/roadmap-number-stubs.js <fixture>``) whose stdout was
 captured and hardcoded below as the expected byte-parity output — not derived by
 re-reading this port's own source.
@@ -484,7 +484,7 @@ def test_main_state_malformed_run_id_exits_2(capsys):
 # ---------------------------------------------------------------------------
 # C1/C2/C7 — edges.txt reconciliation (AC1/AC2/AC4/AC10) and query-failure-
 # vs-clean-result exit-code discipline (AC3/AC11).
-# Spec backlink: docs/plans/2026-08-05-roadmap-graph-enforcement-gap.md § C1/C2/C6/C7.
+# Spec backlink: pln-roadmap-dependency-graph-close-6192fb § C1/C2/C6/C7.
 # ---------------------------------------------------------------------------
 
 

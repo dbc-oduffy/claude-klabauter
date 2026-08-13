@@ -1,11 +1,11 @@
 """bootstrap-repo.py — git-as-revert single-repo bootstrap primitive.
 
-Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter's
+Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.bootstrap_repo. Runs the ensure-git / assert-clean /
 scaffold / conflict-warn / commit pipeline for one repo, git commit acting
 as the revert mechanism if scaffolding needs to be undone. Seeds
 COORDINATOR_ROOT so the op's sibling-script resolver
-(check-install-divergence.py) finds this example-doctrine-repo clone. Called per-repo by
+(check-install-divergence.py) finds this coordinator-claude clone. Called per-repo by
 bootstrap-orchestrate.py.
 """
 # coordinator/lib/bootstrap-repo.py — CLI trampoline over claude-klabauter
@@ -15,10 +15,10 @@ bootstrap-orchestrate.py.
 # bootstrap primitive — ensure-git/assert-clean/scaffold/conflict-warn/commit
 # pipeline) has been fully ported to coordinator_core/ops/bootstrap_repo.py
 # (claude-klabauter-resident, 16 co-located tests in test_bootstrap_repo.py). This file is
-# now a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module,
-# per DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+# now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module,
+# per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 #
-# Sibling-script resolution: the ported op needs to find a example-doctrine-repo-resident
+# Sibling-script resolution: the ported op needs to find a coordinator-claude-resident
 # sibling (bin/check-install-divergence.py; canonical structure scaffolding
 # now routes to the claude-klabauter coordinator_core.install.scaffold_structure CLI)
 # that is NOT part of this port. This trampoline computes its own coordinator
@@ -71,7 +71,7 @@ def _import_main():
     Also seeds COORDINATOR_ROOT (this trampoline's own coordinator/ tree) into
     the environment, if not already set, so the op's sibling-script resolver
     (check-install-divergence.py) finds THIS
-    example-doctrine-repo clone rather than falling through its ~/.claude-install-layout rungs.
+    coordinator-claude clone rather than falling through its ~/.claude-install-layout rungs.
     """
     os.environ.setdefault("COORDINATOR_ROOT", _COORDINATOR_ROOT)
     claude_klabauter_root = _resolve_claude_klabauter_root()

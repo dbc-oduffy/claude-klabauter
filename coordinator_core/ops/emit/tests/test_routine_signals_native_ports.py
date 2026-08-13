@@ -15,8 +15,8 @@ a frozen point-in-time capture and drifts against these sites' genuinely time-va
 the observable-contract lock the plan review demanded; see docs/plans/2026-07-21-claude-klabauter-
 pure-python-shop-retire-all-bash.md § C9 review note).
 
-Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C9
-Port of: count-distill-backlog.sh (example-doctrine-repo 721a71f4, 2026-07-21).
+Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C9
+Port of: count-distill-backlog.sh (coordinator-claude 721a71f4, 2026-07-21).
 """
 
 from __future__ import annotations

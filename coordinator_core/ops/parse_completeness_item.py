@@ -31,8 +31,8 @@ surfaces as the ordinary "empty input" malformed error -- not a distinct
 "missing trailing newline" diagnostic. This module replicates that by only
 considering "\\n"-terminated segments of stdin as candidate lines.
 
-Port of: parse-completeness-item.sh (example-doctrine-repo b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-06-24-install-baton-completeness-claude-code-validation.md § C3 (example-doctrine-repo)
+Port of: parse-completeness-item.sh (coordinator-claude b5a4192c, 2026-07-20)
+Spec backlink: docs/plans/2026-06-24-install-baton-completeness-claude-code-validation.md § C3 (coordinator-claude)
 """
 
 from __future__ import annotations

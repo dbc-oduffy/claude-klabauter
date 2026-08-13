@@ -3,7 +3,7 @@ coordinator_core.ops.verify_fix_files_changed — JSON-RPC
 "bug_sweep.verify_fix_files_changed" operation.
 
 Purpose: the bug-sweep Phase-4 mechanical diff gate, ported native (fence:
-Example-doctrine-repo coordinator/skills/bug-sweep/SKILL.md:261). The bash oracle piped
+Coordinator-claude coordinator/skills/bug-sweep/SKILL.md:261). The bash oracle piped
 `jq -r '.[].file'` through `sort -u`, `comm -23`, and `<(...)` process
 substitution — bash-only (no dash/sh/native-Windows equivalent) and
 dependent on `jq` and `comm` being installed. Settlement B9
@@ -51,7 +51,7 @@ the EM-serial registration pass per CC-3; this module carries only its own
 `register_op`.
 
 Contract: params {phase2_fix_now_path: str} -> {claimed_no_diff: list[str]}
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B9
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B9
 Parent plan:   docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § DEC-2
 
 Negative-spec:

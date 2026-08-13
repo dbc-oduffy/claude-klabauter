@@ -3,7 +3,7 @@ coordinator_core.ops.ceremony.update_docs_scan — JSON-RPC "ceremony.update_doc
 operation (C17; AC8).
 
 Purpose: thin op orchestrator (DEC-5 — ops compose the library, the library stays
-pure) emitting the update-docs mechanical work-manifest example-doctrine-repo's `/update-docs` Phases
+pure) emitting the update-docs mechanical work-manifest coordinator-claude's `/update-docs` Phases
 1, 8, and 8b currently derive by hand-rolled prose/bash (reflection §1):
 
   - **Phase 1 state-detection** — tracker (`coordinator_core/DIRECTORY.md`)
@@ -15,7 +15,7 @@ pure) emitting the update-docs mechanical work-manifest example-doctrine-repo's 
     active successor's `supersedes:` frontmatter field is BLOCKED from pruning
     for as long as that successor exists and is itself not `abandoned`.
     Supersession-based, deliberately NO age threshold (a fresh supersession
-    still blocks immediately; scout-verified against example-doctrine-repo's own Phase 8).
+    still blocks immediately; scout-verified against coordinator-claude's own Phase 8).
   - **Phase 8b prune classification** — per-file prunable/reasons across three
     disjoint cohorts (`plans`, `crossrepo_archive`, `tasks`), each gated by its
     own named module-constant threshold (AC8: thresholds are data, not prose).
@@ -39,7 +39,7 @@ register_op("ceremony.update_docs_scan", ...) as a side-effect (same pattern
 as ops/distill_curation_status.py). coordinator_core.ops.__init__ imports it
 so the registration fires at start_server() time (AC14).
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C17
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C17
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ shared module; the schema_version-as-first-key discipline is followed anyway."""
 # --- Phase 1 constants -----------------------------------------------------
 
 TRACKER_REL_PATH = "coordinator_core/DIRECTORY.md"
-"""The source-tree map example-doctrine-repo's Phase 1 checks for staleness (§ Architecture,
+"""The source-tree map coordinator-claude's Phase 1 checks for staleness (§ Architecture,
 Key Files — "coordinator_core/DIRECTORY.md — full module map")."""
 
 GIT_LOG_WINDOW_DAYS = 14

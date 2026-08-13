@@ -32,7 +32,7 @@ Remaining live consumer of tombstone stubs: ops/health.py imports
     uds_socket_path and read_endpoint (post-daemon semantics: both return
     NotImplementedError / None respectively).
 
-Spec backlink: docs/plans/2026-07-05-coordinator-core-execution-model-retirem.md § C4
+Spec backlink: pln-coordinator-core-execution-mod-e44780 § C4
 Anti-scope: do NOT restore daemon machinery; do NOT restore version-skew subsystem;
             do NOT remove repo-root utils or tombstone stubs (C5 owns those).
 """
@@ -237,7 +237,7 @@ def global_sentinel_dir() -> Path:
     Read at CALL TIME (not module import) so per-test monkeypatch / os.environ
     mutation takes effect without a process restart.
 
-    Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1a
+    Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1a
     """
     svc_root = os.environ.get("COORDINATOR_SVC_ROOT")
     if svc_root:
@@ -337,7 +337,7 @@ def read_global_running_version() -> Optional[str]:
     Returns None if the sentinel is absent, empty, or unreadable.
     Authoritative version source for the single global multiplex service (C1a/AC-4).
 
-    Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C5
+    Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C5
     """
     vf = global_sentinel_dir() / _FILE_VERSION
     try:

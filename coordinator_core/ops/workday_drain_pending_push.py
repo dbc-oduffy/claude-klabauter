@@ -5,7 +5,7 @@ coordinator_core.ops.workday_drain_pending_push — JSON-RPC
 Purpose: AC14's third independent drain point for the durable pending-push
 record (`coordinator_core.hooks.auto_push`'s
 `coordinator-auto-push-pending.json`) — the workday-start push-health seam.
-Spec backlink: docs/plans/2026-08-03-check5-owner-attribution-liveness.md
+Spec backlink: pln-check-5-foreign-staged-owner-a-415188
 § AC14/AC14a, § Delivery and residuals ("AC14 (partial) — drain redundancy
 is 1-of-3").
 

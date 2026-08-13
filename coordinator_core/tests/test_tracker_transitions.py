@@ -9,7 +9,7 @@ module as it landed in C2-C5. Does not touch `tracker_store.py`'s own
 suite (`test_tracker_store.py`, C9a) or the projection suite
 (`test_tracker_projection.py`, C9c) — those are concurrent peers' scope.
 
-Spec backlink: docs/plans/2026-08-11-sat-03-event-sourced-completion-core.md
+Spec backlink: pln-sat-03-event-sourced-completio-c270a1
 § Acceptance Criteria AC4, AC5, AC7, AC9; § Tasks C9.
 """
 

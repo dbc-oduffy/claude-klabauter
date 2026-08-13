@@ -1,14 +1,14 @@
 """
 coordinator_core.install.sandbox_check — sandbox clean-install shape validator.
 
-Port of: ``coordinator/bin/install-sandbox-check.sh`` (example-doctrine-repo b5a4192c,
-2026-07-20) [example-doctrine-repo repo] (BIG_PORT Wave C, item ``install-sandbox-check``,
+Port of: ``coordinator/bin/install-sandbox-check.sh`` (coordinator-claude b5a4192c,
+2026-07-20) [coordinator-claude repo] (BIG_PORT Wave C, item ``install-sandbox-check``,
 971 LOC oracle).
-Purpose (unchanged from bash): exercises the W4.1 install steps (example-doctrine-repo clone,
+Purpose (unchanged from bash): exercises the W4.1 install steps (coordinator-claude clone,
 ``claude-doe`` wrapper, ``gen-settings-hooks`` seeding, ``.doe-root`` pointer,
 ``claude-doe-shim.sh``, resolver cold-tier, publish-repo parameterization)
 against an isolated sandbox ``CLAUDE_HOME`` and asserts the resulting thin-
-``~/.claude`` + cloned-example-doctrine-repo shape. Validates Tier 1 (filesystem) of the
+``~/.claude`` + cloned-coordinator-claude shape. Validates Tier 1 (filesystem) of the
 install-surface-completeness contract; Tier 2 (running-in-Claude-Code) is
 printed as a DEFERRED manual-gate banner, unchanged in spirit from the oracle.
 
@@ -20,11 +20,11 @@ the claude-klabauter link itself cannot be established (the trampoline's own con
 not this module's — this module assumes it is already running IN claude-klabauter).
 
 Of the dependency scripts this validator drives, only ``claude-doe`` remains
-a genuine subprocess-exec of a example-doctrine-repo-owned artifact: it has no native claude-klabauter
+a genuine subprocess-exec of a coordinator-claude-owned artifact: it has no native claude-klabauter
 peer, and its OWN dry-run/exec-line behavior is what checks 7/7b/F5 assert
 on — there is no "port" of a wrapper whose entire job is to be invoked as a
 standalone binary. ``claude-doe`` was PURE BASH on disk at the time this
-module was first ported (confirmed via ``file(1)``); example-doctrine-repo has since
+module was first ported (confirmed via ``file(1)``); coordinator-claude has since
 ported it to python3 (shebang ``#!/usr/bin/env python3``), so the invocation
 below (check 7) uses ``sys.executable`` directly rather than an explicit
 ``bash`` spawn — feeding Python source to a bash interpreter fails outright
@@ -53,20 +53,20 @@ as the subject under test, not the shim's logic in isolation — a distinct
 rationale from (d), not a re-run of it. The shim this probe sources
 (``claude-doe-shim.sh``) is itself emitted by claude-klabauter's own
 :mod:`coordinator_core.ops.gen_claude_doe_shim` op, which copies a
-Example-doctrine-repo-authored *template*'s bytes verbatim rather than reimplementing the
+Coordinator-claude-authored *template*'s bytes verbatim rather than reimplementing the
 template body (see that module's own docstring) — so the shim is more
-precisely a claude-klabauter-emitted artifact carrying a example-doctrine-repo-template body, not
-purely "a example-doctrine-repo artifact," and this provenance is load-bearing for why the
+precisely a claude-klabauter-emitted artifact carrying a coordinator-claude-template body, not
+purely "a coordinator-claude artifact," and this provenance is load-bearing for why the
 site qualifies under (e): asserting the live-shell-environment behavior of
 a byte-verbatim-copied template is the thing under test, not a foreign
 script's independent logic. Tracked as the reclassified (was: row #7) entry
 in ``state/audits/2026-07-21-pure-python-bash-spawn-audit.md``.
 
-``gen-settings-hooks.sh`` (example-doctrine-repo a2078a9b, 2026-07-22),
-``gen-doe-root-pointer.sh`` (example-doctrine-repo b5a4192c, 2026-07-20),
-``gen-claude-doe-shim.sh`` (example-doctrine-repo b5a4192c, 2026-07-20), and
-``resolve-coordinator-clone.sh`` (example-doctrine-repo 290997c7, 2026-07-22)
-[example-doctrine-repo repo] are the FOUR bridges this module used to subprocess-exec
+``gen-settings-hooks.sh`` (coordinator-claude a2078a9b, 2026-07-22),
+``gen-doe-root-pointer.sh`` (coordinator-claude b5a4192c, 2026-07-20),
+``gen-claude-doe-shim.sh`` (coordinator-claude b5a4192c, 2026-07-20), and
+``resolve-coordinator-clone.sh`` (coordinator-claude 290997c7, 2026-07-22)
+[coordinator-claude repo] are the FOUR bridges this module used to subprocess-exec
 (``bash <script> ...``, relying on the first three being sh/python polyglot
 trampolines) and now calls **in-process** instead, against claude-klabauter's own
 native peer modules — :mod:`coordinator_core.install.gen_settings_hooks`,
@@ -75,12 +75,12 @@ native peer modules — :mod:`coordinator_core.install.gen_settings_hooks`,
 :mod:`coordinator_core.resolve_coordinator_clone` respectively (see
 :func:`_call_gen_settings_hooks`, :func:`_call_gen_doe_root_pointer`,
 :func:`_call_gen_claude_doe_shim`, :func:`_call_resolve_coordinator_clone`,
-and the paired ``_assert_*_interface`` functions). Each example-doctrine-repo trampoline's only
+and the paired ``_assert_*_interface`` functions). Each coordinator-claude trampoline's only
 job was to import and call the same claude-klabauter-owned module this validator now
 calls directly — subprocess-exec'ing it was a circular, Windows-costly
 (~326ms shim tax measured for gen-settings-hooks.sh alone) round-trip through
 ``bash``/``sh`` PATH-probing back into this repo's own Python, and (for the
-other three) a dependency on example-doctrine-repo `.sh` files being present/landed at all
+other three) a dependency on coordinator-claude `.sh` files being present/landed at all
 before this validator's OWN in-tree logic could be exercised. Repointed per
 ``cross-repo/inbox/2026-07-20-claude-central-em-sandbox-check-execs-doe-shell-blocks-deletion.md``
 and its correction
@@ -90,15 +90,15 @@ and its correction
 ``CLAUDE_HOME`` before that repoint, for a reason the repoint does NOT fix —
 see the correction memo's rc=3 ``CLAUDE_KLABAUTER_ROOT``-resolution finding); the same
 in-process pattern is extended here to the other three bridges as the
-general "reimplement native, do not subprocess a example-doctrine-repo oracle" doctrine for
+general "reimplement native, do not subprocess a coordinator-claude oracle" doctrine for
 this plan (`docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md`
 § Decisions).
 
 Flagged behavioral broadening (not silent): because the pointer/shim/resolver
-calls no longer require the corresponding example-doctrine-repo ``.sh`` file to exist on disk,
+calls no longer require the corresponding coordinator-claude ``.sh`` file to exist on disk,
 checks that used to report FAIL "not found (Cn not yet landed — expected
 RED)" now exercise the real native logic directly and can PASS even against
-a example-doctrine-repo clone that has not yet shipped those trampolines. This is the intended
+a coordinator-claude clone that has not yet shipped those trampolines. This is the intended
 outcome of the port (the native module IS the authoritative implementation
 now, matching :mod:`coordinator_core.resolve_coordinator_clone`'s own
 "reimplement-native" docstring), not a masked regression — the shim/pointer
@@ -179,7 +179,7 @@ _DEFAULT_TIMEOUT = 60
 
 
 # ---------------------------------------------------------------------------
-# unit1 — Reporter, subprocess helper, example-doctrine-repo-clone resolution, arg parse
+# unit1 — Reporter, subprocess helper, coordinator-claude-clone resolution, arg parse
 # ---------------------------------------------------------------------------
 
 
@@ -598,7 +598,7 @@ def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, s
 def _assert_gen_doe_root_pointer_interface(r: Reporter) -> None:
     """Real interface assertion against the in-process
     ``coordinator_core.ops.gen_doe_root_pointer`` module — replaces the
-    former ``bash -n``/``py_compile`` syntax checks of the example-doctrine-repo
+    former ``bash -n``/``py_compile`` syntax checks of the coordinator-claude
     ``gen-doe-root-pointer.sh`` polyglot, which become meaningless once the
     call site no longer reads that file at all. Asserts the module exposes
     a callable ``main(argv)`` (the ``--check-only`` contract the call sites
@@ -634,7 +634,7 @@ def _call_gen_doe_root_pointer(argv: List[str], env: Dict[str, str]) -> Tuple[in
 def _assert_gen_claude_doe_shim_interface(r: Reporter) -> None:
     """Real interface assertion against the in-process
     ``coordinator_core.ops.gen_claude_doe_shim`` module — replaces the
-    former ``bash -n``/``py_compile`` syntax checks of the example-doctrine-repo
+    former ``bash -n``/``py_compile`` syntax checks of the coordinator-claude
     ``gen-claude-doe-shim.sh`` polyglot. Asserts the module exposes a
     callable ``main(argv)`` (see :func:`_call_gen_claude_doe_shim`)."""
     main_fn = getattr(gen_claude_doe_shim, "main", None)
@@ -665,7 +665,7 @@ def _call_gen_claude_doe_shim(argv: List[str], env: Dict[str, str]) -> Tuple[int
 def _assert_resolve_coordinator_clone_interface(r: Reporter) -> None:
     """Real interface assertion against the in-process
     ``coordinator_core.resolve_coordinator_clone`` module — replaces the
-    former file-presence check of the example-doctrine-repo ``resolve-coordinator-clone.sh``
+    former file-presence check of the coordinator-claude ``resolve-coordinator-clone.sh``
     (804-line pure-bash oracle, never a polyglot — no ``py_compile`` check
     ever applied to it). Asserts the module exposes both public resolver
     entrypoints (see :func:`_call_resolve_coordinator_clone`)."""
@@ -858,7 +858,7 @@ def _tier1b_pointer_and_shim(
         # re.findall() over the whole body over-counts a single, correctly
         # idempotent source line as 2 and would always FALSE-POSITIVE "duplicated
         # source line" (a genuine bug caught while wiring this call in-process;
-        # this assertion never ran against real content before, since the example-doctrine-repo
+        # this assertion never ran against real content before, since the coordinator-claude
         # .sh bridge was always "not found" in every prior fixture run).
         _source_line_re = re.compile(r"claude-doe-shim|claude_doe_shim")
 

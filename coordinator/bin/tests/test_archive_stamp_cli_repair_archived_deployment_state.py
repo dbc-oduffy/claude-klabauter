@@ -4,7 +4,7 @@ unit test for `archive-stamp-cli repair-archived-deployment-state` (2026-07-26).
 Defect this closes: `ship-handoff`'s state/handoffs/-only containment refuses
 archive/handoffs/ paths, so 13 archived handoffs stuck at
 deployment_state: in_flight could not be repaired through any existing verb
-and were instead hand-edited (example-doctrine-repo cross-repo memo, 2026-07-26). This
+and were instead hand-edited (coordinator-claude cross-repo memo, 2026-07-26). This
 suite covers the CLI veneer's argv -> `cs_repair_archived_deployment_state(...)`
 call-shape translation only — not the engine behind it (that is
 coordinator_core/ops/tests/test_handoff_stamp.py's job, which exercises the

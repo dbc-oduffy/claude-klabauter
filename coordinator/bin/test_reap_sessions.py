@@ -1,7 +1,7 @@
 """test_reap_sessions.py — self-contained test suite for reap-sessions.py.
 
 Native-Python successor to the retired coordinator/bin/tests/test-reap-sessions-wrapper.sh
-and test-coordinator-reap-sessions.sh (example-doctrine-repo f703efad, 2026-07-21; de-bash-coordinator
+and test-coordinator-reap-sessions.sh (coordinator-claude f703efad, 2026-07-21; de-bash-coordinator
 campaign, Wave F1, facade collapse). Retargets the bash oracles' contract assertions onto the Python trampoline: session.reap
 dispatch shape (params == {}, never `force`), the negative-spec no-stdout-on-success
 invariant, and the best-effort exit-0-always ceremony even when the transport seam raises.

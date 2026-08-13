@@ -95,9 +95,9 @@ Coverage:
     (jj) coverage_gate_indeterminate_does_not_stamp -- exit_code == 2 leaves
          COVERAGE_GATE unstamped
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C6, § C9.
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C5.
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C17b (liveness call sites).
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C6, § C9.
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C5.
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C17b (liveness call sites).
 """
 
 from __future__ import annotations

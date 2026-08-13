@@ -45,7 +45,7 @@ Negative-spec:
     sanctioned for bookkeeping ops (D2, pcore-08).
 
 Intentional engine-context deviation — no fallback writer (Review: code-reviewer F3):
-    Port of: session-heartbeat.sh (example-doctrine-repo d39ab164, 2026-07-16), whose bash source
+    Port of: session-heartbeat.sh (coordinator-claude d39ab164, 2026-07-16), whose bash source
     fell back to an inline sed read-modify-write of meta.json when
     coordinator-session.sh was not found.
     The Python engine does NOT implement that fallback. update_last_activity()
@@ -54,7 +54,7 @@ Intentional engine-context deviation — no fallback writer (Review: code-review
     broken install is acceptable, and a second writer for a scenario the engine's
     install contract is designed to prevent is not worth the clobber risk.
 
-Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § C2, D4
+Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C2, D4
 """
 
 from __future__ import annotations

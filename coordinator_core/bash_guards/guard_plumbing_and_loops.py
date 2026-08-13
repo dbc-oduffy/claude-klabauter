@@ -213,7 +213,7 @@ _EVENT_NAME = "PreToolUse"
 
 #: FOR-LOOP GENERIC FALLBACK -- DECIDED EXPLICITLY, NOT AN OMISSION
 #: (worklist Row P4, `state/audits/2026-07-29-guard-module-ladder-
-#: worklist.md`, example-doctrine-repo repo; `docs/plans/2026-07-29-bash-guard-
+#: worklist.md`, coordinator-claude repo; `docs/plans/2026-07-29-bash-guard-
 #: consolidated-execution.md` row M10 item 2). This bare-glob for-loop
 #: branch is ARCHITECTURALLY CAPPED at an every-platform advisory carrying
 #: a generic (non-command-specific) skeleton -- a recorded stop, not a

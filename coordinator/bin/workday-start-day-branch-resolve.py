@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
 coordinator/bin/workday-start-day-branch-resolve.py — native port of two genuine
-imperative fragments from `commands/workday-start.md` (example-doctrine-repo), Steps -1 and
+imperative fragments from `commands/workday-start.md` (coordinator-claude), Steps -1 and
 0.45: session reap-log append, and local-day/branch-span mismatch assertion.
 
 Purpose: these two fragments were the last non-trivial bash LOGIC left inline in
@@ -10,11 +10,11 @@ the workday-start ceremony body (everything else in those steps is either the
 plan's WDS-1 scope note — or a thin single-CLI-invocation fence). Both fragments
 are genuinely imperative: a conditional-append with a generated timestamp, and a
 multi-step parse/compare/format-message ladder. Concentrating them in one
-importable/invokable CLI lets the example-doctrine-repo ceremony call this file by name instead of
+importable/invokable CLI lets the coordinator-claude ceremony call this file by name instead of
 carrying the logic inline, where it is unlintable (ShellCheck does not see markdown
 fences), untestable (no test registry enumerates fenced code), and unreachable by
 extension-filtered code search — the same pathology documented in
-`example-doctrine-repo/CLAUDE.local.md`'s "A skill must LINK to an entrypoint" note.
+`coordinator-claude/CLAUDE.local.md`'s "A skill must LINK to an entrypoint" note.
 
 Subcommands:
     reap-log
@@ -58,15 +58,15 @@ Negative-spec (do NOT reintroduce while touching this file):
       resolve-claude-klabauter-bin resolver block, or the `_cc_claude_klabauter` resolution ladder —
       those are a separate concern (D1/D2 of the extirpation plan), and this file
       lives INSIDE the claude-klabauter checkout so it self-resolves via
-      `resolve_colocated_claude_klabauter_root`, not the example-doctrine-repo-side ladder.
+      `resolve_colocated_claude_klabauter_root`, not the coordinator-claude-side ladder.
     - Does NOT re-implement reap-sessions.py's own session.reap dispatch — it
       SHELLS OUT to the co-located script and only owns the log-append conditional,
       matching the bash fragment's own division of labor.
     - Does NOT auto-rename a mismatched branch — span-assert is read-only.
 
-Spec backlink: example-doctrine-repo commands/workday-start.md § Step -1 (Session Reaper),
+Spec backlink: coordinator-claude commands/workday-start.md § Step -1 (Session Reaper),
 § Step 0.45 (Post-Step-0 Span Assertion)
-Spec backlink: docs/plans/2026-07-23-extirpate-bash-from-workday-start.md § WDS-1
+Spec backlink: docs/plans/2026-07-23-extirpate-bash-from-workday-start.md § WDS-1 [DEAD-CITATION: plan file never committed to this repo]
 """
 from __future__ import annotations
 

@@ -10,9 +10,9 @@ Cover:
   - UNRESOLVED + suggestion — `to` is a near-miss of a registered receiver
     (defect 2, GREEN).
   - setup errors — missing `to`; `dry_run: false`; `repo_root=None`.
-  - defect-1 redirect-MATCH — `to` is a example-doctrine-repo redirect-alias literal that
+  - defect-1 redirect-MATCH — `to` is a coordinator-claude redirect-alias literal that
     resolves (via the manifest's declared central receiver id) to the same
-    repo as self. Example-doctrine-repo promoted `identity.redirectAliases` into the manifest
+    repo as self. Coordinator-claude promoted `identity.redirectAliases` into the manifest
     2026-07-21; this is now a real passing assertion, not a gated xfail.
 
 Harness: asyncio.run() in sync test functions — no pytest-asyncio dependency
@@ -298,7 +298,7 @@ class TestResolverExceptionMapping:
             tmp_path,
             {
                 "central": str(tmp_path / "central-repo"),
-                "example_doctrine_repo": str(tmp_path / "example-doctrine-repo-repo"),
+                "example_doctrine_repo": str(tmp_path / "coordinator-claude-repo"),
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -308,7 +308,7 @@ class TestResolverExceptionMapping:
             tmp_path,
             {
                 "identity": {
-                    "centralReceiverIds": ["central-em", "example-doctrine-repo-em"],
+                    "centralReceiverIds": ["central-em", "coordinator-claude-em"],
                     "repoAliases": [],
                 }
             },
@@ -323,18 +323,18 @@ class TestResolverExceptionMapping:
 
 
 # ===========================================================================
-# 5. defect-1 redirect-MATCH — example-doctrine-repo promoted identity.redirectAliases 2026-07-21
+# 5. defect-1 redirect-MATCH — coordinator-claude promoted identity.redirectAliases 2026-07-21
 # ===========================================================================
 
 class TestRedirectMatchDefect1:
     def test_redirect_alias_matches_central_self(self, tmp_path, monkeypatch):
-        """`to` is a example-doctrine-repo redirect alias literal; self resolves to the central repo.
+        """`to` is a coordinator-claude redirect alias literal; self resolves to the central repo.
 
         Manifest declares `identity.redirectAliases: ["coordinator-claude"]` (the
-        field example-doctrine-repo promoted 2026-07-21) plus a SINGLE central receiver id,
-        `"example-doctrine-repo-em"`. read_redirect_aliases() picks up the normalized `to`
+        field coordinator-claude promoted 2026-07-21) plus a SINGLE central receiver id,
+        `"coordinator-claude-em"`. read_redirect_aliases() picks up the normalized `to`
         ("coordinator-claude"), so the redirect branch fires: it takes
-        `sorted(central_ids)[0]` == `"example-doctrine-repo-em"` and resolves it through
+        `sorted(central_ids)[0]` == `"coordinator-claude-em"` and resolves it through
         `resolve_receiver_inbox()`, which (via `convention_repo_key`) maps to
         registry key `repos.example_doctrine_repo` — registered here to the SAME repo as
         self. Two distinct repo paths (self_root from the git common_dir, to_root
@@ -343,7 +343,7 @@ class TestRedirectMatchDefect1:
         in the handler, only read declaratively via read_redirect_aliases()/
         read_central_receiver_ids().
         """
-        central_repo = tmp_path / "example-doctrine-repo-repo"
+        central_repo = tmp_path / "coordinator-claude-repo"
         central_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": str(central_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -357,7 +357,7 @@ class TestRedirectMatchDefect1:
                     # and maps (via convention_repo_key) to the one registered
                     # repos.example_doctrine_repo key above -> the redirect branch resolves
                     # to central_repo, the same repo as self.
-                    "centralReceiverIds": ["example-doctrine-repo-em"],
+                    "centralReceiverIds": ["coordinator-claude-em"],
                     "repoAliases": [],
                     "redirectAliases": ["coordinator-claude"],
                 }

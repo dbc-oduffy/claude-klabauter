@@ -61,7 +61,7 @@ Does NOT emit any frontmatter key beyond the four columns plus ``baton_class``
 plus ``path``. Does NOT write ``baton_class`` to any on-disk frontmatter —
 it is derived on read, per call, never persisted.
 
-Spec backlink: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3
+Spec backlink: pln-a-pull-surface-for-cockpit-the-b8e2f3 § C3
 """
 
 from __future__ import annotations

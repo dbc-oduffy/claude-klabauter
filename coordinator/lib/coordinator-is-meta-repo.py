@@ -10,17 +10,17 @@ the retired bash oracle (coordinator/lib/coordinator-is-meta-repo.sh, a
 sourced-lib boolean primitive) paid the bash-invocation tax on every call and
 degrades Windows. This port preserves the bash original's SELF-CONTAINMENT
 deliberately: the bash oracle resolved the meta-repo root by shelling out to
-this repo's own `claude-home/claude-home dir` — a example-doctrine-repo-local resolver with no
+this repo's own `claude-home/claude-home dir` — a coordinator-claude-local resolver with no
 CLAUDE_KLABAUTER_ROOT / engine-repo dependency — never the engine checkout. A
 sibling native module exists on the engine side
 (`coordinator_core.meta_repo_identity.is_meta_repo`, authored explicitly as
-"the Python-native peer of example-doctrine-repo's coordinator-is-meta-repo.sh" for a future
+"the Python-native peer of coordinator-claude's coordinator-is-meta-repo.sh" for a future
 gated adoption wave) but importing it here would introduce a bootstrap
 coupling this primitive never had: CLAUDE_KLABAUTER_ROOT must already resolve to a
 real engine checkout with `coordinator_core` importable just to
 answer "is cwd the meta-repo?" — a question this file's own callers
 (coordinator_state_root's Rule 5, and coordinator_doe_root's bootstrap
-ladder) ask BEFORE CLAUDE_KLABAUTER_ROOT is necessarily known. Reusing the example-doctrine-repo-local
+ladder) ask BEFORE CLAUDE_KLABAUTER_ROOT is necessarily known. Reusing the coordinator-claude-local
 `claude-home` seam (this repo's own `coordinator/lib/claude-home/_claude_home.py`,
 already the sourced-out implementation the bash oracle shelled to) avoids
 that bootstrap-order hazard while still reusing an existing seam rather
@@ -60,8 +60,8 @@ Negative-spec:
     repeatedly without side-effects, mirroring the bash original's
     safe-to-source-multiple-times contract).
 
-Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C2 / AC2
-Port of: coordinator-is-meta-repo.sh (example-doctrine-repo 6fb5fb37, 2026-07-22, bash sourced-lib oracle)
+Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C2 / AC2
+Port of: coordinator-is-meta-repo.sh (coordinator-claude 6fb5fb37, 2026-07-22, bash sourced-lib oracle)
 Reused seam: coordinator/lib/claude-home/_claude_home.py::claude_home_dir()
 """
 from __future__ import annotations
@@ -74,7 +74,7 @@ from typing import Optional
 
 
 def _claude_home_module():
-    """Import this repo's own claude-home resolver module (example-doctrine-repo-local, no
+    """Import this repo's own claude-home resolver module (coordinator-claude-local, no
     CLAUDE_KLABAUTER_ROOT dependency) — mirrors the bash oracle's own lib-relative
     resolution of `${_cimr_lib_dir}/claude-home/claude-home`."""
     _lib_dir = os.path.dirname(os.path.abspath(__file__))

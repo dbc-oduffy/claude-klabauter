@@ -2,7 +2,7 @@
 Tests for coordinator_core.orient_assemble.readers_handoff_triage's AC11
 ledger-first filter — `_suppress_live_ledger_claims` / `_read_ready`.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C7 (AC11), sub-dispatch C7a.
 
 THE INCIDENT THIS COVERS: `_read_ready` lists `deployment_state=ready_to_fire

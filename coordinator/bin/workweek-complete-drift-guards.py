@@ -1,9 +1,9 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """workweek-complete-drift-guards.py — /workweek-complete advisory + gate
-dispatch logic, ported out of example-doctrine-repo's coordinator/commands/workweek-complete.md
+dispatch logic, ported out of coordinator-claude's coordinator/commands/workweek-complete.md
 (M3 chunk WWC-3, 2026-07-23 bash-extirpation campaign).
 
-Purpose: the example-doctrine-repo ceremony file previously carried the *imperative logic*
+Purpose: the coordinator-claude ceremony file previously carried the *imperative logic*
 (loops, conditionals, rc-branch ladders) around a handful of already-existing
 Claude-klabauter CLIs — this file is that logic's new home, callable as a single
 subcommand-shaped CLI so the ceremony file can shrink each step to a thin
@@ -34,6 +34,13 @@ Subcommands:
                                     sibling schema-drift-gate CLI — a release
                                     gate must never conflate "ran and found
                                     drift" with "could not run".
+    pcli-drift-gate               — BLOCKING gate. Same three-way exit-code
+                                    branch (0 PASS / 1 FAIL / 2 ERROR) over
+                                    the sibling check-pcli-drift-gate CLI —
+                                    dispatch_feed-vs-live-Workflow-API drift,
+                                    14-day capture staleness, and C7 source-
+                                    hash drift on subagent-catering-
+                                    resolution.json.
     shellcheck-sweep             — repo-wide `git ls-files '*.sh'` loop
                                     through `shellcheck -f gcc -s bash`.
     console-flash-guard          — thin dispatcher over
@@ -43,10 +50,10 @@ Subcommands:
 
 Exit-code contract per subcommand is documented in its own function docstring
 below — they are NOT uniform (schema-drift-gate propagates a real block
-signal; the advisory subcommands always exit 0 by design, per example-doctrine-repo doctrine
+signal; the advisory subcommands always exit 0 by design, per coordinator-claude doctrine
 that advisories never block merge).
 
-Spec backlink: example-doctrine-repo coordinator/commands/workweek-complete.md
+Spec backlink: coordinator-claude coordinator/commands/workweek-complete.md
     §§ Step 4d (description-length), Step 4f (enabledPlugins drift),
     Step 4h (CVE recheck), Step 4k (vendored-schema drift gate),
     Step 6 (ShellCheck sweep + console-flash guard + multi-event-hook guard).
@@ -98,7 +105,7 @@ def _sibling(name: str) -> str:
 
 def cmd_description_length(_args: argparse.Namespace) -> int:
     """Informational — never blocks. Always exits 0; the rc of the underlying
-    check is reported IN the banner text, not propagated, matching the example-doctrine-repo
+    check is reported IN the banner text, not propagated, matching the coordinator-claude
     ceremony's own `set +e` / never-fail-the-step framing."""
     script = _sibling("check-description-length.py")
     rc, out = _run([sys.executable, script])
@@ -198,11 +205,44 @@ def cmd_schema_drift_gate(_args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# pcli-04 drift gate (BLOCKING)
+# ---------------------------------------------------------------------------
+
+def cmd_pcli_drift_gate(_args: argparse.Namespace) -> int:
+    """Blocking gate. Three-way exit-code branch — same shape as
+    cmd_schema_drift_gate above, a release gate must never conflate "ran and
+    found drift" with "could not run":
+        0 PASS  — dispatch_feed-vs-capture, staleness, and C7 hash legs all
+                  clean (see sibling CLI's own stdout).
+        1 FAIL  — at least one leg fired; halt the release.
+        2 ERROR — the gate could not run at all; halt and surface, NOT a pass.
+        other   — unexpected rc from the sibling CLI; treated as ERROR (2).
+    """
+    script = _sibling("check-pcli-drift-gate.py")
+    if not os.path.isfile(script):
+        print(f"ERROR: check-pcli-drift-gate CLI not found at {script} — halt and surface", file=sys.stderr)
+        return 2
+    rc, out = _run([sys.executable, script])
+    if out:
+        print(out, end="" if out.endswith("\n") else "\n")
+    if rc == 0:
+        return 0
+    if rc == 1:
+        print("BLOCK: pcli-04 drift gate found issues (see above) — halt the release, reconcile, re-run", file=sys.stderr)
+        return 1
+    if rc == 2:
+        print("ERROR: check-pcli-drift-gate could not run — halt and surface; this is NOT a pass", file=sys.stderr)
+        return 2
+    print(f"ERROR: check-pcli-drift-gate returned unexpected rc={rc} — halt and surface", file=sys.stderr)
+    return 2
+
+
+# ---------------------------------------------------------------------------
 # Step 6: repo-wide ShellCheck sweep
 # ---------------------------------------------------------------------------
 
 def cmd_shellcheck_sweep(args: argparse.Namespace) -> int:
-    """Reports findings; does not gate the ceremony on its own (the example-doctrine-repo
+    """Reports findings; does not gate the ceremony on its own (the coordinator-claude
     ceremony step "offers to fix" straightforward findings and flags
     behavior-changing ones for PM review — a human/EM judgment call this CLI
     cannot make). Exit code: 0 = clean or shellcheck not installed, 1 =
@@ -258,7 +298,7 @@ def _which(name: str) -> str | None:
 def cmd_console_flash_guard(args: argparse.Namespace) -> int:
     """Thin dispatcher over verify-no-console-flash.py. Reports OK/issues,
     or a clean skip if the sibling guard is missing (install-surface gap,
-    not a ceremony failure). Always exits 0 — the example-doctrine-repo ceremony step reports
+    not a ceremony failure). Always exits 0 — the coordinator-claude ceremony step reports
     and offers to fix, it does not hard-block on this guard."""
     target = args.target or os.path.join(os.path.expanduser("~"), ".claude", "plugins")
     guard = _sibling("verify-no-console-flash.py")
@@ -314,6 +354,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_cve_recheck)
 
     sub.add_parser("schema-drift-gate").set_defaults(func=cmd_schema_drift_gate)
+
+    sub.add_parser("pcli-drift-gate").set_defaults(func=cmd_pcli_drift_gate)
 
     p = sub.add_parser("shellcheck-sweep")
     p.add_argument("--repo-root", default=None)

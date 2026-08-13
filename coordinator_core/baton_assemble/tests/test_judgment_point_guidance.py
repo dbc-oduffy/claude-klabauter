@@ -6,7 +6,7 @@ guidance on every disposition; `recommendation` stays `None` on all three
 (structurally, via `build_untrusted_gate_judgment_point`'s no-parameter
 signature -- unchanged by this addition).
 
-Spec backlink: docs/plans/2026-08-13-build-disposition-per-option-guidance.md
+Spec backlink: pln-build-disposition-carries-per-399055
 """
 
 from __future__ import annotations

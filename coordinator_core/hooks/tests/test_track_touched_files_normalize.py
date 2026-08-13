@@ -4,7 +4,7 @@ for session.scope.normalize_touch_path's absolute-path handling (imported into
 track_touched_files as `normalize_touch_path`; the module no longer carries
 its own parallel `_normalize_path` implementation).
 
-Spec backlink: example-doctrine-repo security-audit 2026-07-31 (coordinatorsecurity-audit-worker
+Spec backlink: coordinator-claude security-audit 2026-07-31 (coordinatorsecurity-audit-worker
 -1671c577.md) — Writer 1 finding: on POSIX, os.path.relpath's only exception
 (ValueError) is the Windows cross-drive case, and the pre-fix fallback
 returned file_path UNCHANGED (still absolute) rather than skipping — an
@@ -113,7 +113,7 @@ class TestHandlerEndToEndCommonDirScopedRoot:
     this same change makes it green by routing through
     `main_worktree_root(common_dir)` before normalization.
 
-    Spec backlink: docs/plans/2026-07-31-touched-path-poisoning-normalize-git-dir.md
+    Spec backlink: pln-touched-txt-path-poisoning-nor-ecab01
     § C1 / AC3.
     """
 

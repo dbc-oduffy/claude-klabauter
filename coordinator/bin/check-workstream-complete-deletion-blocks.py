@@ -14,8 +14,8 @@ coordinator_core/ops/ceremony/commit_gates.py (deletion_block_gate() +
 CLI entry point main(), 16 tests in
 coordinator_core/ops/ceremony/tests/test_commit_gates.py) as part of the
 `wsc_tail` pure-Python rebuild (docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md
-§ C3). This file is now a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter
-(engine) module, per DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+§ C3). This file is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter
+(engine) module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
 owned by `gen-launcher-shim.py --ensure-unix`, and correct for this shape. On
@@ -24,8 +24,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Exit codes (reproduced verbatim from the bash original — see
@@ -39,7 +39,7 @@ docstring):
   3 — environment error (not in a git repo)
 
 Spec backlink: docs/plans/2026-06-15-workstream-complete-self-clean.md (Chunk 6)
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C3 (AC10)
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C3 (AC10)
 Doctrine: docs/wiki/cruft-sweep-cadence.md § Three-layer design (Layer 3)
 
 DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than a

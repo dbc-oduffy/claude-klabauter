@@ -2,9 +2,9 @@
 coordinator_core.ops.ceremony.chunk_commits — JSON-RPC "ceremony.chunk_commits" op.
 
 Purpose: answers "did chunk `<id>` of plan `<path>` commit?" as a nameable engine
-command, replacing two raw git reads example-doctrine-repo's `execute-plan/SKILL.md` embedded in
+command, replacing two raw git reads coordinator-claude's `execute-plan/SKILL.md` embedded in
 skill prose (skills carry no shell — see the sizing memo this plan actions,
-`cross-repo/inbox/2026-08-10-example-doctrine-repo-em-chunk-commit-liveness-cli-request.md`).
+`cross-repo/inbox/2026-08-10-coordinator-claude-em-chunk-commit-liveness-cli-request.md`).
 
 Three wrong forms this op exists to make unreachable (executed evidence,
 `docs/plans/2026-08-10-chunk-commit-liveness-becomes-a-nameable.md` § "The
@@ -62,7 +62,7 @@ rev-parse --show-toplevel`, mirroring the `cartography.*` /
 path, any repo, never the caller's own dispatching tree / engine-injected
 `repo_root`) rather than depending on `_origin_worktree` keying.
 
-Spec backlink: docs/plans/2026-08-10-chunk-commit-liveness-becomes-a-nameable.md § C1
+Spec backlink: pln-chunk-commit-liveness-becomes-c77555 § C1
 
 Negative-spec (hard-won):
   - Does NOT use `git log --grep` anywhere — not even as a prefilter. The

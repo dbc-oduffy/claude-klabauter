@@ -5,7 +5,7 @@ Behavioural tests for the write-surface declaration protocol
 (coordinator_core.install.write_surface). Covers the four design
 requirements from the spec as behaviour, not shape assertions.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C1
 """
 

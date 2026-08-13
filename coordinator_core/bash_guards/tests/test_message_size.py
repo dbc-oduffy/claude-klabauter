@@ -1,6 +1,6 @@
 """Unit coverage for `coordinator_core.bash_guards._message_size` (C2).
 
-Spec backlink: docs/plans/2026-08-02-guard-message-size-discipline.md,
+Spec backlink: pln-runtime-measured-message-size--0669ac,
 chunk C2. Three things this module owns and must prove correct in
 isolation, before any corpus (C3) or gate (C5) is built on top of it:
 

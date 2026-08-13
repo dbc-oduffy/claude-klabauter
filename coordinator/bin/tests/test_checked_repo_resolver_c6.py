@@ -4,7 +4,7 @@ query-handoff-columns.py, workday-complete-step9-append-changelog.py,
 migrate-lessons-md-to-yaml.py, standup.py, whats-next.py, and
 review-coverage-gate.py.
 
-Spec backlink: docs/plans/2026-08-11-one-checked-resolver-for-the-bin-family.md
+Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C6 / AC2-AC5, AC10.
 
 C1's own module (`test_checked_repo_resolver.py`) already exhaustively

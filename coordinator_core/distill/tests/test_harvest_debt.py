@@ -15,7 +15,7 @@ Coverage:
         disposition|fate, ASCII "->") plus a seeded archive/specs tree, asserting the
         exact harvest_debt basename list
     (d) DISTILLED and PROMOTE both count as harvested; EPHEMERAL/SKIP/PRESERVE do not
-    (d2) action-table vocabulary (example-doctrine-repo schema-header `date | action | path | ...` format,
+    (d2) action-table vocabulary (coordinator-claude schema-header `date | action | path | ...` format,
         lowercase `harvested`/`deleted` — the format sibling repos' live logs carry):
         counted as harvested; unrecognized actions (`skipped`, `consolidated`) do not
         count; uppercase variants do NOT match (exact-token, no case-folding); a mixed
@@ -41,7 +41,7 @@ Coverage:
         state/distillation-log.md + archive/specs/ tree directly) — see the
         test's own docstring for why that shape was a bug, not a feature.
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C4/C6
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C4/C6
 """
 
 from __future__ import annotations
@@ -171,7 +171,7 @@ def test_comm_minus_23_semantics_excludes_only_harvested_basenames(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# action-table vocabulary (example-doctrine-repo schema-header format: date | action | path | ...)
+# action-table vocabulary (coordinator-claude schema-header format: date | action | path | ...)
 # ---------------------------------------------------------------------------
 
 ACTION_TABLE_LOG_FIXTURE = """\

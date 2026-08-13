@@ -1,9 +1,9 @@
 """Adversarial parity tests for ``_rm_peer_claim_of`` (coordinator_core.
 bash_guards.dispatch_checks) — the Q24 liveness-ordering fix.
 
-Oracle: ``_rm_peer_claim_of`` / ``_gr_peer_claim_of`` in example-doctrine-repo's retired
+Oracle: ``_rm_peer_claim_of`` / ``_gr_peer_claim_of`` in coordinator-claude's retired
 ``coordinator/hooks/scripts/block-destructive-rm.sh`` /
-``block-destructive-git-revert.sh`` (both deleted 2026-07-16, example-doctrine-repo
+``block-destructive-git-revert.sh`` (both deleted 2026-07-16, coordinator-claude
 ``2f8b8450``; identical decision trees; the Python port serves both callers
 with one shared function). The bash tree PREFERS
 the canonical ``cs_live_session_ids`` liveness source per-sid (a sid is

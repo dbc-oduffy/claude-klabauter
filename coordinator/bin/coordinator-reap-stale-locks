@@ -26,10 +26,10 @@ next-index-*.lock + maintenance.lock coverage, reap-log emission) has been fully
 ported to coordinator_core/ops/reap_stale_locks.py (claude-klabauter), with its
 coordinator/lib/coordinator-session.sh sourcing severed entirely — that port needed
 none of that library's session/liveness/claim machinery, only portable stat helpers,
-which the port replaces with os.stat. This file is now a thin example-doctrine-repo-side trampoline over
-that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo owns contract, claude-klabauter owns engine).
+which the port replaces with os.stat. This file is now a thin coordinator-claude-side trampoline over
+that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns contract, claude-klabauter owns engine).
 
-This op is pure engine logic — no example-doctrine-repo-side input/output paths to resolve or hand over
+This op is pure engine logic — no coordinator-claude-side input/output paths to resolve or hand over
 via env var (unlike emit-artifact-shape-contract's schemas/ dependency); it operates
 entirely on the CALLER's git worktree via `git rev-parse`, resolved from cwd. No
 sys.argv is consumed — the bash oracle never inspected `$@` either (see the claude-klabauter

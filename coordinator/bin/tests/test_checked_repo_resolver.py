@@ -1,7 +1,7 @@
 """test_checked_repo_resolver.py -- C1 test surface for
 `coordinator/bin/lib/repo_identity.py::resolve_checked_repo_root`.
 
-Spec backlink: docs/plans/2026-08-11-one-checked-resolver-for-the-bin-family.md
+Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C1 / AC1-AC7.
 
 C1's own module (no other chunk in this plan writes to this file -- each

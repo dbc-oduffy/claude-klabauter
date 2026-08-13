@@ -8,7 +8,7 @@ paths — `brief(cadence)` tunes severity/depth knobs (day = red-and-stale +
 reap; session = red-only + warn; week = lighter) over ONE shared compute,
 per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md` § Approach.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C1
 Registration seam: this module ships no bash veneer — it is consumed
 directly by the `coordinator/bin/orient-assemble` trampoline, mirroring
@@ -91,7 +91,7 @@ CADENCES: tuple[str, ...] = ("session", "day", "week")
 #: `extend_exit_codes` docstring).
 OrientExitCode = extend_exit_codes("OrientExitCode", USAGE=2, TRANSPORT_FAIL=3)
 
-#: example-doctrine-repo schema-of-record (`decision-object.schema.json`) constraint: when a
+#: coordinator-claude schema-of-record (`decision-object.schema.json`) constraint: when a
 #: judgment point's `recommendation` is `null`, `reason` MUST be one of
 #: these two enum values — free text is only schema-legal when `recommendation`
 #: is non-null. Every reader family here builds its no-verdict judgment

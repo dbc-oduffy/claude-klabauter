@@ -78,7 +78,7 @@ under test — there is no native substitute for "does bash accept this syntax,"
 the reimplementable bridge the mandate targets; scoped strictly to parse-checking, never
 execution. Its only named site, `coordinator_core/snippet_sync/verify_registry_consistency.py`
 `_bash_n()`, was deleted with the retired four-script (`verify-<X>-sync.sh`) leg it parse-checked
-— those scripts are retired everywhere (example-doctrine-repo `b644d5a9`), so there was nothing left to
+— those scripts are retired everywhere (coordinator-claude `b644d5a9`), so there was nothing left to
 parse-check.
 
 Kept as historical record per the enumeration-is-constitutive rule: the class's site list
@@ -278,7 +278,7 @@ is the one class-(b) site with a real subprocess call and is entered below.
 ## Adjudicated and CLOSED 2026-07-21 — no longer a residual
 
 `coordinator_core/install/substrate.py` `_write_agent_forwarder` (formerly a generated
-`#!/bin/sh` bin-forwarder onto the coordinator-claude/example-doctrine-repo tree) was the one open scope decision
+`#!/bin/sh` bin-forwarder onto the coordinator-claude/coordinator-claude tree) was the one open scope decision
 under this section. Resolved as **native port**, not a carve-out (`daca1c74`): the forwarder emits
 `#!/usr/bin/env python3`. The carve-out case did not survive inspection — its `sh` shebang was
 never load-bearing, because both target classes resolve their sibling `lib/` from their OWN file

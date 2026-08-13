@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.sync_main.
 
-Port of: sync-main.sh (example-doctrine-repo b5a4192c, 2026-07-20), ~124 lines.
+Port of: sync-main.sh (coordinator-claude b5a4192c, 2026-07-20), ~124 lines.
 Spec backlink: archive/specs/2026-05-01-orphan-branch-prevention.md § 1.1.5
 """
 from __future__ import annotations

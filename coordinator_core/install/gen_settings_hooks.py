@@ -1,8 +1,8 @@
 """
 coordinator_core.install.gen_settings_hooks — settings.json hooks-block generator.
 
-Port of: ``coordinator/bin/gen-settings-hooks.sh`` (example-doctrine-repo a2078a9b, 2026-07-22)
-[example-doctrine-repo repo]. Purpose (unchanged from bash): read ``coordinator/hooks/hooks.json``
+Port of: ``coordinator/bin/gen-settings-hooks.sh`` (coordinator-claude a2078a9b, 2026-07-22)
+[coordinator-claude repo]. Purpose (unchanged from bash): read ``coordinator/hooks/hooks.json``
 and emit/merge a settings.json ``hooks`` block where:
 
   - ONLY ``type=='command'`` entries WITH ``${CLAUDE_PLUGIN_ROOT}`` in their
@@ -78,9 +78,9 @@ Port backlink: docs/plans/2026-07-16-clean-slate-residual-migration.md
     (BIG_PORT Wave B, item gen-settings-hooks).
 Spec backlink: docs/plans/2026-07-04-doe-maximalist-execution-plugin-dir.md § M1
 Mechanism: coordinator/docs/wiki/external-plugin-live-resolution.md
-    § Hook-delivery — SOLVED via settings.json [example-doctrine-repo repo]
+    § Hook-delivery — SOLVED via settings.json [coordinator-claude repo]
 
-Double-fire refusal (added 2026-07-29, example-doctrine-repo dispatch
+Double-fire refusal (added 2026-07-29, coordinator-claude dispatch
 state/subagent-share/78b683cd-1b62-4a25-904d-954cb3c69412/
 coordinatorexecutor-ba51c36f.md): ``hooks.json`` is the sole input to BOTH
 delivery surfaces this generator can produce — everything this generator can
@@ -732,7 +732,7 @@ def generate(
 
     ``"skipped (clone absent)"`` is a SOFT skip (no exception, generate()
     returns normally, exit 0) — this mirrors the retired bash trampoline's
-    own ``else`` branch ("example-doctrine-repo clone not resolved — complete step 3.5a
+    own ``else`` branch ("coordinator-claude clone not resolved — complete step 3.5a
     first"), which never set a non-zero rc either. It applies ONLY when NO
     explicit ``coordinator_root_override`` was given and the registry/env/
     pointer-file resolution chain (``resolve_coordinator_root()``) itself

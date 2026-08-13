@@ -390,7 +390,7 @@ def test_agent_cmd_forwarder_falls_through_on_missing_bake_with_spaces(tmp_path)
 
 # --- _RAW_CMDLINE_TARGETS coverage -- scoped-git-commit / cross-repo-memo ----
 #
-# cross-repo/inbox/2026-08-07-example-doctrine-repo-em-cmd-forwarder-drops-everything-
+# cross-repo/inbox/2026-08-07-coordinator-claude-em-cmd-forwarder-drops-everything-
 # after-a-newline.md: `%*`-populated batch parameters silently lose everything
 # after a literal newline in an argument (a `.cmd` forwarder parse-time
 # defect, not a caller-side quoting bug -- see `_agent_cmd_raw_cmdline_block`'s

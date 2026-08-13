@@ -301,7 +301,7 @@ Semantics rag should encode: "live" = present in the combined handoff index
 **Version-stability guarantee (skew-tolerant for reads).** `handoff.has_live_children` is a
 read-only query whose live-set computation is **version-stable**: a stale service and current
 source resolve the same lineage answer for the same on-disk frontmatter. Consumers MAY degrade a
-client-side version-skew abort to a warn-and-proceed on this op (as example-doctrine-repo's `--read-only-skew-degrade`
+client-side version-skew abort to a warn-and-proceed on this op (as coordinator-claude's `--read-only-skew-degrade`
 does for `--stamp-only`) without risking a wrong answer. This is a producer-side guarantee, not a
 consumer assumption: **claude-klabauter owns a change-detection obligation** — any future release that alters
 the live-set logic (edge-kind set, reverse-membership hop count, index-membership definition) MUST
@@ -514,7 +514,7 @@ never from git directly (store-less consumption).
 Source: `coordinator_core/ops/emit/sections/commit_closures.py` (porter) +
 `coordinator_core/contract/cockpit_schema/entities/commit_closure.py` (entity). Trailer
 grammar: `coordinator_core/contract/commit-trailer-producer-contract.md § 1.1` (`Closes:` row).
-Spec backlink: `docs/plans/2026-07-17-commit-closure-emission-fact.md`.
+Spec backlink: `pln-commit-closure-emission-fact-e-c22b04`.
 
 | field | type | notes |
 |-------|------|-------|

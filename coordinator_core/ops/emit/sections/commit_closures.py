@@ -43,7 +43,7 @@ Negative-spec:
     both considered and rejected (see plan DECISION-3) for silently dropping decision-relevant
     closures.
 
-Spec backlink: docs/plans/2026-07-17-commit-closure-emission-fact.md § Chunk C3, DECISION-1,
+Spec backlink: pln-commit-closure-emission-fact-e-c22b04 § Chunk C3, DECISION-1,
   DECISION-2, DECISION-3, AC4, AC5.
 Parity oracle: none — net-new record type; no bash equivalent ever emitted this fact.
 """

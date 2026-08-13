@@ -47,7 +47,7 @@ predecessor edge to walk. This module carries NO special-case spinoff branch;
 the wall falls out of the spine's shape, not a hand-authored guard.
 
 ``priority: none`` on an ancestor is the ledger's EXPLICIT-CLEAR SENTINEL
-(see ``coordinator/schemas/priority-ledger.schema.json``, example-doctrine-repo repo): a
+(see ``coordinator/schemas/priority-ledger.schema.json``, coordinator-claude repo): a
 real authored assignment that terminates the upward walk, NOT an absence. An
 ancestor with ``priority: none`` IS "the nearest explicit ancestor" for step
 2 — it just carries no priority VALUE (``effective_priority`` resolves to
@@ -73,7 +73,7 @@ the failure the worked example above was written to prevent. (C6,
 — boot no longer carries a handoff-derived ``## Priorities`` view at all, so
 this is the sole caller now, not one of two.)
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § C5.
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C5.
 """
 
 from __future__ import annotations

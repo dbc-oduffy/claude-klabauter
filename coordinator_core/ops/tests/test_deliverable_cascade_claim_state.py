@@ -10,7 +10,7 @@ docstring names, commit 11fe08d51) must never read as "unclaimed" here. This tes
 seeds exactly that desync — a live claim ledger entry with a reverted (empty)
 frontmatter mirror — and proves the candidate is refused, not advanced.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks row C6a (this chunk: C6a1, `deliverable_cascade._claimant`).
 
 Negative-spec: does NOT re-test `resolve_claim_state`'s own ledger/mirror

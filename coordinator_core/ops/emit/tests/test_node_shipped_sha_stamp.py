@@ -8,7 +8,7 @@ for handoffs, adapted to the bare-scalar RoadmapDagNode.shipped_sha field (no sh
 
 No golden-fixture dependency — all records are synthetic in-memory objects.
 
-Spec backlink: docs/plans/2026-07-06-roadmap-dag-emit-switch.md § C3 (D4 / F3)
+Spec backlink: pln-emit-first-class-roadmap-dag-i-137a28 § C3 (D4 / F3)
 """
 
 from __future__ import annotations

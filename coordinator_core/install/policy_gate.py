@@ -1,6 +1,6 @@
 """Fail-closed dual-host PowerShell execution-policy verdict.
 
-<!-- Spec backlink: docs/plans/2026-08-07-ps1-launcher-class-and-fail-closed-policy-gate.md,
+<!-- Spec backlink: pln-second-managed-launcher-class-aea900,
      Problem §3, chunk C2. -->
 
 This module computes a verdict for whether `.ps1` launchers may run on THIS

@@ -21,7 +21,7 @@ Coverage:
       the session — origin_handoff resolves to null (unchanged from the
       pre-existing mirror-only behaviour for the true no-match case).
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C6a (AC5).
 """
 

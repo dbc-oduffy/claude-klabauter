@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.review_coverage_core.build_segments.
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § C3a
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § C3a
 
 Pins the per-range memoisation fix on both the `git rev-list` leg and the
 `git log --name-only` leg of `build_segments`: a repeated `sha_range`

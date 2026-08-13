@@ -8,7 +8,7 @@ silent on a valid draft, on state/memo-outbox/sent/<topic>.md (archived,
 already-delivered), on a non-outbox path, and on a buffer with no
 frontmatter block yet.
 
-Spec backlink: docs/plans/2026-08-07-cross-repo-memo-outbox-frontmatter-shape.md
+Spec backlink: docs/plans/2026-08-07-cross-repo-memo-outbox-frontmatter-shape.md [DEAD-CITATION: plan file never committed to this repo]
 """
 
 from __future__ import annotations

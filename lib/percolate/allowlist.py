@@ -134,7 +134,7 @@ Spec backlink: docs/plans/2026-07-04-doe-maximalist-execution-plugin-dir.md
                § W5.1
 Port: docs/plans/2026-07-21-percolate-python-port.md (chunk C-W1c).
 Multi-source: state/subagent-share/5bae563a-448a-4c5e-96ef-2de84498bd09/
-              coordinatorstaff-eng-dfffb96b.md (example-doctrine-repo) §§ 1, 5.
+              coordinatorstaff-eng-dfffb96b.md (coordinator-claude) §§ 1, 5.
 
 Negative-spec: this module never falls back to publishing the unrestricted
 source tree when allowlist enforcement fails or is ambiguous — every error
@@ -543,7 +543,7 @@ def _compose_percolate_ignore(
         it). Kept only if that entry is S's own (`entry in e_s`); dropped
         otherwise. This is the actual footgun: a stray `skills/` rule in
         claude-klabauter's file, where claude-klabauter contributes no `skills/` entry, would
-        suppress example-doctrine-repo's entire `skills/` publish outright.
+        suppress coordinator-claude's entire `skills/` publish outright.
       - **`"ancestor"`** — the pattern is a strict ANCESTOR of one or more
         entries (e.g. pattern `docs/` against entry `docs/wiki`, where
         `docs/wiki` is a full allowlist entry name, not decomposable into

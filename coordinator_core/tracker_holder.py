@@ -2,7 +2,7 @@
 coordinator_core.tracker_holder — resolves the designated holder repo for
 sovereign-tracker writes whose producer named no owning repo.
 
-Spec backlink: docs/plans/2026-08-11-designated-holder-repo-for-unowned-identity.md
+Spec backlink: pln-designated-holder-repo-for-uno-d11d4d
 chunk C1 § The fail-loud fork, § Anti-scope.
 DR-241 § Per-repo, not fleet-wide (DEC-11): every repo's sovereign-tracker
 event log is that repo's own — writes never fan out fleet-wide. This module
@@ -37,7 +37,7 @@ string comparison between two independently-drifting path values instead of
 an identity check on one registry key.
 
 This shape is now RATIFIED DOCTRINE, not just this module's local argument:
-Example-doctrine-repo `coordinator/docs/wiki/machine-local-registry.md` § 5c.4
+Coordinator-claude `coordinator/docs/wiki/machine-local-registry.md` § 5c.4
 ("Role-key indirection — a value that names another registry key", landed
 `af17845ea`), with the anti-pattern registered as the greppable tripwire
 `ROLE-KEY-NAMES-A-REPO-KEY-NOT-A-PATH` in `coordinator-tripwires.md`.
@@ -169,7 +169,7 @@ def holder_repo_root() -> Path:
     `tracker.holder_repo` names a `repos.<key>` entry, which in turn resolves
     to a filesystem path. Never treats the role key's own value as a path.
 
-    Spec backlink: docs/plans/2026-08-11-designated-holder-repo-for-unowned-identity.md
+    Spec backlink: pln-designated-holder-repo-for-uno-d11d4d
     chunk C2 § The fail-loud fork. DR-241 § Per-repo, not fleet-wide (DEC-11):
     this resolver exists only to answer "where does a write whose producer
     named no owning repo land", never to relax DEC-11's per-repo bound.
@@ -238,7 +238,7 @@ def write_root_for(*, owning_repo: str | None, repo_root: Path) -> Path:
     TypeError at the call site, not a decision this function makes on the
     caller's behalf (see module docstring § The fail-loud fork).
 
-    Spec backlink: docs/plans/2026-08-11-designated-holder-repo-for-unowned-identity.md
+    Spec backlink: pln-designated-holder-repo-for-uno-d11d4d
     chunk C3 § The match predicate, § Anti-scope. DR-241 § Per-repo, not
     fleet-wide (DEC-11): a stated owning repo writes to its own tracker,
     never fleet-wide. DR-214's admission bound: the producer supplies a

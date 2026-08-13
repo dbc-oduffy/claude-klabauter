@@ -82,7 +82,7 @@ from coordinator_data_root import data_root  # noqa: E402
 def _resolve_plugin_root() -> str:
     """Resolve the coordinator root sibling DATA dirs (snippets/, subagent-sandbox-
     policy.yaml) live under — CLAUDE_PLUGIN_ROOT override always wins; otherwise the
-    parent of the resolved snippets/ data dir (co-located or example-doctrine-repo-resident per
+    parent of the resolved snippets/ data dir (co-located or coordinator-claude-resident per
     `coordinator_data_root.data_root()`), since that parent IS the coordinator root
     under either layout. Mirrors `snippet-registry`'s `_resolve_plugin_root()`.
     """
@@ -93,7 +93,7 @@ def _resolve_plugin_root() -> str:
 
 
 # Historical: PLUGIN_ROOT used to be a bare `os.path.dirname(SCRIPT_DIR)` walk, which
-# broke once the 2026-07-22 executable-surface migration split snippets/ (example-doctrine-repo-resident)
+# broke once the 2026-07-22 executable-surface migration split snippets/ (coordinator-claude-resident)
 # away from this script (claude-klabauter-resident) — see coordinator_data_root.py's
 # module docstring. Resolved via the shared two-rung resolver instead of reimplementing
 # the DOE_ROOT chain here (negative-spec in that module).

@@ -11,7 +11,7 @@ Self-registration: importing this module calls register_op("ping", _ping) as a
 side-effect. coordinator_core.ops.__init__ imports this module, so the registration
 fires when `import coordinator_core.ops` executes (at dispatch time).
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C1b
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C1b
 """
 
 from __future__ import annotations

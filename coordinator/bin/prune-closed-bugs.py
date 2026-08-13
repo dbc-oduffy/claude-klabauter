@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """prune-closed-bugs.py — archive closed bug-backlog entries via fleet.prune_closed_bugs.
 
-Port of: prune-closed-bugs.sh (example-doctrine-repo f703efad, 2026-07-21). Daily ceremony wrapper — dispatches
+Port of: prune-closed-bugs.sh (coordinator-claude f703efad, 2026-07-21). Daily ceremony wrapper — dispatches
 fleet.prune_closed_bugs, which self-enumerates state/bug-backlog/*.yaml
 with status: closed and owns the git-mv + self-commit. Best-effort: errors
 are logged and this script always exits 0 so it never hard-gates

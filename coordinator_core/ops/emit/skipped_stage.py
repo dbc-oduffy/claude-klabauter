@@ -21,7 +21,7 @@ thing that makes such a choice safe to offer at all. Whether a hot emit path sho
 all is a separate question, dispositioned to its own spinoff rather than answered here.
 
 Why this is a module and not a convention: an empty array is structurally schema-valid for
-every required-array field in example-doctrine-repo's frozen ``snapshot-envelope.schema.json``, so a skipped
+every required-array field in coordinator-claude's frozen ``snapshot-envelope.schema.json``, so a skipped
 stage that emits ``[]`` passes validation, passes the emit gate, reports ``ok: True`` — and
 lies to every consumer, which reads ``[]`` as "there are genuinely zero of these". That is
 the exact silent-narrowing shape ``sections/file_attribution.py``'s F1/F2 fixes exist to
@@ -64,7 +64,7 @@ VALIDATED REUSE (break-class fix, 2026-07-29, post-review):
 
 This is the ``[]``-trap's twin, and it is not obvious from the ``[]`` framing alone — it
 narrows nothing and manufactures nothing, so every check above passes, yet the emitted
-envelope is still wrong. It was found live: example-doctrine-repo's on-disk emission (2026-07-28,
+envelope is still wrong. It was found live: coordinator-claude's on-disk emission (2026-07-28,
 schema 3.7.0) carries 4027 ``file_attributions`` rows of which **3991 have absolute
 ``file_path`` values** and 0 exclusion markers — it predates the porter's F2
 path-normalisation. The first version of this gate faithfully reused all of it, which on the

@@ -12,7 +12,7 @@ Isolation discipline: `tempfile.gettempdir` is monkeypatched to `tmp_path`
 for every test in this module (autouse fixture) so a failed test can never
 leave a live unlock sentinel in the real platform temp dir.
 
-Spec backlink: docs/plans/2026-08-03-in-session-operator-unlock-for-the-hard-.md § C1/C6.
+Spec backlink: pln-in-session-operator-unlock-for-aa6cf9 § C1/C6.
 """
 
 from __future__ import annotations
@@ -133,7 +133,7 @@ class TestConsumeOneShotSemantics:
 
 class TestAnnotateDenyDoesNotNameACodename:
     """AC6/register: the rendered deny text names no private-repo codename —
-    the example-doctrine-repo-source pointer branch is gone (§ EM ruling, branch B) and the
+    the coordinator-claude-source pointer branch is gone (§ EM ruling, branch B) and the
     settings-root pointer is unconditional and codename-free.
 
     UPDATED 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-
@@ -151,7 +151,7 @@ class TestAnnotateDenyDoesNotNameACodename:
     def test_no_example_doctrine_repo_codename(self):
         out = self._fire()
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "example-doctrine-repo" not in reason
+        assert "coordinator-claude" not in reason
 
     def test_no_placeholder_codename(self):
         out = self._fire()
@@ -159,12 +159,12 @@ class TestAnnotateDenyDoesNotNameACodename:
         assert "example-doctrine-repo" not in reason
 
     def test_doe_checkout_present_no_longer_changes_the_pointer(self, tmp_path, monkeypatch):
-        """The example-doctrine-repo-checkout-present branch is gone: presence of a example-doctrine-repo
+        """The coordinator-claude-checkout-present branch is gone: presence of a coordinator-claude
         checkout on disk must not change the rendered text (now unchanged
         either way, per item 9)."""
         import coordinator_core.doe_root_pointer as doe_root_pointer_mod
 
-        doe_root = tmp_path / "example-doctrine-repo"
+        doe_root = tmp_path / "coordinator-claude"
         (doe_root / "coordinator" / "docs" / "wiki").mkdir(parents=True)
         monkeypatch.setattr(
             doe_root_pointer_mod, "read_doe_root_pointer", lambda: str(doe_root)

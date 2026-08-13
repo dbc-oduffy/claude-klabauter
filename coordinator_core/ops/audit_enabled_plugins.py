@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.audit_enabled_plugins
 
-Port of: audit-enabled-plugins.sh (example-doctrine-repo b5a4192c, 2026-07-20).
+Port of: audit-enabled-plugins.sh (coordinator-claude b5a4192c, 2026-07-20).
 
 Purpose: drift-checks a repo's `.claude/settings.json` `enabledPlugins` object against
 that repo's `coordinator.local.md` frontmatter (`project_type` / `stack_tags`), per

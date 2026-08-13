@@ -240,7 +240,7 @@ class TestResolveClaimedPlanPathUnchanged:
     def test_tier_a_pointer_without_backing_claim_is_ignored(
         self, tmp_path, monkeypatch
     ):
-        """The released-plan case (example-doctrine-repo-em memo, 2026-08-10): the claim
+        """The released-plan case (coordinator-claude-em memo, 2026-08-10): the claim
         was released, the shape pointer was not, so tier (a) named a shipped
         plan and every consumer of this resolver believed it active. An
         unbacked pointer must fall through to tier (b)."""

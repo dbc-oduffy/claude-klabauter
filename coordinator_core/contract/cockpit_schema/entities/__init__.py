@@ -1,7 +1,7 @@
 """
 entities — the 24 cockpit-contract entity modules, aggregated.
 
-Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/index.ts`'s import +
+Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/index.ts`'s import +
 re-export block (everything in that file EXCEPT the `ENTITY_SCHEMAS` map and
 `CONTRACT_VERSION`, which live one level up at
 `coordinator_core/contract/cockpit_schema/__init__.py` — the package-level

@@ -27,7 +27,7 @@ Coverage:
   - migrating into a canonical log that already has rows APPENDS rather than
     clobbering existing content
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C7.
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C7.
 """
 
 from __future__ import annotations
@@ -51,9 +51,9 @@ Tracks which `archive/specs/**` plans have been harvested into `docs/wiki/` (or 
 
 > Some blockquote prose that must never be parsed as a data row.
 
-## Harvested-upstream — pre-July example-doctrine-mirror-repo cohort (reclaimed to example-doctrine-repo, pruned 2026-07-08)
+## Harvested-upstream — pre-July example-doctrine-mirror-repo cohort (reclaimed to coordinator-claude, pruned 2026-07-08)
 
-archive/specs/2026-03..06/** → harvested-upstream (distilled in example-doctrine-repo; see example-doctrine-repo `state/distillation-log.md`) — reclaimed to example-doctrine-repo, pruned from claude-klabauter per DR `2026-07-08-reclaim-pre-july-history-from-claude-klabauter`
+archive/specs/2026-03..06/** → harvested-upstream (distilled in coordinator-claude; see coordinator-claude `state/distillation-log.md`) — reclaimed to coordinator-claude, pruned from claude-klabauter per DR `2026-07-08-reclaim-pre-july-history-from-claude-klabauter`
 
 ## Harvested — 2026-07 claude-klabauter cohort (run 2026-07-08-pass1)
 

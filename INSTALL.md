@@ -14,7 +14,7 @@ meaning.
 
 **coordinator-claude is a hard prerequisite, stated plainly: most mutating coordinator
 operations fail without this engine present, and this engine has nothing to control without
-coordinator-claude's doctrine, skills, and artifact-shape contract.** coordinator-claude is
+Coordinator-claude's doctrine, skills, and artifact-shape contract.** coordinator-claude is
 public at <https://github.com/dbc-oduffy/coordinator-claude>. Installing that repo and
 installing this one is one joint installation, not two independent ones — from a Claude Code
 session with coordinator-claude present, its setup flow walks the whole install chain and
@@ -52,7 +52,7 @@ degraded path is the explicit override pair `--skip-dep-check --accept-missing-d
 
 **Cloning coordinator-claude is not the same as installing it, and the order matters.** Its
 repository ships `bin/machine-local` as a forwarder; the real resolver is only deposited once
-coordinator-claude's own `/coordinator:setup` has run, which includes a restart. Until then the
+Coordinator-claude's own `/coordinator:setup` has run, which includes a restart. Until then the
 forwarder exits 127, reporting `resolver not installed` and directing you to
 `run /coordinator:setup (Phase 3)`.
 

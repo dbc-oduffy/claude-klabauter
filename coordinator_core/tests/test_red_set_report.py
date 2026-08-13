@@ -1,6 +1,6 @@
 """test_red_set_report.py -- unit coverage for coordinator/bin/red-set-report.py.
 
-Spec backlink: docs/plans/2026-08-07-guard-suite-back-to-a-gate.md § C1
+Spec backlink: pln-make-the-bash-guards-suite-a-g-2f81d6 § C1
 
 Deliberately lives OUTSIDE coordinator_core/bash_guards/tests/ -- that is the
 tree red-set-report.py measures; a self-referential test cell there would

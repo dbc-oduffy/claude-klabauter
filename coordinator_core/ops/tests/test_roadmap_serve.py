@@ -28,7 +28,7 @@ Deferred verification (PM-gated daemon restart required):
 Fixture shape: all fixture files are real ---fenced Markdown files with YAML frontmatter
 matching the production stub handoff shape (lesson: test-fidelity-seed-fixtures-in-the-real).
 
-Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C5 (AC5)
+Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C5 (AC5)
 """
 
 from __future__ import annotations

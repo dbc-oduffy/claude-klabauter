@@ -845,7 +845,7 @@
           "type": "null"
         }
       ],
-      "description": "Durable deliverable join key. Minted once at the earliest artifact (roadmap-spinoff stub or first plan/handoff) and carried verbatim by every downstream artifact. dlv-<stub_id> for roadmap-stub origins; dlv-<slug>-<6hex> for plan/handoff origins. Cross-field rule enforces 'dlv-' prefix when non-null. Null for pre-backfill artifacts. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md \u00a7 D1"
+      "description": "Durable deliverable join key. Minted once at the earliest artifact (roadmap-spinoff stub or first plan/handoff) and carried verbatim by every downstream artifact. dlv-<stub_id> for roadmap-stub origins; dlv-<slug>-<6hex> for plan/handoff origins. Cross-field rule enforces 'dlv-' prefix when non-null. Null for pre-backfill artifacts. Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c \u00a7 D1"
     },
     "initiative": {
       "anyOf": [
@@ -856,7 +856,7 @@
           "type": "null"
         }
       ],
-      "description": "FK to the initiative entity (state/initiatives/<id>.yaml). Nullable \u2014 not all work belongs to a named initiative. Cross-field rule enforces non-empty string when non-null. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md \u00a7 D2"
+      "description": "FK to the initiative entity (state/initiatives/<id>.yaml). Nullable \u2014 not all work belongs to a named initiative. Cross-field rule enforces non-empty string when non-null. Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c \u00a7 D2"
     },
     "caption": {
       "anyOf": [

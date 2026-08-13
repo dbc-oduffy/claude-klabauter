@@ -52,7 +52,7 @@ DR-208 five-question affirmation (COMPUTE_ONLY; citing this handler):
   git queries"). No subprocess call is made here at all.
 Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
 
-Spec backlink: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md § C2
+Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d § C2
 """
 
 from __future__ import annotations

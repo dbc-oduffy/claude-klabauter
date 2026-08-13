@@ -3,7 +3,7 @@ coordinator_core.session_ledger
 
 Chain-walk aggregators over handoff Session Ledger blocks (T3a-g3d).
 
-Port of: aggregate-chain-loe.sh (example-doctrine-repo b644d5a9, 2026-07-22).
+Port of: aggregate-chain-loe.sh (coordinator-claude b644d5a9, 2026-07-22).
 
 ``SESSION_LEDGER_BLOCK_LINES`` is the canonical Session Ledger block emitted
 by every write-time author of a ledger-owing handoff — the emitter side of
@@ -12,7 +12,7 @@ the contract this package's own parser (``aggregate_chain_loe.parse_session_ledg
 and the op-side authors (``ops/handoff_author_fork.py``, ``ops/queue_scaffold_baton.py``)
 that bypass it — do not fork this literal per caller.
 
-Spec backlink: docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C1/C2
+Spec backlink: pln-ledger-owing-handoff-kinds-emi-648818 § C1/C2
 
 ``SESSION_LEDGER_HEADING_RE`` is the canonical detector for that same heading —
 shared by the parser (``aggregate_chain_loe``) and every write-time/detection

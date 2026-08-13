@@ -743,7 +743,7 @@ def test_ac9_existing_entry_not_clobbered() -> None:
 # WRITE_SURFACE declaration
 # ---------------------------------------------------------------------------
 #
-# Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+# Spec backlink: pln-writer-declared-write-surface-49d3bd,
 # chunk C3b. This writer's surface (which `<plugin>@<marketplace>` /
 # `<marketplace>` entries get seeded) depends entirely on what
 # `_read_repos_registry` + `_enumerate_present_plugin_keys` find checked out

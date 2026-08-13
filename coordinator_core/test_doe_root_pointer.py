@@ -1,8 +1,8 @@
 """
-Tests for coordinator_core.doe_root_pointer — example-doctrine-repo root pointer-file reader.
+Tests for coordinator_core.doe_root_pointer — coordinator-claude root pointer-file reader.
 
 Covers all resolution paths (mirrors the bash oracle, Port of:
-read-doe-root-pointer.sh (example-doctrine-repo 6fb5fb37, 2026-07-22), updated for DR-071
+read-doe-root-pointer.sh (coordinator-claude 6fb5fb37, 2026-07-22), updated for DR-071
 registry-first precedence):
   1. CLAUDE_HOME set, pointer file present -> content returned (trailing
      newlines stripped).
@@ -20,8 +20,8 @@ doe-root-pointer-test-clobbers-real-home.md and
 HOME, CLAUDE_HOME, and COORDINATOR_SETTINGS_HOME to tmp_path via monkeypatch,
 and never touches the real machine's settings-home or ~/.claude.
 
-Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md
-DR-071: docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-registry-doe-root-demoted-to-cache.md (example-doctrine-repo)
+Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md [DEAD-CITATION: plan file never committed to this repo]
+DR-071: docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-registry-doe-root-demoted-to-cache.md (coordinator-claude)
 """
 
 from __future__ import annotations

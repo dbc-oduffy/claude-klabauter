@@ -18,8 +18,8 @@ Residue directory (fixed resolution, no parallel ladder):
     os.path.join(resolve_content_root(), "skills", "review", "residue")
 via `coordinator_core.resolve_coordinator_clone.resolve_content_root` — the
 same content-root resolver every other computed-skill engine uses. This
-module deliberately does NOT read a example-doctrine-repo-root pointer directly (that
-resolves only a example-doctrine-repo clone and breaks on a pure OSS install); it composes
+module deliberately does NOT read a coordinator-claude-root pointer directly (that
+resolves only a coordinator-claude clone and breaks on a pure OSS install); it composes
 the shared resolver instead.
 
 Segment contract (frozen, authored alongside this module): each file
@@ -74,9 +74,9 @@ Negative-spec:
     resolution step; no fallback probing of alternate locations.
   - Does NOT do per-domain routing beyond `plan`/`diff`/`shared` — this is
     a single flat assembler, not a god-assembler dispatching to other
-    skills' concerns (example-doctrine-repo `docs/decisions/DR-092-canonical-resolution-
+    skills' concerns (coordinator-claude `docs/decisions/DR-092-canonical-resolution-
     engine.md`; NOT the retired prime-v1 DR-092, which numbers a different
-    decision in `example-doctrine-repo/archive/prime-v1-decisions/`).
+    decision in `coordinator-claude/archive/prime-v1-decisions/`).
   - Does NOT emit a well-formed envelope carrying zero residue. An empty
     residue directory, an unreadable content root
     (`ResolveCoordinatorCloneError`), or a segment set that resolves to

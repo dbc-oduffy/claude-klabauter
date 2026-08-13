@@ -20,14 +20,14 @@ Environment:
   DOCTOR_WIKI_PATH         override wiki path (default: resolved via
                            coordinator_data_root.data_root("docs") / "wiki" /
                            "coordinator-doctor.md" — co-located if this repo ships
-                           its own docs/, else example-doctrine-repo-resident via coordinator_registry.
+                           its own docs/, else coordinator-claude-resident via coordinator_registry.
                            doe_root(); see coordinator/bin/lib/coordinator_data_root.py)
 
 Cross-repo write note: --write mode writes coordinator-doctor.md in place at the
 resolved wiki path above. In the current split-repo layout that path resolves to
-Example-doctrine-repo's coordinator/docs/wiki/coordinator-doctor.md (this repo's coordinator/docs/
-does not exist), so --write is a cross-repo write into example-doctrine-repo's tree, same as it always
-was pre-migration when this script's caller ran with a example-doctrine-repo-relative CWD. This module
+Coordinator-claude's coordinator/docs/wiki/coordinator-doctor.md (this repo's coordinator/docs/
+does not exist), so --write is a cross-repo write into coordinator-claude's tree, same as it always
+was pre-migration when this script's caller ran with a coordinator-claude-relative CWD. This module
 does not change that write behavior or its governance — it only fixes path resolution
 to still find the target after the executable-surface split.
 """

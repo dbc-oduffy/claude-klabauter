@@ -21,7 +21,7 @@ Coverage:
         that the digest itself ignores id/created, per the field-set decision in
         ``_content_digest``'s docstring).
 
-Spec backlink: docs/plans/2026-07-08-concurrency-safe-strangled-op-writes.md § C2
+Spec backlink: pln-concurrency-safe-writes-for-th-c7ca9f § C2
 """
 
 from __future__ import annotations

@@ -26,7 +26,7 @@ States asserted (AC2/AC3/AC4):
     attributed onto that file's envelope entry as an `"error"` field; a
     healthy language total must not excuse a silently-dropped file.
 
-Spec backlink: docs/plans/2026-08-08-cartography-consumes-symbol-extract.md
+Spec backlink: pln-cartography-consumes-symbol-ex-3fc0a8
 chunk C2 (AC2, AC3, AC4).
 
 Anti-scope this file enforces (mirrors the plan's own Anti-scope section):

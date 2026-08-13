@@ -1,19 +1,19 @@
 """break_glass.py — Tier 1 operator-recovery diagnose-then-repair sweep for a
 wedged coordinator install.
 
-Design: example-doctrine-repo `docs/research/2026-07-28-break-glass-recovery-design.md`.
+Design: coordinator-claude `docs/research/2026-07-28-break-glass-recovery-design.md`.
 Repo-placement note (deviation from that design doc's file table, judgment
 call made at build time — see this module's own build dispatch report, not
 repeated here as a changelog entry): the design doc's component table names
-`coordinator/bin/break_glass.py` as a example-doctrine-repo file. Example-doctrine-repo tracks ZERO
+`coordinator/bin/break_glass.py` as a coordinator-claude file. Coordinator-claude tracks ZERO
 files under `coordinator/bin/` (`git ls-files coordinator/bin | wc -l` -> 0)
-— example-doctrine-repo's own CLAUDE.md states plainly that the executable bin surface
-is claude-klabauter-resident, not example-doctrine-repo-resident. This module therefore
+— coordinator-claude's own CLAUDE.md states plainly that the executable bin surface
+is claude-klabauter-resident, not coordinator-claude-resident. This module therefore
 lives in claude-klabauter, alongside `setup-verify.py` (one of the tools it
 calls) and the `gen_settings_hooks` / `guard_foreign_platform_paths` /
 `machine_resolver` modules it reuses — all of which are ALREADY claude-klabauter-side,
 so placing Tier 1 here is following the evidence, not inventing a new split.
-A thin `break-glass.cmd` mirror still lives at the example-doctrine-repo repo root (per
+A thin `break-glass.cmd` mirror still lives at the coordinator-claude repo root (per
 AC-2, "whichever repo the operator opens first") and delegates to this file.
 
 Purpose: run the 8-layer diagnose pass (AC-3) and peer-safe repair (AC-4),
@@ -160,7 +160,7 @@ def check_settings_json(
     """Layer 1 (AC-3 #1). Missing -> BROKEN. Invalid JSON -> BROKEN with the
     parse error. Valid -> classify every `command` string's hook paths via
     `guard_foreign_platform_paths.detect_foreign_platform_paths` (claude-klabauter's
-    own module — no example-doctrine-repo-side import needed; this check's classifier is
+    own module — no coordinator-claude-side import needed; this check's classifier is
     already resident in this repo, confirming the build-sequence step 1
     reusability check the design doc calls for).
 

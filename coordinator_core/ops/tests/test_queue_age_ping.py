@@ -17,7 +17,7 @@ Coverage:
   (h) ordering — entries sorted by age_days descending.
   (i) handler direct-invocation (async) with the ratified response envelope.
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C4
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C4
 """
 
 from __future__ import annotations

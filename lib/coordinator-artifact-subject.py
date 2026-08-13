@@ -4,7 +4,7 @@ Purpose: given the path of a coordinator working-data artifact, classifies
 its SUBJECT MATTER and prints exactly one of: engine, doctrine, or
 cross-cutting to stdout. The discriminator is what the artifact is ABOUT,
 not where it physically lives on disk. Subject-matter is the routing key
-used by coordinator_state_root to place doctrine artifacts in the example-doctrine-repo plane
+used by coordinator_state_root to place doctrine artifacts in the coordinator-claude plane
 and engine artifacts in the engine-repo plane.
 
 Spec backlinks:
@@ -43,7 +43,7 @@ Consumer contract (W2.3 coordinator_state_root):
   - exit code: 0 = confident (engine | doctrine); 2 = cross-cutting.
   - stderr: diagnostics only — never parsed by the consumer.
 
-Port of: coordinator-artifact-subject.sh (example-doctrine-repo 6fb5fb37, 2026-07-22). This
+Port of: coordinator-artifact-subject.sh (coordinator-claude 6fb5fb37, 2026-07-22). This
 port preserves the exact CLI contract (args, exit codes, stdout/stderr
 shape) so callers repoint without behavior change.
 """

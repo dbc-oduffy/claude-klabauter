@@ -113,7 +113,7 @@ ADVISORY_REWRITE_NAMES = [
     # of the two remaining PLATFORM_CONDITIONED_DENY guards below.
     "branch-set-precedence",
     "longlived-branch-naming",
-    # docs/plans/2026-08-02-write-confinement-guards.md (example-doctrine-repo), chunk
+    # docs/plans/2026-08-02-write-confinement-guards.md (coordinator-claude), chunk
     # C4 -- the Bash-surface cross-repo write-confinement speed bump.
     # `ADVISORY_REWRITE`, deliberately NOT `CONFINEMENT_DENY`: the blanket-
     # disarm marker can suppress every band except `CONFINEMENT_DENY`, and
@@ -284,7 +284,7 @@ def test_advisory_rewrite_guards_never_fail_closed():
     file. That is what happened on 2026-07-30 to a peer repo's session, while
     `grep-via-bash-guard` still carried `fail_closed=True` from its
     pre-H11(a) PLATFORM_CONDITIONED_DENY registration
-    (`cross-repo/inbox/2026-07-30-example-doctrine-repo-em-guard-grep-via-bash-
+    (`cross-repo/inbox/2026-07-30-coordinator-claude-em-guard-grep-via-bash-
     nameerror.md`): an advisory-only guard, by its own docstring, taking down
     unrelated commands in sessions that were not editing it.
 

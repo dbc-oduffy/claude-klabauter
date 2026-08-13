@@ -3,7 +3,7 @@
 Covers AC2: to_json()/from_json() round-trip carries every AC2-pinned field,
 and schema_version is pinned to 1.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C8 (AC2).
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C8 (AC2).
 """
 
 from __future__ import annotations

@@ -30,7 +30,7 @@ rung bodies, since git-ops gates oss on .git while content gates oss on the
     2. registry repos.example_doctrine_repo (canonical), then
        plugin.mirrors.coordinator-claude.live_path (fallback)
     3. Pointer file (settings-home durable, then legacy ~/.claude/.doe-root)
-       -> example-doctrine-repo repo root, gated on -d <root>/.git
+       -> coordinator-claude repo root, gated on -d <root>/.git
     4. Flat layout: ~/.claude/plugins/coordinator-claude, gated on .git/
     5. FAIL-LOUD
 

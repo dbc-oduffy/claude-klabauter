@@ -8,8 +8,8 @@ Finish-strangler port: the bash implementation (repo-setup-time helper that
 seeds a skeleton state/health-ledger.md so workday-complete Step 4 can append
 without a "create if missing" branch) has been fully ported to
 coordinator_core/ops/setup_seed_health_ledger.py, with a co-located pytest
-suite (test_setup_seed_health_ledger.py). This file is now a thin example-doctrine-repo-side
-(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo owns
+suite (test_setup_seed_health_ledger.py). This file is now a thin coordinator-claude-side
+(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
 contract/generator, claude-klabauter owns engine).
 
 Renamed from setup-seed-health-ledger.sh (2026-07-22 bash-kill campaign):

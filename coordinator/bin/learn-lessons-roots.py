@@ -8,8 +8,8 @@ learn-lessons should process on this machine — $CLAUDE_HOME + machine-local
 supplemental-roots sentinel) has been fully ported to
 coordinator_core/ops/learn_lessons_roots.py (co-located test:
 coordinator_core/ops/test_learn_lessons_roots.py, 10 tests). This file is now a
-thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
-(example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
+(coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
 owned by `gen-launcher-shim.py --ensure-unix`, and correct for this shape. On
@@ -18,8 +18,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Contract preserved verbatim from the bash oracle's own header:

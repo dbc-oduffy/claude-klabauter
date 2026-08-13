@@ -3,7 +3,7 @@ coordinator_core.ops.workday_surface_auto_push_failure_stats — JSON-RPC
 "workday.surface_auto_push_failure_stats" operation.
 
 Purpose: read-only aggregation over `.git/push-failures.log` for the
-/workday-start orientation surface (fence: example-doctrine-repo commands/workday-start.md:954,
+/workday-start orientation surface (fence: coordinator-claude commands/workday-start.md:954,
 which computed TOTAL/RECENT_24H/LAST_LINE via wc/awk/date/tail). The bash
 oracle's 24h window used GNU `date -d` with a BSD `date -v-1d` fallback —
 exactly the dual-syntax shell fragility the bash-kill campaign targets.
@@ -49,7 +49,7 @@ EM-serial registration pass per CC-3; this module carries only its own
 `register_op`.
 
 Contract: params {repo_root: str} -> {total: int, recent_24h: int, last_line: str|null}
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B8
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B8
 Parent plan:   docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § DEC-2
 
 Negative-spec:

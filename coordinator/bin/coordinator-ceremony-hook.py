@@ -137,7 +137,7 @@ _KNOWN_CEREMONIES = (
 
 # Read/redact/warn primitives now live in coordinator_resolve_validation_cmd
 # — the naked-python port of the former lib/coordinator-resolve-validation-cmd.sh
-# (example-doctrine-repo c187f5b9, 2026-07-21) this hook used to source for
+# (coordinator-claude c187f5b9, 2026-07-21) this hook used to source for
 # cs_read_local_md_key / _cs_metachar_warn / _cs_redact_for_diag. See
 # that module's read_local_md_key / _metachar_warn / _redact_for_diag.
 

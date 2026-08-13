@@ -1,6 +1,6 @@
 """Tests for coordinator/bin/coordinator-validate-local-config.py.
 
-Spec backlink: docs/plans/2026-08-06-shell-spawn-regrowth-gate.md § C12
+Spec backlink: pln-shell-spawn-regrowth-gate-cens-097e21 § C12
 """
 
 from __future__ import annotations

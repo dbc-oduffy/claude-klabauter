@@ -5,7 +5,7 @@ plain-bash write-sink shape table shared by the cross-repo bump guard
 by reference, so the two chunks classify the identical shape set rather than
 each hand-rolling its own list that can silently drift from the other's.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
 repo], chunk C4 ("the enumerated plain-bash write-sink set is owned by chunk
 C5 and shared here by reference so the two cannot drift -- put the set in one
 shared helper you own now, structured so C5 imports it rather than restating
@@ -439,7 +439,7 @@ def translate_msys_path(path: str) -> Optional[str]:
     form this function deliberately does not attempt to resolve.
 
     Pattern: normalize at the single get seam, not at each of the N
-    consumers -- see example-doctrine-repo `coordinator/docs/wiki/bash-on-windows-
+    consumers -- see coordinator-claude `coordinator/docs/wiki/bash-on-windows-
     gotchas.md` §10/§14. This function IS that single seam for the two
     `bump_*_write.py` guards (C2, C4): `resolve_relative` below calls it on
     both `base` and `target` before either ever reaches `os.path`.

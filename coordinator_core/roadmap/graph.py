@@ -11,7 +11,7 @@ DAG (``topo_number``) and a fail-loud verification gate for dependency-monotone
 Domain vocabulary: stub, sprint, wave, topological linearization, blocked_by edge,
 dependency-monotone, (sprint, wave) slot.
 
-Port source: coordinator/bin/lib/roadmap-graph.js (example-doctrine-repo), 345 LoC.
+Port source: coordinator/bin/lib/roadmap-graph.js (coordinator-claude), 345 LoC.
 Spec backlink: docs/plans/2026-06-28-roadmap-stub-numbering-dependency-order.md § C1
 Port backlink: BIG_PORT Wave B, item roadmap-pair.
 

@@ -162,7 +162,7 @@ def test_foreign_platform_shape_rearms_kill_switch(tmp_path):
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "python3 X:/example-doctrine-repo/coordinator/hooks/scripts/x.py",
+                                    "command": "python3 X:/coordinator-claude/coordinator/hooks/scripts/x.py",
                                 }
                             ],
                         }
@@ -193,7 +193,7 @@ def test_already_armed_kill_switch_is_not_duplicated(tmp_path):
     (meta / "settings.json").write_text(
         json.dumps(
             {"hooks": {"SessionStart": [{"matcher": "", "hooks": [
-                {"type": "command", "command": "python3 X:/example-doctrine-repo/coordinator/hooks/scripts/x.py"}
+                {"type": "command", "command": "python3 X:/coordinator-claude/coordinator/hooks/scripts/x.py"}
             ]}]}}
         ),
         encoding="utf-8",

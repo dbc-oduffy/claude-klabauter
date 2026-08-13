@@ -36,7 +36,7 @@ Coverage:
     (`detect_foreign_commits`, what wsc_resolve.py calls) fails EMPTY
     (returns `[]`, its documented "could not determine" result).
 
-Spec backlink: docs/plans/2026-07-27-review-trail-scope-guard.md § C5
+Spec backlink: pln-review-trail-scope-guard-refus-d6e42c § C5
 (C5a/C5b/C5c were a dispatch-time wave-map expansion, not plan-doc text —
 the plan carries one C5 task-spine row).
 # Review: code-reviewer — backlink cited a "§ C5b" heading the plan doc

@@ -5,7 +5,7 @@ bands, min-vs-target pass/fail boundaries, and the invariant that gate.py
 never consumes a floor_delta (floor subtraction is out of scope for this
 module — see gate.py's module docstring).
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C8 (AC3).
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C8 (AC3).
 """
 
 from __future__ import annotations

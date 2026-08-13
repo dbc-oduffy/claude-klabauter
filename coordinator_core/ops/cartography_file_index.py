@@ -31,7 +31,7 @@ Wire params:
 
 Consumption status: registered and reachable via dispatch (see
 "Self-registration" below), but UNCONSUMED — no call site exists today.
-Example-doctrine-repo's frozen contract (`docs/contracts/arch-engine-scripts.md`) names
+Coordinator-claude's frozen contract (`docs/contracts/arch-engine-scripts.md`) names
 this op under its `arch-callgraph` lane, but the survey's Workflow script
 does not call it; only `cartography.chunk_table` and `cartography.churn`
 have call sites (docs/plans/2026-08-06-claude-klabauter-ize-the-survey-census.md §
@@ -73,7 +73,7 @@ checklist — carried into authz/classification.py, which now holds the
        wire param (any repo), no implicit repo-specific state (mirrors "ping" /
        "percolate.run" / "cartography.tree" scope="none" precedent).
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md § C2
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e § C2
 """
 
 from __future__ import annotations

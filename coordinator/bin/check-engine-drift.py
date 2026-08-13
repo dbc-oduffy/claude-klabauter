@@ -23,7 +23,7 @@ veneer with no legacy body to strangle (same shape as
 handoff-has-live-children.sh, R1 DOE-PORT template Section 4). The port
 converts the bash veneer's manual two-stage interpreter resolution plus a
 raw subprocess spawn plus an inline "python3 -c" JSON parse into a direct
-call to the EXISTING example-doctrine-repo-side Python transport,
+call to the EXISTING coordinator-claude-side Python transport,
 coordinator/bin/lib/cc_invoke.py's cc_invoke() function (itself a straight
 port of coordinator/lib/coordinator-core-invoke.sh's cc_invoke, DR-215) --
 reusing it rather than re-deriving a second transport.
@@ -76,7 +76,7 @@ Negative-spec:
   - Does NOT hardcode CLAUDE_KLABAUTER_ROOT -- resolves via cc_invoke's
     _resolve_claude_klabauter_root() (env var -> settings-home pointer -> bash resolver).
   - Does NOT hard-error or nag when the op is unregistered/claude-klabauter absent --
-    degrades to a fully silent skip (exit 0, no output). Example-doctrine-repo is a consumer;
+    degrades to a fully silent skip (exit 0, no output). Coordinator-claude is a consumer;
     it must never nag about claude-klabauter's activation state.
   - Does NOT re-implement the invoke transport -- imports and calls cc_invoke().
 """

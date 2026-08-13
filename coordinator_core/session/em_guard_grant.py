@@ -84,7 +84,7 @@ function, 2 on a usage/validation error, 3 reserved for import-shape
 failures (unused today, kept for parity with the sibling's documented
 exit-code contract).
 
-Spec backlink: docs/plans/2026-08-13-em-exercisable-in-band-grant-route.md § C1
+Spec backlink: pln-an-em-exercisable-in-band-gran-6bfb4a § C1
 Precedent: coordinator_core/session/claude_md_grant.py
 Precedent: coordinator_core/session/grant.py (Tier-U grant, DR-088 layer 5)
 

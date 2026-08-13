@@ -6,7 +6,7 @@ heading with only prose bullets under it; stays silent when the heading's
 items are already checkboxes; stays silent when the heading is absent
 entirely; stays silent on a non-handoff path.
 
-Spec backlink: docs/plans/2026-08-13-handoff-ac-shape-template-rule-and-write-time-offer.md (chunk C1)
+Spec backlink: pln-handoff-acceptance-criteria-sh-0e51f5 (chunk C1)
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@ once it flips a handoff (and, per AC6g, the rows inside a roadmap-baton handoff'
 `## Tasks` spine) it has no undo. Per R1a, the EM's stamp anchoring the whole cascade
 design is trusted precisely because the EM CAN be wrong — which only holds in practice
 if being wrong is recoverable in one move. This module is that move.
-Spec backlink: docs/plans/2026-08-04-terminal-state-propagation-join-keys.md § C6d (AC6f).
+Spec backlink: pln-terminal-state-propagation-giv-c85539 § C6d (AC6f).
 See also docs/decisions/DR-263-terminal-cascade-join-closure-fanout-and-retraction-
 provenance.md § 3.4, which this module implements.
 

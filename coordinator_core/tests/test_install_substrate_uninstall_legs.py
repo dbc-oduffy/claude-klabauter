@@ -7,8 +7,8 @@ Pins the empty-$HOME safety guard (bash bug-history: `_uninstall_require_home`)
 and the settings.json hook-strip / hardware-concern-migration functional
 behavior against a sandboxed HOME, per the port recipe's fixture requirements.
 
-Port of: install-substrate.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
-Port of: uninstall-legs.sh (example-doctrine-repo bd5b5a96, 2026-07-19)
+Port of: install-substrate.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Port of: uninstall-legs.sh (coordinator-claude bd5b5a96, 2026-07-19)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
     (T4a-g3b chunk).
 """
@@ -323,7 +323,7 @@ def test_remove_shim_refuses_hand_modified_legacy_block(tmp_path, monkeypatch):
 def test_remove_shim_strips_matching_legacy_block(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
-    expected_repo = f"{tmp_path}/X/example-doctrine-repo"
+    expected_repo = f"{tmp_path}/X/coordinator-claude"
     expected_bin = f"{expected_repo}/coordinator/bin/claude-doe"
     bashrc = tmp_path / ".bashrc"
     bashrc.write_text(
@@ -389,7 +389,7 @@ def test_register_hardware_concern_noop_when_already_present(tmp_path):
 # _run_hardware_audit (Step 3h) — native in-process call, unconditional (no
 # file-existence gate — the former `plugin_root/lib/detect-hardware.sh`
 # existence check suppressed a working, file-independent native audit any
-# time the example-doctrine-repo-side .sh happened to be absent, which is unconditionally
+# time the coordinator-claude-side .sh happened to be absent, which is unconditionally
 # post-b644d5a9's executable-surface relocation).
 # ---------------------------------------------------------------------------
 
@@ -443,7 +443,7 @@ SEED_WIKI_FIXTURE_BODY = "# stub seed wiki\n"
 
 def _build_success_fixture(tmp_path, monkeypatch, *, omit_plugin_root_lib=True):
     """Lay down the MINIMUM dual-anchor tree substrate.run() actually needs to
-    reach rc==0: a example-doctrine-repo-side ``plugin_root`` (templates/{bin,setup,machine-local}
+    reach rc==0: a coordinator-claude-side ``plugin_root`` (templates/{bin,setup,machine-local}
     + whoami/ deliberately ABSENT — no-viable-whoami is a non-fatal warning
     branch, not a precondition) and a claude-klabauter-side root (``coordinator/lib`` +
     ``coordinator/bin``) resolved via ``CLAUDE_KLABAUTER_ROOT``, per the dual-anchor
@@ -600,7 +600,7 @@ def test_substrate_run_success_path_dual_anchor_populated_tree(tmp_path, monkeyp
     assert (ml_dst / "registry.toml").is_file()
     assert (ml_dst / "hardware.toml").is_file()
 
-    # example-doctrine-repo-side (plugin_root) resolvers landed.
+    # coordinator-claude-side (plugin_root) resolvers landed.
     assert (bin_dst / "machine-local").is_file()
     assert is_executable(bin_dst / "machine-local")
 
@@ -819,9 +819,9 @@ def test_substrate_run_fails_loud_on_bad_layout(tmp_path, monkeypatch):
 
 
 def test_substrate_run_fails_loud_when_claude_klabauter_lib_missing(tmp_path, monkeypatch):
-    """example-doctrine-repo-side layout (plugin_root/templates) satisfied, but claude-klabauter-side
+    """coordinator-claude-side layout (plugin_root/templates) satisfied, but claude-klabauter-side
     coordinator/lib is missing at the resolved CLAUDE_KLABAUTER_ROOT — the dual-anchor
-    precondition (§ item 3) must fail loud rather than treat the example-doctrine-repo-side
+    precondition (§ item 3) must fail loud rather than treat the coordinator-claude-side
     check alone as sufficient."""
     plugin_root = tmp_path / "plugin-root"
     (plugin_root / "templates").mkdir(parents=True)
@@ -1129,8 +1129,8 @@ def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path, monkeyp
 # side effects) the bash subprocess used to produce -- with zero bash/sh
 # dependency, per the naked-Python mandate.
 #
-# Port of: render-template.sh (example-doctrine-repo 290997c7, 2026-07-22)
-# Port of: platform-localize.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
+# Port of: render-template.sh (coordinator-claude 290997c7, 2026-07-22)
+# Port of: platform-localize.sh (coordinator-claude 6fb5fb37, 2026-07-22)
 # ---------------------------------------------------------------------------
 
 

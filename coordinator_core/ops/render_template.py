@@ -6,7 +6,7 @@ caller-supplied KEY=VALUE pairs. Fails loudly on any unsubstituted
 {{KEY}} remaining after render; rejects keys with whitespace inside
 braces by treating them as unsubstituted.
 
-Port of: render-template.sh (example-doctrine-repo 290997c7, 2026-07-22)
+Port of: render-template.sh (coordinator-claude 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-05-19-coordinator-installer-redesign-implementation.md § C1 (D3.b)
                docs/plans/2026-06-26-coordinator-install-update-friction-fix-slate.md § C-R3a
 

@@ -1,10 +1,10 @@
 """
 coordinator_core.ops.workday_complete_backfill_scan — skipped-workday backfill detector.
 
-Port of: workday-complete-backfill-scan.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: workday-complete-backfill-scan.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-07-workday-complete-local-day-and-targeted-wrap.md § C3
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-Spec backlink: docs/plans/2026-07-19-de-machine-backfill-scan-per-day.md § C1
+Spec backlink: pln-de-machine-workday-complete-ba-f1b7e6 § C1
 
 Purpose: `/workday-complete` Step 3.5 and `/workday-start` Step 1.85 both call the
 trampoline over this module to detect past days with commits but no daily-summary
@@ -36,7 +36,7 @@ Exit codes (main()):
         validation failures, distinct from any in-scan degrade.
 This module has no claude-klabauter-transport dependency of its own (it IS the claude-klabauter
 module) — the transport-failure code (import/CLAUDE_KLABAUTER_ROOT resolution) lives at
-the example-doctrine-repo trampoline layer, which treats that failure as best-effort/
+the coordinator-claude trampoline layer, which treats that failure as best-effort/
 advisory (exit 0, loud stderr) since this scanner only ever feeds a nudge or
 an auto-backfill fan-out, never a hard ceremony gate. See the trampoline's own
 comment block for its chosen code.

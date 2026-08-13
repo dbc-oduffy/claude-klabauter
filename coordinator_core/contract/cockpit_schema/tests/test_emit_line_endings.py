@@ -3,13 +3,13 @@ test_emit_line_endings — the emitter writes LF on every platform.
 
 Failure class guarded: `Path.write_text` without `newline=` runs in universal-
 newlines mode, so a Windows emit rewrites all 31 schema files CRLF. Nothing
-downstream caught it — example-doctrine-repo's `.gitattributes` pins `*.json eol=lf` so the
+downstream caught it — coordinator-claude's `.gitattributes` pins `*.json eol=lf` so the
 committed bytes normalise in the index, and `test_committed_emit_drift` reads
 its comparands in text mode, which strips the CR before comparing. The exposure
 is the *worktree*: `regen-cockpit-schema.py --advance-ref` runs the regen and
 then refuses on a `git status --porcelain` that now reports 31 modified files,
-with no second attempt that succeeds. Reported by example-doctrine-repo-em, 2026-08-11
-(`cross-repo/archive/2026-08-11-example-doctrine-repo-em-cockpit-3-11-0-tagged-revendor-now.md`).
+with no second attempt that succeeds. Reported by coordinator-claude-em, 2026-08-11
+(`cross-repo/archive/2026-08-11-coordinator-claude-em-cockpit-3-11-0-tagged-revendor-now.md`).
 
 Negative spec: this asserts raw bytes, not decoded text — a text-mode read on
 Windows would silently translate the very CRLF this test exists to catch.
@@ -30,7 +30,7 @@ def test_emitted_schema_files_are_lf_only(tmp_path):
     crlf = [p.name for p in emitted if b"\r" in p.read_bytes()]
     assert crlf == [], (
         "emitted schema files contain carriage returns — the emitter must pin "
-        'newline="\\n" on every write. CRLF here dirties example-doctrine-repo\'s worktree on every '
+        'newline="\\n" on every write. CRLF here dirties coordinator-claude\'s worktree on every '
         "Windows regen and blocks regen-cockpit-schema.py --advance-ref.\n"
         f"Offending files: {', '.join(crlf)}"
     )

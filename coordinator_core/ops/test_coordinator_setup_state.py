@@ -6,7 +6,7 @@ Covers: seed-on-first-record, idempotent first-occurrence-wins, check exit
 codes, status absence/presence, bad-arg rejection, auto-record self-heal, and
 the bash-oracle-faithful "missing .claude parent dir -> record fails" quirk.
 
-Port of: coordinator-setup-state.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: coordinator-setup-state.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

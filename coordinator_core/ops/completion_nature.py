@@ -24,7 +24,7 @@ This module is NOT a registered op — it is a helper consumed by
 ceremony.wsc_resolve (C2.2) to pre-resolve the nature branch. No edits to
 ops/__init__.py or ipc.py are needed or made here.
 
-Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-workstream.md § C1.3
+Spec backlink: pln-ceremony-as-pipeline-2-invert--fd1b98 § C1.3
 Node-map reference: wsc node 2.6.4 (SHOULD-BE-SCRIPT → D)
 """
 

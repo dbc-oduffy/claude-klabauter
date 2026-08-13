@@ -3,7 +3,7 @@ coordinator_core.ops.fleet.memo_check_addressee — memo.check_addressee COMPUTE
 
 Purpose: answer "is a memo's `to:` value addressed to THIS (calling) repo?" —
 a **path-based** MATCH / MISMATCH / UNRESOLVED verdict, the claude-klabauter port of the
-Example-doctrine-repo CLI `cross-repo-memo --check-addressee` handler that `/pickup`'s M-addr
+Coordinator-claude CLI `cross-repo-memo --check-addressee` handler that `/pickup`'s M-addr
 guard consumes to decide whether a memo is this repo's to action. Verdict is
 computed by comparing resolved REPO PATHS, not receiver-id strings — the same
 alias can resolve to the same repo path from two different spellings, and
@@ -17,8 +17,8 @@ to compute self_root, hence common_dir-scoping — unlike memo.list's "none").
 Spec backlink:
     state/handoffs/2026-07-21_184526_claude_klabauter-check-addressee-verb.md
     (ratifying spinoff — carries DR-047 addressee-guard corrected behaviour).
-    Parity source: example-doctrine-repo CLI `cross-repo-memo --check-addressee` handler
-    (example-doctrine-repo/coordinator/bin/cross-repo-memo:3249-3289).
+    Parity source: coordinator-claude CLI `cross-repo-memo --check-addressee` handler
+    (coordinator-claude/coordinator/bin/cross-repo-memo:3249-3289).
     Resolver: coordinator_core/ops/fleet/_memo_resolver.py (resolve_receiver_inbox,
     suggest_nearest_receiver, read_redirect_aliases).
 
@@ -27,7 +27,7 @@ Negative-spec:
     (self_root vs to_root), which is the whole reason an alias resolving to
     the same repo path counts as MATCH.
   - Does NOT hardcode any redirect-alias literal — the redirect set is read
-    declaratively via `read_redirect_aliases()`. Example-doctrine-repo promoted
+    declaratively via `read_redirect_aliases()`. Coordinator-claude promoted
     `identity.redirectAliases` into the manifest 2026-07-21; the redirect
     branch fires whenever a caller's `to` normalizes into that set.
   - Does NOT write any file, create any directory, or run any git command —
@@ -180,7 +180,7 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
         if central_check_id in central_ids:
             note = (
                 f"receiver {to!r} is a central receiver id "
-                f"(identity.centralReceiverIds) that resolves to the example-doctrine-repo "
+                f"(identity.centralReceiverIds) that resolves to the coordinator-claude "
                 f"repo, but none of the manifest's central receiver ids is "
                 f"registered in the machine-local registry."
             )
@@ -207,7 +207,7 @@ def compute_check_addressee_candidate(self_root: Path, to: str) -> dict:
     }
 
 
-#: Exit codes mirroring the example-doctrine-repo CLI's `--check-addressee` branch
+#: Exit codes mirroring the coordinator-claude CLI's `--check-addressee` branch
 #: (`cross-repo-memo:4088-4105`) — `format_addressee_message` returns one of
 #: these three; there is no fourth verdict string in `compute_check_addressee_
 #: candidate`'s output, so no other exit code is ever produced by this path.
@@ -220,7 +220,7 @@ def format_addressee_message(
     self_em: str, self_root: Path, to_val: str, candidate: dict
 ) -> tuple[str, int]:
     """Render the `self:`/`to:`/`verdict:` three-line text byte-for-byte
-    against the example-doctrine-repo CLI's `--check-addressee` stdout (`cross-repo-memo:
+    against the coordinator-claude CLI's `--check-addressee` stdout (`cross-repo-memo:
     4088-4105`), plus the matching exit code. THE ONE formatter for this
     prose — every in-process consumer of `compute_check_addressee_candidate`
     calls this rather than re-deriving the verdict lines.

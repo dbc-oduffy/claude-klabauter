@@ -14,8 +14,8 @@ Idempotent and enduring: each milestone timestamp is set ONCE (first
 occurrence wins) and never overwritten on re-run, so re-running /setup or
 re-taking the tour does not rewrite history.
 
-Spec backlink: docs/wiki/coordinator-setup-state-receipt.md (example-doctrine-repo)
-Port of: coordinator-setup-state.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Spec backlink: docs/wiki/coordinator-setup-state-receipt.md (coordinator-claude)
+Port of: coordinator-setup-state.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Commands:

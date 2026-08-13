@@ -57,7 +57,7 @@ Self-registration: importing this module calls
 register_op("session.sweep_consumed_handoffs", _handler) as a side-effect.
 Add to coordinator_core/ops/__init__.py to trigger registration.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C21
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C21
 """
 from __future__ import annotations
 

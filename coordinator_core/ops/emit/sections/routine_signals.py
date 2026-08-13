@@ -12,9 +12,9 @@ last update-docs / bug-sweep commit, a static "unknown" dormant-repo placeholder
 All six use provenance derivation ``rolled_up``; there is no malformed bucket for this
 section (the shapes are constructed, never parsed). Byte/semantic parity port.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) § SECTION 4 —
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) § SECTION 4 —
   RoutineSignals.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P04
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P04
 """
 
 from __future__ import annotations

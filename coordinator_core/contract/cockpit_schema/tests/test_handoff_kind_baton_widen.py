@@ -3,7 +3,7 @@ test_handoff_kind_baton_widen — union non-narrowing guard for the D1
 baton-kind vocabulary widen (C8a, critical-path chunk).
 
 `HandoffKind` (entities/summaries.py) and its emitted wire twin
-(example-doctrine-repo `coordinator/cockpit-contract/schema/handoff-summary.schema.json`
+(coordinator-claude `coordinator/cockpit-contract/schema/handoff-summary.schema.json`
 `properties.kind.enum`) must both accept the three D1 rename targets
 ("roadmap-baton", "roadmap-seed", "goal-seed") AND still carry every
 pre-existing value, including the three tokens those targets retire on the

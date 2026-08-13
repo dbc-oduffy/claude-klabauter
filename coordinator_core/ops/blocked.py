@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.blocked
 
-Port of: blocked.sh (example-doctrine-repo b5a4192c, 2026-07-20).
+Port of: blocked.sh (coordinator-claude b5a4192c, 2026-07-20).
 
 Purpose: Two-part blocked-work detector, unchanged from the bash oracle:
   1. Handoffs with `status: blocked` or `status: paused` — via
@@ -32,7 +32,7 @@ Negative-spec:
     - Does NOT recurse below `tasks/<name>/todo.md` (mindepth 2, maxdepth 2 in the
       bash oracle) — mirrors that exact depth, not a general todo-file finder.
     - No more node/subprocess dependency for the handoff leg — `BLOCKED_QUERY_RECORDS_DIR`
-      and the example-doctrine-repo `coordinator/bin/query-records.js` co-location are retired for this site;
+      and the coordinator-claude `coordinator/bin/query-records.js` co-location are retired for this site;
       `query_records()` walks claude-klabauter's own worktree directly, so `repo_root` is the only
       root this leg now depends on (same root the removed spawn's `cwd`/`--root` resolved
       to). Any failure in the seam (unreadable dir, bad glob, parse error) is swallowed —
@@ -51,7 +51,7 @@ from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.wire_paths import rel_id
 from coordinator_core.win_portability import no_console_creationflags
 
-_PROG = "blocked.sh"  # literal program-name prefix — matches the example-doctrine-repo filename
+_PROG = "blocked.sh"  # literal program-name prefix — matches the coordinator-claude filename
 
 
 def _git_repo_root(cwd: Optional[str] = None) -> Optional[str]:

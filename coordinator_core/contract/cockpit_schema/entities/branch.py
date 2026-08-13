@@ -1,6 +1,6 @@
 """
 Branch — a single ref observation, keyed on `(repo, branch_name, tip_sha)`.
-Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/entities/branch.ts`
+Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/branch.ts`
 (Zod source).
 
 Branch-fact data-quality defenses (the Data Science Reviewer P1-D5, github-connector corpus):

@@ -1,6 +1,6 @@
 """test_sweep_boot.py — self-contained test suite for sweep-boot.py.
 
-Port of: test-sweep-boot-wrapper.sh (example-doctrine-repo a920e2de, 2026-07-19). Retargets the bash oracle's
+Port of: test-sweep-boot-wrapper.sh (coordinator-claude a920e2de, 2026-07-19). Retargets the bash oracle's
 contract assertions onto the Python trampoline: integer-count stdout contract on every
 path (success / op-level refusal / transport failure), exit-0-always ceremony contract,
 WARN-to-stderr on non-success paths, params-json state_common_dir forwarding, and the
@@ -13,7 +13,7 @@ generic transport-error path (test_route_mutation_runtime_error).
 Runs bash-free: `python3 test_sweep_boot.py` (or via the coordinator test runner).
 Exit 0 = all tests pass; non-zero = at least one failure.
 
-Spec backlink: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C2 / AC7
+Spec backlink: pln-strang-11-b8-session-init-boot-f78455 § C2 / AC7
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Pinned pattern, Wave 1b
 """
 from __future__ import annotations

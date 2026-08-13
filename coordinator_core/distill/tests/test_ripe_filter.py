@@ -36,7 +36,7 @@ Coverage:
     (s) sidecars list is sorted
     (t) sidecars survive month-nested recursion with rel-posix paths
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C1
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C1
 """
 
 from __future__ import annotations

@@ -33,7 +33,7 @@ Coverage:
     (p) missing run_id param raises ValueError (no wallclock minting)
     (q) end-to-end dispatch_message smoke via the real registered wiring
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C10
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C10
 """
 
 from __future__ import annotations

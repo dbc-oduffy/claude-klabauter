@@ -199,9 +199,9 @@ Negative-spec (FOURTH LEG / C8):
 Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D2d
 Spec backlink (SECOND LEG): cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
 terminal-state-not-cleared-programmatically.md, defect 1, item 3.
-Spec backlink (C5): docs/plans/2026-08-05-stranded-baton-drainage-make-the-detecto.md § C5.
-Spec backlink (THIRD LEG / C4): docs/plans/2026-08-05-reaper-preserves-closure-evidence.md § AC10.
-Spec backlink (FOURTH LEG / C8): docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink (C5): pln-stranded-baton-drainage-make-t-f4a679 § C5.
+Spec backlink (THIRD LEG / C4): pln-reaper-preserves-closure-evide-34a6fc § AC10.
+Spec backlink (FOURTH LEG / C8): pln-claim-state-make-the-ledger-th-6641e3
 § Tasks C8, AC17. NOTE: this leg knowingly breaks AC5 of
 docs/plans/2026-08-05-stranded-baton-drainage-make-the-detecto.md (byte-identical result-dict
 output) — the sibling plan's AC5 gives, by PM ruling 2026-08-07; see that plan's own amendment

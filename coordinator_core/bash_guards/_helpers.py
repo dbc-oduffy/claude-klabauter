@@ -24,7 +24,7 @@ Two families of shared primitive live here:
 2. Two new shared predicates that had no Python port before this module
    (recipe \xa7(a) "Confined-findings-agent SSOT gap" + \xa7 Summary items 1-2):
 
-   - ``is_confined_findings_agent(effective_type)`` -- port of example-doctrine-repo's
+   - ``is_confined_findings_agent(effective_type)`` -- port of coordinator-claude's
      ``coordinator/lib/coordinator-session.sh``'s ``_cs_is_confined_findings_agent``.
      SSOT for the guard-before-grant set consumed by
      ``block-reviewer-bash-outside-allowlist.sh`` (fold-candidate #2). A
@@ -37,7 +37,7 @@ Two families of shared primitive live here:
      write-sandbox), and conflating the two confinement concepts under one
      policy object would be a regression, not a simplification.
 
-   - ``csn_check(comp)`` -- port of example-doctrine-repo's
+   - ``csn_check(comp)`` -- port of coordinator-claude's
      ``coordinator/bin/lib/coordinator-safe-name.sh``'s ``csn_check``. The
      canonical basename-legality predicate: byte-for-byte faithful to the
      bash case-statement order (trailing dot, trailing space, then each
@@ -108,10 +108,10 @@ Two families of shared primitive live here:
    it was picked against.
 
 Parity oracles:
-  Port of: coordinator-session.sh \xa7 _cs_is_confined_findings_agent (example-doctrine-repo e34f2484, 2026-07-22)
-  Port of: coordinator-safe-name.sh \xa7 csn_check (example-doctrine-repo 721a71f4, 2026-07-21)
-  Ported from the retired example-doctrine-repo bash guard
-  ``block-reviewer-bash-outside-allowlist.sh`` (deleted 2026-07-16, example-doctrine-repo
+  Port of: coordinator-session.sh \xa7 _cs_is_confined_findings_agent (coordinator-claude e34f2484, 2026-07-22)
+  Port of: coordinator-safe-name.sh \xa7 csn_check (coordinator-claude 721a71f4, 2026-07-21)
+  Ported from the retired coordinator-claude bash guard
+  ``block-reviewer-bash-outside-allowlist.sh`` (deleted 2026-07-16, coordinator-claude
   ``2f8b8450``).
 Spec backlink: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md \xa7(a), \xa7 Summary items 1-2
 """
@@ -139,7 +139,7 @@ from coordinator_core.session.identity import resolves_em_audience
 # AC5 (docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md, C2):
 # a plain re-use of C1's dispatch-seam roster resolver, NOT a second roster
 # implementation. `resolve_roster()` is the one function that already unions
-# the three legitimate-dispatch sources (example-doctrine-repo policy map keys, coordinator
+# the three legitimate-dispatch sources (coordinator-claude policy map keys, coordinator
 # agents, harness built-ins + plugin agents) and fails CLOSED on an
 # unreadable roster -- see that module's own docstring. This bash-guard
 # package borrows it for the SAME reason it borrows `resolve_effective_types`
@@ -311,12 +311,12 @@ OVERRIDE_KEYS_DOC = "docs/reference/guard-override-keys.md"
 #: file-resolution form a caller joins to a repo root, this is what a reader
 #: of a guard MESSAGE sees.
 #:
-#: These guards are not claude-klabauter-local: example-doctrine-repo's PreToolUse shim resolves this
+#: These guards are not claude-klabauter-local: coordinator-claude's PreToolUse shim resolves this
 #: engine and runs the guard logic in-process for EVERY repo on the machine,
 #: so the reader of this pointer is usually sitting in some other repo's
 #: tree, where a bare `docs/reference/...` resolves to nothing. Naming the
 #: repo matches the convention CLAUDE.md already uses for cross-repo
-#: citations ("example-doctrine-repo coordinator/docs/wiki/..."). NEGATIVE SPEC: do not
+#: citations ("coordinator-claude coordinator/docs/wiki/..."). NEGATIVE SPEC: do not
 #: collapse these two constants back into one -- the file-resolution caller
 #: and the message reader need different strings.
 #:
@@ -684,7 +684,7 @@ def is_confined_by_roster_absence(effective_type: str) -> bool:
     cheaper ``bash_policy:`` key and ``is_confined_findings_agent`` legs --
     those two checks resolve the common case (a known confined type) without
     ever reaching this function's ``resolve_roster()`` call, which walks
-    example-doctrine-repo's policy YAML, ``coordinator/agents/*.md``, and the plugin discovery
+    coordinator-claude's policy YAML, ``coordinator/agents/*.md``, and the plugin discovery
     tree -- real disk I/O, unlike the two cheap membership checks it
     supplements. This function does not itself defer that call further; the
     call-site ordering in ``block_reviewer_bash_outside_allowlist.
@@ -704,14 +704,14 @@ def is_confined_by_roster_absence(effective_type: str) -> bool:
 # ---------------------------------------------------------------------------
 
 #: NTFS-illegal chars in csn_check's exact case-statement order
-#: (Port of: coordinator-safe-name.sh, example-doctrine-repo 721a71f4, 2026-07-21). Order matters only for WHICH
+#: (Port of: coordinator-safe-name.sh, coordinator-claude 721a71f4, 2026-07-21). Order matters only for WHICH
 #: hint is returned when a component has more than one illegal char -- the
 #: deny/allow verdict (None vs non-None) is order-independent.
 _ILLEGAL_CHARS_ORDER = (":", "?", "*", "<", ">", "|", '"', "\\", "/")
 
 
 def csn_check(comp: str) -> Optional[str]:
-    """Port of: coordinator-safe-name.sh's ``csn_check`` (example-doctrine-repo 721a71f4, 2026-07-21).
+    """Port of: coordinator-safe-name.sh's ``csn_check`` (coordinator-claude 721a71f4, 2026-07-21).
 
     Exit-code-0-if-safe / exit-non-zero-plus-reason-if-not becomes: return
     ``None`` if ``comp`` is safe for all target platforms (NTFS, macOS HFS+,

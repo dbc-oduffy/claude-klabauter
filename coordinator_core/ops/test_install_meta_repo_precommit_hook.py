@@ -11,7 +11,7 @@ rather than only grepping the hook text for marker substrings, because
 substring presence is exactly what the previous "gates are present but dead
 after a stray `exit 0`" bug would still pass.
 
-Port of: install-meta-repo-precommit-hook.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: install-meta-repo-precommit-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 """
 from __future__ import annotations

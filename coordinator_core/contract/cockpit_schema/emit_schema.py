@@ -1,5 +1,5 @@
 """
-emit_schema — pydantic port of example-doctrine-repo `coordinator/cockpit-contract/scripts/emit-schema.ts`.
+emit_schema — pydantic port of coordinator-claude `coordinator/cockpit-contract/scripts/emit-schema.ts`.
 
 Emits one `<name>.schema.json` per registered entity plus a bundled
 `cockpit-contract.schema.json` (all entities under `$defs`), reproducing the
@@ -62,7 +62,7 @@ self-referential entity would need `_resolve_refs` extended with a
 recursion guard before this emitter could safely handle it.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
-Source: coordinator/cockpit-contract/scripts/emit-schema.ts (example-doctrine-repo)
+Source: coordinator/cockpit-contract/scripts/emit-schema.ts (coordinator-claude)
 Negative-spec: this module does NOT own `ENTITY_SCHEMAS` (the name→model
 registry) — that is the stage-2 (T4e-d) agent's job, wiring
 `coordinator_core/contract/cockpit_schema/__init__.py`. `main()` below
@@ -92,7 +92,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # The T4e-c recipe (§ 6, GIVES-PAUSE) flagged an open architecture question —
 # where CONTRACT_VERSION canonically lives post-port, and whether it should
 # be read in-process from this pydantic module or cross-checked against
-# example-doctrine-repo's committed schema/*.json — as EM/PM/the Staff Engineer-adjudicated, NOT a
+# coordinator-claude's committed schema/*.json — as EM/PM/the Staff Engineer-adjudicated, NOT a
 # BUILD-wave call. That question is still open; this module wins only the
 # narrower "which literal is authoritative" sub-question, by being the
 # dependency-free leaf that must stay independently importable/runnable
@@ -106,7 +106,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # MINOR bump 3.3.0 -> 3.4.0 (C6a): adds four DERIVED HandoffSummary fields
 # (pm_priority/pm_priority_origin/pm_priority_source_id/suggested_priority)
 # and rides the already-landed owner-casing clause amendment (claude-klabauter
-# 4a73368b, example-doctrine-repo 39a65721), which shipped without its own bump so it
+# 4a73368b, coordinator-claude 39a65721), which shipped without its own bump so it
 # would ride this one. MINOR, not MAJOR, is deliberate: example-cockpit-repo's
 # checkSchemaVersion() hard-throws on a MAJOR mismatch in either direction
 # but tolerates emission-minor-greater-than-vendored on the same major (with
@@ -122,7 +122,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # adds `docs_staleness` (REQUIRED-WITH-NULL, D9) to `ExecSummary` — per-doc
 # staleness verdicts from `coordinator_core.ops.doc_staleness`. Additive
 # only: no existing required field changed, narrowed, or removed, same
-# class as D19-D28/D32 §9 (example-doctrine-repo coordinator/cockpit-contract/
+# class as D19-D28/D32 §9 (coordinator-claude coordinator/cockpit-contract/
 # DECISIONS.md) — cockpit confirmed this class in their 2026-07-28 reply.
 # The plan's original target was "3.3.0 -> 3.4.0"; disk had already moved
 # to 3.5.0 via the unrelated priority-ledger bump above by the time this
@@ -167,15 +167,15 @@ from coordinator_core.contract.cockpit_schema.common import (
 # as distinct from fetched (raw), structured (parsed), aggregated (rolled_up),
 # or multi-source-derived (computed). Member-only additive on an existing
 # enum: no member removed, no required field changed, so MINOR, same class as
-# D22/D23/D28. Example-doctrine-repo ratified this in cockpit-contract DECISIONS.md D42
+# D22/D23/D28. Coordinator-claude ratified this in cockpit-contract DECISIONS.md D42
 # (2026-08-03) and routed the emitter work here under the D31
 # emitter-ownership boundary; the artifact-shape-contract half landed first
 # (ops/emit_artifact_shape_contract.py, its own 3.1.0 row), leaving this
 # emitter as the unexecuted second half — which the cross-package parity test
 # (contract/cockpit_schema/tests/test_provenance_parity.py) then caught as a
-# divergence. Example-doctrine-repo's bilateral version-bump assent for this bump is on record
-# in cross-repo/inbox/2026-08-05-example-doctrine-repo-em-cockpit-derivation-synthesized-
-# half-landed.md; example-doctrine-repo re-runs regen-cockpit-schema.py on their side once this
+# divergence. Coordinator-claude's bilateral version-bump assent for this bump is on record
+# in cross-repo/inbox/2026-08-05-coordinator-claude-em-cockpit-derivation-synthesized-
+# half-landed.md; coordinator-claude re-runs regen-cockpit-schema.py on their side once this
 # lands, regenerating all 58 inlined enum sites plus the standalone envelope
 # from this one literal.
 # MINOR bump 3.10.0 -> 3.11.0 (scan-completeness on RoadmapSummary): adds
@@ -194,7 +194,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # MINOR classification and the two D9 conditions (required/always-present, and
 # scan_errors items pinned to string) on 2026-08-11, discharged the D21 consumer
 # census (cockpit and rag both pass), and specified the D39 source-first release
-# sequence: claude-klabauter widens and regenerates into example-doctrine-repo's schema/ out-dir, example-doctrine-repo
+# sequence: claude-klabauter widens and regenerates into coordinator-claude's schema/ out-dir, coordinator-claude
 # commits the bundle and advances the release tag, claude-klabauter re-vendors, and only
 # then does the emitter begin populating the keys.
 # 3.11.0 -> 3.12.0 (producer-axis) adds the `producer` record to
@@ -210,7 +210,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 #     present-as-null when there is nothing to report. The sole construction
 #     site (ops/emit/sections/handoffs.py) always supplies it.
 # Classified MINOR either way: one new field on an existing entity, nothing
-# narrowed and nothing removed, the same class example-doctrine-repo assigned their paired
+# narrowed and nothing removed, the same class coordinator-claude assigned their paired
 # handoff.schema.json 7.1.0 / handoff-archived.schema.json 2.5.0
 # (`nested-field-additive`) — MINOR does not turn on optional-vs-required-
 # with-null, only on additive-vs-narrowing/removing.
@@ -219,11 +219,11 @@ from coordinator_core.contract.cockpit_schema.common import (
 # re-emit: HandoffSummary's shape moved while the constant did not, which is
 # the guard doing its job rather than a defect — a bundle whose version says
 # nothing changed is the failure it exists to prevent. It fired for
-# example-doctrine-repo-em when they went to run their C6b regen; reported to us by memo
+# coordinator-claude-em when they went to run their C6b regen; reported to us by memo
 # rather than worked around, and this bump is the discharge.
 #
 # D39 source-first release sequence, unchanged from 3.11.0: claude-klabauter widens and
-# regenerates into example-doctrine-repo's schema/ out-dir, example-doctrine-repo commits the bundle and advances
+# regenerates into coordinator-claude's schema/ out-dir, coordinator-claude commits the bundle and advances
 # the release tag, claude-klabauter re-vendors, and only then does the emitter's output
 # reach a validator that knows the shape. Between this bump and that
 # re-vendor the local desync guard is EXPECTED to trip — that interim red is

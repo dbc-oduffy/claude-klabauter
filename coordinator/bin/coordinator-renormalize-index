@@ -21,7 +21,7 @@ Finish-strangler port: the bash implementation (187 lines) has been fully
 ported to coordinator_core/ops/renormalize_index.py (claude-klabauter), with parity
 coverage in the co-located pytest
 (coordinator_core/ops/test_renormalize_index.py). This file is now a thin
-Example-doctrine-repo-side trampoline over that claude-klabauter module. Zero production callers of the
+Coordinator-claude-side trampoline over that claude-klabauter module. Zero production callers of the
 bash original as of this port — tests only, which exec'd this file in place
 and needed no rework: this trampoline preserves the same argv contract (bare /
 `--check`), the same stdout-silent / stderr-messaged behavior, and the same

@@ -1,6 +1,6 @@
 """
 TrackerSummary — summary view over docs/project-tracker.md lifecycle and
-status. Pydantic port of example-doctrine-repo
+status. Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/tracker-summary.ts` (Zod source).
 
 Spec backlink: schemas/tracker.yaml + docs/plans/2026-06-27-emit-new-record-types-producer-wiring.md

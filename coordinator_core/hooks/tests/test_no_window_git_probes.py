@@ -7,7 +7,7 @@ hook-path git-probe spawn sites (`example_retrieval_repo_detect._git` and
 `subprocess.run` call, suppressing the Windows `conhost.exe` popup those
 read-only git probes previously triggered on every invocation.
 
-Spec backlink: docs/plans/2026-08-07-no-window-subprocess-primitive.md, row C4.
+Spec backlink: pln-no-window-subprocess-primitive-750d2d, row C4.
 """
 
 from __future__ import annotations

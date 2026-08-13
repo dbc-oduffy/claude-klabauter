@@ -4,7 +4,7 @@ test_query_file_attribution.py — Smoke test for query-file-attribution.py CLI.
 Purpose: Verify the --session and --file query modes produce correct JSON output
 when run against the golden transcript fixture.
 
-Spec backlink: docs/plans/2026-07-02-ccos-6-rehome-attribution-python.md § C2
+Spec backlink: pln-ccos-6-rehome-attribution-python-9966da § C2
 
 Test strategy:
   - Copies the golden fixture (transcript-golden.jsonl) into a temp directory

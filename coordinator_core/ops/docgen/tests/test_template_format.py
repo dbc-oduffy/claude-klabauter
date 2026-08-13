@@ -8,7 +8,7 @@ Covers:
     value_or_literal_fallback) are exercised across the corpus, and no unsanctioned
     field kind sneaks in (AC3)
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C2 (AC3)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C2 (AC3)
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import pytest
 from coordinator_core.ops.docgen import template_format as tf
 
 # The full 22-type surface this chunk extracts (Problem section: all 22
-# `_scaffold_*` bodies in example-doctrine-repo's coordinator-doc-new, with _scaffold_sidecar's
+# `_scaffold_*` bodies in coordinator-claude's coordinator-doc-new, with _scaffold_sidecar's
 # 4-way if/elif split into 4 keyed template entries per the plan body).
 EXPECTED_DOC_TYPES = frozenset({
     "handoff",
@@ -87,7 +87,7 @@ def test_format_round_trip_is_lossless(path):
 
     This is the format's round-trip contract (plan C2 body: "Test: format
     round-trip over every extracted type") — not a byte-identity check against
-    the live example-doctrine-repo oracle (that harness is C6's, against rendered *output*, not
+    the live coordinator-claude oracle (that harness is C6's, against rendered *output*, not
     this data-format's serialization).
     """
     original = tf.load_template(path)

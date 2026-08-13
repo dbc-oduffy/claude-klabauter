@@ -10,7 +10,7 @@ Design source: state/handoffs/2026-07-25_000921_slate-tracker-and-registry-sync.
 the "why" behind the compact-pointer-in-tracker / full-index-in-INDEX.md split,
 and why the hand-authored docs/plans/README.md is not a generator target).
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b
 """
 
 from __future__ import annotations

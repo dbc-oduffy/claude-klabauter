@@ -20,7 +20,7 @@ Claude-klabauter module docstring (`coordinator_core/ops/scan_unresolved_ubt_rec
 py`'s `main()`) — this file is a thin argv/exit-code passthrough over that
 module's `main()`.
 
-Spec backlink: example-doctrine-repo coordinator/docs/wiki/coordinator-tripwires.md
+Spec backlink: coordinator-claude coordinator/docs/wiki/coordinator-tripwires.md
 § phantom-cli-guard-seam
 """
 

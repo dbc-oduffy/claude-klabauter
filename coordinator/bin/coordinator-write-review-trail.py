@@ -204,7 +204,7 @@ def _plan_scope_kind_already_recorded(sha_range: str, repo_root: str) -> bool:
 
 def _validate_reviewer_verdict_coherence(reviewer: str, verdict: str) -> None:
     """Cross-field coherence gate (docs/plans/2026-08-05-coverage-gate-planning-
-    artifact-class.md § C14, folded from the example-doctrine-repo-em memo): `reviewer` and
+    artifact-class.md § C14, folded from the coordinator-claude-em memo): `reviewer` and
     `verdict` agree on whether this record is waived, or neither field alone tells
     the truth. The incident record —
     `{"reviewer":"waived","verdict":"pending",...}` — reads as BOTH "no reviewer is

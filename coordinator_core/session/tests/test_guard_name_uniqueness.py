@@ -16,7 +16,7 @@ route.md`, C1's `_GRANTABLE_GUARDS`) keys a sentinel on name alone: if a
 bash guard and a write guard ever shared a name, minting a sentinel for
 one would clear both.
 
-Spec backlink: docs/plans/2026-08-13-em-exercisable-in-band-grant-route.md, chunk C0.
+Spec backlink: pln-an-em-exercisable-in-band-gran-6bfb4a, chunk C0.
 """
 
 from __future__ import annotations

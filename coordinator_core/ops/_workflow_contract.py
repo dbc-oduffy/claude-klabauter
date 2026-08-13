@@ -9,7 +9,7 @@ against the evolving harness Workflow tool description (the living SSOT) is a
 data edit, not a logic rewrite. Imported by both `workflow.validate` (C2) and
 `workflow.scaffold` (C3) so neither op re-implements a check.
 
-Spec backlink: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md § C1
+Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d § C1
 
 Pure functions only; no I/O, no JS parser (no AST) — a bounded regex/line-based
 textual contract over conformant-shaped scripts, per the plan's "regex, not

@@ -1,7 +1,7 @@
 """coordinator_core.bash_guards.block_subagent_destructive_action -- Python
-engine-ification of example-doctrine-repo's retired
+engine-ification of coordinator-claude's retired
 ``coordinator/hooks/scripts/block-subagent-destructive-action.sh`` PreToolUse
-hook (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``; fold-candidate #3 of 5, W3a
+hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``; fold-candidate #3 of 5, W3a
 recipe section (b)).
 
 This is a faithful engine-ification, not a redesign: it ports the reference
@@ -65,7 +65,7 @@ Anti-scope (do NOT extend without a spec update):
 FAIL-OPEN OBSERVABILITY (2026-07-29 addition, PM-authorized, observability
 only -- see "FAIL-OPEN OBSERVABILITY" comment block above `_log_fail_open`
 for the full rationale): root-caused live by
-Example-doctrine-repo state/audits/2026-07-29-destructive-git-guard-inconsistency.md --
+Coordinator-claude state/audits/2026-07-29-destructive-git-guard-inconsistency.md --
 a `git rm --cached` denied in one repo and silently allowed the identical
 shape in another, and `check()` returning `None` on ANY of the three
 fail-open branches above wrote nothing anywhere, so the incident could not
@@ -79,8 +79,8 @@ confirmed by the existing deny/allow regression suite staying green plus
 new tests pinning each fail-open branch's log record and confirming a
 fail-open on a NON-flagged command logs nothing.
 
-Ported from the retired example-doctrine-repo bash guard ``block-subagent-destructive-action.sh``
-  (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``).
+Ported from the retired coordinator-claude bash guard ``block-subagent-destructive-action.sh``
+  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
 Spec backlink: docs/plans/2026-07-13-subagent-destructive-action-em-lock.md
 Recipe: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md section (b).3
 
@@ -513,7 +513,7 @@ _SOURCE_VERBS = frozenset({".", "source"})
 # ---------------------------------------------------------------------------
 # MACHINE-LOCAL REGISTRY WRITE DENY (2026-08-03, this change, DR-125
 # implementation -- docs/decisions/DR-125-subagent-bash-confinement-two-
-# classes.md, example-doctrine-repo). Confirmed live (code-reviewer Finding 3,
+# classes.md, coordinator-claude). Confirmed live (code-reviewer Finding 3,
 # narrow-subagent-commit-confinement-two-classes.md chunk C2 review): once
 # `coordinator:executor` left `_helpers._CONFINED_FINDINGS_AGENTS`,
 # `machine-local set/array-append/array-set/migrate-publish-mirrors`
@@ -766,7 +766,7 @@ def _normalize_windows_wrapper_argv0(cmd: str) -> str:
 # resolution once this guard fails to deny. That premise does not hold for
 # this project's actual harness: the Bash tool's execution shell on
 # Windows is Git Bash / MSYS bash (see `docs/wiki/bash-on-windows-
-# gotchas.md`, example-doctrine-repo) -- a genuine POSIX shell whose own `exec` does
+# gotchas.md`, coordinator-claude) -- a genuine POSIX shell whose own `exec` does
 # real word-splitting/backslash-escape processing BEFORE resolving an
 # executable, and hands `CreateProcess` an already-resolved, already-quoted
 # application name (never a raw, un-split command line with
@@ -1910,7 +1910,7 @@ def _evaluate_git_segment_anchored(
         # Classified explicitly rather than falling through to the
         # default-deny below, SOLELY to earn a named forward path in
         # `_deny_message` — the verdict is unchanged (still denied).
-        # 2026-07-25 example-doctrine-repo memo asked for a per-dispatch `git mv` carve-out
+        # 2026-07-25 coordinator-claude memo asked for a per-dispatch `git mv` carve-out
         # after an executor authorized by its brief to move one archived
         # lesson file fell back to filesystem `mv`. Declined, and this is
         # the reasoning: `git mv A B` is exactly `mv A B` plus `git add A B`,
@@ -2776,7 +2776,7 @@ def _build_reason(
 # via ordinary, non-adversarial multi-repo dispatch (a subagent's Bash call
 # lands in a repo other than the one it was dispatched from, so the
 # per-repo back-pointer the SECONDARY leg reads was never written there).
-# See example-doctrine-repo state/audits/2026-07-29-destructive-git-guard-inconsistency.md.
+# See coordinator-claude state/audits/2026-07-29-destructive-git-guard-inconsistency.md.
 #
 # This section is OBSERVABILITY ONLY -- it never changes an allow/deny
 # verdict. It only ever runs on a command Layer 1 has ALREADY flagged as

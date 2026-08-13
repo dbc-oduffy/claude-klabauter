@@ -27,7 +27,7 @@ Coverage:
                                       predecessor") canonicalizes to itself
                                       unchanged and has no legacy alias
 
-Spec backlink: chunk C1, chunk C6 (test f), docs/plans/2026-08-01-wsc-completeness-gate-and-pickup-successor.md.
+Spec backlink: chunk C1, chunk C6 (test f), pln-wsc-completeness-gate-pickup-s-9793ca.
 MEMO_PREDECESSOR coverage (test g) added by chunk C1,
 docs/plans/2026-08-05-memo-predecessor-representable-outcome.md.
 """

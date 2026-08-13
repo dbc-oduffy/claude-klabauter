@@ -8,18 +8,18 @@ Covers:
   - AC4 conformance: known_types() is set-EQUAL (not merely a subset) to
     coordinator-doc-new's own post-union _KNOWN_TYPES, reconstructed here by
     loading bin/lib/coordinator_registry.py directly (resolved
-    repo-root-relative — this module migrated in-repo via example-doctrine-repo commit
+    repo-root-relative — this module migrated in-repo via coordinator-claude commit
     b644d5a9) and applying the SAME local "run-report" union the CLI itself
     applies — never hand-copying a second literal type list to compare
     against. The manifest half of this comparison
     (``coordinator/schemas/coordinator-registry.manifest.json``, read by
     ``type_enum.known_types(doe_clone)`` et al.) has NOT migrated in-repo —
-    it still resolves the live example-doctrine-repo clone via ``resolve_doe_clone()`` and
+    it still resolves the live coordinator-claude clone via ``resolve_doe_clone()`` and
     is genuinely skippable when that clone is unavailable; only the
     ``coordinator_registry.py`` module load below was affected by the
     b644d5a9 migration and made fail-loud.
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C3 (AC4)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C3 (AC4)
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from coordinator_core.ops.docgen import type_enum as te
 from coordinator_core.ops.emit.doe_drift import DoeResolveError, resolve_doe_clone
 
 # ---------------------------------------------------------------------------
-# Live-example-doctrine-repo-clone skip guard for the manifest half of AC4 conformance
+# Live-coordinator-claude-clone skip guard for the manifest half of AC4 conformance
 # (mirrors coordinator_core/ops/emit/tests/test_doe_drift.py). The manifest
 # (coordinator/schemas/coordinator-registry.manifest.json) has NOT migrated
 # in-repo, unlike coordinator_registry.py below — this remains a genuine
@@ -50,7 +50,7 @@ except DoeResolveError:
 
 # ---------------------------------------------------------------------------
 # Oracle resolution for coordinator_registry.py (repo-root-relative — no
-# cross-repo clone lookup). This module lives in THIS repo as of example-doctrine-repo commit
+# cross-repo clone lookup). This module lives in THIS repo as of coordinator-claude commit
 # b644d5a9; a missing oracle at the expected path is a broken checkout, not
 # an unavailable optional dependency, so resolution failure fails loud.
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ if not _REGISTRY_PATH.is_file():
         f"oracle coordinator_registry.py not found at {_REGISTRY_PATH} "
         f"(resolved repo-root-relative from {__file__}) — this is a broken "
         "checkout, not an unavailable optional dependency; the oracle has "
-        "lived in-repo since example-doctrine-repo commit b644d5a9",
+        "lived in-repo since coordinator-claude commit b644d5a9",
         pytrace=False,
     )
 
@@ -82,7 +82,7 @@ def _load_cli_coordinator_registry():
 
 
 # ---------------------------------------------------------------------------
-# Synthetic-manifest fixtures — no live example-doctrine-repo clone required
+# Synthetic-manifest fixtures — no live coordinator-claude clone required
 # ---------------------------------------------------------------------------
 
 _SYNTHETIC_MANIFEST = {
@@ -193,17 +193,17 @@ class TestManifestReadFailures:
 # AC4 — live conformance against the CLI's actual post-union _KNOWN_TYPES
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(not _DOE_AVAILABLE, reason="example-doctrine-repo clone not available on this machine (manifest.json has not migrated in-repo)")
+@pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine (manifest.json has not migrated in-repo)")
 class TestAC4LiveConformance:
     # 2026-07-28: the class-level `pytestmark = pytest.mark.pending_fix` demotion
     # that used to sit here is RETIRED — all 7 cases pass live against a present
-    # example-doctrine-repo clone. The `skipif` above is NOT a demotion and stays: it is the
+    # coordinator-claude clone. The `skipif` above is NOT a demotion and stays: it is the
     # clone-absence guard it always was.
     #
     # The prior comment here is deleted, not reworded. It asserted "the marker was
     # never actually added here" while that very marker sat on the next line —
-    # both git history and the example-doctrine-repo memo prompting its removal
-    # (cross-repo/archive/2026-07-25-example-doctrine-repo-em-orient-assemble-phantom-verbs.md
+    # both git history and the coordinator-claude memo prompting its removal
+    # (cross-repo/archive/2026-07-25-coordinator-claude-em-orient-assemble-phantom-verbs.md
     # § P2, "Both use the module-level pytestmark form") confirm it was present.
     # Leaving a false claim adjacent to the code it describes is worse than
     # leaving no comment at all.

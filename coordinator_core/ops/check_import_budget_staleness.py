@@ -91,7 +91,7 @@ numeric ordering of `EXIT_STALE`/`EXIT_UNKNOWN` does NOT track severity
 must branch on `== EXIT_STALE` / `== EXIT_UNKNOWN` explicitly, never on
 exit-code magnitude.
 
-Spec backlink: docs/plans/2026-08-13-import-budget-manifest-staleness-tell.md § C2
+Spec backlink: pln-a-staleness-tell-for-the-impor-531a50 § C2
 """
 from __future__ import annotations
 

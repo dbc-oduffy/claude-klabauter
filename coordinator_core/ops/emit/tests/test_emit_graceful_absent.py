@@ -1,4 +1,4 @@
-"""Port of: emit-cockpit-spine-graceful-absent.sh (example-doctrine-repo f703efad, 2026-07-21)
+"""Port of: emit-cockpit-spine-graceful-absent.sh (coordinator-claude f703efad, 2026-07-21)
 (AC4 realization) — pytest edition.
 
 Asserts that when the spine source files that CAN be made absent for this test

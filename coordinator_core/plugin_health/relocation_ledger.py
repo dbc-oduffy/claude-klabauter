@@ -5,11 +5,11 @@ by any outside consumer without needing to reconstruct history from
 cross-repo archives.
 
 Purpose: a re-homing that changes owner repo AND runtime AND extension all at
-once (the `b644d5a9` example-doctrine-repo -> claude-klabauter executable-surface absorption) is
+once (the `b644d5a9` coordinator-claude -> claude-klabauter executable-surface absorption) is
 indistinguishable from a deletion to a consumer probing the old path. The
 2026-07-26 cockpit incident (spec backlink below) shows the cost: cockpit's
 own drift gate probed a dead `../coordinator-claude/bin/...` path,
-reconstructed history from example-doctrine-repo's cross-repo archive, concluded the validator
+reconstructed history from coordinator-claude's cross-repo archive, concluded the validator
 had been destroyed, and carried a 13-day-open durability ask plus a reviewed
 plan's `## External blocker` section around that wrong premise -- while the
 validator was working the whole time, one path resolution away.
@@ -26,14 +26,14 @@ bother to consult it.
 
 Sibling of `coordinator_core.plugin_health.fleet_reachability`, not an
 extension of it. That module answers a narrower question -- "does every
-`bin/<name>` example-doctrine-repo's OWN skills/commands/hooks/pipelines cite still have
+`bin/<name>` coordinator-claude's OWN skills/commands/hooks/pipelines cite still have
 a surviving claude-klabauter oracle by normalized stem" -- via a live regex sweep of
 one specific consumer's tree. It has no way to help a *different* sibling
 repo (cockpit) that hardcodes a path into its own gate, because that repo's
 citation is never swept by anything living in claude-klabauter. This module answers
 the question fleet_reachability structurally cannot: "does claude-klabauter itself
 publish a queryable record of executables that moved, so ANY outside
-prober -- not just example-doctrine-repo's own fenced citations -- can resolve a stale
+prober -- not just coordinator-claude's own fenced citations -- can resolve a stale
 path mechanically instead of guessing." The two modules solve adjacent but
 distinct problems and neither subsumes the other.
 
@@ -168,8 +168,8 @@ class RelocationEntry:
 class IntegrityResult:
     """`ok=True` -> every ledger entry's `new_path` resolved to a real file
     (or the entry's `new_repo` is unresolvable on this machine, which is a
-    skip for that entry, not a failure -- an OSS consumer without a example-doctrine-repo
-    checkout should not fail this check over a example-doctrine-repo-side entry). `stale`
+    skip for that entry, not a failure -- an OSS consumer without a coordinator-claude
+    checkout should not fail this check over a coordinator-claude-side entry). `stale`
     carries one line per entry whose `new_repo` DID resolve but whose
     `new_path` does not exist there -- a ledger entry that has itself gone
     stale, which is exactly the rot this check exists to catch."""

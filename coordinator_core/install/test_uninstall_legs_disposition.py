@@ -3,7 +3,7 @@ coordinator_core.install.test_uninstall_legs_disposition — tests for the
 honest uninstall disposition report (Rule 1 / Rule 2 total-function
 coverage).
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
     chunk C8
 """
 
@@ -61,9 +61,9 @@ class TestClassifyEntryDisposition:
 
     def test_attempted_ok_none_is_deliberately_not_reversed(self):
         record = classify_entry_disposition(
-            _entry(kind="file-path", path="/some/example-doctrine-repo/checkout"),
+            _entry(kind="file-path", path="/some/coordinator-claude/checkout"),
             attempted_ok=None,
-            reason="full-remove mode never deletes <example-doctrine-repo>/coordinator source (PM-gated)",
+            reason="full-remove mode never deletes <coordinator-claude>/coordinator source (PM-gated)",
         )
         assert record.disposition == DISPOSITION_DELIBERATE
 
@@ -151,7 +151,7 @@ class TestBuildDispositionReportTotalCoverage:
                 reason="reversed",
             ),
             classify_entry_disposition(
-                _entry(kind="file-path", path="/example-doctrine-repo"),
+                _entry(kind="file-path", path="/coordinator-claude"),
                 attempted_ok=None,
                 reason="deliberate policy",
             ),
@@ -273,9 +273,9 @@ class TestRenderUninstallDryRunReport:
             reason="dry-run preview — a real run would reverse this entry",
         )
         genuinely_deliberate = classify_entry_disposition(
-            _entry(kind="file-path", path="/some/example-doctrine-repo/checkout"),
+            _entry(kind="file-path", path="/some/coordinator-claude/checkout"),
             attempted_ok=None,
-            reason="full-remove mode never deletes <example-doctrine-repo>/coordinator source (PM-gated)",
+            reason="full-remove mode never deletes <coordinator-claude>/coordinator source (PM-gated)",
         )
         report = build_disposition_report([would_reverse, genuinely_deliberate])
         text = render_disposition_report(report, dry_run=True)
@@ -283,7 +283,7 @@ class TestRenderUninstallDryRunReport:
         assert "reversed (1):" in text
         assert "deliberately-not-reversed (1):" in text
         assert "gc.autoDetach" in text
-        assert "/some/example-doctrine-repo/checkout" in text
+        assert "/some/coordinator-claude/checkout" in text
         # the two entries land in different buckets, not the same one
         assert would_reverse.disposition != genuinely_deliberate.disposition
 
@@ -432,9 +432,9 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
             reason="dry-run preview — a real run would reverse this entry",
         )
         genuinely_deliberate = classify_entry_disposition(
-            _entry(kind="file-path", path="/some/example-doctrine-repo/checkout"),
+            _entry(kind="file-path", path="/some/coordinator-claude/checkout"),
             attempted_ok=None,
-            reason="full-remove mode never deletes <example-doctrine-repo>/coordinator source (PM-gated)",
+            reason="full-remove mode never deletes <coordinator-claude>/coordinator source (PM-gated)",
         )
         coverage_unknown = classify_entry_disposition(
             _entry(kind="file-path", path="<writer:configure_git>"),
@@ -448,7 +448,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert "deliberately-not-reversed (1):" in text
         assert "cannot-reverse-safely (1):" in text
         assert "gc.autoDetach" in text
-        assert "/some/example-doctrine-repo/checkout" in text
+        assert "/some/coordinator-claude/checkout" in text
         assert "configure_git" in text
         # all three land in genuinely different buckets
         dispositions = {
@@ -627,7 +627,7 @@ class TestUninstallReverseGitConfigGroup:
         assert all(r.disposition == DISPOSITION_REVERSED for r in records)
 
     def test_no_prefix_strands_web_browser_without_noop_cmd(self):
-        """example-doctrine-repo ruling (Ask 2, cross-repo/inbox/2026-08-07-example-doctrine-repo-em-
+        """coordinator-claude ruling (Ask 2, cross-repo/inbox/2026-08-07-coordinator-claude-em-
         configure-git-per-key-scope-ruled-a.md): no prefix of the reversal
         sequence may leave `web.browser=noop` set without
         `browser.noop.cmd` also set -- that combination makes git print

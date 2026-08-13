@@ -14,11 +14,11 @@ from the oracle, see "Negative-spec" below.
 Port source: coordinator/bin/refresh-queries.js (432 lines)
 Spec backlink: archive/specs/2026-05-01-portable-ideas-from-obsidian-research.md
 §W2 (Refresh Helper)
-Port recipe: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/
+Port recipe: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-normalize-snippet.md (byte-parity port discipline)
 
 query-records.js dependency — RESOLVED, native (2026-07-22):
-    The oracle imports two example-doctrine-repo-side sibling modules: coordinator/bin/lib/
+    The oracle imports two coordinator-claude-side sibling modules: coordinator/bin/lib/
     sentinel-blocks.js (ported — coordinator_core.text.sentinel_blocks,
     reused directly below) and coordinator/bin/query-records.js (1924
     lines — its queryRecords()/formatRecords() pair). This module used to

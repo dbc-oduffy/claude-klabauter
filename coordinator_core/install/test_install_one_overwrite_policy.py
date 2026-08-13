@@ -1,7 +1,7 @@
 """Unit tests for coordinator_core.install.substrate._install_one's
 overwrite-vs-preserve policy.
 
-Spec backlink: this closes a genuinely-dropped coverage gap left by example-doctrine-repo's
+Spec backlink: this closes a genuinely-dropped coverage gap left by coordinator-claude's
 deletion of ``coordinator/lib/tests/test-install-substrate-overwrite.sh``
 (191 lines) in the `6fb5fb37` de-bash wave, which had no successor. The
 subject under test is `_install_one` itself (`coordinator_core/install/

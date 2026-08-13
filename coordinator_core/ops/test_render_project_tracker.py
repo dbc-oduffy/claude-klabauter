@@ -1,13 +1,13 @@
 """coordinator_core.ops.test_render_project_tracker — golden-fixture parity
-tests for the naked-Python port of example-doctrine-repo's (now-retired) bash implementation.
+tests for the naked-Python port of coordinator-claude's (now-retired) bash implementation.
 
-Port of: render-project-tracker.sh (example-doctrine-repo 93887f6f, 2026-07-17).
+Port of: render-project-tracker.sh (coordinator-claude 93887f6f, 2026-07-17).
 
 Golden-fixture provenance (review-integrator note, F2 of the 2026-07-17
-BIG_PORT Wave B review, EM ruling): this test PREVIOUSLY ran the real example-doctrine-repo
+BIG_PORT Wave B review, EM ruling): this test PREVIOUSLY ran the real coordinator-claude
 bash oracle via subprocess and diffed its output byte-for-byte against the
 port. That bash oracle script was deleted as part of THIS SAME port (the
-Example-doctrine-repo trampoline was renamed off `.sh` to a polyglot Python entrypoint), so
+Coordinator-claude trampoline was renamed off `.sh` to a polyglot Python entrypoint), so
 the live-subprocess oracle comparison can no longer function — byte parity
 against the retired bash implementation was verified at port-time, before
 the bash source was removed. This test now freezes the port's own output
@@ -905,10 +905,10 @@ def test_main_zero_section_render_over_previously_non_trivial_tracker_refuses(
 def test_main_zero_section_regression_over_non_matching_crp_names_offending_value(
     tmp_path, monkeypatch, capsys
 ):
-    """C1(2)/C1's example-doctrine-repo-shape case: a marker-bearing tracker that previously
+    """C1(2)/C1's coordinator-claude-shape case: a marker-bearing tracker that previously
     had content, plus a definition carrying a NON-MATCHING
-    coordinator_root_path (e.g. the example-doctrine-repo-side "coordinator_root_path:
-    example-doctrine-repo" shape), regresses to zero sections and refuses via
+    coordinator_root_path (e.g. the coordinator-claude-side "coordinator_root_path:
+    coordinator-claude" shape), regresses to zero sections and refuses via
     EXIT_RENDER_REGRESSION — and the extended silent-drop warning names the
     offending (path, stored) pair, not just the scanned/matched counts."""
     monkeypatch.delenv(rpt._ALLOW_TRUNCATE_ENV, raising=False)
@@ -918,9 +918,9 @@ def test_main_zero_section_regression_over_non_matching_crp_names_offending_valu
     definition_path.write_text(
         textwrap.dedent("""\
             workstream_id: "wks-doe"
-            title: "example-doctrine-repo-shape workstream"
+            title: "coordinator-claude-shape workstream"
             created: "2026-08-01"
-            coordinator_root_path: "example-doctrine-repo"
+            coordinator_root_path: "coordinator-claude"
         """),
         encoding="utf-8",
     )
@@ -944,7 +944,7 @@ def test_main_zero_section_regression_over_non_matching_crp_names_offending_valu
     captured = capsys.readouterr()
     assert "non-matching values:" in captured.err
     assert str(definition_path) in captured.err
-    assert "example-doctrine-repo" in captured.err
+    assert "coordinator-claude" in captured.err
 
 
 def test_main_silent_success_over_non_matching_crp_still_warns_and_exits_zero(
@@ -961,9 +961,9 @@ def test_main_silent_success_over_non_matching_crp_still_warns_and_exits_zero(
     definition_path.write_text(
         textwrap.dedent("""\
             workstream_id: "wks-doe"
-            title: "example-doctrine-repo-shape workstream"
+            title: "coordinator-claude-shape workstream"
             created: "2026-08-01"
-            coordinator_root_path: "example-doctrine-repo"
+            coordinator_root_path: "coordinator-claude"
         """),
         encoding="utf-8",
     )
@@ -977,7 +977,7 @@ def test_main_silent_success_over_non_matching_crp_still_warns_and_exits_zero(
     captured = capsys.readouterr()
     assert "non-matching values:" in captured.err
     assert str(definition_path) in captured.err
-    assert "example-doctrine-repo" in captured.err
+    assert "coordinator-claude" in captured.err
 
 
 def test_format_non_matching_values_caps_at_five_with_rest_count():

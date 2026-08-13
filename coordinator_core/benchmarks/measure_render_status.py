@@ -51,7 +51,7 @@ Never points at the real `state/` tree -- every fixture is materialized
 under a fresh `tempfile.mkdtemp` root and torn down in a `finally`,
 exactly as `measure_read_events.materialize_fixture` does.
 
-Spec backlink: docs/plans/2026-08-11-sat-03-event-sourced-completion-core.md
+Spec backlink: pln-sat-03-event-sourced-completio-c270a1
 § Tasks C10 (AC16, AC17).
 """
 

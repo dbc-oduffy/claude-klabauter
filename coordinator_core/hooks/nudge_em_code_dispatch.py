@@ -31,7 +31,7 @@ Negative-spec:
   - This op is read-only (per ipc.py:28-32 negative-spec). Sentinels are only CHECKED,
     never written — writing the dispatch-nudge-ok sentinel remains the EM's job via bash.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § C5
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C5
 Source: coordinator/hooks/scripts/nudge-em-code-dispatch.js
 Design: docs/wiki/eager-agent-calibration.md (design-as-offers)
 Tripwire: coordinator-tripwires.md § NUDGE-EM-CODE-DISPATCH
@@ -186,7 +186,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
 # op(payload) — synchronous, in-process, stdin->stdout trampoline entry point.
 #
 # Purpose: full line-for-line port of nudge-em-code-dispatch.js's `main()`
-# orchestration for the example-doctrine-repo-resident stdin->stdout hook stub
+# orchestration for the coordinator-claude-resident stdin->stdout hook stub
 # (coordinator/hooks/scripts/nudge-em-code-dispatch.py), replacing the `node`
 # cold-spawn on every Write/Edit/MultiEdit (constraint 7, performant-or-dead).
 #
@@ -200,12 +200,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
 # bootstrap/out-of-repo carve-out, EXT_EXECUTOR_MAP/COORDINATOR_PATH_MARKERS
 # executor-type derivation, and the pending-dispatch artifact write — none of
 # which the pcore-04 op implements. Do not conflate the two; do not route the
-# example-doctrine-repo stub through the async op above.
+# coordinator-claude stub through the async op above.
 #
 # Contract: takes the raw stdin-parsed payload dict, returns a Form-A
 # hookSpecificOutput dict (see context_only()) when the nudge fires, or None
 # for every silent-allow/bypass path. Never raises on well-formed input;
-# callers (the example-doctrine-repo stub) wrap this in a broad try/except for fail-open ALLOW
+# callers (the coordinator-claude stub) wrap this in a broad try/except for fail-open ALLOW
 # on any resolve/import/run failure per constraint discipline.
 #
 # Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md

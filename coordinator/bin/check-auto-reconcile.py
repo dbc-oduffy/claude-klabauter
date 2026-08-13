@@ -2,7 +2,7 @@
 """
 bin/check-auto-reconcile.sh -- CLI trampoline over the engine repo's
 coordinator_core.ops.check_auto_reconcile, rendering the "handoff.reconcile_open"
-op's surfaced[] list for the example-doctrine-repo fleet /workday-start Morning Briefing.
+op's surfaced[] list for the coordinator-claude fleet /workday-start Morning Briefing.
 
 Purpose: surface the engine repo's registered handoff.reconcile_open op during fleet
 /workday-start, mirroring how check-engine-drift.py nudges on the
@@ -12,14 +12,14 @@ otherwise; it always invokes with the op's own default resolution.
 
 POST-D2(a) UPDATE (2026-07-27, docs/plans/2026-07-26-push-side-write-
 discipline.md § D2): the op's dry_run resolution changed underneath this
-script -- the loaded example-doctrine-repo `auto-reconcile-policy.yaml`'s own `dry_run` key is
+script -- the loaded coordinator-claude `auto-reconcile-policy.yaml`'s own `dry_run` key is
 now the SOLE source of truth (coordinator_core/reconcile/policy_loader.py +
 coordinator_core/ops/handoff_reconcile.py::_resolve_dry_run), not a
 caller-params-only default. This script SHOULD KEEP not passing a `dry_run`
 param -- not-passing correctly means "defer to policy" now, same as it always
 claimed to mean. But the OLD claim that the invoked op therefore "never
 writes anything" is NO LONGER TRUE for every repo: whenever the policy it
-loads declares `dry_run: false` (an explicit, present, valid, example-doctrine-repo-authored
+loads declares `dry_run: false` (an explicit, present, valid, coordinator-claude-authored
 posture -- see policy_loader.py's fail-closed default, which still yields
 `dry_run: true` on any absent/malformed policy), this script's ordinary,
 unmodified invocation now drives a WRITE-CAPABLE path
@@ -49,7 +49,7 @@ doubled for this op's provisional-registration window):
   (a) CLAUDE_KLABAUTER_ROOT cannot resolve (no engine checkout on this machine) --
       a fleet-topology fact, not a health regression.
   (b) .error present in the envelope, or the engine-side module/op is not
-      importable (provisional-op rollout window) -- example-doctrine-repo is a consumer and
+      importable (provisional-op rollout window) -- coordinator-claude is a consumer and
       must never nag about the engine repo's activation state.
 Both cases: exit 0, no output, no error.
 
@@ -69,7 +69,7 @@ Malformed/unparseable JSON -> silent, never crash. Exit 0 always.
 
 Rendering is deliberately self-contained (no engine import) so the
 COORDINATOR_AUTO_RECONCILE_JSON test seam below can exercise it without any
-engine checkout registered anywhere -- envelope-parsing/rendering is a example-doctrine-repo-side
+engine checkout registered anywhere -- envelope-parsing/rendering is a coordinator-claude-side
 concern; the engine repo's module owns only the dispatch step.
 
 Test seam (test-only): when COORDINATOR_AUTO_RECONCILE_JSON is set and
@@ -88,7 +88,7 @@ Negative-spec:
   - THIS SCRIPT does NOT write anything itself, and does NOT pass a dry_run
     flag, forced or otherwise -- always invokes with the op's own default
     resolution. But post-D2(a), the OP it invokes owns a dry_run default that
-    is no longer hard-coded true -- it resolves from the loaded example-doctrine-repo policy,
+    is no longer hard-coded true -- it resolves from the loaded coordinator-claude policy,
     so the INVOKED OP may perform real writes (ship_and_archive /
     gate-cascade-clear) on this script's ordinary, unmodified invocation
     whenever that policy declares `dry_run: false`. "This script never
@@ -100,7 +100,7 @@ Negative-spec:
     (bin/lib/cc_invoke.py): CLAUDE_KLABAUTER_ROOT env -> self-location walk-up to the
     enclosing engine checkout -> the pointer-file/registry ladder.
   - Does NOT hard-error or nag when the op is unregistered/engine absent --
-    degrades to a fully silent skip (exit 0, no output). Example-doctrine-repo is a consumer;
+    degrades to a fully silent skip (exit 0, no output). Coordinator-claude is a consumer;
     it must never nag about the engine repo's activation state.
 """
 

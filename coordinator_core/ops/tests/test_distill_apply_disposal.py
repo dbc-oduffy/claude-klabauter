@@ -57,7 +57,7 @@ affirmation block's bound->test citations, DR-228 § D2a/D2b):
     - test_denorm_untracked_child_unlink_failure_writes_no_denorm_entry
       (same regression, untracked-child leg)
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C14
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C14
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D2a, D2b, D3, D4
 """
 

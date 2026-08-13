@@ -25,7 +25,7 @@ Public surface (pinned contract):
     def resolve_engine_sha() -> str | None: ...
     MIN_KNOWN_GOOD_SHA: str
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-engine-version-surface-drift-probe.md
+Spec backlink: pln-claude-klabauter-engine-version-surface--c130a8
 """
 
 from __future__ import annotations

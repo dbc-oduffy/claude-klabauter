@@ -33,12 +33,12 @@ byte-for-byte):
         (environment problem)
 
 Transport-failure exit code (trampoline-only, NOT returned by main() here):
-    3 — reserved by the example-doctrine-repo-side trampoline for a CLAUDE_KLABAUTER_ROOT
+    3 — reserved by the coordinator-claude-side trampoline for a CLAUDE_KLABAUTER_ROOT
         resolution / import failure (never collides with this module's own
         0/1/2 business codes).
 
 Requires CLAUDE_PLUGIN_ROOT to be set in the environment — this module has
-no way to derive "the example-doctrine-repo coordinator/bin directory" on its own (it does not
+no way to derive "the coordinator-claude coordinator/bin directory" on its own (it does not
 live in that tree). The trampoline sets this before calling main() (env var
 already set wins; else the trampoline derives it from its own file location,
 mirroring the bash oracle's `dirname "$0"/..` fallback). A bare `python -m
@@ -46,9 +46,9 @@ coordinator_core.ops.verify_dist_publish_repo_sync` invocation without
 CLAUDE_PLUGIN_ROOT set fails loud with exit 2, matching the "environment
 problem" bucket the bash oracle itself used for missing source dirs.
 
-Port of: verify-dist-publish-repo-sync.sh (example-doctrine-repo b5a4192c, 2026-07-20).
+Port of: verify-dist-publish-repo-sync.sh (coordinator-claude b5a4192c, 2026-07-20).
 Spec backlink: docs/plans/2026-05-21-back-percolate-publish-repo-orphans.md
-§ Chunk 4 (example-doctrine-repo repo) and docs/plans/2026-06-30-registry-publish-vs-working-targets.md § C8 (example-doctrine-repo repo).
+§ Chunk 4 (coordinator-claude repo) and docs/plans/2026-06-30-registry-publish-vs-working-targets.md § C8 (coordinator-claude repo).
 
 Negative-spec (faithfully reproduced from the .sh original):
     - Only maxdepth-1 (non-recursive) file scan of each dist/ target — mirrors

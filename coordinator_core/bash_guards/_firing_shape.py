@@ -32,7 +32,7 @@ own offered alternative shape) rather than editing every ``_advisory()``/
 ``deny()`` call site across the emitter modules, which stay untouched by
 this chunk.
 
-The two-axis firing predicate this module operationalizes (example-doctrine-repo's contract,
+The two-axis firing predicate this module operationalizes (coordinator-claude's contract,
 adopted verbatim, docs/plans/2026-08-01-advisory-firing-shape-predicate.md):
 
 - **Axis A (obligation).** Any emission that asks the agent to change or
@@ -87,7 +87,7 @@ NEGATIVE-SPEC -- what this gate deliberately does NOT do
 ===========================================================================
 Design-as-offers
 ===========================================================================
-This gate operationalizes the design-as-offers doctrine (example-doctrine-repo
+This gate operationalizes the design-as-offers doctrine (coordinator-claude
 ``coordinator/docs/wiki/eager-agent-calibration.md``: "Design agent-facing
 tooling as offers, not nags... lead with the better alternative, not the
 violation") as an ENFORCEMENT surface: Axis A is exactly "does this emission
@@ -95,7 +95,7 @@ lead with an offer" made mechanically checkable, and the report clause is
 exactly "or does it at least avoid nagging with the same unchanged text
 forever" made mechanically checkable.
 
-Spec backlink: docs/plans/2026-08-01-advisory-firing-shape-predicate.md (C6)
+Spec backlink: pln-advisory-firing-shape-predicat-802b35 (C6)
 Sibling: ``_alternative_liveness.py`` (alternative liveness, reused here);
 ``tests/test_firing_shape_gate.py`` (the gate).
 """

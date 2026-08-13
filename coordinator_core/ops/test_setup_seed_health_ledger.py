@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.setup_seed_health_ledger.
 
-Port of: setup-seed-health-ledger.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
+Port of: setup-seed-health-ledger.sh (coordinator-claude 6fb5fb37, 2026-07-22).
 """
 
 from __future__ import annotations

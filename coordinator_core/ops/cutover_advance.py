@@ -179,7 +179,7 @@ async def _cutover_advance(params: dict, repo_root: Optional[Path] = None) -> di
 
     Params:
         record (str, required) — path to the cutover record markdown file,
-            absolute or relative to the resolved example-doctrine-repo worktree. Same
+            absolute or relative to the resolved coordinator-claude worktree. Same
             contract as `cutover.gate`'s `record` param — forwarded to it
             verbatim.
 

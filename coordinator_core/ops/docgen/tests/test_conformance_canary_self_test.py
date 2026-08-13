@@ -1,7 +1,7 @@
 """coordinator_core.ops.docgen.tests.test_conformance_canary_self_test — proves
 ``test_conformance_canary``'s own escalation logic across the full
-(example-doctrine-repo present/absent) x (env var set/unset) matrix, without depending on the
-running machine's actual example-doctrine-repo-clone presence.
+(coordinator-claude present/absent) x (env var set/unset) matrix, without depending on the
+running machine's actual coordinator-claude-clone presence.
 
 Purpose: the canary (`test_conformance_canary.py`) exists specifically to turn
 a silent skip into a loud failure when it should have run and didn't — a bug
@@ -11,7 +11,7 @@ purpose while still reporting green, exactly the class of problem the canary
 exists to catch one level up. This module exercises the canary's decision
 function directly with monkeypatched env vars and a synthetic resolver (never
 the real `resolve_doe_clone`/`doe_root_and_present`), so it is deterministic on
-every machine — including this repo's own dev boxes, which DO have example-doctrine-repo
+every machine — including this repo's own dev boxes, which DO have coordinator-claude
 resolvable and would otherwise make the "absent" cells of the matrix
 unreachable without a mock.
 
@@ -21,7 +21,7 @@ Matrix (asserted below):
   - present + unset -> SKIP  (not required, so not even attempted)
   - present + set   -> PASS  (no skip, no fail)
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C6 (AC5)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5)
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from coordinator_core.ops.docgen.tests import test_conformance_canary as canary
 def _resolver(doe_present: bool):
     def _resolve() -> None:
         if not doe_present:
-            raise RuntimeError("synthetic: example-doctrine-repo clone not resolvable")
+            raise RuntimeError("synthetic: coordinator-claude clone not resolvable")
 
     return _resolve
 

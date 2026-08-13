@@ -1,11 +1,11 @@
 """Characterization tests for coordinator_core.ops.install_health_run.
 
-Ported test cases mirror the T1-T5 cases from example-doctrine-repo's former
+Ported test cases mirror the T1-T5 cases from coordinator-claude's former
 coordinator/bin/tests/test-install-health-run.sh, plus the trust-gate
-contract from example-doctrine-repo's former coordinator/lib/coordinator-
+contract from coordinator-claude's former coordinator/lib/coordinator-
 trusted-root-guard.sh's fail-loud mode, which this module reimplements.
 
-Port of: install-health-run.sh (example-doctrine-repo 290997c7, 2026-07-22)
+Port of: install-health-run.sh (coordinator-claude 290997c7, 2026-07-22)
 """
 from __future__ import annotations
 
@@ -205,7 +205,7 @@ def test_untrusted_root_gate_fails_loud(tmp_path, capsys, monkeypatch):
 # Regression: shebang-driven interpreter resolution (2026-07-21 defect).
 #
 # A drop-in named `*.sh` may carry non-bash content — the `.sh` suffix
-# exists only so the directory glob keeps finding it (see example-doctrine-repo's
+# exists only so the directory glob keeps finding it (see coordinator-claude's
 # seed-skill-overrides.sh, pure Python under a .sh name). A hardcoded
 # `bash <script>` invocation dies on the script's first non-bash line.
 # ---------------------------------------------------------------------------
@@ -422,7 +422,7 @@ def test_native_entrypoint_exception_counts_one_failure_and_does_not_abort_loop(
 # ensure-python3-exe-shim and check-windows-ssh-binary must run EVERY time
 # main() is invoked, with NO dependency on any file existing under
 # bin/install-health/ (glob-discovered or otherwise) — this is the actual
-# defect: example-doctrine-repo deleted the two `.sh` siblings these probes were originally
+# defect: coordinator-claude deleted the two `.sh` siblings these probes were originally
 # glob-discovered+basename-intercepted through, and the old code silently
 # stopped running both with no error, no warning, no non-zero exit.
 #
@@ -436,7 +436,7 @@ def test_native_entrypoint_exception_counts_one_failure_and_does_not_abort_loop(
 
 def test_ensure_python3_exe_shim_runs_even_with_no_sh_sibling_present(tmp_path, capsys):
     """The regression guard: no `ensure-python3-exe-shim.sh` file anywhere —
-    exactly example-doctrine-repo's post-deletion state — and the probe must still run."""
+    exactly coordinator-claude's post-deletion state — and the probe must still run."""
     root = _mk_root(tmp_path)  # bin/install-health/ exists but is EMPTY
 
     with patch(

@@ -12,7 +12,7 @@ got a false registry MISS under lazy ops before this fix, because the sibling
 module was never imported. `cutover.advance` was unusable for every record as
 a result.
 
-Spec backlink: cross-repo/inbox/2026-07-25-example-doctrine-repo-em-posix-bareword-path-provisioning.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-posix-bareword-path-provisioning.md
 
 Coverage:
   (a) subprocess isolation (real process isolation required -- see

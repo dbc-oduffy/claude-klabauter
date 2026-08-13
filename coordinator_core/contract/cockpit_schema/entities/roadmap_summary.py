@@ -1,6 +1,6 @@
 """
 RoadmapSummary — summary view over state/roadmap/<slug>/OVERVIEW.md lifecycle
-and status. Pydantic port of example-doctrine-repo
+and status. Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/roadmap-summary.ts` (Zod source).
 
 Spec backlink: schemas/roadmap.yaml + docs/plans/2026-06-27-emit-new-record-types-producer-wiring.md
@@ -89,7 +89,7 @@ class RoadmapSummary(BaseModel):
     """Roadmap_id values that gate this roadmap; null if not declared."""
 
     # Deliverable spine identity fields (D9 present-as-null).
-    # Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § C1, D5.
+    # Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C1, D5.
     purpose: str | None
     """
     Prose facet: one-sentence business-legible purpose statement for this

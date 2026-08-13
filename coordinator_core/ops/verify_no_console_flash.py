@@ -8,7 +8,7 @@ window that briefly flashes. The only reliable suppression is
 CREATE_NO_WINDOW / windowsHide:true at the CreateProcess call — not
 `-WindowStyle Hidden`, which is create-then-hide. See:
 docs/wiki/claude-code-platform-gotchas.md § Windows console window flash
-(example-doctrine-repo).
+(coordinator-claude).
 
 This guard statically scans a coordinator-claude tree (`*.sh`, `*.json`,
 `coordinator-auto-push`) for spawn shapes that lack an explicit suppression
@@ -17,7 +17,7 @@ site. It performs NO subprocess spawns of its own — detection is pure
 text/regex scanning (os.walk + re), never a `grep`/`sed` shell-out, so this
 module itself cannot flash a console window on the very platform it guards.
 
-Port of: verify-no-console-flash.sh (example-doctrine-repo 894d4bc6, 2026-07-22)
+Port of: verify-no-console-flash.sh (coordinator-claude 894d4bc6, 2026-07-22)
 Spec backlink: docs/plans/2026-05-29-windows-console-flash-elimination.md § Chunk 3
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 

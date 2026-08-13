@@ -21,10 +21,10 @@ Fleet defaults (used whenever a repo declares no override for that key):
     doc_verify_ignore      = []
 
 `human_facing_docs` deliberately does NOT default-include `coordinator/README.md`
-— that is a example-doctrine-repo-specific plugin-root path (this source tree's one-level
+— that is a coordinator-claude-specific plugin-root path (this source tree's one-level
 `coordinator/` offset), absent or differently-rooted in every other consumer
 repo. Shipping it fleet-wide would emit a permanent no-op `absent` row in
-every non-example-doctrine-repo consumer's report. Example-doctrine-repo declares it explicitly as its own
+every non-coordinator-claude consumer's report. Coordinator-claude declares it explicitly as its own
 per-repo override in its own `coordinator.local.md` frontmatter instead.
 
 A declared doc path that does not exist on disk is NOT this module's concern

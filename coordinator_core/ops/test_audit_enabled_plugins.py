@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.audit_enabled_plugins.
 
-Port of: audit-enabled-plugins.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: audit-enabled-plugins.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 

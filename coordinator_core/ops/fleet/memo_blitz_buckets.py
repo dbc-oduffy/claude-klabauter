@@ -190,7 +190,7 @@ _BASIS_RANK = {
 
 # In-body self-declaration — a sender announcing supersession in memo PROSE
 # rather than via the `supersedes:` frontmatter field. Added 2026-08-03 after
-# example-doctrine-repo ran this op against a real 52-memo pile: `same-sender-same-locus`
+# coordinator-claude ran this op against a real 52-memo pile: `same-sender-same-locus`
 # went 0-for-46, while the two real confirmations both announced themselves in
 # the body and neither carried `supersedes:` (so neither fired `declared`
 # either). The two confirmed strings — "Superseding it" and "read this one as
@@ -234,7 +234,7 @@ _MEMO_REFERENCE_PHRASE_RE = re.compile(
 
 
 def _has_supersession_phrase(text: str) -> bool:
-    """True if `text` contains either example-doctrine-repo-confirmed self-declaration form."""
+    """True if `text` contains either coordinator-claude-confirmed self-declaration form."""
     return bool(
         _SUPERSEDING_VERB_RE.search(text) or _AUTHORITATIVE_PRECEDENCE_RE.search(text)
     )
@@ -570,13 +570,13 @@ def _supersession_candidates(records: list[dict]) -> list[dict]:
         supersession (e.g. "Superseding it", "read this one as authoritative
         where the two disagree"), scoped to prose that also names the older
         memo. Added 2026-08-03: this is the signal that actually fired on
-        example-doctrine-repo's real pile when neither of the other two bases did.
+        coordinator-claude's real pile when neither of the other two bases did.
       - `declared` — a later memo's own `supersedes:` names an earlier one.
         The sender said so; this is the strong structured signal, and the
         whole reason the field was added.
       - `same-sender-same-locus` — same sender, later date, overlapping cited
         loci. This is the inference example-retrieval-repo ran by hand; against
-        example-doctrine-repo's 52-memo pile it went 0-for-46 read as a primary signal,
+        coordinator-claude's 52-memo pile it went 0-for-46 read as a primary signal,
         which is why it now carries an explicit `advisory` marker (AC4)
         rather than being read as comparably strong to the two declaration
         bases. It is a CANDIDATE and nothing more: two memos can touch the
@@ -693,7 +693,7 @@ def _supersession_candidates(records: list[dict]) -> list[dict]:
                 "shared_loci": sorted(shared),
                 # AC4 — distinguishes this basis from the two declaration
                 # bases (`self-declared`, `declared`): 0-for-46 against
-                # example-doctrine-repo's real pile as a PRIMARY signal, so a consumer
+                # coordinator-claude's real pile as a PRIMARY signal, so a consumer
                 # must be able to tier it without re-deriving what the basis
                 # string means.
                 "advisory": True,

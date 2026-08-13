@@ -26,7 +26,7 @@ creates this marker to route around an explicit "check with your PM first"
 message is not the well-meaning, mid-task agent this bump targets, and
 building unforgeability machinery to chase that agent is the iron-law
 posture the PM explicitly rejected for this plan. This decision is also
-registered in `coordinator/docs/wiki/coordinator-tripwires.md` (example-doctrine-repo,
+registered in `coordinator/docs/wiki/coordinator-tripwires.md` (coordinator-claude,
 landed by chunk C1) -- restated here because this module's own docstring is
 where the next maintainer actually looks before "helpfully" hardening it.
 

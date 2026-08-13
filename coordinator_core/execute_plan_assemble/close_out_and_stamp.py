@@ -2,7 +2,7 @@
 coordinator_core.execute_plan_assemble.close_out_and_stamp — mutating
 assembler for `/execute-plan` Phase 4's close-out sequence.
 
-Purpose: `/execute-plan`'s Phase 4 (example-doctrine-repo
+Purpose: `/execute-plan`'s Phase 4 (coordinator-claude
 `coordinator/skills/execute-plan/SKILL.md` § "Phase 4: Commit, Report, and
 Offer the Next Step", item 1) narrates a hand-sequenced git close-out as
 inline prose -- decide whether every wave-map chunk landed, stamp the plan's
@@ -15,7 +15,7 @@ single CLI (`close-out-and-stamp <plan-path>`) instead of hand-sequencing
 
 Full-shipped vs. halted determination: reads the plan's `## Tasks`
 machine-parseable spine (the single fenced ```yaml plan-tasks``` block
-directly under `## Tasks` -- example-doctrine-repo `docs/wiki/writing-plans.md` §
+directly under `## Tasks` -- coordinator-claude `docs/wiki/writing-plans.md` §
 Machine-Parseable Task Spine), takes every row with `deferred` absent or
 `false`, and cross-references each row's `id` against
 `git log --oneline <range>` commit subjects using the `<chunk-id>: ...` /
@@ -231,7 +231,7 @@ A chunk that legitimately shipped as a commit in that sibling repo could
 never be seen by a completeness scan that only ever ran `git log` against
 `repo_root` -- observed live, `docs/plans/
 2026-07-27-plan-line-item-resolution-model.md`'s chunk C5b shipped as
-commit `649797c9` in claude-klabauter, and the oracle (run from example-doctrine-repo)
+commit `649797c9` in claude-klabauter, and the oracle (run from coordinator-claude)
 reported it uncommitted because it never looked there. A SECOND
 false-negative in this same grammar (the mandatory-whitespace-after-colon
 pattern, when every real plan author writes the zero-space
@@ -376,7 +376,7 @@ protection -- ancestry-of-HEAD already proves the commit is real and landed
 -- while reintroducing the identical false-negative the near-miss
 diagnostic exists to explain, for the one evidence path meant to survive it.
 
-Spec backlink: example-doctrine-repo coordinator/skills/execute-plan/SKILL.md § Phase 4,
+Spec backlink: coordinator-claude coordinator/skills/execute-plan/SKILL.md § Phase 4,
 docs/plans/2026-07-27-plan-line-item-resolution-model.md § C7 (AC7/AC8/AC9),
 docs/plans/2026-08-03-klabauter-rows-relocate-into-claude-klabauter.md § C5/C6
 (disposition_ref evidence)
@@ -579,7 +579,7 @@ def _extract_chunk_ids(
     `/`-joined subject failed the match ENTIRELY and contributed zero ids --
     observed live, `C8p` shipped inside `C8a-doe/C8p: ...` and this oracle
     reported it uncommitted). Separator set is corpus-derived (`git log
-    --format='%s'` over both example-doctrine-repo and claude-klabauter, 2026-07-27) --
+    --format='%s'` over both coordinator-claude and claude-klabauter, 2026-07-27) --
     do not widen it past `,`/`+`/`/` without fresh corpus evidence.
 
     Whitespace around `+`/`/` (Defect fix, 2026-08-06 cross-repo memo
@@ -651,7 +651,7 @@ def _extract_chunk_ids(
     token `mise` -- both `C12` and `C3` are invisible to every caller of
     this function. This is a REAL, RECURRING corpus shape, not a one-off --
     confirmed by `git log --format='%s'` over both claude-klabauter (8372
-    subjects) and example-doctrine-repo (9940 subjects), 2026-08-04: e.g. `mise: wave
+    subjects) and coordinator-claude (9940 subjects), 2026-08-04: e.g. `mise: wave
     1 -- DOCTRINE-C7a admission gate ...; RESIDUE-C9 named-dispatch strip
     guard ...; RESIDUE-C10 read-only tier offer ...` and `mise: wave 2 --
     RESIDUE-C1..C7 relocate the auto-memory corpus ... so C8 can verify
@@ -731,7 +731,7 @@ def _committed_id_covers_spine_id(committed_id: str, spine_id: str) -> bool:
        alphanumerics (`-doe`, `-mak`, `-fix2`) -- the repo-side/variant tag
        a chunk's commit subject carries when the same spine row lands via
        more than one commit (e.g. `C8a-mak: ...` in claude-klabauter,
-       `C8a-doe/C8p: ...` in example-doctrine-repo, both covering spine `C8a`; real
+       `C8a-doe/C8p: ...` in coordinator-claude, both covering spine `C8a`; real
        corpus examples also include `C1-fix2`, `C3-classification`). This
        is a LOCAL-repo concern, not cross-repo lookup: this function only
        ever sees commit subjects already present in THIS repo's own git
@@ -833,7 +833,7 @@ def _plan_deliverable_id(plan_text: str) -> Optional[str]:
 #: YAML parses `- repo: path` (with a space) as a MAPPING, not the plain
 #: string a `scope:` list wants, so every real author writes `- repo:path`
 #: (no space) instead. Confirmed against real plans: `grep -rhoE '^\s+-
-#: [a-z0-9-]+:[^ ]+' docs/plans/*.md` in example-doctrine-repo returns only no-space
+#: [a-z0-9-]+:[^ ]+' docs/plans/*.md` in coordinator-claude returns only no-space
 #: entries, e.g. `claude-klabauter:coordinator_core/ops/plan_tasks_mutate.py`.
 #: Do not reintroduce a mandatory `\s+` here even if it looks like it
 #: "keeps the grammar strict" -- it excludes the only form real authors
@@ -2647,7 +2647,7 @@ def _determine_shipped(
 # joined, or the claim already agrees) is the correct, safe answer; guessing
 # a full section back together from parts is not attempted here.
 #
-# Spec backlink: docs/plans/2026-08-04-terminal-state-propagation-join-keys.md
+# Spec backlink: pln-terminal-state-propagation-giv-c85539
 # § C8 / AC7.
 # ---------------------------------------------------------------------------
 
@@ -4834,7 +4834,7 @@ def close_out_and_stamp(
             # AC7 (C3b): the pushed-extent fields belong on THIS payload,
             # not buried in `diagnostics` prose -- this is the exact site
             # the original memo pinned as reporting `"pushed": true` while
-            # example-doctrine-repo's stamp had actually advanced `origin/main` by
+            # coordinator-claude's stamp had actually advanced `origin/main` by
             # three commits that were not its own; an operator reading
             # `commit_result` needs the range/count alongside the bare
             # boolean to see the extent of what landed. `None` unless a

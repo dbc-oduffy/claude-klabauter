@@ -1,6 +1,6 @@
 """Tests for `substrate.WRITE_SURFACE`.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C3c (`install-substrate`), corrected by chunk C3c2, extended by the
 `<settings-home>/bin/` + overwrite-backup-tree follow-on dispatch closing
 `state/debt-backlog/2026-08-06-write-surface-declarations-must-live-wit-e49b9cfd8ad1.yaml`.

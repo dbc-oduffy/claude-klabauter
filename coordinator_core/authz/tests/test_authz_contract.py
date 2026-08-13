@@ -14,7 +14,7 @@ Negative-spec (DR-215/C8 — vacated tests removed):
 Test convention: pytest (see pyproject.toml [tool.pytest.ini_options] at repo root).
 Invoke via: ``pytest coordinator_core/authz/tests/ -v``
 
-Spec backlink: docs/plans/2026-07-04-pcore-05-invoke-op-classification-authz-model.md § C1
+Spec backlink: pln-pcore-05-invoke-op-write-seman-80eecd § C1
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md § AC4 / AC8
 """
 
@@ -187,7 +187,7 @@ class TestDriftGuard:
 # test (test_memo_send_scope_is_common_dir) are removed with the UDS-auth / per-request
 # routing machinery (DR-215/C8 and C5 respectively).
 #
-# Spec backlink: docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md § C3
+# Spec backlink: pln-strang-03-cross-repo-memo-send-40d84e § C3
 # ---------------------------------------------------------------------------
 
 class TestMemoSendClassification:
@@ -218,7 +218,7 @@ class TestMemoSendClassification:
 # Both the OP_CLASSIFICATION membership and the live _REGISTRY membership are asserted
 # explicitly — the drift-guard >= N floor is not weakened; these are additive assertions.
 #
-# Spec backlink: docs/plans/2026-07-06-claude-klabauter-deliverable-spine-factsupply-op.md § C3
+# Spec backlink: pln-claude-klabauter-deliverable-spine-fact--cd004e § C3
 # ---------------------------------------------------------------------------
 
 class TestDeliverableRollupClassification:
@@ -260,7 +260,7 @@ class TestDeliverableRollupClassification:
 # adds a write-signal drift-guard so a future self-contradicting entry for
 # these two ops fails loud rather than silently regressing.
 #
-# Spec backlink: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C7
+# Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C7
 # Decision:      docs/decisions/DR-208-invoke-op-authz-model.md § 5 (fail-closed)
 # ---------------------------------------------------------------------------
 

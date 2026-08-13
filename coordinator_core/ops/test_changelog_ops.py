@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.changelog_ops.main.
 
-Port of: backfill-week-changelog-gaps.sh (example-doctrine-repo b5a4192c, 2026-07-20; retired
+Port of: backfill-week-changelog-gaps.sh (coordinator-claude b5a4192c, 2026-07-20; retired
 cc_invoke veneer).
 
 Covers the CLI entrypoint (`main()`), not the underlying `backfill_gaps()` /

@@ -1,9 +1,9 @@
 """Behavioral tests for
 coordinator_core.write_guards.validate_frontmatter_schema_advisory — the
-warn-mode (default) leg of the fan-in split of example-doctrine-repo's
+warn-mode (default) leg of the fan-in split of coordinator-claude's
 validate-frontmatter-schema.py PreToolUse hook.
 
-Requires the sibling example-doctrine-repo checkout (for coordinator/schemas/ and the
+Requires the sibling coordinator-claude checkout (for coordinator/schemas/ and the
 registry manifest) — skipped entirely when absent, per the
 coordinator_core.testing.doe_root convention (parity-oracle tests that need
 real schema content, not a synthetic stand-in, follow this same pattern
@@ -15,7 +15,7 @@ every test (rather than relying on REPO_EXAMPLE_DOCTRINE_REPO / machine-local at
 time) so the suite is deterministic regardless of this machine's registry
 state.
 
-Covers: non-write-tool/non-dict-tool_input passthrough, example-doctrine-repo-root-unresolvable
+Covers: non-write-tool/non-dict-tool_input passthrough, coordinator-claude-root-unresolvable
 fail-open, the four warn-by-default payloads (schema-validation warning,
 mislocated-memo offer, routing-mismatch offer, scaffold offer) firing in
 default (non-strict) mode and going silent (None) under
@@ -26,7 +26,7 @@ would otherwise warn, a fully schema-conformant handoff/memo write passing
 through silently, and the module contract (CLASS/MATCHERS/PRIORITY).
 
 Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C11
-Source: example-doctrine-repo coordinator/hooks/scripts/validate-frontmatter-schema.py
+Source: coordinator-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ _doe_root, _doe_present = doe_root_and_present()
 @pytest.fixture(autouse=True)
 def _pin_doe_root(monkeypatch):
     if not _doe_present:
-        pytest.skip("sibling example-doctrine-repo checkout not found")
+        pytest.skip("sibling coordinator-claude checkout not found")
     monkeypatch.setattr(guard, "coordinator_doe_root", lambda: _doe_root)
 
 
@@ -85,7 +85,7 @@ class TestGateOnToolAndPayloadShape:
     def test_doe_root_unresolvable_still_warns_via_vendored_schemas(self, tmp_path, monkeypatch):
         # Pre-repoint this fully fail-opened (registry unresolvable -> zero
         # enforcement). Post-repoint (AC2), schema-shape advisories no
-        # longer depend on the example-doctrine-repo sibling at all -- the corpus is vendored
+        # longer depend on the coordinator-claude sibling at all -- the corpus is vendored
         # in-repo, so a title-only handoff still warns even with the
         # sibling unreachable. Manifest-derived behaviour (scaffold offers,
         # which need the offerable-doc-types map) still degrades silently,
@@ -105,8 +105,8 @@ class TestGateOnToolAndPayloadShape:
 class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
     """AC2 twin (docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
     corpus.md): the advisory guard still validates against the schema
-    corpus with the example-doctrine-repo sibling completely unreachable, because the corpus
-    is vendored in-repo now instead of read from example-doctrine-repo's live working
+    corpus with the coordinator-claude sibling completely unreachable, because the corpus
+    is vendored in-repo now instead of read from coordinator-claude's live working
     tree. Only manifest-DERIVED behaviour (memo routing, scaffold offers)
     is expected to degrade.
     """
@@ -166,7 +166,7 @@ class TestSchemaCorpusSourcePinned:
         assert guard._VENDORED_SCHEMAS_DIR.is_dir()
 
     def test_resolved_schemas_dir_does_not_move_when_doe_root_changes(self, tmp_path, monkeypatch):
-        fake_doe_root = str(tmp_path / "not-a-real-example-doctrine-repo-checkout")
+        fake_doe_root = str(tmp_path / "not-a-real-coordinator-claude-checkout")
         monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_doe_root)
         # _VENDORED_SCHEMAS_DIR is a module-level constant -- re-pointing
         # coordinator_doe_root() cannot move it, unlike the old
@@ -184,7 +184,7 @@ class TestSchemaCorpusSourcePinned:
 
 
 class TestTornWriteRetry:
-    """example-doctrine-repo's schema corpus and registry manifest are read from the sibling
+    """coordinator-claude's schema corpus and registry manifest are read from the sibling
     checkout's LIVE working tree on every check() — a concurrent session can
     leave a torn/partial JSON file mid-write. `_retry_on_transient_read_failure`
     narrows that race without changing the guard's fail-open contract once
@@ -300,7 +300,7 @@ class TestTornWriteRetry:
         # (an absent manifest path is never retried) still holds.
         sleep_calls = {"n": 0}
         monkeypatch.setattr(guard.time, "sleep", lambda secs: sleep_calls.__setitem__("n", sleep_calls["n"] + 1))
-        fake_root = str(tmp_path / "nonexistent-example-doctrine-repo-root")
+        fake_root = str(tmp_path / "nonexistent-coordinator-claude-root")
         monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_root)
         result = guard.check(
             _payload("Write", "/tmp/state/handoffs/x.md", "/tmp", content="---\ntitle: t\n---\nbody")
@@ -422,14 +422,14 @@ class TestOwnInboxIsDenySiblingTerritory:
     """
 
     def test_own_inbox_misplacement_yields_none(self):
-        # Uses the real example-doctrine-repo checkout as both cwd (repo root) and the
+        # Uses the real coordinator-claude checkout as both cwd (repo root) and the
         # REPO_EXAMPLE_DOCTRINE_REPO-resolved central path, so the guard's
         # this-repo-is-central branch engages. No file is ever opened for a
         # Write payload's own content (see _memo_guards_decision), so this
         # never touches disk.
         fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-test.md"
         memo_content = (
-            "---\nfrom: example-doctrine-repo-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: coordinator-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
         result = guard.check(_payload("Write", fp, _doe_root, content=memo_content))
@@ -438,7 +438,7 @@ class TestOwnInboxIsDenySiblingTerritory:
     def test_correct_inbound_memo_passes_through_silent(self):
         fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-correct-inbound-test.md"
         memo_content = (
-            "---\nfrom: example-game-repo-em\nto: example-doctrine-repo-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: example-game-repo-em\nto: coordinator-claude-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
         result = guard.check(_payload("Write", fp, _doe_root, content=memo_content))
@@ -679,9 +679,9 @@ class TestPlanTasksSpineWarn:
             "  disposition_detail: PM said no, out of scope\n"
             # Required by plan-tasks 1.6.0's allOf conditional on the two scope-cut
             # dispositions. Present so the ONLY variable this test isolates stays the
-            # pm_approved-required branch. NOTE: this fixture tracks example-doctrine-repo's LIVE tree,
+            # pm_approved-required branch. NOTE: this fixture tracks coordinator-claude's LIVE tree,
             # not claude-klabauter's vendored copy -- these guards resolve schemas_dir from
-            # coordinator_doe_root(), so a example-doctrine-repo-side bump reaches them with no re-vendor.
+            # coordinator_doe_root(), so a coordinator-claude-side bump reaches them with no re-vendor.
             "  case_against: Superseded by the C4 rewrite; carrying it forward would\n"
             "    duplicate that surface.\n"
         )

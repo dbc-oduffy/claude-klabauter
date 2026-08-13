@@ -2,7 +2,7 @@
 repoint of the five near-verbatim `_resolve_repo_root` copies onto C1's
 checked resolver.
 
-Spec backlink: docs/plans/2026-08-11-one-checked-resolver-for-the-bin-family.md
+Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C4 / AC2, AC3, AC4, AC5, AC10.
 
 C4's own module -- no other chunk in this plan writes to this file (each

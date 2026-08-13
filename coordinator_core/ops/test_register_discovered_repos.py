@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.register_discovered_repos.
 
-Port of: register-discovered-repos.sh (example-doctrine-repo b644d5a9, 2026-07-22).
+Port of: register-discovered-repos.sh (coordinator-claude b644d5a9, 2026-07-22).
 Spec backlink: F16 (install discovers working repos but never registers them into
 the machine-local repos.* registry).
 
@@ -353,7 +353,7 @@ class TestResolutionJournalWiring:
 
 
 class TestWriteSurfaceDeclaration:
-    """Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+    """Spec backlink: pln-writer-declared-write-surface-49d3bd,
     chunk C2c. The runtime-computed set of `repos.*` keys this writer
     registers cannot be flattened into a static list — it depends on
     whatever `discover_working_repos` finds on the machine running the

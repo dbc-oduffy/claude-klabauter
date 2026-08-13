@@ -1,7 +1,7 @@
 """
 Read-from-disk consumed shapes — the coordinator-artifact summaries the
 connector (tc-4) / emitter (tc-3) extract from each repo's `state/` tree and
-the store (tc-5) ingests for the cross-repo census. Pydantic port of example-doctrine-repo
+the store (tc-5) ingests for the cross-repo census. Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/summaries.ts` (Zod source).
 
 These are part of the frozen C5-consumable field set (tc-2 stub §
@@ -118,7 +118,7 @@ HandoffKind = Literal[
     "session-handoff", "spinoff", "spinoff-roadmap", "recovery",
     "spinoff-goal", "spinoff-roadmap-creator",
     # Retained deliberately after spike-result stopped being a LIVE handoff kind
-    # (example-doctrine-repo handoff.schema.json 3.0.0). The cockpit `handoffs` array is NOT
+    # (coordinator-claude handoff.schema.json 3.0.0). The cockpit `handoffs` array is NOT
     # live-only: it carries archived records too, and an archived record may
     # carry any historical kind — the same reason handoff-archived.schema.json
     # keeps this value permanently. Narrowing it here silently DROPS archived
@@ -252,7 +252,7 @@ a successor (now `closed`, paired with the required `closed_reason`;
 human/session decision only, never automated). See `continued_into` and
 `closed_reason` on `HandoffSummary` below.
 
-Spec backlink: `docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md` § C6.
+Spec backlink: `pln-handoff-lifecycle-vocabulary-o-22ada6` § C6.
 """
 
 
@@ -389,7 +389,7 @@ class HandoffSummary(BaseModel):
     """
 
     # Deliverable spine identity fields (D9 present-as-null).
-    # Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § C1.
+    # Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C1.
     deliverable_id: str | None
     """Durable join key — minted at the earliest artifact, carried verbatim by all downstream artifacts of the same deliverable. Null during the pre-backfill window."""
     plan_id: str | None
@@ -422,7 +422,7 @@ class HandoffSummary(BaseModel):
     # ── Ancestry-origin fields (D9 present-as-null) ──────────────────────
     # Spec backlink: docs/plans/2026-07-07-spinoff-provenance-ancestry.md § C7.
     #
-    # Per-kind residency split (ratified, example-doctrine-repo contract-shape decision — do not
+    # Per-kind residency split (ratified, coordinator-claude contract-shape decision — do not
     # re-open): session/handoff/plan_id are EMITTED kinds (a HandoffSummary
     # row or, for plan_id, a resolvable id already carried elsewhere in this
     # contract) so a bare id suffices for cockpit to resolve. origin_goal_id
@@ -488,7 +488,7 @@ class HandoffSummary(BaseModel):
     or a ledger entry — a persisted resolved-from pointer would be a fourth
     lineage axis, and is exactly the shape the rejected priority-stamping
     design would smuggle back in (see priority-ledger.schema.json
-    NEGATIVE-SPEC (2), example-doctrine-repo repo). This field exists precisely so
+    NEGATIVE-SPEC (2), coordinator-claude repo). This field exists precisely so
     that design never needs reviving. D9: nullable, never optional.
     """
     suggested_priority: str | None

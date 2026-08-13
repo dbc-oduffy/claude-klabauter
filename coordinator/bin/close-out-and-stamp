@@ -9,8 +9,8 @@
 # a plain in-process function call after resolving CLAUDE_KLABAUTER_ROOT, no
 # cc_invoke/IPC hop.
 #
-# Contract: example-doctrine-repo coordinator/docs/wiki/computed-skills.md
-# Spec backlink: example-doctrine-repo coordinator/skills/execute-plan/SKILL.md § Phase 4
+# Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
+# Spec backlink: coordinator-claude coordinator/skills/execute-plan/SKILL.md § Phase 4
 # Registration seam: a new engine capability registers by shipping a thin
 # bin/ trampoline over an in-process coordinator_core module -- same shape as
 # every other direct-import CLI in this tree (pickup-assemble,

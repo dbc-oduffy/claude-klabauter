@@ -13,7 +13,7 @@ than serve a pre-commit cached False forever.
 
 Also covers the 2026-07-29 build_git_history_cache widening (dropping --diff-filter=A,
 adding --no-renames) — regression coverage for a follow-on defect measured against
-Example-doctrine-repo, where the ADD-only priming pass left handoffs.collect() spawning 314 unique
+Coordinator-claude, where the ADD-only priming pass left handoffs.collect() spawning 314 unique
 per-path `git log --all -- <path>` fallback subprocesses because it never caught a path
 renamed into its final name.
 
@@ -211,7 +211,7 @@ class TestInvalidationForcesRequery:
 # (4) build_git_history_cache widening (2026-07-29) — the batch-sweep priming
 #     pass must catch a path renamed INTO its final name, not just paths that
 #     were freshly `git add`ed under that exact name. Regression coverage for
-#     the 314-per-path-spawn defect measured against example-doctrine-repo: the prior
+#     the 314-per-path-spawn defect measured against coordinator-claude: the prior
 #     `--diff-filter=A`-only pass missed every path whose only appearance
 #     under its current name was as the target side of a detected rename,
 #     forcing every such lookup through _git_path_ever_tracked's per-path

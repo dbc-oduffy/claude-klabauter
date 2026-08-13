@@ -8,10 +8,10 @@ repo-wide. _lib_path() now resolves a single candidate,
 <claude_klabauter_root>/coordinator/lib/coordinator_session.py, via
 coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root() — pinned
 deterministically in tests via CLAUDE_KLABAUTER_ROOT env, never the real machine
-registry or example-doctrine-repo checkout. Superseded coverage (the old 3-rung ladder's
+registry or coordinator-claude checkout. Superseded coverage (the old 3-rung ladder's
 success/nonzero-rc/timeout/OSError branches) is gone with the ladder itself.
 
-Spec backlink: docs/plans/2026-07-11-coordinator-core-home-claude-read-repoint.md § C4 (site 1)
+Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C4 (site 1)
 """
 
 from __future__ import annotations

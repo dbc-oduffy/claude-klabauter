@@ -44,7 +44,7 @@ never only via a hand-invoked verb. Deliberately NOT wired to
 Windows + macOS both first-class: ``pathlib.Path`` joins only, no POSIX
 separators, no shell.
 
-Spec backlink: docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C12b
+Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb § C12b
 """
 
 from __future__ import annotations
@@ -75,24 +75,24 @@ _EVIDENCE_KINDS = frozenset(
 
 # committed_by -> sibling_fact repo id. Closed table, verified against the live
 # ledger (2026-07-26 survey): every one of the 31 records is committed_by one of
-# example-doctrine-repo's two EM personas — "claude-central-em" (legacy) or "example-doctrine-repo-em"
+# coordinator-claude's two EM personas — "claude-central-em" (legacy) or "coordinator-claude-em"
 # (current) — both the SAME sibling clone, repo id "example_doctrine_repo". A committed_by
 # this table has never seen is a new sibling, not a guessable one; it resolves
 # to "not yet resolvable", not a repo-id guess.
 _COMMITTED_BY_TO_REPO_ID = {
     "claude-central-em": "example_doctrine_repo",
-    "example-doctrine-repo-em": "example_doctrine_repo",
+    "coordinator-claude-em": "example_doctrine_repo",
 }
 
 # One backfilled record ("2026-07-13-doe-to-land-report-sidecar-consuming-hal-
 # 43e1dbc3e01c.yaml") authored its `file:` evidence with a leading repo-name
-# segment ("file:example-doctrine-repo/coordinator/hooks/scripts/enforce-agent-dispatch-
+# segment ("file:coordinator-claude/coordinator/hooks/scripts/enforce-agent-dispatch-
 # mode.py") even though `sibling_fact.resolve_leg`'s `file_exists` already
 # roots at the resolved clone directory — leaving the prefix in would double
 # the repo directory into the resolved path. Stripping it here is a named
 # correction for a known C12a corpus quirk, not a general normalization rule.
 _REPO_NAME_PREFIXES_TO_STRIP: dict[str, tuple[str, ...]] = {
-    "example_doctrine_repo": ("example-doctrine-repo/",),
+    "example_doctrine_repo": ("coordinator-claude/",),
 }
 
 

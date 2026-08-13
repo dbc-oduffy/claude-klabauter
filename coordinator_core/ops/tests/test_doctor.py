@@ -58,7 +58,7 @@ def _run_doctor(doe_root: Path, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def doe_root(tmp_path: Path) -> Path:
-    root = tmp_path / "example-doctrine-repo"
+    root = tmp_path / "coordinator-claude"
     (root / "coordinator" / "hooks" / "scripts").mkdir(parents=True)
     return root
 

@@ -9,7 +9,7 @@ strings name a private repo codename (or its OSS-scrub placeholder) — a
 banner should tell the reader what command to run, never send them to a repo
 an OSS reader cannot reach.
 
-Spec backlink: docs/plans/2026-08-12-message-text-stops-naming-an-unreachable-repo.md, chunk C5a.
+Spec backlink: pln-message-text-stops-naming-a-re-5c92dd, chunk C5a.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from unittest import mock
 from coordinator_core.hooks import example_retrieval_repo_detect
 
 _FORBIDDEN_SUBSTRINGS = (
-    "example-doctrine-repo",
-    "example-doctrine-repo",
+    "coordinator-claude",
+    "coordinator-claude",
     "cockpit",
     "example-fleet",
     "machine-b",

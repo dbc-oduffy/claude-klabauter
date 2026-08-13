@@ -19,6 +19,6 @@ Negative-spec (DR-215/C8 — vacated):
     Re-introduction path (DR-215 § 6): a future cross-language live caller re-adds a
     ~150 LOC transport shim; Scope + is_authorized can be revived alongside it.
 
-Spec backlink: docs/plans/2026-07-04-pcore-05-invoke-op-classification-authz-model.md § C1
+Spec backlink: pln-pcore-05-invoke-op-write-seman-80eecd § C1
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md (vacated in part by DR-215/C8)
 """

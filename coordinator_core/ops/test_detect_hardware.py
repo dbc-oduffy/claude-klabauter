@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.detect_hardware.
 
-Port source: coordinator/lib/detect-hardware.sh (example-doctrine-repo, 179 lines, retained as
+Port source: coordinator/lib/detect-hardware.sh (coordinator-claude, 179 lines, retained as
 a polyglot trampoline over this module on cutover).
 Spec backlink: docs/plans/2026-06-23-coordinator-install-surface-dogfood-hardening.md §C4
 """

@@ -1,6 +1,6 @@
 """coordinator_core.bash_guards.dispatch_checks -- the 11 checks folded into
-Example-doctrine-repo's retired ``coordinator/hooks/scripts/preuse-bash-dispatch.sh`` (deleted
-2026-07-16, example-doctrine-repo ``2f8b8450``) (hard/soft/content/ advisory phases), ported
+Coordinator-claude's retired ``coordinator/hooks/scripts/preuse-bash-dispatch.sh`` (deleted
+2026-07-16, coordinator-claude ``2f8b8450``) (hard/soft/content/ advisory phases), ported
 per the W3a/W3b naked-Python hook migration recipe
 (scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md
 Sec(c)).
@@ -32,9 +32,9 @@ Each ``check_*`` function:
     outer safety net, matching the bash dispatcher's `rc != 0` -> crash-deny
     semantics for the hard chain.
 
-Ported from these retired example-doctrine-repo bash guards (example-doctrine-repo coordinator/hooks/scripts/,
-all deleted 2026-07-16, example-doctrine-repo ``2f8b8450``, except ``validate-commit.sh``
-deleted 2026-07-20, example-doctrine-repo ``e91827a7``):
+Ported from these retired coordinator-claude bash guards (coordinator-claude coordinator/hooks/scripts/,
+all deleted 2026-07-16, coordinator-claude ``2f8b8450``, except ``validate-commit.sh``
+deleted 2026-07-20, coordinator-claude ``e91827a7``):
   block-no-verify.sh, block-destructive-git-orphan.sh, block-destructive-rm.sh,
   block-destructive-git-clean.sh, block-destructive-git-revert.sh,
   block-blanket-git-add.sh, block-runaway-find.sh, offer-git-c-over-cd.sh,
@@ -110,7 +110,7 @@ CLOSED PORTING GAPS:
     ``coordinator_core.bash_guards.commit_tripwires``. The prior filename-based
     lookup (``_find_bin_script``/``_delegate_bin_check``, both removed) was
     confirmed dead on this machine at port time: the machine-path-leak script
-    had already been renamed ``.sh``->``.py`` example-doctrine-repo-side, and this install's
+    had already been renamed ``.sh``->``.py`` coordinator-claude-side, and this install's
     ``~/.claude`` plugin mirror had an empty ``bin/`` besides. See
     ``commit_tripwires.py``'s own module docstring for the full writeup.
 """
@@ -2327,7 +2327,7 @@ def check_destructive_rm(cmd: str, session_id: str = "") -> Optional[Dict[str, A
                 # Asking the parent unconditionally -- as this did until
                 # 2026-07-31 -- silently skipped (`continue`) every target
                 # whose parent happened to sit outside a repo, which is the
-                # normal shape of a checkout: `~/.claude`, `~/X/example-doctrine-repo`,
+                # normal shape of a checkout: `~/.claude`, `~/X/coordinator-claude`,
                 # and `~/X/claude-klabauter` were all ALLOWED because `~` and
                 # `~/X` are not repos, while their SUBdirectories were
                 # correctly denied. The dirty-work protection existed and
@@ -3129,7 +3129,7 @@ def _check_destructive_git_revert_full(
     # Advisory floor (2026-08-05): `affected` non-empty but `deny_paths`
     # empty (no load-bearing/peer-claimed path in it) previously fell
     # through `if not deny_paths: continue` with ZERO signal -- see
-    # cross-repo/inbox/2026-08-05-example-doctrine-repo-em-unscoped-stash-has-no-
+    # cross-repo/inbox/2026-08-05-coordinator-claude-em-unscoped-stash-has-no-
     # main-loop-guard.md. `pending_advisory` accumulates the MOST
     # destructive such non-blocking envelope seen so far (Review:
     # staff-eng, Finding 11 -- `len(affected)` compared across segments,
@@ -3634,7 +3634,7 @@ def check_destructive_git_revert_advisory(
 # repo -- 4 cross-contamination commits on work/machine-a/2026-06-14,
 # 2026-06-15). That commit removed the scope gate ENTIRELY, on the claim
 # that the 2026-06-15 plan
-# (example-doctrine-repo docs/plans/2026-06-15-harden-safe-commit-against-sibling-add-all.md
+# (coordinator-claude docs/plans/2026-06-15-harden-safe-commit-against-sibling-add-all.md
 # § E1) recorded the meta-repo scope as an incidental mechanism detail with
 # no stated reason the hazard is meta-repo-specific -- that claim was false
 # (the plan states directly: "the cwd guard is what makes it a no-op in
@@ -3645,7 +3645,7 @@ def check_destructive_git_revert_advisory(
 # opt-out an operator would know to reach for.
 #
 # The corrected shape is neither the original narrow gate (missed
-# claude-klabauter, a shared tree this example-doctrine-repo EM commits into directly and
+# claude-klabauter, a shared tree this coordinator-claude EM commits into directly and
 # daily, carrying the identical cross-contamination hazard) nor the
 # now-corrected blanket widening (catches every OSS consumer) -- it fires
 # only where the concurrent-session hazard is actually possible:
@@ -3717,7 +3717,7 @@ def _is_hazard_repo(git_root: str) -> bool:
     blanket ``git add -A`` can plausibly sweep a CONCURRENT session's
     in-flight edits into this commit -- the ~/.claude meta-repo (the origin
     incident's own repo), or any repo this machine's fleet registry
-    (``repos.*``) tracks (claude-klabauter, example-doctrine-repo, and every other
+    (``repos.*``) tracks (claude-klabauter, coordinator-claude, and every other
     sibling repo on this machine -- see ``_hazard_registry_repo_roots``).
     An arbitrary OSS-consumer repo has neither property, so this returns
     False there and the guard stays a no-op -- restoring the load-bearing
@@ -4409,7 +4409,7 @@ def check_probe_spray(
 
 def _extract_commit_subject(command: str) -> str:
     """Port of Check 8's subject-extraction sed pipeline (validate-commit.sh,
-    example-doctrine-repo e91827a7, 2026-07-20): pull the ``-m "<subject>"`` / ``-m '<subject>'`` payload out
+    coordinator-claude e91827a7, 2026-07-20): pull the ``-m "<subject>"`` / ``-m '<subject>'`` payload out
     of a ``git commit`` command line.
 
     Bash's ``sed -n '...p' | head -1`` is a PER-LINE substitution (no
@@ -5006,7 +5006,7 @@ def check_validate_commit(
     # Check 7: CLAUDE.md char budget -- GOVERNED (fleet-loaded OR audience-
     # manifest-declared) surfaces only, per
     # coordinator_core.claude_md_budget.is_governed_claude_md (claude-klabauter-owned
-    # SSOT, unified with example-doctrine-repo's check-claude-md-size.py hook). A bare
+    # SSOT, unified with coordinator-claude's check-claude-md-size.py hook). A bare
     # basename match (the pre-unification shape) fires on ANY file named
     # CLAUDE.md, including a repo-scoped copy that is not fleet-loaded and
     # must not share this budget -- see that module's own docstring and
@@ -5086,7 +5086,7 @@ def check_validate_commit(
             )
 
         # C7b (AC4): the per-surface ratchet watermark, read from the same
-        # repo-local ledger convention C7a's example-doctrine-repo-resident admission gate
+        # repo-local ledger convention C7a's coordinator-claude-resident admission gate
         # uses -- unarmed (no ledger, or no "## Watermark" section) is a
         # silent no-op, never a violation.
         if resolve_ledger_path is not None and _repo_root_for_governance:
@@ -5185,12 +5185,12 @@ def check_validate_commit(
     # (docs/plans/2026-07-19-debash-coordinator-windows.md). Formerly
     # delegated to bin/*.sh by FILENAME via _delegate_bin_check/
     # _find_bin_script -- a lookup that silently no-ops (guard never fires,
-    # no error surfaced) the moment a example-doctrine-repo-side rename moves the target
+    # no error surfaced) the moment a coordinator-claude-side rename moves the target
     # filename, which is exactly what happened to check-machine-path-leak.sh
     # (renamed to .py) and was mid-happening to check-bin-sh-polyglot.sh at
     # port time. See commit_tripwires.py's own module docstring for the full
     # defect writeup and the resolution-mechanism split between Checks 9/10
-    # (example-doctrine-repo-plugin-repo-scoped) and Check 11 (target-commit-repo-scoped).
+    # (coordinator-claude-plugin-repo-scoped) and Check 11 (target-commit-repo-scoped).
     schema_bump_violation = commit_tripwires.check_schema_version_bump()
     if schema_bump_violation:
         warnings.append("SCHEMA-BUMP-TRIPWIRE:\n%s" % schema_bump_violation)
@@ -5263,7 +5263,7 @@ def check_validate_commit(
 
 # ---------------------------------------------------------------------------
 # 12-16. BX-16 -- generalising the offer-git-c rewrite seam from cd-over-git
-# to bash-over-op. Example-doctrine-repo docs/plans/2026-07-29-windows-viability-stop-the-
+# to bash-over-op. Coordinator-claude docs/plans/2026-07-29-windows-viability-stop-the-
 # spawn-storms.md, row BX-16.
 #
 # check_offer_git_c (above) is the template: auto-rewrite when a faithful
@@ -5469,7 +5469,7 @@ def check_find_exec_rewrite(
     """BX-16 shape 1 (flagship) -- `find ... -exec <binary> {} ;` and its
     `for f in $(find ...); do <binary> "$f"; done` sibling both fork ONE
     CHILD PROCESS PER MATCH, which is the exact mechanism behind the
-    founding incident's 879-process stall on Windows (example-doctrine-repo
+    founding incident's 879-process stall on Windows (coordinator-claude
     ``state/plan-sidecars/2026-07-28-bash-tax-negative-space.md``).
 
     Auto-rewrites to a single `python3 -c` process (zero per-match forks)
@@ -6167,7 +6167,7 @@ def _bt_commit_operand_scan(
     `git commit -m -o` as the `--only` flag and fakes scope out of it.
 
     The single parser behind BOTH `--`-keyed predicates below. SC-DR-020
-    (`example-doctrine-repo coordinator/docs/wiki/scoped-safety-commits.md`, token
+    (`coordinator-claude coordinator/docs/wiki/scoped-safety-commits.md`, token
     `SEPARATOR-IS-DISAMBIGUATION-NOT-SCOPE`) rules that `--` is git's
     revision/path DISAMBIGUATION token and carries no scope of its own:
     `git commit a.py -m x` and `git commit -m x -- a.py` are the same
@@ -6288,7 +6288,7 @@ def _bt_commit_has_explicit_pathspec(seg_tokens: List[str]) -> bool:
     `-- <paths>` scope (a standalone `--` separator with at least one
     operand after it), skipping option values so `-m -- ` shapes cannot
     fake one. This is the ratified default scoped-commit form
-    (example-doctrine-repo `docs/wiki/scoped-safety-commits.md` SC-DR-008/SC-DR-015), so its
+    (coordinator-claude `docs/wiki/scoped-safety-commits.md` SC-DR-008/SC-DR-015), so its
     presence is the suppression condition for the advisory below.
 
     `--pathspec-from-file[=<f>]`/`--pathspec-file-nul` also count as
@@ -6306,7 +6306,7 @@ def _bt_commit_has_explicit_pathspec(seg_tokens: List[str]) -> bool:
     from every option set in this module.
 
     `-o`/`--only` (bare or bundled, `-om`) counts for the SAME reason, raised
-    by example-doctrine-repo-em against the rule the paragraph above states: it selects
+    by coordinator-claude-em against the rule the paragraph above states: it selects
     git's identical index-bypassing self-scoped mode. Verified live against
     git 2.50.1 -- `git commit -o a.txt -m x` with a peer's `b.txt` staged
     commits `a.txt` alone and leaves `b.txt` staged. A no-paths `--only` is
@@ -6320,7 +6320,7 @@ def _bt_commit_has_explicit_pathspec(seg_tokens: List[str]) -> bool:
     `a.txt` and the peer's staged `b.txt`. That is precisely the sweep this
     advisory exists to catch, so `--include` must keep firing.
 
-    SC-DR-020 (example-doctrine-repo-em, 2026-08-04, `5a5fbe89f`): a BARE POSITIONAL
+    SC-DR-020 (coordinator-claude-em, 2026-08-04, `5a5fbe89f`): a BARE POSITIONAL
     pathspec counts too -- `git commit a.py -m x` is the same operation as
     `git commit -m x -- a.py`, verified live on git 2.54.0 (with a peer's
     `b.txt` also staged, `a.py` lands alone and `b.txt` stays staged). The
@@ -6679,14 +6679,14 @@ def check_git_commit_safe_commit_advise(
     is no longer `coordinator-safe-commit`.)
 
     Two properties this check exists to hold, both of them regressions
-    found in the field (example-doctrine-repo-em, 2026-07-29 cross-repo memo, after
+    found in the field (coordinator-claude-em, 2026-07-29 cross-repo memo, after
     four ignored firings):
 
     - **It never fires on the ratified, both-halves scoped form.** A
       command already carrying `-- <paths>` on its commit segment (or
       `--pathspec-from-file`/`--pathspec-file-nul`, see
       `_bt_commit_has_explicit_pathspec`) IS the ratified default
-      (`git add -- <paths> && git commit -m "x" -- <paths>`, example-doctrine-repo
+      (`git add -- <paths> && git commit -m "x" -- <paths>`, coordinator-claude
       `docs/wiki/scoped-safety-commits.md` SC-DR-015, which ratifies
       pathspec on BOTH halves, not one); advising it toward anything
       spends the band's credibility on the case that needs it least, and
@@ -6810,7 +6810,7 @@ def check_git_commit_safe_commit_advise(
 
 # ---------------------------------------------------------------------------
 # 17-18. BX-7/BX-8's missing rewrite targets -- closing the two-shape gap in
-# BX-16's vocabulary. Example-doctrine-repo docs/plans/2026-07-29-windows-viability-stop-the-
+# BX-16's vocabulary. Coordinator-claude docs/plans/2026-07-29-windows-viability-stop-the-
 # spawn-storms.md, row BX-16 (this dispatch's own remit): `_shape_classifier
 # .Shape` names FIVE measured fork-tax shapes, and two of them (MULTI_PROBE_
 # BANNER at 40.1% of forks, HEAD_TAIL_PLUMBING at 25%) had no rewrite target

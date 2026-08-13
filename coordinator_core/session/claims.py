@@ -1,6 +1,6 @@
 """
 coordinator_core.session.claims — Python engine port of the CLAIMS module of
-the coordinator session hub (Port of: coordinator-session.sh, example-doctrine-repo e34f2484,
+the coordinator session hub (Port of: coordinator-session.sh, coordinator-claude e34f2484,
 2026-07-22).
 
 The claim primitives were deliberately NOT extracted to a ``lib/session/``
@@ -642,7 +642,7 @@ def mark_claim_stamped(claim_dir: Union[str, Path]) -> bool:
     a genuinely successful mutation (e.g. ``archive_stamp.cs_claim_handoff``
     returning ok on its OWN post-write ``_validate_fm`` pass), never before.
 
-    WHY THIS EXISTS (cross-repo/inbox/2026-08-13-example-doctrine-repo-em-pickup-
+    WHY THIS EXISTS (cross-repo/inbox/2026-08-13-coordinator-claude-em-pickup-
     already-satisfied-masks-a-refused-write.md): ``claim_stage`` reads
     ``apply`` the moment ``promote_claim_stage`` runs, which ``pickup_
     assemble.apply.apply`` does UNCONDITIONALLY, BEFORE the directives that
@@ -961,7 +961,7 @@ def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
     workstream) — silently accepting and stripping it would launder that bug
     forward indefinitely instead of surfacing it where it can be fixed once.
 
-    Spec backlink: docs/plans/2026-07-02-ceremony-as-pipeline-v1-session-state-co.md § C3
+    Spec backlink: pln-ceremony-as-pipeline-v1-session-state-co-596280 § C3
     """
     if "/" in slug or "\\" in slug or slug.endswith(".md"):
         print(
@@ -1020,7 +1020,7 @@ def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
 #: answers over and ``ceremony.scoped_git_commit``'s commit gate
 #: (``coordinator_core/ops/ceremony/scoped_git_commit.py::
 #: _check_claim_conflicts``) fails closed on -- widened onto here per
-#: cross-repo/inbox/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+#: cross-repo/inbox/2026-08-11-coordinator-claude-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md: a dead session's claim on an arbitrary
 #: repo-relative path (e.g. a doctrine/code file the three classed forms
 #: were never meant to cover) had a query surface (``who-claims-path``) and
@@ -1146,7 +1146,7 @@ def _clear_path_claim_if_dead(
     """``class_ == "artifact"`` entrypoint for ``clear_claim_if_dead`` -- the
     CLEAR-ONLY, liveness-gated counterpart to ``_release_path_claim_
     artifact`` for the PATH-TOUCH claim plane. This is the release path
-    cross-repo/inbox/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+    cross-repo/inbox/2026-08-11-coordinator-claude-em-dead-claim-on-a-non-plan-
     artifact-has-no-clear-path.md asks for: a claim ``who-claims-path``
     reports and ``ceremony.scoped_git_commit`` fails closed on, whose
     claimant is confirmed dead, had no sanctioned release path before this.
@@ -1326,7 +1326,7 @@ def _clear_shape_plan_pointer(
     the shape pointer BEFORE the durable ``plan-claims/`` store and returns on
     a hit — so ``/handoff`` after a shipped plan resolved the shipped plan and
     surfaced a ``DivergentDeliverableIdError`` against the handoff chain's own
-    ``deliverable_id`` (example-doctrine-repo-em memo, 2026-08-10; the two ids differing
+    ``deliverable_id`` (coordinator-claude-em memo, 2026-08-10; the two ids differing
     is the EXPECTED steady state for a chain spanning several plans, so the
     stale pointer made a routine seam fail loud).
 
@@ -1731,7 +1731,7 @@ def backfill_reaped_from_session(worktree: Path) -> dict:
     reaped BEFORE ``reaped_from_session`` (C2, this same plan) existed, and
     write it as a real frontmatter field.
 
-    Spec backlink: docs/plans/2026-08-05-reaper-preserves-closure-evidence.md § C5
+    Spec backlink: pln-reaper-preserves-closure-evide-34a6fc § C5
 
     RE-DERIVES the target set at run time by scanning the LIVE corpus ONLY
     (``state/handoffs/``, via ``_collect_live_handoff_paths``) — deliberately
@@ -2144,7 +2144,7 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
     Do NOT re-inline a second normalization dialect here; a caller (e.g.
     ``coordinator_core.text.refresh_queries.process_file``) routinely
     invokes this with an ALWAYS-absolute path, so skipping this step is
-    exactly how an absolute entry lands in ``touched.txt`` (example-doctrine-repo
+    exactly how an absolute entry lands in ``touched.txt`` (coordinator-claude
     security-audit 2026-07-31: 240 such entries corroborated on disk). A
     path that is still absolute after normalization is SKIPPED (fail-open,
     advisory-only — this function's return-True-always contract already

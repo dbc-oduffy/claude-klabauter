@@ -6,7 +6,7 @@ The load-bearing cases are the two refusals the gate still owns —
 `test_indefinite_carry_is_allowed`, which pins the PM ruling that carry depth
 is NOT a defect: no count, no limit, no refusal on depth.
 
-Spec backlink: example-doctrine-repo coordinator/schemas/handoff.schema.json
+Spec backlink: coordinator-claude coordinator/schemas/handoff.schema.json
     `carried_items`; coordinator/skills/handoff/SKILL.md § Cascading
     unresolved items.
 """

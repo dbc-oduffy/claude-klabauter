@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.goal_append — goal-event appender (goal.append op).
 
-Purpose: Port of: append-goal-event.sh (example-doctrine-repo b5a4192c, 2026-07-20). Appends a single goal-event JSON line to
+Purpose: Port of: append-goal-event.sh (coordinator-claude b5a4192c, 2026-07-20). Appends a single goal-event JSON line to
 the per-machine append-only JSONL log
 ``<central_state_root>/goals-log.<machine>.jsonl``.
 
@@ -47,7 +47,7 @@ DR-208 / tri-plane DD#1).
 Registered as ``goal.append`` in ops/__init__.py and classified ``OpClass.MUTATING``
 in authz/classification.py (same chunk, per plan § C6 / AC10).
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C6
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C6
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ _LOG_NAME_TEMPLATE = "goals-log.{machine}.jsonl"
 # fixes) are expected to agree on the full id string, not merely a prefix.
 _GOAL_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
-# Cross-repo memo naming the upstream (example-doctrine-repo emit-goal-from-artifact.sh) caller bug that
+# Cross-repo memo naming the upstream (coordinator-claude emit-goal-from-artifact.sh) caller bug that
 # motivates the absolute->relative rewrite in _normalize_coordinator_root_path(). Cited
 # in the observability breadcrumb emitted on the absolute-rewrite branch (Finding 2).
 _PHANTOM_REPO_FK_MEMO = (
@@ -183,7 +183,7 @@ def _normalize_coordinator_root_path(crp: Optional[str], repo_root: Path) -> str
     The contract (contract/cockpit_schema/entities/coordinator_root.py) declares
     coordinator_root_path as repo-root-relative — "." for a single-root repo, "subdir"
     for a monorepo sub-root. This is the sole write choke point that rewrites an
-    absolute path to that shape, defending against callers (notably example-doctrine-repo's
+    absolute path to that shape, defending against callers (notably coordinator-claude's
     emit-goal-from-artifact.sh) that pass an absolute git-toplevel path instead — an
     absolute (machine-specific) path resolves the same logical repo to a phantom
     second repo_fk in rag's (owner, repo, coordinator_root_path) keying, causing

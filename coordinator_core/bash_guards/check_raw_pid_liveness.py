@@ -1,6 +1,6 @@
 """coordinator_core.bash_guards.check_raw_pid_liveness -- PreToolUse(Bash)
 hard-deny guard closing the RAW-PID-LIVENESS tripwire's own long-standing
-"forthcoming" mechanical-enforcement tier (example-doctrine-repo
+"forthcoming" mechanical-enforcement tier (coordinator-claude
 ``docs/wiki/coordinator-tripwires.md`` § RAW-PID-LIVENESS: "a C5 PreToolUse
 offer-hook (mechanical enforcement tier)").
 
@@ -70,9 +70,9 @@ the rare legitimate raw-pid use this guard cannot distinguish (e.g.
 interactive process-management tooling entirely unrelated to session/claim
 liveness that merely happens to share the same two flag spellings).
 
-Spec backlink: example-doctrine-repo ``docs/plans/2026-07-27-claude-md-altitude-triage.md``
+Spec backlink: coordinator-claude ``docs/plans/2026-07-27-claude-md-altitude-triage.md``
 § C14/RAW-PID-LIVENESS-GUARD.
-Tripwire entry: example-doctrine-repo ``coordinator/docs/wiki/coordinator-tripwires.md``
+Tripwire entry: coordinator-claude ``coordinator/docs/wiki/coordinator-tripwires.md``
 § RAW-PID-LIVENESS.
 """
 

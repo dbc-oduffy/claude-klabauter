@@ -13,7 +13,7 @@ session — new writes are clean — but 337 pre-existing session
 poisoned dialect and corrupt `compute_scope`'s candidate/other_owner key
 space. This module migrates that historical corpus IN PLACE, once.
 
-Spec backlink: docs/plans/2026-07-31-touched-path-poisoning-normalize-git-dir.md
+Spec backlink: pln-touched-txt-path-poisoning-nor-ecab01
 § C6 (Tasks), § Recommendation on the corpus fork (AC7), § AC7.
 
 Scope, precisely

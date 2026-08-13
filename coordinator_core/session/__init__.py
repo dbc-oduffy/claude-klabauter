@@ -1,6 +1,6 @@
 """
 coordinator_core.session — Python engine port of coordinator's session substrate
-(Port of: coordinator-session.sh, example-doctrine-repo e34f2484, 2026-07-22, + its
+(Port of: coordinator-session.sh, coordinator-claude e34f2484, 2026-07-22, + its
 ``coordinator/lib/session/*.sh`` sibling modules).
 
 Purpose: package namespace for the session-tracking primitives (identity

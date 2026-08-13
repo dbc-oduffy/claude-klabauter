@@ -728,15 +728,12 @@ def test_scan_still_flags_os_access_when_windows_branch_calls_it(tmp_path):
 
 
 def test_scan_does_not_flag_path_separator_replace_inside_guard(tmp_path):
-    """Covers the explicit if/else branch shape. NOTE a real, stated
-    limitation: an early-return guard clause (`if sys.platform.startswith
-    ('win'): return p` followed by the guarded code as the NEXT sibling
-    statement, no `else:`) is NOT caught -- that idiom is not a nested
-    `If.orelse` in the AST at all, just a subsequent statement, and
-    detecting it needs real control-flow/reachability analysis rather than
-    a parent-chain walk. `_is_windows_guarded` only recognizes the explicit
-    branch shape below; the early-return idiom remains a false positive
-    until a future pass adds reachability analysis."""
+    """Covers the explicit if/else branch shape (a nested `If.orelse`). The
+    sibling bare early-return shape -- `if sys.platform.startswith('win'):
+    return p` followed by the guarded code as the NEXT sibling statement, no
+    `else:` -- is covered separately by
+    test_scan_does_not_flag_path_separator_replace_after_bare_early_return_guard
+    (closed 2026-08-13, see `_is_windows_guarded`'s own docstring)."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import sys\n\n"
@@ -751,6 +748,73 @@ def test_scan_does_not_flag_path_separator_replace_inside_guard(tmp_path):
     result = scan(repo)
 
     assert "tool.py" not in result["path_separator"]
+
+
+def test_scan_does_not_flag_path_separator_replace_after_bare_early_return_guard(tmp_path):
+    """2026-08-13 gap closure: the bare, `else:`-less early-return guard
+    clause (`if sys.platform.startswith('win'): return p` followed by the
+    guarded code as the next SIBLING statement, not a nested `If.orelse`)
+    must now be recognized -- this is the exact shape AC6 named."""
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import sys\n\n"
+        "def norm(p):\n"
+        "    if sys.platform.startswith('win'):\n"
+        "        return p\n"
+        "    return p.replace('/', '\\\\')\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" not in result["path_separator"]
+
+
+def test_scan_still_flags_bare_early_return_with_unrecognized_windows_test(tmp_path):
+    """False-negative control: a bare, else-less early-return guard clause
+    that is structurally IDENTICAL to the now-recognized shape, except its
+    test is a project-local wrapper function rather than one of
+    `_branch_windows_status`'s recognized os.name/sys.platform/
+    platform.system() forms. This must still fire -- if it silently stopped
+    firing, the 2026-08-13 fix would have widened past its stated scope
+    (recognizing the SHAPE only when the TEST is a known windows-test) into
+    treating any bare early return as a platform guard, which would hide
+    genuinely unguarded code behind an unrelated conditional."""
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "def _host_is_windows():\n"
+        "    raise NotImplementedError\n\n"
+        "def norm(p):\n"
+        "    if not _host_is_windows():\n"
+        "        return p\n"
+        "    return p.replace('/', '\\\\')\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" in result["path_separator"]
+
+
+def test_scan_still_flags_bare_early_return_guard_whose_body_does_not_exit(tmp_path):
+    """False-negative control: a bare, else-less `if <windows-test>:` clause
+    whose body does NOT unconditionally exit (no return/raise/sys.exit) does
+    not actually make the following sibling statement unreachable on
+    Windows, so it must still fire. Proves `_block_always_exits` is load-
+    bearing, not decorative."""
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import sys\n\n"
+        "def norm(p):\n"
+        "    if sys.platform.startswith('win'):\n"
+        "        print('on windows')\n"
+        "    return p.replace('/', '\\\\')\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" in result["path_separator"]
 
 
 def test_scan_still_flags_ungated_os_access(tmp_path):
@@ -1143,7 +1207,7 @@ def test_check_against_baseline_leads_with_early_return_escape_for_guard_aware_c
     ok, msg = check_against_baseline(repo, baseline_path)
 
     assert ok is False
-    idx_escape = msg.find("KNOWN, NAMED gap")
+    idx_escape = msg.find("IS recognized by `_is_windows_guarded()`")
     idx_generic_fix = msg.find("Fix: port posix mode bits")
     assert idx_escape != -1 and idx_generic_fix != -1
     assert idx_escape < idx_generic_fix, "the EXEMPTIONS escape must come BEFORE the generic fix text"
@@ -1162,7 +1226,7 @@ def test_check_against_baseline_does_not_lead_with_escape_for_non_guard_aware_cl
     ok, msg = check_against_baseline(repo, baseline_path)
 
     assert ok is False
-    assert "KNOWN, NAMED gap" not in msg
+    assert "IS recognized by `_is_windows_guarded()`" not in msg
 
 
 def test_check_against_baseline_passes_when_violation_is_baselined(tmp_path):
@@ -1596,11 +1660,11 @@ def test_prefix_exclusion_is_repo_scoped(tmp_path):
 
 
 def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_path):
-    """Migration proof: the three hand-listed example-doctrine-repo m8-baseline `path_separator`
+    """Migration proof: the three hand-listed coordinator-claude m8-baseline `path_separator`
     entries were deleted from EXEMPTIONS in favour of one prefix. The class
     they named must still be invisible -- migrating a carve-out must not
     quietly re-expose what it covered."""
-    repo = _repo_with_preserved_tree(tmp_path, "example-doctrine-repo", _DOE_PREFIX)
+    repo = _repo_with_preserved_tree(tmp_path, "coordinator-claude", _DOE_PREFIX)
     for name in (
         "block_subagent_commit.py",
         "block_subagent_destructive_action.py",

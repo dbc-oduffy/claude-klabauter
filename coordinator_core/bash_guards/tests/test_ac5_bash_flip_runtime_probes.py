@@ -20,7 +20,7 @@ Each of the four gets TWO probes:
       registered check function to raise and observing
       `evaluate_payload_json` return None (ALLOW), not a deny.
 
-Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, AC5.
+Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, AC5.
 """
 from __future__ import annotations
 

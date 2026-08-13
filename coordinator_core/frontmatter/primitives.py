@@ -2,7 +2,7 @@
 coordinator_core.frontmatter.primitives
 
 Unified Python port of the YAML frontmatter text-manipulation primitives from
-the example-doctrine-repo coordinator JS tools:
+the coordinator-claude coordinator JS tools:
   - handoff-transition.js       (4-arg anchored insertFmField, block-scalar guard)
   - stamp-shipped-in.js         (numeric/scientific quoting additions)
   - normalize-handoff-frontmatter.js (2-arg append-only insertFmField, null→'null')
@@ -237,7 +237,7 @@ def unquote_yaml_scalar(raw: str | None) -> str | None:
       ``''`` inner-quote form (the exact inverse of ``serialize_yaml_scalar``);
     - a matched pair of surrounding double-quotes (plain strip) — not emitted by
       ``serialize_yaml_scalar``, but present in hand-authored frontmatter and in
-      artifacts written by the example-doctrine-repo node oracle's ``schema.js`` ``unquoteScalar``,
+      artifacts written by the coordinator-claude node oracle's ``schema.js`` ``unquoteScalar``,
       whose behaviour this mirrors.
 
     Negative-spec: NOT a general YAML unquoter. It does not process
@@ -781,7 +781,7 @@ def insert_fm_field_raw(fm: str, key: str, raw_value: str, after_key: str | None
 def remove_fm_field(fm: str, key: str) -> str:
     """Remove the ``key: …`` line from frontmatter text, including its trailing newline.
 
-    Port of ``removeFmField`` from example-doctrine-repo ``bin/memo-transition.js:126-132``.
+    Port of ``removeFmField`` from coordinator-claude ``bin/memo-transition.js:126-132``.
 
     The boundary lookahead ``(?=[ \\t]|\\r?$)`` prevents ``picked_up_by`` from
     matching ``picked_up_by_x:`` (same discipline as ``read_fm_field``). The

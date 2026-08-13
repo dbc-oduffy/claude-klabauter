@@ -2,7 +2,7 @@
 coordinator_core.session.harness_registry — pure parser over the harness's
 own `<claude-config>/sessions/*.json` registry.
 
-Spec backlink: docs/plans/2026-08-08-harness-session-registry-as-liveness-source.md § C1
+Spec backlink: pln-the-harness-already-knows-whic-096836 § C1
 
 Public surface (pinned contract — do not change without updating consumers):
 
@@ -25,8 +25,8 @@ Like every other field here, reading them attaches no liveness meaning:
 `start_epoch` only.
 
 `self_record()` (added `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
-§ C1, spike-verified anchor; cite `example-doctrine-repo@642195ba` / follow-up
-`example-doctrine-repo@88929bea` — the wrongful-takeover shape this module's
+§ C1, spike-verified anchor; cite `coordinator-claude@642195ba` / follow-up
+`coordinator-claude@88929bea` — the wrongful-takeover shape this module's
 negative-spec defends against) is the O(1) leg over the pid-keyed
 `<registry_dir>/<CLAUDE_PID>.json` file: it resolves `CLAUDE_PID` via
 `coordinator_core.session.core._resolve_claude_pid_from_env` (the one
@@ -70,7 +70,7 @@ Negative-spec:
       existing fallback stack decides what `None` means. An executor
       "simplifying" a `None` return into a dead verdict reintroduces a
       wrongful-takeover failure this fleet has already suffered twice
-      (example-doctrine-repo 642195ba, follow-up 88929bea).
+      (coordinator-claude 642195ba, follow-up 88929bea).
     - `updatedAt` and `statusUpdatedAt` are read NOWHERE in this module, at
       any call site, forever. They track busy/idle transitions, not process
       liveness: a continuously-working session was measured carrying a

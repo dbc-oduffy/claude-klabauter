@@ -9,7 +9,7 @@ SessionEnd hook) has a settings-home-forwarder-reachable CLI to call rather
 than a hardcoded engine-plane path.
 
 This module is also the SIGTERM-handling seam for the SessionEnd-hook
-child: ``sessionend-auto-commit.py`` (example-doctrine-repo) soft-terminates this
+child: ``sessionend-auto-commit.py`` (coordinator-claude) soft-terminates this
 process and waits a grace window before hard-killing, and ``main()``
 installs a handler converting that SIGTERM into a normal ``SystemExit``
 unwind so ``commit_pipeline.py``'s cleanup ``finally`` block actually runs

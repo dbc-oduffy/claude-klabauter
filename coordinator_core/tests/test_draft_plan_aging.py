@@ -1,11 +1,11 @@
 """Characterization tests for coordinator_core.ops.draft_plan_aging.
 
-Ported (parity target) from coordinator/tests/draft-plan-aging.bats (example-doctrine-repo,
+Ported (parity target) from coordinator/tests/draft-plan-aging.bats (coordinator-claude,
 20 cases) — each bats `t_*` case has a corresponding test here, plus unit-level
 coverage for the individual helper predicates.
 
 Spec backlink: docs/plans/2026-07-09-continuity-artifact-staleness-parity.md § Design Fix #2, § Chunks C1
-Port of: draft-plan-aging.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: draft-plan-aging.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 

@@ -10,8 +10,8 @@ needs-PM classification, rename-source F8 fold) has been fully ported to
 coordinator_core/ops/workday_complete_step2_5_dirty_tree.py (co-located
 tests: test_workday_complete_step2_5_dirty_tree.py, including cross-repo
 parity tests against this trampoline's own prior bash body). This file is
-now a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module,
-per DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module,
+per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
 owned by `gen-launcher-shim.py --ensure-unix`, and correct for this shape. On
@@ -20,8 +20,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Exit codes (business codes 0/1/2 identical to the retired bash oracle — see
@@ -42,7 +42,7 @@ and is never emitted by the claude-klabauter module itself):
         this repo," which rc=1 conflated before this fix.
 
 Spec backlink: commands/workday-complete.md § Step 2.5
-Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md
+Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md [DEAD-CITATION: plan file never committed to this repo]
 """
 
 from __future__ import annotations

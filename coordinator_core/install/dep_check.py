@@ -4,12 +4,12 @@ agent-mode consent prompt, functional dep probing, and the crash-safe
 visited-set cycle-detection state machine consumed by coordinator's
 install-chain setup.sh.
 
-Port source: coordinator/scripts/lib/dep_check.sh [example-doctrine-repo repo]
+Port source: coordinator/scripts/lib/dep_check.sh [coordinator-claude repo]
 (a thin bash veneer replaces the old function bodies with subprocess calls
 into THIS module; see that file's own header comment for the veneer/degrade
 contract. The `.sh` file stays in place — it is a sourced library, not a
 standalone trampoline executable, so there is no polyglot-shebang shape
-here. Reachability note, confirmed 2026-07-17: example-doctrine-repo's own
+here. Reachability note, confirmed 2026-07-17: coordinator-claude's own
 coordinator/scripts/setup.sh no longer sources this bash lib — it is itself
 a polyglot trampoline into coordinator_core.ops.setup_chain_walker.main,
 which ports manifest-reading/dep-probing natively. dep_check.sh is
@@ -21,7 +21,7 @@ Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase
 Spec backlink: coordinator/docs/wiki/agent-install-contract.md §Dual-mode script UX
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
-CLI contract (invoked by the example-doctrine-repo bash veneer as
+CLI contract (invoked by the coordinator-claude bash veneer as
 `python -m coordinator_core.install.dep_check <subcommand> [args...]`):
 
   phase-zero-should-run                    -> exit 0 (run) / 1 (skip)
@@ -596,9 +596,9 @@ _FALLBACK_BANNER = (
 def _load_banner(banner_path: Optional[str]) -> str:
     """Loads the consent banner body. Unlike the bash original (which
     resolves the banner path relative to its OWN file location — it lives
-    example-doctrine-repo-side, co-located with dep_consent_banner.txt), this claude-klabauter module
-    has no example-doctrine-repo-tree-relative default: banner_path is REQUIRED from the
-    caller (the example-doctrine-repo bash veneer resolves + passes its own sibling path).
+    coordinator-claude-side, co-located with dep_consent_banner.txt), this claude-klabauter module
+    has no coordinator-claude-tree-relative default: banner_path is REQUIRED from the
+    caller (the coordinator-claude bash veneer resolves + passes its own sibling path).
     Falls back to the same inline minimal banner text the bash original
     uses when the file is absent."""
     if not banner_path:

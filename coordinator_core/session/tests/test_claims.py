@@ -4,7 +4,7 @@ coordinator_core.session.claims, the Python engine port of the CLAIMS module of
 coordinator-session.sh (the claim primitives lived in the MAIN bash file, not
 a lib/session/ sub-module).
 
-Port of: coordinator-session.sh (example-doctrine-repo e34f2484, 2026-07-22).
+Port of: coordinator-session.sh (coordinator-claude e34f2484, 2026-07-22).
 
 Oracle bash functions cited per test class:
   - atomic_dedup_append   -> cs_atomic_dedup_append
@@ -719,7 +719,7 @@ class TestReleaseArtifact:
         landed, nothing unwrote it, so a released plan stayed resolvable via
         `claimed_plan.resolve_claimed_plan_path`'s tier (a) and `/handoff`
         after a shipped plan failed loud on a DivergentDeliverableIdError
-        (example-doctrine-repo-em memo, 2026-08-10)."""
+        (coordinator-claude-em memo, 2026-08-10)."""
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)
         _make_claim(repo, "plan", "p-shipped", session_id="me-sid")
@@ -855,7 +855,7 @@ class TestClearClaimIfDead:
 # ---------------------------------------------------------------------------
 # class_ == "artifact" (PATH-TOUCH claim plane widening)
 #
-# cross-repo/inbox/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+# cross-repo/inbox/2026-08-11-coordinator-claude-em-dead-claim-on-a-non-plan-
 # artifact-has-no-clear-path.md -- who-claims-path answers over the
 # PATH-TOUCH plane (claim_index / touched.txt T-R events), a DIFFERENT
 # store than the mkdir-based handoff/memo/plan claim-record store the
@@ -1317,7 +1317,7 @@ class TestSelfClaim:
 
 
 # ---------------------------------------------------------------------------
-# self_claim — absolute-path normalization (example-doctrine-repo security-audit 2026-07-31:
+# self_claim — absolute-path normalization (coordinator-claude security-audit 2026-07-31:
 # self_claim previously appended `path` verbatim with no normalization at
 # all, the live gap distinct from scope.touch()'s existing guard — see
 # claims.self_claim's docstring and scope.normalize_touch_path).
@@ -1361,7 +1361,7 @@ class TestSelfClaimAbsolutePathNormalization:
         self, tmp_path, monkeypatch
     ):
         """The refresh-queries.py self_claim(file_path) call site always
-        passes an absolute path (example-doctrine-repo security-audit 2026-07-31 finding);
+        passes an absolute path (coordinator-claude security-audit 2026-07-31 finding);
         this asserts that even when normalization cannot resolve it to
         repo-relative, the raw absolute path is never appended."""
         repo = _make_repo(tmp_path)

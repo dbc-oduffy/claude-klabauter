@@ -1,11 +1,11 @@
 """
 coordinator_core.hooks.ue_knowledge_distrust -- SessionStart(startup|clear|compact)
 UE-project detection + knowledge-distrust banner + per-project plugin-gating
-auto-bootstrap (Port of: ue-knowledge-distrust.sh, example-doctrine-repo e91827a7, 2026-07-20,
+auto-bootstrap (Port of: ue-knowledge-distrust.sh, coordinator-claude e91827a7, 2026-07-20,
 W4b bash-to-python-migration cohort).
 
 Disposition: naked-Python DIRECT PORT (recipe section 2.5:
-X:/example-doctrine-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md).
+X:/coordinator-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md).
 
 Ported behavior, in order:
   1. Bounded ".uproject" search: cwd-relative, maxdepth 3 (matches the bash
@@ -36,12 +36,12 @@ Python's stdlib json module has no external-tool dependency, so that
 precondition can never occur in the port -- it is correctly and permanently
 unreachable, not silently dropped.
 
-Called IN-PROCESS by the thin example-doctrine-repo SessionStart stub
+Called IN-PROCESS by the thin coordinator-claude SessionStart stub
 (coordinator/hooks/scripts/ue-knowledge-distrust.py), mirroring
 coordinator_reminder.render_reminder / example_retrieval_repo_detect.detect_banner's
 direct-import shape -- no IPC round trip, no register_op().
 
-Spec backlink: X:/example-doctrine-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md section 2.5
+Spec backlink: X:/coordinator-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md section 2.5
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ def _read_override_value(settings_path: Path) -> tuple[bool, Optional[bool]]:
 
 
 def _run_bootstrap(plugin_root: str, cwd: str) -> tuple[bool, str]:
-    """Port of: claude-ue-bootstrap.sh (example-doctrine-repo 4518ca1a, 2026-07-21)'s
+    """Port of: claude-ue-bootstrap.sh (coordinator-claude 4518ca1a, 2026-07-21)'s
     settings.json write/merge logic (C5: retires the bash
     `["bash", script, cwd]` subprocess spawn this session-hot-path hook
     used to make -- no bash, jq, or node dependency of any kind remains).
@@ -237,13 +237,13 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
 
     Args:
       cwd: the working directory to search (bash oracle used "$(pwd)").
-      plugin_root: the example-doctrine-repo coordinator plugin root (bash oracle derived this
-        from "${BASH_SOURCE[0]}/../.."; the example-doctrine-repo stub passes it explicitly --
+      plugin_root: the coordinator-claude coordinator plugin root (bash oracle derived this
+        from "${BASH_SOURCE[0]}/../.."; the coordinator-claude stub passes it explicitly --
         it owns bin/claude-ue-bootstrap.py, not claude-klabauter).
     """
     # Review: code-reviewer -- Finding 4, 2026-07-24-codereview-sliceowns-zero-claude-klabauter
     # sidecar (docstring above still said "claude-ue-bootstrap.sh"; the
-    # example-doctrine-repo-side source script was renamed extensionless-to-.py by the
+    # coordinator-claude-side source script was renamed extensionless-to-.py by the
     # bash-kill campaign -- repointed to match, same as the user-facing
     # message below).
     stderr_lines: list[str] = []

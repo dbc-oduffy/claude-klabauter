@@ -16,7 +16,7 @@ bin/*.py` script (or, for the node ceremony gate, `node --test`) via an
 explicit argv list resolved from this module's own file location — never a
 brief-derived import, never a shell string built from `directives[].args`.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C6
 
 Negative-spec:

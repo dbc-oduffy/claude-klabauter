@@ -9,7 +9,7 @@ wrong (see fan_out_integrator._parse_file_lists's inline comment): a trailing
 comma in the file-list column must NOT produce a spurious empty-path-entry
 error, matching bash's `IFS=',' read -ra` one-trailing-empty-field drop.
 
-Port of: test-fan-out-integrator.sh (example-doctrine-repo 432e3285, 2026-07-22)
+Port of: test-fan-out-integrator.sh (coordinator-claude 432e3285, 2026-07-22)
 """
 from __future__ import annotations
 

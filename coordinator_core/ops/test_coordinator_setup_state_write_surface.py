@@ -1,6 +1,6 @@
 """Tests for `coordinator_setup_state.WRITE_SURFACE`.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C3g.
 
 Purpose: proves the declaration's keys are DERIVED from `_MILESTONES` at

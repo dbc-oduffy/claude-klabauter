@@ -17,7 +17,7 @@
       "available": true,
       "hosts": null,
       "agent_types": null,
-      "note": "guard_inprocess_search (coordinator_core/bash_guards/guard_inprocess_search.py) answers a substitutable grep-shaped Bash command inside the already-running PreToolUse(Bash) hook process -- zero additional subprocess forks. Registered ahead of guard_grep_via_bash in dispatch.py's guard_chain. Ground truth: example-doctrine-repo state/audits/2026-07-29-search-capability-roster-truth.md (this is the ONE non-bash search capability that audit confirms genuinely reachable in-process from a main session; Grep/Glob themselves remain unreachable)."
+      "note": "guard_inprocess_search (coordinator_core/bash_guards/guard_inprocess_search.py) answers a substitutable grep-shaped Bash command inside the already-running PreToolUse(Bash) hook process -- zero additional subprocess forks. Registered ahead of guard_grep_via_bash in dispatch.py's guard_chain. Ground truth: coordinator-claude state/audits/2026-07-29-search-capability-roster-truth.md (this is the ONE non-bash search capability that audit confirms genuinely reachable in-process from a main session; Grep/Glob themselves remain unreachable)."
     },
     "guard_inprocess_search::searched in-process": {
       "available": true,

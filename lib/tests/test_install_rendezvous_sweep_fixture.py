@@ -44,8 +44,8 @@ _TEMPLATE_REL = "coordinator/templates/handoffs/continue-onboarding-and-installa
 
 def _resolve_template_path() -> Path | None:
     """claude-klabauter does not vendor this template — it is coordinator-claude/
-    example-doctrine-repo content (see this repo's own CLAUDE.md § What this repo is). Resolve
-    it via the example-doctrine-repo sibling root, same as
+    coordinator-claude content (see this repo's own CLAUDE.md § What this repo is). Resolve
+    it via the coordinator-claude sibling root, same as
     coordinator_core/tests/test_install_chain_driven_leaf_seed_sweep.py; the
     bash oracle this replaces used a hardcoded relative path
     (SCRIPT_DIR/../../templates/...) that has never resolved inside this repo
@@ -79,7 +79,7 @@ def template_text():
     template_path = _resolve_template_path()
     if template_path is None:
         pytest.skip(
-            "example-doctrine-repo root not resolvable via coordinator_core.doe_root_pointer "
+            "coordinator-claude root not resolvable via coordinator_core.doe_root_pointer "
             "on this machine (or the template is missing there) — this template is "
             "not vendored in claude-klabauter; not a defect in claude-klabauter."
         )

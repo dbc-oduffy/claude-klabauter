@@ -10,7 +10,7 @@ This guard offers the shape a GOOD baton body has instead of merely refusing
 the bad one, per the design-as-offers convention (a nudge leads with the
 better alternative, not the violation).
 
-This is a NEW guard, not a port of a example-doctrine-repo reference `.sh` hook — there is no
+This is a NEW guard, not a port of a coordinator-claude reference `.sh` hook — there is no
 `coordinator/hooks/scripts/nudge-baton-body-bar.sh` predecessor. It follows
 the module-shape convention set by
 `coordinator_core/write_guards/nudge_improvement_queue_write.py` (constants

@@ -14,7 +14,7 @@ deferred-import workaround is needed the way ``_blanket_disarm.py`` needs one
 for ``GuardBand``.
 
 Spec backlink: docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md
-(example-doctrine-repo) row H1.
+(coordinator-claude) row H1.
 """
 
 from __future__ import annotations

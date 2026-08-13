@@ -1,14 +1,14 @@
 """Tests for the DR-130 KR-suggestion reader half of ``coordinator_core.goals.reassess_krs``.
 
 Pins each invariant of the generalized optional suggestion-source contract
-(``example-doctrine-repo:coordinator/schemas/kr-suggestion.schema.json``, ``DR-130``) against
+(``coordinator-claude:coordinator/schemas/kr-suggestion.schema.json``, ``DR-130``) against
 this repo's reader: ``state/kr-suggestions/*.yaml`` resolution by goal-level `id:`
 and `key_results[].id` (never a path/slug, never an index), unresolved-anchor
 reporting, staleness detection, the append-only write path, per-file degrade-to-
 warning, and dry-run's report-only contract. One test per invariant, named so a
 failure names which invariant broke.
 
-Spec backlink: docs/plans/2026-08-05-dr-130-kr-suggestion-source-the-reader-h.md
+Spec backlink: pln-dr-130-kr-suggestion-source-th-32c84d
 """
 
 from __future__ import annotations

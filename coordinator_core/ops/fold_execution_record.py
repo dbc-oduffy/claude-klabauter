@@ -38,7 +38,7 @@ only to stdout; exit is always 0 for all SKIPs.
 
 NEVER commits or stages files. NEVER edits the plan or any sidecar.
 
-Sidecar addressing (DR-047 contract-derived, NOT a example-doctrine-repo-side path reconstruction):
+Sidecar addressing (DR-047 contract-derived, NOT a coordinator-claude-side path reconstruction):
 each chunk sidecar lives at state/subagent-share/<session-id>/<provision_key>.md per
 Claude-klabauter's landed CONTRACT.md (coordinator_core/subagent_sandbox/CONTRACT.md
 § Provision-and-emit contract). provision_key is the SAME pre-flattened
@@ -52,7 +52,7 @@ plan_slug derivation contract (CRITICAL SEMANTIC COUPLING): this module and
 coordinator/bin/fan-out-dispatch.py derive plan_slug via the IDENTICAL idiom — strip
 a leading "YYYY-MM-DD-" date prefix from the plan's basename via regex
 `^[0-9]{4}-[0-9]{2}-[0-9]{2}-`, then strip a trailing ".md" suffix. This equivalence
-is asserted by example-doctrine-repo's coordinator/tests/run-report-provision-key-flattening.bats
+is asserted by coordinator-claude's coordinator/tests/run-report-provision-key-flattening.bats
 (parity test), which greps both scripts for their respective idiom fragments — same
 input MUST yield a byte-identical slug on both sides, or provisioning (write side)
 and folding (read side) silently mislocate each other's sidecars.
@@ -72,7 +72,7 @@ Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-p
       grandparent-of-plan-dir repo-root heuristic (mirrors the oracle's logical
       `cd && pwd`, not a physical/resolved path).
 
-Spec backlink: (inline — no plan doc yet on the example-doctrine-repo side; this module inherits that
+Spec backlink: (inline — no plan doc yet on the coordinator-claude side; this module inherits that
 posture from its bash oracle, which names itself as the spec surface)
 Prior bash implementation: coordinator/bin/coordinator-fold-execution-record.
 """

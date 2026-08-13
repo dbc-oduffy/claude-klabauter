@@ -28,7 +28,7 @@ and retyped — the EM fills a blank in a file it is already holding.
 survives only as the crash-resume/audit surface (the Director of Engineering review, F6); the file is
 the primary path.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-23-computed-skills-bz-pickup-rebuild.md, chunks C2a + C2b + C2c + C2d
 
 Security-load-bearing (the Director of Engineering review F1 / the Staff Engineer second-pass finding #1, AC9e):
@@ -363,7 +363,7 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
             raise RuntimeError(
                 f"archive-stamp-cli {verb} {args[1]}: {result.get('error', 'failed')}"
             )
-        # Durable stamp-landed marker (cross-repo/inbox/2026-08-13-example-doctrine-repo-
+        # Durable stamp-landed marker (cross-repo/inbox/2026-08-13-coordinator-claude-
         # em-pickup-already-satisfied-masks-a-refused-write.md) — written ONLY
         # here, after `ok` has confirmed `cs_claim_handoff`'s underlying
         # `handoff_transition._claim` genuinely landed the frontmatter mutation

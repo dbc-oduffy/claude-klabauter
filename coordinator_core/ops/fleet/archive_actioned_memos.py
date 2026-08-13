@@ -25,7 +25,7 @@ Spec backlinks:
   - Plan (C3): docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C3
   - Wire contract (FROZEN): coordinator_core/contract/cockpit-invoke-producer-contract.md §2.2
   - DR-211: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md (D1-D4)
-  - Port of: coordinator-session.sh (example-doctrine-repo e34f2484, 2026-07-22) cs_sweep_actioned_memos
+  - Port of: coordinator-session.sh (coordinator-claude e34f2484, 2026-07-22) cs_sweep_actioned_memos
 
 Negative-spec:
   - Does NOT archive a memo carrying status:actioned or status:superseded but

@@ -2,7 +2,7 @@
 coordinator_core.distill.ripe_filter — pure frontmatter scan partitioning a spec dir into
 harvest-ripe vs skip-worthy specs.
 
-Purpose: the first of the 3 independent (no-example-doctrine-repo-coupling) distill-ceremony scripts. Scans
+Purpose: the first of the 3 independent (no-coordinator-claude-coupling) distill-ceremony scripts. Scans
 every Markdown file under a given spec directory — recursing into subdirectories, so a
 month-foldered archive layout (`archive/specs/YYYY-MM/*.md`) is handled in one invocation —
 reads its `status:` frontmatter field, and partitions the set into three buckets:
@@ -20,7 +20,7 @@ Any other status value (e.g. `draft`, `reviewed`, `approved`, `executing`) or a 
 `status:` field is also treated as SKIP (not-yet-ripe), with a reason naming the actual
 status found (or "no status field").
 
-No LLM, no coupling to example-doctrine-repo's canonical-log/distill_fate work — this is a pure, deterministic
+No LLM, no coupling to coordinator-claude's canonical-log/distill_fate work — this is a pure, deterministic
 frontmatter read. Consumes coordinator_core.distill._common's read-only frontmatter
 re-exports (split_frontmatter, read_fm_field), not a divergent YAML parser.
 
@@ -28,7 +28,7 @@ Negative-spec: does not read the log, does not touch archive/specs/**, does not 
 active_reference_guard, does not write anything — output is a pure function of a spec dir's
 current frontmatter contents.
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C1
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C1
 """
 
 from __future__ import annotations

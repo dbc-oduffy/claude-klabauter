@@ -19,7 +19,7 @@ This test never spawns an `invoke` child process directly -- all subprocess
 spawning under test is owned by timer.py/op_fixtures.py, exercised
 transitively via harness.run().
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C11
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C11
 (AC8).
 """
 

@@ -3,7 +3,7 @@ coordinator_core.ops.tests.conftest
 
 Shared fixture for the C1 (spec_backlink_resolve)/C2 (backfill_deliverable_spine)/
 C3 (rewrite_spec_backlinks) chunk trio of
-docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md — one
+pln-spec-backlinks-cite-a-stable-d-451b3e — one
 on-disk corpus fixture, authored once here rather than re-derived three times.
 
 Mirrors real corpus shape verified against this repo's own

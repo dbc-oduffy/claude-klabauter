@@ -23,7 +23,7 @@ verbatim in behavior):
         [--today YYYY-MM-DD] [--yesterday YYYY-MM-DD]
 
 Flags exist for test determinism (--today/--yesterday) and for pointing the
-sweep at a fixture tree (--archive-root); the example-doctrine-repo ceremony caller passes no
+sweep at a fixture tree (--archive-root); the coordinator-claude ceremony caller passes no
 flags — the daily-cadence defaults (today's/yesterday's local date, and
 cwd-relative `archive/completed`) exactly reproduce the retired bash step's
 behavior.
@@ -46,10 +46,10 @@ Exit code: always 0 — this is informational hygiene, never a ceremony gate
 individual per-entry helper failures are reported inline and skipped, not
 escalated to a nonzero sweep-level exit).
 
-Spec backlink: example-doctrine-repo coordinator/commands/workday-start.md § Step 1.86
+Spec backlink: coordinator-claude coordinator/commands/workday-start.md § Step 1.86
     (Completion-Entry Reconcile Backstop)
 Spec backlink: docs/plans/2026-06-27-post-summary-completion-loop-closure.md § C5
-Port source: example-doctrine-repo coordinator/commands/workday-start.md Step 1.86 bash
+Port source: coordinator-claude coordinator/commands/workday-start.md Step 1.86 bash
     fence (nested `archive/completed/*/` loop + awk frontmatter parse +
     reconcile-completion-commits.py dispatch), ported verbatim to naked
     Python as part of the bash-kill campaign (2026-07-23, chunk WDS-4).

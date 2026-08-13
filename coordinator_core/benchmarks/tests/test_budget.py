@@ -5,7 +5,7 @@ manifest-supplied default in wave-1's budget-manifest.json carries
 `_provisional: true` (Phase-0 placeholder discipline -- see budget.py's
 module docstring).
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C8 (AC5).
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C8 (AC5).
 """
 
 from __future__ import annotations

@@ -14,7 +14,7 @@ Deleted by AC8 (DR-215 discipline — retired machinery, never skipped-to-green)
   - TestCLIContainmentGate (_cli_containment_check removed; cli_path concept retired)
   - TestClaimParamValidation (tested build_argv param validation; retired with build_argv)
 
-Spec backlink: docs/plans/2026-07-06-memo-transition-native-python-port.md § C4, AC8
+Spec backlink: pln-memo-transition-native-python--7e1dd0 § C4, AC8
 """
 
 from __future__ import annotations
@@ -696,7 +696,7 @@ created: 2026-06-01
 # ---------------------------------------------------------------------------
 # (5) resolve verb (C1) — atomic claim+action for open memos, disposition required
 #
-# Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C1
+# Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C1
 #
 # resolve moves open -> actioned in ONE locked_rmw closure — no intermediate
 # in_progress state is ever visible on disk. These tests assert the disk-truth

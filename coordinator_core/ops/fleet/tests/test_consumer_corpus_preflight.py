@@ -4,7 +4,7 @@ DR-084-follow-up fleet-wide consumer-corpus vocabulary pre-flight.
 
 Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § C5
 Origin defect: state/improvement-queue/2026-07-23-vocabulary-retirement-needs-consumer-corpus-preflight.yaml
-Hardening backlink: cross-repo/inbox/2026-07-31-example-doctrine-repo-em-consumer-corpus-preflight-blind-to-half-the-fleet.md
+Hardening backlink: cross-repo/inbox/2026-07-31-coordinator-claude-em-consumer-corpus-preflight-blind-to-half-the-fleet.md
 """
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ class TestRunPreflightRepoResolution:
     def test_run_preflight_reports_exact_counts_and_unresolvable_bucket_separately(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
-        doe_root = tmp_path / "example-doctrine-repo"
+        doe_root = tmp_path / "coordinator-claude"
         claude_klabauter_root = tmp_path / "claude-klabauter"
         _handoff(doe_root, "state/handoffs/a.md", "spinoff")
         _handoff(doe_root, "state/handoffs/b.md", "session-handoff")
@@ -170,10 +170,10 @@ class TestRunPreflightRepoResolution:
         assert report["exit_code"] == 1
 
         repos = report["repos"]
-        assert repos["example-doctrine-repo"]["resolved"] is True
-        assert repos["example-doctrine-repo"]["counts_live"] == {"spinoff": 1, "session-handoff": 1}
-        assert repos["example-doctrine-repo"]["counts_archived"] == {}
-        assert repos["example-doctrine-repo"]["total"] == 2
+        assert repos["coordinator-claude"]["resolved"] is True
+        assert repos["coordinator-claude"]["counts_live"] == {"spinoff": 1, "session-handoff": 1}
+        assert repos["coordinator-claude"]["counts_archived"] == {}
+        assert repos["coordinator-claude"]["total"] == 2
 
         assert repos["claude-klabauter"]["resolved"] is True
         assert repos["claude-klabauter"]["counts_live"] == {}
@@ -203,7 +203,7 @@ class TestRunPreflightRepoResolution:
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         roots = _register_all_fleet(tmp_path, monkeypatch)
-        _handoff(roots["example-doctrine-repo"], "state/handoffs/a.md", "spinoff")
+        _handoff(roots["coordinator-claude"], "state/handoffs/a.md", "spinoff")
 
         report = preflight.run_preflight()
 
@@ -341,7 +341,7 @@ class TestOffEnumDetection:
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         roots = _register_all_fleet(tmp_path, monkeypatch)
-        _handoff(roots["example-doctrine-repo"], "state/handoffs/.archive/a.md", "spinoff-roadmap")
+        _handoff(roots["coordinator-claude"], "state/handoffs/.archive/a.md", "spinoff-roadmap")
         _handoff(roots["example-game-workbench-repo"], "state/handoffs/archive/b.md", "spinoff-roadmap")
 
         report = preflight.run_preflight()
@@ -350,18 +350,18 @@ class TestOffEnumDetection:
         # neither gates, neither shows up as off_enum_live.
         assert report["exit_code"] == 0
         assert report["off_enum_live"] == []
-        assert report["repos"]["example-doctrine-repo"]["counts_archived"] == {"spinoff-roadmap": 1}
+        assert report["repos"]["coordinator-claude"]["counts_archived"] == {"spinoff-roadmap": 1}
         assert report["repos"]["example-game-workbench-repo"]["counts_archived"] == {"spinoff-roadmap": 1}
-        assert report["repos"]["example-doctrine-repo"]["counts_live"] == {}
+        assert report["repos"]["coordinator-claude"]["counts_live"] == {}
         assert report["repos"]["example-game-workbench-repo"]["counts_live"] == {}
 
     def test_absent_kind_never_trips_off_enum_in_either_population(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         roots = _register_all_fleet(tmp_path, monkeypatch)
-        _handoff(roots["example-doctrine-repo"], "state/handoffs/a.md", None)  # absent, live
-        _handoff(roots["example-doctrine-repo"], "state/handoffs/b.md", "session-handoff")
-        _handoff(roots["example-doctrine-repo"], "archive/handoffs/c.md", None)  # absent, archived
+        _handoff(roots["coordinator-claude"], "state/handoffs/a.md", None)  # absent, live
+        _handoff(roots["coordinator-claude"], "state/handoffs/b.md", "session-handoff")
+        _handoff(roots["coordinator-claude"], "archive/handoffs/c.md", None)  # absent, archived
 
         report = preflight.run_preflight()
 
@@ -374,7 +374,7 @@ class TestOffEnumDetection:
         for i, kind in enumerate([
             "session-handoff", "spinoff", "roadmap-baton", "goal-seed", "roadmap-seed", "recovery",
         ]):
-            _handoff(roots["example-doctrine-repo"], f"state/handoffs/{i}.md", kind)
+            _handoff(roots["coordinator-claude"], f"state/handoffs/{i}.md", kind)
 
         report = preflight.run_preflight()
 

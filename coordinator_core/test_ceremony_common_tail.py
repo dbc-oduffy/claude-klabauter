@@ -18,7 +18,7 @@ Covers, per assembler (`workday_complete.brief`, `workweek_complete.brief`):
     key at all (workday never had that concept — the shared tail builder
     itself does not know about `hard_block`, per its own negative-spec).
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md,
+Spec backlink: coordinator-claude docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md,
 chunk C5, AC9
 
 Run: cd /Users/example-operator/X/claude-klabauter && python3 -m pytest coordinator_core/test_ceremony_common_tail.py -q

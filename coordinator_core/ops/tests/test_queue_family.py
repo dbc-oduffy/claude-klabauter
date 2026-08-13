@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.queue_family — the queue-family read seam.
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C1
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C1
 
 Covers: family normalization (all three families + unknown-family error),
 delegated loading via query_records() for each family, the per-family field

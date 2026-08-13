@@ -627,7 +627,7 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
     which stayed green for as long as the advisory printed a suggestion
     that silently dropped the caller's `-- <pathspec>`. A test that cannot
     see the one property that makes a suggestion safe to follow is why an
-    incorrect suggestion shipped green (example-doctrine-repo-em cross-repo memo,
+    incorrect suggestion shipped green (coordinator-claude-em cross-repo memo,
     2026-07-29).
     """
 
@@ -701,7 +701,7 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         few hours of life — is a registered op with no bin artifact, and the
         settings-home forwarder set is derived from a scan of
         `coordinator/bin/`. Naming a dotted op id reads to a caller exactly
-        like naming nothing (example-doctrine-repo-em, 2026-07-29: "an op named in
+        like naming nothing (coordinator-claude-em, 2026-07-29: "an op named in
         doctrine with no reachable entrypoint reads to a caller exactly like
         no mechanism at all"). This asserts against the artifact whose
         presence is what makes the forwarder generate at all.

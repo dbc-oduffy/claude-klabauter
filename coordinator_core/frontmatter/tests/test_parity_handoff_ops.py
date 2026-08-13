@@ -2,7 +2,7 @@
 coordinator_core.frontmatter.tests.test_parity_handoff_ops
 
 Parity harness — CLI byte-parity between claude-klabauter's native handoff op handlers and
-FROZEN GOLDEN snapshots of the legacy JS CLIs (example-doctrine-repo coordinator/bin/) they
+FROZEN GOLDEN snapshots of the legacy JS CLIs (coordinator-claude coordinator/bin/) they
 were ported from, via coordinator_core.testing.golden (de-node Gate A, C3).
 
 Covered operations (each captured ONCE, CAPTURE_GOLDENS=1, against the live
@@ -14,14 +14,14 @@ Node.js oracle CLI, then committed under `_goldens/parity_handoff_ops/`):
   stamp     — stamp-shipped-in.js
 
 Ordinary runs shell out ONLY to the Python op handlers and diff their resulting
-on-disk content against the committed golden — no node / example-doctrine-repo checkout
+on-disk content against the committed golden — no node / coordinator-claude checkout
 needed at test time.
 
 TestHandoffPhaseCrossFieldParity is a distinct LIVE-ORACLE-turned-golden shape
 (not a mutation-parity harness like the above): its golden freezes the
 lint-frontmatter.js --file --json cross-field-rule-logic verdict (H-CROSS-EXEC-1/2
-from example-doctrine-repo's CROSS_FIELD_RULES['handoff']) so claude-klabauter's validate_frontmatter() can be
-diffed against it without a live node/example-doctrine-repo dependency at test time. This is
+from coordinator-claude's CROSS_FIELD_RULES['handoff']) so claude-klabauter's validate_frontmatter() can be
+diffed against it without a live node/coordinator-claude dependency at test time. This is
 a drift guard on rule LOGIC, which check_schema_drift() (byte-comparing
 schema.json shape) does not cover.
 
@@ -52,7 +52,7 @@ Parity contract:
 Negative-spec: none of the fixture bodies or lint-frontmatter.js --json output
 below embed a tmp_path-derived absolute prefix — frontmatter content has no path
 fields, and lint-frontmatter.js's JSON `file` key is `repoRel` (relative to repo
-root, see example-doctrine-repo coordinator/bin/lint-frontmatter.js:72), not an absolute
+root, see coordinator-claude coordinator/bin/lint-frontmatter.js:72), not an absolute
 path — so no tmp_path normalization step is needed before freezing here (unlike
 `coordinator_core/tests/test_dag_js_parity.py`'s `--format paths`/`json` CLI
 output, which does embed absolute paths and requires `_normalize_paths_output`/
@@ -62,16 +62,16 @@ inspecting a captured golden for path leakage before committing it.
 Regenerating goldens (deliberate, reviewed action only — see Decisions in
 docs/plans/2026-07-21-parity-suites-freeze-to-goldens.md):
     CAPTURE_GOLDENS=1 python3 -m pytest coordinator_core/frontmatter/tests/test_parity_handoff_ops.py -q
-(requires `node` on PATH and the example-doctrine-repo sibling checkout to be resolvable.)
+(requires `node` on PATH and the coordinator-claude sibling checkout to be resolvable.)
 
 Run (from the repo root):
   python3 -m pytest coordinator_core/frontmatter/tests/test_parity_handoff_ops.py -q
 
 Spec backlinks:
-  example-doctrine-repo: coordinator/bin/handoff-transition.js
-  example-doctrine-repo: coordinator/bin/stamp-shipped-in.js
-  example-doctrine-repo: coordinator/bin/normalize-handoff-frontmatter.js
-  example-doctrine-repo: coordinator/bin/lint-frontmatter.js
+  coordinator-claude: coordinator/bin/handoff-transition.js
+  coordinator-claude: coordinator/bin/stamp-shipped-in.js
+  coordinator-claude: coordinator/bin/normalize-handoff-frontmatter.js
+  coordinator-claude: coordinator/bin/lint-frontmatter.js
   Port sources: coordinator_core/ops/handoff_transition.py
                 coordinator_core/ops/handoff_stamp.py
                 coordinator_core/ops/handoff_normalize.py
@@ -104,7 +104,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _GOLDEN_NAMESPACE = "parity_handoff_ops"
 
 # ---------------------------------------------------------------------------
-# JS CLI paths (example-doctrine-repo sibling repo) — resolved lazily and ONLY consulted
+# JS CLI paths (coordinator-claude sibling repo) — resolved lazily and ONLY consulted
 # under CAPTURE_GOLDENS=1 (see `_require_oracle` below). Never gates an
 # ordinary (non-capture) run — that skip-on-missing shape is exactly the
 # silent-green hazard this de-node conversion closes (see module docstring
@@ -134,7 +134,7 @@ def _require_oracle() -> str:
     ]
     if node is None or missing:
         raise RuntimeError(
-            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the example-doctrine-repo "
+            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the coordinator-claude "
             "sibling checkout's coordinator/bin/*.js CLIs to be resolvable — neither "
             f"is needed for an ordinary (non-capture) run. node={node!r} missing={missing!r}"
         )
@@ -143,7 +143,7 @@ def _require_oracle() -> str:
 # claude-klabauter's own vendored copy of handoff.schema.json — the drift-checked schema
 # validate_frontmatter() actually validates against (see check_schema_drift /
 # TestSchemaFilesExist in test_schema_validate.py). Live-oracle parity means the
-# LIVE example-doctrine-repo JS rule engine vs claude-klabauter's Python re-implementation, both consulted
+# LIVE coordinator-claude JS rule engine vs claude-klabauter's Python re-implementation, both consulted
 # fresh per assertion — not a frozen transcription of either side's output.
 _CLAUDE_KLABAUTER_HANDOFF_SCHEMA = Path(__file__).parent.parent / "schemas" / "handoff.schema.json"
 
@@ -363,7 +363,7 @@ def _js_lint_file(repo_root: Path, file_path: Path) -> Tuple[int, str, str]:
     Exit 0 = schema-valid (or no matching schema — treated as valid by this
     caller since all fixtures below are constructed to match the handoff
     schema); exit 1 = schema/cross-field violation. Mirrors handoff.stamp_phase's
-    AC3 live-oracle contract: shells to the LIVE example-doctrine-repo lint-frontmatter.js
+    AC3 live-oracle contract: shells to the LIVE coordinator-claude lint-frontmatter.js
     CROSS_FIELD_RULES['handoff'].
 
     CAPTURE_GOLDENS=1 recapture path ONLY — never called on an ordinary run
@@ -504,7 +504,7 @@ def _cross_field_golden(case: str, capture_fn) -> dict:
     `capture_fn` is never invoked — the committed golden verdict is diffed
     against claude-klabauter's validate_frontmatter() output instead. No tmp_path
     normalization needed: lint-frontmatter.js's `file` key is `repoRel`
-    (relative to repo root — see example-doctrine-repo coordinator/bin/lint-frontmatter.js:72),
+    (relative to repo root — see coordinator-claude coordinator/bin/lint-frontmatter.js:72),
     not an absolute path (see module docstring negative-spec).
     """
     if is_capturing():
@@ -946,7 +946,7 @@ class TestStampParity:
             return js_file.read_text(encoding="utf-8")
 
         expected = _mutation_golden_content(case, _capture)
-        # kind is now REQUIRED on the Python side (DR-096, example-doctrine-repo
+        # kind is now REQUIRED on the Python side (DR-096, coordinator-claude
         # 2026-07-26/27 follow-up) — the JS oracle predates shipped_in_kind
         # entirely and never writes it, so the golden's SHA-quoting-only
         # content gets one line inserted (immediately after shipped_in:,
@@ -1517,12 +1517,12 @@ class TestEmptySessionIdParity:
 # ---------------------------------------------------------------------------
 # Tests — handoff_phase / execution-authorization cross-field parity (C3)
 #
-# LIVE ORACLE, not frozen fixtures: each case below shells to the live example-doctrine-repo
+# LIVE ORACLE, not frozen fixtures: each case below shells to the live coordinator-claude
 # lint-frontmatter.js (which applies CROSS_FIELD_RULES['handoff'] including
 # H-CROSS-EXEC-1/2) on every test run and asserts claude-klabauter's validate_frontmatter()
 # verdict agrees. check_schema_drift() only byte-compares schema.json shape; it
 # does NOT cover the schema.js rule-logic gap this class guards. Plain
-# assert-based parity (not xfail(strict)) — example-doctrine-repo's H-CROSS-EXEC-1/2 rules and
+# assert-based parity (not xfail(strict)) — coordinator-claude's H-CROSS-EXEC-1/2 rules and
 # claude-klabauter's _cf_execution_stamp_required / _cf_handoff_phase_kind_gate
 # ports are freshly landed in lockstep with no pre-existing divergence.
 # ---------------------------------------------------------------------------
@@ -1558,7 +1558,7 @@ class TestHandoffPhaseCrossFieldParity:
         py_valid = len(py_errors) == 0
 
         assert py_valid == js_valid, (
-            f"parity mismatch for {filename}: golden (example-doctrine-repo lint-frontmatter.js) "
+            f"parity mismatch for {filename}: golden (coordinator-claude lint-frontmatter.js) "
             f"valid={js_valid} vs claude-klabauter valid={py_valid} (errors={py_errors!r})"
         )
 

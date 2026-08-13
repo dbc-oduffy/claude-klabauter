@@ -5,11 +5,11 @@ test for the AC15 gate's blast radius.
 AC7 keyed its loop on "has an entry point" rather than `is_mirror_like` so that
 `repo-cut` could not go permanently unchecked. Correct as far as it went, but
 the table-wide form refused the WHOLE run over an entry point the run's rows
-would never call: when claude-klabauter landed `sync_repo_cut`, example-doctrine-repo's percolate
+would never call: when claude-klabauter landed `sync_repo_cut`, coordinator-claude's percolate
 root — which carries its own pre-fourth-mode `setup/publish_sync.py` override
 (§ `_resolve_publish_sync_module_path`) and whose five rows are all
 mirror/flat-mirror — lost every one of those rows to a mode it does not use.
-Reported in cross-repo/inbox/2026-08-10-example-doctrine-repo-em-config-class-landed-
+Reported in cross-repo/inbox/2026-08-10-coordinator-claude-em-config-class-landed-
 fleet-reach-is-your-publish.md; filed as state/bug-backlog/2026-08-10-a-
 percolate-root-holding-a-stale-publish-4c2e91a7d33b.yaml.
 
@@ -81,7 +81,7 @@ def _check(module, modes):
 
 
 def test_stale_override_no_longer_refuses_a_run_it_cannot_affect(stale_override):
-    """example-doctrine-repo's actual run: every row mirror/flat-mirror, both entry points present
+    """coordinator-claude's actual run: every row mirror/flat-mirror, both entry points present
     and binding. The absent `sync_repo_cut` is unreachable from these rows, so
     the gate must not veto them."""
     _check(stale_override, frozenset({"mirror", "flat-mirror"}))

@@ -11,7 +11,7 @@ fields directly. That loss is permanently unrecoverable: unlike most C6a sites,
 no later pass reconstructs a missing Anchor: trailer once the commit already
 landed. This test seeds exactly that desync and proves the anchor now resolves.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks row C6a (this chunk: C6a4, `commit_anchors._resolve_anchor`).
 
 Negative-spec: does NOT re-test `resolve_claim_state`'s own ledger/mirror

@@ -20,15 +20,15 @@ Spec backlink: extracted from the inline rule logic that first landed in
 `coordinator_core/tests/test_home_resolution_lint.py` (commit `c1545206`,
 2026-07-28), which found 98 live violations in this repo (70 X_OK, 18
 bare-or-chain, 9 forward-slash, 1 colon-join). Extraction design:
-`example-doctrine-repo/docs/research/2026-07-28-fleet-lint-distribution-design.md`
-(the example-doctrine-repo distribution blueprint). This module is a behavior-preserving
+`coordinator-claude/docs/research/2026-07-28-fleet-lint-distribution-design.md`
+(the coordinator-claude distribution blueprint). This module is a behavior-preserving
 extraction -- same AST logic, same matching semantics -- not a rewrite.
 
 **Why this file lives here and not vendored per-repo.** This path
 (`claude-klabauter/coordinator/lib/`) is already covered by the `bin,lib`
-multi-source percolation row (`example-doctrine-repo/setup/publish-targets.portable`),
+multi-source percolation row (`coordinator-claude/setup/publish-targets.portable`),
 so it reaches the OSS mirror with zero new allowlist configuration, and it
-respects the example-doctrine-repo-prose/claude-klabauter-engine plane split (a lint is executable
+respects the coordinator-claude-prose/claude-klabauter-engine plane split (a lint is executable
 Python -- engine-subject, not doctrine). Every consuming repo (including
 this one's own test suite, see the shim at
 `coordinator_core/tests/test_home_resolution_lint.py`) imports this module
@@ -562,7 +562,7 @@ class HomeResolutionLintEngine:
         `right`), an attribute chain on top of the call
         (`Path.home().resolve()` -- `.attr` or `.method(...)` applied to a
         `Path.home()` receiver is still the same underlying call), or nested
-        combinations of all of the above -- the shapes example-doctrine-repo's fleet
+        combinations of all of the above -- the shapes coordinator-claude's fleet
         uses at its correct sites (guard-ladder `return Path.home() /
         ".claude"` reduces to this same expression-level check once C4
         extracts the returned value).
@@ -1181,7 +1181,7 @@ class HomeResolutionLintEngine:
         judged by the shared `_rung_order_is_violation`). Deliberately a
         SEPARATE accessor, not folded into `find_rung_order_violations`'s
         list or `run_all_rules()`'s dict -- `run_all_rules()`'s keys are a
-        cross-repo contract example-doctrine-repo constructs against directly
+        cross-repo contract coordinator-claude constructs against directly
         (`coordinator/tests/test_home_resolution_lint.py:125-127`) and every
         one of its per-rule lists is treated as gate-failing by both the
         pytest shim and this module's own CLI (`main`'s ledger loop below);
@@ -1241,7 +1241,7 @@ _DEFAULT_LEDGER_NAME = ".home_resolution_lint_baseline.json"
 #: Printed on every CLI exit path. The counts this engine reports are a floor by
 #: construction -- `_iter_ladder_sites` claims a whole function for its guard-ladder
 #: pass, so any nested ladder in that function is never scored. Stated on the output
-#: rather than only in a docstring because example-doctrine-repo imports this engine live, and a caller
+#: rather than only in a docstring because coordinator-claude imports this engine live, and a caller
 #: outside this repo reads "0 new" without ever reading the module.
 _FLOOR_NOTE = (
     "home-resolution-lint: NOTE -- these counts are a known FLOOR, not a total, "

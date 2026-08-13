@@ -12,7 +12,7 @@ literal ``state/priority-intent-inbox/`` string — resolved the SAME way
 ``priority_set.py`` resolves its central root, via
 ``coordinator_core.state_root.coordinator_state_root(central=True)``), and
 this op DRAINS that inbox: it is an ASK, not a write. The record schema is
-authored in example-doctrine-repo and vendored locally at
+authored in coordinator-claude and vendored locally at
 ``coordinator_core/frontmatter/schemas/priority-intent.schema.json``,
 pin-tracked (structural cousin of ``lessons-outbox.schema.json`` — see that
 schema's own description for why it is a cousin, not a full precedent: the
@@ -98,7 +98,7 @@ Registered as ``priority.drain``, classified ``OpClass.MUTATING``
 (coordinator_core/op_scopes.py) — same class as ``priority.set``: the inbox
 and ledger roots are both resolved centrally, not derived from a caller repo_root.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § C7
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C7
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ _PRIORITIES = ("urgent", "high", "medium", "low", "none")
 _KNOWN_KINDS = ("handoff", "plan", "roadmap", "deliverable")
 
 # Mirrors coordinator/schemas/priority-intent.schema.json's target_id pattern
-# EXACTLY (example-doctrine-repo) — same pattern as priority_set._TARGET_ID_PATTERN,
+# EXACTLY (coordinator-claude) — same pattern as priority_set._TARGET_ID_PATTERN,
 # including its excluded-trailing-dot final-char class (a bare `[A-Za-z0-9._-]*`
 # would accept a trailing `.`, which the schema's own x-bump-note calls out as
 # a Windows filename-aliasing hazard: Windows silently strips a trailing dot,
@@ -175,7 +175,7 @@ def _resolve_schema_path() -> Optional[Path]:
     like priority_set's own resolution. The hardcoded
     ``_TARGET_ID_PATTERN``/``_own_validate`` guards below remain the
     non-skippable trust boundary regardless of this resolution's outcome —
-    unlike the pre-vendoring live-example-doctrine-repo-tree read, a missing vendored file is
+    unlike the pre-vendoring live-coordinator-claude-tree read, a missing vendored file is
     no longer an EXPECTED failure mode.
     """
     if not _VENDORED_SCHEMA_PATH.is_file():

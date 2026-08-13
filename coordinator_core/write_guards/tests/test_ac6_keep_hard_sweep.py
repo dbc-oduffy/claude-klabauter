@@ -33,7 +33,7 @@ the SAME class-stability assertion to it that the two Windows guards get
 (diff allowed, CLASS/band/fail_closed/advisory_value pinned) -- not
 byte-identity, and not absent from this sweep either.
 
-Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, AC6.
+Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, AC6.
 """
 from __future__ import annotations
 

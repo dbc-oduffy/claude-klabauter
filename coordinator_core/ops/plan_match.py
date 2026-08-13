@@ -30,7 +30,7 @@ Worktree resolution mirrors ``goals_match.py`` and ``initiatives_serve.py``:
   - If ``repo_root`` is absent the op returns ``{"candidates": []}`` with a logged
     warning rather than raising — empty is safe for a picker nudge.
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C2
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C2
 Sibling: coordinator_core/ops/handoff_match.py, coordinator_core/ops/goals_match.py
 """
 

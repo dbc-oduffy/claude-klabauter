@@ -9,7 +9,7 @@ instead of sitting in ``deferred`` forever. Mirrors the age-predicate SHAPE of
 age) but returns structured records for a caller to render, not human-readable lines,
 and generalizes over queue families instead of being handoff-specific.
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C4
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C4
 
 No queue schema gains an age/last-recheck field — age is always computed from
 ``created`` at call time, exactly as ``handoff_gate_aging`` computes handoff age from

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # scoped-git-commit — CLI trampoline over claude-klabauter's `ceremony.scoped_git_commit`
-# op (coordinator_core/ops/ceremony/scoped_git_commit.py), the mechanism example-doctrine-repo's
+# op (coordinator_core/ops/ceremony/scoped_git_commit.py), the mechanism coordinator-claude's
 # always-loaded doctrine routes ordinary scoped commits to
 # (`coordinator/snippets/em-operating-doctrine.md` ~:422: "it selects the
 # agree-case form vs. an isolated private-index mechanism for you").
@@ -11,8 +11,8 @@
 # an op with no artifact here is unreachable without hardcoding a claude-klabauter path
 # — which reads to a caller exactly like no mechanism at all, and left the
 # reachable-but-wrong `coordinator-safe-commit` as the only thing a
-# scoped-commit advisory could name. Sourced from example-doctrine-repo-em's 2026-07-29
-# memo (`cross-repo/archive/2026-07-29-example-doctrine-repo-em-safe-commit-advisory-
+# scoped-commit advisory could name. Sourced from coordinator-claude-em's 2026-07-29
+# memo (`cross-repo/archive/2026-07-29-coordinator-claude-em-safe-commit-advisory-
 # offers-a-mode-that-does-not-exist.md`), ask option 1.
 #
 # The argument grammar deliberately mirrors `git commit`'s own scoped form
@@ -21,7 +21,7 @@
 # discharge test applied to this rule: the correct path is cheaper than the
 # wrong one, rather than documented next to it.
 #
-# Contract: example-doctrine-repo coordinator/docs/wiki/scoped-safety-commits.md
+# Contract: coordinator-claude coordinator/docs/wiki/scoped-safety-commits.md
 #   § SC-DR-015 (agree-case vs. private-index discriminator)
 # Registration seam: a new engine capability registers by shipping a thin
 # bin/ trampoline over a coordinator_core op — same shape as cross-repo-memo
@@ -312,8 +312,8 @@ def _legacy_absent() -> None:
 # Human renderings of the op's `push_state` tri-state. `unconfirmed` deliberately
 # does NOT read as a failure and names no corrective action: the commit is local,
 # the remote could not be read, and the reader's cheapest correct next move is to
-# re-check, never to re-push or amend. Sourced from example-doctrine-repo-em's 2026-07-30
-# memo (`cross-repo/archive/2026-07-30-example-doctrine-repo-em-scoped-git-commit-misreports-
+# re-check, never to re-push or amend. Sourced from coordinator-claude-em's 2026-07-30
+# memo (`cross-repo/archive/2026-07-30-coordinator-claude-em-scoped-git-commit-misreports-
 # push-state.md`) — a two-valued report rendered an in-flight push identically to
 # a failed one, and the corrections that invites (re-push, amend, force-push) are
 # more dangerous on an auto-push-armed shared branch than the symptom.

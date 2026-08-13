@@ -15,7 +15,7 @@ _cartography_symbols) as a side-effect. Wired into
 coordinator_core.ops.__init__, which imports this module — this op is LIVE on
 the dispatch path.
 
-Consumption status: UNCONSUMED — no call site exists today. Example-doctrine-repo's
+Consumption status: UNCONSUMED — no call site exists today. Coordinator-claude's
 frozen contract (`docs/contracts/arch-engine-scripts.md`) names this op
 under its `arch-census` lane, but the survey's Workflow script does not call
 it; only `cartography.chunk_table` and `cartography.churn` have call sites
@@ -91,7 +91,7 @@ DR-208 five-question affirmation (COMPUTE_ONLY; citing this handler):
   anything outside the requested `files` list.
 Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C4 (cartography.symbols); non-Python routing added by
 docs/plans/2026-08-08-cartography-consumes-symbol-extract.md § chunk C3.
 

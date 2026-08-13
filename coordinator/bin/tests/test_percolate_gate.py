@@ -2,7 +2,7 @@
 
 Covers the three ported gate-logic subcommands (branch0-gate, scan-secrets,
 inverse-drift) against the contract documented in percolate-gate.py's module
-docstring, itself a direct port of the fences in example-doctrine-repo
+docstring, itself a direct port of the fences in coordinator-claude
 coordinator/skills/percolate/SKILL.md (Branch 0, Step 2c, Step 2d). The
 former `run-pre-ci-hooks` subcommand (Step 5a) was removed 2026-07-24 once
 the declarative engine-side pre-ci guard (`publish.py`'s

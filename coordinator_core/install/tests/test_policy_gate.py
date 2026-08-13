@@ -4,7 +4,7 @@ coordinator_core.install.tests.test_policy_gate
 Behavioural tests for the fail-closed dual-host PowerShell execution-policy
 gate (coordinator_core.install.policy_gate).
 
-Spec backlink: docs/plans/2026-08-07-ps1-launcher-class-and-fail-closed-policy-gate.md,
+Spec backlink: pln-second-managed-launcher-class-aea900,
 chunk C2 (AC3, AC4, AC6).
 
 All probes are faked — no real PowerShell/pwsh is invoked, and no test

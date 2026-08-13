@@ -1,6 +1,6 @@
 """Tests for envelope.main — the check-shipped-on-main.sh CLI port.
 
-Port of: check-shipped-on-main.sh (example-doctrine-repo b5a4192c, 2026-07-20). Exercises the
+Port of: check-shipped-on-main.sh (coordinator-claude b5a4192c, 2026-07-20). Exercises the
 exit-code/stdout contract (0/1/2, --verbose ON_MAIN/NOT_ON_MAIN lines) against
 a real tmp git repo + bare "origin" remote, mirroring the bash script's own
 semantics (git merge-base --is-ancestor against origin/main).

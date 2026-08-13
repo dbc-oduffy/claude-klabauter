@@ -50,7 +50,7 @@ whatever is already on disk: a supplied row REPLACES an existing row sharing its
 `deliverable_id`; every row not mentioned in the supplied set is preserved untouched.
 Blind append is wrong here and would raise on the very first overlapping id.
 
-Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C1
+Spec backlink: pln-archive-side-corpus-remediatio-3ff30d § C1
 """
 
 from __future__ import annotations

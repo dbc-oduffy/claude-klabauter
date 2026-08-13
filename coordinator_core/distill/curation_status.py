@@ -46,7 +46,7 @@ never makes the reality-check scout's NEW/ALREADY_CAPTURED/EPHEMERAL/SKIP judgme
 (§ Negative spec, AC12) — `harvested`/`ripe`/`prunable`/`blocked_by` are all
 mechanically derived signals, not authored classifications.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C11 (DEC-1)
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C11 (DEC-1)
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
   (scratch-tier writer bounds; this module itself performs no I/O writes — the
   op wrapper, coordinator_core/ops/distill_curation_status.py, is the D6-bound writer)

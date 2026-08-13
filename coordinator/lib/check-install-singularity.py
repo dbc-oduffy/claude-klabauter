@@ -1,6 +1,6 @@
 """check-install-singularity.py — canonical-install-locus invariant probe.
 
-Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter's
+Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
 coordinator_core.install.check_install_singularity. Detects accidental
 coordinator install splits — more than one location claiming to be the
 canonical coordinator install — and fails loud with remediation. Invoked
@@ -14,8 +14,8 @@ doctor-sentinel P-18 probe.
 # invariant probe — detects accidental coordinator install splits) has been
 # fully ported to coordinator_core/install/check_install_singularity.py, with
 # tests in the co-located test_check_install_singularity.py. This file is now
-# a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per
-# DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+# a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per
+# DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 #
 # Exit convention: this is a fail-loud gate/validator script (install.md
 # Step 7.5 "canonical-locus integrity gate", a `run_required` step; also a

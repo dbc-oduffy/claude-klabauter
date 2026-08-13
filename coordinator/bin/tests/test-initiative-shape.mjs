@@ -65,7 +65,7 @@ async function test(label, fn) {
 const VALID_BURN_DOWN = {
   id: "coordinator-schema-discipline",
   label: "Coordinator Schema Discipline",
-  owner: "example-doctrine-repo-em",
+  owner: "coordinator-claude-em",
   status: "active",
   target_date: null
 };
@@ -74,7 +74,7 @@ const VALID_BURN_DOWN = {
 const VALID_COMPLETION = {
   id: "example-fleet-pro-launch",
   label: "Example-Fleet Pro Launch",
-  owner: "example-doctrine-repo-em",
+  owner: "coordinator-claude-em",
   status: "active",
   target_date: "2026-09-30"
 };

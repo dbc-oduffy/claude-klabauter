@@ -14,9 +14,9 @@ Source: reads the central-state ``state/health`` tree via
 central state is claude-klabauter-resident post stop-the-rot, so health rows live there, not under the
 meta-repo. Emit-DERIVED fields do not apply to this entity; collect() returns final records.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 8.10,
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.10,
   HealthStatusSummary. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P14
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P14
 
 Node-subprocess retirement: this section originally shelled out to
 ``node "$COORDINATOR_ROOT/bin/query-records.js" --type health-status --root <scan_root>

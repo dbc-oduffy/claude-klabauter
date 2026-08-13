@@ -4,7 +4,7 @@ is declared and its target is importable.
 
 Purpose: coordinator_core.invoke is claude-klabauter's generic in-process op dispatcher
 (coordinator_core/invoke/__main__.py). A downstream caller outside a claude-klabauter
-checkout (e.g. Example-doctrine-repo's cc_invoke) must be able to reach it by spawning a
+checkout (e.g. Coordinator-claude's cc_invoke) must be able to reach it by spawning a
 command, never by resolving claude-klabauter's interpreter and importing its
 internals (DR-215 — command-type, spawn-per-call engine, no resident
 daemon). This test covers the two things collectable from inside a checkout:
@@ -15,7 +15,7 @@ freshly-installed console-script resolution itself — that requires an
 actual package install into a separate environment and is exercised as live
 evidence at dispatch/AC-verification time, not as a unit test here.
 
-Spec backlink: docs/plans/2026-08-06-claude-klabauter-ize-the-survey-census.md § C4
+Spec backlink: pln-claude-klabauter-ize-the-survey-census-c-2a0dfd § C4
 """
 
 from __future__ import annotations

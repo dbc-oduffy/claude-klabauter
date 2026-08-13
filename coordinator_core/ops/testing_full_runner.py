@@ -64,7 +64,7 @@ Reply fields (result object in JSON-RPC response):
     convention).
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C5 (DEC-9)
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C5 (DEC-9)
 
 Negative-spec:
     - This op is explicitly NOT the `full_test_cmd` path. `full_test_cmd` uses

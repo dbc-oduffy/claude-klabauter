@@ -218,7 +218,7 @@ def resolve_home_base() -> Path:
     currently the only thing guarding those ~30 hand-rolled sites, not this
     function.
 
-    Spec backlink: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C6
+    Spec backlink: pln-home-resolution-gate-family-ma-e5c146 § C6
     """
     return home_dir()
 

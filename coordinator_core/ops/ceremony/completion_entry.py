@@ -9,7 +9,7 @@ contract) and op D2 (fill residues: prose / chain_terminal / authored_by, OLD
 helpers -- no bash/node spawn (AC1/AC2).
 
 Scaffold-creation decision (plan § C7): a thin native equivalent of
-``coordinator-doc-new``'s ``_scaffold_completion`` emitter (example-doctrine-repo
+``coordinator-doc-new``'s ``_scaffold_completion`` emitter (coordinator-claude
 ``coordinator/bin/coordinator-doc-new:1509``) -- ``completion_ops.py`` covers
 only ``completion.reconcile_commits`` (fold commits into an EXISTING entry)
 and ``plan.append_session``, neither of which covers entry CREATION, so
@@ -50,9 +50,9 @@ Negative-spec:
       defensive invariant), the fill aborts loudly via ``MutateAbort``
       rather than truncating it.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C7
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C7
 Behavior reference (read for behavior, not structure, per the plan's Anti-scope):
-    example-doctrine-repo:coordinator/bin/coordinator-doc-new:1509 (_scaffold_completion)
+    coordinator-claude:coordinator/bin/coordinator-doc-new:1509 (_scaffold_completion)
     claude-klabauter coordinator_core/ops/ceremony/wsc_commit.py:944 (_tail_scaffold_completion_entry)
     claude-klabauter coordinator_core/ops/ceremony/wsc_commit.py:1372 (_fill_completion_entry_residues)
 """
@@ -78,7 +78,7 @@ TailResult = Dict[str, Any]
 OP_COMPLETION_SCAFFOLD = "completion_entry:scaffold"
 OP_COMPLETION_RESIDUE_FILL = "completion_entry:residue_fill"
 
-# Mirrors coordinator-doc-new's --nature default (example-doctrine-repo coordinator/bin/coordinator-doc-new:2438).
+# Mirrors coordinator-doc-new's --nature default (coordinator-claude coordinator/bin/coordinator-doc-new:2438).
 _COMPLETION_NATURE_DEFAULT = "infra"
 
 # Body-paragraph sentinel comment the scaffold's own body emits verbatim -- matched as a
@@ -105,7 +105,7 @@ def _today() -> str:
 def _slug_from_title(title: str) -> str:
     """Sanitize a title into a filesystem-safe slug (<=40 chars).
 
-    Port of coordinator-doc-new's ``_slug_from_title`` (example-doctrine-repo
+    Port of coordinator-doc-new's ``_slug_from_title`` (coordinator-claude
     ``coordinator/bin/coordinator-doc-new:473``).
     """
     slug = title.lower()
@@ -117,7 +117,7 @@ def _slug_from_title(title: str) -> str:
 def _yaml_quote(value: str) -> str:
     """Double-quote a string for YAML frontmatter, escaping backslashes/quotes/newlines.
 
-    Port of ``memo_compose._yaml_quote`` (example-doctrine-repo ``coordinator/bin/lib/memo_compose.py:44``).
+    Port of ``memo_compose._yaml_quote`` (coordinator-claude ``coordinator/bin/lib/memo_compose.py:44``).
     """
     escaped = (
         value.replace("\\", "\\\\")
@@ -133,7 +133,7 @@ def _completion_entry_rel_path(title: str) -> Path:
     """Deterministic output path: archive/completed/<YYYY-MM>/<YYYY-MM-DD>-<slug>.md.
 
     Mirrors coordinator-doc-new's ``_default_output_path`` completion branch
-    (example-doctrine-repo ``coordinator/bin/coordinator-doc-new:2229``).
+    (coordinator-claude ``coordinator/bin/coordinator-doc-new:2229``).
     """
     today = _today()
     slug = _slug_from_title(title)
@@ -145,7 +145,7 @@ def _scaffold_text(title: str, nature: str, chain: str | None) -> str:
     """Generate validator-clean completion-entry frontmatter + canonical body placeholder.
 
     Byte-shape port of coordinator-doc-new's ``_scaffold_completion``
-    (example-doctrine-repo ``coordinator/bin/coordinator-doc-new:1509``), minus the
+    (coordinator-claude ``coordinator/bin/coordinator-doc-new:1509``), minus the
     optional ``completion_id`` field (not part of this chunk's scope --
     see the plan § C7 body).
     """

@@ -4,9 +4,9 @@ for the PreToolUse(Agent) unenumerated-`subagent_type` deny guard.
 Two families of test here:
     - Controlled roster tests (tmp_path fixtures + `resolve_roster(doe_root=...,
       home=...)` injection) -- isolate the deny/allow/fail-closed/override
-      logic from this machine's real example-doctrine-repo checkout and `~/.claude`
+      logic from this machine's real coordinator-claude checkout and `~/.claude`
       state.
-    - ONE live-resolution regression test, run against the REAL example-doctrine-repo
+    - ONE live-resolution regression test, run against the REAL coordinator-claude
       sibling checkout and this machine's real `~/.claude/plugins/`, that
       pins the three-source union directly (AC3): `Explore`, `Plan`,
       `general-purpose`, and `game-dev:staff-game-dev` must all resolve as
@@ -15,7 +15,7 @@ Two families of test here:
       every controlled test above still passes (they inject a synthetic
       roster and never touch the real union path at all).
 
-Spec backlink: docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md § C1
+Spec backlink: pln-deny-unenumerated-agent-types-e56d1b § C1
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import coordinator_core.hooks.block_unenumerated_agent_type as mod
 
 
 # ---------------------------------------------------------------------------
-# Fixtures — a synthetic example-doctrine-repo-shaped tree under tmp_path.
+# Fixtures — a synthetic coordinator-claude-shaped tree under tmp_path.
 # ---------------------------------------------------------------------------
 
 
@@ -61,7 +61,7 @@ def _write_agents_dir(doe_root: Path, names: "list[str]") -> None:
 
 @pytest.fixture()
 def doe_root(tmp_path: Path) -> Path:
-    root = tmp_path / "example-doctrine-repo"
+    root = tmp_path / "coordinator-claude"
     _write_policy_yaml(root)
     _write_agents_dir(root, ["executor", "code-reviewer"])
     return root
@@ -237,7 +237,7 @@ def test_resolve_roster_doe_root_unresolved_fails_closed() -> None:
 
 
 def test_resolve_roster_policy_yaml_missing_fails_closed_as_missing(tmp_path: Path) -> None:
-    root = tmp_path / "example-doctrine-repo"
+    root = tmp_path / "coordinator-claude"
     _write_agents_dir(root, ["executor"])  # policy yaml deliberately absent
     roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
     assert roster is None
@@ -246,7 +246,7 @@ def test_resolve_roster_policy_yaml_missing_fails_closed_as_missing(tmp_path: Pa
 
 
 def test_resolve_roster_policy_yaml_unparseable_fails_closed_as_unparseable(tmp_path: Path) -> None:
-    root = tmp_path / "example-doctrine-repo"
+    root = tmp_path / "coordinator-claude"
     policy_dir = root / "coordinator"
     policy_dir.mkdir(parents=True)
     (policy_dir / "subagent-sandbox-policy.yaml").write_text(
@@ -260,7 +260,7 @@ def test_resolve_roster_policy_yaml_unparseable_fails_closed_as_unparseable(tmp_
 
 
 def test_resolve_roster_agents_dir_missing_fails_closed(tmp_path: Path) -> None:
-    root = tmp_path / "example-doctrine-repo"
+    root = tmp_path / "coordinator-claude"
     _write_policy_yaml(root)  # agents dir deliberately absent
     roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
     assert roster is None
@@ -269,7 +269,7 @@ def test_resolve_roster_agents_dir_missing_fails_closed(tmp_path: Path) -> None:
 
 
 def test_resolve_roster_plugin_dir_absent_degrades_not_fatal(doe_root: Path) -> None:
-    # No plugin_home fixture at all — real example-doctrine-repo sources present, home unresolved.
+    # No plugin_home fixture at all — real coordinator-claude sources present, home unresolved.
     roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=None)
     assert reason is None
     assert roster is not None
@@ -410,12 +410,12 @@ def test_absent_subagent_type_out_of_scope(monkeypatch: pytest.MonkeyPatch) -> N
 #: `read_doe_root_pointer()`). abs-path-ok: fixed test-only path, matches
 #: the coordinator's own live measurement that caught the AC3 regression;
 #: skipped outright (never silently passed) when absent on the host.
-_LIVE_DOE_ROOT = "X:/example-doctrine-repo"
+_LIVE_DOE_ROOT = "X:/coordinator-claude"
 
 
 def _live_doe_root_or_skip() -> str:
     if not Path(_LIVE_DOE_ROOT).is_dir():
-        pytest.skip(f"example-doctrine-repo sibling checkout not present on this host: {_LIVE_DOE_ROOT}")
+        pytest.skip(f"coordinator-claude sibling checkout not present on this host: {_LIVE_DOE_ROOT}")
     return _LIVE_DOE_ROOT
 
 
@@ -443,7 +443,7 @@ def test_live_roster_allows_via_check_not_just_resolve_roster(monkeypatch: pytes
     # real_home: see the marker note on the sibling test above.
     doe_root = _live_doe_root_or_skip()
     # check() calls resolve_roster() with no args (real resolution); pin the
-    # example-doctrine-repo root deterministically via read_doe_root_pointer rather than
+    # coordinator-claude root deterministically via read_doe_root_pointer rather than
     # relying on this pytest process's own registry/env state, matching the
     # coordinator's ask that this test be deterministic in the one
     # environment that matters.

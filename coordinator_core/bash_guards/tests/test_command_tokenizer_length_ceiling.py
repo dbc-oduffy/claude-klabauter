@@ -764,7 +764,7 @@ class TestStartProcessArgvReconstruction:
     genuine grammar regression (not just this function's own walk) would
     also be caught here.
 
-    Spec backlink: cross-repo/inbox/2026-08-07-example-doctrine-repo-em-powershell-
+    Spec backlink: cross-repo/inbox/2026-08-07-coordinator-claude-em-powershell-
     suite-guard-converted-and-wave2-findings.md § Finding 1
     """
 

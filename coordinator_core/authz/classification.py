@@ -11,14 +11,14 @@ Dual-write ban (content-invariant on MUTATING ops): a MUTATING op MUST write coo
 substrate (claude-klabauter's disk-truth custody) ONLY. It MUST NOT write into rag's workstate_store —
 a derived, rebuildable projection over claude-klabauter's disk-truth, not a system-of-record claude-klabauter may
 also write. This is the per-op corollary of the dual-write ban drawn under DR-047, the
-governing example-doctrine-repo/claude-klabauter boundary authority
-Example-doctrine-repo docs/decisions/DR-047-example-doctrine-repo-claude-klabauter-boundary-redraw-contract-vs-e.md, reconciled at
+governing coordinator-claude/claude-klabauter boundary authority
+Coordinator-claude docs/decisions/DR-047-coordinator-claude-klabauter-boundary-redraw-contract-vs-e.md, reconciled at
 the custody-vs-projection level by
 docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md — successor to the
 tree-local docs/decisions/2026-07-03-tri-plane-ownership-boundary.md § Design Decision #1,
-which was never ratified into example-doctrine-repo's tree — see that doc's superseded-by header.
+which was never ratified into coordinator-claude's tree — see that doc's superseded-by header.
 
-Spec backlink: docs/plans/2026-07-04-pcore-05-invoke-op-classification-authz-model.md § C1
+Spec backlink: pln-pcore-05-invoke-op-write-seman-80eecd § C1
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md
 """
 
@@ -238,7 +238,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The on-disk writes are read by external consumers (greppers of
     #      agent-audit.jsonl and dispatched-agents.txt; readers of meta.json).
     #
-    # Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § D2, C0.
+    # Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § D2, C0.
     "hooks.track_touched_files": OpClass.MUTATING,
     "hooks.session_heartbeat": OpClass.MUTATING,
     "hooks.agent_completion_log": OpClass.MUTATING,
@@ -271,7 +271,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # JSONL shard <central_state_root>/goals-log.<machine>.jsonl (an on-disk state write).
     # Writes coordinator substrate ONLY, never rag's relational store (dual-write ban,
     # DR-208 / tri-plane DD#1). A DISTINCT WRITER op; NOT the P06 goals reader (read-only).
-    # Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C6
+    # Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C6
     "goal.append": OpClass.MUTATING,
     # goal.set_kr_status — MUTATING: locked read-modify-write of one
     # key_results[].status scalar in a state/goals/*.yaml artifact (via
@@ -289,7 +289,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "orientation.regenerate_cache": OpClass.MUTATING,
     # memo.transition — MUTATING: native Python port (strang-09) that writes memo
     # frontmatter in-place (claim/action/release verbs). No subprocess / node reach-back —
-    # byte-faithful port of the example-doctrine-repo memo-transition.js oracle, not a delegation to it.
+    # byte-faithful port of the coordinator-claude memo-transition.js oracle, not a delegation to it.
     # Review: code-reviewer (F8) — DR-208 five-question affirmation added to match the file's
     # established affirmation discipline (citing ops/memo_transition.py; plan strang-09).
     # DR-208 five-question affirmation:
@@ -306,7 +306,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Memo files under cross-repo/ and state/ are coordinator substrate shared across repos.
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      Mutated memo frontmatter is read by the sibling repo EM and the cross-repo workflow.
-    # Spec backlink: docs/plans/2026-07-05-strang-09-memo-transition-op-strangle.md § C1,
+    # Spec backlink: pln-strang-09-memo-transition-op-s-fec3a1 § C1,
     #   docs/plans/2026-07-06-memo-transition-native-python-port.md (native-port cutover)
     "memo.transition": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
@@ -850,7 +850,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C2
+    # Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C2
     "initiative.serve_set": OpClass.COMPUTE_ONLY,
     # goal.match_candidates — COMPUTE_ONLY: reads state/goals/*.yaml under the main worktree,
     # ranks active goals by difflib.SequenceMatcher similarity, and returns a computed ranked
@@ -876,7 +876,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C2
+    # Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C2
     "goal.close_day": OpClass.COMPUTE_ONLY,
     # goal.close_day_apply — MUTATING: re-appends one row per close-out decision to
     # the per-machine goals-log JSONL shard via goal_append.append_goal (same write
@@ -889,7 +889,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      the goals-log shard, append mode only, never rewritten.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      Yes.
-    # Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C3
+    # Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C3
     "goal.close_day_apply": OpClass.MUTATING,
     # plan.match_candidates — COMPUTE_ONLY: reads docs/plans/*.md frontmatter under the main
     # worktree, ranks plans by difflib.SequenceMatcher similarity, and returns a computed ranked
@@ -901,7 +901,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C2
+    # Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C2
     "plan.match_candidates": OpClass.COMPUTE_ONLY,
     # handoff.match_candidates — COMPUTE_ONLY: reads state/handoffs/*.md frontmatter under the
     # main worktree, ranks handoffs by difflib.SequenceMatcher similarity, and returns a computed
@@ -913,7 +913,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C2
+    # Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C2
     "handoff.match_candidates": OpClass.COMPUTE_ONLY,
     # handoff.author_fork — MUTATING: creates a new ``state/handoffs/*.md`` fork artifact with
     # provenance fields (origin_session, origin_handoff, origin_plan_id, origin_goal_id) populated
@@ -930,7 +930,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      state/handoffs/*.md is coordinator substrate shared across EM sessions.
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      The new handoff file is read by git, the shell layer, and rag ingestion.
-    # Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
+    # Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C3
     "handoff.author_fork": OpClass.MUTATING,
     # plan.persist_capture — MUTATING: scaffolds a new docs/plans/*.md plan artifact
     # (via a coordinator-doc-new subprocess) from a captured harness plan-mode body,
@@ -961,7 +961,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C4
+    # Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C4
     "handoff.lineage_ancestry": OpClass.COMPUTE_ONLY,
     # plan.tasks.mutate — MUTATING: in-place mutation of a docs/plans/*.md file's
     # '## Tasks' fenced body block (add-task / stamp verbs). Same scope class and
@@ -979,7 +979,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      docs/plans/*.md is coordinator substrate shared across EM sessions.
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      The mutated plan file is read by shell consumers, other ops, and rag.
-    # Spec backlink: docs/plans/2026-07-10-pcli-need-1-plan-tasks-engine-plane.md § C3
+    # Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
     "plan.tasks.mutate": OpClass.MUTATING,
     # plan.tasks.grouping_digest — COMPUTE_ONLY, the read-only sibling of plan.tasks.mutate
     # immediately above. It computes the digest a PENDING resolve write is about to produce;
@@ -988,7 +988,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # file lock, never calls locked_rmw"). Five-question checklist all "no": it parses the
     # '## Tasks' block, applies a prospective cut in memory, and returns a digest.
     # Reintroducing a write here would collapse the separation this op exists to enforce.
-    # Spec backlink: docs/plans/2026-07-10-pcli-need-1-plan-tasks-engine-plane.md § C3
+    # Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
     "plan.tasks.grouping_digest": OpClass.COMPUTE_ONLY,
     # plan.list_orphaned — COMPUTE_ONLY: scans <repo_root>/docs/plans/*.md read-only
     # (frontmatter + resolve_plan_owner's own read-only state/handoffs/*.md scan) and
@@ -1003,7 +1003,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-31-plan-orphan-ownership-resolver.md § C2
+    # Spec backlink: pln-plan-orphan-ownership-resolver-3e68bb § C2
     "plan.list_orphaned": OpClass.COMPUTE_ONLY,
     # plan.suggest_completion_steps — COMPUTE_ONLY: scans
     # <repo_root>/docs/plans/*.md (frontmatter reads) and
@@ -1034,7 +1034,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C5
+    # Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C5
     "roadmap.serve": OpClass.COMPUTE_ONLY,
     # commit.anchors — COMPUTE_ONLY: derives git-trailer text (Plan/Plan-Id/Deliverable/
     # Nature/Anchor) from the staged diff + on-disk read-model and RETURNS it; the git-message
@@ -1386,7 +1386,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   - NOT accessible over HTTP (UDS-only; gate 6 of dispatch.py enforces 403 for ALL
     #     MUTATING ops — memo.send inherits this by classification, no extra gate needed).
     #   - NO legacy direct-write fallback (Q-c HARD; single write path; refuse when down).
-    # Spec backlink: docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md § C3
+    # Spec backlink: pln-strang-03-cross-repo-memo-send-40d84e § C3
     "memo.send": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # memo.list / memo.draft / memo.compose (strang-0x memo-tool-rebuild C7) —
@@ -1917,7 +1917,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # COMPUTE_ONLY justification: all five questions answered No — the op is a pure
     #   read-and-render. Same affirmation pattern as records.query above.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec backlink: docs/plans/2026-07-08-session-specific-instruction-set-emitter.op-spec.md
+    # Spec backlink: docs/plans/2026-07-08-session-specific-instruction-set-emitter.op-spec.md [DEAD-CITATION: plan file never committed to this repo]
     "ceremony.session_instructions": OpClass.COMPUTE_ONLY,
     # ceremony.render_handoff_tracker — MUTATING: the C9 disk seam for C8b's
     # render_repo_section. Writes state/handoff-tracker.md (per-repo mode) or
@@ -1933,7 +1933,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     Yes — the
     #      written tracker file is read by ceremony consumers and EM sessions.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b/C9
+    # Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b/C9
     "ceremony.render_handoff_tracker": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # strang-11 B8 new ops — session.boot_sweep, fleet.archive_shipped_handoffs,
@@ -2014,7 +2014,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      Written realized_by/actioned_note fields are read by cockpit's
     #      cross_repo_memos projection and any git client after return.
-    # Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C5
+    # Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C5
     "fleet.backfill_dispositionless_memos": OpClass.MUTATING,
     # session.reap — MUTATING (Class B): cadence-gated (12h .last-reap mtime file marker) reaper
     # for stale sessions, stale agent dirs, and orphaned claim dirs inside
@@ -2267,7 +2267,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
     #      check_forwarder_drift/_diff_one_location/_derive_names/_cited_entrypoint_sites
     #      only read directory listings and file contents (settings-home bin/, the
-    #      retired ~/.claude/bin compat mirror, coordinator/bin/, example-doctrine-repo's prompt-
+    #      retired ~/.claude/bin compat mirror, coordinator/bin/, coordinator-claude's prompt-
     #      surface trees); no `open(..., "w")`, no `write_text`, no `mkdir`. Grepped the
     #      module for any write call — none found.
     #   2. Writes into rag's relational store?                                 No.
@@ -2335,7 +2335,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # cartography.churn — COMPUTE_ONLY: thin RPC wrapper over
     # coordinator_core.cartography.churn.compute_emergent_set (ops/cartography_churn.py).
     # Shells out to git for three read-only input path-lists (churned_all/catalogued/
-    # head_present), promoting example-doctrine-repo survey chunk-K bash into tested Python.
+    # head_present), promoting coordinator-claude survey chunk-K bash into tested Python.
     # DR-208 five-question affirmation:
     #   1. Does the handler open any file for write (including append)?          No.
     #      Only reads: subprocess.run(["git", "log", ...]) / (["git", "ls-files"])
@@ -2510,7 +2510,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # memo.triage — COMPUTE_ONLY: deterministic pre-filter over cross-repo/archive/*.md
     # memos (frontmatter score + already-captured cross-check + legacy backfill +
     # observability). Does NOT call Haiku/Sonnet and does NOT decide final promotion —
-    # that judgment belongs to example-doctrine-repo's C6 background-Workflow LLM triage wave.
+    # that judgment belongs to coordinator-claude's C6 background-Workflow LLM triage wave.
     # DR-208 five-question affirmation (citing ops/memo_triage.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?    No.
     #      Every path read is opened read-only (Path.read_text); no write/append call
@@ -2631,7 +2631,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # session_ledger.aggregate_chain_loe — COMPUTE_ONLY: read-only chain walk over
     # state/handoffs + archive/handoffs, no writes/mutation. Byte-parity port
     # (read-only/idempotent per the oracle's own header).
-    # Port of: aggregate-chain-loe.sh (example-doctrine-repo b644d5a9, 2026-07-22).
+    # Port of: aggregate-chain-loe.sh (coordinator-claude b644d5a9, 2026-07-22).
     # Spec: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3d
     "session_ledger.aggregate_chain_loe": OpClass.COMPUTE_ONLY,
     # deferral.detect_orphan_memo — COMPUTE_ONLY: read-only hidden-deferral detector —
@@ -2799,7 +2799,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      resolves this explicitly, now extended to this op's own named
     #      subdirectory).
     #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The written artifact is read by example-doctrine-repo's
+    #      The written artifact is read by coordinator-claude's
     #      /coordinator:architecture-survey consumer
     #      (fanout.poll_scratch_dir) across the LLM-transport + process
     #      boundary — the entire reason this op exists (see module docstring).
@@ -3086,7 +3086,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "updatedocs.gates": OpClass.MUTATING,
     # git.push_failure_verdict — COMPUTE_ONLY: classifies a non-fast-forward push
     # failure into peer_staged / half_applied_merge / simple_lag / resolved_since /
-    # indeterminate so example-doctrine-repo's Stop-hook advisory renders a verdict we computed
+    # indeterminate so coordinator-claude's Stop-hook advisory renders a verdict we computed
     # rather than re-deriving one from a regex. Every git call is a read
     # (`diff --cached --name-only`, `diff --name-only`, `rev-parse`); no write, no
     # index mutation, no recovery action — the op deliberately never runs stash,
@@ -3179,11 +3179,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # self-imposed and NOT DR-094-ratified — see "STILL PROVISIONAL" note
     # above); no rag store write.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5 (classification axis only)
-    # Authority (reserved-noun-write axis): example-doctrine-repo
+    # Authority (reserved-noun-write axis): coordinator-claude
     #   docs/decisions/DR-094-tracker-advance-status-write-target-carveout.md
     #   (write target, as currently built, only — does NOT ratify
     #   handler-issued commit; see "STILL PROVISIONAL" note above)
-    # Spec: example-doctrine-repo coordinator/skills/enrich-and-review/SKILL.md § Phase 2.5/4.5/6
+    # Spec: coordinator-claude coordinator/skills/enrich-and-review/SKILL.md § Phase 2.5/4.5/6
     # ---------------------------------------------------------------------------
     "tracker.advance_status": OpClass.MUTATING,
     # ---------------------------------------------------------------------------

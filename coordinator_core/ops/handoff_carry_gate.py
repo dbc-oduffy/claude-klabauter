@@ -12,14 +12,14 @@ field exists to remove.
 
 Identity across re-wording: each carried item carries a stable `carry_id`
 (minted once, threaded byte-identical hop to hop — see
-Example-doctrine-repo coordinator/schemas/handoff.schema.json `carried_items`). The gate
+Coordinator-claude coordinator/schemas/handoff.schema.json `carried_items`). The gate
 keys EXCLUSIVELY on `carry_id`, never on `description` text, so rephrasing an
 item never makes it look "new".
 
 Entry point: `evaluate_gate(items)` — returns a `GateResult`; `main()` maps a
 non-ok result to exit 1 and a malformed/unreadable handoff to exit 2.
 
-Spec backlink: example-doctrine-repo coordinator/schemas/handoff.schema.json
+Spec backlink: coordinator-claude coordinator/schemas/handoff.schema.json
     `carried_items` field, coordinator/skills/handoff/SKILL.md
     § Cascading unresolved items.
 

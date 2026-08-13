@@ -11,7 +11,7 @@ Negative-spec:
     Do NOT treat "" as a valid non-absent value. The mcp_tool hook forwarding contract
     guarantees "" means "field was not set or not resolvable" — not an empty user input.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § D5
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § D5
 """
 
 from __future__ import annotations

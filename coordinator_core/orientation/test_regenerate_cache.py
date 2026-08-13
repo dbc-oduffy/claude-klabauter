@@ -3,7 +3,7 @@ coordinator_core.orientation.test_regenerate_cache — tests for the
 ``--pinboard-only`` fast path (patch_pinboard_only) added on top of the
 existing byte-for-byte bash-oracle port.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md (C18)
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 (C18)
 """
 from __future__ import annotations
 
@@ -415,7 +415,7 @@ def test_pinboard_only_rederives_housekeeping_section(tmp_path):
     the OLD, now-wrong behaviour (housekeeping frozen at seed time, surviving byte-identical
     through a pinboard-only patch). That was exactly the AC5 hole reported in
     `cross-repo/inbox/2026-07-23-claude-central-em-wsc-tail-preflight-doe-reply.md`
-    § "New -- an AC5 hole your own ask 4 opens": example-doctrine-repo adopted --pinboard-only at BOTH
+    § "New -- an AC5 hole your own ask 4 opens": coordinator-claude adopted --pinboard-only at BOTH
     mid-session call sites (/workstream-complete, /handoff), so a failure recorded between
     two full regens would not reach the EM within one session boundary. DO NOT "restore" the
     old assertions below -- they encode the bug, not the contract.

@@ -1,6 +1,6 @@
 """
 LessonSummary — one captured lesson from the full {lessons.md} ∪ {lessons-outbox/}
-∪ {drained/} union surface. Pydantic port of example-doctrine-repo
+∪ {drained/} union surface. Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/lesson-summary.ts` (Zod source).
 
 Spec backlink: state/roadmap/cockpit-contract-ext-2026-06-22/COORDINATOR-RESOLUTIONS.md § R4

@@ -10,7 +10,7 @@ holder whose claim is at `apply` stage. A `brief`-stage ledger reservation
 `claim_state.resolve_claim_state` reads) is a pre-work lock, not evidence of
 a landed write, and must never satisfy `d2`.
 
-The incident (cross-repo/inbox/2026-08-11-example-doctrine-repo-em-pickup-claim-never-
+The incident (cross-repo/inbox/2026-08-11-coordinator-claude-em-pickup-claim-never-
 reaches-frontmatter.md): a first-ever pickup of an unclaimed handoff took a
 `brief`-stage claim, then read that same claim back as "already landed",
 skipped `d2`, and left the claim stranded in the ledger with the frontmatter
@@ -185,7 +185,7 @@ def test_apply_stage_claim_with_refused_stamp_does_not_satisfy_d2(
     tmp_path, as_session, holder_reads_live
 ):
     """THE regression this module was repaired for (cross-repo/inbox/
-    2026-08-13-example-doctrine-repo-em-pickup-already-satisfied-masks-a-refused-write.md):
+    2026-08-13-coordinator-claude-em-pickup-already-satisfied-masks-a-refused-write.md):
     `apply.py::apply` promotes the claim dir to `apply` stage UNCONDITIONALLY,
     before `d2`'s directive (`archive-stamp-cli claim-handoff`) ever runs — so
     an `apply`-stage claim dir is reachable on a REFUSED stamp attempt exactly

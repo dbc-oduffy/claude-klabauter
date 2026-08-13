@@ -5,14 +5,14 @@
 Port history: this file used to CARRY the fresh-scaffold-probe /
 repomap-gate / queue-prune-sweep / distill-threshold logic directly (4
 concerns, one subcommand each, ported from `coordinator/commands/update-
-docs.md` bash fences). 2026-08-06 (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-
+docs.md` bash fences). 2026-08-06 (cross-repo/inbox/2026-08-06-coordinator-claude-em-
 updatedocs-gates-structured-verdicts.md, ADOPTED): that logic moved to
 `coordinator_core/ops/updatedocs_gates.py`'s gate functions, which return a
 structured `GateResult` (clean/finding/unavailable/contradiction + severity)
 instead of a bare exit code — the native op is now the source of truth, and
 this file's only remaining job is translating a `GateResult` back into the
 legacy exit-code/stdout contract each `/update-docs` phase already expects,
-so the phase prose in `coordinator/commands/update-docs.md` (example-doctrine-repo, out
+so the phase prose in `coordinator/commands/update-docs.md` (coordinator-claude, out
 of this repo's edit scope) does not need to change in lockstep.
 
 Each `_cmd_*` function below calls its gate function directly (in-process,
@@ -25,7 +25,7 @@ would silently change behavior a caller may depend on.
 
 Retired 2026-07-29: the `snippet-sync-sweep` subcommand (Phase 11b glob-loop
 over `bin/verify-*-sync.sh` verifiers) was removed as dead code — those
-verifiers were retired fleet-wide (example-doctrine-repo `dce9788bc` / `de23f5002`,
+verifiers were retired fleet-wide (coordinator-claude `dce9788bc` / `de23f5002`,
 superseded by the native `coordinator_core/snippet_sync/` verifier), and no
 caller passed a `--glob-root` pointing anywhere but the default `~/.claude`.
 Its Windows-side `sh`/`bash` interpreter resolution (added 2026-07-28) was
@@ -73,13 +73,13 @@ Negative-spec: this file does NOT implement probe logic itself anymore —
 adding a new axis/threshold/CLI-override belongs in
 `coordinator_core/ops/updatedocs_gates.py`, not here. It does NOT run the
 11f/11g/11h/11j gates that `updatedocs_gates.py` also carries — those never
-had a CLI shim (example-doctrine-repo's Phase 11f/11g/11h/11j fences invoke the underlying
+had a CLI shim (coordinator-claude's Phase 11f/11g/11h/11j fences invoke the underlying
 CLIs directly, see that module's docstring), so there is nothing here to
 port them into.
 
-Spec backlink: coordinator/commands/update-docs.md (example-doctrine-repo) — Pre-flight
+Spec backlink: coordinator/commands/update-docs.md (coordinator-claude) — Pre-flight
   probe, Phase 9b, Phase 11i, Phase 13 steps 1-2.
-Spec backlink: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-updatedocs-gates-
+Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-updatedocs-gates-
   structured-verdicts.md
 """
 
@@ -241,7 +241,7 @@ def _cmd_snippet_sync_sweep_retired(_args: argparse.Namespace) -> int:
         "[update-docs] snippet-sync-sweep is retired (the verify-*-sync.sh leg it "
         "swept no longer exists fleet-wide; the native coordinator_core/snippet_sync/ "
         "verifier supersedes it) — accepting the verb as a no-op until the "
-        "example-doctrine-repo Phase 11b invocation is dropped.",
+        "coordinator-claude Phase 11b invocation is dropped.",
         file=sys.stderr,
     )
     return 0

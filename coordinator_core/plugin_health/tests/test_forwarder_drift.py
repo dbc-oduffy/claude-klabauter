@@ -172,7 +172,7 @@ def test_installed_but_not_derived_is_named_orphan(tmp_path: Path, two_bin_dirs)
 
 
 def _write_doe_citation(doe_root: Path, skill_relpath: str, cli_name: str) -> None:
-    """A example-doctrine-repo-shaped prompt surface citing a settings-home entrypoint,
+    """A coordinator-claude-shaped prompt surface citing a settings-home entrypoint,
     matching the corpus's live shape (`resolve-coordinator-bin.md`'s
     Shape B fallback form) — see forwarder_drift.py's `_ENTRYPOINT_RE`."""
     path = doe_root / "coordinator" / skill_relpath
@@ -188,11 +188,11 @@ def _write_doe_citation(doe_root: Path, skill_relpath: str, cli_name: str) -> No
 
 def test_missing_and_cited_is_the_loud_arm(tmp_path: Path, two_bin_dirs):
     """CITED-VS-UNCITED SPLIT: a missing forwarder for a CLI a live
-    example-doctrine-repo prompt surface actually invokes gets the louder, 127-naming
+    coordinator-claude prompt surface actually invokes gets the louder, 127-naming
     line — not today's plain "expected transient install lag" wording."""
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "example-doctrine-repo"
+    doe_root = tmp_path / "coordinator-claude"
 
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "check-auto-memory-drained")
@@ -222,11 +222,11 @@ def test_missing_and_cited_is_the_loud_arm(tmp_path: Path, two_bin_dirs):
 
 def test_missing_and_uncited_stays_the_plain_arm(tmp_path: Path, two_bin_dirs):
     """The other half of the split: a missing forwarder for a CLI nothing in
-    example-doctrine-repo's prompt-surface corpus cites keeps today's plain wording —
+    coordinator-claude's prompt-surface corpus cites keeps today's plain wording —
     ordinary transient install lag, not an escalation."""
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "example-doctrine-repo"
+    doe_root = tmp_path / "coordinator-claude"
 
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "some-uncited-cli")
@@ -344,7 +344,7 @@ def test_main_exits_nonzero_on_cited_missing_set(tmp_path: Path, two_bin_dirs, m
     gates — main() must return non-zero."""
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "example-doctrine-repo"
+    doe_root = tmp_path / "coordinator-claude"
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "check-auto-memory-drained")
     for b in (settings_bin, compat_bin):
@@ -447,7 +447,7 @@ def test_cited_missing_field_carries_sites_for_the_cited_set(tmp_path: Path, two
     machine-readable form."""
     agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
     settings_bin, compat_bin = two_bin_dirs
-    doe_root = tmp_path / "example-doctrine-repo"
+    doe_root = tmp_path / "coordinator-claude"
 
     _write_cli(agent_bin, "foo")
     _write_cli(agent_bin, "check-auto-memory-drained")

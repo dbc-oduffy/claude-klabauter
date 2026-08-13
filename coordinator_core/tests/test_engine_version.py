@@ -4,7 +4,7 @@ Tests for coordinator_core.engine_version — the engine self-version surface.
 Covers: real-repo SHA resolution shape, graceful-degradation to None on git
 failure (never raises), and the committed floor constant's shape.
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-engine-version-surface-drift-probe.md
+Spec backlink: pln-claude-klabauter-engine-version-surface--c130a8
 """
 
 from __future__ import annotations

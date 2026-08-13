@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.verify_coverage — cross-reference integrity sweep for the
-coordinator-claude plugin tree.
+Coordinator-claude plugin tree.
 
-Purpose: port of `coordinator/bin/verify-coverage.js` (example-doctrine-repo). Inspired by
+Purpose: port of `coordinator/bin/verify-coverage.js` (coordinator-claude). Inspired by
 Example-game-repo's agent-domain-coverage.test.ts (TOOL_ORPHANED / TOOL_DOUBLE_CLAIMED /
 STALE_AGENT_ENTRY against the MCP tool-defs <-> agent-routing-table producer/
 consumer contract). This module ports the same shape to coordinator-claude's
@@ -51,7 +51,7 @@ Exit codes (parity-critical -- callers branch on these):
          or file could not be scanned -- see "scanIncomplete"/"scanErrors" in JSON output)
     2 -- usage / configuration error (unknown flag, missing root/sweep-root dir)
 
-Port source: coordinator/bin/verify-coverage.js (example-doctrine-repo, 517 lines)
+Port source: coordinator/bin/verify-coverage.js (coordinator-claude, 517 lines)
 Spec backlink: docs/plans/2026-07-16-clean-slate-recon (BIG_PORT Wave B, item verify-coverage)
 
 Negative-spec (faithful reproduction of the JS oracle's behavior):
@@ -146,8 +146,8 @@ def parse_args(argv: List[str]) -> dict:
 def default_root(home_dir: Optional[str] = None) -> str:
     """Resolve the plugin tree root.
 
-    example-doctrine-repo authoring machines: `~/.claude/.doe-root` contains the absolute path to
-    the example-doctrine-repo clone root. The plugin tree lives directly there (example-doctrine-repo/
+    coordinator-claude authoring machines: `~/.claude/.doe-root` contains the absolute path to
+    the coordinator-claude clone root. The plugin tree lives directly there (coordinator-claude/
     contains coordinator/, deep-research/, etc. as siblings -- the same shape as
     the published coordinator-claude/ mirror). Reading the sentinel lets this
     module operate against the live authoring tree instead of the publish
@@ -178,7 +178,7 @@ def default_sweep_root() -> str:
     must always resolve the real plugin tree (that's where skills/agents/
     commands live), but the SWEEP -- which files get scanned FOR references --
     must be scoped to whichever repo invoked the module. Defaulting to cwd
-    keeps a consumer run scoped to its own doc surface; a example-doctrine-repo-authoring
+    keeps a consumer run scoped to its own doc surface; a coordinator-claude-authoring
     invocation (cwd already inside the resolved plugin root) naturally sweeps
     the plugin tree since cwd IS that tree.
     """
@@ -342,7 +342,7 @@ def extract_references(content: str, valid_plugin_prefixes: List[str]) -> List[d
         'worker'     -- name listed under "## Worker Dispatch Recommendations"
 
     Marker-vocabulary discriminator (2026-08-06, cross-repo memo
-    2026-08-06-example-doctrine-repo-em-verify-coverage-extractor-marker-vocabulary.md):
+    2026-08-06-coordinator-claude-em-verify-coverage-extractor-marker-vocabulary.md):
     `coordinator:` doubles as the fence/sentinel/marker namespace, not only
     the dispatch namespace -- a doc describing a marker TOKEN ("needs a
     `coordinator:fleet-only` fence") is not dispatching anything, and no
@@ -536,12 +536,12 @@ REF_ALLOWLIST: Set[str] = {
     # External installed plugin, NOT part of the coordinator-claude tree; bare-prefix
     # so it bypasses the colon-prefix external-skip path in resolve().
     "feature-dev",                         # external plugin; capability-catalog dispatch-shape doc (2026-06-27)
-    # FORWARD-reference: example-doctrine-repo is authoring this M-tier reviewer (DR-133); claude-klabauter
+    # FORWARD-reference: coordinator-claude is authoring this M-tier reviewer (DR-133); claude-klabauter
     # pre-registered its lens in _PLAN_DERIVABLE_LENS so the sidecar files to
     # state/plan-sidecars/ the day it ships. Landing the entry BEFORE the agent
-    # exists is the point -- see cross-repo/archive/2026-08-05-example-doctrine-repo-em-plan-
+    # exists is the point -- see cross-repo/archive/2026-08-05-coordinator-claude-em-plan-
     # reviewer-lens-registration.md (decision: partial). Drop when DR-133 ships.
-    "coordinator:plan-reviewer",           # forward-ref, unshipped example-doctrine-repo agent DR-133 (2026-08-06)
+    "coordinator:plan-reviewer",           # forward-ref, unshipped coordinator-claude agent DR-133 (2026-08-06)
     # NOT a dispatch target: a publish-boundary fence identifier in DR-248's prose
     # ("`coordinator:fleet-only` fences"). Shares the <plugin>:<name> shape by
     # coincidence of naming, not because anything dispatches it.
@@ -552,7 +552,7 @@ REF_ALLOWLIST: Set[str] = {
     # Speculative future-skill name in inspiration-recheck marker prose ("consider
     # extracting ... on the fourth instance"), not a live dispatch reference.
     "coordinator:inspiration-audit",       # proposed-future name in recheck-marker prose (2026-07-19)
-    # Historical-record citations of retired/never-built artifacts (example-doctrine-repo
+    # Historical-record citations of retired/never-built artifacts (coordinator-claude
     # dated 2026-04/2026-05 research docs & plan reviews) -- 2026-07-22, per
     # claude-central-em memo.
     "coordinator:test-driven-development",
@@ -624,7 +624,7 @@ def main(argv: List[str]) -> int:
     for file in walk_markdown(
         sweep_root,
         # .claude/worktrees/agent-* (untracked worktree checkouts, each
-        # duplicating every file in the tree -- 45 found in example-doctrine-repo, 21
+        # duplicating every file in the tree -- 45 found in coordinator-claude, 21
         # were worktree duplicates) is excluded by walk_markdown itself via a
         # path-scoped check, not via this basename exclude set -- a basename
         # exclude on ".claude" would also drop tracked .claude fixture dirs

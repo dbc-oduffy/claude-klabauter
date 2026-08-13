@@ -42,20 +42,20 @@ patches: a maintainer-only signal (`.doe-root`, the harness's own
 installed-plugins registry) may be used to CLASSIFY which install shape a
 machine has, but its ABSENCE must never be read as evidence the install is
 UNHEALTHY — polarity, not provenance. This module is DR-117's worked
-example: `d6fa361d` below is exactly the defect DR-117 names (a example-doctrine-repo-only
+example: `d6fa361d` below is exactly the defect DR-117 names (a coordinator-claude-only
 signal's absence treated as a diagnosis), and `d19dbe78` is the fix DR-117
 generalizes from (a disjoint, harness-native classify-only branch added
 alongside the first, not a replacement for it — see DR-117's anti-scope).
 See `docs/decisions/DR-117-maintainer-signals-may-classify-never-diagnose.md`
-(example-doctrine-repo repo; tripwire `MAINTAINER-SIGNAL-DIAGNOSIS` in
+(coordinator-claude repo; tripwire `MAINTAINER-SIGNAL-DIAGNOSIS` in
 `coordinator/docs/wiki/coordinator-tripwires.md`) for the rule in full — a
-blunter "no example-doctrine-repo-specific signal in shipped code" framing was considered and
+blunter "no coordinator-claude-specific signal in shipped code" framing was considered and
 rejected there (it would misflag `resolve_coordinator_clone._resolve_source_mode`,
 a legitimate classify-only use of `.coordinator-dev-repo`).
 
 Inline-install carve-out (added 2026-07-31): an empty/unresolvable
 `COORDINATOR_CONTENT_ROOT` is NOT itself proof of breakage — a machine whose
-hook delivery is already live via the plugin path (e.g. a example-doctrine-repo inline
+hook delivery is already live via the plugin path (e.g. a coordinator-claude inline
 `--plugin-dir` dev install) legitimately never needs this env var at all
 (`gen_settings_hooks.generate()` returns "skipped (plugin delivery already
 live)" before ever writing it). `run_self_probe` now checks
@@ -66,11 +66,11 @@ shape; see the inline comment at the check site for why the two OTHER
 in-tree candidates (`gen_settings_hooks.positive_marker_path()`,
 `guard_settings_integrity._plugin_side_reachable()`/
 `detect_hook_delivery_duplication()`) were rejected. This carve-out covers
-ONLY the example-doctrine-repo-maintainer `--plugin-dir` dev-install shape (a `.doe-root`
+ONLY the coordinator-claude-maintainer `--plugin-dir` dev-install shape (a `.doe-root`
 pointer).
 
 Marketplace/OSS-install carve-out (added 2026-07-31, closing the gap the
-paragraph above left open): `.doe-root` is a example-doctrine-repo-maintainer-specific signal
+paragraph above left open): `.doe-root` is a coordinator-claude-maintainer-specific signal
 — the coordinator plugin ships to many users through the marketplace/OSS
 path who have no `.doe-root` at all, so for that MAJORITY install shape the
 probe still false-positived and armed a kill switch that then required a
@@ -124,7 +124,7 @@ bare `#`-comment marker previously did, on every boot).
 
 Spec backlink: coordinator_core.install.gen_settings_hooks (kill-switch /
     positive-marker polarity inversion, same 2026-07-28 dispatch).
-Spec backlink: DR-117 (example-doctrine-repo, maintainer signals may classify, never
+Spec backlink: DR-117 (coordinator-claude, maintainer signals may classify, never
     diagnose) — the general rule both carve-outs in this module instantiate;
     see the paragraph above `_is_marketplace_install_live`'s discussion for
     how this module is DR-117's worked example.
@@ -295,7 +295,7 @@ _BANNER_REARMED = """
 ║     until this is fixed, rather than bricking hooks again next run.
 ║
 ║  Action: re-run the coordinator installer (or `/coordinator:setup`) once
-║  this machine's example-doctrine-repo clone location is confirmed, then delete
+║  this machine's coordinator-claude clone location is confirmed, then delete
 ║  {marker} to re-enable.
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -411,7 +411,7 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
             return ""
 
         # Marketplace/OSS carve-out (added 2026-07-31): the ONLY thing
-        # `is_inline_install` above covers is a example-doctrine-repo `--plugin-dir` dev
+        # `is_inline_install` above covers is a coordinator-claude `--plugin-dir` dev
         # install (`.doe-root` present) -- the majority of coordinator
         # users install via the marketplace/OSS path and have no
         # `.doe-root` at all, so without this second OR-branch this probe

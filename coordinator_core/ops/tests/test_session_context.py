@@ -14,7 +14,7 @@ Coverage:
   (g) env vars take priority over an (ignored) sentinel — tier-1 returns even when
       sentinel exists.
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C3
 Extraction source: coordinator_core/ops/review_trail_write.py:_resolve_session_id
 """
 

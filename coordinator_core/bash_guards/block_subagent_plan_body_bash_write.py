@@ -1,8 +1,8 @@
 """
 coordinator_core.bash_guards.block_subagent_plan_body_bash_write -- Python
-engine-ification of example-doctrine-repo's retired
+engine-ification of coordinator-claude's retired
 ``coordinator/hooks/scripts/block-subagent-plan-body-bash-write.sh``
-PreToolUse(Bash) hook (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``).
+PreToolUse(Bash) hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
 
 Purpose: closes the Bash escape from the Write/Edit/MultiEdit/NotebookEdit-only
 deny in the sibling hook ``block-subagent-plan-body-write.sh`` (ported at
@@ -70,8 +70,8 @@ Spec backlink: docs/plans/2026-07-09-dispatch-sidecar-executor-confinement.md
   section D-BASH, AC4, chunk C-BASH.
 Spec backlink (ADVISORY_REWRITE conversion):
   docs/plans/2026-08-06-apply-guard-class-census.md, chunk C14.
-Ported from the retired example-doctrine-repo bash guard ``block-subagent-plan-body-bash-write.sh``
-  (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``).
+Ported from the retired coordinator-claude bash guard ``block-subagent-plan-body-bash-write.sh``
+  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
 Recipe: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md
   section (b) fold-candidate 1.
 """

@@ -17,7 +17,7 @@ rendering for a caller to accidentally treat as the source of truth. The
 row is, and remains, the single source of truth.
 
 Homing (see docs/plans/2026-07-27-plan-line-item-resolution-model.md § C9,
-Example-doctrine-repo): this is a NEW module, not an addition to plan_tasks_mutate.py.
+Coordinator-claude): this is a NEW module, not an addition to plan_tasks_mutate.py.
 It is a READ concern depending on C1's schema fields, not a MUTATE concern
 depending on C4's ``resolve`` verb — and plan_tasks_mutate.py's own
 docstring already carries a negative-spec ("Does NOT support verbs beyond

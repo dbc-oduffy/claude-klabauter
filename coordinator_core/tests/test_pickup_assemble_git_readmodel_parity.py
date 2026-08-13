@@ -3,7 +3,7 @@
 replaced on the read-only `brief` path.
 
 Spec backlink: docs/plans/2026-07-24-canonical-resolution-engine.md
-task W0-2 + AC-6/AC-8 (example-doctrine-repo).
+task W0-2 + AC-6/AC-8 (coordinator-claude).
 
 Additive-before-destructive (plan body): this test file lands BEFORE the
 spawn bodies were deleted from `_run_git` — by the time this file is read,
@@ -196,7 +196,7 @@ def test_hash_object_stdin_matches_known_git_value(claude_klabauter_root):
 # needle count differs (here, the second parent `B1`, which never carried
 # the needle), even though the FIRST parent already accounts for `M`'s own
 # content. Reproduces the stamp-integrity investigation's Root cause B,
-# Case 2 (`tasks/mise-findings/stamp-integrity.md`, example-doctrine-repo) end to end
+# Case 2 (`tasks/mise-findings/stamp-integrity.md`, coordinator-claude) end to end
 # through the real `_find_stamp_commit` entry point, not just the inner
 # walk.
 # ---------------------------------------------------------------------------

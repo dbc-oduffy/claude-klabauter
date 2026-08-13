@@ -11,7 +11,7 @@ visited, deduplicates by ``session_id``, and emits summed
 t-shirt. Consumed by ``/workstream-complete`` Step 2.6 on the chain-terminal
 path.
 
-Port of: aggregate-chain-loe.sh (example-doctrine-repo b644d5a9, 2026-07-22, 709 LoC bash)
+Port of: aggregate-chain-loe.sh (coordinator-claude b644d5a9, 2026-07-22, 709 LoC bash)
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 4
 Spec backlink: docs/plans/2026-06-29-handoff-lineage-dag-fan-in-fan-out.md § C2
 
@@ -24,7 +24,7 @@ aggregation per DR-014 effort-isolation, exactly as the bash oracle excludes it.
 
 Two callers into this module:
   - The CLI trampoline (``coordinator/bin/aggregate-chain-loe.py``,
-    example-doctrine-repo) calls this module's own ``main()`` directly, in-process —
+    coordinator-claude) calls this module's own ``main()`` directly, in-process —
     this is a cold ceremony-only caller, so there is no daemon-RPC overhead
     to justify (mirrors ``regenerate-orientation-cache``'s trampoline shape,
     NOT ``cc_invoke()``/``route()``). A former extensionless sibling
@@ -183,10 +183,10 @@ def resolve_state_root(coordinator_root: Path, cwd: Path) -> Path:
 
     Calls ``coordinator_core.state_root.coordinator_state_root()`` (Rule 4/5
     default) in-process — the already-landed native peer of
-    coordinator-state-root.sh (example-doctrine-repo 6fb5fb37, 2026-07-22; aggregate-chain-loe.sh's
+    coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22; aggregate-chain-loe.sh's
     own ``source coordinator-state-root.sh; STATE_ROOT="$(coordinator_state_root)"``).
     *coordinator_root* is unused by the native seam (it derives the
-    example-doctrine-repo/claude-klabauter roots via its own resolvers) and is retained only for call-site
+    coordinator-claude/claude-klabauter roots via its own resolvers) and is retained only for call-site
     compatibility with existing callers of this function.
 
     Review: code-reviewer — *cwd* is threaded explicitly to
@@ -206,7 +206,7 @@ def resolve_state_root(coordinator_root: Path, cwd: Path) -> Path:
     only when the native seam raises ``StateRootError`` — never silently
     returns a wrong-repo path.
     """
-    del coordinator_root  # unused: native seam self-resolves example-doctrine-repo/claude-klabauter roots
+    del coordinator_root  # unused: native seam self-resolves coordinator-claude/claude-klabauter roots
     try:
         git_root = resolve_repo_root(cwd)
         out = coordinator_state_root(git_root=str(git_root))
@@ -966,10 +966,10 @@ def resolve_thresholds(thresholds_path: Optional[Union[str, Path]]) -> List[Dict
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point — consumed in-process by the example-doctrine-repo-side CLI trampoline
+# CLI entry point — consumed in-process by the coordinator-claude-side CLI trampoline
 # (coordinator/bin/aggregate-chain-loe.py). Byte-parity with the retired
 # bash oracle's own arg-parsing / help text / exit-code convention
-# (example-doctrine-repo b644d5a9, 2026-07-22).
+# (coordinator-claude b644d5a9, 2026-07-22).
 # ---------------------------------------------------------------------------
 
 _HELP_TEXT = """Usage: aggregate-chain-loe.sh --terminal-handoff <path> [OPTIONS]

@@ -14,7 +14,7 @@ tree — this repo's own discovered set is exercised live by the two
 consumer test files) and confirming discovery finds the planted package.
 
 Spec backlink: cross-repo/inbox/2026-07-27-… "Generalize seam guards
-fleet-wide" dispatch (example-doctrine-repo, 2026-07-27), red-proof requirement.
+fleet-wide" dispatch (coordinator-claude, 2026-07-27), red-proof requirement.
 """
 
 from __future__ import annotations

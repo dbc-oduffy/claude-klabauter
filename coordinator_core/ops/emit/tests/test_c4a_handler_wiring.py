@@ -7,7 +7,7 @@ Verifies that each handler:
   4. A linked-worktree fixture confirms non-zero records are produced when common_dir is
      the shared .git dir of a main worktree (not the raw _origin_worktree file-pointer).
 
-Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C4a
+Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C4a
 """
 
 from __future__ import annotations

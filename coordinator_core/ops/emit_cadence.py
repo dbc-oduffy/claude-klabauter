@@ -15,7 +15,7 @@ entry points of each (recorder.record, envelope.emit) over one shared EmitContex
 once and reused, so context resolution is not duplicated across the two sub-ops.
 
 Decision provenance: PM-ratified per-repo tri-plane boundary (2026-07-03) — emission
-ordering semantics live on claude-klabauter's control plane, not a example-doctrine-repo ceremony facade. See the
+ordering semantics live on claude-klabauter's control plane, not a coordinator-claude ceremony facade. See the
 actioned memo response (decision B) at
 cross-repo/inbox/2026-07-11-claude-central-em-backlog-record-cadence-relocation-reconcile.md
 § EM Response.

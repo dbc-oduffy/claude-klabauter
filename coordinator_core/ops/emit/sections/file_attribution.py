@@ -110,7 +110,7 @@ aggregate rows.
 
 History, because the reversal is the load-bearing part (this paragraph is a record, NOT a
 live claim): the read was non-recursive until ``e6449947``, and coverage was measured at
-**34.7%** of a 2,924-file ``git ls-files`` union on the example-doctrine-repo corpus — 1,910 tracked
+**34.7%** of a 2,924-file ``git ls-files`` union on the coordinator-claude corpus — 1,910 tracked
 files attributed to nobody, the section failing at its stated job in a fleet where
 subagents do most of the editing. DR-244 originally forbade the recursive read on the
 premise that the additional (agent, file) pairs would overrun a 600-row publish cap.
@@ -126,7 +126,7 @@ NEGATIVE-SPEC on future edits, both constraints live and both from DR-244 § Ame
   - Do NOT collapse a subagent's touches onto its parent session. That is the same lossy
     pre-aggregation cockpit rejected for the rows themselves — a query surface can aggregate
     at read time and can never disaggregate what was pre-summed. A parent-session LINK is
-    the thing that would need a new contract field; route that through example-doctrine-repo rather than
+    the thing that would need a new contract field; route that through coordinator-claude rather than
     inventing it here.
   - Do NOT pre-aggregate into per-file totals or per-session counts, which locks consumers
     out of the other axis.
@@ -134,14 +134,14 @@ NEGATIVE-SPEC on future edits, both constraints live and both from DR-244 § Ame
 Citing DR-244's ORIGINAL text to restore the non-recursive read is NOT valid — its
 2026-07-29 amendment answers Q3 and governs. Read the amendment, not only the decision.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 8.14,
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.14,
   FileAttribution. Byte/semantic parity port.
 Producer: coordinator/bin/derive-file-attribution.py — claude-klabauter's own file, resolved via
-  ``ctx.coordinator_root`` (a ``__file__`` walk from this repo, not a example-doctrine-repo/upstream path);
+  ``ctx.coordinator_root`` (a ``__file__`` walk from this repo, not a coordinator-claude/upstream path);
   change-controlled rather than frozen (a ``_DERIVATION_VERSION`` bump is required on any
   behavioural change, since the module's own stat cache can't detect a logic-only edit).
   Called the SAME way via subprocess.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P17
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P17
 """
 
 from __future__ import annotations
@@ -220,7 +220,7 @@ _EDIT_CLASS_OPERATIONS = frozenset({"edit", "create", "delete", "rename", "bash"
 #
 # Sized on order of magnitude, NOT on a precise measurement, because the absolute cold cost
 # does not reproduce: three runs of the same nominal quantity (non-recursive path, empty stat
-# cache, example-doctrine-repo corpus) gave 14.12s, 2.56s and 4.87s, varying with OS page-cache state and
+# cache, coordinator-claude corpus) gave 14.12s, 2.56s and 4.87s, varying with OS page-cache state and
 # concurrent load. The replicating quantity is the ratio — the 2026-07-29 recursive-read change
 # costs ~2.5x the non-recursive path (12.16s vs 4.87s, measured back-to-back in one run). All
 # observed cold readings sit an order of magnitude under this ceiling, which is the property
@@ -279,7 +279,7 @@ def _validate_prior_file_attributions(rows: Any, repo_root: Path) -> Optional[st
     case-by-case: two implementations of one contract boundary is how they drift apart, which
     is ``skipped_stage``'s own negative-spec — and this validator was in breach of it.
 
-    Why this exists at all: example-doctrine-repo's on-disk emission (2026-07-28, schema 3.7.0) carries
+    Why this exists at all: coordinator-claude's on-disk emission (2026-07-28, schema 3.7.0) carries
     4027 rows of which 3991 have ABSOLUTE ``file_path`` values and zero exclusion markers — it
     predates F2. Reusing it emitted absolute paths into a rag/cockpit join key, resurrected the
     out-of-repo rows F2 excludes, and hid the re-widening (no markers). Validated reuse turns
@@ -380,7 +380,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     producer-failure observability signal (see module docstring for all three).
 
     CADENCE GATE (2026-07-29, Lever 3): the producer walks every top-level transcript file
-    (557 on the example-doctrine-repo corpus), so it runs only on the full-enrichment tier. For this
+    (557 on the coordinator-claude corpus), so it runs only on the full-enrichment tier. For this
     walk's cost see ``_PRODUCER_TIMEOUT_SECONDS`` — the single place those figures are
     stated; this docstring used to restate them and drifted to a pre-re-measurement pair
     (``~0.22s warm, ~2.3s cold``) that DR-244 then refuted, which is the whole reason the
@@ -395,7 +395,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
 
     The reuse is VALIDATED (``_validate_prior_file_attributions``): a prior emission whose
     ``file_path`` values are absolute — i.e. one predating F2, which is the live state of
-    example-doctrine-repo's on-disk emission — is REJECTED and recomputed, not reused. Unvalidated reuse
+    coordinator-claude's on-disk emission — is REJECTED and recomputed, not reused. Unvalidated reuse
     propagates exactly the contract rot F2 exists to remove, from the opposite direction. This
     means the cheap tier pays full producer cost on any repo whose last emission is stale,
     which is the correct trade and a real caveat on the lever's saving.

@@ -6,7 +6,7 @@ headroom for each named hot-path entrypoint (`coordinator_core.hooks`,
 delta (deterministic) rather than wall-clock (flaky under parallel test load) -- see
 `import_budget.py`'s module docstring for the full rationale and the schema-vs-sibling decision.
 
-Spec backlink: docs/plans/2026-08-06-windows-hot-path-less-work-per-interpreter.md chunk C4
+Spec backlink: pln-windows-hot-path-cost-less-wor-0ec8ea chunk C4
 (AC9, AC11).
 """
 

@@ -4,7 +4,7 @@ coordinator_core.ops.check_rag_state — detect example-retrieval-repo freshness
 Purpose: centralises the RAG-state detection logic shared by update-docs,
 enrich-and-review, and the project-orientation hook — each caller invokes this
 op and gates repomap generation on the result. Full gating doctrine:
-coordinator/docs/wiki/repomap-rag-gating.md (example-doctrine-repo).
+coordinator/docs/wiki/repomap-rag-gating.md (coordinator-claude).
 
 Output (stdout, one token):
     absent   — no example-retrieval-repo MCP tool is registered in this session
@@ -14,10 +14,10 @@ Output (stdout, one token):
 
 Exit codes:
     0 — state is one of: absent, stale, fresh
-    1 — state is unknown (callers should treat as stale), OR the example-doctrine-repo root /
+    1 — state is unknown (callers should treat as stale), OR the coordinator-claude root /
         plugin-root trust preconditions could not be satisfied
 
-Port of: check-rag-state.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-rag-state.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: coordinator/docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
 Negative-spec:
@@ -75,7 +75,7 @@ def check_rag_state() -> Tuple[str, int]:
 
     Returns (stdout_text, exit_code). stdout_text is the single token to
     print on stdout ("" when the caller should instead print to stderr, i.e.
-    the example-doctrine-repo-root/trust preconditions failed — that stderr text is the second
+    the coordinator-claude-root/trust preconditions failed — that stderr text is the second
     element of the tuple returned by main()'s caller path, not this
     function's return; see main()).
     """
@@ -122,7 +122,7 @@ def check_rag_state() -> Tuple[str, int]:
 
 
 def _doe_root_error(doe_root: str) -> Optional[str]:
-    """Return the ERROR line for a missing/invalid example-doctrine-repo root, else None."""
+    """Return the ERROR line for a missing/invalid coordinator-claude root, else None."""
     if doe_root and os.path.isdir(os.path.join(doe_root, "coordinator")):
         return None
     return "ERROR: ~/.claude/.doe-root missing/invalid — re-run coordinator:install"

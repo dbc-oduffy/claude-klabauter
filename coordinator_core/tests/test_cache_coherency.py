@@ -9,7 +9,7 @@ AC13 (micro-benchmark): 100+ synthetic linked handoff files traversed via
 walk_forward within a generous latency budget — regression guard for the
 sub-10ms SLA under dag._read_meta content-hash cost.
 
-Spec backlink: docs/plans/2026-07-03-tri-plane-boundary-claude-klabauter-side-landing-c.md § C3
+Spec backlink: pln-tri-plane-boundary-claude-klabauter-side-landing-c-b393a7 § C3
 """
 
 from __future__ import annotations

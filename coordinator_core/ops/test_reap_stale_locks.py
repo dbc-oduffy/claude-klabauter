@@ -1,8 +1,8 @@
 """Tests for coordinator_core.ops.reap_stale_locks.
 
-Port-parity coverage for coordinator/bin/coordinator-reap-stale-locks (example-doctrine-repo tree),
+Port-parity coverage for coordinator/bin/coordinator-reap-stale-locks (coordinator-claude tree),
 mined against coordinator/tests/reap-stale-locks.bats and
-test-coordinator-reap-stale-locks.sh (example-doctrine-repo a1a568d2, 2026-07-22, read-only
+test-coordinator-reap-stale-locks.sh (coordinator-claude a1a568d2, 2026-07-22, read-only
 oracles — not run directly, ported here as real-git-repo pytest equivalents).
 """
 from __future__ import annotations

@@ -24,9 +24,9 @@ oracle routed its stamp/ship mutations through `strangle_route_mutation`,
 a three-state facade that dispatches to either a spawned `coordinator_core.
 invoke` subprocess (native, when the seam is present on disk) or a legacy
 Node.js CLI (`stamp-shipped-in.js` / `handoff-transition.js`, when it is
-not) — that indirection existed ONLY because the example-doctrine-repo-side caller was bash
+not) — that indirection existed ONLY because the coordinator-claude-side caller was bash
 and needed an IPC/subprocess bridge to reach Python. This module runs AS
-Python (the example-doctrine-repo-side trampoline direct-imports it), so it calls the already-
+Python (the coordinator-claude-side trampoline direct-imports it), so it calls the already-
 registered "handoff.stamp" / "handoff.transition" op handlers in-process via
 `coordinator_core.ipc.get_op_handler` — the exact native code path the
 facade's State 2 would have spawned a subprocess to reach, minus the spawn.
@@ -42,7 +42,7 @@ this closer's four aggregate counters (promoted/norc_count/unknown_error_count/
 stamp_abort_count) rather than one global boolean:
   - `promoted == 0 and norc_count == 0 and unknown_error_count == 0 and
     stamp_abort_count == 0` (nothing in_flight to scan at all) -> exit 0,
-    quiet. This is the "zero candidates at all" case: example-doctrine-repo's `/workday-start`
+    quiet. This is the "zero candidates at all" case: coordinator-claude's `/workday-start`
     runs this closer unconditionally every morning, and most mornings have
     no in-flight spinoff-roadmap stubs — going loud here is a false alarm on
     a day nothing is wrong.
@@ -71,7 +71,7 @@ This was previously "0 always" (matching the retired bash oracle's
 `set -euo pipefail` + `|| true` fallbacks); AC3/AC14 require the
 stamp-write-failure case to survive as a caller-visible signal, so the
 unconditional-0 contract no longer holds. A claude-klabauter-link/import failure at
-the example-doctrine-repo-side trampoline layer still degrades to exit 0 with a loud stderr
+the coordinator-claude-side trampoline layer still degrades to exit 0 with a loud stderr
 diagnostic (never-block posture, per the porter-brief addendum's
 transport-failure rule for best-effort/advisory scripts) — that failure
 class is orthogonal to this module's own business-outcome exit code.
@@ -101,7 +101,7 @@ Repo-root vs. cwd (SCRIPT_DIR-relative parity): the bash oracle resolved
 wherever the script physically sits, NOT the invoking shell's cwd — while its
 git operations (via `rollup-derive.sh`, `git show`) inherited the invoking
 shell's cwd unchanged. This module mirrors that split exactly: `repo_root`
-(passed explicitly by the example-doctrine-repo trampoline, derived the same SCRIPT_DIR-
+(passed explicitly by the coordinator-claude trampoline, derived the same SCRIPT_DIR-
 relative way) drives all *filesystem* path resolution (state/handoffs/, the
 git common dir passed to the stamp/ship op handlers); the rollup-derive call
 and the per-SHA `git show` calls rely on the current process's inherited cwd,
@@ -109,7 +109,7 @@ exactly as the bash oracle's git subprocesses did. Callers (the trampoline,
 tests) MUST invoke this module with cwd already inside the target repo.
 
 Spec: docs/plans/2026-07-11-consumed-in-flight-stub-shipped-stamp-propagation.md (C1)
-Port of: promote-shipped-in-flight-stubs.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: promote-shipped-in-flight-stubs.sh (coordinator-claude b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix"):
@@ -658,7 +658,7 @@ def main(argv: List[str], *, repo_root: Optional[str] = None) -> int:
     # mutation failure (a shipped-token candidate whose shipped_in stamp
     # write did not land) goes loud. "Zero candidates at all" and
     # "candidates present but not-yet-shipped" (norc_count) both stay quiet
-    # — neither is a caller-visible failure, and example-doctrine-repo's /workday-start runs
+    # — neither is a caller-visible failure, and coordinator-claude's /workday-start runs
     # this closer unconditionally every morning where the former is the
     # common case.
     if stamp_abort_count > 0:

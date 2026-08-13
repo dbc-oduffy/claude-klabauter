@@ -15,7 +15,7 @@ the real `setup/percolate-hooks/percolate-store.yaml` transform for target
 reader writes into settings.json verbatim and are deliberately NOT covered by
 this banner-only check.
 
-Spec backlink: docs/plans/2026-08-12-message-text-stops-naming-an-unreachable-repo.md, chunk C5b.
+Spec backlink: pln-message-text-stops-naming-a-re-5c92dd, chunk C5b.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ from __future__ import annotations
 from coordinator_core.hooks import ue_knowledge_distrust as mod
 
 _FORBIDDEN_SUBSTRINGS = (
-    "example-doctrine-repo",
-    "example-doctrine-repo",
+    "coordinator-claude",
+    "coordinator-claude",
     "cockpit",
     "example-fleet",
     "machine-b",

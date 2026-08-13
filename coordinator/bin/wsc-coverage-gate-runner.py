@@ -1,5 +1,5 @@
 """wsc-coverage-gate-runner.py — /workstream-complete Step 2.4/2.9 imperative
-logic ported off the bash fences embedded in example-doctrine-repo
+logic ported off the bash fences embedded in coordinator-claude
 coordinator/skills/workstream-complete/SKILL.md.
 
 Subcommands (argv[1] selects):
@@ -149,7 +149,7 @@ Subcommands (argv[1] selects):
                    - `own_shas` non-empty => this subcommand REFUSES (HALT,
                      exit 1) — a session cannot be told "four reviewers
                      required," run zero, and still reach a clean terminal
-                     stamp (the verified 2026-08-05 example-doctrine-repo incident this
+                     stamp (the verified 2026-08-05 coordinator-claude incident this
                      closes) when the gap is one it could close itself. The
                      halt names the performable remedy: record a per-commit
                      review-trail verdict for each `own_shas` entry via
@@ -186,8 +186,8 @@ Subcommands (argv[1] selects):
                  UNCHANGED — this does not restore the pre-C10 hard-block
                  posture, it adds one discharge check on top of it.
 
-Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md
-  (M3 chunk WSC-2). Source: example-doctrine-repo
+Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md [DEAD-CITATION: plan file never committed to this repo]
+  (M3 chunk WSC-2). Source: coordinator-claude
   coordinator/skills/workstream-complete/SKILL.md §§ Step 2.4 "Plan-claim
   guard", Step 2.9 "Coverage gate (chain-end path)" + "Marker write".
 
@@ -604,7 +604,7 @@ def _resolve_chain_tip_sha(from_handoff: str) -> str | None:
 
     Why not raw HEAD (the prior behavior this replaces): this fleet's
     documented norm is ONE SHARED `work/{machine}/{date}` branch with many
-    concurrent sessions on it (example-doctrine-repo's
+    concurrent sessions on it (coordinator-claude's
     coordinator/docs/wiki/concurrent-em-hazards.md § The model — a shared bus,
     not a workspace, for the many-sessions-one-branch fact, and
     coordinator/docs/wiki/daily-branch-discipline.md for the branch-name norm;
@@ -613,7 +613,7 @@ def _resolve_chain_tip_sha(from_handoff: str) -> str | None:
     this chain's own tip and gate-run time, so demanding a trail record reach
     raw HEAD is structurally unsatisfiable outside a single-session repo.
     Observed live: 155 peer commits (from ~14 concurrent unrelated sessions)
-    landed between a real review-trail record's tip and HEAD in one example-doctrine-repo
+    landed between a real review-trail record's tip and HEAD in one coordinator-claude
     run, and the disbelief check printed "could not be corroborated" for a
     verdict that was, in fact, fully corroborated.
 
@@ -1907,7 +1907,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
         # mint is best-effort by contract (see `_run_review_coverage_gate`),
         # so a failure here degrades the narration's precision, not the
         # gate's verdict. Observed-but-unasserted in cross-repo/inbox/
-        # 2026-08-10-example-doctrine-repo-em-brightline-unrecordable-narration-is-
+        # 2026-08-10-coordinator-claude-em-brightline-unrecordable-narration-is-
         # false.md § "A mint we could not confirm fired".
         # The returncode alone cannot carry this: review-coverage-gate.py
         # returns 1 both for an ordinary HALT verdict (engine ran, mint
@@ -2157,7 +2157,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                         )
                 if foreign_shas:
                     # 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-
-                    # example-doctrine-repo-em-brightline-unrecordable-narration-is-
+                    # coordinator-claude-em-brightline-unrecordable-narration-is-
                     # false.md): this block used to call EVERY foreign sha
                     # unrecordable. All three premise clauses were true and
                     # the conclusion was false — `review_trail_write.
@@ -2166,7 +2166,7 @@ def cmd_brightline_gate(args: argparse.Namespace) -> int:
                     # waiver minted for this chain, and this same runner
                     # mints exactly those waivers by default at the
                     # `_run_review_coverage_gate` call site above. A
-                    # predecessor session in example-doctrine-repo read the old string,
+                    # predecessor session in coordinator-claude read the old string,
                     # concluded its chain could not be recorded, and handed
                     # the workstream on; the write the narration called
                     # impossible is the write that closed their gate.

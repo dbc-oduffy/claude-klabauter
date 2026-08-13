@@ -1,6 +1,6 @@
 """
 Shared scalar primitives for the cockpit work-state contract — pydantic port of
-Example-doctrine-repo `coordinator/cockpit-contract/src/common.ts` (Zod source).
+Coordinator-claude `coordinator/cockpit-contract/src/common.ts` (Zod source).
 
 Every entity speaks ISO-8601 UTC for timestamps and ISO calendar dates for
 day-grained periods. Centralising these here keeps the emitted JSON Schema

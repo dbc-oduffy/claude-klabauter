@@ -18,7 +18,7 @@ closing it is worth having. What it does NOT buy: it is not a barrier
 against an agent that deliberately constructs an evasion -- dynamic string
 assembly, a glob near-miss, a runtime-computed basename -- see "KNOWN OPEN
 GAP" below for the specific shapes known to defeat it. The boundary's real
-strength does not live here alone: the sibling example-doctrine-repo-side read gate requires
+strength does not live here alone: the sibling coordinator-claude-side read gate requires
 the sentinel to be a REGULAR FILE (a forged directory is dead regardless of
 what reaches the filesystem, see "KNOWN OPEN GAP"), the Write/Edit tool-call
 surface is separately guarded by `_sentinel_write_guard` (a different code
@@ -26,7 +26,7 @@ path, not a text classifier over Bash strings), and the actual creation of a
 genuine approval is an act only the human PM performs out-of-band -- those
 hold regardless of whatever this classifier misses.
 
-WHY THIS EXISTS. A sibling example-doctrine-repo-side hook denies edits to always-loaded
+WHY THIS EXISTS. A sibling coordinator-claude-side hook denies edits to always-loaded
 doctrine surfaces (global CLAUDE.md and friends) unless a repo-root sentinel
 file named `.coordinator-doctrine-edit-approved` exists and is under 30
 minutes old. The PM creates that sentinel themselves, by hand, as the
@@ -93,7 +93,7 @@ finds either:
 DEFAULT POSTURE ON AMBIGUITY IS DENY, DELIBERATELY ASYMMETRIC. This guard
 protects an approval boundary, not a convenience default: a false negative
 here (a creation slipping through) is a structural failure of the boundary
-the sibling example-doctrine-repo hook depends on, while a false positive costs only a
+the sibling coordinator-claude hook depends on, while a false positive costs only a
 rephrase. Consequently rule 2 above denies on ANY argument position
 (source or destination) rather than trying to disambiguate which one is
 being written -- e.g. `cp .coordinator-doctrine-edit-approved /tmp/x` reads
@@ -153,15 +153,15 @@ embedded language), which is a different guard shape entirely, not a rule
 addition to this one. What DOES still hold regardless: the Write/Edit
 tool-call surface stays covered by the separate `_sentinel_write_guard` leg
 (a different code path, not a text classifier over Bash strings), and the
-sibling example-doctrine-repo-side read gate requires the sentinel to be a REGULAR FILE, so a
+sibling coordinator-claude-side read gate requires the sentinel to be a REGULAR FILE, so a
 forged DIRECTORY at the sentinel's path -- which this guard's `mkdir` rule
 (part of the 2026-07-30 first-round fix) already denies outright regardless
 of this gap -- is closed on the read side too, independent of whatever a
 future lexical bypass might slip past the create side.
 
-Spec: doctrine-approval sentinel un-creatable-by-agent guard (example-doctrine-repo
+Spec: doctrine-approval sentinel un-creatable-by-agent guard (coordinator-claude
 dispatch, 2026-07-28; round-two variable-taint closure, 2026-07-30) --
-companion to the sibling example-doctrine-repo-side hook that reads this sentinel to gate
+companion to the sibling coordinator-claude-side hook that reads this sentinel to gate
 always-loaded-doctrine edits.
 """
 
@@ -197,7 +197,7 @@ PRIORITY = 41
 #: The exact basename this guard protects. Never relaxed to a substring/
 #: prefix match -- an unrelated file that merely CONTAINS this string in a
 #: longer name (e.g. `.coordinator-doctrine-edit-approved.bak`) is a
-#: DIFFERENT file and is not the approval sentinel the sibling example-doctrine-repo hook
+#: DIFFERENT file and is not the approval sentinel the sibling coordinator-claude hook
 #: reads; matching it too would be scope creep past what this guard is
 #: chartered to protect.
 _TARGET_BASENAME = ".coordinator-doctrine-edit-approved"

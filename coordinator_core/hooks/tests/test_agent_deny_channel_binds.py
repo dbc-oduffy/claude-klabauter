@@ -41,7 +41,7 @@ stdout and the process *exit code* are themselves part of what is being
 pinned; a bug in `main()`'s I/O plumbing that `check()`-only coverage would
 miss is exactly the kind of drift this file exists to catch.
 
-Spec backlink: docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md § C5 / AC8
+Spec backlink: pln-deny-unenumerated-agent-types-e56d1b § C5 / AC8
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def test_main_subprocess_contract_exit_and_stdout_shape() -> None:
     it asserts only the CHANNEL shape -- exit 0 and a well-formed JSON
     object with `hookSpecificOutput.permissionDecision` when non-silent,
     or empty stdout when silent -- never a specific deny/allow verdict,
-    since that depends on this host's real example-doctrine-repo/plugin state.
+    since that depends on this host's real coordinator-claude/plugin state.
     """
     payload = {
         "tool_name": "Agent",

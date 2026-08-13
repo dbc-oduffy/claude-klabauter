@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.install.maximalist.
 
-Port of: install-maximalist.sh (example-doctrine-repo 6fb5fb37, 2026-07-22, 622 lines).
+Port of: install-maximalist.sh (coordinator-claude 6fb5fb37, 2026-07-22, 622 lines).
 
 These tests independently re-derive parity against the bash oracle's OWN
 documented control-flow contract (read directly from
@@ -28,7 +28,7 @@ gen-claude-doe-shim, gen-claude-doe-launcher, register-coordinator-mirror,
 check-install-singularity, capture-fan-out-threshold, platform-localize,
 coordinator-setup-state) are now direct in-process calls into
 coordinator_core.ops/.install/.hooks modules that ALREADY lived in this
-package (the example-doctrine-repo-side .sh/.py files they used to spawn were themselves only
+package (the coordinator-claude-side .sh/.py files they used to spawn were themselves only
 thin polyglot trampolines back into these same modules). The bash-stub-tree
 mechanism (`_BASH_SUB_SCRIPTS` / `_write_bash_stub`) this file used to build
 for those ten is retired along with them -- coverage moves to Python `_fake_*`
@@ -188,7 +188,7 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     # executable `bin/` surface (`claude-doe`, `gen-claude-klabauter-root-pointer.py`)
     # migrated wholesale to claude-klabauter in commit `b644d5a9` (2026-07-22),
     # so production code now resolves these two paths under
-    # `<claude_klabauter_root>/coordinator/bin/...`, distinct from the example-doctrine-repo clone's
+    # `<claude_klabauter_root>/coordinator/bin/...`, distinct from the coordinator-claude clone's
     # `coord_root` (which still correctly houses `templates/`). Mirroring
     # that split here (rather than leaving these files under `coord_root/bin`)
     # is what lets this fixture prove the real call sites resolve the right
@@ -289,7 +289,7 @@ def stub_env(tmp_path, monkeypatch):
     monkeypatch.setattr(_threshold_module, "main", _fake_capture_fan_out_threshold)
     monkeypatch.setattr(_platform_localize_module, "main", _fake_platform_localize)
     monkeypatch.setattr(_setup_state_module, "main", _fake_coordinator_setup_state)
-    # register-coordinator-mirror's own example-doctrine-repo-local "coordinator live path"
+    # register-coordinator-mirror's own coordinator-claude-local "coordinator live path"
     # resolution (native resolve_content_root() / claude-home plugins
     # fallback, out of C13's scope) is stubbed to a fixed value so the phase
     # under test never resolves either.
@@ -874,7 +874,7 @@ def test_step35c_marker_skip_surfaces_in_orchestrator_output_and_summary(stub_en
 # C13 -- the ten remaining bash bridges retired to in-process calls
 #
 # Each phase used to spawn `["bash", <coord_root or claude_home>/.../<name>]`.
-# That example-doctrine-repo-side script was, in every one of the ten cases, only a thin
+# That coordinator-claude-side script was, in every one of the ten cases, only a thin
 # polyglot trampoline back into a coordinator_core module already living in
 # THIS package. These tests pin the observable contract (argv shape, rc
 # propagation, halting semantics, and "no bash subprocess is spawned to get
@@ -931,7 +931,7 @@ def test_c13_check_only_forwarded_to_each_native_phase(stub_env):
 
 def test_c13_register_coordinator_mirror_receives_resolved_live_path(stub_env, monkeypatch):
     """register-coordinator-mirror is the one C13 phase carrying real (if
-    example-doctrine-repo-owned) resolution logic: the maximalist-local
+    coordinator-claude-owned) resolution logic: the maximalist-local
     `_resolve_coordinator_live_path` result must be threaded through to the
     engine module as `--live-path <value>`, matching the retired
     trampoline's own `--live-path` handoff exactly."""

@@ -3,7 +3,7 @@
 Ported test intent from the bash oracle — same three paths (carry / stub /
 slug), same stderr path-label strings, same output-format assertions.
 
-Port of: mint-deliverable-id.test.sh (example-doctrine-repo 3a561713, 2026-07-22)
+Port of: mint-deliverable-id.test.sh (coordinator-claude 3a561713, 2026-07-22)
 """
 from __future__ import annotations
 

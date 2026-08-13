@@ -11,7 +11,7 @@ WIRING: status -> _ProbeResult status/required/skipped).
   MATCH          -> PASS
   DRIFT          -> DEGRADED (never BROKEN — advisory nudge, not a broken install)
   INDETERMINATE  -> DEGRADED worded as indeterminate (never PASS, never a drift claim)
-  UNRESOLVED     -> SKIP-as-advisory (no example-doctrine-repo clone on this machine)
+  UNRESOLVED     -> SKIP-as-advisory (no coordinator-claude clone on this machine)
 
 Probe-authoring invariant (per state/lessons/2026-07-04-a-diagnostic-must-always-emit-a-parseabl.yaml):
   Every probe must emit a parseable _ProbeResult on ALL paths — including its own
@@ -95,7 +95,7 @@ def _patch_scan(monkeypatch: pytest.MonkeyPatch, report) -> None:
 def _report(status: str, **extra):
     base = {
         "status": status,
-        "doe_repo_path": "/fake/example-doctrine-repo",
+        "doe_repo_path": "/fake/coordinator-claude",
         "checked": 12,
         "matched": [],
         "drifted": [],
@@ -135,7 +135,7 @@ class TestVendoredSchemaDriftProbe:
                     "doe_version": "1.1.0",
                 }],
                 summary=(
-                    "1/12 vendored schema(s) diverge from example-doctrine-repo HEAD: "
+                    "1/12 vendored schema(s) diverge from coordinator-claude HEAD: "
                     "improvement-queue.schema.json [we-are-behind]"
                 ),
             ),
@@ -160,7 +160,7 @@ class TestVendoredSchemaDriftProbe:
         ], "the operator-facing data must carry direction and both x-schema-version reads"
 
     def test_indeterminate_is_degraded_not_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Unreadable example-doctrine-repo clone: visibly indeterminate — never silent green, never drift."""
+        """Unreadable coordinator-claude clone: visibly indeterminate — never silent green, never drift."""
         mod = _require_module()
         _patch_scan(
             monkeypatch,
@@ -183,12 +183,12 @@ class TestVendoredSchemaDriftProbe:
         assert result.data["drifted"] == [], "indeterminate must not be reported as drift"
 
     def test_unresolved_doe_clone_is_skip_not_crash(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No example-doctrine-repo clone at all (fresh machine / CI): SKIP-as-advisory, graceful."""
+        """No coordinator-claude clone at all (fresh machine / CI): SKIP-as-advisory, graceful."""
         mod = _require_module()
         _patch_scan(
             monkeypatch,
             _report("UNRESOLVED", doe_repo_path=None, checked=0,
-                    summary="No example-doctrine-repo clone resolved on this machine"),
+                    summary="No coordinator-claude clone resolved on this machine"),
         )
 
         result = mod._run_probe_vendored_schema_drift(_REPO_ROOT)

@@ -10,7 +10,7 @@ already established for a plan's spine, see `docs/wiki/writing-plans.md`
 uncommitted, deferred, or ruled-out even after the baton itself ships. This
 module closes the gap `deliverable_cascade.py`'s own docstring names and
 disclaims ("Does NOT implement AC6g's baton-row depth").
-Spec backlink: docs/plans/2026-08-04-terminal-state-propagation-join-keys.md
+Spec backlink: pln-terminal-state-propagation-giv-c85539
 § C6g (AC6g).
 
 WRITE RULE (evidence-joined, never blanket — corrects an earlier

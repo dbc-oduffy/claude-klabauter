@@ -23,7 +23,7 @@ Tests:
 All handlers are async; asyncio.run() is used to avoid the pytest-asyncio
 dependency (mirrors test_commit_anchors.py convention).
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C4
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C4
 Bug-fix backlink: coordinator_core/ops/handoff_children.py (common_dir→worktree_root)
 """
 
@@ -896,7 +896,7 @@ class TestBlockedByDependents:
 class TestBlockedByDependentsOp:
     """`handoff.blocked_by_dependents` — registered op wrapper around
     `blocked_by_dependents` (PIN-1 registration, cross-repo/inbox/2026-08-02-
-    example-doctrine-repo-em-baton-lifecycle-three-asks-reply.md Ask 3). Mirrors the
+    coordinator-claude-em-baton-lifecycle-three-asks-reply.md Ask 3). Mirrors the
     op-level test shape used for `handoff.has_live_children` above: router
     supplies repo_root=<worktree>/.git (the common_dir), the op maps it via
     main_worktree_root before delegating to `blocked_by_dependents`."""
@@ -953,7 +953,7 @@ class TestBlockedByDependentsOp:
     ) -> None:
         """The tri-state case that matters: a scan error underneath the
         op boundary must surface as state=="indeterminate", NEVER a quiet
-        "none" — this is the exact protection example-doctrine-repo's accepted reply named
+        "none" — this is the exact protection coordinator-claude's accepted reply named
         as the reason to keep `indeterminate` loud through registration."""
         from coordinator_core.ops.handoff_children import _handoff_blocked_by_dependents
 

@@ -188,6 +188,22 @@ def _read_auto_reconcile() -> ReaderResult:
     carries no priority signal, so a withheld entry is not "less important,"
     only "later in an arbitrary order."
 
+    Re-asked and re-answered 2026-08-13 (DR-300, its correction block):
+    every `surfaced.append(...)` call site in `handoff_reconcile.py` (the
+    `gate_eval`-verdict branches, the `narrow+surface` composite, the C9
+    desync-read-error branch, and the terminal `commit_reality` fallthrough)
+    writes only `handoff_id`, `reason`, `evidence`, and — on two branches
+    only — `gate_evidence_resolved`/`contradiction`. No staleness, date, or
+    confidence field exists on any entry to sort by; inventing one here
+    would fabricate a ranking the producer never computed. DR-300 confirms
+    this residual is real but small: the cap's own overflow judgment point
+    already states the true total and the command to list every entry
+    (`cap_judgment_points`'s "{N} total ... {cap} shown, {withheld}
+    withheld" contract, live since `4f131b1bf`), so an arbitrary-order
+    5-entry surface never reads as "these are the only 5 that exist." Do
+    not re-open this question again without a genuine new field landing on
+    `surfaced[]` upstream.
+
     Legibility (spec: docs/plans/2026-08-13-legible-reconcile-surface-and-
     single-baton-check.md, chunk C1; docs/decisions/DR-300-pickup-may-not-
     call-the-reconcile-orchestrator.md): the arbitrary order is a non-issue

@@ -10,7 +10,7 @@ Run this ONCE after Phase 2's scope-guard commit hook is live. The
 flip-readiness evaluator (scope-flip-readiness) reads this sentinel to compute
 the "2-week minimum soak" criterion.
 
-Port source: coordinator/bin/scope-soak-enable (example-doctrine-repo)
+Port source: coordinator/bin/scope-soak-enable (coordinator-claude)
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, chunk B3
 See also: docs/pretooluse-deny-contract.md, docs/wiki/scoped-safety-commits.md § Phase 5
 

@@ -54,7 +54,7 @@ Negative-spec:
     reads as marker-present and is therefore REAPED — a premature-but-
     git-recoverable reap of a sidecar that merely quotes the heading rather
     than carrying a genuine disposition. This is an ACCEPTED limitation, not
-    an oversight: it matches example-doctrine-repo's own reference implementation
+    an oversight: it matches coordinator-claude's own reference implementation
     (`grep -qE '^## Integrator Dispositions'`) exactly, and any accidental
     reap is recoverable via git history — parity with leg (a)'s upstream
     reference over incremental hardening this op alone would not carry

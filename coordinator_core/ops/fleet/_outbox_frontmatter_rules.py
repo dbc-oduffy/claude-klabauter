@@ -39,7 +39,7 @@ that pre-existing three-way duplication is unchanged. This module closes
 specifically the CLI-vs-guard duplication the incident named.
 
 Negative-spec:
-  - Does NOT validate the example-doctrine-repo inbox schema shape
+  - Does NOT validate the coordinator-claude inbox schema shape
     (`coordinator/schemas/cross-repo-memo.schema.json`) — that schema's
     `applies_to` glob is `cross-repo/inbox/[0-9]*.md` and must NOT be
     extended to cover `state/memo-outbox/*.md`; outbox drafts and delivered

@@ -4,7 +4,7 @@ coordinator_core.ops.tests.test_review_trail_write — direct-op tests for revie
 Purpose: Exercise ``write_review_trail_entry`` / ``_build_json_record`` directly — JSON
 content and key order, validation rules, filename derivation, session-id/workstream
 resolution, and atomic-write semantics. This is the strangler invariant (C3 / DR-216 D3):
-if the JSON record bytes drift, the example-doctrine-repo facade routing will silently produce different
+if the JSON record bytes drift, the coordinator-claude facade routing will silently produce different
 on-disk review-trail entries.
 
 Coverage:
@@ -23,11 +23,11 @@ Coverage:
                             uniquely-suffixed file (DR-216 D2(i) last-write-wins reversed —
                             see 2026-07-27 silent-data-loss incident below).
 
-Spec backlink: docs/plans/2026-07-06-strang-10-residual-writer-strangle-command-type.md § C3
+Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C3
 DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2/D3
 
 Negative-spec:
-    - The byte-parity harness against ``coordinator-write-review-trail.sh`` (the example-doctrine-repo shell
+    - The byte-parity harness against ``coordinator-write-review-trail.sh`` (the coordinator-claude shell
       oracle this suite once ran as a spawned child process) was RETIRED 2026-07-22 —
       deleted, not repointed at its ``.py`` replacement (``coordinator-write-review-trail.py``, a pure
       ``cc_invoke.route_mutation()`` trampoline into this repo's OWN ``review_trail_write``
@@ -36,8 +36,8 @@ Negative-spec:
       is folded into ``TestJsonContentStructure::test_full_record_bytes_for_all_scope_kinds``
       below (exact full-content equality against a locally-constructed expected string,
       parametrized over every scope_kind × workstream combination) — same assertive power,
-      no external process, no example-doctrine-repo-checkout dependency. Do NOT reintroduce an oracle path or
-      a ``pytest.skip``/``skipif`` gated on a missing example-doctrine-repo artifact; that shape is exactly the
+      no external process, no coordinator-claude-checkout dependency. Do NOT reintroduce an oracle path or
+      a ``pytest.skip``/``skipif`` gated on a missing coordinator-claude artifact; that shape is exactly the
       hazard this retirement removes. See
       state/review-trail/findings/2026-07-22-parity-retire-fold-plan.md § 4.2 and
       state/review-trail/findings/2026-07-22-parity-test-circularity-audit.md § 2.6/§5.
@@ -1159,7 +1159,7 @@ class TestWriteTimeSymbolicRefResolution:
         """sha_range='<sha>..HEAD' is persisted as '<sha>..<concrete-sha>',
         not the literal string 'HEAD'.
 
-        This is the exact defect shape observed live in example-doctrine-repo
+        This is the exact defect shape observed live in coordinator-claude
         (state/review-trail/*.json, 8+ records citing '..HEAD').
         """
         monkeypatch.delenv("REVIEW_TRAIL_OUTPUT_ROOT", raising=False)
@@ -1537,7 +1537,7 @@ class TestForeignSessionScopeGuard:
     def test_single_commit_case3_does_not_advise_impossible_narrowing(
         self, tmp_path
     ) -> None:
-        """DEFECT 2 repro (2026-08-07 example-doctrine-repo-em memos: case3-remedy-is-
+        """DEFECT 2 repro (2026-08-07 coordinator-claude-em memos: case3-remedy-is-
         not-performable / review-trail-guard-remedy-unreachable). A sha_range
         that is ALREADY a single commit lands in Case 3 when that commit is
         untrailered and unplaceable — but there is no narrower range than one

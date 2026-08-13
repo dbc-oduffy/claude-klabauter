@@ -235,13 +235,13 @@ def test_legacy_stopgap_detected_in_home_bashrc(tmp_path, monkeypatch, capsys):
 
 def test_legacy_stopgap_detected_with_padded_line_form(tmp_path, capsys):
     """The real-world hand-written block carries a trailing comment/padding
-    suffix on the marker line (e.g. ``... (example-doctrine-repo-resident plugin source) ---...``)
+    suffix on the marker line (e.g. ``... (coordinator-claude-resident plugin source) ---...``)
     rather than the bare marker in isolation. The detector must match on the
     marker as a line prefix (after strip), not whole-line equality, or it
     never fires on the one machine that actually has the legacy block."""
     home = Path(os.environ["HOME"])
     (home / ".bashrc").write_text(
-        "# --- coordinator maximalist launch (example-doctrine-repo-resident plugin source) "
+        "# --- coordinator maximalist launch (coordinator-claude-resident plugin source) "
         "----------------\nold stuff\n# end\n"
     )
     tmpl = _make_template(tmp_path)
@@ -352,7 +352,7 @@ def test_graceful_skip_unresolved_exits_zero_with_skip_row(tmp_path, monkeypatch
     rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path))])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "claude_shim: skipped (example-doctrine-repo clone not resolved" in out
+    assert "claude_shim: skipped (coordinator-claude clone not resolved" in out
 
 
 def test_graceful_skip_unresolved_noop_when_resolved(tmp_path, monkeypatch, capsys):

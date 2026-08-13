@@ -338,7 +338,7 @@ class SpecBacklinkTests(unittest.TestCase):
     """Coverage for the spec-backlink mechanism (gen-launcher-shim.py
     § SPEC BACKLINKS).
 
-    Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C7
+    Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C7
 
     The obligation being discharged: CLAUDE.md requires spec backlinks (the
     "RAG-bait exception" to the no-inline-comments rule), while

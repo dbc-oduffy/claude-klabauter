@@ -2,7 +2,7 @@
 bin/claude-klabauter-revendor-cockpit-contract.py — repeatable cockpit-contract pin+bundle re-vendor
 with an inline magnitude-aware MAJOR-delta ack gate.
 
-Purpose: fail-closed, repeatable re-vendor of the example-doctrine-repo cockpit-contract bundle into claude-klabauter's
+Purpose: fail-closed, repeatable re-vendor of the coordinator-claude cockpit-contract bundle into claude-klabauter's
 vendored pin at coordinator_core/ops/emit/_vendor/cockpit-contract/. Vendors ONLY the
 language-neutral JSON Schema (schema/) — claude-klabauter binds to the wire contract, not to any
 TS/Zod derivative.
@@ -41,7 +41,7 @@ Usage:
     — the two flags answer different questions and BOTH are required together to land an
     acked downgrade that also carries a shape delta.
 
-Spec backlink: docs/plans/2026-07-08-producer-emit-hold-removal-reader-first-consumer-owned.md § C3
+Spec backlink: pln-producer-emit-hold-removal-rea-48bd64 § C3
 Lesson: state/lessons/2026-07-05-re-vendoring-a-bundle-that-newly-declare.yaml
 
 Negative-spec: this script does NOT read or require any on-disk sentinel file (the prior
@@ -59,7 +59,7 @@ delta`` / ``_enforce_major_delta_gate`` vs ``_detect_downgrade`` / ``_enforce_do
 are independent by construction — do not collapse them.
 
 Negative-spec (2026-07-21): this script no longer vendors, builds, or byte/functional-
-verifies ``src/`` or ``dist/``. Upstream example-doctrine-repo commit 7cca4d4c (2026-07-16) deleted the
+verifies ``src/`` or ``dist/``. Upstream coordinator-claude commit 7cca4d4c (2026-07-16) deleted the
 entire cockpit-contract TS/Zod toolchain (``src/``, ``package.json``, ``pnpm-lock.yaml``,
 ``tsconfig*.json``, the pnpm build scripts) — only ``schema/`` (the JSON Schema files),
 ``conformance/``, ``DECISIONS.md``, and ``README.md`` remain upstream. Re-vendoring any
@@ -175,7 +175,7 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="claude-klabauter-revendor-cockpit-contract.py",
         description=(
-            "Re-vendor the example-doctrine-repo cockpit-contract JSON Schema (schema/ only) into claude-klabauter's "
+            "Re-vendor the coordinator-claude cockpit-contract JSON Schema (schema/ only) into claude-klabauter's "
             "vendored pin. Enforces full-SHA pin, consumer-visible-delta inline ack gate "
             "(reader-first invariant), a direction-aware downgrade guard (independent of "
             "the ack gate), schema/ byte-identity verify, and post-vendor drift-check green."
@@ -202,7 +202,7 @@ def _parse_args() -> argparse.Namespace:
         default=_CONTRACT_RELEASE_REF,
         metavar="SHA_OR_TAG",
         help=(
-            "Ref (tag refspec or SHA) to vendor from the example-doctrine-repo origin. "
+            "Ref (tag refspec or SHA) to vendor from the coordinator-claude origin. "
             f"Default: {_CONTRACT_RELEASE_REF!r}."
         ),
     )
@@ -210,7 +210,7 @@ def _parse_args() -> argparse.Namespace:
         "--doe-clone",
         metavar="PATH",
         help=(
-            "Override the example-doctrine-repo clone path. Default: resolve via machine-local registry "
+            "Override the coordinator-claude clone path. Default: resolve via machine-local registry "
             "(repos.example_doctrine_repo in registry.local.toml / registry.toml). "
             "Reuses resolve_doe_clone() — never re-implements registry parsing (AC2)."
         ),
@@ -338,7 +338,7 @@ def _fetch_and_resolve_sha(clone: Path, ref: str) -> str:
     if len(sha) != 40 or not all(c in "0123456789abcdef" for c in sha):
         _die(
             f"git rev-parse FETCH_HEAD^{{commit}} returned a non-40-char value: {sha!r}. "
-            "Expected a full SHA. Check the ref and example-doctrine-repo clone."
+            "Expected a full SHA. Check the ref and coordinator-claude clone."
         )
     return sha
 
@@ -767,7 +767,7 @@ def _is_already_vendored(clone: Path, sha: str) -> bool:
 def _copy_schema(clone: Path, sha: str) -> None:
     """AC3: copy schema/ from git show <sha>:<path> into the vendored tree.
 
-    Uses git-show per-file — never copies the example-doctrine-repo clone's dirty working tree.
+    Uses git-show per-file — never copies the coordinator-claude clone's dirty working tree.
 
     Authoritative replace (not additive): files absent from the incoming ref are pruned
     from the vendor dir so the vendored tree EXACTLY equals the incoming ref set.
@@ -900,20 +900,20 @@ def main() -> None:  # noqa: C901  (complexity: deliberate — sequential steps 
     args = _parse_args()
 
     # ------------------------------------------------------------------
-    # Step 1: Resolve example-doctrine-repo clone (AC2: reuse resolve_doe_clone(), never re-implement).
+    # Step 1: Resolve coordinator-claude clone (AC2: reuse resolve_doe_clone(), never re-implement).
     # ------------------------------------------------------------------
-    _info("[1] Resolving example-doctrine-repo clone...")
+    _info("[1] Resolving coordinator-claude clone...")
     if args.doe_clone:
         doe_clone = Path(args.doe_clone).expanduser().resolve()
         if not doe_clone.is_dir():
             _die(f"--doe-clone path does not exist or is not a directory: {doe_clone}")
-        _info(f"  example-doctrine-repo clone (--override): {doe_clone}")
+        _info(f"  coordinator-claude clone (--override): {doe_clone}")
     else:
         try:
             doe_clone = resolve_doe_clone()
         except DoeResolveError as exc:
             _die(str(exc))
-        _info(f"  example-doctrine-repo clone (registry): {doe_clone}")
+        _info(f"  coordinator-claude clone (registry): {doe_clone}")
 
     # ------------------------------------------------------------------
     # Step 2: Fetch-then-rev-parse (AC3) + precondition assertion.

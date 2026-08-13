@@ -16,7 +16,7 @@ test_singleton_lock_acquire_release failures.
 Review: code-reviewer (B-F9) — replaced machine-specific absolute path in docstring with
 the generic Path-resolution description that matches the actual implementation below.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § C0 / D3
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C0 / D3
 """
 
 from __future__ import annotations

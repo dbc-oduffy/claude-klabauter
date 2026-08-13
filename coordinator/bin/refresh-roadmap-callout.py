@@ -2,7 +2,7 @@
 """refresh-roadmap-callout.py — refreshes a roadmap-callout sentinel block in place.
 
 CLI trampoline over claude-klabauter coordinator_core.ops.refresh_roadmap_callout, per
-DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine). Validates a
+DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine). Validates a
 roadmap_id against the STUB-INDEX allowlist, checks the invoking coordinator
 root is trusted, and delegates the actual markdown rewrite to
 refresh-queries.py's --files mode. Invoked at /pickup and
@@ -10,12 +10,12 @@ refresh-queries.py's --files mode. Invoked at /pickup and
 """
 from __future__ import annotations
 # Finish-strangler port: the bash implementation (refresh-roadmap-callout.sh,
-# example-doctrine-repo a1a568d2, 2026-07-22 — CLI arg parse, roadmap_id allowlist/quote-strip
+# coordinator-claude a1a568d2, 2026-07-22 — CLI arg parse, roadmap_id allowlist/quote-strip
 # validation, STUB-INDEX resolution, trust-guard, and the
 # `refresh-queries.js --files` node delegate) has been fully ported to
 # coordinator_core/ops/refresh_roadmap_callout.py, with a co-located pytest
-# (test_refresh_roadmap_callout.py). This file is now a thin example-doctrine-repo-side
-# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo owns
+# (test_refresh_roadmap_callout.py). This file is now a thin coordinator-claude-side
+# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
 # contract/generator, claude-klabauter owns engine).
 #
 # Exit convention: this is a fail-loud wrapper (missing/invalid roadmap_id,

@@ -63,7 +63,7 @@ runner.py::cmd_brightline_gate`) to catch that and report it loudly on
 stderr without changing its own exit code, per that gate's advisory-not-
 halting contract.
 
-Spec backlink: docs/plans/2026-08-03-chain-end-review-scale-wiring.md
+Spec backlink: pln-chain-end-review-scale-wire-de-23a81a
 (the Staff Engineer finding 2, "producer/consumer seam") — this module is the
 persistence half that plan's C5 flagged as still hand-carried.
 """

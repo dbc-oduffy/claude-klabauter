@@ -33,7 +33,7 @@ def _stub_roster_absence_leg(monkeypatch):
     (``_helpers.is_confined_by_roster_absence``, wired into
     ``_is_confined_type`` this dispatch) -- that leg's non-trivial branch
     calls ``resolve_roster()``, which does real disk I/O against a live
-    example-doctrine-repo checkout and this machine's plugin discovery tree. Every test
+    coordinator-claude checkout and this machine's plugin discovery tree. Every test
     in THIS file predates AC5 and exercises only the two pre-existing legs
     (``bash_policy:`` key, ``is_confined_findings_agent`` membership); none
     of them intends to depend on this machine's roster state. Stubbed to
@@ -728,7 +728,7 @@ def test_ls_suffix_bypass_denies(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Tier A: grep addition (2026-07-25, example-doctrine-repo correction memo)
+# Tier A: grep addition (2026-07-25, coordinator-claude correction memo)
 # ---------------------------------------------------------------------------
 
 

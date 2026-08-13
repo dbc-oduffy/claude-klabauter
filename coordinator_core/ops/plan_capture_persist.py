@@ -22,7 +22,7 @@ the body into the canonical section skeleton, and synthesizes a
 This module does NOT wire itself into the hook — that edit belongs to the
 hook's own (sibling doctrine) repo, a different scope (see the invocation
 contract memo this module ships alongside,
-``cross-repo/outbox/<date>-example-doctrine-repo-em-plan-persistence-hook-should-call-
+``cross-repo/outbox/<date>-coordinator-claude-em-plan-persistence-hook-should-call-
 plan-capture-persist.md``). Until that wiring lands, the hook's existing raw
 write is unchanged and this op is reachable only by direct invocation
 (JSON-RPC ``plan.persist_capture``, in-repo) or via its CLI trampoline

@@ -2,7 +2,7 @@
 coordinator.bin.tests.test_validator_negative_corpus
 
 Standing regression oracle for the validator-negative fixture corpus. Re-port of
-testNegativeCorpus(fixturesDir, schemasDir) from example-doctrine-repo coordinator/bin/lib/schema.js,
+testNegativeCorpus(fixturesDir, schemasDir) from coordinator-claude coordinator/bin/lib/schema.js,
 deleted (not ported) in commit 480ad8f8 ("D1: retire claude-klabauter oracle .js + bin/lib/*.js").
 The corpus itself (fixtures/validator-negative/*.md + expected-rejections.json) survived
 the port; its loader did not, so nothing exercised the corpus from 480ad8f8 until this file.
@@ -164,7 +164,7 @@ def test_c2_index_entries_exist_on_disk() -> None:
 
 
 # c3-01/c3-02 were added wholesale by a05cae48 (coordinator test-suite adoption) with no
-# owning index anywhere in this tree, in example-doctrine-repo's schema.js history, or in the
+# owning index anywhere in this tree, in coordinator-claude's schema.js history, or in the
 # retired PreToolUse hook. Named and carved out here (not silently swallowed) so a NEW
 # unindexed fixture still fails this test loud — the whole point of this check — while
 # this one pre-existing, out-of-scope gap doesn't permanently red the suite. Fixing it

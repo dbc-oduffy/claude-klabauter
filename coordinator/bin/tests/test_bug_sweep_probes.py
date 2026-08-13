@@ -1,6 +1,6 @@
 """test_bug_sweep_probes — pytest tests for coordinator/bin/bug-sweep-probes.py.
 
-Spec backlink: example-doctrine-repo coordinator/skills/bug-sweep/SKILL.md § Phase 0 step 1
+Spec backlink: coordinator-claude coordinator/skills/bug-sweep/SKILL.md § Phase 0 step 1
   and § Phase 4 step 0.
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
   (chunk C-BUGSWEEP)

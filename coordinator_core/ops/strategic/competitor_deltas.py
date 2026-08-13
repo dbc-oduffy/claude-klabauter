@@ -23,7 +23,7 @@ Accepted snapshot shapes (defensive — either is handled):
                                                      # degrades to an empty set instead
 
 Pinned return shape (frozen schema, generatable subset — see
-Example-doctrine-repo/coordinator/schemas/strategic-self-description.schema.json):
+Coordinator-claude/coordinator/schemas/strategic-self-description.schema.json):
     list[{
         "name":       str,
         "note":       str | None,
@@ -35,7 +35,7 @@ superseded-by|supersedes) — that enum is human-curated only per the frozen sch
 generator only ever contributes name/note/provenance. Never emits provenance "curated" or
 "asserted". Never mutates state; this module performs no I/O.
 
-Spec backlink: docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md § C1 (stub) / § C3 (derivation)
+Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C1 (stub) / § C3 (derivation)
 """
 
 from __future__ import annotations

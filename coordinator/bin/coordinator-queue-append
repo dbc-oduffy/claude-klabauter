@@ -8,9 +8,9 @@ for this shape. On Windows, this file's co-located `.cmd` twin wins via
 macOS/Linux `python3` is the right interpreter. Caution: callers must invoke
 via the extensionless name or a resolved-interpreter prefix, never a bareword
 `.py` through git-bash — git-bash DOES honor the shebang and would exec-127
-with no `python3` present. See the carve-out in example-doctrine-repo's
+with no `python3` present. See the carve-out in coordinator-claude's
 coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
-this wiki lives in the example-doctrine-repo repo, not here). There is no separate
+this wiki lives in the coordinator-claude repo, not here). There is no separate
 polyglot trampoline line — this file is the pure-`.py`-with-`.cmd` shape
 end to end.
 
@@ -28,7 +28,7 @@ Output path: state/<output_dir from schema>/<ISO-date>-<slug>.yaml
 from_repo resolution order (same convention as cross-repo-memo and
 coordinator-lesson-promote):
   1. cwd git-root → reverse-lookup against machine-local repos.* table
-  2. Example-doctrine-repo repo (repos.example_doctrine_repo) → "claude-central-em"
+  2. Coordinator-claude repo (repos.example_doctrine_repo) → "claude-central-em"
   3. Unregistered git repo → basename of git root + "-em"
   4. Not in a git repo → "unknown-sender-em"
   Never uses `git remote get-url origin` — that yields a URL, not a shortname.
@@ -318,7 +318,7 @@ _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
 
 # Env var for CLAUDE_KLABAUTER_ROOT override — mirrors coordinator-claude-klabauter-root.sh §4b
 # idempotency gate. Set to the claude-klabauter repo root to bypass machine-local resolution.
-# Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC1 / AC13
+# Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
 _CLAUDE_KLABAUTER_ROOT_ENV = cli_shared.CLAUDE_KLABAUTER_ROOT_ENV
 
 
@@ -333,7 +333,7 @@ class _ClaudeKlabauterUnresolvable(RuntimeError):
     state-placement-law.md § Taxonomy "Central/global state", the same seam the
     meta-repo per-project branch already used.
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
 
 # Registry aliases: stable doctrine EM names derived from
@@ -396,7 +396,7 @@ def _resolve_session_id() -> str:
     <git_root>/.git/coordinator-sessions/.current-session-id. Unsound under
     concurrency (documented last-writer-wins across concurrent sessions
     sharing one worktree — coordinator_core/bash_guards/guard_inprocess_search.py
-    ~L84) AND its sole writer (session-init.py, the example-doctrine-repo SessionStart
+    ~L84) AND its sole writer (session-init.py, the coordinator-claude SessionStart
     hook) was deleted by PM directive 2026-07-15 — no production writer
     survives.
 
@@ -575,8 +575,8 @@ def _output_path(
       - docs/plans/2026-07-08-project-tracker-render-from-queue.md § Substrate / § Chunks C2 (filename_override)
       - Landmine L7 (per-repo cwd-fallback): closed here by using git root, not os.getcwd().
 
-    Negative-spec: [example-doctrine-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md § C1
-    proposed routing central state to example-doctrine-repo instead of claude-klabauter, but that plan is
+    Negative-spec: [coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md § C1
+    proposed routing central state to coordinator-claude instead of claude-klabauter, but that plan is
     `status: draft` with AC1/AC2 `pending` and its own C3 HELD (recorded disk proof
     the flip never took effect on the production path) — it was never ratified and
     must not be cited as authority for this branch's routing decision.
@@ -605,8 +605,8 @@ def _output_path(
             )
         # Central state routes to claude-klabauter unconditionally — see
         # docs/wiki/state-placement-law.md § Taxonomy "Central/global state".
-        # (The [example-doctrine-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md
-        # plan's proposal to route this branch to example-doctrine-repo was never ratified: that plan is `status: draft`,
+        # (The [coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md
+        # plan's proposal to route this branch to coordinator-claude was never ratified: that plan is `status: draft`,
         # AC1/AC2 are `pending`, and its own C3 is HELD with recorded disk proof
         # the flip never took effect on the production path.)
         # _claude_klabauter_root() raises _ClaudeKlabauterUnresolvable when repos.claude_klabauter is
@@ -2002,7 +2002,7 @@ def main() -> None:
             # AC13: degrade gracefully on unresolvable CLAUDE_KLABAUTER_ROOT for meta-repo per-project
             # cwd writes (else-branch of _output_path). Unchanged from pre-flip behaviour
             # for all pre-existing schemas.
-            # Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+            # Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
             #
             # Review: code-reviewer — F5 (P2): for the workstream-store schemas (C2)
             # specifically, a silent WARN + exit-0 no-op defeats the whole store's

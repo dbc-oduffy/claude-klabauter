@@ -1,10 +1,10 @@
 """Characterization tests for coordinator_core.ops.plan_status_transition.
 
 Golden-oracle-derived: each case was hand-run against the node CLI
-(example-doctrine-repo coordinator/bin/plan-status-transition.js) during the port to
+(coordinator-claude coordinator/bin/plan-status-transition.js) during the port to
 capture exact stdout/stderr text and exit codes, then reproduced here.
 
-Port source: coordinator/bin/plan-status-transition.js (example-doctrine-repo)
+Port source: coordinator/bin/plan-status-transition.js (coordinator-claude)
 """
 from __future__ import annotations
 

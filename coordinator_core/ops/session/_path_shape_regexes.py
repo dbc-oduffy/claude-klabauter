@@ -18,7 +18,7 @@ single letter or digit -- so ordinary prose ending a sentence/word in a
 letter-colon pair, followed by an escaped newline, phantom-matches as a
 one-character drive path (a real fleet example: text ending "...as e:" then
 a JSON-escaped newline then "    # e." reads as root "e:" + segment "n").
-Reproduced against example-doctrine-repo's `state/cockpit-emission.json`.
+Reproduced against coordinator-claude's `state/cockpit-emission.json`.
 
 Fix chosen: exclude a SINGLE-CHARACTER segment drawn from the escape-letter
 alphabet these languages use for control characters, via a trailing

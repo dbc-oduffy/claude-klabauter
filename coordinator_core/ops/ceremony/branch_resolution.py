@@ -183,7 +183,7 @@ _CHAIN_TERMINAL_ONLY_STEPS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 # Partition-mandatory thresholds (mirrors review-brightline-gate.sh defaults;
-# Port of: review-brightline-gate.sh, example-doctrine-repo b5a4192c, 2026-07-20)
+# Port of: review-brightline-gate.sh, coordinator-claude b5a4192c, 2026-07-20)
 _BRIGHTLINE_LOC = 500
 _BRIGHTLINE_COMMITS = 5
 _BRIGHTLINE_SURFACES = 4
@@ -1262,7 +1262,7 @@ def _scan_open_memos(worktree_root: Path) -> tuple[list[dict[str, Any]], str | N
 # ---------------------------------------------------------------------------
 # STEP_2_65C flip half — routes through memo.transition's resolve verb (C1/C2)
 # ---------------------------------------------------------------------------
-# Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C2
+# Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C2
 #
 # Structural note: this is NOT called from _resolve_branches / the
 # ceremony.wsc_resolve op handler below. STEP_2_65B is a J-node — its answer
@@ -1809,7 +1809,7 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
                 # does not itself assert ownership.  Verify consumed_by == sid via the
                 # anchored helper before trusting the path; otherwise a peer's in-flight
                 # handoff gets misattributed as this session's consumed predecessor.
-                # (Originating incident: example-doctrine-repo 2026-07-09 — a /workstream-complete
+                # (Originating incident: coordinator-claude 2026-07-09 — a /workstream-complete
                 # nearly stamped a live peer workstream's handoff as shipped.)
                 if (
                     hf_in_repo is not None

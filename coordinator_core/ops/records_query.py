@@ -22,12 +22,12 @@ Worktree resolution (mirrors roadmap_serve.py / handoff_children.py):
   - If ``repo_root`` is absent the op returns a well-formed empty payload
     with a logged warning — an unknown worktree is NOT a 500.
 
-Spec backlink: docs/plans/2026-07-06-strang-11-c11-12-records-query-op.md § C1
+Spec backlink: pln-strang-11-c11-12-native-record-e92436 § C1
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4d-g1
   (query-records.js grammar EXTEND — freeze-query-records-grammar.md is the parity
   oracle; the FULL ``--where``/``--since``/``--older-than``/``--sort``/``--format``
   grammar and the ``liveness()`` predicate table below are byte-parity ports of the
-  matching surfaces in example-doctrine-repo ``coordinator/bin/query-records.js``, not a fresh design.)
+  matching surfaces in coordinator-claude ``coordinator/bin/query-records.js``, not a fresh design.)
 
 Grammar surface (post-T4d-g1c EXTEND):
   - ``--where`` supports the full operator set — ``=``, ``!=``, ``<``, ``>``, ``<=``,
@@ -79,7 +79,7 @@ Negative-spec:
     hand-maintained map) plus ``research-synthesis``/``gap-report``/
     ``coverage-audit`` (added 2026-07-22 — cross-repo/inbox/2026-07-22-
     claude-central-em-records-query-excluded-types-doe-needs.md named these
-    three as having LIVE example-doctrine-repo runtime consumers reproducing the ``goal``
+    three as having LIVE coordinator-claude runtime consumers reproducing the ``goal``
     false-empty shape) plus ``archived-memo`` (``cross-repo/archive/*.md`` —
     see the ``_TYPE_TO_GLOB`` entry's own comment for the liveness rule) plus
     ``sizing-object`` (``state/sizings/*.yaml``) plus ``cutover``
@@ -96,7 +96,7 @@ Negative-spec:
     ``_TYPE_TO_GLOB`` is intentionally NOT a blanket
     repoint to ``coordinator_core.frontmatter.schema_validate.build_type_to_glob``
     — that derivation is a clean 51-type superset of this map (verified
-    2026-07-22 against example-doctrine-repo ``coordinator/schemas/*.schema.json``) but includes
+    2026-07-22 against coordinator-claude ``coordinator/schemas/*.schema.json``) but includes
     several schema-recognised types that are NOT query-servable record
     collections: single fixed-path files (e.g. ``docs-roadmap`` ->
     ``docs/ROADMAP.md``, no wildcard — "querying a record set" is meaningless
@@ -115,7 +115,7 @@ Negative-spec:
     ``decision``/``review``/``lesson`` needed only static glob entries plus
     the EXISTING ``.md``/``.yaml`` parsers below — porting ``schema.js``'s
     full ``loadSchemas()``/``matchSchemaForPath`` (which requires the
-    complete example-doctrine-repo schema tree as a runtime dependency) was NOT required for
+    complete coordinator-claude schema tree as a runtime dependency) was NOT required for
     THESE three: neither ``docs/decisions/*.md`` nor ``state/reviews/*.md``
     has a co-located sibling glob among any WIRED ``_TYPE_TO_GLOB`` entry, so
     ``_apply_sibling_exclusion`` (below ``_collect_files``) is a no-op for
@@ -126,18 +126,18 @@ Negative-spec:
     suffix-narrowed patterns, all three sharing the ``docs/research/``
     directory. ``_apply_sibling_exclusion`` ports the oracle's filter
     self-containedly, derived from ``_TYPE_TO_GLOB`` itself rather than the
-    full example-doctrine-repo schema set: verified 2026-07-22 that only 4 example-doctrine-repo schemas declare
+    full coordinator-claude schema set: verified 2026-07-22 that only 4 coordinator-claude schemas declare
     an ``applies_to`` glob under ``docs/research/`` — the 3 above plus
     ``research-claim`` (``docs/research/*.claims.json``, disjoint from the
     other three's ``.md`` globs by extension and therefore never a filename-
-    regex collision). Every example-doctrine-repo schema that could collide with these three is
+    regex collision). Every coordinator-claude schema that could collide with these three is
     therefore already a ``_TYPE_TO_GLOB`` member once they are wired — the
     map-local derivation and the oracle's all-schemas filter are provably
     equivalent over the wired set. See ``_apply_sibling_exclusion``'s own
     docstring for the specificity-ordering mechanics (mirrors
     ``schema_validate.py``'s ``_specificity_key``) and
     ``test_records_query.py``'s ``TestSiblingExclusionDerivedFromWiredSet``
-    for the gate that keeps this equivalence honest as new example-doctrine-repo schemas land.
+    for the gate that keeps this equivalence honest as new coordinator-claude schemas land.
     ``handoff-ledger``
     and ``research-claim`` are SYNTHETIC types (N records per source file —
     see ``_collect_handoff_ledger_records``/``_collect_research_claim_records``
@@ -228,18 +228,18 @@ class _RecordsCollectError(Exception):
 # (sidecar suffixes, timestamped/doubled sidecars, README.md) is excluded.
 _CANONICAL_PLAN_RE = re.compile(r'^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$')
 
-# Consumed-marker regex — ported from example-doctrine-repo lib/consumed-marker.js CONSUMED_MARKER_RE.
+# Consumed-marker regex — ported from coordinator-claude lib/consumed-marker.js CONSUMED_MARKER_RE.
 # Matches `<!-- consumed: YYYY-MM-DD [optional notes] -->` anywhere in a body.
 _CONSUMED_MARKER_RE = re.compile(
     r'<!--\s*consumed:\s*(\d{4}-\d{2}-\d{2})(?:\s+(.*?))?\s*-->',
     re.IGNORECASE,
 )
 
-# Terminal deployment states — consumed-marker guard (example-doctrine-repo lib/consumed-marker.js).
+# Terminal deployment states — consumed-marker guard (coordinator-claude lib/consumed-marker.js).
 # SSOT: coordinator_core.lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT.
 _TERMINAL_DEPLOYMENT = HANDOFF_TERMINAL_DEPLOYMENT
 
-# Terminal record-lifecycle statuses — single source of truth, mirrors example-doctrine-repo
+# Terminal record-lifecycle statuses — single source of truth, mirrors coordinator-claude
 # lib/consumed-marker.js TERMINAL_STATUS (used by liveness()'s graceful default
 # and the handoff/handoff-archived two-axis rule below).
 # SSOT: coordinator_core.lifecycle_constants.HANDOFF_TERMINAL_STATUS.
@@ -306,7 +306,7 @@ _TYPE_TO_GLOB: dict[str, str] = {
     'sizing-object':    'state/sizings/*.yaml',
     # spike-result: same "schema-recognised with a live producer already landed"
     # precedent as goal/sizing-object/cutover. The glob is the RELOCATED home,
-    # not state/handoffs/ — example-doctrine-repo's spike-verdict-records-stable-evidence-home
+    # not state/handoffs/ — coordinator-claude's spike-verdict-records-stable-evidence-home
     # work moved these records out to docs/research/spike-verdicts/ and struck
     # `spike-result` from handoff.schema.json's kind enum (a major bump, taken
     # because state/handoffs/ was verified to carry zero live spike-result
@@ -325,7 +325,7 @@ _TYPE_TO_GLOB: dict[str, str] = {
     # `_collect_handoff_ledger_records`/`_collect_research_claim_records`.
     'handoff-ledger':   'state/handoffs/*.md',
     'research-claim':   'docs/research/*.claims.json',
-    # research-synthesis/gap-report/coverage-audit: three live-consumer example-doctrine-repo
+    # research-synthesis/gap-report/coverage-audit: three live-consumer coordinator-claude
     # types named in cross-repo/inbox/2026-07-22-claude-central-em-records-
     # query-excluded-types-doe-needs.md. All three share the docs/research/
     # directory and research-synthesis's glob is a SUPERSET of the other
@@ -418,7 +418,7 @@ _SYNTHETIC_TYPES: frozenset[str] = frozenset({'handoff-ledger', 'research-claim'
 # NEGATIVE-SPEC — do NOT widen these globs to absorb a single repo's stray
 # archive location. Fleet-verified 2026-08-11 by example-cockpit-repo-em, who ran
 # `handoff.columns` across all six coordinator repos on this disk and compared
-# served rows against on-disk handoff files: example-doctrine-repo 550/550, claude-klabauter
+# served rows against on-disk handoff files: coordinator-claude 550/550, claude-klabauter
 # 431/431, example-retrieval-repo 371/371, example-market-data-repo 194/194, example-cockpit-repo
 # 169/169 — five of six exact on the globs above. The sixth, example-store-repo, served
 # 18 of 25 because seven handoffs sit in a FLAT `state/handoffs/archive/`
@@ -440,7 +440,7 @@ _ARCHIVE_GLOB_FOR_TYPE: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Legacy prose-queue invisibility signal (DR-115 — example-doctrine-repo
+# Legacy prose-queue invisibility signal (DR-115 — coordinator-claude
 # docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md).
 #
 # Six sibling repos still carry pre-migration line-per-row prose queues at a
@@ -610,7 +610,7 @@ def _legacy_prose_signal(worktree_root: Path, record_type: str) -> Optional[dict
 # null/absent, spanning queues + roadmap spinoff-stubs + handoffs + plans.
 # This constant is the ENGINE-side definition of which record types can carry
 # an ``initiative`` FK — claude-klabauter owns ``state/initiatives/``, so "which types
-# join to an initiative" is engine schema knowledge, not a example-doctrine-repo-side client
+# join to an initiative" is engine schema knowledge, not a coordinator-claude-side client
 # loop's business. This is why the set lives here rather than being
 # recomputed per-caller.
 #
@@ -765,7 +765,7 @@ def liveness(fm: dict, record_type: str) -> str:
 def _apply_consumed_marker(fm: dict, body: str) -> None:
     """Normalize deployment fields in-place when a consumed-marker is found.
 
-    Ports ``applyConsumedMarker`` from example-doctrine-repo ``bin/query-records.js:965-980``
+    Ports ``applyConsumedMarker`` from coordinator-claude ``bin/query-records.js:965-980``
     (applied at queryRecords:1328).  Before ``--where`` filtering, if the
     record body carries ``<!-- consumed: YYYY-MM-DD ... -->`` AND frontmatter
     ``deployment_state`` is NOT already terminal (``shipped`` / ``abandoned``),
@@ -787,11 +787,11 @@ def _apply_consumed_marker(fm: dict, body: str) -> None:
     load-bearing for ``coordinator_core.ops.ceremony.renderers`` /
     ``ceremony.records_query``'s own consumers, which assert the new
     vocabulary (``coordinator_core/ops/ceremony/tests/test_records_query.py``
-    ``TestConsumedMarkerNormalization``). Example-doctrine-repo's ``query-records.js`` stays
+    ``TestConsumedMarkerNormalization``). Coordinator-claude's ``query-records.js`` stays
     old-vocabulary until the fleet cutover, so the node parity oracle is
     expected to disagree here for the duration of the window (oracles are
-    test-only and gate-exempt); it re-converges only once example-doctrine-repo's own
-    ``query-records.js`` narrows onto the new vocabulary on example-doctrine-repo's own
+    test-only and gate-exempt); it re-converges only once coordinator-claude's own
+    ``query-records.js`` narrows onto the new vocabulary on coordinator-claude's own
     schedule (not asserted here) — see ``test_records_query_parity.py``'s
     "Deliberate divergence" docstring section for the test-side
     accommodation.
@@ -1180,7 +1180,7 @@ def _specificity_key(glob: str) -> tuple[int, int]:
     Deliberately re-derived rather than imported: the two operate over
     different corpora (this module's flat ``_TYPE_TO_GLOB`` values vs. a
     loaded schema tree's ``applies_to`` strings) and must not share a
-    runtime dependency on the full example-doctrine-repo schema set — see
+    runtime dependency on the full coordinator-claude schema set — see
     ``_apply_sibling_exclusion``'s docstring for why that independence is
     load-bearing.
     """
@@ -1205,11 +1205,11 @@ def _apply_sibling_exclusion(
     wired type — self-contained port of query-records.js's generalized
     sibling-exclusion filter (bin/query-records.js:1319-1335).
 
-    The oracle's filter walks ALL loaded example-doctrine-repo schemas' ``applies_to`` globs
+    The oracle's filter walks ALL loaded coordinator-claude schemas' ``applies_to`` globs
     (specificity-sorted via ``schema.js``'s ``_byGlob``) and drops a
     collected file whenever some OTHER schema's glob matches it more
     specifically than the queried type's own. Porting that verbatim would
-    make this op depend on the full example-doctrine-repo schema tree at runtime — claude-klabauter's
+    make this op depend on the full coordinator-claude schema tree at runtime — claude-klabauter's
     vendored ``coordinator_core/frontmatter/schemas/`` holds only 12 schemas
     and does not include ``research-synthesis``/``gap-report``/
     ``coverage-audit``, and a sibling-checkout dependency is not acceptable
@@ -1221,16 +1221,16 @@ def _apply_sibling_exclusion(
     ``_SIBLING_EXCLUSION_INELIGIBLE`` types are skipped as non-comparable
     shapes. This is narrower than the oracle's all-schemas filter but
     provably equivalent over the set of WIRED types today: verified
-    2026-07-22 that only 4 example-doctrine-repo schemas declare an ``applies_to`` glob under
+    2026-07-22 that only 4 coordinator-claude schemas declare an ``applies_to`` glob under
     ``docs/research/`` — ``research-synthesis``, ``gap-report``,
     ``coverage-audit`` (all three now wired) plus ``research-claim``
     (``docs/research/*.claims.json``, disjoint by extension and never a
-    filename-regex collision). No unwired example-doctrine-repo schema is a more-specific
+    filename-regex collision). No unwired coordinator-claude schema is a more-specific
     sibling of any wired glob, so the map-local derivation and the oracle's
     all-schemas filter agree everywhere this op can be asked to look.
     ``test_records_query.py``'s ``TestSiblingExclusionDerivedFromWiredSet``
     is the derive-and-gate check that fails loud the moment a NEW unwired
-    example-doctrine-repo schema glob would break that equivalence.
+    coordinator-claude schema glob would break that equivalence.
 
     Ties (identical specificity — two wired ELIGIBLE siblings under the same
     directory whose globs produce an equal ``_specificity_key``) are resolved

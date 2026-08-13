@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.test_completion_ops — coverage for ``completion.flip_to_released``.
 
-Byte-parity oracle: [example-doctrine-repo] coordinator/skills/merging-to-main/SKILL.md
+Byte-parity oracle: [coordinator-claude] coordinator/skills/merging-to-main/SKILL.md
 § Step 1.65 item 3's ``python3 -<<'PYEOF'`` block. Fixture pattern mirrors
 ``coordinator_core/ops/tests/test_completion_ops_reconcile.py`` (tmp git repo, real
 subprocess git — not mocked) and ``coordinator_core/reconcile/tests/test_commit_reality.py``.
@@ -365,7 +365,7 @@ def test_day_coverage_sweep_separates_foreign_authored_deliveries(repo: Path) ->
         repo,
         "cross-repo/inbox/2026-07-20-doe-thing.md",
         "memo",
-        "cross-repo: deliver Thing broke memo from example-doctrine-repo-em",
+        "cross-repo: deliver Thing broke memo from coordinator-claude-em",
         iso_date=iso,
     )
     foreign_false_trailer_sha = _commit_on(
@@ -390,7 +390,7 @@ def test_day_coverage_sweep_separates_foreign_authored_deliveries(repo: Path) ->
     )
     # Negative 3 — delivery-shaped subject, but touched a source file too.
     mislabelled_sha = _commit_on(
-        repo, "src/b.py", "b", "cross-repo: deliver Fake memo from example-doctrine-repo-em", iso_date=iso
+        repo, "src/b.py", "b", "cross-repo: deliver Fake memo from coordinator-claude-em", iso_date=iso
     )
 
     result = day_coverage_sweep(repo, day)
@@ -422,7 +422,7 @@ def test_day_coverage_sweep_claimed_beats_foreign(repo: Path) -> None:
         repo,
         "cross-repo/inbox/2026-07-20-doe-thing.md",
         "memo",
-        "cross-repo: deliver Thing broke memo from example-doctrine-repo-em",
+        "cross-repo: deliver Thing broke memo from coordinator-claude-em",
         iso_date=f"{day}T12:00:00+00:00",
     )
     _write_entry(repo, "archive/completed/claimed.md", status="released", commits=[sha])

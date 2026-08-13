@@ -1,7 +1,7 @@
 """refresh-queries.py — CLI trampoline over the query-callout refresh engine.
 
-Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter
-coordinator_core.text.refresh_queries, per DR-047 (example-doctrine-repo owns contract/
+Thin coordinator-claude-side (contract) trampoline over claude-klabauter
+coordinator_core.text.refresh_queries, per DR-047 (coordinator-claude owns contract/
 generator, claude-klabauter owns engine). Walks markdown for query-callout sentinel
 blocks, expands or --check-verifies them in-process against
 coordinator_core.ops.ceremony.records_query.query_records +
@@ -19,8 +19,8 @@ from __future__ import annotations
 # detection, query-callout spec parsing, fenced-code/inline-backtick-aware
 # markdown walk, sentinel-block expansion, --check/--files modes) has been
 # fully ported to coordinator_core/text/refresh_queries.py, with a co-located
-# pytest (test_refresh_queries.py). This file is now a thin example-doctrine-repo-side
-# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo
+# pytest (test_refresh_queries.py). This file is now a thin coordinator-claude-side
+# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude
 # owns contract/generator, claude-klabauter owns engine).
 #
 # Predecessor: coordinator/bin/refresh-queries.js, whose own logic (arg parse,
@@ -66,7 +66,7 @@ from __future__ import annotations
 #       from both CLI-usage (2) and business (1) failure.
 #
 # Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-# Port recipe: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/
+# Port recipe: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/
 # recipe-normalize-snippet.md (byte-parity port discipline)
 # Prior node implementation: coordinator/bin/refresh-queries.js — retired in
 # 480ad8f8 (2026-07-24); see the Predecessor note above.

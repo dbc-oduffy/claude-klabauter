@@ -5,7 +5,7 @@ coordinator_core.workday_complete.cockpit_contract_freshness, the
 .brief` emits on EVERY run in EVERY repo.
 
 Covers:
-  - unresolvable example-doctrine-repo root -> UNKNOWN, ZERO subprocess/ls-remote calls (the
+  - unresolvable coordinator-claude root -> UNKNOWN, ZERO subprocess/ls-remote calls (the
     fleet-wide cost guard: this is the common consumer-machine path and must
     never shell out).
   - ls-remote timeout -> UNKNOWN, no raise.
@@ -19,9 +19,9 @@ Covers:
 No network: every subprocess/git seam is monkeypatched at the module-function
 level (`_resolve_doe_root_local`, `_ls_remote_release_tag`, `_peel_to_commit`,
 `_candidate_sha`, `_contract_version_at`, `_is_ancestor`) rather than exercised
-against a real example-doctrine-repo clone or origin.
+against a real coordinator-claude clone or origin.
 
-Spec backlink: example-doctrine-repo ceremony Step 10 Final Summary line (2026-07-25 ask)
+Spec backlink: coordinator-claude ceremony Step 10 Final Summary line (2026-07-25 ask)
 
 Run: cd /Users/example-operator/X/claude-klabauter && python3 -m pytest coordinator_core/test_cockpit_contract_freshness.py -q
 """
@@ -70,11 +70,11 @@ def _init_real_repo(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _assume_doe_clone_is_readable(monkeypatch):
-    """Neutralize the example-doctrine-repo-clone readability gate for every test that stubs the
+    """Neutralize the coordinator-claude-clone readability gate for every test that stubs the
     git seams rather than materialising a real clone.
 
     `_compute` gates the whole probe on `_doe_clone_unusable_reason` so that an
-    unreachable — or environment-retargeted — example-doctrine-repo clone degrades to UNKNOWN
+    unreachable — or environment-retargeted — coordinator-claude clone degrades to UNKNOWN
     instead of emitting a confident FRESH/STALE/DIVERGED computed against the
     LOCAL repo (see the module's git-scoping negative-spec). Every test here
     points `_resolve_doe_root_local` at the synthetic `_FAKE_ROOT`, which is
@@ -90,12 +90,12 @@ def _assume_doe_clone_is_readable(monkeypatch):
 
 
 def test_unreadable_doe_clone_is_unknown_and_never_a_diverged_claim(monkeypatch, tmp_path):
-    """A example-doctrine-repo clone that cannot be read AS a git repository is INDETERMINATE.
+    """A coordinator-claude clone that cannot be read AS a git repository is INDETERMINATE.
 
     Regression for the 2026-08-03 class: `git -C <doe_root>` scopes only the
     working directory, so an inherited GIT_DIR (git exports one to every hook it
     runs) silently retargets every hop below at the LOCAL repo while the emitted
-    entry still names example-doctrine-repo's path. Unguarded, that path emits DIVERGED — "a human
+    entry still names coordinator-claude's path. Unguarded, that path emits DIVERGED — "a human
     must reconcile" — about a history this process never read. Could-not-check
     must be its own outcome and must never be phrased as staleness or
     divergence.
@@ -107,7 +107,7 @@ def test_unreadable_doe_clone_is_unknown_and_never_a_diverged_claim(monkeypatch,
 
     def _must_not_run(*_args, **_kwargs):
         raise AssertionError(
-            "no git hop may run against a example-doctrine-repo clone that failed the readability "
+            "no git hop may run against a coordinator-claude clone that failed the readability "
             "gate — every answer would be about the wrong repository"
         )
 
@@ -122,7 +122,7 @@ def test_unreadable_doe_clone_is_unknown_and_never_a_diverged_claim(monkeypatch,
     assert "could not be read as a git repository" in entry["reason"]
     assert "NOT a claim" in entry["reason"], (
         "the third state must disclaim itself explicitly, or a reader takes it "
-        "as a finding about example-doctrine-repo"
+        "as a finding about coordinator-claude"
     )
 
 
@@ -131,10 +131,10 @@ def test_git_dir_poison_does_not_produce_a_verdict_about_the_wrong_repo(
 ):
     """End-to-end poisoned-environment regression.
 
-    A real repo standing in for the example-doctrine-repo clone, plus a real repo standing in for
-    ours, plus GIT_DIR pointing at ours: the probe must still read example-doctrine-repo's own
+    A real repo standing in for the coordinator-claude clone, plus a real repo standing in for
+    ours, plus GIT_DIR pointing at ours: the probe must still read coordinator-claude's own
     object database. Before the fix, `_candidate_sha` and `_is_ancestor`
-    answered from the poisoned target and the emitted entry named example-doctrine-repo.
+    answered from the poisoned target and the emitted entry named coordinator-claude.
     """
     doe = _init_real_repo(tmp_path)
     (doe / "coordinator" / "cockpit-contract" / "schema").mkdir(parents=True)
@@ -177,14 +177,14 @@ def test_unresolvable_root_is_unknown_and_makes_zero_network_calls(monkeypatch):
 
     def _spy(*args, **kwargs):
         calls.append(args)
-        raise AssertionError("ls-remote seam must never be invoked when example-doctrine-repo root is unresolvable")
+        raise AssertionError("ls-remote seam must never be invoked when coordinator-claude root is unresolvable")
 
     monkeypatch.setattr(ccf, "_ls_remote_release_tag", _spy)
 
     entry = ccf.compute_cockpit_contract_freshness()
 
     assert entry["verdict"] == "UNKNOWN"
-    assert "no example-doctrine-repo clone" in entry["reason"]
+    assert "no coordinator-claude clone" in entry["reason"]
     assert entry["remediation"] is None
     assert entry["published"] == {"ref": ccf._RELEASE_REF, "peel": None, "contract_version": None}
     assert entry["candidate"] == {
@@ -313,7 +313,7 @@ def test_ref_absent_on_origin_is_unknown(monkeypatch):
     monkeypatch.setattr(ccf, "_resolve_doe_root_local", lambda: _FAKE_ROOT)
 
     def _absent(root):
-        raise ccf._FreshnessProbeError(f"'{ccf._RELEASE_REF}' is not published yet on the example-doctrine-repo origin")
+        raise ccf._FreshnessProbeError(f"'{ccf._RELEASE_REF}' is not published yet on the coordinator-claude origin")
 
     monkeypatch.setattr(ccf, "_ls_remote_release_tag", _absent)
 
@@ -414,7 +414,7 @@ def test_env_root_ladder_both_unset_consults_registry(monkeypatch, tmp_path):
 
 def test_brief_carries_the_gate_and_never_raises(monkeypatch):
     """workday_complete.brief() itself must return normally with the gate
-    entry present under the common zero-example-doctrine-repo-clone path (the never-raise
+    entry present under the common zero-coordinator-claude-clone path (the never-raise
     contract for internal probe failures is proven directly against
     compute_cockpit_contract_freshness() above)."""
     monkeypatch.setattr(workday_brief, "resolve_operator_config", lambda **_: {})

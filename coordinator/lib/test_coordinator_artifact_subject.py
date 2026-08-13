@@ -6,7 +6,7 @@ surface from the W2.2 spec — which tri-plane subject a given artifact path
 belongs to (doctrine / engine / cross-cutting), plus the rc and stderr
 contract each verdict carries.
 
-Port of: coordinator-artifact-subject.test.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
+Port of: coordinator-artifact-subject.test.sh (coordinator-claude 6fb5fb37, 2026-07-22).
 Retargets the SUT from the deleted bash lib to the Python port; assertions
 are unchanged (same cases, same expected token/rc pairs).
 
@@ -26,7 +26,7 @@ The ratchet that keeps this from recurring is
 
 Run: python3 -m pytest coordinator/lib/test_coordinator_artifact_subject.py
 
-Spec backlink: docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md § W2.2
+Spec backlink: docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md § W2.2 [DEAD-CITATION: plan file never committed to this repo]
 
 NEGATIVE SPEC
     - Does NOT test the CLI wrapper around the classifier — these call

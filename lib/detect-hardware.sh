@@ -7,8 +7,8 @@ Finish-strangler port: the bash implementation (cross-platform CPU/RAM/GPU
 audit, persisted into hardware.local.toml via the machine-local --concern
 writer) has been fully ported to coordinator_core/ops/detect_hardware.py, with
 tests in the co-located test_detect_hardware.py. This file is now a thin
-Example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
-(example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+Coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
+(coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `python3` — irrelevant on Windows,
 where the `.cmd` sibling launcher (not this shebang) resolves the interpreter;

@@ -839,7 +839,7 @@ def test_alias_retract_then_readd_resolves(repo_root):
 # `(applied_at, observed_at, id)` tie-break (AC8), compaction round-trip
 # (AC10), and append-only compaction (AC12).
 #
-# Spec backlink: docs/plans/2026-08-11-sat-03-event-sourced-completion-core.md
+# Spec backlink: pln-sat-03-event-sourced-completio-c270a1
 # § Tasks C9.
 # ---------------------------------------------------------------------------
 

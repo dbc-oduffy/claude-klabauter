@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.nudge_prose_queue_append — advisory guard.
 
-Spec: example-doctrine-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec: coordinator-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 § PM direction (A) ("Append-silence becomes append-advisory — the PM
 sentence wins"). Part 3 of the original ruling specified this half as
 silent; the PM direction that arrived afterward overrode that specific
@@ -85,7 +85,7 @@ Negative-spec:
     reconstruction failure returns ``None`` (ALLOW/no-op), never an
     advisory.
 
-Spec backlink: example-doctrine-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec backlink: coordinator-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 """
 
 from __future__ import annotations

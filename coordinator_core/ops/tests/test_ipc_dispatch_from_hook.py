@@ -1,10 +1,10 @@
 """dispatch_from_hook() -- the single engine-side home for the JSON-RPC envelope
-build + asyncio.run(dispatch_message) + result-unwrap body that seven example-doctrine-repo hook
+build + asyncio.run(dispatch_message) + result-unwrap body that seven coordinator-claude hook
 shims currently hand-roll identically.
 
-Spec backlink: cross-repo/archive/2026-07-31-example-doctrine-repo-em-dr116-seam-contents-and-ipc-hook-dispatch.md
-               (example-doctrine-repo's DR-118 — the memo's filename says dr116 because example-doctrine-repo renumbered the
-               ruling at execute time; DR-116 in the example-doctrine-repo tree is an unrelated record)
+Spec backlink: cross-repo/archive/2026-07-31-coordinator-claude-em-dr116-seam-contents-and-ipc-hook-dispatch.md
+               (coordinator-claude's DR-118 — the memo's filename says dr116 because coordinator-claude renumbered the
+               ruling at execute time; DR-116 in the coordinator-claude tree is an unrelated record)
 
 Coverage:
   (a) happy path returns the handler's return value.

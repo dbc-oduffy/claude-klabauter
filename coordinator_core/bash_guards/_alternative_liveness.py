@@ -751,10 +751,10 @@ def discover_write_guard_names() -> List[str]:
 def _trigger_validate_frontmatter_schema_advisory() -> Optional[Dict[str, Any]]:
     """Fires the warn-mode schema-validation leg with a `state/handoffs/*.md`
     write carrying no frontmatter at all -- the simplest deterministic
-    `build_violation_payload_advisory` trigger, needing no example-doctrine-repo
+    `build_violation_payload_advisory` trigger, needing no coordinator-claude
     sibling checkout (the schema-validation leg matches purely off
     claude-klabauter's own vendored `_VENDORED_SCHEMAS_DIR`; `_load_doe_registry()`
-    fails open when the example-doctrine-repo root is unresolvable, per that guard's own
+    fails open when the coordinator-claude root is unresolvable, per that guard's own
     module docstring). Scratch git repo, never the real working tree --
     same pattern as this module's own `_scratch_git_repo` bash_guards
     triggers above."""

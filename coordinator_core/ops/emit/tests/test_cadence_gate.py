@@ -261,7 +261,7 @@ def test_prior_emission_with_absolute_paths_is_rejected_and_recomputed(
 ) -> None:
     """A prior emission predating F2 must NOT be reused — recompute instead.
 
-    Regression for the live defect: example-doctrine-repo's on-disk emission carried 4027 rows of which
+    Regression for the live defect: coordinator-claude's on-disk emission carried 4027 rows of which
     3991 had absolute ``file_path`` values and zero exclusion markers. Reusing it emitted
     absolute paths into a rag/cockpit join key, resurrected the out-of-repo rows F2 excludes,
     and hid the re-widening. Reuse is only safe when the reused value satisfies the same
@@ -271,7 +271,7 @@ def test_prior_emission_with_absolute_paths_is_rejected_and_recomputed(
         tmp_path,
         {
             "file_attributions": [
-                {"session_id": "s1", "file_path": "/Users/x/example-doctrine-repo/cross-repo/inbox/a.md"},
+                {"session_id": "s1", "file_path": "/Users/x/coordinator-claude/cross-repo/inbox/a.md"},
                 {"session_id": "s2", "file_path": "already/relative.md"},
             ]
         },

@@ -47,7 +47,7 @@ plus the graceful-degradation carve-out for untrailered ANCESTOR nodes:
                                        --no-merges --grep=...` (dead/rewritten
                                        history).
 
-Routed from example-doctrine-repo bug-blitz 2026-07-19 (state/bug-backlog/
+Routed from coordinator-claude bug-blitz 2026-07-19 (state/bug-backlog/
 2026-07-17-coverage-py-indeterminate-paths-regressed.yaml) as a P1: all three
 original cases were reported as regressed, collapsing to COVERED/NOT-COVERED
 instead of INDETERMINATE. Investigation found _derive_dag_chain_set's guard

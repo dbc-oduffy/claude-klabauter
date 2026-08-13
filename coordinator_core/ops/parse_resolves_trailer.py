@@ -27,9 +27,9 @@ Exit codes (parity-critical):
   2 — not inside a git repository, OR <commit> does not resolve to a valid
       commit
 
-Port of: parse-resolves-trailer.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: parse-resolves-trailer.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md § C4
-Doctrine: coordinator/docs/wiki/resolves-commit-trailer.md (example-doctrine-repo)
+Doctrine: coordinator/docs/wiki/resolves-commit-trailer.md (coordinator-claude)
 
 Negative-spec (do NOT "fix" mid-port):
     - Does NOT probe git version via `git interpret-trailers --version` (not

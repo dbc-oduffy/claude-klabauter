@@ -22,7 +22,7 @@ behavior, because there is none — `detect_hook_delivery_duplication` and
 the module's own "DETECT-ONLY" section docstring); a future PR that adds a
 write path here would be a scope violation, not a bug fix.
 
-Spec backlink: example-doctrine-repo dispatch state/subagent-share/
+Spec backlink: coordinator-claude dispatch state/subagent-share/
 78b683cd-1b62-4a25-904d-954cb3c69412/coordinatorexecutor-8166967b.md
 (2026-07-28).
 """

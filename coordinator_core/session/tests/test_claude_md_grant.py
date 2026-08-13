@@ -1,7 +1,7 @@
 """
 coordinator_core.session.tests.test_claude_md_grant — tests for
 coordinator_core.session.claude_md_grant, the session-scoped PM
-authorization grant for CLAUDE.md-class writes (example-doctrine-repo
+authorization grant for CLAUDE.md-class writes (coordinator-claude
 docs/plans/2026-07-27-claude-md-altitude-triage.md § C5).
 
 Structurally mirrors ``test_grant.py`` (the Tier-U grant's own suite) —
@@ -14,7 +14,7 @@ caller using that same default resolution path — the exact path a C4
 guard evaluation running inside a dispatched subagent's tool-call turn
 would use, per this module's "SUBAGENT-RESOLVABILITY" docstring section.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-27-claude-md-altitude-triage.md § C5
+Spec backlink: coordinator-claude docs/plans/2026-07-27-claude-md-altitude-triage.md § C5
 Precedent: coordinator_core/session/tests/test_grant.py
 """
 

@@ -1,5 +1,5 @@
 """coordinator_core.write_guards.validate_frontmatter_schema_advisory — advisory
-leg of the fan-in split of example-doctrine-repo's
+leg of the fan-in split of coordinator-claude's
 ``coordinator/hooks/scripts/validate-frontmatter-schema.py`` PreToolUse
 (Write|Edit|MultiEdit) hook, per the write-guard fan-in
 (write_guards/INTERFACE.md) and the wave map's C11 slot.
@@ -58,7 +58,7 @@ reference hook's warn-mode payload builders (``build_violation_payload``,
 ``build_scaffold_offer_payload``). Every escape-hatch env var
 (``COORDINATOR_SCHEMA_STRICT``, ``COORDINATOR_OVERRIDE_OWN_INBOX``,
 ``COORDINATOR_OVERRIDE_MEMO_REDIRECT``) is read exactly as the reference
-hook reads it. Fail-open narrowing (missing/unresolvable example-doctrine-repo root, manifest,
+hook reads it. Fail-open narrowing (missing/unresolvable coordinator-claude root, manifest,
 schemas, or DAG helper) always returns ``None`` — never fabricates an
 advisory from partial state, mirroring the reference hook's "skip
 validation, never block" posture (which degrades identically for a warn
@@ -66,32 +66,32 @@ outcome: no advisory rather than a wrong one).
 
 In-process schema/manifest/DAG resolution
 -------------------------------------------
-The reference hook lives in example-doctrine-repo and must resolve INTO claude-klabauter
+The reference hook lives in coordinator-claude and must resolve INTO claude-klabauter
 for schema validation, DAG lineage-walk, and the two claude-klabauter-generated memo
 schemas — hence its ``_claude_klabauter_root``/``sys.path`` seam (D1a). This module
 lives IN claude-klabauter already, so those three imports
 (``coordinator_core.frontmatter.schema_validate``, ``coordinator_core.dag``,
 ``coordinator_core.contract``) are direct, in-tree imports — no seam, no
 ``sys.path`` manipulation needed. The DIRECTION this module still needs to
-resolve is the reverse one: the example-doctrine-repo sibling checkout, for
-``coordinator/schemas/`` (the schema corpus, contract-owned by example-doctrine-repo, not
+resolve is the reverse one: the coordinator-claude sibling checkout, for
+``coordinator/schemas/`` (the schema corpus, contract-owned by coordinator-claude, not
 Claude-klabauter) and ``coordinator/schemas/coordinator-registry.manifest.json`` (the
 registry manifest). That resolution goes through
 ``coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`` — the
-same ratified "resolve the example-doctrine-repo sibling root" ladder the reference
-hook's own example-doctrine-repo-side callers use elsewhere, now called natively in-process
+same ratified "resolve the coordinator-claude sibling root" ladder the reference
+hook's own coordinator-claude-side callers use elsewhere, now called natively in-process
 rather than via the ``machine-local get repos.example_doctrine_repo`` subprocess the
 reference hook shells out to. Same target, same effective resolution (that
 subprocess call is rung 2 of this very ladder), no behavior change.
 
-Import-safety: per INTERFACE.md rule 7, no resolution work (example-doctrine-repo-root
+Import-safety: per INTERFACE.md rule 7, no resolution work (coordinator-claude-root
 lookup, manifest load, schema load, git-root subprocess) happens at import
 time — regex/module-level constants only. All of it happens inside
 ``check()``, matching the reference hook's own per-invocation (spawn-per-
 call) freshness.
 
 Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C11
-Source: example-doctrine-repo coordinator/hooks/scripts/validate-frontmatter-schema.py
+Source: coordinator-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
 from __future__ import annotations
@@ -138,14 +138,14 @@ _EXAMPLE_DOCTRINE_REPO_REGISTRY_KEY = "repos.example_doctrine_repo"
 # against — see module docstring § In-process schema/manifest/DAG
 # resolution and docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
 # corpus.md. Resolved relative to this file's own on-disk location (this
-# module runs INSIDE claude-klabauter already), never from example-doctrine-repo's live working
-# tree. The registry MANIFEST (`_load_doe_registry`) stays on example-doctrine-repo's tree —
+# module runs INSIDE claude-klabauter already), never from coordinator-claude's live working
+# tree. The registry MANIFEST (`_load_doe_registry`) stays on coordinator-claude's tree —
 # it is routing/scaffold logic, not a schema, and is out of scope for this
 # repoint (plan AC4 + Out of scope).
 _VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "frontmatter" / "schemas"
 
 # ---------------------------------------------------------------------------
-# Torn-write retry — example-doctrine-repo's schema corpus and registry manifest are resolved
+# Torn-write retry — coordinator-claude's schema corpus and registry manifest are resolved
 # from the LIVE working tree of a sibling repo checkout (see module docstring
 # § In-process schema/manifest/DAG resolution), which concurrent sessions
 # edit continuously. A `check()` call can land mid-write and see a torn/
@@ -463,17 +463,17 @@ def build_scaffold_offer_payload_advisory(
 
 
 def _load_doe_registry() -> dict:
-    """Resolve the example-doctrine-repo sibling root and load
+    """Resolve the coordinator-claude sibling root and load
     coordinator-registry.manifest.json, best-effort. NEVER returns ``None``
     any more — that was exactly the fail-open-on-missing-sibling hole AC2
     closes (see docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
     corpus.md): the schema corpus this module validates against is now
     claude-klabauter's own vendored copy, independent of this manifest read entirely,
-    so an unresolvable/absent example-doctrine-repo root or a malformed manifest must not
+    so an unresolvable/absent coordinator-claude root or a malformed manifest must not
     black out schema-shape advisories too. Only the manifest-DERIVED fields
     (memo routing / scaffold-offer maps, central-EM identity) degrade to
     empty defaults on any resolution or parse failure — those remain
-    genuinely example-doctrine-repo-owned routing data (plan AC4 + Out of scope), so their
+    genuinely coordinator-claude-owned routing data (plan AC4 + Out of scope), so their
     absence narrows only the memo-guard/scaffold-offer steps, never the
     schema-validation ones.
     """
@@ -757,7 +757,7 @@ def _memo_guards_decision(
                     landing_is_central = landing_em_id == registry["central_canonical_id"]
                     if to_is_central and landing_is_central:
                         pass
-                    # Fail open when the example-doctrine-repo root is unresolvable. Deliberately does NOT also test
+                    # Fail open when the coordinator-claude root is unresolvable. Deliberately does NOT also test
                     # `to_is_central`: `central_em_ids` only populates once that root HAS resolved,
                     # so `to_is_central and example_doctrine_repo_realpath is None` was unsatisfiable by
                     # construction and the regex fallback below fired unconditionally on any
@@ -858,7 +858,7 @@ def _plan_tasks_spine_errors(
       - MALFORMED (>1 fence, or a heading with no fence in its section) —
         plan-coverage-checker's fail-loud, not duplicated here.
 
-    Reference: example-doctrine-repo coordinator/hooks/scripts/validate-frontmatter-schema.py
+    Reference: coordinator-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
     (`_plan_tasks_spine_errors`) — kept as an honest parity copy there, but
     inert (that hook is no longer registered in hooks.json); this module is
     the live enforcement.

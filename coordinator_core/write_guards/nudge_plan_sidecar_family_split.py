@@ -63,7 +63,7 @@ Negative-spec:
     carve-out for hard blocks is irreversible harm, which this is not.
   - Never raises: any unexpected input shape returns ``None`` (ALLOW/no-op).
 
-Spec backlink: docs/plans/2026-08-03-plan-sidecar-write-seam-guard.md § AC1-AC6
+Spec backlink: pln-plan-sidecar-write-seam-guard-4e1906 § AC1-AC6
 """
 
 from __future__ import annotations

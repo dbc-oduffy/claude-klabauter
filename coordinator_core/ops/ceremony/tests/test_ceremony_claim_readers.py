@@ -20,7 +20,7 @@ guard pass a handoff that is actually claimed by a DIFFERENT live session:
     fix already covers these sites, per this chunk's own re-verify-first
     instruction, not a second independent fix.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks row C4.
 
 Negative-spec: does NOT re-test `resolve_claim_state`'s own ledger/mirror

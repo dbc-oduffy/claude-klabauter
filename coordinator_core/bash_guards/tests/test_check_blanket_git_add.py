@@ -7,7 +7,7 @@ cites ``coordinator_core.bash_guards.block_blanket_git_add`` as the
 enforcement point. The real symbol is
 ``coordinator_core.bash_guards.dispatch_checks.check_blanket_git_add`` -- a
 module-level function in the ``dispatch_checks`` cohort (see that module's
-docstring: 11 checks folded from example-doctrine-repo's retired
+docstring: 11 checks folded from coordinator-claude's retired
 ``preuse-bash-dispatch.sh``, each following the bash predecessors'
 ``check_<name>(cmd, session_id[, cwd])`` sourceable-function contract, with
 no ``block_*``-named discovery module of its own). This file does NOT "fix"
@@ -22,7 +22,7 @@ it is a HAZARD-DISCRIMINATED guard. It fires (a) inside the ~/.claude
 meta-repo (the origin incident's own repo -- unchanged from the original
 scope), and (b) inside any repo the machine-local fleet registry
 (``repos.*``, see ``coordinator_core.machine_resolver``) knows about
-(claude-klabauter, example-doctrine-repo, every other sibling repo this machine tracks
+(claude-klabauter, coordinator-claude, every other sibling repo this machine tracks
 -- the concurrent-multi-session cross-contamination hazard that motivated
 the guard in the first place). It stays INERT in a repo that is neither
 the meta-repo nor a registered fleet sibling -- the OSS-consumer-install

@@ -1,17 +1,17 @@
 """coordinator_core.bash_guards.roster -- public, payload-free enumeration
 of every guard `dispatch.py::_build_guard_chain` registers.
 
-Purpose: example-doctrine-repo's `x-effective-delivery` hook-delivery-manifest emitter
+Purpose: coordinator-claude's `x-effective-delivery` hook-delivery-manifest emitter
 (`docs/reference/hook-delivery-manifest.md`) cannot see the guards
 `preuse-bash-dispatch.py` fans out to -- they exist only as claude-klabauter Python
 modules, reachable solely through `dispatch.py`'s private, payload-
 parameterised `_build_guard_chain`. This module is the public seam that
 closes that gap: a stable, payload-free read of the live registration, safe
 to call from outside this package (including across the plane boundary,
-per that contract's "Natural emitter source" section -- claude-klabauter is example-doctrine-repo's
+per that contract's "Natural emitter source" section -- claude-klabauter is coordinator-claude's
 hard prereq, so this dependency direction is the allowed one).
 
-Spec backlink: docs/plans/2026-08-13-guard-roster-export.md, chunk C1.
+Spec backlink: pln-guard-roster-export-minus-the-a4dec3, chunk C1.
 Contract: docs/reference/hook-delivery-manifest.md (`tool_names` /
 `script` / "Script tail key" sections -- this module is the claude-klabauter-side
 root of truth those sections describe).
@@ -177,7 +177,7 @@ def _script_tail_for(entry: "_dispatch.GuardEntry") -> str:
     rather than re-implementing the lowercasing/two-segment rule, per the
     plan's "ONE definition of that normal form in the tree" requirement.
 
-    Isolated to this one function on purpose: example-doctrine-repo has been asked which
+    Isolated to this one function on purpose: coordinator-claude has been asked which
     value this field should hold for a fanned-out guard (module tail vs
     carrier tail vs a historical script name), and their answer must be a
     one-function change here, not a rewrite of `guard_roster()`.

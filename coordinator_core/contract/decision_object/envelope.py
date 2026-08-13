@@ -1,18 +1,18 @@
 """The decision-object envelope: 8-key schema + the `_emit` fail-loud chokepoint.
 
-Conformance target (the example-doctrine-repo schema-of-record): `schemas/decision-object.schema.json`
-in example-doctrine-repo is the contract-of-record (DR-047). `ENVELOPE_KEYS` below encodes
+Conformance target (the coordinator-claude schema-of-record): `schemas/decision-object.schema.json`
+in coordinator-claude is the contract-of-record (DR-047). `ENVELOPE_KEYS` below encodes
 that schema's 8 canonical top-level keys as a module constant rather than
 coupling this package to a cross-repo file path -- the conformance suite
 (`coordinator_core/tests/test_decision_object_envelope.py`) asserts this
 package's produced/accepted key set matches that authority by name.
 
-Negative-spec: do not add a 9th key here without first updating the example-doctrine-repo-side
+Negative-spec: do not add a 9th key here without first updating the coordinator-claude-side
 schema-of-record and re-deriving `ENVELOPE_KEYS` from it -- this constant is a
 mirror of that schema, not an independent source of truth.
 
 Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md (Wave 1,
-chunk W1-A2).
+chunk W1-A2). [DEAD-CITATION: plan file never committed to this repo]
 """
 
 from __future__ import annotations

@@ -1,23 +1,23 @@
 """Parity guard: `offerable: true` in the registry manifest implies a
 vendored schema exists.
 
-Companion to example-doctrine-repo's `test_every_ops_schema_has_vendored_counterpart`
+Companion to coordinator-claude's `test_every_ops_schema_has_vendored_counterpart`
 (coordinator/tests/test_vendored_schema_version_parity.py) — that test
-sweeps example-doctrine-repo's schema source directory; this one sweeps the manifest's
+sweeps coordinator-claude's schema source directory; this one sweeps the manifest's
 `offerable` flag from claude-klabauter's side, which is the surface
 `validate_frontmatter_schema_deny.py` actually keys scaffold-offer/
 shape-validation on since `b4c6df071` repointed `schemas_dir` at the
 vendored corpus (coordinator_core/frontmatter/schemas/) instead of a live
-Example-doctrine-repo checkout.
+Coordinator-claude checkout.
 
 Was `pending_fix` from 2026-08-06 while twelve `offerable: true` doc types
 had no vendored schema (completion-entry, decision, docs-check-sidecar,
 goal, health-status, plan-coverage-check, prior-art-check, problem-set,
 research-synthesis, review-sidecar, sizing-object,
 strategic-self-description) — see
-cross-repo/inbox/2026-08-06-example-doctrine-repo-em-twelve-doc-types-lost-write-enforcement-today.md
+cross-repo/inbox/2026-08-06-coordinator-claude-em-twelve-doc-types-lost-write-enforcement-today.md
 and state/audits/2026-08-06-offerable-types-without-vendored-schemas.md.
-All twelve were vendored the same day from example-doctrine-repo's committed bytes at
+All twelve were vendored the same day from coordinator-claude's committed bytes at
 `e24d88781` (via `git show <sha>:coordinator/schemas/<name>.schema.json`,
 never a working-tree read — a working-tree copy would bake back in the very
 live-tree coupling `b4c6df071` removed), so the mark is gone and this is a
@@ -27,7 +27,7 @@ is the condition this file exists to make loud.
 
 Standing caveat, and the reason this guard is necessary but not sufficient:
 it asserts that an offerable type HAS a vendored schema. It cannot assert
-that a type WITHOUT one is legitimately excluded — that is example-doctrine-repo's
+that a type WITHOUT one is legitimately excluded — that is coordinator-claude's
 `DOE_ONLY_SCHEMAS`, whose own criterion ("validated solely by a live
 write-guard path") was falsified in two commits four days apart, in two
 repos, while its guarding test stayed green because it asserts roster
@@ -84,7 +84,7 @@ def test_every_offerable_doc_type_has_vendored_schema(schema_name: Optional[str]
     """
     if schema_name is None:
         pytest.skip(
-            "manifest unresolvable (no live example-doctrine-repo checkout on this machine) -- "
+            "manifest unresolvable (no live coordinator-claude checkout on this machine) -- "
             "this parity guard needs one to enumerate offerable doc types"
         )
     candidates = [

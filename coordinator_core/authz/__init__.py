@@ -16,7 +16,7 @@ Negative-spec (DR-215/C8 — vacated surface):
     transport-independent retained metadata. Note: dispatch_message does NOT call
     classify(); classification is not an enforcement gate on the in-process path.
 
-Spec backlink: docs/plans/2026-07-04-pcore-05-invoke-op-classification-authz-model.md
+Spec backlink: pln-pcore-05-invoke-op-write-seman-80eecd
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md
                docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
 """

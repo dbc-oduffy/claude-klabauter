@@ -19,7 +19,7 @@ writes a disposition outside `_common.DISPOSITIONS` — a caller-supplied invali
 raises ValueError rather than silently writing a row `_common`'s parser would skip. A batch
 is all-or-nothing: no partial batch ever reaches disk.
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C7
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C7
 """
 
 from __future__ import annotations

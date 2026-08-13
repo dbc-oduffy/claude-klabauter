@@ -1,6 +1,6 @@
 """lib/coordinator_safe_name.py — cross-platform safe filename component primitives.
 
-Port of: coordinator-safe-name.sh (example-doctrine-repo 721a71f4, 2026-07-21). Defines the canonical NTFS-illegal charset and
+Port of: coordinator-safe-name.sh (coordinator-claude 721a71f4, 2026-07-21). Defines the canonical NTFS-illegal charset and
 three pure functions (csn_timestamp, csn_slug, csn_check) plus a `main()` CLI
 dispatcher, importable by any consumer so the NTFS-illegal-charset logic
 lives in exactly one place. Known importers: the `coordinator-safe-name` CLI

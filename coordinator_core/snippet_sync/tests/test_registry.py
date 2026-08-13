@@ -3,12 +3,12 @@
 Covers the schema validation, consumer-resolution ordering (F5), and
 machine-local/file-exists conditional handling ported from the retired
 `coordinator/bin/snippet-registry` bash CLI (477 LoC). Golden-diff parity
-against the live example-doctrine-repo-side registry.toml + 3 bats suites
+against the live coordinator-claude-side registry.toml + 3 bats suites
 (test-snippet-registry{,-conditional,-malformed}.bats) is verified
 separately at build time — this file covers unit-level edges those
 integration suites don't isolate (e.g. content_root override).
 
-Spec backlink: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
+Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
 """
 from __future__ import annotations
 
@@ -194,7 +194,7 @@ def test_resolve_consumers_sibling_plugin_file_exists_anchors_to_home_regardless
     sibling-plugin file-exists conditional must resolve against the live-install
     plugins root ($CLAUDE_HOME-or-$HOME/.claude/plugins/example-game-workbench-repo/...)
     in BOTH production contexts — plugin_root == the live-install itself, and
-    plugin_root == the example-doctrine-repo SOURCE tree (the real --plugin-dir resolution path).
+    plugin_root == the coordinator-claude SOURCE tree (the real --plugin-dir resolution path).
     Prior to the fix, only the live-install plugin_root happened to resolve
     (by coincidence of relative-path arithmetic); the source-tree plugin_root
     silently dropped the consumer.
@@ -229,9 +229,9 @@ def test_resolve_consumers_sibling_plugin_file_exists_anchors_to_home_regardless
     out_live = reg.resolve_consumers(data, "foo", live_install_plugin_root)
     assert out_live == [str(live_install_target)]
 
-    # Context 2: plugin_root IS the example-doctrine-repo SOURCE tree — a wholly different
+    # Context 2: plugin_root IS the coordinator-claude SOURCE tree — a wholly different
     # location bearing no relative-path relationship to the live install.
-    source_tree_plugin_root = tmp_path / "some-other-checkout" / "example-doctrine-repo" / "coordinator"
+    source_tree_plugin_root = tmp_path / "some-other-checkout" / "coordinator-claude" / "coordinator"
     out_source = reg.resolve_consumers(data, "foo", source_tree_plugin_root)
     assert out_source == [str(live_install_target)]
 
@@ -293,7 +293,7 @@ def test_list_for_sibling_plugin_file_exists_matches_in_both_contexts(tmp_path, 
     )
     data = reg.load_registry(registry_path)
 
-    source_tree_plugin_root = tmp_path / "some-other-checkout" / "example-doctrine-repo" / "coordinator"
+    source_tree_plugin_root = tmp_path / "some-other-checkout" / "coordinator-claude" / "coordinator"
     assert reg.list_for(data, str(live_install_target), source_tree_plugin_root) == ["foo"]
     live_install_plugin_root = fake_home / ".claude" / "plugins" / "coordinator-claude" / "coordinator"
     assert reg.list_for(data, str(live_install_target), live_install_plugin_root) == ["foo"]
@@ -460,7 +460,7 @@ def test_get_snippet_meta_unknown_header_style_fails_loud(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# schema_version 4 — excluded_consumer + eligible_glob (example-doctrine-repo 355255cc3)
+# schema_version 4 — excluded_consumer + eligible_glob (coordinator-claude 355255cc3)
 #
 # Both fields are ADDITIVE-OPTIONAL: the v3-shaped-row case below is as
 # load-bearing as the violation cases, because "a v3 row is still valid at v4"

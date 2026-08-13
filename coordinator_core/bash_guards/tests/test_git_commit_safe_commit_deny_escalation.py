@@ -1,7 +1,7 @@
 """C7's oracle for `check_git_commit_safe_commit_advise`'s index-probe
 escalation (`dispatch_checks.py`).
 
-Spec backlink: docs/plans/2026-08-01-advisory-firing-shape-predicate.md
+Spec backlink: pln-advisory-firing-shape-predicat-802b35
 § C7, AC1 (deny leg), AC2 (oracle rows), AC10.
 
 `test_git_commit_safe_commit_firing_shape.py` (C1a) already covers the

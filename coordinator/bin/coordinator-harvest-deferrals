@@ -9,9 +9,9 @@ for this shape. On Windows, this file's co-located `.cmd` twin wins via
 macOS/Linux `python3` is the right interpreter. Caution: callers must invoke
 via the extensionless name or a resolved-interpreter prefix, never a bareword
 `.py` through git-bash — git-bash DOES honor the shebang and would exec-127
-with no `python3` present. See the carve-out in example-doctrine-repo's
+with no `python3` present. See the carve-out in coordinator-claude's
 coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
-this wiki lives in the example-doctrine-repo repo, not here).
+this wiki lives in the coordinator-claude repo, not here).
 
 Spec backlink: docs/plans/2026-07-09-plan-full-coverage-and-deferred-harvest.md § Architecture (C4a)
 
@@ -181,7 +181,7 @@ from coordinator_registry import doe_root, _DoeUnresolvable  # noqa: E402
 # cli_shared.claude_klabauter_root() resolves repos.claude_klabauter (CLAUDE_KLABAUTER_ROOT env ->
 # machine-local registry) — the SAME function coordinator-queue-append's
 # _output_path() central branch calls for improvement-queue since commit
-# 5b908173 ("central scope routes to claude-klabauter, not example-doctrine-repo — reconcile the two
+# 5b908173 ("central scope routes to claude-klabauter, not coordinator-claude — reconcile the two
 # implementations", 2026-07-23). doe_root() resolves the DIFFERENT
 # repos.example_doctrine_repo key and is the correct root ONLY for lessons-outbox
 # (coordinator-lesson-promote's _outbox_root() was not touched by that
@@ -248,12 +248,12 @@ def _resolve_cli_cmd(cli_name: str) -> list[str] | None:
 # The 11-value project-tier improvement-queue-eligible change_kind subset.
 # SSOT: coordinator/docs/wiki/lessons-outbox-schema.md § Change-kind enum
 # (the universal enum); this is the improvement-queue-eligible slice of it.
-# Hand-maintained mirror of a example-doctrine-repo-owned enum — when the SSOT gains a
+# Hand-maintained mirror of a coordinator-claude-owned enum — when the SSOT gains a
 # project-tier member, it must be added here too or the harvest treats it as
 # unroutable (and, since 2026-07-29, fails loud on a pm_approved row rather
 # than dropping it silently).
 #
-# `verification` (added 2026-07-29, example-doctrine-repo 1239761c1) is the one member whose
+# `verification` (added 2026-07-29, coordinator-claude 1239761c1) is the one member whose
 # deliverable is evidence rather than a diff — a hardware- or
 # environment-gated re-run, a manual dogfood. It is the only member naming no
 # surface to edit, which is the point: this shape gets deferred precisely
@@ -263,7 +263,7 @@ def _resolve_cli_cmd(cli_name: str) -> list[str] | None:
 # Negative-spec: `script-port` is NOT a member and does not become one. These
 # values name the SURFACE changed, not the flavour of the change — a
 # bash-to-Python port of a `bin/` utility is `script-edit`. A coined
-# work-shape token routes nowhere by design (example-doctrine-repo 1239761c1 decided this
+# work-shape token routes nowhere by design (coordinator-claude 1239761c1 decided this
 # explicitly after such a token dropped a pm_approved row here).
 _QUEUE_ELIGIBLE_CHANGE_KINDS = frozenset(
     {
@@ -561,7 +561,7 @@ def _select_harvest_candidates(
 ) -> tuple[list[dict], list[str], int]:
     """Split rows into (candidates, warnings, skipped_malformed_count).
 
-    Selection has TWO axes, and keeping them straight matters — example-doctrine-repo's memo
+    Selection has TWO axes, and keeping them straight matters — coordinator-claude's memo
     framed this as "both arms need re-pointing at the grouping predicate",
     which conflates them:
 
@@ -640,7 +640,7 @@ def _select_harvest_candidates(
             # with no disposition defaults to `open`, which lands in the `do`
             # grouping and is not a deferral at all. Honouring the legacy arm
             # on a governed plan would harvest a row into the queue without
-            # any grouping ever having been approved — the exact hole example-doctrine-repo
+            # any grouping ever having been approved — the exact hole coordinator-claude
             # warned about in "Vocabulary — deferred: true is legacy on both
             # sides". Gate on disposition; read-tolerate deferred.
             is_candidate = disposition == "backlogged" and defer_approved
@@ -740,7 +740,7 @@ def _resolved_claude_klabauter_root() -> str | None:
     docstring's Negative-spec).
 
     Deliberately distinct from _resolved_doe_root() above: commit 5b908173
-    ("central scope routes to claude-klabauter, not example-doctrine-repo — reconcile the two
+    ("central scope routes to claude-klabauter, not coordinator-claude — reconcile the two
     implementations", 2026-07-23) repointed coordinator-queue-append's central
     improvement-queue write (both its legacy _output_path() branch and the
     native queue.append op) from doe_root() (repos.example_doctrine_repo) to
@@ -839,8 +839,8 @@ def _derive_proposed_action(body: str, title: str, surface: str) -> str:
 
     coordinator-queue-append previously received `str(row["surface"])` for
     both --surface and --proposed-action, so every harvested row landed with
-    proposed_action byte-identical to a bare file path (example-doctrine-repo cross-repo memo,
-    measured 15/32 example-cockpit-repo, 11/493 example-doctrine-repo, 12/605 here).
+    proposed_action byte-identical to a bare file path (coordinator-claude cross-repo memo,
+    measured 15/32 example-cockpit-repo, 11/493 coordinator-claude, 12/605 here).
     proposed_action is the field that makes a queue entry actionable to a
     session that did not author it — a duplicated path reads as populated, so
     nothing ever prompts anyone to fill it in. This derives an actual action
@@ -916,7 +916,7 @@ def _run_queue_append(row: dict, key: str, dry_run: bool) -> bool:
         "--evidence",
         key,
     ]
-    # Carry-through (example-doctrine-repo cross-repo memo, leg 3): a row with no case_against
+    # Carry-through (coordinator-claude cross-repo memo, leg 3): a row with no case_against
     # (legitimately possible — the ~84 already-stamped plans are not
     # retro-fitted) harvests cleanly with the field simply omitted — never an
     # empty string or a placeholder. Only append the flag when the row
@@ -994,7 +994,7 @@ def _harvest(
     is never coerced onto a change_kind it doesn't carry (that would corrupt
     the record being harvested) and never silently default-sunk into the
     improvement queue (the improvement-queue schema's change_kind enum is
-    example-doctrine-repo's SSOT — coercing here would be an unowned, undocumented widening of
+    coordinator-claude's SSOT — coercing here would be an unowned, undocumented widening of
     it). Instead it is collected into `skipped_unroutable` — {id, change_kind,
     pm_approved} — so the caller can surface it in the summary and, for a
     pm_approved row, fail loudly rather than let a PM-ratified deferral

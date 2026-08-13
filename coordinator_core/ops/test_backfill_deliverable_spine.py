@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.backfill_deliverable_spine.
 
-Port of: backfill-deliverable-spine.sh (example-doctrine-repo ca30f76c, 2026-07-17)
+Port of: backfill-deliverable-spine.sh (coordinator-claude ca30f76c, 2026-07-17)
 Expectations below are independently re-derived from the bash oracle's awk/case logic
 (read directly, not by running the ported module and asserting its own output back at
 itself) — this is the review-integration-doctrine "fresh re-check" posture applied to a

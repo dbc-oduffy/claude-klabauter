@@ -3,10 +3,10 @@ speed bump's shared deny copy, consumed by all three bump guards (Bash
 cross-repo, Bash outside-repo, and the `Write`/`Edit`/`MultiEdit` tool
 surface) so every surface speaks with one voice.
 
-Spec backlink: docs/plans/2026-08-03-narrow-write-confinement-bump.md,
+Spec backlink: pln-narrow-the-write-confinement-b-d10f79,
 chunk C2, "Destination-class axis in the message module, owner-aware
-publish copy". Ported deliverable of example-doctrine-repo's `{C2, C12}` group,
-reduced here to `{C2}` (C12 shipped example-doctrine-repo-side, `6d0a8c4fa`).
+publish copy". Ported deliverable of coordinator-claude's `{C2, C12}` group,
+reduced here to `{C2}` (C12 shipped coordinator-claude-side, `6d0a8c4fa`).
 
 THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY. Under the plan's "Design
 posture -- passable by construction", detection exists only to trigger this
@@ -56,7 +56,7 @@ this guard's own message as prompt injection and ignored it").
 BUDGET -- every rendered template must fit
 `_message_size.MESSAGE_PROSE_CAP_BYTES` (220 BYTES of prose, measured by
 `_message_size.measure_envelope`), not 280 characters (this repo has no
-`docs/wiki/guard-message-concision.md` -- that page is example-doctrine-repo-resident and
+`docs/wiki/guard-message-concision.md` -- that page is coordinator-claude-resident and
 documents a DIFFERENT surface's cap in a different unit; do not cite it
 here). Every template below leans on `_alternative_liveness`'s own
 `_CUE_WINDOW_RE`/`_BACKTICK_RE`/`_cue_windows` exemption semantics, used as
@@ -202,7 +202,7 @@ DESTINATION_PUBLISH = "publish"
 #: The durable source-side alternative's doctrine citation (AC15) -- the
 #: doctrine SECTION, never a bare directory, and never the mirror's own
 #: destination path (Anti-scope: "do not hardcode a mirror DESTINATION path
-#: anywhere"). This is a citation of a example-doctrine-repo-resident wiki page name,
+#: anywhere"). This is a citation of a coordinator-claude-resident wiki page name,
 #: not a filesystem path this guard could read or test.
 _PUBLISH_DOCTRINE_CITATION = "plugin-extraction-and-distribution.md"
 _PUBLISH_DOCTRINE_SECTION = "Publish-Repo Content Authoring"

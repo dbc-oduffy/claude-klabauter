@@ -1,6 +1,6 @@
 """
 CompetitorSummary — example-market-data-repo competitor relationship fact (Level-2).
-Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/entities/competitor-summary.ts`
+Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/competitor-summary.ts`
 (Zod source).
 
 One of two entities added in the v2.16.0 widen for cockpit's example-market-data-repo

@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.rollup_derive.
 
-Port of: rollup-derive.sh (example-doctrine-repo b5a4192c, 2026-07-20).
+Port of: rollup-derive.sh (coordinator-claude b5a4192c, 2026-07-20).
 """
 
 from __future__ import annotations

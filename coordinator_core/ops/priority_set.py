@@ -4,7 +4,7 @@ coordinator_core.ops.priority_set — the SOLE writer of a priority-ledger entry
 
 Purpose: writes one authored priority assignment to
 ``<coordinator-state-root --central>/priority-ledger/<target_id>.yaml`` — the
-one-file-per-target ledger schema authored in example-doctrine-repo at
+one-file-per-target ledger schema authored in coordinator-claude at
 ``coordinator/schemas/priority-ledger.schema.json`` (C1 of the same plan wave).
 Every write goes through this op; there is no second writer of this directory.
 
@@ -44,9 +44,9 @@ Schema location: this op vendors a local copy of ``priority-ledger.schema.json``
 under ``coordinator_core/frontmatter/schemas/`` (handoff_transition's
 ``handoff.schema.json`` precedent), pin-tracked in
 ``coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS``.
-Example-doctrine-repo remains the schema's AUTHOR — this is a vendored copy, not a fork —
-and drift from example-doctrine-repo's tree is caught by the pin's gating tamper-check plus
-``schema_drift_watch``'s advisory probe, never by a live read of example-doctrine-repo's working
+Coordinator-claude remains the schema's AUTHOR — this is a vendored copy, not a fork —
+and drift from coordinator-claude's tree is caught by the pin's gating tamper-check plus
+``schema_drift_watch``'s advisory probe, never by a live read of coordinator-claude's working
 tree at call time. Resolution is a fixed path against the vendored directory
 and cannot fail (the file ships in this repo); ``_resolve_schema_path`` still
 returns ``Path``, never ``None`` — the ``Optional`` return type is kept only
@@ -60,7 +60,7 @@ Registered as ``priority.set``, classified ``OpClass.MUTATING``
 (coordinator_core/op_scopes.py — same class as ``ping`` / ``goal.set_kr_status``:
 the ledger root is resolved centrally, not derived from a caller repo_root).
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § C3
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C3
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ def _resolve_schema_path() -> Optional[Path]:
     Returns the fixed vendored path, or None (never raises) in the
     defensive case where the vendored file is somehow missing from this
     repo's own tree — see module docstring "Schema location". Unlike the
-    pre-vendoring live-example-doctrine-repo-tree read, this is no longer an EXPECTED failure
+    pre-vendoring live-coordinator-claude-tree read, this is no longer an EXPECTED failure
     mode; it exists so a corrupted/deleted vendored copy still degrades to a
     skipped validation rather than crashing the write path outright.
     """

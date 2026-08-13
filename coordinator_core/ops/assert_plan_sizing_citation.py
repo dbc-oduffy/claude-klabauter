@@ -51,8 +51,8 @@ dangling citation against — a dangling `sizing_object` means the record was
 never written, not that it moved. Likewise a missing declaration means the
 decision to cite was never made; the anti-scope forbids guessing one.
 
-Spec backlink: docs/plans/2026-08-06-plan-sizing-citation-gate.md § C3 / AC4 / AC6
-Spec backlink: docs/plans/2026-08-06-sizing-citation-absence-is-checkable.md § C2 / AC5-AC10
+Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C3 / AC4 / AC6
+Spec backlink: pln-sizing-citation-gate-make-abse-9495d8 § C2 / AC5-AC10
 """
 from __future__ import annotations
 

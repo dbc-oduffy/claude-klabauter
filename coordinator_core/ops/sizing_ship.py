@@ -67,7 +67,7 @@ Caller seam (report-only, not wired in this dispatch — see docstring of the
 dispatching brief / run-report sidecar for the seam found and why it is not
 wired here): a workstream-complete ceremony body reaching a terminal-positive
 outcome for a `spec-dispatch`/`plan`-routed sizing with no plan FK is this
-op's intended trigger. The ceremony body itself lives in example-doctrine-repo and needs
+op's intended trigger. The ceremony body itself lives in coordinator-claude and needs
 a cross-repo memo — out of scope for this engine-primitive dispatch.
 
 Scope, deliberately narrow (same "one value, its applier, its consumers, one

@@ -4,7 +4,7 @@ dispatch_checks), which previously delegated to bash scripts located BY
 FILENAME via ``_delegate_bin_check`` / ``_find_bin_script``.
 
 Windows de-bash (2026-07-20, docs/plans/2026-07-19-debash-coordinator-windows.md):
-Example-doctrine-repo's ``coordinator/bin/check-machine-path-leak.sh`` was renamed to
+Coordinator-claude's ``coordinator/bin/check-machine-path-leak.sh`` was renamed to
 ``check-machine-path-leak.py`` by an earlier de-bash session, and
 ``coordinator/bin/check-bin-sh-polyglot.sh`` is mid-rename to ``.py`` under the
 same campaign's Wave 4a sweep. ``_find_bin_script(name)`` looks up scripts BY
@@ -17,15 +17,15 @@ error. **Confirmed dead on this machine at port time**: the
 HARD-BLOCK guard was firing on nobody. Separately, this machine's
 ``~/.claude/plugins/coordinator/bin/`` mirror is empty, so
 even ``check-schema-version-bump.sh``/``check-bin-sh-polyglot.sh`` (which still
-exist as ``.sh`` in the example-doctrine-repo source repo) were unreachable via
+exist as ``.sh`` in the coordinator-claude source repo) were unreachable via
 ``_find_bin_script``'s fallback rung on this install -- all three delegates
 were silently no-op'ing here, not just the renamed one. This module removes
-the by-filename bash/subprocess coupling entirely so a future example-doctrine-repo-side rename
+the by-filename bash/subprocess coupling entirely so a future coordinator-claude-side rename
 cannot silently disable a guard again.
 
-Parity oracles -- example-doctrine-repo coordinator/bin/:
-  Port of: check-schema-version-bump.sh (example-doctrine-repo 51851112, 2026-07-21)
-  Port of: check-bin-sh-polyglot.sh (example-doctrine-repo 51851112, 2026-07-21)
+Parity oracles -- coordinator-claude coordinator/bin/:
+  Port of: check-schema-version-bump.sh (coordinator-claude 51851112, 2026-07-21)
+  Port of: check-bin-sh-polyglot.sh (coordinator-claude 51851112, 2026-07-21)
   check-machine-path-leak.py (still alive, already renamed pre-port)
 
 Posture: preserved EXACTLY from the reference impls. Checks 9 and 10
@@ -38,7 +38,7 @@ plumbing is replaced.
 
 Resolution mechanism, per check (NOT interchangeable -- see each function's
 own docstring):
-  - Checks 9/10 are example-doctrine-repo-repo-specific structural invariants
+  - Checks 9/10 are coordinator-claude-repo-specific structural invariants
     (canonical-structure.yaml / coordinator/bin/ live only in the coordinator
     plugin's own source repo). Their bash originals resolve their OWN plugin
     root from ``$(dirname "${BASH_SOURCE[0]}")`` -- i.e. wherever the
@@ -47,7 +47,7 @@ own docstring):
     dispatcher. This port reproduces that same "always the installed
     coordinator-plugin repo, never the commit's own cwd" semantics, but via
     ``coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`` (the
-    canonical, already-adopted-elsewhere example-doctrine-repo-root resolver with a real
+    canonical, already-adopted-elsewhere coordinator-claude-root resolver with a real
     machine-local-registry ladder) rather than re-deriving the bash
     originals' fragile ``BASH_SOURCE``-relative walk / ``_find_bin_script``'s
     hardcoded-depth-index walk -- both of which this port's own author
@@ -56,9 +56,9 @@ own docstring):
     files, not changing the guards' policy.
   - Check 11 (machine-path-leak) is different: it is scoped to whichever repo
     the ``git commit`` actually targets (``settings.json`` can live in any
-    repo, not just example-doctrine-repo). It reuses ``check_validate_commit``'s own
+    repo, not just coordinator-claude). It reuses ``check_validate_commit``'s own
     already-resolved ``staged``/``cwd`` (the target repo's staged-file list
-    and the commit's own working directory) -- no example-doctrine-repo-root resolution needed.
+    and the commit's own working directory) -- no coordinator-claude-root resolution needed.
   - Check 12 (``check_registration_quad_completeness``, added
     docs/plans/2026-07-25-registration-quad-completeness-gate.md) is a third,
     DIFFERENT resolution shape again: its oracle is the STAGED-DIFF content of
@@ -113,15 +113,15 @@ Check 13 (`check_staged_pathspec_divergence`, added 2026-07-27 per SC-DR-015)
 is a fourth resolution shape: its oracle is a live comparison of two
 `git diff` invocations (`--cached` vs plain) scoped to the trailing
 pathspec of a `git commit -- <paths>` in THIS Bash command -- neither the
-Example-doctrine-repo-plugin-repo scope of Checks 9/10, the target-commit-repo scope of Check
+Coordinator-claude-plugin-repo scope of Checks 9/10, the target-commit-repo scope of Check
 11, nor the staged-diff-content scope of Check 12. Disposition is ADVISORY
 ONLY (never a hard deny) -- see that function's own module-level comment
 block for why this one stays warn/offer rather than promoting straight to
 deny.
 
-Spec backlink: docs/plans/2026-07-25-registration-quad-completeness-gate.md
+Spec backlink: pln-registration-quad-completeness-bf0d39
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md
-Spec backlink: example-doctrine-repo coordinator/docs/wiki/scoped-safety-commits.md § SC-DR-015
+Spec backlink: coordinator-claude coordinator/docs/wiki/scoped-safety-commits.md § SC-DR-015
 """
 
 from __future__ import annotations
@@ -165,7 +165,7 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0) -
 
 def _resolve_doe_coordinator_root() -> Optional[str]:
     """Resolve the installed coordinator plugin's ``coordinator/`` directory,
-    via the canonical example-doctrine-repo-root resolver. Returns ``None`` on any resolution
+    via the canonical coordinator-claude-root resolver. Returns ``None`` on any resolution
     failure (never raises) -- Checks 9/10 fail open on this, matching the
     bash originals' own "not a git repo at PLUGIN_ROOT" -> exit 2 -> no
     warning-appended fail-open shape (see this module's docstring)."""
@@ -733,7 +733,7 @@ def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[
 # then ran `git commit -m ... -- <paths>` and discarded all of it; two hunks
 # belonging to a concurrent session landed under the wrong subject.
 #
-# Ruling + full empirical writeup: SC-DR-015, canonical text at example-doctrine-repo's
+# Ruling + full empirical writeup: SC-DR-015, canonical text at coordinator-claude's
 # `coordinator/docs/wiki/scoped-safety-commits.md` § SC-DR-015. That ruling's
 # own "Discharge" section names this exact guard as the artifact that makes
 # the ruling unnecessary to remember: "a PreToolUse check that sees

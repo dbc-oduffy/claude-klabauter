@@ -27,7 +27,7 @@ subprocess round-trip to a real CLI). Covers:
       baton's *wiring* to that runner, not the runner's own internals a
       second time.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
+Spec backlink: coordinator-claude docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
 chunk C3 (depends C1-C2).
 
 Run: python -m pytest coordinator_core/test_baton_assemble.py -q
@@ -1869,7 +1869,7 @@ class TestStandaloneHandoffSlugFromTitle:
 
 # ---------------------------------------------------------------------------
 # 2026-07-29 follow-up: successor-derivation archive-collision fix. Evidence:
-# example-doctrine-repo state/handoffs/2026-07-29_175200_confinement-band-split-plan-
+# coordinator-claude state/handoffs/2026-07-29_175200_confinement-band-split-plan-
 # awaiting-review.md § Session Ledger -- `baton-assemble apply handoff`'s
 # first brief timestamped the predecessor's basename (a live same-day
 # collision, correctly disambiguated); a concurrent session then archived
@@ -3521,7 +3521,7 @@ class TestHandoffStampPhaseSiteReceivesArgsVerbatim:
         assert result["args"] == [normalized]
 
     def test_nonzero_exit_code_raises_rather_than_returning_a_failed_result(self, tmp_path, monkeypatch):
-        """The swallow example-doctrine-repo-em reported 2026-07-29: `_invoke_op_in_process`
+        """The swallow coordinator-claude-em reported 2026-07-29: `_invoke_op_in_process`
         returns the op's `_err(...)` dict as an ordinary value, and
         `apply_base.execute_directives` treats only a RAISED exception as
         failure -- so without this raise a failed stamp landed in `landed`
@@ -6403,7 +6403,7 @@ class TestDirtyTreeCaseCEndToEndViaBrief:
 
 # ---------------------------------------------------------------------------
 # C6c -- red-before-green regression tests for C3/C4/C5.
-# Spec backlink: docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md,
+# Spec backlink: pln-roadmap-baton-supersession-haz-b82ac3,
 # chunk C6c (depends C3/C4/C5, which are PEER chunks -- NOT implemented by
 # this chunk). Every test in this section is expected to FAIL against
 # current HEAD; the fixes land in C3 (`_build_directives` gains a
@@ -6534,7 +6534,7 @@ class TestC4PlanTierSupersessionTargetFromLedger:
     `_resolve_held_handoff_for_session` already reads for the empty-
     artifact-path self-resolution case -- rather than from the plan's
     `predecessor_handoff`/`predecessor` fields, which name PROVENANCE (the
-    handoff that SPAWNED this plan per example-doctrine-repo's plan.schema.json), not a
+    handoff that SPAWNED this plan per coordinator-claude's plan.schema.json), not a
     termination target (F3). `predecessor_handoff` must still be carried on
     `lineage` for lineage-carry purposes (assumed key name
     `lineage["predecessor_handoff"]`, mirroring this module's existing

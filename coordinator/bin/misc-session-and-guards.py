@@ -1,5 +1,5 @@
 """misc-session-and-guards.py — small-guard-and-resolver grab-bag, ported off
-Example-doctrine-repo instruction-file bash fences (M3 chunk C-MISC).
+Coordinator-claude instruction-file bash fences (M3 chunk C-MISC).
 
 Subcommands (argv[1] selects):
     claim-classify

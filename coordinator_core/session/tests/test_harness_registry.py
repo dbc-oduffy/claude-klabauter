@@ -1,7 +1,7 @@
 """
 coordinator_core.session.tests.test_harness_registry — C1 scoped test suite.
 
-Spec backlink: docs/plans/2026-08-08-harness-session-registry-as-liveness-source.md § C1
+Spec backlink: pln-the-harness-already-knows-whic-096836 § C1
 
 All fixtures are fabricated on `tmp_path` — this suite never reads the
 operator's real `~/.claude/sessions`.

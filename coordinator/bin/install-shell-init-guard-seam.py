@@ -3,7 +3,7 @@
 install-shell-init-guard-seam.py — CLI trampoline over claude-klabauter
 coordinator_core.ops.install_shell_init_guard_seam.
 
-Collapses coordinator/commands/install.md (example-doctrine-repo repo) Step 3.5b.1's two
+Collapses coordinator/commands/install.md (coordinator-claude repo) Step 3.5b.1's two
 literal bash fences (lines 932 and 950 of the source doc) into one call —
 see coordinator_core.ops.install_shell_init_guard_seam's own docstring for
 the full design rationale and negative-spec.

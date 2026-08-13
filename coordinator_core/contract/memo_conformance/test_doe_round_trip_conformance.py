@@ -9,9 +9,9 @@ op still satisfies the schema / DR-026 filename lockstep / delivery-collision co
 across all 5 lockstep sites.
 
 Ownership note (2026-07-22): the 2026-07-21 executable-surface migration relocated this
-fixture out of example-doctrine-repo's ``coordinator/bin/`` into claude-klabauter's own ``coordinator/bin/``
-(``/Users/example-operator/X/example-doctrine-repo/coordinator/bin/cross-repo-memo-roundtrip.test.py`` no
-longer exists). Before this fix the gate resolved the fixture off a example-doctrine-repo clone via
+fixture out of coordinator-claude's ``coordinator/bin/`` into claude-klabauter's own ``coordinator/bin/``
+(``/Users/example-operator/X/coordinator-claude/coordinator/bin/cross-repo-memo-roundtrip.test.py`` no
+longer exists). Before this fix the gate resolved the fixture off a coordinator-claude clone via
 ``doe_drift.resolve_doe_clone()`` and skipped loud when unresolvable -- since the
 migration that meant the fixture was silently absent at the old path and the gate
 skipped on every run, thinning contract coverage to zero without failing anything. The
@@ -20,18 +20,18 @@ fixture is now resolved from claude-klabauter's own tree and a missing fixture F
 machine; that posture does not apply to a file that lives in our own repo. Trigger:
 ``cross-repo/inbox/2026-07-22-claude-central-em-auto-push-hook-fixed-generator-now-yours.md``.
 
-This is DELIBERATELY NOT a byte-compare against the old example-doctrine-repo CLI's output: the tool
-this fixture gates intentionally diverges from the example-doctrine-repo CLI's former bytes on all five
+This is DELIBERATELY NOT a byte-compare against the old coordinator-claude CLI's output: the tool
+this fixture gates intentionally diverges from the coordinator-claude CLI's former bytes on all five
 footguns the ownership move exists to fix (fail-loud vs. silent folder-scan, prose-first
 summary vs. heading-first, no-write dry-run resolution, nearest-match suggestion,
 supersedes-based re-delivery vs. hand-edit clobber). The oracle here is the documented
 CONTRACT (schema-valid frontmatter, the `kind` enum, DR-026 filename shape, collision
 semantics), not any CLI's byte-identical behavior. See CONTRACT-VS-ERGONOMIC.md for the
-full split between contract-invariant and CLI-ergonomic coverage in the original example-doctrine-repo
+full split between contract-invariant and CLI-ergonomic coverage in the original coordinator-claude
 CLI's ~139-test suite, so cutover did not silently thin contract coverage.
 
 Negative-spec: does NOT re-run ``coordinator/tests/test_cross_repo_memo_collision.py`` --
-that file exercises the (retired) example-doctrine-repo CLI's OWN ``_write_file`` helper (the former oracle
+that file exercises the (retired) coordinator-claude CLI's OWN ``_write_file`` helper (the former oracle
 side), not claude-klabauter's op; claude-klabauter's equivalent collision semantics are already covered
 locally by ``coordinator_core/ops/fleet/tests/test_memo_send.py``, and the round-trip
 fixture's own Collision 1/1b/2 + AC9 cases already dispatch claude-klabauter's REAL memo.send op
@@ -85,7 +85,7 @@ shape meant ``_KNOWN_DOE_SIDE_FAILURES`` could never match anything, however cor
 ordered the assertions were. Both shapes are matched so the set works against the
 fixture as it is today and as it was.
 
-Spec backlink: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C8 (A7/A8)
+Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C8 (A7/A8)
 Spec backlink: docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md § 2(a)/2(b)
 Oracle: coordinator/bin/test_cross_repo_memo_roundtrip.py (claude-klabauter-owned as of 2026-07-21;
 resolved from claude-klabauter's own tree, no vendoring, no foreign-clone dependency)
@@ -103,14 +103,14 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Known-bad tracking -- claude-klabauter-owned fixture defects, tracked pending a fixture-side
-# fix (not a example-doctrine-repo-relay any more -- see ownership note below)
+# fix (not a coordinator-claude-relay any more -- see ownership note below)
 # ---------------------------------------------------------------------------
-# History: Site 4 (surface-script glob) previously failed on a then-example-doctrine-repo-owned fixture
+# History: Site 4 (surface-script glob) previously failed on a then-coordinator-claude-owned fixture
 # defect -- test_cross_repo_memo_roundtrip.py's test_site4_surface_glob shelled the
 # Python surface script (`workday-start-cross-repo-memo-surface.py`, shebang
 # `#!/usr/bin/env python3`) via `subprocess.run(["bash", surface_script], ...)` instead
 # of the Python interpreter. Relayed to claude-central-em via the C8 cutover memo rather
-# than patched here (claude-klabauter did not own example-doctrine-repo/coordinator/bin/ at the time). Example-doctrine-repo
+# than patched here (claude-klabauter did not own coordinator-claude/coordinator/bin/ at the time). Coordinator-claude
 # fixed it in d55d882d ("Site-4 roundtrip test invoked python source via bash", on top
 # of the 28a7b868 de-polyglot caller migration); the fixture now invokes it via
 # `[sys.executable, surface_script]`. The healed assertion below fired (2026-07-21) and
@@ -124,13 +124,13 @@ import pytest
 # `coordinator/hooks/scripts/validate-frontmatter-schema.js` relative to its OWN
 # `_bin_dir()` (dirname(__file__)), which resolved inside claude-klabauter's checkout after the
 # fixture relocated there, but per a0bb05a0's rationale "schemas are contract and stay
-# example-doctrine-repo-side permanently" (schemas/ and hooks/ were deliberately NOT migrated with
+# coordinator-claude-side permanently" (schemas/ and hooks/ were deliberately NOT migrated with
 # bin/lib/scripts/tests). Fixed in the fixture itself
 # (coordinator/bin/test_cross_repo_memo_roundtrip.py's new `_doe_bin_dir()` helper,
 # following the same DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO env -> machine-local repos.example_doctrine_repo
 # resolution pattern as coordinator_registry.doe_root() /
 # percolate-preflight-scratch-publish.py's _resolve_coordinator_root()). Direct run
-# confirmed 2026-07-22: all 10 fixture tests pass with a resolvable example-doctrine-repo clone.
+# confirmed 2026-07-22: all 10 fixture tests pass with a resolvable coordinator-claude clone.
 #
 # To track a NEW claude-klabauter-owned fixture defect: add its fixture test NAME (prefix-matchable)
 # here, never swallow-all -- so a genuinely new claude-klabauter regression is never silently
@@ -200,11 +200,11 @@ def _claude_klabauter_root() -> Path:
 def test_doe_round_trip_conformance_fixture() -> None:
     """claude-klabauter's memo.send op clears the 5-site + collision + AC9 round-trip fixture.
 
-    The fixture is claude-klabauter-owned (relocated 2026-07-21 from example-doctrine-repo's
+    The fixture is claude-klabauter-owned (relocated 2026-07-21 from coordinator-claude's
     coordinator/bin/ into claude-klabauter's own coordinator/bin/) -- a missing fixture here is a
     genuine local defect (a bad relocation, a stale checkout) and FAILS loud rather
     than skipping. Skip-loud was the correct bootstrap-safety posture only while the
-    fixture lived in a foreign example-doctrine-repo clone that might not be resolvable on every
+    fixture lived in a foreign coordinator-claude clone that might not be resolvable on every
     machine; that posture no longer applies to a file that lives in our own tree.
     """
     claude_klabauter_root = _claude_klabauter_root()
@@ -213,7 +213,7 @@ def test_doe_round_trip_conformance_fixture() -> None:
         pytest.fail(
             f"round-trip conformance fixture not found at {fixture} -- expected in "
             "claude-klabauter's own tree since the 2026-07-21 executable-surface migration "
-            "(it is no longer hosted by example-doctrine-repo)"
+            "(it is no longer hosted by coordinator-claude)"
         )
         return
 
@@ -303,8 +303,8 @@ def test_doe_round_trip_conformance_fixture() -> None:
         if not any(name.startswith(known) for name in failing)
     }
     assert not healed, (
-        f"Tracked example-doctrine-repo-side fixture failure(s) {sorted(healed)} no longer reproduce -- "
-        "example-doctrine-repo has apparently fixed the surface-script invocation bug. Narrow "
+        f"Tracked coordinator-claude-side fixture failure(s) {sorted(healed)} no longer reproduce -- "
+        "coordinator-claude has apparently fixed the surface-script invocation bug. Narrow "
         "_KNOWN_DOE_SIDE_FAILURES accordingly (do not leave a stale known-bad entry "
         "that would mask a real future regression under the same test name)."
     )

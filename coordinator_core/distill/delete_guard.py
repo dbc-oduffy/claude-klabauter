@@ -52,7 +52,7 @@ run-and-fail):
      (`in_repo_capture:` present, resolves on disk, is a file, non-empty) or BLOCKS;
      any other value fails CLOSED. See `check_distill_fate` for the full semantics
      table.
-     Spec backlink: docs/plans/2026-07-23-distill-delete-guard-fate-enforcement.md § E1
+     Spec backlink: pln-distill-delete-guard-fate-enfo-12cddd § E1
   7. harvest-provenance — both classes, but a no-op unless `distill_fate == commitment`
      (2026-07-23 Gap 2 follow-up, code-review Finding 1). None of Guard 5's three
      `realized_by` shapes (`inline`, a bare SHA, a path) verify that a `commitment`
@@ -65,7 +65,7 @@ run-and-fail):
      (including absent) it is a PASS-through no-op, so it never touches the routine
      `ephemeral` deletion majority. See `check_harvest_provenance` for the full
      semantics.
-     Spec backlink: docs/plans/2026-07-23-distill-delete-guard-fate-enforcement.md § E1
+     Spec backlink: pln-distill-delete-guard-fate-enfo-12cddd § E1
 
 Output shape: `{"eligible": bool, "artifact_class": "memo"|"handoff"|None,
 "blocked_by": [<guard-name>, ...]}` per candidate. An unclassifiable candidate fails
@@ -76,7 +76,7 @@ Negative-spec: this module performs no writes. It reads frontmatter, shells out 
 read-only `git`/`rg` subprocesses, and stats the filesystem — it never mutates repo
 state or forms a durable store (claude-klabauter's store-less invariant holds).
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C3
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C3
 """
 
 from __future__ import annotations

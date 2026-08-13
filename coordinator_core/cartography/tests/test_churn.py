@@ -51,7 +51,7 @@ Coverage:
                               the op-level payload stays well-formed rather than
                               propagating the exception.
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C3 (cartography.churn); AC6 fixture-shape note (the Staff Engineer Finding 2).
 """
 

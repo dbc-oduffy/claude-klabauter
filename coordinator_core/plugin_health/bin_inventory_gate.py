@@ -72,7 +72,7 @@ Negative-spec:
       green. Unlike `relocation_ledger`'s own loader (which degrades a
       missing/malformed ledger to "nothing recorded" for callers that
       merely want to query it) or `fleet_reachability`'s legitimate
-      unresolvable-sibling-repo skip (an OSS consumer without a example-doctrine-repo
+      unresolvable-sibling-repo skip (an OSS consumer without a coordinator-claude
       checkout genuinely has nothing to compare), THIS gate's inventory and
       `coordinator/bin/` are both always-present, in-tree, self-contained
       surfaces on any checkout of this repo -- there is no legitimate
@@ -127,7 +127,7 @@ _KNOWN_OLD_PATH_EXTENSIONS = (".py", ".js", ".sh", ".cmd", ".ps1")
 # registry id that same section names as claude-klabauter's own self-identifier, and
 # every fixture in this module's own test file already assumes it. An entry
 # recording a DIFFERENT repo's history (the one production entry records a
-# example-doctrine-repo -> claude-klabauter adoption, not a claude-klabauter-internal move) must never
+# coordinator-claude -> claude-klabauter adoption, not a claude-klabauter-internal move) must never
 # "explain away" a disappearance from claude-klabauter's OWN tree merely because its
 # `old_path` stem happens to collide with a tracked inventory name.
 _SELF_OLD_REPO_ID = "claude_klabauter"

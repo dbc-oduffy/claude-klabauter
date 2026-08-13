@@ -42,7 +42,7 @@ competitor_deltas both return [] unconditionally) so a wire-level dispatch smoke
 producing a valid (empty-tracks) draft file. C2/C3 land the real Track A/B derivation logic; C4
 hardens draft_writer. See each helper module's docstring for its own stub/hardening split.
 
-Spec backlink: docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md § C1
+Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C1
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 """harvest-exit-interviews.py — CLI trampoline over claude-klabauter
 coordinator_core.subagent_sandbox.harvest_exit_interviews.
 
-Three example-doctrine-repo plan ACs cite ``harvest_exit_interviews.py`` by filename as an
+Three coordinator-claude plan ACs cite ``harvest_exit_interviews.py`` by filename as an
 entrypoint, but the module lives under ``coordinator_core/subagent_sandbox/``
 and was invocable only via ``python3 -m coordinator_core.subagent_sandbox.
 harvest_exit_interviews`` — no bareword/bin entrypoint existed for it to be
@@ -19,8 +19,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Exit convention: this is a read-only harvest/report tool, not a commit gate.
@@ -31,7 +31,7 @@ posture to fall back to). Once import succeeds, the exit code and stdout/
 stderr shape are entirely coordinator_core.subagent_sandbox.
 harvest_exit_interviews.main()'s own — see that module's docstring.
 
-Spec backlink: docs/plans/2026-07-13-subagent-run-report-autoprovision.md
+Spec backlink: pln-claude-klabauter-subagent-run-report-aut-f51428
 """
 
 from __future__ import annotations

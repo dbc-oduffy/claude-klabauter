@@ -19,7 +19,7 @@ vocabulary, several transcriptions, no parity test" (a legacy `kind:` value
 like `spinoff-roadmap` silently diverging between the two paths again).
 
 Neither function under test touches disk beyond a schema dict this suite
-constructs itself, so this suite does not require the sibling example-doctrine-repo
+constructs itself, so this suite does not require the sibling coordinator-claude
 checkout (unlike write_guards/tests/test_validate_frontmatter_schema_deny.py).
 """
 from __future__ import annotations

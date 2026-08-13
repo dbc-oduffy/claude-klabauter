@@ -18,8 +18,8 @@ tree (D-4/F6 of the same plan); every submodule is a pure, `__init__`-
 independent builder, and this module is the ONLY one that reads the
 CONSUMES_MANIFEST, assembles the 8-key envelope, and exposes the CLI.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
-Branches computed against: example-doctrine-repo coordinator/skills/workstream-complete/SKILL.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
+Branches computed against: coordinator-claude coordinator/skills/workstream-complete/SKILL.md
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
 chunk C3 (wiring the manifest/submodules/apply-verb landed here). Original
 compute-only convert: docs/plans/2026-07-21-canonical-resolution-engine.md,
@@ -1079,7 +1079,7 @@ def build_directives(
     # disposition), but substituting nothing left the close that caps an
     # entire lineage's diff as the ONE close with no brightline gate at all,
     # strictly less gated than an ordinary mid-chain session (2026-08-03
-    # example-doctrine-repo-em memo, `cross-repo/inbox/2026-08-03-example-doctrine-repo-em-wsc-
+    # coordinator-claude-em memo, `cross-repo/inbox/2026-08-03-coordinator-claude-em-wsc-
     # chain-terminal-brightline-gate-never-fires.md`). The chain gate's
     # machinery was already live — `wsc-coverage-gate-runner brightline-gate
     # --from-handoff` and its two-oracle plan/chain compute — only the call
@@ -1145,7 +1145,7 @@ def build_directives(
     # operation. Emitting it here archived a still-live session mid-session,
     # destroying once-per-session sentinels and the dispatch-evidence file.
     # Archival now belongs to session END, not workstream close — wired via
-    # a SessionEnd hook (example-doctrine-repo repo) rather than this assembly. The
+    # a SessionEnd hook (coordinator-claude repo) rather than this assembly. The
     # `wsc-close archive-session` CLI subcommand remains in place for that
     # caller; the directive builder that used to construct this call
     # (`directives_commit_tail.build_archive_session_claim_directive`) has
@@ -1202,7 +1202,7 @@ def build_coverage_judgment_point(gate: SessionShapeGate, directives: list[dict[
     # judgment point or on `d-coverage-gate`, and none of the dispositions
     # below resolve it. See `state/lessons/2026-07-27-verify-a-gate-
     # actually-enforces-before-s-a20579f1aa06.yaml` (evidence 87578a31 in
-    # claude-klabauter, e5f7b47c in example-doctrine-repo) — do not re-derive this as a
+    # claude-klabauter, e5f7b47c in coordinator-claude) — do not re-derive this as a
     # bug or wire a dependency edge here without a fresh PM decision.
     return build_judgment_point(
         {
@@ -1236,7 +1236,7 @@ def build_review_scale_judgment_point(
     verdict_presence: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Surfaces `decide_review_scale`'s verdict — otherwise dead code with
-    no call site (source memo 2026-08-03-example-doctrine-repo-em-wsc-chain-terminal-
+    no call site (source memo 2026-08-03-coordinator-claude-em-wsc-chain-terminal-
     brightline-gate-never-fires.md). Sits BESIDE `review-partition-strategy`
     / `reviewer-count-on-oracle-disagreement` (the Staff Engineer finding 13): it does
     not feed their inputs and is not gated on `review_relevant` — read only
@@ -1246,7 +1246,7 @@ def build_review_scale_judgment_point(
     the same ruling `build_coverage_judgment_point` carries): the commit
     tail (`d-run-wsc-tail`) carries no dependency edge on this judgment
     point. See DR-068 ("Commit-Time Coverage Gate — ... Advisory-Not-
-    Blocking") and example-doctrine-repo coordinator/docs/wiki/workstream-complete-
+    Blocking") and coordinator-claude coordinator/docs/wiki/workstream-complete-
     review.md, section "The gate is an oracle, not a lock" — do not
     re-derive this as a bug or wire a dependency edge here without a fresh
     PM decision. (The lesson file a sibling comment cites,
@@ -1288,7 +1288,7 @@ def build_review_scale_judgment_point(
     recommendation and closes a chain terminal on one reviewer." This is
     STILL advisory, not a new block: `d-run-wsc-tail` carries no dependency
     edge on `jp-review-scale` either way, per DR-068 (2026-07-27,
-    "Commit-Time Coverage Gate — ... Advisory-Not-Blocking") and example-doctrine-repo
+    "Commit-Time Coverage Gate — ... Advisory-Not-Blocking") and coordinator-claude
     coordinator/docs/wiki/workstream-complete-review.md, section "The gate
     is an oracle, not a lock" — do not re-derive this as a bug or wire a
     dependency edge here without a fresh PM decision. Removing the
@@ -1750,8 +1750,8 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
 
 def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> dict[str, Any]:
     """Leg A for `kind: session-handoff` batons only — that kind is not
-    built to carry its own `## Acceptance criteria` (0/34 in example-doctrine-repo's
-    corpus, 0/22 in claude-klabauter's; cross-repo/inbox/2026-08-03-example-doctrine-repo-em-
+    built to carry its own `## Acceptance criteria` (0/34 in coordinator-claude's
+    corpus, 0/22 in claude-klabauter's; cross-repo/inbox/2026-08-03-coordinator-claude-em-
     wsc-leg-a-session-handoff-kind-blind.md): its acceptance criteria live
     in the PLAN it was executing. Joins on the handoff's own
     `deliverable_id` frontmatter to that plan's `deliverable_id`

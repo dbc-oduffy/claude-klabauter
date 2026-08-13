@@ -2,7 +2,7 @@
 Tests for coordinator_core.ops.fleet._memo_summary's C1 additions:
 SUMMARY_PLACEHOLDER, is_placeholder_summary, validate_explicit_summary.
 
-Spec backlink: docs/plans/2026-08-07-memo-summary-cap-warn-at-draft.md § C1
+Spec backlink: pln-memo-summary-cap-warn-at-draft-8246d3 § C1
 """
 
 from __future__ import annotations

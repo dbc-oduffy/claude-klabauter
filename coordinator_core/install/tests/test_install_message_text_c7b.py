@@ -2,12 +2,12 @@
 docs/plans/2026-08-12-message-text-stops-naming-an-unreachable-repo.md.
 
 Purpose: pin that `gen_settings_hooks.py` and `prereq_probe.py` no longer
-print prose naming an unreachable private repo (`example-doctrine-repo`,
+print prose naming an unreachable private repo (`coordinator-claude`,
 `example-retrieval-repo-ue-addon`) at a reader who cannot navigate to it on a
 published OSS mirror — while their functional identifiers (env var names,
 registry keys, `EXAMPLE_GAME_REPO_UE_ROOT`, etc.) are untouched.
 
-Spec backlink: docs/plans/2026-08-12-message-text-stops-naming-an-unreachable-repo.md § C7b
+Spec backlink: pln-message-text-stops-naming-a-re-5c92dd § C7b
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def test_gen_settings_hooks_remediation_does_not_name_example_doctrine_repo(tmp_
     else:
         raise AssertionError("expected GenSettingsHooksError for a nonexistent coordinator root")
 
-    assert "example-doctrine-repo" not in message
+    assert "coordinator-claude" not in message
     assert "coordinator-claude repo is cloned" in message
 
 

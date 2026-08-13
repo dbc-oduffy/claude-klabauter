@@ -4,8 +4,8 @@ Mirrors the bash oracle's own regression net (issue #12) plus dedicated
 coverage for the greedy-decode disambiguator and the platform/permission
 edges called out in PORTER-BRIEF-ADDENDUM.md.
 
-Port of: discover-working-repos.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
-Oracle: test-discover-working-repos.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
+Port of: discover-working-repos.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Oracle: test-discover-working-repos.sh (coordinator-claude 6fb5fb37, 2026-07-22)
 """
 from __future__ import annotations
 
@@ -165,7 +165,7 @@ class TestFsProbePath:
 
     def test_msys_drive_form_converted_on_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
-        assert _fs_probe_path("/x/example-doctrine-repo") == "x:/example-doctrine-repo"
+        assert _fs_probe_path("/x/coordinator-claude") == "x:/coordinator-claude"
 
     def test_bare_msys_drive_root_converted_on_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
@@ -173,25 +173,25 @@ class TestFsProbePath:
 
     def test_already_native_path_passed_through_on_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
-        assert _fs_probe_path("X:\\example-doctrine-repo") == "X:\\example-doctrine-repo"
-        assert _fs_probe_path("X:/example-doctrine-repo") == "X:/example-doctrine-repo"
+        assert _fs_probe_path("X:\\coordinator-claude") == "X:\\coordinator-claude"
+        assert _fs_probe_path("X:/coordinator-claude") == "X:/coordinator-claude"
 
     def test_identity_on_non_windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "posix")
-        assert _fs_probe_path("/x/example-doctrine-repo") == "/x/example-doctrine-repo"
-        assert _fs_probe_path("/home/example-operator/example-doctrine-repo") == "/home/example-operator/example-doctrine-repo"
+        assert _fs_probe_path("/x/coordinator-claude") == "/x/coordinator-claude"
+        assert _fs_probe_path("/home/example-operator/coordinator-claude") == "/home/example-operator/coordinator-claude"
 
 
 class TestTierAGreedyDecode:
     def test_resolves_hyphenated_dir_name_against_real_fixture_tree(self, tmp_path: Path):
         # Direct regression net for the reported symptom: a projects-dir
-        # basename like "X--example-doctrine-repo" decodes (naive fast path) to
-        # "X:\\example-doctrine-repo\\claude", which doesn't exist on disk. The greedy walk
-        # must recover "example-doctrine-repo" as one hyphen-containing segment by
+        # basename like "X--coordinator-claude" decodes (naive fast path) to
+        # "X:\\coordinator-claude\\claude", which doesn't exist on disk. The greedy walk
+        # must recover "coordinator-claude" as one hyphen-containing segment by
         # probing what actually exists under the fixture root.
-        (tmp_path / "example-doctrine-repo").mkdir()
-        out = _tier_a_greedy_decode("example-doctrine-repo", "X", str(tmp_path))
-        assert out == "X:\\example-doctrine-repo"
+        (tmp_path / "coordinator-claude").mkdir()
+        out = _tier_a_greedy_decode("coordinator-claude", "X", str(tmp_path))
+        assert out == "X:\\coordinator-claude"
 
     def test_resolves_hyphenated_segment(self, tmp_path: Path):
         # "X:\dev\example-stats-repo" encodes to "X--dev-example-stats-repo"; the naive decode
@@ -223,9 +223,9 @@ class TestDecodeProjectsDirName:
         # Faithful oracle-bug repro: non-drive-letter entries decode via a
         # blanket backslash-join even though the source path was POSIX —
         # this is a documented, NOT-fixed gap (see module docstring).
-        drive, rest, decoded = _decode_projects_dir_name("-Users-example-operator-X-example-doctrine-repo")
+        drive, rest, decoded = _decode_projects_dir_name("-Users-example-operator-X-coordinator-claude")
         assert drive == ""
-        assert decoded == "\\Users\\example-operator\\X\\example-doctrine-repo\\claude"
+        assert decoded == "\\Users\\example-operator\\X\\coordinator-claude\\claude"
 
 
 class TestTierAEndToEnd:
@@ -233,7 +233,7 @@ class TestTierAEndToEnd:
     fast path (`_decode_projects_dir_name`) and the greedy-decode fallback
     (`_tier_a_greedy_decode`) were only tested in isolation, never composed
     at the orchestration layer where the MSYS-path-form bug actually lived:
-    a hyphenated projects-dir basename (e.g. "X--example-doctrine-repo") silently
+    a hyphenated projects-dir basename (e.g. "X--coordinator-claude") silently
     discovered nothing because BOTH the fast-path existence probe and the
     greedy-decode existence probe built an MSYS-form path native Windows
     Python cannot stat. This is the regression net at that failing layer.
@@ -241,17 +241,17 @@ class TestTierAEndToEnd:
 
     def test_hyphenated_repo_name_resolved_via_greedy_fallback(self, tmp_path: Path, monkeypatch):
         # Fixture: a ~/.claude/projects entry whose repo name carries a
-        # literal hyphen — the naive fast-path decode ("X:\\example-doctrine-repo\\claude")
-        # does not exist on disk; only the greedy walk recovers "example-doctrine-repo"
+        # literal hyphen — the naive fast-path decode ("X:\\coordinator-claude\\claude")
+        # does not exist on disk; only the greedy walk recovers "coordinator-claude"
         # as one segment.
         fake_home = tmp_path / "home"
         projects_dir = fake_home / ".claude" / "projects"
-        (projects_dir / "X--example-doctrine-repo").mkdir(parents=True)
+        (projects_dir / "X--coordinator-claude").mkdir(parents=True)
 
         # COORDINATOR_TIER_A_FS_ROOT test seam: point existence probes at a
         # real fixture tree holding the matching (lowercased) directory.
         fs_root = tmp_path / "fsroot"
-        (fs_root / "example-doctrine-repo").mkdir(parents=True)
+        (fs_root / "coordinator-claude").mkdir(parents=True)
 
         monkeypatch.setenv("HOME", str(fake_home))
         # Path.home() on Windows reads USERPROFILE, not HOME — set both so
@@ -261,7 +261,7 @@ class TestTierAEndToEnd:
 
         out = _tier_a()
 
-        assert out == ["X:\\example-doctrine-repo"]
+        assert out == ["X:\\coordinator-claude"]
 
 
 class TestTierAExcludeRegex:
@@ -290,8 +290,8 @@ class TestSortUnique:
         # entries differently than Python's plain ordinal sort — this is the
         # exact class of bug the byte-parity check against the bash oracle
         # caught (uppercase-first ordinal vs locale-aware collation).
-        out = _sort_unique(["example-doctrine-repo", "example-store-repo", "example-sim-repo-md"])
-        assert set(out) == {"example-doctrine-repo", "example-store-repo", "example-sim-repo-md"}
+        out = _sort_unique(["coordinator-claude", "example-store-repo", "example-sim-repo-md"])
+        assert set(out) == {"coordinator-claude", "example-store-repo", "example-sim-repo-md"}
         assert len(out) == 3
 
     def test_dedups(self):

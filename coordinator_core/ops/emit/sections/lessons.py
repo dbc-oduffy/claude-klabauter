@@ -16,10 +16,10 @@ logic away from its single source of truth.
 Quarantine: the lessons producer degrades-but-counts (parse_status="partial"), it never
 quarantines — so the malformed bucket is always empty (golden malformed_records.lessons=[]).
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 8.5,
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.5,
   LessonSummary. Byte/semantic parity port.
 Producer: bin/lib/emit-lesson-summaries.py (§ C3 producer, frozen).
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P09
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P09
 
 Review: code-reviewer — Finding 2 (DR-060 production-leak scope gap): the frozen
 producer has since been fixed at source to relativize its own provenance path (see

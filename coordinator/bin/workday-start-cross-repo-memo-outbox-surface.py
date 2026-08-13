@@ -9,8 +9,8 @@ the stale threshold) has been fully ported to
 coordinator_core/ops/workday_start_cross_repo_memo_outbox_surface.py, with a
 co-located pytest suite
 (coordinator_core/ops/test_workday_start_cross_repo_memo_outbox_surface.py).
-This file is now a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter
-(engine) module, per DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns
+This file is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter
+(engine) module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns
 engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -20,8 +20,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Always exits 0 — this is an orientation surfacer (offer-shape only: emits

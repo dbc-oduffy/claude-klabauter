@@ -20,7 +20,7 @@ Verified here by ACTUALLY EXECUTING the generated payload via a real `bash
 originally caught (fold a real apostrophe in, watch the outer quote break).
 
 Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md
-row BX-16 (example-doctrine-repo); this file's own coverage supersedes the "compile
+row BX-16 (coordinator-claude); this file's own coverage supersedes the "compile
 under current interpreter" checks in `test_bx16_multiprobe_and_headtail_
 rewrite.py`'s `TestGeneratedPayloadShellSafety` for the apostrophe case
 specifically -- those pin quote-content ABSENCE, this file pins quote-content

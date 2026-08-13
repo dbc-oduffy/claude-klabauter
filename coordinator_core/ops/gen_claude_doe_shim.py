@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.gen_claude_doe_shim — Port of: gen-claude-doe-shim.sh
-(example-doctrine-repo b5a4192c, 2026-07-20).
+(coordinator-claude b5a4192c, 2026-07-20).
 
 Purpose: renders .claude/shell/claude-doe-shim.sh — under CLAUDE_HOME when set,
 else under the HOME env var, else under the expanded platform home — from the
@@ -17,7 +17,7 @@ Idempotency:  safe to re-run — sentinel-guarded rc block, atomic writes; re-ru
 Dry-run safe: --check-only renders to a discarded temp path, never touches live files.
 Migration:    detects the legacy `# --- coordinator maximalist launch ---` block and
               surfaces a one-line migration note; does NOT silently rewrite it.
-Override:     --rc <path> (or the example-doctrine-repo trampoline's COORDINATOR_SHIM_RC env passthrough)
+Override:     --rc <path> (or the coordinator-claude trampoline's COORDINATOR_SHIM_RC env passthrough)
               selects the rc directly (escape hatch when $SHELL detection is wrong).
 
 Shell family: --shell bash|powershell (default: bash, preserving all prior
@@ -61,7 +61,7 @@ applied in the sibling ports gen_claude_doe_launcher.py / gen_doe_root_pointer.p
 Transport-failure exit code note (porter-brief addendum § 3b): this module's own
 exit codes are pure CLI-usage/business codes (0 success, 1 failure) — it has no
 notion of a "transport" failure itself (no subprocess, no claude-klabauter-internal call).
-The example-doctrine-repo-side trampoline's CLAUDE_KLABAUTER_ROOT-resolution / import-failure path (a distinct,
+The coordinator-claude-side trampoline's CLAUDE_KLABAUTER_ROOT-resolution / import-failure path (a distinct,
 outer transport-failure class) maps to a DEDICATED exit code 2 — never a reused
 business rc — per addendum rule A3b, so `run_required`-style callers can tell
 "the install step's own business logic failed" (1) apart from "the claude-klabauter engine
@@ -80,7 +80,7 @@ from typing import List, Optional
 
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-claude-doe-shim.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
+_PROG = "gen-claude-doe-shim.sh"  # literal program-name prefix, matches the coordinator-claude filename
 
 SENTINEL_BEGIN = "# --- coordinator claude-doe shim [generated] ---"
 SENTINEL_END = "# --- end coordinator claude-doe shim ---"
@@ -88,7 +88,7 @@ SENTINEL_END = "# --- end coordinator claude-doe shim ---"
 LEGACY_MARKER = "# --- coordinator maximalist launch ---"
 # The invariant lead-in shared by every observed hand-written variant of the
 # marker line above -- real-world instances append a trailing comment/padding
-# suffix (e.g. "... (example-doctrine-repo-resident plugin source) ----------------") after
+# suffix (e.g. "... (coordinator-claude-resident plugin source) ----------------") after
 # "launch", so detection matches this as a line PREFIX (after strip), never
 # the full LEGACY_MARKER string as a whole-line equality check.
 LEGACY_MARKER_PREFIX = "# --- coordinator maximalist launch"
@@ -134,7 +134,7 @@ Options:
   --check-only        Validate without mutating any live file (renders to a
                       temp path, discards it, exits 0 on success)
   --template <path>   Override template source path (default: auto-resolved
-                      relative to the example-doctrine-repo trampoline; useful for tests)
+                      relative to the coordinator-claude trampoline; useful for tests)
   --shell <family>    Target shell family: "bash" (default, covers bash/zsh)
                       or "powershell" (selects the .ps1 shim path and a
                       dot-source wired line instead of a bash source line)
@@ -150,7 +150,7 @@ Exit codes:
        --check-only pass)
   1 -- any failure: unknown argument, missing --template value, template not
        found, rc sentinel block hand-modified, rc file uncreatable, or (from the
-       example-doctrine-repo trampoline) CLAUDE_KLABAUTER_ROOT/import resolution failure
+       coordinator-claude trampoline) CLAUDE_KLABAUTER_ROOT/import resolution failure
 """
 
 
@@ -281,20 +281,20 @@ def main(argv: List[str]) -> int:
                 except OSError:
                     doe_resolved = False
         if not doe_resolved:
-            print("claude_shim: skipped (example-doctrine-repo clone not resolved — complete step 3.5a first)")
+            print("claude_shim: skipped (coordinator-claude clone not resolved — complete step 3.5a first)")
             return 0
 
     if not template_override:
-        # This module has no co-located example-doctrine-repo-side script path to derive the oracle's
+        # This module has no co-located coordinator-claude-side script path to derive the oracle's
         # `${_script_dir}/../templates/shell/claude-doe-shim.sh.tmpl` default from —
-        # the example-doctrine-repo trampoline resolves that default itself (relative to its own
+        # the coordinator-claude trampoline resolves that default itself (relative to its own
         # on-disk location) and always passes --template explicitly, so this branch
         # is reached only when a caller invokes main() directly without one. Fail
         # loud rather than guess a cwd-relative path that could silently pick up the
         # wrong template.
         print(
             f"{_PROG}: --template not supplied and no default resolvable "
-            "(the example-doctrine-repo trampoline should always pass one explicitly).",
+            "(the coordinator-claude trampoline should always pass one explicitly).",
             file=sys.stderr,
         )
         print("claude_shim: failed (see stderr for gen-claude-doe-shim.py output)")

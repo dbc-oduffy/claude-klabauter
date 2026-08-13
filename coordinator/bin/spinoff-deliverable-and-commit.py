@@ -2,7 +2,7 @@
 """spinoff-deliverable-and-commit.py — deliverable_id/origin-handoff-id carry cascade
 and scope-scoped commit for the `/spinoff` authoring surface.
 
-Purpose: example-doctrine-repo's coordinator/skills/spinoff/SKILL.md inlines several multi-step
+Purpose: coordinator-claude's coordinator/skills/spinoff/SKILL.md inlines several multi-step
 bash blocks (C3d deliverable_id auto-inheritance, C2 origin_handoff_id ID-companion
 resolution, and Step 4's scope-path-extraction-then-commit) that had to share one
 shell process (resolved variables do not survive across separate Bash tool calls).
@@ -43,7 +43,7 @@ commit-scope) exits 1, matching the bash oracle's own `exit 1` on the same guard
 Spec backlink: coordinator/skills/spinoff/SKILL.md § "Deliverable-spine threading
                (D1 carry-not-remint)" (C3d block), § "origin_handoff_id:" (C2 block),
                § "Step 4: Commit"
-Port of: the three bash fences named above in example-doctrine-repo
+Port of: the three bash fences named above in coordinator-claude
          coordinator/skills/spinoff/SKILL.md (bash bodies retired on cutover; the
          resolve-claude-klabauter-bin / _cc_trusted/_cc_root guard preambles surrounding those
          fences are NOT ported here — thin-invocation/guard-preamble concern, handled

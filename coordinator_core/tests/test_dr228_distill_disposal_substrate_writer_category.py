@@ -30,7 +30,7 @@ the same plan wave):
       without the citation fails loudly here instead of silently drifting from
       the DR's own admission.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C9b
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C9b
 Governing decision: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md
 Reference implementation shape: coordinator_core/ops/docgen/tests/test_dr_write_site_guard.py
 """

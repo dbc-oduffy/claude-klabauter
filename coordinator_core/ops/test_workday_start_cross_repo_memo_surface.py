@@ -1,9 +1,9 @@
 """
 Tests for coordinator_core.ops.workday_start_cross_repo_memo_surface.
 
-Port of: workday-start-cross-repo-memo-surface.sh (example-doctrine-repo b5a4192c, 2026-07-20).
-Cases mirror the example-doctrine-repo bash test suite (workday-start-cross-repo-memo-surface.test.sh,
-Example-doctrine-repo 3a561713, 2026-07-22, 11 cases) plus additional edge/platform cases
+Port of: workday-start-cross-repo-memo-surface.sh (coordinator-claude b5a4192c, 2026-07-20).
+Cases mirror the coordinator-claude bash test suite (workday-start-cross-repo-memo-surface.test.sh,
+Coordinator-claude 3a561713, 2026-07-22, 11 cases) plus additional edge/platform cases
 exercised during the port.
 """
 

@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.coordinator_complete_entry — Port of:
-coordinator-complete-entry.sh (example-doctrine-repo a1a568d2, 2026-07-22, 392 lines).
+coordinator-complete-entry.sh (coordinator-claude a1a568d2, 2026-07-22, 392 lines).
 
 Purpose: scaffold a pre-filled workstream completion entry — the mechanical
 spine of /workstream-complete Step 2.6 (completion-entry ladder) in one
@@ -10,9 +10,9 @@ and ``<!-- PROSE: ... -->`` (always present — title + body slot for the
 model).
 
 Not a JSON-RPC op — a plain module, NOT ``@register_op``'d, called by direct
-import from the example-doctrine-repo polyglot trampoline (template-variant #1, mirrors
+import from the coordinator-claude polyglot trampoline (template-variant #1, mirrors
 coordinator-auto-push / handoff-gate-aging / coordinator-render-rollup): the
-Example-doctrine-repo caller (coordinator/bin/coordinator-complete-entry) is itself Python, so
+Coordinator-claude caller (coordinator/bin/coordinator-complete-entry) is itself Python, so
 an in-process call is strictly cheaper than a JSON-RPC round-trip.
 
 Wraps (never reimplements) three sibling helpers, exactly as the bash oracle
@@ -33,7 +33,7 @@ did:
     prepend a stub executable named ``coordinator-render-rollup.sh``
     (coordinator_render_rollup.py's own docstring: "PATH-first (enables test
     shims)"); an always-in-process call would have silently broken that
-    testability path — caught by example-doctrine-repo's own
+    testability path — caught by coordinator-claude's own
     ``coordinator/bin/tests/test-complete-entry-rollup.sh`` Test A during this
     port's own verification. Production runs (no such shim on PATH) always
     take the faster in-process branch. 2026-07-21: the shim invocation itself
@@ -48,7 +48,7 @@ did:
   - Step 2.6.5a single-session LoE (was: ``bash coordinator-session-loe.sh
     --format yaml-frontmatter``) is now a fully native, in-process
     reimplementation (``_native_single_session_loe`` /
-    ``_count_session_dispatches`` below) — no subprocess, no bash, no example-doctrine-repo
+    ``_count_session_dispatches`` below) — no subprocess, no bash, no coordinator-claude
     coupling. Resolves the session id via the already-ported
     ``coordinator_core.session.core.resolve_session_id`` (the same 4-tier
     chain the bash oracle's own ``cs_resolve_session_id`` implements),
@@ -61,7 +61,7 @@ did:
     mirroring the bash oracle's ``ad=""``/``od=""`` unset state, NOT ``0``).
   - The Step 2.6.3a idempotency-guard primary signal (was: ``node
     query-records.js --type completion --where chain=<slug>``, a subprocess
-    call into example-doctrine-repo's ``coordinator/bin/``) is now an IN-PROCESS call to
+    call into coordinator-claude's ``coordinator/bin/``) is now an IN-PROCESS call to
     ``coordinator_core.ops.ceremony.records_query.query_records("completion",
     ..., where=f"chain={chain_slug}")`` (2026-07-22 repoint onto claude-klabauter's
     native records-query seam). ``_query_records_existing_path`` re-renders
@@ -77,7 +77,7 @@ did:
     and degrade to ``None``, exactly mirroring the oracle's ``[[ -x ... ]]``
     existence gate plus ``|| _qr_rc=$?`` discard-and-continue — the caller
     (``_idempotency_guard``) falls through to the grep-scan on any of these,
-    same as before. No example-doctrine-repo coupling remains in this function.
+    same as before. No coordinator-claude coupling remains in this function.
 
 Spec backlink: docs/plans/2026-07-06-cockpit-contract-v27 (§ coordinator-complete-entry)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md (BIG_PORT Wave B)
@@ -92,7 +92,7 @@ Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-p
       contains ``.`` or ``-``).
     - ``query-records.js`` degrades silently to the grep-scan result on
       absence, non-zero exit, empty stdout, or the sibling script simply not
-      existing at the resolved example-doctrine-repo bin dir — mirrors the oracle's
+      existing at the resolved coordinator-claude bin dir — mirrors the oracle's
       ``[[ -x ... ]]`` existence gate plus ``|| _qr_rc=$?`` discard-and-continue.
     - LoE block degrades to an explicit null block
       (``agent_dispatches/opus_dispatches/em_tokens/tshirt: null``) on ANY
@@ -104,7 +104,7 @@ Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-p
     - Exit codes reproduced exactly: 0 — entry written, or idempotent no-op
       (pre-existing chain entry found); 1 — argument error; 2 — environment
       error (not inside a git repository). A NEW dedicated code (3) is used
-      ONLY by the example-doctrine-repo-side trampoline for a CLAUDE_KLABAUTER_ROOT/import transport
+      ONLY by the coordinator-claude-side trampoline for a CLAUDE_KLABAUTER_ROOT/import transport
       failure (this module never returns 3 itself — see the trampoline's own
       docstring; this is a fail-loud ceremony tool, not a best-effort/
       never-block script, so a transport outage must not misclassify as
@@ -553,9 +553,9 @@ def _query_records_existing_path(repo_root: str, chain_slug: str) -> Optional[st
     """Primary existence signal — native records-query (best-effort, fail-open).
 
     Was: a ``node query-records.js --type completion --where chain=<slug>``
-    subprocess spawned against example-doctrine-repo's ``coordinator/bin/`` (resolved via
+    subprocess spawned against coordinator-claude's ``coordinator/bin/`` (resolved via
     ``coordinator_doe_root``). Repointed 2026-07-22 onto claude-klabauter's own
-    ``ceremony.records_query.query_records`` seam — no example-doctrine-repo coupling, no node.
+    ``ceremony.records_query.query_records`` seam — no coordinator-claude coupling, no node.
 
     Reproduces the oracle's markdown-list ``completion`` rendering
     (query-records.js:314's ``TYPE_DISPLAY.completion`` — ``- **title**
@@ -654,7 +654,7 @@ def _idempotency_guard(repo_root: str, completed_dir: str, chain_slug: str):
 
 def _count_session_dispatches(agents_file: Path):
     """Port of ``count_session()``'s core counting logic (bash
-    coordinator-session-loe.sh, example-doctrine-repo b644d5a9, 2026-07-22).
+    coordinator-session-loe.sh, coordinator-claude b644d5a9, 2026-07-22).
 
     Returns ``(agent_dispatches, opus_dispatches)`` as ``(Optional[int],
     Optional[int])`` — ``(None, None)`` when *agents_file* does not exist,
@@ -924,7 +924,7 @@ def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
     # explicitly "enables test shims" per coordinator_render_rollup.py's own
     # module docstring. An always-in-process call would silently drop that
     # testability path (a real scope-drop per the porter-brief addendum rule
-    # 7, caught by example-doctrine-repo's own test-complete-entry-rollup.sh Test A, which PATH-
+    # 7, caught by coordinator-claude's own test-complete-entry-rollup.sh Test A, which PATH-
     # prepends a stub `coordinator-render-rollup.sh` and expects it honored).
     # Preserve it: PATH-first subprocess shim wins when present (mirrors the
     # oracle's own `command -v` resolution + `bash "$_RENDER_HELPER" ...`

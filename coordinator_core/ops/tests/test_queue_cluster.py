@@ -8,7 +8,7 @@ caller-supplied floor, the response envelope's `id` field, and a value-pin
 over the signal enum (mirrors coordinator_core/clustering/tests/
 test_candidates_pin.py's STOP_WORDS pin pattern).
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C3
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C3
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ def _init_repo(root) -> None:
 def test_signal_enum_pinned() -> None:
     """The signal enum's names AND order are frozen.
 
-    example-doctrine-repo's `/debt-triage` Step 6b suppresses the "directory" signal by literal
+    coordinator-claude's `/debt-triage` Step 6b suppresses the "directory" signal by literal
     string comparison against this exact value. A rename or re-case here does
     not error on their side -- it silently stops matching, and the next
     triage run hands their ceremony one un-suppressed, oversized cluster as a

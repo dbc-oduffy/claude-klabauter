@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.test_auto_push — behavior-parity tests for the naked-Python
-port of the example-doctrine-repo-owned `coordinator-auto-push` bash script (DR-059).
+port of the coordinator-claude-owned `coordinator-auto-push` bash script (DR-059).
 
 Tests assert:
   - classify_error() ordered-ladder parity, including the load-bearing ordering
@@ -415,7 +415,7 @@ def test_main_exits_0_on_push_failure(monkeypatch, tmp_path):
     assert "auth" in content
     # Separator-norm regression: the forensic path is a TEXT artifact, so it must
     # be forward-slashed like the pre-port bash oracle emitted -- str(Path) on nt
-    # would drift the log's own rows mid-file (example-doctrine-repo observed the split 2026-07-20).
+    # would drift the log's own rows mid-file (coordinator-claude observed the split 2026-07-20).
     assert "\\" not in content, f"backslash leaked into push-failures.log: {content!r}"
 
 
@@ -889,13 +889,13 @@ def test_run_push_with_retry_succeeds_on_second_attempt(monkeypatch, tmp_path):
 # auto_push.py's "cockpit-contract release publish" section for the
 # fleet-wide-firing defect this guard exists to prevent
 # (cross-repo/archive/2026-07-25-claude-klabauter-em-cockpit-publish-use-a-github-action-not-a-claude-klabauter-directive.md,
-# example-doctrine-repo).
+# coordinator-claude).
 # ---------------------------------------------------------------------------
 
 def test_run_push_with_retry_no_cockpit_script_never_attempts_publish_anti_regression(monkeypatch, tmp_path):
     # Anti-regression for the rejected fleet-wide-firing design: a repo that
     # does not track .github/scripts/publish_cockpit_contract.py (i.e. every
-    # coordinator-installed repo except example-doctrine-repo) must NEVER attempt to
+    # coordinator-installed repo except coordinator-claude) must NEVER attempt to
     # invoke it, even on a fully successful push. No .github/ tree is created
     # in this tmp_path repo at all.
     repo_root = str(tmp_path)

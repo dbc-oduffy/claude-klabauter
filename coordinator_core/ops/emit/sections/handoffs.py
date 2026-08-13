@@ -50,7 +50,7 @@ on-disk handoff corpus is migrated to the new vocabulary (``active``→``open``,
 ``consumed``→``claimed``, ``consumed_at``→``claimed_at``, ``consumed_by``→``claimed_by``,
 ``abandoned``→``continued``/``closed``) AND a pre-flight consumer-corpus scan confirms zero
 surviving old tokens — not on a timer, not on claude-klabauter's own corpus alone.
-Spec backlink: docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md § C7.
+Spec backlink: pln-handoff-lifecycle-vocabulary-o-22ada6 § C7.
 
 ``deployment_state: abandoned`` splits into two new terminals that don't map 1:1
 (``continued`` + required ``continued_into`` successor, vs ``closed`` + required
@@ -101,9 +101,9 @@ strings), UNLIKE the ``plan_id`` dead-join above:
     is set to the bare id itself as a documented, minimal placeholder; a follow-up may
     wire a real title lookup.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 1 + § SECTION
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 1 + § SECTION
   1.5. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P01
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P01
 Spec backlink (origin_* fix): docs/plans/2026-07-07-spinoff-provenance-ancestry.md § C7;
   contract requiredness verified against handoff-summary.schema.json at 2.10.0/2.17.0/2.20.0.
 
@@ -303,7 +303,7 @@ def _derive_handoff_id(repo: str, path: Optional[str]) -> tuple[str, str]:
     handoff eventually makes), which would silently re-point this key mid-life — a join key
     that mutates out from under its consumers on a routine housekeeping move is worse than no
     key. The basename survives that move untouched. ``repo`` qualifies the pair because the
-    cockpit corpus aggregates records across repos (claude-klabauter, example-doctrine-repo, example-retrieval-repo,
+    cockpit corpus aggregates records across repos (claude-klabauter, coordinator-claude, example-retrieval-repo,
     example-cockpit-repo, …) and a timestamp-prefixed basename (``2026-07-19-foo.md``) is exactly the
     shape that can collide between two repos emitting on the same day.
 

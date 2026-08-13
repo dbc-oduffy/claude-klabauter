@@ -91,7 +91,7 @@ class TestPhraseOverlapSignal:
 # (b2) precision regression -- the 2026-07-27 first-dogfood failure.
 #
 # The real incident (against coordinator/docs/wiki/cross-repo-communication.md
-# in example-doctrine-repo): appending a rule about worked N-node propagation examples
+# in coordinator-claude): appending a rule about worked N-node propagation examples
 # produced 13 candidates, every one a `shared_ngrams: 1` hit on the single
 # incidental 4-word run "a cross-repo memo" -- generic corpus vocabulary that
 # recurs throughout the file, nowhere near the propagation/inheritance/

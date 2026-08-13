@@ -19,7 +19,7 @@ Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `session-liveness-cli` is an extensionless polyglot entrypoint, not a `.py`
 module -- same load idiom as test_session_claim_cli.py's `_load_cli_module`.
 
-Spec backlink: docs/plans/2026-08-13-liveness-stops-conflating-dead-with-elsewhere.md § C2 / AC4 / AC6.
+Spec backlink: pln-the-liveness-surface-stops-ans-402265 § C2 / AC4 / AC6.
 """
 from __future__ import annotations
 

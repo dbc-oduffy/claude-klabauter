@@ -31,7 +31,7 @@ Zero-node guard (F3): a call for an unknown/unrecognised roadmap_id returns a
 well-formed empty payload ``{nodes:[], edges:[], roll_up:{…null}, critical_path:[]}``
 rather than raising.
 
-Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C5
+Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C5
 
 Negative-spec:
   - Does NOT call ``_stamp_shipped_sha`` or any git subprocess on this path.

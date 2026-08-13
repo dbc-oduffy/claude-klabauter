@@ -8,7 +8,7 @@ Package established as the shared foundation the individual primitives
 caller-supplied-path containment; this module itself contains none of those
 primitives.
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C2 (package foundation + containment helper).
 
 Negative-spec: this package marker does NOT import any op submodule — the

@@ -106,7 +106,7 @@ the handler. Blocking FS I/O wrapped in ``asyncio.to_thread``.
 handler receives ``git_common_dir(caller_worktree)`` via ipc.py; derives worktree via
 ``main_worktree_root(repo_root)`` before any path construction.
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C5
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C5
 
 Negative-spec:
     - Does NOT close, delete, or mutate any source queue row — op-proposes only; the

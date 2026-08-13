@@ -54,13 +54,13 @@ Idempotency:
     Artifacts already carrying ``deliverable_id:`` are reported as
     "already-threaded" and skipped (carry rule D1 — never re-mint).
 
-Port of: backfill-deliverable-spine.sh (example-doctrine-repo ca30f76c, 2026-07-17).
+Port of: backfill-deliverable-spine.sh (coordinator-claude ca30f76c, 2026-07-17).
 BIG_PORT wave, direct-import trampoline variant #1 — no
-``register_op``, no IPC; the example-doctrine-repo-side polyglot trampoline imports and calls
+``register_op``, no IPC; the coordinator-claude-side polyglot trampoline imports and calls
 ``main()`` in-process, exactly like coordinator_core.hooks.auto_push /
 coordinator_core.ops.handoff_gate_aging / coordinator_core.ops.backfill_initiative_fk.
 
-Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § C5, AC7
+Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C5, AC7
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § BIG_PORT Wave C
 
 Public API:
@@ -68,11 +68,11 @@ Public API:
         CLI entry point. ``argv`` is the trampoline's own ``sys.argv[1:]``.
         ``default_coordinator_root`` is used when ``--root`` is not passed on
         the command line — the ``coordinator/bin/backfill-deliverable-spine``
-        trampoline resolves example-doctrine-repo's own ``coordinator/`` directory (via
+        trampoline resolves coordinator-claude's own ``coordinator/`` directory (via
         the shared ``doe_root()`` registry helper, NOT its own ``__file__``
         location — this executable now lives in claude-klabauter while the
-        corpus it walks, example-doctrine-repo's ``coordinator/{state,docs,archive}``,
-        stayed in example-doctrine-repo) and passes it here. If BOTH ``--root`` and
+        corpus it walks, coordinator-claude's ``coordinator/{state,docs,archive}``,
+        stayed in coordinator-claude) and passes it here. If BOTH ``--root`` and
         ``default_coordinator_root`` are absent (e.g. ``doe_root()`` could
         not resolve on this machine either), this module fails loud
         (exit 1) rather than falling back to its own ``coordinator_core/ops/``
@@ -85,7 +85,7 @@ Exit-code contract (byte-parity with the bash oracle):
     2 — ambiguous groups detected (human review required before --write)
     (transport/import failure — CLAUDE_KLABAUTER_ROOT resolution or `coordinator_core`
     import failing before this module is even reached — is NOT a code this
-    function can return; it is handled by the example-doctrine-repo trampoline itself, which
+    function can return; it is handled by the coordinator-claude trampoline itself, which
     uses a DEDICATED exit code 3 for that case per the porter addendum §3b
     fail-loud-gate-script rule, since this tool is a mutating fail-loud CLI,
     not a best-effort/never-block one, and codes 0/1/2 are all live business
@@ -94,7 +94,7 @@ Exit-code contract (byte-parity with the bash oracle):
     `_stamp_file`/`_stamp_yaml_document` — LockTimeout, MutateAbort,
     FileNotFoundError, or UnicodeDecodeError) — codes 0-3 above keep their
     prior meanings; 4 is additive, never overloading an existing code, and is
-    distinct from 3 (which is the example-doctrine-repo trampoline's own transport-failure
+    distinct from 3 (which is the coordinator-claude trampoline's own transport-failure
     code, never returned by this function).
 
 Departure from the oracle (additive robustness, not a behavior change to any
@@ -173,9 +173,9 @@ Sizing corpus extension (C5, this module's second parser class):
     threaded).
 
     Backfilling the live `state/sizings/` corpus (an actual `--write` run
-    over it) WAS out of scope for an earlier plan (example-doctrine-repo asked for the
+    over it) WAS out of scope for an earlier plan (coordinator-claude asked for the
     capability, not the run, at that time) — a later plan
-    (docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C2)
+    (pln-spec-backlinks-cite-a-stable-d-451b3e § C2)
     explicitly re-scopes it back in: 148 of 266 sizings measured lacking a
     `deliverable_id` are backfilled by an ordinary `--write` run the same as
     any other in-scope corpus member, via the existing sizing-only-group
@@ -838,6 +838,19 @@ def _stamp_file(path: str, deliverable_id: str, field_name: str = "deliverable_i
             continue
         out_lines.append(line)
 
+    if not injected:
+        # A plan-shaped document with NO `---` frontmatter fence at all
+        # (e.g. a hand-authored narrative doc) has no anchor for the
+        # oracle's fence-scan injection point — the loop above copies the
+        # file through unchanged and `injected` never flips, which used to
+        # make this function report success (unconditional `return True`
+        # below) while silently writing back the SAME bytes, never actually
+        # threading the field. A minimal fence is created at the top of the
+        # file instead, so the mint this caller already committed to is
+        # actually persisted rather than silently dropped.
+        out_lines = ["---\n", f"{field_name}: {deliverable_id}\n", "---\n"] + out_lines
+        injected = True
+
     orig_mode = None
     try:
         orig_mode = os.stat(path).st_mode
@@ -887,7 +900,7 @@ def _validate_stamped_deliverable_id(parsed: dict) -> list:
     field missing'}, even though `deliverable_id` itself was well-formed.
 
     Deliberately does NOT call `coordinator_core.frontmatter.schema_validate`
-    — `schema_validate.py` is a hard external dependency (example-doctrine-repo imports
+    — `schema_validate.py` is a hard external dependency (coordinator-claude imports
     `validate_frontmatter_obj` by path) and its leniency is contract;
     narrowing that shared path would be a global behaviour change under
     one caller's remit. This function is local to THIS op and checks
@@ -1354,7 +1367,7 @@ Exit codes:
   4 — a --write pass refused one or more writes (see Write failures in the
       WRITE COMPLETE block); codes 0-3 keep their prior meanings
 
-Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § C5, AC7\
+Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C5, AC7\
 """
 
 
@@ -1566,14 +1579,74 @@ def main(
                     )
                     write_failed += 1
 
+        stamped_standalone_plan = 0
         if _UNKNOWN_GROUP_KEY in result.group_files:
+            # C2-leg4: an ungrouped `plan`/`archived-spec` (no `workstream:`
+            # field, so no shared GROUP to derive an id FROM) is not left
+            # un-mintable forever — mirrors the C2-leg3 unkeyed-sizing
+            # standalone-mint shape exactly: `mint(slug=...)`'s existing slug
+            # arm, keyed off the record's OWN slug (`_derive_plan_slug`),
+            # never a synthetic workstream key. Every OTHER class in the
+            # UNKNOWN group (handoff, roadmap, completion) keeps the prior
+            # skip-unknown behaviour unchanged — only these two classes have
+            # a per-file identity concept that makes a standalone mint
+            # meaningful (see `run_plan_id_leg`'s own `plan_id`, minted the
+            # same per-file way).
             for uf in result.group_files[_UNKNOWN_GROUP_KEY]:
-                if not is_immutable_path(uf):
+                if is_immutable_path(uf):
+                    continue
+
+                uf_class = classify_artifact(uf)
+                # Same leg-local generalizations `run_plan_id_leg` already
+                # applies to this exact class pair — a review sidecar
+                # (`.<reviewer>-review.md`, not covered by `is_sidecar_plan`'s
+                # own negative-spec-frozen suffix list) or an undated
+                # `docs/plans/` document (INDEX.md, README.md,
+                # config-slash-*.md — never itself a plan record) must never
+                # receive a standalone mint either; both fall through to the
+                # ordinary skip-unknown path below, same as any other
+                # never-groupable artifact.
+                is_review_sidecar = _REVIEW_SIDECAR_RE.search(os.path.basename(uf)) is not None
+                is_undated_plan_doc = (
+                    uf_class == "plan" and not _DATE_PREFIX_RE.match(os.path.basename(uf))
+                )
+                if uf_class not in ("plan", "archived-spec") or is_review_sidecar or is_undated_plan_doc:
                     print(
                         f"  [skip-unknown] {_rel(uf, coordinator_root)}  (no workstream field — cannot assign id)",
                         file=out,
                     )
                     skipped_unknown += 1
+                    continue
+
+                existing_id = extract_deliverable_id(uf, uf_class)
+                if existing_id:
+                    print(
+                        f"  [skip-threaded] {_rel(uf, coordinator_root)}  (already has id: {existing_id})",
+                        file=out,
+                    )
+                    continue
+
+                if only_kind and uf_class not in only_kind:
+                    print(
+                        f"  [skip-out-of-scope] {_rel(uf, coordinator_root)}  (class: {uf_class}, not in --only-kind scope)",
+                        file=out,
+                    )
+                    skipped_out_of_scope += 1
+                    continue
+
+                slug = _derive_plan_slug(uf)
+                standalone_id, _label = _mint(slug=slug)
+                print(f"  [mint-standalone] {_rel(uf, coordinator_root)} -> {standalone_id}", file=out)
+                landed = _stamp_deliverable_id(uf, uf_class, standalone_id, coordinator_root)
+                if landed:
+                    print(f"  [stamp] {_rel(uf, coordinator_root)}  -> {standalone_id}", file=out)
+                    stamped_standalone_plan += 1
+                else:
+                    print(
+                        f"  [skip-write-failed] {_rel(uf, coordinator_root)}  (write refused — see stderr)",
+                        file=out,
+                    )
+                    write_failed += 1
 
         if _UNKEYED_SIZING_GROUP_KEY in result.group_files:
             # C2-leg3: an unkeyed sizing (no citing plan, so no shared
@@ -1617,9 +1690,10 @@ def main(
 
         print("", file=out)
         print("WRITE COMPLETE:", file=out)
-        print(f"  Stamped:                  {stamped + stamped_unkeyed_sizing}", file=out)
+        print(f"  Stamped:                  {stamped + stamped_unkeyed_sizing + stamped_standalone_plan}", file=out)
         print(f"  Stamped (named groups):   {stamped}", file=out)
         print(f"  Stamped (unkeyed sizings): {stamped_unkeyed_sizing}", file=out)
+        print(f"  Stamped (standalone plan/spec): {stamped_standalone_plan}", file=out)
         print(f"  Skipped (immutable):      {skipped_immutable}", file=out)
         print(f"  Skipped (unknown):        {skipped_unknown}", file=out)
         if only_kind:

@@ -302,7 +302,7 @@ def test_new_violations_flags_a_duplicate_of_an_existing_citation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# `dead-registry-rung` (ported from example-doctrine-repo's former Rule B) -- see the
+# `dead-registry-rung` (ported from coordinator-claude's former Rule B) -- see the
 # module docstring's own "mention-awareness, per surface" section.
 # ---------------------------------------------------------------------------
 

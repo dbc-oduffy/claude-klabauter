@@ -7,8 +7,8 @@ trailing junk) so that BOTH the bash resolver (coordinator-claude-klabauter-root
 read the pointer with zero subprocess spawn, avoiding the 5s bash-fallback hang
 on Windows that motivated this fix.
 
-Cross-platform by design (Python, not bash): the analogous example-doctrine-repo writer
-(gen-doe-root-pointer.py) is bash-only, which is fine for the example-doctrine-repo resolver
+Cross-platform by design (Python, not bash): the analogous coordinator-claude writer
+(gen-doe-root-pointer.py) is bash-only, which is fine for the coordinator-claude resolver
 (bash-native consumers only). The claude-klabauter pointer, by contrast, is read by a
 Python transport whose whole point is avoiding a bash subprocess spawn on
 Windows — a bash-only WRITER would reintroduce exactly the fragility (bash
@@ -17,8 +17,8 @@ script is invoked identically from the POSIX install path (install-maximalist.py
 via `python3`/`python`) and the Windows install path (setup.ps1, via
 `python3`/`python`) — one implementation, no shell-specific duplication.
 
-Spec backlink: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C1b
-Design mirror: coordinator/bin/gen-doe-root-pointer.py (bash analog for the example-doctrine-repo
+Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C1b
+Design mirror: coordinator/bin/gen-doe-root-pointer.py (bash analog for the coordinator-claude
                 repo root pointer — same idempotent/atomic/--check-only shape).
 Resolution mirror: coordinator/lib/coordinator-claude-klabauter-root.sh (bash reader),
                     coordinator/bin/lib/cc_invoke.py::_resolve_claude_klabauter_root (Python reader).

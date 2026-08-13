@@ -5,7 +5,7 @@ coordinator_core.ops.install_claude_doe_wrapper.
 
 Installs the co-located `coordinator/bin/claude-doe` wrapper onto
 `${CLAUDE_HOME:-$HOME}/.local/bin/claude-doe`. Collapses the bash fence at
-coordinator/commands/install.md line 892 (example-doctrine-repo repo) into one call —
+coordinator/commands/install.md line 892 (coordinator-claude repo) into one call —
 see coordinator_core.ops.install_claude_doe_wrapper's own docstring for the
 full design rationale and negative-spec.
 

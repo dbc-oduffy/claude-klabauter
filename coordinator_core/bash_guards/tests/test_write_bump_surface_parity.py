@@ -1,9 +1,9 @@
 """Two-surface parity test for the write-confinement bump's destination-class
 axis (C6).
 
-Spec backlink: docs/plans/2026-08-03-narrow-write-confinement-bump.md, chunk
-C6, "Two-surface parity test" (AC8, AC9). Example-doctrine-repo's paired decision record ("two
-extraction front-ends, one classification stack") is example-doctrine-repo-resident and does
+Spec backlink: pln-narrow-the-write-confinement-b-d10f79, chunk
+C6, "Two-surface parity test" (AC8, AC9). Coordinator-claude's paired decision record ("two
+extraction front-ends, one classification stack") is coordinator-claude-resident and does
 NOT port -- this file, asserting the table itself, is C6's whole deliverable
 here.
 
@@ -296,7 +296,7 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     anchor = _init_repo(tmp_path, "anchor")
-    doe_root = _init_repo(tmp_path, "example-doctrine-repo")
+    doe_root = _init_repo(tmp_path, "coordinator-claude")
     reg_dir = tmp_path / "registry"
     _write_registry(reg_dir)
     session_id = "sess-parity-lessons-outbox"

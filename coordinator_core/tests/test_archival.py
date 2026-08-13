@@ -7,7 +7,7 @@ archive-resident and/or terminal-status (consumed/superseded/abandoned)
 children. A consumed parent whose only reverse-membership edge points at such
 a child was reported as referenced=True forever, so it never archived — a
 faithfully-ported bash bug (Port of: handoff-has-live-children.sh
-(example-doctrine-repo 50ec0809, 2026-07-19) scanned both --type handoff and --type
+(coordinator-claude 50ec0809, 2026-07-19) scanned both --type handoff and --type
 handoff-archived into one undifferentiated set).
 
 Fix: reverse_membership now excludes archive-resident and terminal-status
@@ -44,7 +44,7 @@ Tests:
       carve-out is consumed-only — superseded/abandoned children remain
       terminal (excluded) unconditionally, even with deployment_state:in_flight.
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C4
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C4
 Bug-fix backlink: coordinator_core/archival.py::_is_terminal_or_archived_child
 Memo: cross-repo/inbox/2026-07-09-claude-central-em-handoff-has-live-children-terminal-archived-exclusion.md
 Bug-fix backlink (2026-07-17, deployment_state-aware terminal predicate):

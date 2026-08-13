@@ -10,7 +10,7 @@ Pins two invariants for ``coordinator_core/lifecycle_constants.py``:
      status enums). A new handoff token silently appearing on a plan/spec axis would be a
      regression this test exists to catch.
 
-Spec backlink: docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md § C3/C4
+Spec backlink: pln-handoff-lifecycle-vocabulary-o-22ada6 § C3/C4
 """
 
 from __future__ import annotations

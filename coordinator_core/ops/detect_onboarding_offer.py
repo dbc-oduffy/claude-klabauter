@@ -46,13 +46,13 @@ Exit codes (main(), advisory-only, never blocks):
 Output (stdout): offer line when action warranted; nothing when silent. Callers
 MUST NOT infer meaning from exit code -- check stdout content.
 
-Port of: detect-onboarding-offer.sh (example-doctrine-repo 432e3285, 2026-07-22)
+Port of: detect-onboarding-offer.sh (coordinator-claude 432e3285, 2026-07-22)
 Spec backlink: docs/plans/2026-05-29-it-just-works-agentic-install-currency.md § Chunk 3
 
 Negative-spec (retired bash-oracle surface -- deliberately NOT reproduced here):
     - The bash oracle's SOURCE mode (`source detect-onboarding-offer.sh` then call
       `detect_onboarding_offer` as a shell function) is dropped. Grepped every
-      real caller of the example-doctrine-repo .sh (commands/workday-start.md, bin/tests/
+      real caller of the coordinator-claude .sh (commands/workday-start.md, bin/tests/
       test-detect-onboarding-offer.sh) -- both invoke it as `bash <script>`
       (subprocess), never `source`. SOURCE mode was unused dead API surface, not
       load-bearing behavior; this is not a scope-drop regression.
@@ -169,7 +169,7 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
     # repo/plugins/), not "is the repo's git root the claude-home dir?".
     #
     # coordinator_currency.py lives in claude-klabauter's own coordinator/lib/ (it
-    # migrated out of the example-doctrine-repo plugin_root tree during the executable-surface
+    # migrated out of the coordinator-claude plugin_root tree during the executable-surface
     # relocation), not under plugin_root -- resolve it off the claude-klabauter root
     # via the canonical resolver, never plugin_root, so this branch stays
     # reachable instead of silently always missing the file and returning ""
@@ -233,7 +233,7 @@ def main(argv: List[str], default_plugin_root: Optional[str] = None) -> int:
     Args (env overrides, mirroring the bash oracle's standalone-mode contract):
         DETECT_ONBOARDING_REPO_ROOT   -- repo to check (default: git root of cwd)
         DETECT_ONBOARDING_PLUGIN_ROOT -- coordinator plugin root (default:
-                                          `default_plugin_root`, a example-doctrine-repo-side
+                                          `default_plugin_root`, a coordinator-claude-side
                                           contract fact only the calling
                                           trampoline can supply -- the location
                                           of the .sh file on disk)

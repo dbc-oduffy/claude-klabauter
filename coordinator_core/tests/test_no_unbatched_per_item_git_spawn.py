@@ -1,7 +1,7 @@
 """Amplification collector (G1): sibling to `spawn_policy`, resolving generic runners and
 injected `GitRunner`s -- the third state neither existing gate expresses.
 
-Spec backlink: `docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md`,
+Spec backlink: `pln-kill-the-n-1-git-spawn-class-a-88897a`,
 `## Tasks` chunk G1 (this collector) and G2 (the two assertions this collector feeds, landed
 in a later wave over this same file).
 

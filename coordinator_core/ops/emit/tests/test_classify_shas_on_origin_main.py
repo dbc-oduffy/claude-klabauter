@@ -14,7 +14,7 @@ test_check_shipped_on_main.py and the commit_closures reachability tests in
 test_emit_parity.py.
 
 Spec backlink: dispatched fix for the 108-spawn sha_on_origin_main hot spot,
-coordinator_core/ops/emit/envelope.py:530 (measured against example-doctrine-repo, 2026-07-29).
+coordinator_core/ops/emit/envelope.py:530 (measured against coordinator-claude, 2026-07-29).
 """
 
 from __future__ import annotations

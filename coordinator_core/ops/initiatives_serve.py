@@ -27,7 +27,7 @@ Worktree resolution mirrors ``handoff_children.py``:
   - If ``repo_root`` is absent the op returns an empty list with a logged warning
     rather than raising — empty is safe for a dropdown.
 
-Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C2
+Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C2
 """
 
 from __future__ import annotations

@@ -88,7 +88,7 @@ uniformly to both branches:
         candidate whose only referencing children are forked_from children
         is RETAINED, not archived, by this branch.
     H3. (FIX 2, 2026-07-22) NOT (kind == "spinoff-roadmap" AND deliverable_id
-        is populated) — mirrors example-doctrine-repo's reaper predicate P1
+        is populated) — mirrors coordinator-claude's reaper predicate P1
         (coordinator/bin/reap-orphaned-in-flight-handoffs.py:67-69;
         documented handoff-tracker-system.md P1). A spinoff-roadmap node
         with a populated deliverable_id belongs to
@@ -112,7 +112,7 @@ uniformly to both branches:
         own branch never runs) — see that section for why both are covered.
     H4. (FIX 1, 2026-07-22) A resolvable shipped_in already exists on the
         candidate's OWN frontmatter — `abandoned` retirement is fleet-wide
-        coordinator doctrine; the reaper-scoped precedent is example-doctrine-repo
+        coordinator doctrine; the reaper-scoped precedent is coordinator-claude
         coordinator/docs/wiki/handoff-tracker-system.md:536-540
         (2026-07-20): "The handoff stays in state/handoffs/ and is NOT
         archived — archival only ever happens after a handoff reaches
@@ -151,7 +151,7 @@ uniformly to both branches:
     (adjacent reaper-side disposition; shares the succession-vs-derivation
     reasoning this branch applies on the archival side).
     Negative-spec (2026-07-22): DR-224's supersede→abandoned disposition is
-    the example-doctrine-repo REAPER's own disposition (a separate op, a separate repo) and
+    the coordinator-claude REAPER's own disposition (a separate op, a separate repo) and
     is deliberately NOT applied by this sweep — this sweep's heir branch
     may only ever produce "shipped" (via H4's ship-evidence gate), never
     "abandoned"; see _resolve_heir_deployment_state (session/boot_sweep.py)
@@ -211,7 +211,7 @@ Negative-spec:
     separate per-family callables (the Staff Engineer F3).
   - Check A2 (deployment_state != "in_flight", Branch A only) is an OPEN
     single-literal exclusion, NOT a closed-enum terminal check (code-reviewer F2,
-    2026-07-10 slice).  If example-doctrine-repo lvv-04/C3 (lifecycle-vocab roadmap) introduces
+    2026-07-10 slice).  If coordinator-claude lvv-04/C3 (lifecycle-vocab roadmap) introduces
     additional non-terminal deployment_state values that can co-occur with
     status:consumed, Check A2 must be extended in lockstep — or inverted to a
     terminal-state allowlist — or this predicate will silently archive them.  This
@@ -339,7 +339,7 @@ _FAMILY = "handoff"
 # Heir-branch edge-kind subset — SUCCESSION edges only (predecessor,
 # additional_predecessors).  Deliberately excludes forked_from: a spinoff is
 # branch-point/derivation ancestry, not succession — it does NOT retire its
-# origin (DR-224; example-doctrine-repo/CONTEXT.md:17; coverage.py:771 LoE walk excludes
+# origin (DR-224; coordinator-claude/CONTEXT.md:17; coverage.py:771 LoE walk excludes
 # forked_from for the identical reason).  See _classify_heir_children.
 _HEIR_EDGE_KINDS = {"predecessor", "additional_predecessors"}
 
@@ -813,7 +813,7 @@ async def _is_terminal(
         if heir_kind == "error":
             return False, heir_detail, ""
         if heir_kind == "heir":
-            # FIX 2 (2026-07-22) — spinoff-roadmap carve-out, mirroring example-doctrine-repo's
+            # FIX 2 (2026-07-22) — spinoff-roadmap carve-out, mirroring coordinator-claude's
             # reaper predicate P1 (coordinator/bin/reap-orphaned-in-flight-
             # handoffs.py:67-69; documented handoff-tracker-system.md P1): a
             # kind:roadmap-baton node (still-live pre-rename spelling
@@ -841,7 +841,7 @@ async def _is_terminal(
                 )
 
             # FIX 1 (2026-07-22) — `abandoned` retirement is fleet-wide
-            # coordinator doctrine; reaper-scoped precedent, example-doctrine-repo
+            # coordinator doctrine; reaper-scoped precedent, coordinator-claude
             # coordinator/docs/wiki/handoff-tracker-system.md:536-540
             # (2026-07-20): "archival only ever happens after a handoff
             # reaches shipped ... Liveness-based auto-abandonment no longer
@@ -902,7 +902,7 @@ async def _is_terminal(
         # Check A2: deployment_state != "in_flight" — hard exclusion, fires regardless
         # of the Check 4 liveness verdict below.
         # Review: code-reviewer — an in_flight handoff is BY DEFINITION not terminal;
-        # this is the interim forward-compatible subset of the fuller example-doctrine-repo lvv-04/C3
+        # this is the interim forward-compatible subset of the fuller coordinator-claude lvv-04/C3
         # archive-safe predicate (lifecycle-vocab roadmap) — just the in_flight hard
         # exclusion, not the full two-predicate design.  It makes the Check 4
         # heartbeat-windowed liveness race (a genuinely-live session mid-long-tool-call
@@ -913,7 +913,7 @@ async def _is_terminal(
         #
         # Negative-spec (code-reviewer F2, 2026-07-10 slice): this is Check A2, an OPEN
         # single-literal exclusion (deployment_state == "in_flight"), NOT a closed-enum
-        # terminal check.  If example-doctrine-repo lvv-04/C3 (lifecycle-vocab roadmap) introduces
+        # terminal check.  If coordinator-claude lvv-04/C3 (lifecycle-vocab roadmap) introduces
         # additional non-terminal deployment_state values that can co-occur with
         # status:consumed (e.g. a paused/blocked state), Check A2 must be extended in
         # lockstep — or inverted to a terminal-state allowlist — otherwise this

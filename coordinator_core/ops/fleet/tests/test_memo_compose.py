@@ -13,7 +13,7 @@ C5 test surface (docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C5
 
 Harness: asyncio.run() in sync test functions — no pytest-asyncio dependency.
 
-Spec backlink: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C5
+Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C5
 """
 
 from __future__ import annotations

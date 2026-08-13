@@ -12,7 +12,7 @@ use hyphens (`example-cockpit-repo`) — this guard derives and greps BOTH forms
 slug, since grepping only the underscore form would silently miss the exact
 leak class this guard exists to catch.
 
-Port of: check-registry-codename-leak.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-registry-codename-leak.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-06-27-genericize-provenance-sweeper.md § C4 / AC11
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -99,7 +99,7 @@ def _is_kept(slug: str, no_exempt: Sequence[str] = ()) -> bool:
 def _validate_no_exempt(no_exempt: Sequence[str]) -> None:
     """Raise ValueError if any re-admitted slug is not an exact KEEPSET member.
 
-    A silent no-op here would let a `example-doctrine-repo` (hyphen) vs `example_doctrine_repo`
+    A silent no-op here would let a `coordinator-claude` (hyphen) vs `example_doctrine_repo`
     (underscore) authoring slip through as a no-op re-admission — the target
     would keep its original (unintended) exemption instead of failing loud.
     """

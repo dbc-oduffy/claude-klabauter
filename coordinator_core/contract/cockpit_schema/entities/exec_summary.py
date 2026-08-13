@@ -1,5 +1,5 @@
 """
-ExecSummary — per-repo executive-summary entity. Pydantic port of example-doctrine-repo
+ExecSummary — per-repo executive-summary entity. Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/exec-summary.ts` (Zod source).
 
 A coordinator-mandated, one-screen "why this project matters" brief that

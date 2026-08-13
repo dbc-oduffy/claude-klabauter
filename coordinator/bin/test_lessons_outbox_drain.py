@@ -179,7 +179,7 @@ def test_lessons_outbox_drain(tmp_path: Path) -> None:
     )
 
     # --- read_peer_outbox: leading+trailing `---` document markers must still parse ---
-    # Real on-disk entries in both claude-klabauter and example-doctrine-repo carry this shape;
+    # Real on-disk entries in both claude-klabauter and coordinator-claude carry this shape;
     # `yaml.safe_load` (single-document) rejects it as "expected a single document in
     # the stream" — verified against the real corpus, every entry failed to parse
     # under the pre-fix code. `read_peer_outbox` must recover the first document.

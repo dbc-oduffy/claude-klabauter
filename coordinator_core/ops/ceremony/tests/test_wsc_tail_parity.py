@@ -9,7 +9,7 @@ the full `ceremony.wsc_tail` op level. This is the C10 chunk of the
 the AC4/AC14 "port-or-retire the parity tests -> reconstruct" resolution.
 
 Provenance: the deleted bash oracle recovered from
-`example-doctrine-repo:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh` (the
+`coordinator-claude:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh` (the
 kill commit's parent). Its fixture data (SUBJECT/PROSE_BODY/DELETED_PATHS/
 KEPT_ENTRIES/COMMIT_PATHS below) is reproduced VERBATIM so the golden message
 this file asserts against is byte-identical to the one the bash oracle
@@ -46,7 +46,7 @@ Coverage:
        sentinel and completes the stamp/follow-up-commit/receipt-emit
        without double-committing the main ceremony commit.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C10
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C10
   (AC4, AC14, AC17, AC18).
 
 Also covers (2026-07-22 C9 wiring-gap fix -- § C9): `_run_precommit_tail` sequences
@@ -154,7 +154,7 @@ def _unique_session_id() -> str:
 
 # ---------------------------------------------------------------------------
 # Assertions (a) + (b) -- golden fixture, reproduced VERBATIM from the
-# deleted bash oracle (example-doctrine-repo:85006468^:coordinator/tests/wsc-asic/
+# deleted bash oracle (coordinator-claude:85006468^:coordinator/tests/wsc-asic/
 # test-wsc-commit-parity.sh).
 # ---------------------------------------------------------------------------
 
@@ -438,7 +438,7 @@ def test_kpi_spawn_count_git_only_and_collapsed(tmp_path, monkeypatch):
     from OBSERVED state and picks the commit mechanism accordingly, rather
     than trusting an operator to pick `git commit -- <paths>` vs. a bare
     `git commit` by hand (the shape of two real incidents -- claude-klabauter
-    506748a0, example-doctrine-repo 726925b2). That correctness costs one
+    506748a0, coordinator-claude 726925b2). That correctness costs one
     `diverging_paths()` call (2 `git diff` subprocesses) in the AGREE case
     this test exercises -- `commit_pipeline.explicit_stage()` needs it to
     decide what is safe to `git add` without destroying a
@@ -927,7 +927,7 @@ def test_chain_terminal_stamp_all_skipped_surfaces_tail_item_not_silent_exit_0(
 def test_single_session_close_lands_but_names_no_flip_due_in_diagnostics(
     wsc_tail_repo,
 ):
-    """Regression for cross-repo/inbox/2026-08-10-example-doctrine-repo-em-wsc-tail-
+    """Regression for cross-repo/inbox/2026-08-10-coordinator-claude-em-wsc-tail-
     silent-noop-and-gate-rewalk.md finding 1: a landed commit whose step-1
     resolve found no consumed handoff for this sid (`chain_terminal=False`,
     the ordinary single-session-close shape -- same fixture pattern as

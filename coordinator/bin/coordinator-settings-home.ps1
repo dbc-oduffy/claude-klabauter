@@ -30,14 +30,14 @@
 # Negative spec: do NOT collapse the USERPROFILE rung back into the automatic $HOME on
 # the reasoning that "$HOME mirrors $env:USERPROFILE on Windows". It mirrors its value at
 # session start, not the variable; that reasoning is what AC10b's permuted-env probe
-# falsified. The peer template (example-doctrine-repo@coordinator/templates/bin/coordinator-settings-home.ps1)
+# falsified. The peer template (coordinator-claude@coordinator/templates/bin/coordinator-settings-home.ps1)
 # already carries the explicit USERPROFILE rung — this file had drifted BEHIND it while
 # citing it as the peer shape, so there is nothing to relay upstream.
 #
 # Resolve-ClaudeHomeBase — named export mirroring this same ladder, additive alongside
 # the inline resolution above (no restructuring). Peer:
-# example-doctrine-repo@coordinator/templates/bin/coordinator-settings-home.ps1's
-# Resolve-ClaudeHomeBase (line 26, read at example-doctrine-repo@9e0fb5c44).
+# coordinator-claude@coordinator/templates/bin/coordinator-settings-home.ps1's
+# Resolve-ClaudeHomeBase (line 26, read at coordinator-claude@9e0fb5c44).
 # Spec: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C7b
 function Resolve-ClaudeHomeBase {
     if ($env:CLAUDE_HOME) {

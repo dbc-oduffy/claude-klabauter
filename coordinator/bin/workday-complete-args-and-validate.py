@@ -34,10 +34,10 @@ into one naked-Python CLI (M3 extirpation wave, chunk WDC-1):
 Each subcommand is independently self-contained (no dependency on another
 subcommand having run first in the same process) and self-resolving
 (`Path(__file__)`-relative; no cwd dependence) — safe to invoke as three
-separate subprocess calls from the example-doctrine-repo ceremony fence.
+separate subprocess calls from the coordinator-claude ceremony fence.
 
 Spec backlink: commands/workday-complete.md § Argument Parsing (Front Door),
-§ Step 1: Validate (example-doctrine-repo repo, C6 —
+§ Step 1: Validate (coordinator-claude repo, C6 —
 docs/plans/2026-07-07-workday-complete-local-day-and-targeted-wrap.md).
 
 Stdout contracts (eval-safe; values `shlex.quote`'d — eval-injection defence,
@@ -157,7 +157,7 @@ def cmd_check_cross_machine(arguments: str) -> int:
     Self-contained: re-derives --for-date presence from the raw arguments
     string rather than depending on parse-front-door having already run in
     this process (each subcommand is an independent subprocess call from the
-    example-doctrine-repo ceremony fence).
+    coordinator-claude ceremony fence).
     """
     if not _FOR_DATE_RE.search(arguments):
         return 0  # no --for-date present; restriction is not applicable

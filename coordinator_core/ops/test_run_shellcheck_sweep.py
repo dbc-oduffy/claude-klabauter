@@ -27,7 +27,7 @@ Coverage:
   (h) idempotency (AC7): two back-to-back invocations against an unchanged
       repo return byte-identical results
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
                § Wave 2 — Low-risk new modules, "run" cluster.
 """
 

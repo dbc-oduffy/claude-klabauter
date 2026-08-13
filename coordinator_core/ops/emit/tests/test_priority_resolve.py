@@ -7,7 +7,7 @@ real files) written directly under a tmp dir; ledger entries are injected via
 ``load_priority_ledger``'s disk read — the resolution algorithm is this
 module's subject under test, not the ledger loader's I/O.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § C5, § C10.
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C5, § C10.
 """
 
 from __future__ import annotations

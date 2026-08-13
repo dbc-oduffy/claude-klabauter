@@ -51,7 +51,7 @@ If a pre-commit hook already exists with content other than this gate chain
 (custom hooks, Git LFS prefix, etc.), the installer appends whatever gates
 are still missing after the existing block rather than clobbering it.
 
-Port of: install-meta-repo-precommit-hook.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: install-meta-repo-precommit-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: cross-repo/inbox/2026-06-08-exec-bit-drift-runtime-tripwire-tests.md
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -935,7 +935,7 @@ def _default_target() -> Optional[str]:
     a working repo, so the ONE surface whose whole job is to be installed was
     the one surface a bare invocation never installed — and the skip was
     indistinguishable from success to `/coordinator:install` and `/repo-setup`
-    (example-doctrine-repo `state/bug-backlog/2026-07-29-meta-repo-gate-installer-is-cwd-gated-so-3763de751e55.yaml`;
+    (coordinator-claude `state/bug-backlog/2026-07-29-meta-repo-gate-installer-is-cwd-gated-so-3763de751e55.yaml`;
     it is why `~/.claude/.git/hooks` held only `pre-commit` on 2026-07-29 even
     though the `main_install_all` call site had already landed). Resolving the
     subject rather than inferring it from where the caller happens to stand is

@@ -1,6 +1,6 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """parallel-review-gate-decision.py — gate-decision assembler for the weekly
-parallel-code-review gate (example-doctrine-repo coordinator/skills/parallel-code-review/
+parallel-code-review gate (coordinator-claude coordinator/skills/parallel-code-review/
 SKILL.md).
 
 Spec backlink: docs/plans/2026-07-24-computed-skills-b8-review-ci-cluster.md

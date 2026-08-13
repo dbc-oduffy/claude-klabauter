@@ -25,7 +25,7 @@ Two independent legs, both load-bearing:
     anywhere in the module. This catches an added-but-untriggered-by-tests
     write/spawn that the dynamic leg's fixed input set wouldn't reach.
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C7 (AC6)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C7 (AC6)
 """
 
 from __future__ import annotations

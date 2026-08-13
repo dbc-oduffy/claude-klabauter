@@ -268,17 +268,22 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
 
     B6/B8: states the refusal, never names the CLI being refused -- to a
     dispatched subagent, saying an unlock exists at all is out of scope
-    here. Tone: this deny fires almost exclusively on agents acting in
-    good faith, so it does not frame the caller's own work as suspect. It
-    states the STRUCTURAL reason a dispatched subagent cannot itself
-    confirm PM ratification -- it never speaks to the PM directly, only
-    hears what its EM tells it -- and hands the agent the pieces its
-    BLOCKED report needs, never a command the agent could run itself to
-    clear its own gate. Matches the register of
-    `block_subagent_grant_acquisition._deny_reason`'s post-`69239e9c5`
-    text, the model this chunk names.
+    here. `deny_kind` and `cmd` are accepted for call-site parity with the
+    classifier but deliberately UNUSED in the rendered text below -- a
+    dispatched subagent is never shown the governed module path, the
+    gated subcommand, or its own attempted command, because any of those
+    is a pasteable recipe to the one audience this guard exists to keep in
+    the dark (see module docstring's cited incident). Tone: this deny
+    fires almost exclusively on agents acting in good faith, so it does
+    not frame the caller's own work as suspect. It states the STRUCTURAL
+    reason a dispatched subagent cannot itself confirm PM ratification --
+    it never speaks to the PM directly, only hears what its EM tells it --
+    and hands the agent the pieces its BLOCKED report needs, never a
+    command the agent could run itself to clear its own gate. Matches the
+    register of `block_subagent_grant_acquisition._deny_reason`'s
+    same-incident-driven text, the model this chunk names.
     """
-    cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
+    del deny_kind, cmd
     return (
         "BLOCKED: acquiring a guard grant is an EM action, not a "
         "dispatched agent's.\n\n"
@@ -287,8 +292,6 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
         "dispatch carries a PM ratification; it only hears what its EM "
         "tells it. Confirming that is the EM's call, not something to "
         "resolve from here. Report BLOCKED to your EM with:\n"
-        f"  Governed surface: `{deny_kind}`\n"
-        f"  Command attempted: {cmd_safe}\n"
         "  Reason: grant acquisition is EM-only; a subagent's action "
         "should inherit the EM's own grant via shared-session-id "
         "resolution, not mint one of its own.\n"

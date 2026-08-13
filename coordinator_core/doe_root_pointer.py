@@ -1,9 +1,9 @@
 """
 coordinator_core.doe_root_pointer
 
-Port of: read-doe-root-pointer.sh (example-doctrine-repo 6fb5fb37, 2026-07-22)
+Port of: read-doe-root-pointer.sh (coordinator-claude 6fb5fb37, 2026-07-22)
 
-Purpose: resolves the example-doctrine-repo repo root, registry-first per DR-071 (2026-07-22 — the
+Purpose: resolves the coordinator-claude repo root, registry-first per DR-071 (2026-07-22 — the
 settings-home machine-local registry key `repos.example_doctrine_repo` is the canonical,
 authoritative coordinator-root anchor; `.doe-root` is a demoted, non-authoritative
 mirror), with the pointer-file rungs retained as durable-then-legacy fallbacks:
@@ -12,7 +12,7 @@ mirror), with the pointer-file rungs retained as durable-then-legacy fallbacks:
     3. `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`         (legacy fallback)
 written by `coordinator_core.ops.gen_doe_root_pointer`. Mirror-image of
 `coordinator_core.claude_klabauter_root` (which resolves CLAUDE_KLABAUTER_ROOT from inside the claude-klabauter
-engine) — this module resolves the example-doctrine-repo root from the registry/pointer file, the
+engine) — this module resolves the coordinator-claude root from the registry/pointer file, the
 cold-read primitive consumed by the coordinator-clone resolver's rung 3.
 
 **Why registry-first, and why direct tomllib (not the `machine-local` CLI):**
@@ -27,10 +27,10 @@ mirror is what a reset actually wipes). Reading the registry TOML directly via
 reset-safe: "`machine-local get` works" is not proof of reset-survival, since the
 CLI itself can be the thing a reset just broke. See DR-071
 (`docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-registry-doe-root-demoted-to-cache.md`
-in example-doctrine-repo) and the consumer-contract memo
+in coordinator-claude) and the consumer-contract memo
 `cross-repo/inbox/2026-07-22-claude-central-em-durable-root-anchor-contract.md`.
 
-Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md
+Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md [DEAD-CITATION: plan file never committed to this repo]
 DR-148: no realpath, no GNU-isms — this is a pure-Python read, no shell-portability
 concern applies, but the resolution semantics (whitespace handling, absent-file
 behavior) mirror the bash oracle exactly for the two file rungs.
@@ -76,7 +76,7 @@ from coordinator_core.machine_resolver import registry_get
 
 
 def read_doe_root_pointer_file(home: str | None = None) -> str:
-    """Resolve the example-doctrine-repo root from the pointer FILES only — durable, then legacy.
+    """Resolve the coordinator-claude root from the pointer FILES only — durable, then legacy.
 
         1. <settings-home>/machine-local/.doe-root   (durable — the write target)
         2. <home>/.claude/.doe-root                  (legacy fallback)
@@ -148,7 +148,7 @@ def read_doe_root_pointer_file(home: str | None = None) -> str:
 
 
 def read_doe_root_pointer() -> str:
-    """Resolve the example-doctrine-repo repo root — registry-first (DR-071), durable-file, legacy-file.
+    """Resolve the coordinator-claude repo root — registry-first (DR-071), durable-file, legacy-file.
 
     Read order (DR-071, 2026-07-22 — supersedes the prior durable-file-first
     order of read-doe-root-pointer.sh, DR-072, 2026-07-21):
@@ -156,7 +156,7 @@ def read_doe_root_pointer() -> str:
         2. <settings-home>/machine-local/.doe-root        (durable file mirror)
         3. ${CLAUDE_HOME:-$HOME}/.claude/.doe-root         (legacy fallback)
 
-    Returns the example-doctrine-repo repo root path (single line, stripped) or "" if the
+    Returns the coordinator-claude repo root path (single line, stripped) or "" if the
     registry key is unresolved AND neither pointer file is present/readable,
     or no home directory can be resolved.
     """

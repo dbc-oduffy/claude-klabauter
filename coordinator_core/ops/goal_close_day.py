@@ -66,7 +66,7 @@ Negative-spec:
     supersession fail-loud postures below only apply once there is at least one
     decision to act on.
 
-Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C2/C3
+Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C2/C3
 """
 
 from __future__ import annotations

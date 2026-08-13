@@ -12,7 +12,7 @@ checks (that's `_workflow_contract.py`, C1's SSOT). Imported by
 `workflow_scaffold.py` ONLY — `_workflow_contract.py` does not need the
 templates to validate a script.
 
-Spec backlink: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md § C3
+Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d § C3
 
 Negative-spec:
   - Does NOT implement or register any op — pure data (a dict literal), no

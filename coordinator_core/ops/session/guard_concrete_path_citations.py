@@ -18,7 +18,7 @@ into checked-in prose is wrong on EVERY host, including the one that wrote
 it, because it names one operator's machine as if it were universal.
 
 Scope is deliberately unrestricted by file type -- `.md` is explicitly IN
-scope, unlike example-doctrine-repo's older `coordinator/tests/test_no_absolute_path_
+scope, unlike coordinator-claude's older `coordinator/tests/test_no_absolute_path_
 literals.py` (Rule A/B), which carried a documented decision to exclude
 markdown as "documentary". That decision is what this incident falsifies:
 a documentary-looking line in a doctrine file is exactly the kind of
@@ -120,7 +120,7 @@ as the placeholder check above.
 
 `dead-registry-rung` -- scope-limited, and mention-aware within that scope
 ----------------------------------------------------------------------------
-Ported from example-doctrine-repo's older `coordinator/tests/test_no_absolute_path_
+Ported from coordinator-claude's older `coordinator/tests/test_no_absolute_path_
 literals.py` (its former Rule B) when that gate was rewritten to consume
 this shared module -- the rewrite widened scope but silently dropped this
 rule's coverage for one review cycle before it was ported back in, WITH the
@@ -151,7 +151,7 @@ construction. `_DEAD_RUNG_STRUCTURED_EXTENSIONS` (`.json`/`.toml`/`.yaml`/
 config is machine-parsed data, not documentary prose, so a match there is
 also plausibly a live read. An early revision of this scope excluded the
 structured-data extensions entirely: a corpus reconciliation against
-Example-doctrine-repo found every `.json`/`.yaml` hit under a naive whole-file scan
+Coordinator-claude found every `.json`/`.yaml` hit under a naive whole-file scan
 was a NARRATIVE RECORD that happens to use a structured serialization
 format -- a bug-backlog entry, a lesson, a review-sidecar finding, a task
 flight-recorder dump -- with the citation living in a free-text field
@@ -483,7 +483,7 @@ def _py_documentary_lines(text: str) -> Optional[Set[int]]:
 # Corpus-checked, not guessed: `body`, `summary`, `description`,
 # `suggested_fix`, `how_to_apply`, `one_liner`, `title`, `decomposition`,
 # `filled`, `scout_evidence` are every distinct key this rule's own
-# example-doctrine-repo corpus scan found carrying a `dead-registry-rung` shape
+# coordinator-claude corpus scan found carrying a `dead-registry-rung` shape
 # (bug-backlog/lesson/review-sidecar/task-flight-recorder/sizing-scout
 # entries narrating a defect or an observation, never live-reading a
 # path). `rationale`, `notes`, `text`, `evidence` are included on the same
@@ -995,7 +995,7 @@ def _maybe_relevant(text: str) -> bool:
 
 def scan_repo(root: Path) -> List[Finding]:
     """Scan every tracked file under `root` (any git repo -- this module is
-    not example-doctrine-repo-specific) and return all `Finding`s. Never raises on a
+    not coordinator-claude-specific) and return all `Finding`s. Never raises on a
     per-file read failure; that file is simply skipped."""
     findings: List[Finding] = []
     for rel in _tracked_files(root):

@@ -9,12 +9,12 @@
 #
 # is-session-live / list-stale-claim-handoffs (2026-07-23) are a SEPARATE
 # exposure of coordinator_core.session.liveness / coordinator_core.session.
-# stale_claims. They were built for a sibling repo's bash skill (example-doctrine-repo's
-# workstream-complete Step 0 crash-recovery fix, example-doctrine-repo fd5d61ccb) — that
-# consumer NO LONGER EXISTS: example-doctrine-repo removed it at ada28dbe5 when their
+# stale_claims. They were built for a sibling repo's bash skill (coordinator-claude's
+# workstream-complete Step 0 crash-recovery fix, coordinator-claude fd5d61ccb) — that
+# consumer NO LONGER EXISTS: coordinator-claude removed it at ada28dbe5 when their
 # workstream-complete converted to the computed-skill shape and session-shape
-# became assembler-computed. Verified 2026-08-10: no example-doctrine-repo surface invokes
-# is-session-live, and example-doctrine-repo calls this CLI only for claim-plan and
+# became assembler-computed. Verified 2026-08-10: no coordinator-claude surface invokes
+# is-session-live, and coordinator-claude calls this CLI only for claim-plan and
 # release-artifact. Do NOT read the exit-code contract below as a foreign
 # contract needing cross-repo coordination to change. It still needs to be
 # right: who-claims-path shares these arms and is named as an operator

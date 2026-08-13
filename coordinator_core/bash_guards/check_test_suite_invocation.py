@@ -1,5 +1,5 @@
 """coordinator_core.bash_guards.check_test_suite_invocation -- PreToolUse(Bash)
-hard-deny guard for **test-breadth invocation authority** (example-doctrine-repo's DR-088, layers
+hard-deny guard for **test-breadth invocation authority** (coordinator-claude's DR-088, layers
 2, 3, 5 and 6 of the six-layer test-breadth ladder).
 
 Three ordered deny legs over one shared classifier -- identity, THEN
@@ -17,9 +17,9 @@ told so before it is ever told to wait for the machine:
      unaffected -- directory-level Tier T is unchanged for the top-level
      session. Runs only when the command is NOT suite-shaped, so it is
      strictly additive: it never restates a deny the identity leg below owns
-     with a better diagnosis. Ruled by example-doctrine-repo 2026-07-28
-     (``cross-repo/inbox/2026-07-28-example-doctrine-repo-em-dr088-tier-t-relevance-
-     ruling.md``); example-doctrine-repo refused a breadth/test-count term in the same ruling
+     with a better diagnosis. Ruled by coordinator-claude 2026-07-28
+     (``cross-repo/inbox/2026-07-28-coordinator-claude-em-dr088-tier-t-relevance-
+     ruling.md``); coordinator-claude refused a breadth/test-count term in the same ruling
      (R8) -- a rule the classifier cannot evaluate without collecting is not
      a rule.
 
@@ -49,7 +49,7 @@ told so before it is ever told to wait for the machine:
      non-subagent path (the identity leg above already denies every subagent
      Tier-U/F command outright) and only once the command has already been
      established as suite-shaped, since tiering re-resolves the repo's
-     configured commands. A live grant is either the implicit one a example-doctrine-repo
+     configured commands. A live grant is either the implicit one a coordinator-claude
      ceremony writes at ceremony open, or an explicit PM grant written via
      ``tier-u-grant-cli grant pm``. ``/workday-complete``,
      ``/workweek-complete`` and ``/merging-to-main`` each write the implicit
@@ -66,7 +66,7 @@ told so before it is ever told to wait for the machine:
      Tier U under any of them.
 
      Ownership split, and why this file cannot close a grant-writer gap on
-     its own if one reopens: the WRITER lives in example-doctrine-repo's tree --
+     its own if one reopens: the WRITER lives in coordinator-claude's tree --
      ``coordinator/commands/<ceremony>.md`` OR
      ``coordinator/skills/<ceremony>/SKILL.md``, and both shapes are in live
      use, which is precisely what an earlier verification missed by grepping
@@ -74,7 +74,7 @@ told so before it is ever told to wait for the machine:
      here. The two sides can silently diverge again (this list was wrong in
      both directions on 2026-08-07, within one day), so do not restate which
      ceremonies write the implicit grant here without re-verifying against
-     example-doctrine-repo's tree first.
+     coordinator-claude's tree first.
 
      Negative spec -- the override is NOT a substitute for the explicit
      grant. A session that meets this deny with no live grant may find
@@ -155,16 +155,16 @@ Negative spec -- what this guard deliberately does NOT do:
     the whole suite is the named failure mode this classifier is designed
     against.
   - It does NOT own the Tier-U authorization grant's schema or registry
-    manifest entry (DR-088 layer 5) -- example-doctrine-repo owns
+    manifest entry (DR-088 layer 5) -- coordinator-claude owns
     ``coordinator/schemas/tier-u-grant.schema.json`` and its manifest row.
     This module OWNS the guard leg that reads it (the grant leg above) and
     the writer/reader it calls into (``coordinator_core.session.grant``),
     because the liveness primitive that leg needs
-    (``coordinator_core.session.liveness``) lives in this repo, not example-doctrine-repo's.
+    (``coordinator_core.session.liveness``) lives in this repo, not coordinator-claude's.
 
 This module also exposes a payload-shape-free public classification API
 (``classify_command`` / ``classify_text`` / ``SuiteMatch``) for DR-088 layer
-2 -- example-doctrine-repo's ``PreToolUse(Agent|Workflow)`` dispatch-brief-prose guard, which
+2 -- coordinator-claude's ``PreToolUse(Agent|Workflow)`` dispatch-brief-prose guard, which
 lives in their tree and calls back into this one classifier rather than
 forking a second copy that would silently drift. The private core above
 (``_classify_tokens``, ``_read_testpaths``, ``_configured_test_cmds``, etc.)
@@ -198,7 +198,7 @@ Negative spec for the public API -- what it deliberately does NOT do:
   - It does NOT read, import, or branch on a repo's
     ``fast_tier_unscoped_reason`` declaration (DR-088 R7, standing
     prohibition, ratified 2026-07-25 --
-    cross-repo/inbox/2026-07-25-example-doctrine-repo-em-dr088-marker-scope-ruling.md).
+    cross-repo/inbox/2026-07-25-coordinator-claude-em-dr088-marker-scope-ruling.md).
     This classifier answers "what shape is this command";
     whether a repo has declared its fast tier legitimately unscoped is an
     AUTHORITY question -- "is this caller authorized to run that shape
@@ -216,7 +216,7 @@ SUITE-shaped commands; a dispatch brief that says "run pytest over
 tests/acquisition/" is *scoped* by that classifier's own definition, so it
 reports nothing there, even though it is precisely the shape R9's precision
 leg (leg 0, above) refuses once the dispatched agent actually tries to run
-it. The precision API closes that gap for example-doctrine-repo's layer-2 hook, which needs to
+it. The precision API closes that gap for coordinator-claude's layer-2 hook, which needs to
 warn the dispatching EM at authoring time rather than let the agent
 discover the refusal later.
 
@@ -281,7 +281,7 @@ guard entirely: no classification, no subagent identity deny (leg 1), no
 Tier-U grant check (leg 2). See ``_classify_tox_nox`` for the full rationale
 and why no scoped branch is offered for ``-e``/``-s``/``--`` posargs.
 Reconstructed from a relayed finding (relay:
-cross-repo/inbox/2026-08-03-example-doctrine-repo-em-klabauter-rows-move-to-you-pm-
+cross-repo/inbox/2026-08-03-coordinator-claude-em-klabauter-rows-move-to-you-pm-
 ruled.md's sibling chain; original ``2026-08-01-example-retrieval-repo-em-test-suite-
 approval-gate-bypass.md`` not present in this tree) -- the relay named which
 rung each finding hit (Layer 3 identity leg; the Tier-F/U grant-check leg)
@@ -293,7 +293,7 @@ literal ``os.path.isdir`` check, so an unexpanded glob positional (``pytest
 coordinator_core/*/tests``) was never a directory ON DISK and slipped past
 leg 0 even though the shell expands it to the exact breadth R9 exists to
 refuse. Reported by example-retrieval-repo, relayed via
-cross-repo/inbox/2026-08-03-example-doctrine-repo-em-two-rulings-plan-orphan-population-
+cross-repo/inbox/2026-08-03-coordinator-claude-em-two-rulings-plan-orphan-population-
 and-dr088-antiscope.md (Finding 2; the relay's "spelling-keyed" framing is
 imprecise -- the gap is isdir-keyed, not spelling-keyed). Fixed by expanding
 any positional containing glob metacharacters with ``glob.iglob(...,
@@ -304,10 +304,10 @@ zero-match posture calls this fix pins.
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-test-suite-invocation-guards.md
 Spec backlink (public API): cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 1
 Spec backlink (grant leg): cross-repo/inbox/2026-07-23-claude-central-em-dr088-ceremonies-write-grants-wire-the-deny.md
-Spec backlink (R5-R7 amendment): cross-repo/inbox/2026-07-25-example-doctrine-repo-em-dr088-marker-scope-ruling.md
-Spec backlink (R9 precision public API): cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (example-doctrine-repo repo)
-Governing decision: example-doctrine-repo docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md
-Anti-evasion language adapted from example-doctrine-repo coordinator/agents/coverage-auditor.md:227.
+Spec backlink (R5-R7 amendment): cross-repo/inbox/2026-07-25-coordinator-claude-em-dr088-marker-scope-ruling.md
+Spec backlink (R9 precision public API): cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (coordinator-claude repo)
+Governing decision: coordinator-claude docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md
+Anti-evasion language adapted from coordinator-claude coordinator/agents/coverage-auditor.md:227.
 """
 
 from __future__ import annotations
@@ -1376,7 +1376,7 @@ def _classify_tox_nox(base: str, args: Sequence[str]) -> str:
     2026-08-03 while reconstructing the relayed finding
     ``2026-08-01-example-retrieval-repo-em-test-suite-approval-gate-bypass.md`` (not
     present in this tree; relayed via
-    ``cross-repo/inbox/2026-08-03-example-doctrine-repo-em-klabauter-rows-move-to-you-
+    ``cross-repo/inbox/2026-08-03-coordinator-claude-em-klabauter-rows-move-to-you-
     pm-ruled.md``'s sibling memo chain). Neither runner was in
     ``_RUNNER_PREFILTER_RE`` at all, so a bare ``tox`` or ``nox`` invocation
     -- each of which, by design, walks EVERY configured environment/session
@@ -1820,7 +1820,7 @@ def _configured_test_cmds(repo_root: Optional[str]) -> List[ConfiguredCmd]:
     by-path leg finds no file and returns ``[]``. With ``[]`` the
     configured-command containment leg is inert, and a whole-suite command
     that merely NAMES a path (``python -m pytest coordinator/tests``, which
-    is example-doctrine-repo's declared fast AND full tier) classifies on shape alone as
+    is coordinator-claude's declared fast AND full tier) classifies on shape alone as
     Tier T -- ungated for subagents and requiring no Tier-U grant from the
     EM. That is the guard silently not guarding, in the exact repo whose
     suite command looks scoped. Do not regress this back to by-path-only.
@@ -2330,7 +2330,7 @@ def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
                            cwd: Optional[str]) -> List[str]:
     """Positional pytest arguments that name a DIRECTORY on disk.
 
-    DR-088 R9 (example-doctrine-repo ruling, 2026-07-28): for a caller carrying a top-level
+    DR-088 R9 (coordinator-claude ruling, 2026-07-28): for a caller carrying a top-level
     ``agent_id``, Tier T is file-and-node-id precision, not directory
     precision. § Decision always defined Tier T as files/directories/node-ids
     *"the caller authored or touched"*; the mechanism enforced path-scoped and
@@ -2353,7 +2353,7 @@ def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
     to phrase the alternative in the deny text.
 
     Glob-expansion closing (2026-08-03, example-retrieval-repo Finding 2, relayed via
-    ``cross-repo/inbox/2026-08-03-example-doctrine-repo-em-two-rulings-plan-orphan-
+    ``cross-repo/inbox/2026-08-03-coordinator-claude-em-two-rulings-plan-orphan-
     population-and-dr088-antiscope.md``): this leg was ``os.path.isdir``-keyed
     on the LITERAL positional, so an unexpanded glob (``pytest
     coordinator_core/*/tests``, ``pytest tests/*/``) was never a directory on
@@ -2954,7 +2954,7 @@ class SuiteMatch:
     #: launders an unscoped shape into Tier F, for EITHER key -- and the
     #: undeterminable case. Tier is a property of the invocation's shape,
     #: not of the config key it was read from (R1,
-    #: cross-repo/inbox/2026-07-25-example-doctrine-repo-em-validate-tier-u-shape-
+    #: cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-
     #: ruling.md). Tier F is the narrow opt-in, Tier U the default.
     tier: str
     #: Human-readable runner label, e.g. ``"pytest"``, ``"go test ./..."``,
@@ -2985,7 +2985,7 @@ class SuiteMatch:
     #: ``classify_command`` (a real command line, not prose, has no
     #: code-fence, negation, reported-speech, or clause-structure context to
     #: report). A non-``"imperative"`` position is automatically
-    #: non-denying at the sole downstream consumer (example-doctrine-repo's
+    #: non-denying at the sole downstream consumer (coordinator-claude's
     #: ``coordinator/hooks/scripts/block-dispatch-suite-invocation.py``,
     #: which denies a dispatch iff ANY match has ``position ==
     #: "imperative"``) -- so adding ``"reported"``/``"descriptive"`` as
@@ -3011,7 +3011,7 @@ def _remediation_text(tier: str, detected: str) -> str:
     """Actionable remediation for a public-API match. Distinct copy from
     ``_deny_reason_subagent``/``_deny_reason_mutex`` -- those are hard-deny
     envelopes keyed to ``check()``'s two legs; this is generic advice for a
-    caller (e.g. Example-doctrine-repo's dispatch-brief guard) that has no payload/identity/
+    caller (e.g. Coordinator-claude's dispatch-brief guard) that has no payload/identity/
     mutex context of its own."""
     if tier == "F":
         return (
@@ -3166,7 +3166,7 @@ def _runner_recognized(tokens: Sequence[str]) -> bool:
 
 def _tier_for_cfg_match(cfg_tier: str, generic: Optional[str],
                         argv: Sequence[str]) -> Tuple[str, str]:
-    """R1 (cross-repo/inbox/2026-07-25-example-doctrine-repo-em-validate-tier-u-shape-
+    """R1 (cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-
     ruling.md): tier is a property of the invocation's SHAPE, not of the
     config key (``fast_test_cmd`` or ``full_test_cmd``) it was read from.
     The single decision point for both legs of ``_classify_command_core``'s
@@ -3350,7 +3350,7 @@ def _classify_command_core(
         generic = _classify_tokens(argv, testpaths, cwd)
 
         if cfg_tier is not None:
-            # R1 (cross-repo/inbox/2026-07-25-example-doctrine-repo-em-validate-tier-u-
+            # R1 (cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-
             # shape-ruling.md): tier is a property of the invocation's
             # SHAPE, not of the config key it was read from -- and this
             # holds for BOTH cfg keys, not just ``fast_test_cmd``. A segment
@@ -3547,7 +3547,7 @@ _NEGATION_LOOKBACK = 300
 # was added: that would also flip the Defect-A clause ("A start ceremony
 # that invokes pytest is a several-minute stall...", a genuinely
 # descriptive/prose sentence) to a false positive, regressing the peer's
-# fix at cross-repo/inbox/2026-07-25-example-doctrine-repo-em-dispatch-suite-
+# fix at cross-repo/inbox/2026-07-25-coordinator-claude-em-dispatch-suite-
 # classifier-two-live-defects.md. The middle path taken: broaden the cue
 # vocabulary (this set) and add explicit prose-negative patterns (see
 # ``_PROSE_NEGATIVE_RE`` below), leaving the existing lead-strip fallback
@@ -3717,7 +3717,7 @@ def _bare_line_is_command_shaped(prefix: str) -> bool:
 
     The cue search is CLAUSE-scoped, not whole-prefix -- a second,
     independent false-positive class (2026-07-25, cross-repo/inbox/
-    2026-07-25-example-doctrine-repo-em-dispatch-suite-classifier-two-live-defects.md
+    2026-07-25-coordinator-claude-em-dispatch-suite-classifier-two-live-defects.md
     Defect A): "Neither consumer may run the test tier or block the
     ceremony. A start ceremony that invokes pytest is a several-minute
     stall ..." has a ``run`` in its FIRST sentence (itself part of a
@@ -4294,7 +4294,7 @@ def classify_command_precision(command: str, *, cwd: Optional[str] = None) -> Li
     precision shape, zero-to-many matches. Never short-circuits on the
     first match, mirroring ``classify_command``.
 
-    Spec backlink: cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (example-doctrine-repo repo)
+    Spec backlink: cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (coordinator-claude repo)
     """
     if not isinstance(command, str) or not command or not cwd:
         return []
@@ -4315,7 +4315,7 @@ def classify_text_precision(text: str, *, cwd: Optional[str] = None) -> List[Pre
     Fails open (``[]``) without a ``cwd`` -- see
     ``_classify_command_precision_core``.
 
-    Spec backlink: cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (example-doctrine-repo repo)
+    Spec backlink: cross-repo/inbox/2026-07-28-example-market-data-repo-em-dispatched-agent-scoped-test-breadth.md (coordinator-claude repo)
     """
     if not isinstance(text, str) or not text or not cwd:
         return []

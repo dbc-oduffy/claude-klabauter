@@ -2,7 +2,7 @@
 
 Purpose: Unit tests for parallel-review-orthogonality-guard.py, the fail-fast
 lens-orthogonality guard + weekly-slice diff-freeze CLI ported from the bash
-fences in coordinator/skills/parallel-code-review/SKILL.md (example-doctrine-repo) §
+fences in coordinator/skills/parallel-code-review/SKILL.md (coordinator-claude) §
 Pre-Flight Orthogonality Assertion and § Snapshot.
 
 Test coverage:

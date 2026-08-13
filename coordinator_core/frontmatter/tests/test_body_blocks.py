@@ -4,7 +4,7 @@ Tests for coordinator_core.frontmatter.body_blocks.
 Covers the located/absent/malformed trichotomy against the shared
 plan-tasks-spine fixture corpus — a SINGLE canonical fixture set under
 `coordinator/bin/tests/fixtures/plan-tasks-spine/`, held in common with
-Example-doctrine-repo's `_locate_tasks_block` reference (exercised by
+Coordinator-claude's `_locate_tasks_block` reference (exercised by
 `coordinator/bin/tests/test_plan_tasks_spine_and_harvest.py`). Both suites
 parametrize over the SAME `FIXTURE_EXPECTATIONS` table
 (`coordinator/bin/tests/fixtures/plan-tasks-spine/fixture_expectations.py`)
@@ -20,7 +20,7 @@ Also pins the span contract: the returned span is the fence-BODY span
 
 Spec backlinks:
   coordinator_core/frontmatter/body_blocks.py
-  coordinator/bin/coordinator-harvest-deferrals (example-doctrine-repo, lines 317-372)
+  coordinator/bin/coordinator-harvest-deferrals (coordinator-claude, lines 317-372)
   coordinator/bin/tests/fixtures/plan-tasks-spine/fixture_expectations.py
 """
 from __future__ import annotations

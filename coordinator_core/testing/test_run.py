@@ -8,7 +8,7 @@ fail-loud / Finding-5 timeout discipline, against hermetic `tmp_path`
 fixture suites (never committed dummies — Finding 9).
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C2
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C2
 
 Negative-spec:
     - Does NOT write any dummy `test_*.py` / `.test.py` fixture file anywhere

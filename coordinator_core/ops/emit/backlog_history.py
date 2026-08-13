@@ -5,7 +5,7 @@ Purpose: aggregate latest-per-(repo,date) across all per-machine backlog-snapsho
 shards (written by recorder.py) into the snake_case ``backlog_history`` envelope block
 that cockpit consumes.
 
-Block shape (snake_case — example-doctrine-repo+PM convention call + the Director of Engineering review; contract v2.7.0 landed
+Block shape (snake_case — coordinator-claude+PM convention call + the Director of Engineering review; contract v2.7.0 landed
 the block as ``backlog_history``; cross-repo memo 2026-07-06-backlog-history-landed-v270-claude-klabauter.md):
     {
         "generated_at": "<ISO datetime>",    # null in D9 default
@@ -48,7 +48,7 @@ Aggregation (latest-per-(repo,date)): all shard files matching
 the last-seen row wins (append-only shards — later rows are newer). Malformed lines are
 silently skipped; a shard that cannot be read is silently skipped (graceful-degrade).
 
-Spec backlink: docs/plans/2026-07-05-backlog-history-emit-gate-decouple.md § Design decision → Option C
+Spec backlink: pln-backloghistory-emit-gate-decou-22d451 § Design decision → Option C
 Amends: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § D6 (v2.5.0 sentinel → contract-presence gate)
 Amends: docs/plans/2026-07-08-producer-emit-hold-removal-reader-first-consumer-owned.md (producer-side runtime emit-hold removed; contract-presence self-activation gate is unaffected and stays)
 Parity oracle: n/a (new block — no bash equivalent; D5 defines the shape).
@@ -213,7 +213,7 @@ def collect(ctx: EmitContext) -> dict:
     Returns:
         A dict with snake_case keys ``generated_at`` (str|None), ``series`` (list),
         ``provenance`` (dict, non-null). Block key and timestamp key are snake_case per
-        contract v2.7.0 (example-doctrine-repo+PM convention call + the Director of Engineering review; 2026-07-06 cross-repo memo).
+        contract v2.7.0 (coordinator-claude+PM convention call + the Director of Engineering review; 2026-07-06 cross-repo memo).
     """
     # Block-level provenance — populated regardless of D9 state (provenance_fk NOT NULL, D6).
     provenance = ctx.provenance(

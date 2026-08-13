@@ -123,7 +123,7 @@ gap. That verdict was reached by reasoning about this module's OWN
 ``shlex``-based tokenizer in isolation, not by re-deriving the actual
 execution model. Re-derived: this project's Bash-tool execution path on
 Windows is Git Bash / MSYS bash (see ``docs/wiki/bash-on-windows-
-gotchas.md``, example-doctrine-repo) -- a genuine POSIX shell that performs real
+gotchas.md``, coordinator-claude) -- a genuine POSIX shell that performs real
 word-splitting and backslash-escape processing on the command string
 BEFORE any executable is resolved, not a raw ``CreateProcess``
 successive-space-delimited-prefix resolution (that Win32 hazard requires
@@ -433,9 +433,9 @@ Ported from: coordinator_core/bash_guards/nudge_subagent_scoped_commit.py
   (git-commit detection regexes; scoped-pathspec exemption removed).
 Spec backlink: docs/plans/2026-07-24-g4-execute-pipeline-two-repo-rebuild.md
   chunk M4 ("claude-klabauter -- subagent-commit enforcement gate").
-Spec backlink: docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md
+Spec backlink: pln-confine-subagent-bash-by-allow-7c2901
   chunk C2 ("close the two no-obfuscation holes in block_subagent_commit").
-Spec backlink: docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md
+Spec backlink: pln-confine-subagent-bash-by-allow-7c2901
   chunk C5 ("match the scoped-git-commit trampoline in block_subagent_commit").
 
 2026-08-02 update, part 8 (B-commit-matchers review integration -- the

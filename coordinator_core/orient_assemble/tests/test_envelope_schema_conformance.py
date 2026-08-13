@@ -1,7 +1,7 @@
 """
 coordinator_core.orient_assemble.tests.test_envelope_schema_conformance —
-C3 AC(b): the assembler's envelope validates against the example-doctrine-repo schema-of-
-record (example-doctrine-repo/schemas/decision-object.schema.json, DR-047 — not
+C3 AC(b): the assembler's envelope validates against the coordinator-claude schema-of-
+record (coordinator-claude/schemas/decision-object.schema.json, DR-047 — not
 Claude-klabauter-resident).
 
 Two layers: (1) `brief(cadence)`'s own skeleton output for every cadence,
@@ -41,7 +41,7 @@ def _schema_path():
 @pytest.fixture(scope="module")
 def schema():
     if not _doe_present or not _schema_path().exists():
-        pytest.skip("sibling example-doctrine-repo checkout with schemas/decision-object.schema.json not found")
+        pytest.skip("sibling coordinator-claude checkout with schemas/decision-object.schema.json not found")
     return json.loads(_schema_path().read_text(encoding="utf-8"))
 
 

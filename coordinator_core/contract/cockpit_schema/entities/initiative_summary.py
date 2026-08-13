@@ -1,6 +1,6 @@
 """
 InitiativeSummary — lightweight parent entity for work identity. Pydantic
-port of example-doctrine-repo `coordinator/cockpit-contract/src/entities/initiative-summary.ts`
+port of coordinator-claude `coordinator/cockpit-contract/src/entities/initiative-summary.ts`
 (Zod source).
 
 An initiative is the named business bet / strategic theme that one or more
@@ -16,7 +16,7 @@ the roadmap DAG/roll-up — that is the roadmap-first-class-tracking spinoff.
 with all other summary entities. Nullable fields follow D9 (present-as-null,
 not optional).
 
-Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D2.
+Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2.
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
 """
 from __future__ import annotations

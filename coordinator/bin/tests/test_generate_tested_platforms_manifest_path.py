@@ -2,7 +2,7 @@
 `generate-tested-platforms::_manifest_path()`'s dual-layout resolution.
 
 Context: `_MANIFEST_RELATIVE` used to be a single hardcoded
-`coordinator/docs/install/agent-install-manifest.json` (example-doctrine-repo's layout).
+`coordinator/docs/install/agent-install-manifest.json` (coordinator-claude's layout).
 In claude-klabauter's own checkout the manifest lives at
 `docs/install/agent-install-manifest.json` (no `coordinator/` prefix), so the
 tool's *default* invocation (no `--repo-root`, defaulting to claude-klabauter's own
@@ -10,7 +10,7 @@ checkout) resolved a path that does not exist. `--repo-root` is explicitly
 designed to let this tool probe a foreign repo, so a single hardcoded
 relative layout cannot serve both shapes.
 
-Tests: example-doctrine-repo layout resolves, claude-klabauter layout resolves, neither-exists
+Tests: coordinator-claude layout resolves, claude-klabauter layout resolves, neither-exists
 raises FileNotFoundError naming both attempted paths.
 
 Spec backlink: slice-3 review carried loose end, claude-klabauter

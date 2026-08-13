@@ -19,7 +19,7 @@ sys.modules-delta approach does not; the ceiling this module gates on is a modul
 the delta is the more precise way to obtain one. Mechanism only -- not a scope reduction from
 AC11's intent.
 
-Spec backlink: docs/plans/2026-08-06-windows-hot-path-less-work-per-interpreter.md chunk C4
+Spec backlink: pln-windows-hot-path-cost-less-wor-0ec8ea chunk C4
 (AC9, AC11).
 """
 

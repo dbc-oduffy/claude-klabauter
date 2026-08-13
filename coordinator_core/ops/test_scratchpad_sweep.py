@@ -324,11 +324,11 @@ def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch):
 def test_build_slug_to_root_map_keeps_unambiguous_roots(monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._known_repo_roots",
-        lambda: ["X:/claude-klabauter", "X:/example-doctrine-repo"],
+        lambda: ["X:/claude-klabauter", "X:/coordinator-claude"],
     )
     mapping = _build_slug_to_root_map()
     assert mapping["X--claude-klabauter"] == "X:/claude-klabauter"
-    assert mapping["X--example-doctrine-repo"] == "X:/example-doctrine-repo"
+    assert mapping["X--coordinator-claude"] == "X:/coordinator-claude"
 
 
 # ---------------------------------------------------------------------------

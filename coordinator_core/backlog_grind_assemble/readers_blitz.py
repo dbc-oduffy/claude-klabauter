@@ -68,7 +68,7 @@ Four things live in this module, not one:
    WAVE-VERIFY TIME (Phase 3 step 3), once a DONE summary exists — never
    from `collect()`.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Spec backlink: coordinator-claude docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
 chunk C3a.
 
 Negative-spec:

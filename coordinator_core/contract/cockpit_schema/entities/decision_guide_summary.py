@@ -1,5 +1,5 @@
 """
-DecisionGuideSummary — pydantic port of example-doctrine-repo
+DecisionGuideSummary — pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/decision-guide-summary.ts` (Zod source).
 Summary view over a consolidated/distilled DR-corpus container document.
 

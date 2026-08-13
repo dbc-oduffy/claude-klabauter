@@ -4,7 +4,7 @@ coordinator_core.ops.emit._slug — shared hostname slug helper.
 Single source of truth for ``_machine_slug``, which both recorder.py
 (backlog.record) and goal_append.py (goal.append) must agree on.
 
-Port of: append-goal-event.sh (example-doctrine-repo b5a4192c, 2026-07-20). Mirrors its slug algorithm
+Port of: append-goal-event.sh (coordinator-claude b5a4192c, 2026-07-20). Mirrors its slug algorithm
 exactly: lowercase → collapse every run of non-[a-z0-9] to '-' → strip leading/trailing '-'
 
 Having one implementation means one test point and one update site when the bash
@@ -25,7 +25,7 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 def machine_slug(hostname: Optional[str] = None) -> str:
     """Return the hostname slug used in per-machine JSONL shard filenames.
 
-    Port of: append-goal-event.sh (example-doctrine-repo b5a4192c, 2026-07-20). Mirrors its algorithm
+    Port of: append-goal-event.sh (coordinator-claude b5a4192c, 2026-07-20). Mirrors its algorithm
     exactly: lowercase, collapse every run of non-``[a-z0-9]`` characters to a single
     '-', then strip leading/trailing '-'.
     Falls back to socket.gethostname() when hostname is None; returns "unknown" for

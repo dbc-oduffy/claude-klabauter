@@ -59,7 +59,7 @@ Exit contract:
       it is a single detect-only gate, not two independently-overridable
       ones.
 
-Spec backlink: docs/plans (example-doctrine-repo) state/subagent-share/
+Spec backlink: docs/plans (coordinator-claude) state/subagent-share/
   32637f2b-204d-4937-89a7-c3518928e38d/coordinatorexecutor-7bb4cb37.md
   and 230990b7-b7f4-4dfd-a864-4347b81d3f9e/coordinatorexecutor-87eba508.md
   (CLAUDE.md/CLAUDE.local.md prose leg, 2026-07-30)
@@ -129,7 +129,7 @@ def _canon(path: str) -> str:
 def _resolve_claude_klabauter_root() -> str:
     """This script already runs FROM inside claude-klabauter's own coordinator/bin/,
     so `coordinator_core` is importable via a parents-walk sys.path insert —
-    no cross-repo resolution needed, unlike the example-doctrine-repo-side hook stub."""
+    no cross-repo resolution needed, unlike the coordinator-claude-side hook stub."""
     return os.path.abspath(os.path.join(_BIN_DIR, "..", ".."))
 
 

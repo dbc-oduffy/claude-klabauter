@@ -21,7 +21,7 @@ fetch -> rebase --onto -> re-push, bounded, never `--force`). Every `git`
 subprocess in this module (directly, or transitively via `commit_scoped()`)
 routes through `git_native._git` (AC2/AC3) -- no bare `subprocess.run`.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C4 (AC5).
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C4 (AC5).
 Spec backlink: docs/plans/2026-07-27-computed-commit-mechanism-selection.md
   § C4 -- `commit()` routed through `commit_scoped()`; `explicit_stage()`
   made divergence-aware.
@@ -449,8 +449,8 @@ def explicit_stage(
                                           pipe-delimited forwarding value).
       `p` is a staged deletion source (2026-08-04 fix, defect B -- see
       "Deletion staging" below) -> checked BEFORE the plain `exists()` test
-      above (2026-08-11 fix, example-doctrine-repo-em memo `cross-repo/inbox/2026-08-11-
-      example-doctrine-repo-em-two-gaps-that-let-machine-local-files-stay-tracked.md`
+      above (2026-08-11 fix, coordinator-claude-em memo `cross-repo/inbox/2026-08-11-
+      coordinator-claude-em-two-gaps-that-let-machine-local-files-stay-tracked.md`
       § 2 -- see "Untrack vs. add" below for why the ordering itself is the
       fix) ->
         `p` not in `caller_paths`     -> skipped `"swept-deleted:<p>"`
@@ -507,8 +507,8 @@ def explicit_stage(
                                           staged before this call and is not
                                           staged now.
 
-    Untrack vs. add (2026-08-11 fix, example-doctrine-repo-em memo `cross-repo/inbox/
-    2026-08-11-example-doctrine-repo-em-two-gaps-that-let-machine-local-files-stay-
+    Untrack vs. add (2026-08-11 fix, coordinator-claude-em memo `cross-repo/inbox/
+    2026-08-11-coordinator-claude-em-two-gaps-that-let-machine-local-files-stay-
     tracked.md` § 2 "`scoped-git-commit` cannot perform an untrack commit, by
     construction"): a `git rm --cached` untrack leaves the file's CONTENT on
     disk (only the index entry is removed), so `(worktree_root / p).exists()`
@@ -1095,7 +1095,7 @@ def commit(
     private-index branch (builds the commit tree under a throwaway index
     copy, preserving each diverged path's staged content verbatim, and lands
     via a compare-and-swap `update-ref`). See `commit_scoped`'s own
-    docstring for the two incidents (claude-klabauter 506748a0, example-doctrine-repo
+    docstring for the two incidents (claude-klabauter 506748a0, coordinator-claude
     726925b2) neither commit form is safe against alone. Unlinks the temp
     file in a `finally` regardless of outcome.
 
@@ -1767,7 +1767,7 @@ def push_with_retry(
     non-`work/*` branch. NEVER ambient (no env var, no module-level flag --
     see the plan's Anti-scope); the caller must pass it explicitly on the
     one call that needs it. The ONE sanctioned consumer, as of this chunk,
-    is example-doctrine-repo's `merging-to-main` SKILL, Step 10 item 5 (the
+    is coordinator-claude's `merging-to-main` SKILL, Step 10 item 5 (the
     post-merge, on-`main`, release-notes bookkeeping commit) -- see
     `run_commit_pipeline`'s own docstring for the full citation. No op in
     this repo passes it. Every exercised override -- the gate actually
@@ -2227,7 +2227,7 @@ def run_commit_pipeline(
     naming the branch and `protected_branch_override_reason`. Never an env
     var or a module-level flag (see the plan's Anti-scope) -- the ONE
     sanctioned consumer of this argument, as of this chunk, is
-    example-doctrine-repo's `merging-to-main` SKILL (`coordinator/skills/merging-to-
+    coordinator-claude's `merging-to-main` SKILL (`coordinator/skills/merging-to-
     main/SKILL.md`), Step 10 ("Completion-Log Status Flip") item 5: the
     post-merge, on-`main`, release-notes bookkeeping commit that runs
     AFTER a PR has already merged via `gh pr merge` -- never the work
@@ -2339,7 +2339,7 @@ def run_commit_pipeline(
     caller (C9's orchestrator) surfaces separately; a genuine `StageOutcome.
     failed` (non-empty) DOES set `commit_failed`, since nothing was staged.
 
-    Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C9
+    Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C9
     (AC18 review Finding 2 -- `on_committed` closes the narrower-than-claimed
     crash-resumption window: previously the sentinel was only written by the
     caller AFTER this whole function returned, which meant a crash during
@@ -2837,7 +2837,7 @@ def run_commit_pipeline(
         #
         # Review: code-reviewer -- Finding 1 (verified, not just softened):
         # this is now a two-halves fix, both landed. The SessionEnd hook
-        # (`example-doctrine-repo coordinator/hooks/scripts/sessionend-auto-commit.py`,
+        # (`coordinator-claude coordinator/hooks/scripts/sessionend-auto-commit.py`,
         # `a762df6f9888`) no longer hard-kills on timeout: it soft-
         # terminates this pipeline's own CLI (`coordinator/bin/safe-
         # commit-offer.py`), waits a 5s grace window, and only hard-kills

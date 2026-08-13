@@ -50,7 +50,7 @@ failure at 2am, which is the entire use case). The moment one of them does real 
 AC2 stops being verifiable by reading and this family stops being safe to fire at a live
 tree — which is the only reason it exists.
 
-Spec backlink: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C1
+Spec backlink: pln-a-safe-target-for-transport-fa-7ea067 § C1
 """
 
 from __future__ import annotations

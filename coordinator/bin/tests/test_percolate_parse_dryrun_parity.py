@@ -2,7 +2,7 @@
 
 Purpose: DR-076 cross-platform invocation-parity guard for
 coordinator/bin/percolate-parse-dryrun.py — the /percolate skill's
-dry-run-parse assembler (example-doctrine-repo coordinator/skills/percolate/SKILL.md,
+dry-run-parse assembler (coordinator-claude coordinator/skills/percolate/SKILL.md,
 plan 2026-07-24-computed-skills-b8-review-ci-cluster.md chunk b8-C5).
 
 This assembler had NO test file at all as of the 2026-07-25 DR-076 audit

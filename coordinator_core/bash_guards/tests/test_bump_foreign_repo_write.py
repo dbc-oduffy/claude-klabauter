@@ -1,11 +1,11 @@
 """Tests for coordinator_core.bash_guards.bump_foreign_repo_write -- the
 Bash-surface CROSS-REPO write-confinement speed bump (C4).
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
 repo], chunk C4 "Cross-repo detection and registration". Re-founded on the
 real anchor path by
 docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md, chunk
-C3 (example-doctrine-repo finding #5): applicability here is established via a real
+C3 (coordinator-claude finding #5): applicability here is established via a real
 `write_session_start_record` settings-home anchor, not `CLAUDE_PROJECT_DIR`
 -- see `_set_anchor`'s own docstring for why. `CLAUDE_PROJECT_DIR` is left
 unset throughout this file; it is not this guard's primary anchor (see
@@ -93,7 +93,7 @@ def repos(tmp_path):
 def _set_anchor(monkeypatch, repos, session_id: str, extra: dict | None = None) -> None:
     """Establishes applicability the same way a real session does -- a
     settings-home `write_session_start_record`, not `CLAUDE_PROJECT_DIR`
-    (example-doctrine-repo finding #5 / AC5): `CLAUDE_PROJECT_DIR` is known-absent from a live
+    (coordinator-claude finding #5 / AC5): `CLAUDE_PROJECT_DIR` is known-absent from a live
     confined Bash-tool subprocess (`_write_bump_session_start.
     CLAUDE_PROJECT_DIR_LIVE_IN_HOOK_ENV`), so a suite anchored on it
     exclusively never exercises the real settings-home read path this
@@ -286,7 +286,7 @@ def test_evasion_env_git_dir_write_subcommand_reproduces_live_incident_bumps(rep
 
     Carried on `commit` rather than the incident's literal `cat-file` since
     2026-08-12: `cat-file` is a READ, and this test asserting a bump on it
-    was the reads-never-bump contract violation the example-doctrine-repo memo caught
+    was the reads-never-bump contract violation the coordinator-claude memo caught
     (see `test_readonly_git_verb_outside_the_old_eight_never_bumps`). The
     seam under test here is `GIT_DIR` resolution, not verb classification --
     a write verb exercises it without enshrining the bug."""
@@ -355,7 +355,7 @@ def test_unknown_git_verb_does_not_bump(repos, monkeypatch):
 @pytest.mark.parametrize(
     "verb",
     [
-        # The command the example-doctrine-repo memo named as still costing them after
+        # The command the coordinator-claude memo named as still costing them after
         # the first pass -- the reason this predicate table exists.
         "branch --show-current",
         "branch",
@@ -399,7 +399,7 @@ def test_dual_mode_verb_read_spelling_never_bumps(repos, monkeypatch, verb):
     Those verbs sit in `_GIT_WRITE_SUBCOMMANDS` because their write
     spellings do mutate; `_DUAL_MODE_READ_PREDICATES` vetoes the bump for
     the read spellings only. `git branch --show-current` is the specific
-    command the example-doctrine-repo memo named: an EM verifying a peer's branch
+    command the coordinator-claude memo named: an EM verifying a peer's branch
     before memoing them is doing exactly what this fleet's doctrine tells
     them to do, and it must not read as an attempted write."""
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"

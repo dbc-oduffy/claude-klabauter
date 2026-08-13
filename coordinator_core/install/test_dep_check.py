@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.install.dep_check.
 
-Port of: dep_check.sh (example-doctrine-repo 6fb5fb37, 2026-07-22, 710 lines).
+Port of: dep_check.sh (coordinator-claude 6fb5fb37, 2026-07-22, 710 lines).
 
 These tests independently re-derive parity against the bash oracle's OWN
 documented contract (read directly from dep_check.sh's function-header

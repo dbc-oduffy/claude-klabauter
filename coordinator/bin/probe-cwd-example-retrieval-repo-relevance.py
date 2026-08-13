@@ -3,14 +3,14 @@
 probe-cwd-example-retrieval-repo-relevance.py — CLI trampoline over claude-klabauter
 coordinator_core.ops.probe_cwd_example_retrieval_repo_relevance.
 
-Port of: probe-cwd-example-retrieval-repo-relevance.sh (example-doctrine-repo b5a4192c, 2026-07-20). The bash implementation (workstream-start
+Port of: probe-cwd-example-retrieval-repo-relevance.sh (coordinator-claude b5a4192c, 2026-07-20). The bash implementation (workstream-start
 gift-shape signal for example-retrieval-repo visibility — AC-9 visibility matrix,
 settings-home-seam registry lookup, whoami UE-detection subprocess probe,
 MCP-health + engine-corpus sentinel reads) has been fully ported to
 coordinator_core/ops/probe_cwd_example_retrieval_repo_relevance.py (claude-klabauter), with a
 co-located pytest (test_probe_cwd_example_retrieval_repo_relevance.py). This file is now
-a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per
-DR-047 (example-doctrine-repo owns contract, claude-klabauter owns engine).
+a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per
+DR-047 (coordinator-claude owns contract, claude-klabauter owns engine).
 
 Variant #1 port — PRISTINE, no claude-klabauter shim borrows this module; nothing else
 imports coordinator_core.ops.probe_cwd_example_retrieval_repo_relevance.
@@ -22,15 +22,15 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Always exits 0 — this probe is advisory, never gating. Preserved verbatim in
 the ported module's main().
 
 Spec backlink: docs/plans/2026-05-20-portable-code-substrate.md § Chunk 3
-Example-doctrine-repo-side test oracle (run against this trampoline, must pass unchanged):
+Coordinator-claude-side test oracle (run against this trampoline, must pass unchanged):
     coordinator/tests/test_probe_cwd_example_retrieval_repo_relevance.sh
 """
 

@@ -6,7 +6,7 @@ docs/plans/2026-08-07-publish-identity-scrub-and-two-repo-gates.md).
 Why this exists: `check_tree()` resolves every command-referenced path
 against `--tree` and nowhere else, so a legitimately foreign path (a
 "clone the engine repo, then run its installer" instruction) has no way to
-be expressed at all -- example-doctrine-repo's publish fail-closed with 6 findings, every one
+be expressed at all -- coordinator-claude's publish fail-closed with 6 findings, every one
 of them a legitimate cross-repo instruction. This marker is a narrow,
 checked escape hatch: well-formed markers are accepted without being
 resolved locally; malformed markers and unmarked bogus paths both still
@@ -159,7 +159,7 @@ class TestCheckTreeStillRejectsUnmarkedBogusPath:
 
 
 class TestExistingKlabauterPlaceholderUnaffected:
-    """example-doctrine-repo's `<klabauter-clone>/scripts/setup.py` placeholder must keep
+    """coordinator-claude's `<klabauter-clone>/scripts/setup.py` placeholder must keep
     working untouched -- it is a different mechanism (angle-bracket
     placeholder, invisible to this gate by construction) that C7 must not
     require migrating."""

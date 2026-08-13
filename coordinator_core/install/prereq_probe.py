@@ -2,7 +2,7 @@
 coordinator/scripts/lib/prereq_probe.sh's SSOT functional-prerequisite probe
 suite for the coordinator install Step Zero gate.
 
-Port source: coordinator/scripts/lib/prereq_probe.sh [example-doctrine-repo repo]
+Port source: coordinator/scripts/lib/prereq_probe.sh [coordinator-claude repo]
 (bash lib is SOURCED by coordinator/scripts/setup.sh --preflight and
 coordinator/scripts/normalize-env.sh, and is additionally vendored
 BYTE-STABLE by example-retrieval-repo-ue-addon and deep-research together with its

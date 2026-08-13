@@ -51,7 +51,7 @@ Negative-spec:
     is exactly one more member of the caller's `active_values` set — this
     module filters `segment[filter_key] in active_values` and nothing more.
 
-Spec backlink: docs/plans/2026-08-13-shared-residue-segment-loader.md, chunk C1
+Spec backlink: pln-factor-the-residue-segment-loa-e63300, chunk C1
 """
 from __future__ import annotations
 

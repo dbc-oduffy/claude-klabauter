@@ -22,10 +22,10 @@ Assembler scalars (C2 — v2.6.0 emit switch):
 Null roadmap_id guard (F4): if roadmap_id is None, both scalars are set to null without
   touching ctx.assembler_dag.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) § SECTION 8.8 —
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) § SECTION 8.8 —
   RoadmapSummary. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P12
-Spec backlink: docs/plans/2026-07-06-roadmap-dag-emit-switch.md § C2
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P12
+Spec backlink: pln-emit-first-class-roadmap-dag-i-137a28 § C2
 
 Node-subprocess retirement (2026-07-22): this section originally shelled out to
 ``node COORDINATOR_ROOT/bin/query-records.js --type roadmap --limit 0 --format json``

@@ -6,7 +6,7 @@ arrays (completion_rollups.day, backlogs.bug) are reached by the SECMAP walk.
 
 No golden-fixture dependency — all envelopes are synthetic in-memory objects.
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b
 Producer contract: coordinator_core/contract/example-retrieval-repo-producer-contract.md § 3.3
 """
 

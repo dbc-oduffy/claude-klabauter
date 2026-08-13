@@ -8,7 +8,7 @@ gates measured distributions against a two-level (OpClass-tier default +
 per-op override) budget manifest, and persists an append-only
 code_sha-keyed baseline store.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10
 """
 
 from __future__ import annotations

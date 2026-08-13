@@ -29,7 +29,7 @@ Isolation discipline: `tempfile.gettempdir` is monkeypatched to `tmp_path`
 for every test in this module (autouse fixture) so a failed test can never
 leave a live unlock sentinel in the real platform temp dir.
 
-Spec backlink: docs/plans/2026-08-03-in-session-operator-unlock-for-the-hard-.md § C2/C6.
+Spec backlink: pln-in-session-operator-unlock-for-aa6cf9 § C2/C6.
 """
 
 from __future__ import annotations

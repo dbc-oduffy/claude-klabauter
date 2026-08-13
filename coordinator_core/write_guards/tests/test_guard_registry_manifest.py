@@ -14,7 +14,7 @@ import quirk present on one operator's machine but not in CI). CI runs on one
 environment and cannot see a failure that only reproduces on another. That
 gap is why `engine.discover_guard_names()` also exists as a runtime-visible
 signal (half 2) — see `coordinator/hooks/scripts/preuse-write-dispatch.py`
-(example-doctrine-repo repo), which emits a stderr line naming any guard that failed to
+(coordinator-claude repo), which emits a stderr line naming any guard that failed to
 import at actual hook-invocation time, on whatever machine that turns out to
 be.
 

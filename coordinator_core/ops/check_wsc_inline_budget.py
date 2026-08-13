@@ -8,7 +8,7 @@ against a stored baseline integer. Inline bash blocks are a proxy for
 inline in the skill." The check surfaces a WARN when the count grows.
 
 Spec backlink: wsc-asic task (2026-06-30) / skill-step-parallelization.md § wsc wiring rule
-Port of: check-wsc-inline-budget.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-wsc-inline-budget.sh (coordinator-claude b5a4192c, 2026-07-20)
 
 Exit codes (parity-critical — caller branches on these):
   0 — count within baseline (or no baseline file — safe to ship before finalization)
@@ -80,7 +80,7 @@ def main(argv: List[str]) -> int:
     argv[0] (optional) — skill_path override.
     argv[1] (optional) — baseline_path override.
     Mirrors the bash oracle's WSC_SKILL_PATH / WSC_BASELINE_FILE env-var
-    override convention via positional args at this layer; the example-doctrine-repo
+    override convention via positional args at this layer; the coordinator-claude
     trampoline is responsible for translating its own env vars into argv.
     """
     skill_path: Optional[str] = argv[0] if len(argv) > 0 else None

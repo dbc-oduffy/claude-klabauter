@@ -1,15 +1,15 @@
 """
 test_provenance_parity — cross-package parity: ProvenanceEnvelope semantic equivalence.
 
-Pytest port of example-doctrine-repo `coordinator/cockpit-contract/test/provenance-parity.test.ts`.
+Pytest port of coordinator-claude `coordinator/cockpit-contract/test/provenance-parity.test.ts`.
 
 PURPOSE
 Guards against the two independently-authored ProvenanceEnvelope definitions
 diverging again.
 
-SOURCE A: example-doctrine-repo coordinator/cockpit-contract/schema/provenance-envelope.schema.json
+SOURCE A: coordinator-claude coordinator/cockpit-contract/schema/provenance-envelope.schema.json
   (root IS the ProvenanceEnvelope shape)
-SOURCE B: example-doctrine-repo coordinator/artifact-shape-contract/artifact-shape-contract.schema.json
+SOURCE B: coordinator-claude coordinator/artifact-shape-contract/artifact-shape-contract.schema.json
   → $defs.ProvenanceEnvelope
 
 NORMALIZATION: strips annotation-only fields (title, description, $schema,
@@ -19,7 +19,7 @@ Remaining semantic fields (type, enum, anyOf, required, additionalProperties,
 not, if, then, properties, allOf, …) are compared after recursive key-sort and
 allOf clause-sort.
 
-Spec backlink: docs/plans/2026-07-02-slice-provenance-envelope.md § D4
+Spec backlink: docs/plans/2026-07-02-slice-provenance-envelope.md § D4 [DEAD-CITATION: plan file never committed to this repo]
 """
 from __future__ import annotations
 

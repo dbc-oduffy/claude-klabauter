@@ -1,17 +1,17 @@
 """
 Fixture-drift guard: every ``ml_bin / "<name>"`` source literal in
-``coordinator_core.install.substrate`` names a file the example-doctrine-repo repo
+``coordinator_core.install.substrate`` names a file the coordinator-claude repo
 actually ships under ``coordinator/templates/bin/``. The 2026-07-22
 platform-localize.sh -> {.py,.cmd} rename regression shipped BECAUSE the
 ``test_install_substrate_uninstall_legs.py`` fixture stubbed a filename
 substrate.py no longer installs, and nothing cross-checked the fixture
-against example-doctrine-repo's real listing — this test is that cross-check, so a future
+against coordinator-claude's real listing — this test is that cross-check, so a future
 rename trips a red test here instead of a silent green-tests-dead-path.
 
-Resolves the real example-doctrine-repo checkout the same way the install hubs do
+Resolves the real coordinator-claude checkout the same way the install hubs do
 (``coordinator_core.install._shared.resolve_coordinator_root``); skips
 cleanly when unresolvable on this machine (e.g. a CI box without a sibling
-Example-doctrine-repo clone).
+Coordinator-claude clone).
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ _ML_BIN_LITERAL_RE = re.compile(r'ml_bin\s*/\s*"([^"]+)"')
 
 
 def _ml_bin_names_from_source() -> list:
-    """Names substrate.py sources from ``ml_bin`` (example-doctrine-repo's
+    """Names substrate.py sources from ``ml_bin`` (coordinator-claude's
     ``templates/bin/``) — the union of any remaining bare ``ml_bin /
     "<name>"`` source literals (regex scan, e.g. ``_render_python3_cmd``'s
     template read) and `coordinator/lib/bin-templates-manifest.py`'s
@@ -48,7 +48,7 @@ def _ml_bin_names_from_source() -> list:
     via ``_install_one`` / never referenced as an ``ml_bin / "<name>"``
     literal in substrate.py) are deliberately excluded — this guard is
     scoped to names substrate.py itself sources from ``ml_bin``, matching
-    its example-doctrine-repo ``templates/bin/`` cross-check below."""
+    its coordinator-claude ``templates/bin/`` cross-check below."""
     text = _SUBSTRATE_SRC.read_text(encoding="utf-8")
     seen: list = []
     for name in _ML_BIN_LITERAL_RE.findall(text):
@@ -69,7 +69,7 @@ def test_ml_bin_literals_present_in_source():
     assert "platform-localize.cmd" in names
 
 
-@pytest.mark.real_home  # live-tree oracle: resolves the real example-doctrine-repo coordinator root via
+@pytest.mark.real_home  # live-tree oracle: resolves the real coordinator-claude coordinator root via
 # `_shared.resolve_coordinator_root` (registry_get / .doe-root pointer), which the suite-root
 # `_quarantine_real_home` autouse fixture would otherwise hide, turning this into an
 # unconditional skip. Read-only (Path.is_file/is_dir checks only, no writes).
@@ -77,7 +77,7 @@ def test_ml_bin_literals_exist_in_real_doe_templates_bin():
     try:
         coordinator_root = _shared.resolve_coordinator_root()
     except RuntimeError as exc:
-        pytest.skip(f"example-doctrine-repo coordinator root unresolvable on this machine: {exc}")
+        pytest.skip(f"coordinator-claude coordinator root unresolvable on this machine: {exc}")
 
     templates_bin = Path(coordinator_root) / "templates" / "bin"
     if not templates_bin.is_dir():
@@ -88,5 +88,5 @@ def test_ml_bin_literals_exist_in_real_doe_templates_bin():
     assert missing == [], (
         f"substrate.py names {missing} under ml_bin, but they do not exist "
         f"at {templates_bin} — source-of-truth drift between substrate.py "
-        "and example-doctrine-repo's real templates/bin/ listing"
+        "and coordinator-claude's real templates/bin/ listing"
     )

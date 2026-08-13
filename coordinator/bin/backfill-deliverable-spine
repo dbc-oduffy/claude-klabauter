@@ -21,9 +21,9 @@
 # macOS/Linux `python3` is the right interpreter. Caution: callers must invoke
 # via the extensionless name or a resolved-interpreter prefix, never a bareword
 # `.py` through git-bash — git-bash DOES honor the shebang and would exec-127
-# with no `python3` present. See the carve-out in example-doctrine-repo's
+# with no `python3` present. See the carve-out in coordinator-claude's
 # coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
-# this wiki lives in the example-doctrine-repo repo, not here).
+# this wiki lives in the coordinator-claude repo, not here).
 #
 # Usage:
 #   backfill-deliverable-spine [--dry-run] [--root <coordinator-root>]
@@ -43,7 +43,7 @@
 #       issue (a fresh install may not yet have CLAUDE_KLABAUTER_ROOT resolvable) — the
 #       error message below names the remediation.
 #
-# Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § C5, AC7
+# Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C5, AC7
 # Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § BIG_PORT Wave C
 
 from __future__ import annotations
@@ -68,22 +68,22 @@ _CORPUS_CLASS_RELPATHS = ("state/handoffs", "docs/plans", "archive/completed")
 
 
 def _resolve_default_coordinator_root() -> Optional[str]:
-    """Resolve the default corpus root (example-doctrine-repo's repo root).
+    """Resolve the default corpus root (coordinator-claude's repo root).
 
     This is the root the ported op walks for ``state/handoffs``,
     ``docs/plans``, ``archive/completed``, etc. (see
     ``coordinator_core.ops.backfill_deliverable_spine.enumerate_corpus``).
 
-    The corpus root is example-doctrine-repo's own repo root, NOT its ``coordinator/``
+    The corpus root is coordinator-claude's own repo root, NOT its ``coordinator/``
     plugin subtree. Per cross-repo memo
-    ``2026-08-08-example-doctrine-repo-em-backfill-spine-default-root-misses-the-corpus.md``,
+    ``2026-08-08-coordinator-claude-em-backfill-spine-default-root-misses-the-corpus.md``,
     the ``<doe_root()>/coordinator`` reading (empirically inferred from the
-    tool's one prior real run, commit ``aa98455f`` in example-doctrine-repo,
+    tool's one prior real run, commit ``aa98455f`` in coordinator-claude,
     2026-07-06, which happened to stamp two files under
     ``coordinator/docs/plans/``) was already wrong for ``state/handoffs``
     (never under ``coordinator/``) and was made wrong for ``docs/plans``
-    too once example-doctrine-repo's migration moved that corpus class to
-    ``<doe_root()>/docs/plans/``. Verified against example-doctrine-repo's live disk:
+    too once coordinator-claude's migration moved that corpus class to
+    ``<doe_root()>/docs/plans/``. Verified against coordinator-claude's live disk:
     ``state/handoffs`` and ``docs/plans`` exist directly under
     ``doe_root()``, not under ``doe_root()/coordinator``; only
     ``archive/completed`` happens to exist under both, which is what let
@@ -99,10 +99,10 @@ def _resolve_default_coordinator_root() -> Optional[str]:
     Otherwise resolves via ``doe_root()`` and returns it directly.
 
     This does NOT derive from this script's own ``__file__`` location.
-    That was correct when this executable lived in example-doctrine-repo
+    That was correct when this executable lived in coordinator-claude
     (``coordinator/bin/.. IS`` the plugin root there), but this file has
-    since migrated to claude-klabauter while example-doctrine-repo's corpus
-    (``state/``, ``docs/``, ``archive/``) stayed put in example-doctrine-repo —
+    since migrated to claude-klabauter while coordinator-claude's corpus
+    (``state/``, ``docs/``, ``archive/``) stayed put in coordinator-claude —
     self-location now resolves to ``<claude-klabauter>/coordinator``, a directory
     with none of those subdirs at all, so the corpus scan silently returns
     empty instead of failing loud. A future reader must not "restore"

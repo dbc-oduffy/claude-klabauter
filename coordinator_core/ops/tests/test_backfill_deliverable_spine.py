@@ -401,6 +401,11 @@ def test_plan_id_already_present_is_not_re_minted(tmp_path):
     plan = root / "docs" / "plans" / "2026-08-13-fixture-plan-full.md"
     _write_frontmatter(
         plan,
+        # Pre-existing deliverable_id so the C2-leg4 standalone-mint arm
+        # (an ungrouped plan/archived-spec) also carries D1 and does not
+        # touch this fixture — this test's own concern is the plan_id
+        # carry rule specifically, not leg4's deliverable_id behaviour.
+        deliverable_id_line="deliverable_id: dlv-fixture-plan-full-preexisting",
         plan_id_line="plan_id: pln-fixture-plan-full-aaaaaa",
         slug="fixture-plan-full",
     )
@@ -531,6 +536,131 @@ def test_sizing_already_carrying_real_id_is_untouched(tmp_path):
     assert rc == 0
     assert sizing.read_text(encoding="utf-8") == original
     assert extract_deliverable_id(str(sizing), "sizing") == "dlv-preexisting-000000"
+
+
+def test_write_mints_standalone_id_onto_ungrouped_plan(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-ungrouped-plan.md"
+    _write_frontmatter(plan, slug="fixture-ungrouped-plan")
+
+    out1 = io.StringIO()
+    rc1 = backfill_main(["--write", "--root", str(root)], out=out1, err=io.StringIO())
+    assert rc1 == 0
+
+    minted = extract_deliverable_id(str(plan), "plan")
+    assert minted.startswith("dlv-"), f"expected a minted dlv- id, got {minted!r}"
+    assert "fixture-ungrouped-plan" in minted
+    assert "Stamped (standalone plan/spec): 1" in out1.getvalue()
+
+    text_after_first_write = plan.read_text(encoding="utf-8")
+
+    # Re-run: carry rule D1 — never re-minted.
+    out2 = io.StringIO()
+    rc2 = backfill_main(["--write", "--root", str(root)], out=out2, err=io.StringIO())
+    assert rc2 == 0
+    assert plan.read_text(encoding="utf-8") == text_after_first_write
+    assert "Stamped (standalone plan/spec): 0" in out2.getvalue()
+    assert extract_deliverable_id(str(plan), "plan") == minted
+
+
+def test_write_mints_standalone_id_onto_ungrouped_archived_spec(tmp_path):
+    root = tmp_path
+    spec = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-ungrouped-spec.md"
+    _write_frontmatter(spec, slug="fixture-ungrouped-spec")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    minted = extract_deliverable_id(str(spec), "archived-spec")
+    assert minted.startswith("dlv-")
+    assert "fixture-ungrouped-spec" in minted
+
+
+def test_grouped_plan_still_gets_group_derived_deliverable_id_unchanged(tmp_path):
+    """A plan WITH a workstream group must keep its group-derived id — only
+    the ungrouped arm changes (C2-leg4 constraint)."""
+    root = tmp_path
+    plan_a = root / "docs" / "plans" / "2026-08-13-fixture-grouped-plan-a.md"
+    _write_frontmatter(plan_a, workstream="fixture-grouped-ws", slug="fixture-grouped-plan-a")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    minted = extract_deliverable_id(str(plan_a), "plan")
+    assert minted.startswith("dlv-")
+    assert "fixture-grouped-ws" in minted, (
+        f"a grouped plan must derive its id from the workstream key, got {minted!r}"
+    )
+
+
+def test_rerun_after_write_is_byte_identical_no_op(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-full-rerun.md"
+    _write_frontmatter(plan, slug="fixture-full-rerun")
+    spec = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-full-rerun-spec.md"
+    _write_frontmatter(spec, slug="fixture-full-rerun-spec")
+
+    rc1 = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc1 == 0
+    plan_text_1 = plan.read_text(encoding="utf-8")
+    spec_text_1 = spec.read_text(encoding="utf-8")
+
+    rc2 = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc2 == 0
+    assert plan.read_text(encoding="utf-8") == plan_text_1
+    assert spec.read_text(encoding="utf-8") == spec_text_1
+
+
+def test_ungrouped_review_sidecar_never_mints_standalone_deliverable_id(tmp_path):
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-sidecar-host.md"
+    _write_frontmatter(plan, slug="fixture-sidecar-host")
+    sidecar = root / "docs" / "plans" / "2026-08-13-fixture-sidecar-host.sonnet-review.md"
+    _write_frontmatter(sidecar, slug="fixture-sidecar-host-review")
+    original_sidecar = sidecar.read_text(encoding="utf-8")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    assert sidecar.read_text(encoding="utf-8") == original_sidecar
+    assert extract_deliverable_id(str(sidecar), "plan") == ""
+
+
+def test_undated_non_plan_document_never_mints_standalone_deliverable_id(tmp_path):
+    root = tmp_path
+    readme = root / "docs" / "plans" / "README.md"
+    _write_frontmatter(readme, slug="plans-readme-standalone")
+    index = root / "docs" / "plans" / "INDEX.md"
+    _write_frontmatter(index, slug="plans-index-standalone")
+    original_readme = readme.read_text(encoding="utf-8")
+    original_index = index.read_text(encoding="utf-8")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    assert readme.read_text(encoding="utf-8") == original_readme
+    assert index.read_text(encoding="utf-8") == original_index
+    assert extract_deliverable_id(str(readme), "plan") == ""
+    assert extract_deliverable_id(str(index), "plan") == ""
+
+
+def test_stamp_file_creates_frontmatter_fence_when_absent(tmp_path):
+    """_stamp_file on a plan-shaped document with NO `---` frontmatter fence
+    at all must actually inject the field (prepending a new fence) rather
+    than silently reporting success with no mutation."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-fenceless.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("# A narrative doc with no frontmatter at all\n\nBody text.\n", encoding="utf-8")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 0
+
+    minted = extract_plan_id(str(plan), "plan")
+    assert minted.startswith("pln-"), f"expected a minted pln- id, got {minted!r}"
+    text = plan.read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    assert "A narrative doc with no frontmatter at all" in text
 
 
 def test_keyed_sizing_still_gets_group_derived_id_from_citing_plan(tmp_path):

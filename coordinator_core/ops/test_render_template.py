@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.render_template.
 
-Port of: render-template.sh (example-doctrine-repo 290997c7, 2026-07-22).
+Port of: render-template.sh (coordinator-claude 290997c7, 2026-07-22).
 Spec backlink: docs/plans/2026-05-19-coordinator-installer-redesign-implementation.md § C1 (D3.b)
                docs/plans/2026-06-26-coordinator-install-update-friction-fix-slate.md § C-R3a
 
@@ -27,10 +27,10 @@ def _run(capsys, argv):
 def test_basic_substitution_stdout(tmp_path, capsys):
     tpl = tmp_path / "t1.tpl"
     tpl.write_text("Hello {{NAME}},\nYour project is {{PROJECT}}.\nMulti:\n{{MULTI}}\nEnd.\n")
-    rc, out, err = _run(capsys, [str(tpl), "NAME=Donal", "PROJECT=example-doctrine-repo", "MULTI=line1\nline2"])
+    rc, out, err = _run(capsys, [str(tpl), "NAME=Donal", "PROJECT=coordinator-claude", "MULTI=line1\nline2"])
     assert rc == 0
     assert err == ""
-    assert out == "Hello Donal,\nYour project is example-doctrine-repo.\nMulti:\nline1\nline2\nEnd.\n"
+    assert out == "Hello Donal,\nYour project is coordinator-claude.\nMulti:\nline1\nline2\nEnd.\n"
 
 
 def test_output_path_atomic_write(tmp_path, capsys):
@@ -39,12 +39,12 @@ def test_output_path_atomic_write(tmp_path, capsys):
     out_path = tmp_path / "out2.txt"
     rc, out, err = _run(
         capsys,
-        [str(tpl), "-o", str(out_path), "NAME=Donal", "PROJECT=example-doctrine-repo", "MULTI=line1\nline2"],
+        [str(tpl), "-o", str(out_path), "NAME=Donal", "PROJECT=coordinator-claude", "MULTI=line1\nline2"],
     )
     assert rc == 0
     assert err == ""
     assert out == ""
-    assert out_path.read_text() == "Hello Donal,\nYour project is example-doctrine-repo.\nMulti:\nline1\nline2\nEnd.\n"
+    assert out_path.read_text() == "Hello Donal,\nYour project is coordinator-claude.\nMulti:\nline1\nline2\nEnd.\n"
 
 
 def test_no_trailing_newline_preserved(tmp_path, capsys):

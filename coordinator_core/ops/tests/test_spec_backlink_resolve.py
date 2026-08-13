@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.tests.test_spec_backlink_resolve — tests for the C1 resolver.
 
-Spec backlink: docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C1
+Spec backlink: pln-spec-backlinks-cite-a-stable-d-451b3e § C1
 
 Uses the shared `spec_backlink_corpus` fixture (conftest.py, `build_spec_backlink_corpus`)
 rather than hand-rolling a second corpus — see the plan's own enrich-once stub.
@@ -19,6 +19,7 @@ from coordinator_core.ops.spec_backlink_resolve import (
     build_index,
     resolve,
     resolve_id,
+    resolve_path_with_index,
 )
 
 
@@ -307,3 +308,105 @@ def test_handler_hits_against_real_worktree(spec_backlink_corpus):
     outcome = resolve(root, "pln-fixture-plan-full-aaaaaa")
     assert outcome["outcome"] == "hit"
     assert outcome["path"] == str(spec_backlink_corpus["plan_full"])
+
+
+# ---------------------------------------------------------------------------
+# C1-archived — path->ids resolution across a docs/plans/ <-> archive/specs/
+# git-mv, via the basename join key (reused from
+# assert_no_dangling_plan_backlinks.py's _build_moved_plan_map, not a looser
+# stem/slug match).
+# ---------------------------------------------------------------------------
+
+
+def test_cited_docs_plans_path_resolves_via_archived_twin(spec_backlink_corpus):
+    """A citation to the OLD docs/plans/ path of a record that
+    fleet.archive_completed_plans has since git-mv'd to archive/specs/YYYY-MM/
+    must still resolve, emitting the archived record's ids — this is the
+    plan's central "healable today" population."""
+    root = _worktree_root(spec_backlink_corpus)
+    index = build_index(root)
+    # archived_full lives ONLY at archive/specs/2026-08/2026-08-01-fixture-archived-full.md
+    cited_path = "docs/plans/2026-08-01-fixture-archived-full.md"
+    outcome = resolve_path_with_index(index, root, cited_path)
+    assert outcome["outcome"] == "hit"
+    assert outcome["cited_path"] == cited_path
+    assert outcome["plan_id"] == "pln-fixture-archived-full-222222"
+    assert outcome["deliverable_id"] == "dlv-fixture-archived-full-333333"
+
+
+def test_cited_archive_path_resolves_via_live_twin(spec_backlink_corpus):
+    """Converse of the above: a citation to an archive/specs/ path whose
+    record actually lives (only) under docs/plans/ must also resolve via the
+    same basename join."""
+    root = _worktree_root(spec_backlink_corpus)
+    index = build_index(root)
+    cited_path = "archive/specs/2026-08/2026-08-13-fixture-plan-full.md"
+    outcome = resolve_path_with_index(index, root, cited_path)
+    assert outcome["outcome"] == "hit"
+    assert outcome["cited_path"] == cited_path
+    assert outcome["plan_id"] == "pln-fixture-plan-full-aaaaaa"
+    assert outcome["deliverable_id"] == "dlv-fixture-plan-full-bbbbbb"
+
+
+def test_stem_present_under_both_roots_is_ambiguity_not_silent_pick(tmp_path):
+    """A cited basename that exists as a real-id record under BOTH
+    docs/plans/ AND archive/specs/ (never actually moved, or a stale/duplicate
+    situation) must return the typed AMBIGUITY outcome, never silently pick
+    one candidate."""
+    docs_plans = tmp_path / "docs" / "plans"
+    archive_specs_a = tmp_path / "archive" / "specs" / "2026-07"
+    archive_specs_b = tmp_path / "archive" / "specs" / "2026-08"
+    docs_plans.mkdir(parents=True)
+    archive_specs_a.mkdir(parents=True)
+    archive_specs_b.mkdir(parents=True)
+
+    stem = "2026-08-13-duplicate-stem.md"
+
+    def _write(dest: Path, plan_id: str) -> None:
+        dest.write_text(
+            "\n".join(
+                [
+                    "---",
+                    'title: "duplicate stem"',
+                    "created: 2026-08-13",
+                    f'plan_id: "{plan_id}"',
+                    "scope_mode: feature",
+                    "---",
+                    "",
+                    "# duplicate stem",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    # The cited docs/plans/ path does NOT literally exist (exact-path lookup
+    # misses) -- the basename `stem` instead resolves two DIFFERENT real
+    # records via the fallback (two archive/specs/YYYY-MM/ twins), which is
+    # what must trip AMBIGUITY rather than a silent pick.
+    _write(archive_specs_a / stem, "pln-duplicate-archived-a-000001")
+    _write(archive_specs_b / stem, "pln-duplicate-archived-b-000002")
+
+    index = build_index(tmp_path)
+    cited_path = f"docs/plans/{stem}"
+    outcome = resolve_path_with_index(index, tmp_path, cited_path)
+    assert outcome["outcome"] == "ambiguity"
+    assert outcome["outcome"] not in {"hit", "miss"}
+    assert set(outcome["candidates"]) == {
+        str(archive_specs_a / stem),
+        str(archive_specs_b / stem),
+    }
+
+
+def test_cited_path_absent_from_both_roots_stays_typed_miss(spec_backlink_corpus):
+    """A cited path with no record under either root (the "absent from this
+    repo" population, C7/C8) must stay a typed MISS — the archived-twin
+    fallback must not start resolving these."""
+    root = _worktree_root(spec_backlink_corpus)
+    index = build_index(root)
+    outcome = resolve_path_with_index(
+        index, root, "docs/plans/2026-08-13-does-not-exist-anywhere.md"
+    )
+    assert outcome["outcome"] == "miss"
+    assert outcome["plan_id"] is None
+    assert outcome["deliverable_id"] is None

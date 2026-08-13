@@ -2,7 +2,7 @@
 """reap-sessions.py — reap stale session substrate via session.reap.
 
 Purpose: pure-Python replacement for the retired bash strangler-finish
-wrapper — Port of: reap-sessions.sh (example-doctrine-repo f703efad, 2026-07-21). Routes stale-session cleanup through the
+wrapper — Port of: reap-sessions.sh (coordinator-claude f703efad, 2026-07-21). Routes stale-session cleanup through the
 coordinator_core session op (`session.reap`) via cc_invoke.route() — no
 shell, no legacy fallback (the bash oracle itself dispatched session.reap
 unconditionally-native with no legacy_fn; this port matches that posture).
@@ -72,7 +72,7 @@ def _no_console_creationflags() -> dict:
     raised `ModuleNotFoundError: No module named 'coordinator_core'` at
     import time -- before `main`'s best-effort error handling could run, so
     the "never block session start" contract in this module's own docstring
-    was defeated by its own import line. Reported 2026-08-07 by example-doctrine-repo-em
+    was defeated by its own import line. Reported 2026-08-07 by coordinator-claude-em
     (cross-repo memo `...-scoped-commit-calls-a-live-peer-dead-and-reapable`).
 
     Degrades to `{}` rather than raising: a missing subprocess-window flag is

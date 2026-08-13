@@ -34,22 +34,22 @@ import coordinator_registry as reg  # noqa: E402
 # of truth). Reconciled 2026-07-25: this pin had drifted silently because the
 # hand-rolled fail_test() helper (fixed in 23f65fce) let these assertions run
 # to completion without ever raising, so three real upstream manifest edits
-# in example-doctrine-repo never got mirrored here:
-#   - "flight-recorder" REMOVED — example-doctrine-repo commit 3aa9a79f ("C8(subsume): retire
+# in coordinator-claude never got mirrored here:
+#   - "flight-recorder" REMOVED — coordinator-claude commit 3aa9a79f ("C8(subsume): retire
 #     flight-recorder — rm schema, repoint registry+artifact-shape to
 #     run-report") deleted the flight-recorder schema and repointed the
 #     registry to run-report; the type was subsumed, not merely renamed.
 #   - "run-report" ADDED — the same 3aa9a79f repoint.
-#   - "tier-u-grant" ADDED — example-doctrine-repo commit 58cdc600 ("Tier-U grant token schema +
+#   - "tier-u-grant" ADDED — coordinator-claude commit 58cdc600 ("Tier-U grant token schema +
 #     manifest registration").
-#   - "sizing-object" ADDED — example-doctrine-repo commit adf618d5 ("register sizing-object
+#   - "sizing-object" ADDED — coordinator-claude commit adf618d5 ("register sizing-object
 #     doc-type — manifest row + drift-guard fixture").
 #   - "subagent-sidecar" ADDED — manifest registration closing AC-10's unmet
 #     half (agent-side decision-object container scaffolder, schemaName null
 #     — schema-of-record is schemas/decision-object.schema.json $defs/
 #     subagent_sidecar, not a standalone file); retires the coordinator-doc-
 #     new / type_enum.py local shims that pre-dated this manifest row.
-# Reconciled 2026-08-02 (stale-test cleanup, triage-F): example-doctrine-repo commit 410eae0d1
+# Reconciled 2026-08-02 (stale-test cleanup, triage-F): coordinator-claude commit 410eae0d1
 # ("manifest + skills: --type and kind now agree", deliverable
 # dlv-baton-kind-vocabulary-one-axis-per-field-1be219) renamed the docTypes
 # entries so the --type flag agrees with the kind value each scaffolds:
@@ -132,9 +132,9 @@ def test_receiver_em_aliases():
 
 
 def test_central_receiver_ids():
-    # Includes example-doctrine-repo-em as forgiving alias (C1).
+    # Includes coordinator-claude-em as forgiving alias (C1).
     assert reg.CENTRAL_RECEIVER_IDS == frozenset(
-        {"claude-central-em", "central-em", "central", "example-doctrine-repo-em"}
+        {"claude-central-em", "central-em", "central", "coordinator-claude-em"}
     )
 
 
@@ -157,7 +157,7 @@ def test_sidecar_suffixes():
 # AC-9: repo_key_to_em_id — central anchor and normal cases (C1)
 #
 # repos.example_doctrine_repo resolves to the manifest-derived canonical central identity
-# (identity.centralReceiverIds[0] == "example-doctrine-repo-em"), NOT the retired
+# (identity.centralReceiverIds[0] == "coordinator-claude-em"), NOT the retired
 # "claude-central-em" literal — see _central_canonical_id() in
 # coordinator_registry.py. "claude-central-em" remains a valid receiver alias
 # (see CENTRAL_RECEIVER_IDS) but is no longer the canonical return here.
@@ -165,11 +165,11 @@ def test_sidecar_suffixes():
 
 
 def test_repo_key_to_em_id_example_doctrine_repo_canonical():
-    assert reg.repo_key_to_em_id("repos.example_doctrine_repo") == "example-doctrine-repo-em"
+    assert reg.repo_key_to_em_id("repos.example_doctrine_repo") == "coordinator-claude-em"
 
 
 def test_central_canonical_id():
-    assert reg._central_canonical_id() == "example-doctrine-repo-em"
+    assert reg._central_canonical_id() == "coordinator-claude-em"
 
 
 def test_repo_key_to_em_id_example_retrieval_repo():
@@ -183,7 +183,7 @@ def test_repo_key_to_em_id_example_game_repo_alias():
 # ---------------------------------------------------------------------------
 # AC-10: em_id_for_root — central, unregistered, None cases (C1)
 #
-# Uses the actual example-doctrine-repo repo root derived from __file__ as the repos.example_doctrine_repo path.
+# Uses the actual coordinator-claude repo root derived from __file__ as the repos.example_doctrine_repo path.
 # ---------------------------------------------------------------------------
 _EXAMPLE_DOCTRINE_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -191,7 +191,7 @@ _EXAMPLE_DOCTRINE_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os
 def test_em_id_for_root_example_doctrine_repo_canonical():
     assert reg.em_id_for_root(
         _EXAMPLE_DOCTRINE_REPO_ROOT, {"repos.example_doctrine_repo": _EXAMPLE_DOCTRINE_REPO_ROOT}
-    ) == "example-doctrine-repo-em"
+    ) == "coordinator-claude-em"
 
 
 def test_em_id_for_root_none():
@@ -217,7 +217,7 @@ def test_em_id_for_root_registered_non_central_loop_step_3():
 
 
 def test_example_doctrine_repo_em_alias_in_central_receiver_ids():
-    assert "example-doctrine-repo-em" in reg.CENTRAL_RECEIVER_IDS
+    assert "coordinator-claude-em" in reg.CENTRAL_RECEIVER_IDS
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ def test_example_doctrine_repo_em_alias_in_central_receiver_ids():
 # already-imported module) with DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO unset, covering both
 # the pointer-present and pointer-unreachable cases.
 #
-# Spec backlink: docs/plans/2026-08-07-published-engine-resolves-without-a-codename.md § C1
+# Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1
 # ---------------------------------------------------------------------------
 import subprocess  # noqa: E402
 import sys as _sys  # noqa: E402
@@ -357,7 +357,7 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     ) as _fh:
         _fh.write(
             '{"docTypes": [], "queueTypes": [], '
-            '"identity": {"repoAliases": [], "centralReceiverIds": ["example-doctrine-repo-em"]}}'
+            '"identity": {"repoAliases": [], "centralReceiverIds": ["coordinator-claude-em"]}}'
         )
 
     return payload_lib_dir, claude_home_dir
@@ -414,7 +414,7 @@ def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment(
 # DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO/registry state is enough; the module import at the
 # top of this file already proved import-time behavior above).
 #
-# Spec backlink: docs/plans/2026-08-07-published-engine-resolves-without-a-codename.md § C1D
+# Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
 # ---------------------------------------------------------------------------
 import tempfile as _tempfile  # noqa: E402
 
@@ -447,7 +447,7 @@ def _clear_doe_root_env(monkeypatch):
 
 def test_doe_root_resolves_via_doe_root_pointer_rung(monkeypatch):
     """Pointer rung: coordinator_read_doe_root_pointer() already returns the
-    example-doctrine-repo REPO root directly — used as-is, no conversion, no state/ gate (the
+    coordinator-claude REPO root directly — used as-is, no conversion, no state/ gate (the
     pointer file's own contract already promises a repo root)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         _clear_doe_root_env(monkeypatch)
@@ -492,7 +492,7 @@ def test_doe_root_flat_layout_rejected_without_state_dir(monkeypatch):
 def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
     """Private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
     (`<repo_root>/coordinator`), one level below the repo root doe_root()
-    must return — the plugin-root-vs-example-doctrine-repo-root distinction this chunk exists
+    must return — the plugin-root-vs-coordinator-claude-root distinction this chunk exists
     to close. The marker lives beside the repo root, not beside the content
     root, so the normalizer must climb one level. Gated (Review: staff-eng
     BLOCKER-2) on `<repo_root>/state` being a directory."""
@@ -578,8 +578,8 @@ def test_doe_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable
     """The private-tree chain survives untouched when none of the
     codename-free rungs resolve."""
     _clear_doe_root_env(monkeypatch)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/fake/example-doctrine-repo")
-    assert reg.doe_root() == "/fake/example-doctrine-repo"
+    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/fake/coordinator-claude")
+    assert reg.doe_root() == "/fake/coordinator-claude"
 
 
 def test_doe_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
@@ -671,7 +671,7 @@ def test_plugin_root_candidate_basename_casefold_case_insensitive_on_any_platfor
 
 def test_plugin_root_candidate_no_manifest_relpath_fallback(tmp_path):
     """This call site does NOT carry the engine copy's B5 manifest-relpath
-    fallback: a private example-doctrine-repo repo root with no marketplace marker anywhere
+    fallback: a private coordinator-claude repo root with no marketplace marker anywhere
     must fall through unnormalized, unlike
     coordinator_core.ops.coordinator_doe_root's B5-fixed copy."""
     repo_root = tmp_path / "doe-repo"

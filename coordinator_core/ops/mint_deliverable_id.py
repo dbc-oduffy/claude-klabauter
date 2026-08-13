@@ -12,8 +12,8 @@ minted identically everywhere. Three mutually-exclusive paths:
 Logs which path was taken to stderr ("carry" / "mint-from-stub" /
 "mint-from-slug") — callers/tests grep this.
 
-Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, C3a
-Port of: mint-deliverable-id.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, C3a
+Port of: mint-deliverable-id.sh (coordinator-claude b5a4192c, 2026-07-20)
 
 Negative-spec:
     (shell-doc-ok: the recipe below quotes the bash oracle's own parameter
@@ -84,7 +84,7 @@ Purpose: Shared minting helper for all four authoring surfaces (coordinator-doc-
            stub       — --stub-id supplied → emit "dlv-<stub_id>" (D1: reuse stub identity)
            slug       — --slug supplied → mint "dlv-<slug>-<6hex>" (uniqueness not crypto)
          Logs which path was taken to stderr ("carry" / "mint-from-stub" / "mint-from-slug").
-Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, C3a
+Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, C3a
 Usage:
   mint-deliverable-id.sh --deliverable-id <existing>   # carry (idempotent)
   mint-deliverable-id.sh --stub-id <stub_id>           # reuse stub identity

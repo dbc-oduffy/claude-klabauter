@@ -98,7 +98,7 @@ at, never partially written. A non-empty ``failures`` list is a non-zero exit co
 (CLI) / ``exit_code: 1`` (op), even when other records in the same run migrated
 cleanly.
 
-Spec backlink: docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md § C7
+Spec backlink: pln-handoff-lifecycle-vocabulary-o-22ada6 § C7
 Fix commit (dual-read restoration this migration retires): 9d00b459
 Live-data migration oracle (claude-klabauter's own corpus, same mapping): e2cf1a08
 
@@ -206,7 +206,7 @@ _KNOWN_DEPLOYMENT_STATES: Set[str] = {
 }
 
 # deployment_state: superseded is INVALID on every vocabulary (old or new) — it is
-# the handoff STATUS axis's retired 2026-06-26 token (example-doctrine-repo ruling: retirement
+# the handoff STATUS axis's retired 2026-06-26 token (coordinator-claude ruling: retirement
 # replacement expression is status: consumed + deployment_state: abandoned)
 # written onto the wrong axis. Observed in example-retrieval-repo's corpus on records dated
 # AFTER that retirement (2026-07-03..07-14) — fleet-migration fallout, not a
@@ -227,7 +227,7 @@ _FIELD_RENAMES = (("consumed_at", "claimed_at"), ("consumed_by", "claimed_by"))
 # Succession edges only — mirrors archive_handoffs.py's _HEIR_EDGE_KINDS, PLUS
 # origin_handoff (added 2026-07-23 per example-cockpit-repo's dr084 memo). A
 # `kind: spinoff` handoff carries `predecessor: none` BY DESIGN (coordinator
-# spinoff-handoff schema — see example-doctrine-repo `docs/wiki/spinoff-handoffs.md` §
+# spinoff-handoff schema — see coordinator-claude `docs/wiki/spinoff-handoffs.md` §
 # "predecessor is none by design") and names its parent in `origin_handoff:`
 # instead, so without this edge every spinoff succession looks like an orphan.
 # origin_handoff is a registered walkable edge in dag.EDGE_KIND_META, so
@@ -790,7 +790,7 @@ def _plan_one(
                 successor_rung = "deliverable_id-join"
         today = datetime.date.today().isoformat()
         repair_prefix = "REPAIR: deployment_state: superseded (invalid — " \
-            "example-doctrine-repo 2026-06-26 retired 'superseded' as a handoff STATUS; the ruling's " \
+            "coordinator-claude 2026-06-26 retired 'superseded' as a handoff STATUS; the ruling's " \
             "own replacement expression is status: consumed + deployment_state: " \
             "abandoned, so this value is normalized to abandoned before the usual " \
             "split) → " if is_repair else "deployment_state: abandoned → "
@@ -806,7 +806,7 @@ def _plan_one(
                     fm_text, "continued_into",
                     f"# migration: DR-084 consumer-corpus REPAIR {today} "
                     f"(was: deployment_state: superseded, invalid on any vocabulary — "
-                    f"normalized to abandoned per example-doctrine-repo's 2026-06-26 status retirement, "
+                    f"normalized to abandoned per coordinator-claude's 2026-06-26 status retirement, "
                     f"then continued via reverse lineage edge)",
                 )
             changes.append(
@@ -821,7 +821,7 @@ def _plan_one(
             comment = (
                 f"# migration: DR-084 consumer-corpus REPAIR {today} "
                 f"(was: deployment_state: superseded, invalid on any vocabulary — "
-                f"normalized to abandoned per example-doctrine-repo's 2026-06-26 status retirement; "
+                f"normalized to abandoned per coordinator-claude's 2026-06-26 status retirement; "
                 f"no successor found by a working-tree walk across all three rungs — "
                 f"this is NOT a death claim, a successor deleted without archival "
                 f"survives only as a git blob invisible to this walk; 'stale' is the "

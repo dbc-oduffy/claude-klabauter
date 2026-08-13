@@ -3,7 +3,7 @@ coordinator_core.ops.tests.test_queue_parity — byte-parity harness for queue.a
 
 Purpose: Assert the Python ops (queue.append / queue.promote) produce byte-identical YAML output
 to their legacy bash oracles (coordinator-queue-append / coordinator-lesson-promote) for the same
-inputs. This is the strangler invariant (F10/AC2/AC5): if the byte output drifts, the example-doctrine-repo facade
+inputs. This is the strangler invariant (F10/AC2/AC5): if the byte output drifts, the coordinator-claude facade
 routing will silently produce different on-disk entries.
 
 Coverage:
@@ -23,9 +23,9 @@ Coverage:
   (h) F9/AC14  — node + schema-cli.js reachability asserted as explicit precondition;
                   ≥1 parseable-reject case confirming typed-error mapping
 
-Spec backlink: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § C5
-Oracle: [example-doctrine-repo] coordinator/bin/coordinator-queue-append
-Oracle: [example-doctrine-repo] coordinator/bin/coordinator-lesson-promote
+Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § C5
+Oracle: [coordinator-claude] coordinator/bin/coordinator-queue-append
+Oracle: [coordinator-claude] coordinator/bin/coordinator-lesson-promote
 """
 
 from __future__ import annotations
@@ -131,11 +131,11 @@ def _schema_cli_precondition_reason() -> str:
     if not _NODE_AVAILABLE:
         parts.append("'node' not found on PATH — install Node.js (https://nodejs.org/)")
     if not _DOE_ROOT_SENTINEL.exists():
-        parts.append("~/.claude/.doe-root sentinel absent (example-doctrine-repo root not configured)")
+        parts.append("~/.claude/.doe-root sentinel absent (coordinator-claude root not configured)")
     elif _DOE_SCHEMA_CLI is None or not _DOE_SCHEMA_CLI.is_file():
         parts.append(
             f"schema-cli.js not found at {_DOE_SCHEMA_CLI} — "
-            "check that example-doctrine-repo coordinator clone is present at the path in ~/.claude/.doe-root"
+            "check that coordinator-claude coordinator clone is present at the path in ~/.claude/.doe-root"
         )
     return "; ".join(parts) if parts else "ok"
 
@@ -402,7 +402,7 @@ class TestSchemaCliPrecondition:
         assert shutil.which("node") is not None
 
     def test_schema_cli_js_reachable(self):
-        """example-doctrine-repo-HEAD bin/schema-cli.js must be present at the .doe-root location (F9/AC14)."""
+        """coordinator-claude-HEAD bin/schema-cli.js must be present at the .doe-root location (F9/AC14)."""
         if not _SCHEMA_CLI_AVAILABLE:
             pytest.skip(
                 f"schema-cli.js precondition not met: {_SCHEMA_CLI_SKIP}. "
@@ -410,7 +410,7 @@ class TestSchemaCliPrecondition:
             )
         assert _DOE_SCHEMA_CLI is not None and _DOE_SCHEMA_CLI.is_file(), (
             f"schema-cli.js not found at {_DOE_SCHEMA_CLI}. "
-            "Ensure the example-doctrine-repo coordinator clone exists at the path in ~/.claude/.doe-root."
+            "Ensure the coordinator-claude coordinator clone exists at the path in ~/.claude/.doe-root."
         )
 
     @_requires_schema_cli
@@ -649,7 +649,7 @@ class TestUnquotedCreated:
     The lessons path writes an unquoted YAML date object (matching the legacy
     coordinator-lesson-add output). The byte-identical parity invariant requires
     this to be replicated exactly — quoting it would silently break parity.
-    Spec backlink: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § AC12
+    Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § AC12
     """
 
     def test_lessons_created_is_unquoted_bare_date(self, tmp_path, monkeypatch):
@@ -916,9 +916,9 @@ class TestWriteAlways:
     preserved). Two DISTINCT entries sharing date+slug now produce distinct filenames and
     BOTH survive — this inverts the prior last-write-wins assertion, which assumed a fixed
     date+slug filename with no content-keying. No dedup pre-check in the op — dedup lives
-    in the coordinator-lesson-add wrapper (example-doctrine-repo-side).
+    in the coordinator-lesson-add wrapper (coordinator-claude-side).
 
-    Spec backlink: docs/plans/2026-07-08-concurrency-safe-strangled-op-writes.md § C1
+    Spec backlink: pln-concurrency-safe-writes-for-th-c7ca9f § C1
     (existing-test inversion, not a fixture refresh — see plan's the Staff Engineer F1 review note).
     """
 
@@ -1116,10 +1116,10 @@ class TestClaudeKlabauterUnresolvable:
     """Unresolvable-root → WARN+skip, exit 0, no cwd fallback (AC6).
 
     queue.append (queue_scope='central') triggers this path when CLAUDE_KLABAUTER_ROOT cannot
-    be resolved via env or machine-local registry. queue.promote triggers the example-doctrine-repo-side
-    counterpart when the example-doctrine-repo root cannot be resolved via
+    be resolved via env or machine-local registry. queue.promote triggers the coordinator-claude-side
+    counterpart when the coordinator-claude root cannot be resolved via
     ``coordinator_doe_root()`` (REPO_EXAMPLE_DOCTRINE_REPO env / machine-local / pointer-file
-    rungs) — the outbox is example-doctrine-repo-rooted, not claude-klabauter-rooted (see queue_promote's
+    rungs) — the outbox is coordinator-claude-rooted, not claude-klabauter-rooted (see queue_promote's
     ``_outbox_root`` docstring).
     """
 
@@ -1200,7 +1200,7 @@ class TestClaudeKlabauterUnresolvable:
         monkeypatch.setenv("PATH", str(empty_bin))
 
     def test_promote_raises_claude_klabauter_unresolvable_no_cwd_fallback(self, tmp_path, monkeypatch):
-        """promote_lesson with unresolvable example-doctrine-repo root → _DoeUnresolvable, no cwd fallback.
+        """promote_lesson with unresolvable coordinator-claude root → _DoeUnresolvable, no cwd fallback.
 
         Negative-spec: stop-the-rot C12 closes the cwd-fallback landmine.
         coordinator-lesson-promote's legacy cwd fallback is NOT replicated in the op.
@@ -1238,7 +1238,7 @@ class TestClaudeKlabauterUnresolvable:
             )
         )
         assert result.get("skipped") is True, (
-            f"expected result['skipped'] = True on unresolvable example-doctrine-repo root, got: {result}"
+            f"expected result['skipped'] = True on unresolvable coordinator-claude root, got: {result}"
         )
         assert "reason" in result and result["reason"], (
             f"expected non-empty 'reason' in result, got: {result}"
@@ -1411,7 +1411,7 @@ class TestUnknownSchema:
 # ---------------------------------------------------------------------------
 # _machine_local_impl — settings-home repoint (AC3, C3)
 #
-# Spec backlink: docs/plans/2026-07-11-coordinator-core-home-claude-read-repoint.md § C3
+# Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C3
 # ---------------------------------------------------------------------------
 
 
@@ -1450,7 +1450,7 @@ class TestQueuePromoteRoutesViaDoeResolver:
     """queue_promote no longer owns a private machine-local/settings-home resolution
 
     ladder — it delegates entirely to ``coordinator_core.ops.coordinator_doe_root``
-    (shared example-doctrine-repo resolver seam), which owns its own settings-home/PATH
+    (shared coordinator-claude resolver seam), which owns its own settings-home/PATH
     resolution and is covered by ``coordinator_core/ops/test_coordinator_doe_root.py``.
     This is a thin regression guard that the delegation itself is wired, not a
     re-test of the resolver's internals.
@@ -1461,42 +1461,42 @@ class TestQueuePromoteRoutesViaDoeResolver:
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
         monkeypatch.setattr(
-            _qp_mod, "coordinator_doe_root", lambda: str(tmp_path / "example-doctrine-repo")
+            _qp_mod, "coordinator_doe_root", lambda: str(tmp_path / "coordinator-claude")
         )
 
         result = _qp_mod._outbox_root()
 
-        assert result == str(tmp_path / "example-doctrine-repo" / "state" / "lessons-outbox")
+        assert result == str(tmp_path / "coordinator-claude" / "state" / "lessons-outbox")
 
 
 # ---------------------------------------------------------------------------
 # Regression guard: _outbox_root() DOES NOT fall back to claude-klabauter / cwd-relative
-# state/ when the example-doctrine-repo root is unresolvable (C12 negative-spec).
+# state/ when the coordinator-claude root is unresolvable (C12 negative-spec).
 #
 # Background: for weeks _outbox_root() was claude-klabauter-rooted (resolved via
 # CLAUDE_KLABAUTER_ROOT env / machine-local `repos.claude_klabauter`, mirroring
-# queue_append's central-scope resolver) instead of example-doctrine-repo-rooted, causing ~103
+# queue_append's central-scope resolver) instead of coordinator-claude-rooted, causing ~103
 # lessons-outbox entries from OTHER repos' sessions to land in claude-klabauter's own
 # state/lessons-outbox/ (see queue_promote.py module docstring, corrected
 # 2026-07-22/23). The prose negative-spec at queue_promote.py:117-122 was
 # unguarded by any test — this class is the regression guard that would have
 # caught the claude-klabauter-rooted bug before it shipped.
 #
-# Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C12 / AC13
+# Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C12 / AC13
 # ---------------------------------------------------------------------------
 
 
 class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
     """``_outbox_root()`` resolves under ``coordinator_doe_root()`` — never under
     claude-klabauter's own root (CLAUDE_KLABAUTER_ROOT / ``main_worktree_root()``) and never with a
-    silent cwd-relative fallback on an unresolvable example-doctrine-repo root.
+    silent cwd-relative fallback on an unresolvable coordinator-claude root.
     """
 
     def test_outbox_root_is_doe_rooted_not_claude_klabauter_rooted(self, tmp_path, monkeypatch):
         """_outbox_root() with no env override resolves under coordinator_doe_root(),
         and specifically NOT under claude-klabauter's root / CLAUDE_KLABAUTER_ROOT / main_worktree_root().
 
-        Fixture uses DISTINCT example-doctrine-repo and claude-klabauter roots so the negative assertion has
+        Fixture uses DISTINCT coordinator-claude and claude-klabauter roots so the negative assertion has
         teeth — a fixture where both happen to resolve to the same directory would
         pass even if the claude-klabauter-rooted bug reappeared.
 
@@ -1507,7 +1507,7 @@ class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
         """
         import coordinator_core.ops.queue_promote as _qp_mod
 
-        doe_root = tmp_path / "example-doctrine-repo-root"
+        doe_root = tmp_path / "coordinator-claude-root"
         claude_klabauter_root = tmp_path / "claude-klabauter-root"
         doe_root.mkdir()
         claude_klabauter_root.mkdir()
@@ -1527,7 +1527,7 @@ class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
         result = _qp_mod._outbox_root()
 
         expected = str(doe_root / "state" / "lessons-outbox")
-        assert result == expected, f"expected example-doctrine-repo-rooted path, got: {result}"
+        assert result == expected, f"expected coordinator-claude-rooted path, got: {result}"
         assert not result.startswith(str(claude_klabauter_root)), (
             f"_outbox_root() must NOT resolve under claude-klabauter's root; got: {result}"
         )

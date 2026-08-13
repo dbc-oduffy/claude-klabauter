@@ -19,8 +19,8 @@ of overwriting. Fail-loud on missing templates (hard precondition for
 downstream skills).
 
 Dual-anchor resolution (b644d5a9's executable-surface relocation moved
-``coordinator/lib/`` and ``coordinator/bin/`` out of example-doctrine-repo and into
-Claude-klabauter's own tree): example-doctrine-repo-side surfaces (``templates/``, ``whoami/``,
+``coordinator/lib/`` and ``coordinator/bin/`` out of coordinator-claude and into
+Claude-klabauter's own tree): coordinator-claude-side surfaces (``templates/``, ``whoami/``,
 ``schemas/``) still resolve off ``CLAUDE_PLUGIN_ROOT``; claude-klabauter-side surfaces
 (``coordinator/lib/``, ``coordinator/bin/``) resolve off the claude-klabauter root via
 ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()`` — never by
@@ -28,7 +28,7 @@ Claude-klabauter's own tree): example-doctrine-repo-side surfaces (``templates/`
 
 Env:
     CLAUDE_PLUGIN_ROOT — required; the coordinator plugin install root
-        (example-doctrine-repo-side surfaces only — see dual-anchor note above).
+        (coordinator-claude-side surfaces only — see dual-anchor note above).
     CLAUDE_KLABAUTER_ROOT        — optional; short-circuits claude-klabauter-root resolution
         (see ``coordinator_core.claude_klabauter_root`` for the full resolution chain).
     CLAUDE_HOME        — optional; $HOME substitute.
@@ -250,7 +250,7 @@ def _load_setup_template_manifest(claude_klabauter_root: Path):
     else").
 
     The manifest lives in claude-klabauter's OWN ``coordinator/lib/`` tree (b644d5a9's
-    executable-surface relocation moved ``lib/`` out of the example-doctrine-repo
+    executable-surface relocation moved ``lib/`` out of the coordinator-claude
     ``CLAUDE_PLUGIN_ROOT`` entirely), so this resolves off ``coordinator_claude_klabauter_root()``,
     not ``plugin_root`` — a future reader must NOT "restore" plugin_root
     resolution here on the theory that lib/ files belong under the plugin root;
@@ -300,7 +300,7 @@ def _resolve_bin_templates_manifest_root() -> Path:
     when a caller does not already have one on hand.
 
     Rung 1: co-located — `bin-templates-manifest.py` lives in claude-klabauter's OWN
-    `coordinator/lib/`, the SAME repo as this file (unlike example-doctrine-repo's
+    `coordinator/lib/`, the SAME repo as this file (unlike coordinator-claude's
     `templates/bin/`, which genuinely is cross-repo and needs the parity
     test's registry-backed resolution). This rung is zero-subprocess,
     zero-env-dependent, and wins on every real checkout of this repo —
@@ -358,7 +358,7 @@ restating the strings — a rename here alone keeps both in sync."""
 
 def _load_bin_templates_manifest(claude_klabauter_root: Path) -> "_BinTemplatesManifest":
     """Load ``<claude_klabauter_root>/coordinator/lib/bin-templates-manifest.py``'s
-    named `BinTemplateEntry` groups — single source of truth for example-doctrine-repo's
+    named `BinTemplateEntry` groups — single source of truth for coordinator-claude's
     ``templates/bin/`` classification (its own header: "edited HERE and
     nowhere else"). See that module's docstring for the full contract; see
     `_load_setup_template_manifest` immediately above for why this is an
@@ -640,7 +640,7 @@ def _install_one(
     ``.gitkeep`` markers, the post-rsync allowlist, the README) are the
     motivating case: they read like operator config by suffix/name (a
     ``.yaml``, a ``.gitkeep``, a ``.txt``, a ``.md``) but are actually
-    doctrine-tracked templates sourced from the coordinator-claude/example-doctrine-repo tree,
+    doctrine-tracked templates sourced from the coordinator-claude/coordinator-claude tree,
     so a stale destination must be repaired on re-install rather than
     preserved as if it were operator customization — see
     `_percolation_and_path_steps`'s ``setup_hook_files`` loop, which passes
@@ -794,7 +794,7 @@ def _agent_cmd_dest_name(name: str) -> str:
 # separate literals) so a positive-identification check can never drift out
 # of sync with what the generators actually write. None of these strings
 # appears in any OTHER family this module installs (ml_family/ch_family's
-# machine-local and claude-home sources, the example-doctrine-repo-copied
+# machine-local and claude-home sources, the coordinator-claude-copied
 # platform-localize/resolve-coordinator-clone templates, python3.cmd, or
 # the 5 resolver files) — those are copied verbatim from source trees this
 # module does not author, so they carry none of this module's own
@@ -810,7 +810,7 @@ def _agent_cmd_dest_name(name: str) -> str:
 # Unlike the two markers above, this one is NOT exclusive to agent-helper
 # forwarders — `gen-launcher-shim.py` also generated the legitimate,
 # still-installed-every-run `platform-localize.cmd` and
-# `resolve-coordinator-clone.cmd` example-doctrine-repo templates, confirmed carrying this
+# `resolve-coordinator-clone.cmd` coordinator-claude templates, confirmed carrying this
 # exact marker on a live install. A legacy-marker match is therefore
 # NEVER sufficient on its own; `_sweep_orphaned_agent_helpers` additionally
 # requires the name be absent from `_static_bin_family_names()` (every
@@ -857,7 +857,7 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # verified-live defect (as below) -- never speculatively.
 #
 # `scoped-git-commit` and `cross-repo-memo` added per
-# cross-repo/inbox/2026-08-07-example-doctrine-repo-em-cmd-forwarder-drops-everything-
+# cross-repo/inbox/2026-08-07-coordinator-claude-em-cmd-forwarder-drops-everything-
 # after-a-newline.md: both take multi-line arguments as a matter of course
 # (commit messages, memo bodies) and both are extensionless on-disk CLIs
 # (no `.py` suffix -- see `_derive_agent_helper_target_map`'s stem-dedup
@@ -904,8 +904,8 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
 def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: str) -> None:
     """Naked-Python forwarder that resolves and execs the claude-klabauter-resident
     CLI at ``<claude-klabauter-root>/coordinator/bin/<target>``, per the ratified
-    resolve-claude-klabauter-bin contract (example-doctrine-repo
-    ``coordinator/snippets/resolve-claude-klabauter-bin.md``, example-doctrine-repo commit ``ad7fb0d1``).
+    resolve-claude-klabauter-bin contract (coordinator-claude
+    ``coordinator/snippets/resolve-claude-klabauter-bin.md``, coordinator-claude commit ``ad7fb0d1``).
 
     ``target`` — the real on-disk filename inside ``coordinator/bin/`` this
     forwarder execs — is REQUIRED and keyword-only, sourced from
@@ -939,9 +939,9 @@ def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: st
     ``_claude_home.py`` co-located-impl precedent already used elsewhere in
     this install chain.
 
-    ``b644d5a9`` (example-doctrine-repo, 2026-07-22) relocated example-doctrine-repo's entire executable
+    ``b644d5a9`` (coordinator-claude, 2026-07-22) relocated coordinator-claude's entire executable
     surface into claude-klabauter's own ``coordinator/bin/`` — the forwarder
-    this replaces still exec'd the now-empty example-doctrine-repo-side ``coordinator/bin/``
+    this replaces still exec'd the now-empty coordinator-claude-side ``coordinator/bin/``
     and every one of the 7 agent-helper CLIs was rc=126 in the field
     (claude-central-em memo,
     cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md).
@@ -972,7 +972,7 @@ def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: st
     via the shim vs 980ms direct, byte-identical output -- measured by
     ``coordinator/bin/check-sh-suffix-polyglot.py``'s docstring,
     source-of-record ``state/audits/2026-07-20-sh-suffixed-python-
-    trampolines.md`` in the example-doctrine-repo clone, not this repo -- the path is
+    trampolines.md`` in the coordinator-claude clone, not this repo -- the path is
     qualified deliberately, and its absence here is not evidence it is
     missing), paid unconditionally on EVERY call regardless of whether
     hazard (a) is ever triggered. This function's template is installed once
@@ -985,7 +985,7 @@ def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: st
     content = f"""#!/usr/bin/env python3
 # coordinator-claude bin forwarder for {name} — resolves claude-klabauter's
 # `coordinator/bin/` directory via the co-located `_resolve_claude_klabauter.py`
-# shim (the ratified resolve-claude-klabauter-bin contract, example-doctrine-repo
+# shim (the ratified resolve-claude-klabauter-bin contract, coordinator-claude
 # coordinator/snippets/resolve-claude-klabauter-bin.md) and execs `{target}` there.
 # Regenerated verbatim on every install run — do not hand-edit.
 # Spec backlink: cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
@@ -1075,7 +1075,7 @@ def _write_agent_cmd_forwarder(
     Microsoft Store App Execution Alias picker under ``WindowsApps``) ->
     ``py -3`` -> fail-loud exit 127.
 
-    The baked rung is guarded by ``if exist``, matching example-doctrine-repo's
+    The baked rung is guarded by ``if exist``, matching coordinator-claude's
     ``templates/bin/python3.cmd``: the ladder falls through when the baked
     path is empty OR names something no longer on disk, so a *wrong* bake is
     self-healing rather than a permanent hard failure. Without the exist
@@ -1214,7 +1214,7 @@ def _write_agent_ps1_forwarder(
 # coordinator/bin/ via _resolve_claude_klabauter.py and execs the real target
 # there. {_AGENT_PS1_FORWARDER_MARKER} on every install run --
 # do not hand-edit.
-# Spec backlink: docs/plans/2026-08-07-ps1-launcher-class-and-fail-closed-policy-gate.md
+# Spec backlink: pln-second-managed-launcher-class-aea900
 $ErrorActionPreference = 'Stop'
 $_here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $_entry = Join-Path $_here '{name}'
@@ -1250,7 +1250,7 @@ exit 127
 
 
 # Names already installed by ml_family/ch_family/the coordinator-settings-home
-# and platform-localize install lines (all sourced from example-doctrine-repo's
+# and platform-localize install lines (all sourced from coordinator-claude's
 # templates/bin or claude-klabauter's coordinator/lib/claude-home, NOT from
 # coordinator/bin/) — these run BEFORE the derived agent-helper forwarder
 # loop in _install_bin_resolvers, so a same-named entry surviving into the
@@ -1501,7 +1501,7 @@ def _sweep_orphaned_agent_helpers(
        NOT exclusive — it was stamped by
        ``coordinator/bin/gen-launcher-shim.py`` on every CLI's source-side
        ``.cmd`` AND ``.ps1``, including the legitimate,
-       still-installed-every-run example-doctrine-repo templates ``platform-localize.cmd``/
+       still-installed-every-run coordinator-claude templates ``platform-localize.cmd``/
        ``platform-localize.ps1`` and ``resolve-coordinator-clone.cmd``
        (confirmed on a live install), so a legacy-marker match is a
        necessary but not sufficient condition — and it is checked ONLY on
@@ -1612,7 +1612,7 @@ def _run_hardware_audit(check_only: bool) -> None:
     on `plugin_root/lib/detect-hardware.sh` existing on disk, a file-presence
     check that made no sense once the audit itself became a direct in-process
     Python call (the gate suppressed a working, file-independent audit any
-    time the example-doctrine-repo-side `.sh` happened to be absent — which is unconditionally,
+    time the coordinator-claude-side `.sh` happened to be absent — which is unconditionally,
     post-b644d5a9's executable-surface relocation). Never raises — a failed
     audit degrades to a WARNING, matching the bash oracle's own non-fatal
     posture for this step."""
@@ -1751,7 +1751,7 @@ def repo_key_to_env_var(machine_local_key: str) -> str:
     ``_``.
 
     Port source: ``coordinator/templates/bin/claude-machine-local.sh``
-    [example-doctrine-repo repo] normalization comment block.
+    [coordinator-claude repo] normalization comment block.
     """
     suffix = machine_local_key[len("repos."):] if machine_local_key.startswith("repos.") else machine_local_key
     table = str.maketrans("abcdefghijklmnopqrstuvwxyz.-", "ABCDEFGHIJKLMNOPQRSTUVWXYZ__")
@@ -1958,7 +1958,7 @@ def resolve_hook_python_bin() -> str:
     ``resolve_python_bin()``'s tier 1/2 is ``COORDINATOR_PYTHON`` / machine-local
     ``coordinator.python`` -- the pinned coordinator venv interpreter -- and
     that is the one this resolver wants. Three live hook scripts import
-    ``yaml``, a venv-only package, and example-doctrine-repo's own
+    ``yaml``, a venv-only package, and coordinator-claude's own
     ``coordinator/hooks/scripts/enforce-agent-dispatch-mode.py`` imports it at
     MODULE LEVEL, unguarded -- a system interpreter without PyYAML takes that
     PreToolUse hook down on every fire. ``coordinator_core/hooks/nudge_unrouted_sizing.py``
@@ -1966,7 +1966,7 @@ def resolve_hook_python_bin() -> str:
     ``coordinator_core/hooks/scripts/_oss_operative_strings.py``, imports it
     guarded/fail-open -- unaffected either way, named here so this count is
     self-verifying against three (review: code-reviewer F3, 2026-08-03). The
-    known counter-cost (example-doctrine-repo friction-log F7:
+    known counter-cost (coordinator-claude friction-log F7:
     a baked venv path deadlocked a venv rebuild on a live Windows box) is
     accepted and mitigated downstream by C2's ``[ -x ]`` / ``Test-Path``
     self-healing fallback, not by pointing away from the venv.
@@ -2023,10 +2023,10 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
         return 1
     plugin_root = Path(plugin_root_env)
 
-    # example-doctrine-repo-side precondition only — templates/ is the last surface example-doctrine-repo's
+    # coordinator-claude-side precondition only — templates/ is the last surface coordinator-claude's
     # CLAUDE_PLUGIN_ROOT still owns (b644d5a9 relocated lib/ and bin/ into
     # claude-klabauter's own coordinator/ tree; requiring lib/ here as well would be a
-    # vestigial check that always passes on a post-relocation example-doctrine-repo checkout and
+    # vestigial check that always passes on a post-relocation coordinator-claude checkout and
     # never catches anything real).
     if not (plugin_root / "templates").is_dir():
         print(
@@ -2311,11 +2311,11 @@ def _resolve_agent_cmd_dest_collisions(agent_helper_target_map: "dict[str, str]"
 
 # `_CH_FAMILY_FILES` and `_RM_FAMILY_FILES` are sourced from CLAUDE-KLABAUTER'S OWN
 # tree (`coordinator/lib/claude-home/` and `coordinator/lib/resolve-claude-klabauter/`
-# respectively) — NOT example-doctrine-repo's `templates/bin/` — so they are out of scope for
+# respectively) — NOT coordinator-claude's `templates/bin/` — so they are out of scope for
 # `coordinator/lib/bin-templates-manifest.py` (C12) by construction and stay
 # hand-maintained here. See that manifest's own negative-spec for why. The
 # `_ML_FAMILY_FILES` / `_ML_EXPLICIT_FILES` / `_PLATFORM_LOCALIZE_FILES`
-# tuples that USED to live here (all three sourced from `ml_bin`, example-doctrine-repo's
+# tuples that USED to live here (all three sourced from `ml_bin`, coordinator-claude's
 # `templates/bin/`) are now declared in that manifest instead — see
 # `_load_bin_templates_manifest` above and `_install_bin_resolvers` below.
 _CH_FAMILY_FILES = (
@@ -2350,7 +2350,7 @@ def _static_bin_family_names(claude_klabauter_root: "Optional[Path]" = None) -> 
     This is the completeness half of `_sweep_orphaned_agent_helpers`'s
     provenance check: a marker-carrying file is an orphan only if its name
     is absent from BOTH this static set AND the current agent-helper maps.
-    Without this, a example-doctrine-repo-owned/other-family file that happens to also carry
+    Without this, a coordinator-claude-owned/other-family file that happens to also carry
     a launcher marker (``platform-localize.cmd`` and
     ``resolve-coordinator-clone.cmd`` both do, on the live tree — they were
     generated by the same ``gen-launcher-shim.py`` tool as every CLI in
@@ -2775,7 +2775,7 @@ def _install_bin_resolvers(
     # `.cmd` twins are sourced from claude-klabauter's OWN coordinator/bin/, resolved
     # here (in-process, importable) rather than in the emitted forwarder body
     # (which must stay self-contained path arithmetic — see
-    # _write_agent_forwarder's docstring). `plugin_root / "bin"` (example-doctrine-repo's
+    # _write_agent_forwarder's docstring). `plugin_root / "bin"` (coordinator-claude's
     # tree) is the now-empty, dead source this repoint replaces.
     agent_bin = claude_klabauter_root_resolved / "coordinator" / "bin"
     resolve_claude_klabauter_lib = claude_klabauter_root_resolved / "coordinator" / "lib" / "resolve-claude-klabauter"
@@ -2925,7 +2925,7 @@ def _percolation_and_path_steps(
     for hf in setup_hook_files:
         if not check_only:
             (setup_dest / hf).parent.mkdir(parents=True, exist_ok=True)
-        # Doctrine-tracked templates sourced from the coordinator-claude/example-doctrine-repo
+        # Doctrine-tracked templates sourced from the coordinator-claude/coordinator-claude
         # tree, not operator config — force-overwrite on re-install so a
         # stale destination gets repaired rather than silently preserved
         # (see `_install_one`'s docstring § force_overwrite).
@@ -3582,7 +3582,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         # deletes an orphan zero-byte AppX `python(3).exe` reparse-point
         # stub under `%LOCALAPPDATA%\Microsoft\WindowsApps\`, only after an
         # interactive "Delete this orphan stub? [y/N]" prompt. `effect=
-        # "delete"` per example-doctrine-repo's ruling that consent-gated machine mutations
+        # "delete"` per coordinator-claude's ruling that consent-gated machine mutations
         # must carry a paper trail even when they remove rather than write.
         StaticClause(
             effect="delete",
@@ -3723,7 +3723,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         ),
         # Clause 10 — the claude-home family: a STATIC, hand-maintained
         # 3-entry tuple (`_CH_FAMILY_FILES`), sourced from claude-klabauter's own
-        # `coordinator/lib/claude-home/` (NOT example-doctrine-repo's `templates/bin/`, so
+        # `coordinator/lib/claude-home/` (NOT coordinator-claude's `templates/bin/`, so
         # deliberately out of `bin-templates-manifest.py`/clauses 7-9 by
         # construction — see `_CH_FAMILY_FILES`'s own comment). Genuinely
         # enumerable in source, unlike the manifest-driven groups above, so

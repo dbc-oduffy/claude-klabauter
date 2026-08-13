@@ -1,10 +1,10 @@
 """
 coordinator_core.ops.test_probe_cwd_example_retrieval_repo_relevance — behavior-parity
-tests for the naked-Python port of the example-doctrine-repo-owned bash script.
+tests for the naked-Python port of the coordinator-claude-owned bash script.
 
-Port of: probe-cwd-example-retrieval-repo-relevance.sh (example-doctrine-repo b5a4192c, 2026-07-20).
+Port of: probe-cwd-example-retrieval-repo-relevance.sh (coordinator-claude b5a4192c, 2026-07-20).
 
-Mirrors the AC-9 visibility-matrix coverage of the example-doctrine-repo-side bats-style test
+Mirrors the AC-9 visibility-matrix coverage of the coordinator-claude-side bats-style test
 (coordinator/tests/test_probe_cwd_example_retrieval_repo_relevance.sh) plus the known
 pre-existing registry-path mismatch (see module docstring negative-spec in
 probe_cwd_example_retrieval_repo_relevance.py) — reproduced here, not "fixed", to stay

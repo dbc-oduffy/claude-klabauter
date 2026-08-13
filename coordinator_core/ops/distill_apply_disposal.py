@@ -113,7 +113,7 @@ Negative-spec:
     op's only judgment is mechanical (guard re-verify, drain-ordering,
     throttle-ack), per the plan's negative spec (AC12).
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C14
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C14
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D2a, D2b, D3, D4
 """
 

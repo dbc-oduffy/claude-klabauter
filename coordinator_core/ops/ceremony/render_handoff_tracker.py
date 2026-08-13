@@ -30,17 +30,17 @@ write — this module does not touch that call site (a separate spinoff owns
 repointing it off its own inline write logic onto this one); the two are
 independent producers of the identical output shape today.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b/C9
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b/C9
 Ask backlink: cross-repo/inbox/2026-07-22-claude-central-em-c9-handoff-tracker-render-op-wiring.md
 
 Port source (CLI/dispatch layer only — rendering itself is C8b's, not re-derived
-here): coordinator/bin/render-handoff-tracker.js (example-doctrine-repo) `main()` (:595-664),
+here): coordinator/bin/render-handoff-tracker.js (coordinator-claude) `main()` (:595-664),
 `resolvePerRepoStateRoot()` (:83-126).
 
 Negative-spec:
   - Does NOT re-implement ``render_repo_section`` or any of its table/grouping
     helpers — always calls C8b's port, unchanged.
-  - Does NOT support a fleet-aggregate ``--all-repos`` mode. That mode (example-doctrine-repo-
+  - Does NOT support a fleet-aggregate ``--all-repos`` mode. That mode (coordinator-claude-
     aggregate render across every machine-local-registered ``repos.*`` repo,
     writing ``state/doe-handoff-tracker.md`` under the central root) was
     REMOVED 2026-07-23 (PM-ratified) after example-cockpit-repo-em confirmed it has

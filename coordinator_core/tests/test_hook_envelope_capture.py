@@ -8,7 +8,7 @@ coverage: no test proved capture actually happens, nests correctly, or
 restores the prior sink on exit. A broken restore leaks a sink across tests
 and corrupts any corpus built afterwards after this module's tests run.
 
-Spec backlink: docs/plans/2026-08-02-guard-message-size-discipline.md
+Spec backlink: pln-runtime-measured-message-size--0669ac
 """
 
 from __future__ import annotations

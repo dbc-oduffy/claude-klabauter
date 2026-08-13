@@ -1,7 +1,7 @@
 """coordinator_core.bash_guards._message_size -- the byte-measurement core
 for guard message-size discipline.
 
-Spec backlink: docs/plans/2026-08-02-guard-message-size-discipline.md,
+Spec backlink: pln-runtime-measured-message-size--0669ac,
 chunk C2, § Problem's "Correction: the 440-byte cap compounds a ceiling
 and inverts the duty-of-care incentive" and "Correction: the speaker
 predicate reconstitutes the silent-shim trap one level down".
@@ -231,7 +231,7 @@ def extract_prose_text(envelope: Optional[Dict[str, Any]]) -> str:
     every in-module caller (``measure_envelope``); this wrapper is the
     promoted, intentionally-shared entry point.
 
-    Spec backlink: docs/plans/2026-08-12-agent-facing-messages-not-apology.md,
+    Spec backlink: pln-agent-facing-messages-read-as-658f5c,
     chunk C3 TEXT SEAM CORRECTION -- the register leg must read
     ``GuardCapture``'s rendered text via this seam, never a
     hand-duplicated re-derivation of ``hookSpecificOutput``'s prose

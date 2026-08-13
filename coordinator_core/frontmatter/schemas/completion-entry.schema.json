@@ -251,11 +251,11 @@
     },
     "deliverable_id": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "Durable deliverable join key inherited from the plan/handoff chain this completion records. Enables the board to link completion entries back to the deliverable spine. Null for pre-backfill entries or standalone single-session work. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1"
+      "description": "Durable deliverable join key inherited from the plan/handoff chain this completion records. Enables the board to link completion entries back to the deliverable spine. Null for pre-backfill entries or standalone single-session work. Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1"
     },
     "initiative": {
       "anyOf": [{"type": "string"}, {"type": "null"}],
-      "description": "FK to the initiative entity (state/initiatives/<id>.yaml) inherited from the deliverable spine. Nullable. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D2"
+      "description": "FK to the initiative entity (state/initiatives/<id>.yaml) inherited from the deliverable spine. Nullable. Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2"
     },
     "completion_id": {
       "type": "string",

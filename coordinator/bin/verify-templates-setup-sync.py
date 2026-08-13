@@ -12,7 +12,7 @@ live->template --fix path was removed because it directly contradicted
 the outward-only publish doctrine (state/lessons/2026-07-06-verify-
 templates-setup-sync-sh-fix-is-ba.yaml).
 
-Spec backlink: docs/plans/2026-05-21-generic-percolation-via-coordinator-install.md § Step 3
+Spec backlink: docs/plans/2026-05-21-generic-percolation-via-coordinator-install.md § Step 3 [DEAD-CITATION: plan file never committed to this repo]
 Port target: claude-klabauter coordinator_core/ops/verify_templates_setup_sync.py
 """
 
@@ -53,13 +53,13 @@ def _resolve_plugin_root() -> str:
 
     This does NOT derive from this script's own __file__ location: this
     executable lives in claude-klabauter while coordinator/templates/
-    stayed in example-doctrine-repo per DR-047, so self-location no longer resolves
+    stayed in coordinator-claude per DR-047, so self-location no longer resolves
     to a directory containing templates/ (see
     verify-templates-bin-sync.py's _resolve_plugin_root() for the same fix
     on the sibling script — this function mirrors its shape).
 
     Fails loud (sys.exit(1)) if doe_root() cannot resolve: this is a gate
-    script, not a never-block hook, so an unresolvable example-doctrine-repo root must not
+    script, not a never-block hook, so an unresolvable coordinator-claude root must not
     degrade to an exit-0 no-op.
     """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -69,7 +69,7 @@ def _resolve_plugin_root() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            "verify-templates-setup-sync.py: cannot resolve the example-doctrine-repo "
+            "verify-templates-setup-sync.py: cannot resolve the coordinator-claude "
             f"repo root ({exc}). Set repos.example_doctrine_repo in the machine-local "
             "registry, or set the DOE_ROOT env var, or set "
             "CLAUDE_PLUGIN_ROOT directly.",
@@ -81,7 +81,7 @@ def _resolve_plugin_root() -> str:
 
 def main() -> None:
     # Set CLAUDE_PLUGIN_ROOT (if unset) so the ported op — which cannot
-    # locate the example-doctrine-repo coordinator/ tree via its own __file__ or a cwd()
+    # locate the coordinator-claude coordinator/ tree via its own __file__ or a cwd()
     # fallback (see coordinator_core.ops.verify_templates_setup_sync's
     # _resolve_plugin_root()) — resolves the same templates/setup/
     # directory this trampoline resolves. The op module reads the env var

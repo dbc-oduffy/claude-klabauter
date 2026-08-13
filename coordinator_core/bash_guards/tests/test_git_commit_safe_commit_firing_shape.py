@@ -1,7 +1,7 @@
 """AC2's firing-shape oracle for `check_git_commit_safe_commit_advise`
 (`dispatch_checks.py`).
 
-Spec backlink: docs/plans/2026-08-01-advisory-firing-shape-predicate.md § C1a, AC1, AC2, AC10.
+Spec backlink: pln-advisory-firing-shape-predicat-802b35 § C1a, AC1, AC2, AC10.
 
 `test_deny_message_accuracy.py`'s `TestGitCommitSafeCommitAdviseMessageAccuracy`
 already covers MESSAGE accuracy (does the emitted text describe what tripped

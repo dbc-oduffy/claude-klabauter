@@ -4,7 +4,7 @@ coordinator/bin/distill-log-normalize.py — thin CLI wrapper over
 coordinator_core.distill.log_normalize.
 
 Purpose: the one-time, run-once-per-repo migrator from a legacy pipe-table distillation
-log (`date | action | path | last_sha | belongs_to_spec | reason`) to the example-doctrine-repo C1 canonical
+log (`date | action | path | last_sha | belongs_to_spec | reason`) to the coordinator-claude C1 canonical
 schema (`## Run <run-id>` / `- <path> -> <disposition>, <fate> (run: <run-id>)`).
 
 Usage:
@@ -35,9 +35,9 @@ unset) and accepted once it probes as a real claude-klabauter checkout; the mach
 registry lookup is a fallback reached only if that probe misses (this file has been
 published/vendored to a location outside the claude-klabauter checkout).
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C8;
-Example-doctrine-repo/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C6
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C8;
+Coordinator-claude/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C6
 """
 
 from __future__ import annotations

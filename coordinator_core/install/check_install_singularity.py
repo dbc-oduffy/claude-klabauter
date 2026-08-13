@@ -2,13 +2,13 @@
 coordinator_core.install.check_install_singularity — canonical-install-locus
 invariant probe.
 
-Port of example-doctrine-repo coordinator/lib/check-install-singularity.sh: enforces that
+Port of coordinator-claude coordinator/lib/check-install-singularity.sh: enforces that
 exactly one canonical coordinator tree is reachable. Two shapes are
 recognized:
   Pre-cutover (~/.claude shape): canonical tree =
     ~/.claude/plugins/coordinator-claude (flat install; coordinator source
     lives inside ~/.claude).
-  Maximalist post-W4.2 shape: canonical tree = example-doctrine-repo clone resolved via
+  Maximalist post-W4.2 shape: canonical tree = coordinator-claude clone resolved via
     plugin.mirrors.coordinator-claude.live_path in registry.local.toml
     (delivered live via --plugin-dir; ~/.claude/plugins/coordinator-claude is
     ABSENT).
@@ -66,7 +66,7 @@ guarantee for callers to depend on.
 Invocation: CLI entry (`main(argv) -> int`), no flags/args consumed (the bash
 oracle takes none either — it is a pure environment-driven probe). Invoked
 via `python3 -m coordinator_core.install.check_install_singularity` or
-imported directly. The example-doctrine-repo-side trampoline
+imported directly. The coordinator-claude-side trampoline
 (coordinator/lib/check-install-singularity.sh, kept at its existing filename
 per the plugin_health/sentinel.py P-18 probe's hardcoded subprocess call —
 see that module's own docstring for the not-yet-repointed caller) does a
@@ -86,7 +86,7 @@ Spec backlink:
   tasks/install-friction-triage/cluster-B-path-venv-registration.md § ISSUE #4
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
   (BIG_PORT Wave B, item check-install-singularity)
-Port of: coordinator/lib/check-install-singularity.sh [example-doctrine-repo repo]
+Port of: coordinator/lib/check-install-singularity.sh [coordinator-claude repo]
 """
 
 from __future__ import annotations
@@ -157,15 +157,15 @@ def _to_plugin_root(raw: str) -> str:
     Windows separator normalization: backslashes are folded to forward
     slashes (via ``_norm_sep``) BEFORE the suffix/basename tests. Without
     this the tests are forward-slash-only, so a native-Windows content root
-    (``X:\\example-doctrine-repo\\coordinator``, the shape ``CLAUDE_PLUGIN_ROOT`` carries)
+    (``X:\\coordinator-claude\\coordinator``, the shape ``CLAUDE_PLUGIN_ROOT`` carries)
     fails both ``basename == "coordinator"`` and ``endswith("/coordinator")``
     and is NOT normalized to plugin-root level — while the registry's
     ``live_path`` for the same tree (stored forward-slashed,
-    ``X:/example-doctrine-repo/coordinator``) IS. The one tree then enters ``_TreeSet``
+    ``X:/coordinator-claude/coordinator``) IS. The one tree then enters ``_TreeSet``
     at two different levels, reads as 2 distinct canonical paths, and the gate
     hard-fails a correct install with "accidental split" naming
-    ``X:\\example-doctrine-repo`` and ``X:\\example-doctrine-repo\\coordinator`` — the two halves of
-    the SAME clone. This is the one-level-offset trap (example-doctrine-repo's plugin root
+    ``X:\\coordinator-claude`` and ``X:\\coordinator-claude\\coordinator`` — the two halves of
+    the SAME clone. This is the one-level-offset trap (coordinator-claude's plugin root
     is the ``coordinator/`` subdir, not the repo root) reached via a path-syntax
     bug rather than a real split.
 
@@ -315,7 +315,7 @@ def _has_parent_child_pair(paths: List[str]) -> bool:
     other (parent/child), rather than being genuinely distinct trees?
 
     This is the shape a single repo takes when its plugin root is a
-    subdirectory of its own repo root (e.g. Example-doctrine-repo's ``coordinator/``
+    subdirectory of its own repo root (e.g. Coordinator-claude's ``coordinator/``
     under the repo root) and something upstream (a separator/case/
     trailing-slash mismatch — see ``_to_plugin_root``'s docstring for a
     concrete instance) kept the two spellings of the SAME tree from
@@ -604,7 +604,7 @@ def run() -> Tuple[int, str, str]:
             remedy = (
                 "The paths below are a PARENT and a CHILD of each other, not two separate "
                 "installs -- this is the one-level-offset shape a single repo takes when its "
-                "plugin root is a subdirectory of its own repo root (e.g. Example-doctrine-repo's "
+                "plugin root is a subdirectory of its own repo root (e.g. Coordinator-claude's "
                 "coordinator/ under the repo root). Do NOT remove either path: they are the "
                 "SAME clone counted at two levels, and deleting one deletes part of the "
                 "other. Likely cause: a path-separator/case/trailing-slash mismatch between "
@@ -615,7 +615,7 @@ def run() -> Tuple[int, str, str]:
             )
         else:
             remedy = (
-                "Expected: exactly one canonical tree. Post-W4.2 maximalist shape: the example-doctrine-repo "
+                "Expected: exactly one canonical tree. Post-W4.2 maximalist shape: the coordinator-claude "
                 "clone (resolved via plugin.mirrors.coordinator-claude.live_path in "
                 "registry.local.toml) is the sole tree — ~/.claude/plugins/coordinator-claude "
                 "must be absent. Pre-cutover shape: ~/.claude/plugins/coordinator-claude is "

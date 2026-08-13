@@ -208,7 +208,7 @@ def test_d2_windows_drive_letter_does_not_match_url_scheme(tmp_path):
 
 
 def test_d2_fires_independent_of_length_short_message(tmp_path):
-    text = "Relayed to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/example-doctrine-repo/cross-repo/b.md."
+    text = "Relayed to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/coordinator-claude/cross-repo/b.md."
     assert m._word_count(text) < 20
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is not None
@@ -456,7 +456,7 @@ def test_corpus_shape_353_word_status_report_fires_d1(tmp_path):
 
 
 def test_corpus_shape_10_word_reply_two_absolute_paths_fires_d2_only(tmp_path):
-    text = "Relayed the memo to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/example-doctrine-repo/b.md"
+    text = "Relayed the memo to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/coordinator-claude/b.md"
     word_count = m._word_count(text)
     assert word_count <= 20
     result = m.op(_payload(tmp_path, last_assistant_message=text))

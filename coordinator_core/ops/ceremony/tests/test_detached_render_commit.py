@@ -24,7 +24,7 @@ Coverage:
                                      FIRST attempt -- no retry burned, one CHILD
                                      FAILED record logged immediately.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C5 (Artifact
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C5 (Artifact
 disposition residue)
 """
 

@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """verify-skill-anchor-links.py — dead-anchor gate for `<path>.md § <section>` citations.
 
-Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter's
+Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.verify_skill_anchor_links. Resolution is PATH-DIRECTED:
 each `<path>.md § <section>` citation is checked against the file that citation
 itself names, never against a union of doctrine files. An OPTIONAL manifest at
@@ -30,9 +30,9 @@ from __future__ import annotations
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# example-doctrine-repo repo, not here).
+# coordinator-claude repo, not here).
 #
 # Exit-code convention: this is a fail-loud verification gate, and its three
 # outcomes are load-bearing contract for `/update-docs` Phase 11h — 0 checked/

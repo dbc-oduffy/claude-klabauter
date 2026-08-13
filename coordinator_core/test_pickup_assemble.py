@@ -280,7 +280,7 @@ class TestMemoBranch:
         adjudicating an action `consult` never takes.
 
         `resolves` on both dispositions is `["d-action-memo"]`, not `[]`
-        (defect fix, 2026-07-25, cross-repo memo `2026-07-25-example-doctrine-repo-em-
+        (defect fix, 2026-07-25, cross-repo memo `2026-07-25-coordinator-claude-em-
         consult-dispositions-never-terminal.md`): replying in place IS the
         receiver-side completion of a consult — the memo's work is fully
         done once the reply lands in `actioned_note`, so it must resolve
@@ -449,16 +449,16 @@ class TestLiveFallbackBranch:
     def test_bare_basename_of_live_inbox_memo_resolves(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
-        _seed_memo(repo, "2026-07-25-example-doctrine-repo-em-planless-dispatch-sidecar-provisioning.md")
+        _seed_memo(repo, "2026-07-25-coordinator-claude-em-planless-dispatch-sidecar-provisioning.md")
 
         result = pa.brief(
-            "2026-07-25-example-doctrine-repo-em-planless-dispatch-sidecar-provisioning.md", repo_root=repo
+            "2026-07-25-coordinator-claude-em-planless-dispatch-sidecar-provisioning.md", repo_root=repo
         )
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "memo"
         assert result.decision_object["artifact"]["path"] == (
-            "cross-repo/inbox/2026-07-25-example-doctrine-repo-em-planless-dispatch-sidecar-provisioning.md"
+            "cross-repo/inbox/2026-07-25-coordinator-claude-em-planless-dispatch-sidecar-provisioning.md"
         )
         # An ordinary live pickup, never the terminal `archived` shape.
         assert result.decision_object["artifact"]["resolution"] is None
@@ -685,7 +685,7 @@ class TestSuffixSlugFallback:
         _init_repo(repo)
         _seed_memo(
             repo,
-            "2026-07-28-example-doctrine-repo-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
+            "2026-07-28-coordinator-claude-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
         )
 
         result = pa.brief(
@@ -696,7 +696,7 @@ class TestSuffixSlugFallback:
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "memo"
         assert result.decision_object["artifact"]["path"] == (
-            "cross-repo/inbox/2026-07-28-example-doctrine-repo-em-trampoline-fix-receipt-"
+            "cross-repo/inbox/2026-07-28-coordinator-claude-em-trampoline-fix-receipt-"
             "b6dc46d6-and-forwarder-gate-recommendation.md"
         )
         assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
@@ -764,7 +764,7 @@ class TestSuffixSlugFallback:
         _init_repo(repo)
         _seed_memo(
             repo,
-            "2026-07-28-example-doctrine-repo-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
+            "2026-07-28-coordinator-claude-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
         )
 
         result = pa.brief("ate-recommendation", repo_root=repo)
@@ -3765,7 +3765,7 @@ class TestComputeAddresseeGateDirect:
         assert pa.compute_addressee_gate(repo, "") == {"exit_code": None, "checked": False}
 
     def test_unresolved_receiver_message_shape(self, tmp_path, monkeypatch):
-        """Pins the UNRESOLVED message shape byte-for-byte against the example-doctrine-repo
+        """Pins the UNRESOLVED message shape byte-for-byte against the coordinator-claude
         CLI's own `--check-addressee` stdout (`cross-repo-memo:4099-4104`)."""
         repo = tmp_path / "repo"
         _init_repo(repo)
@@ -4457,7 +4457,7 @@ class TestLivenessSignalLineageFilter:
     # The green-count decrease here is the AC11-amended expectation.
 
     def test_own_stamp_matching_self_session_id_does_not_fire(self, tmp_path, monkeypatch):
-        """Defect 1 (2026-07-29, example-doctrine-repo-em self-claim-reads-as-live-peer
+        """Defect 1 (2026-07-29, coordinator-claude-em self-claim-reads-as-live-peer
         memo): the docstring has always promised a "stamp present & this
         session" handover branch, but `_lineage_related_sessions` never
         contains the CALLING session's own id — only `self_session_id`
@@ -4752,7 +4752,7 @@ class TestBareDictJudgmentPointBuildersCarryRecommendation:
 
 
 class TestKindDispatchRequiredContentKeys:
-    """Defect 2 (2026-07-29, example-doctrine-repo-em self-claim-reads-as-live-peer
+    """Defect 2 (2026-07-29, coordinator-claude-em self-claim-reads-as-live-peer
     memo): `accepted`/`partial` require `--realized-by`
     (`ops/memo_transition.py:642-643`), but nothing an operator reads before
     `apply` said so. `required_content_keys` is stamped onto each
@@ -5388,15 +5388,15 @@ class TestSplitArtifactArgsBulletLines:
         # abs-path-ok: verbatim PM-supplied invocation string under test, not
         # a filesystem citation this repo's own code would ever construct.
         raw = (
-            "- X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "- X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-claude-em-"
             "landed-enum-is-live-declining-deprecate.md\n"
-            "  - X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "  - X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-claude-em-"
             "problem-set-deliverable-id-is-vendored-vendor-first.md"
         )
         assert pa.split_artifact_args(raw) == [
-            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-claude-em-"
             "landed-enum-is-live-declining-deprecate.md",
-            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-example-doctrine-repo-em-"
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-11-coordinator-claude-em-"
             "problem-set-deliverable-id-is-vendored-vendor-first.md",
         ]
 
@@ -5461,14 +5461,14 @@ class TestSplitArtifactArgsBraceExpansion:
         # abs-path-ok: verbatim PM-supplied invocation string under test, not a
         # filesystem citation this repo's own code would ever construct.
         raw = (
-            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-example-doctrine-repo-em-"
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-coordinator-claude-em-"
             "{bx17-ssot-command-tool-constant-your-29-sites,\n"
             "  your-44-is-right-my-8-was-wrong-and-correction-2-does-not-hold}.md"
         )
         assert pa.split_artifact_args(raw) == [
-            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-example-doctrine-repo-em-"
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-coordinator-claude-em-"
             "bx17-ssot-command-tool-constant-your-29-sites.md",
-            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-example-doctrine-repo-em-"
+            "X:\\claude-klabauter\\cross-repo\\inbox\\2026-08-07-coordinator-claude-em-"
             "your-44-is-right-my-8-was-wrong-and-correction-2-does-not-hold.md",
         ]
 
@@ -5619,13 +5619,13 @@ class TestMultiArtifactBrief:
 
 
 def _decode_decision_payload_like_autofire(raw: str) -> list[dict]:
-    """Local reimplementation of example-doctrine-repo's `pickup-autofire.py`
+    """Local reimplementation of coordinator-claude's `pickup-autofire.py`
     `decode_decision_payload()` parsing rule — a bare object decodes to a
     one-element list, a bare array keeps only its dict elements, and
     anything else (including a `{"briefs": [...]}`-shaped wrapper, which is
     itself a bare JSON object) decodes to `[]`.
 
-    Not imported from example-doctrine-repo (a separate repo, not a dependency of this
+    Not imported from coordinator-claude (a separate repo, not a dependency of this
     one) — this is a fixture-local pin of the consumer's parsing contract so
     a shape regression here fails a test in THIS repo before it ever reaches
     the hook. See the shape-contract comment above the `len(results) == 1`
@@ -6015,7 +6015,7 @@ class TestKindDispatchGuidanceAndRecommendation:
                     )
 
     def test_actioned_note_prescribing_guidance_always_resolves_action_memo(self):
-        """Class-closing invariant (cross-repo memo `2026-07-25-example-doctrine-repo-
+        """Class-closing invariant (cross-repo memo `2026-07-25-coordinator-claude-
         em-consult-dispositions-never-terminal.md`): a disposition whose
         guidance PRESCRIBES writing `actioned_note` is terminal-on-decision
         — the receiver's work is done once that note is recorded — and
@@ -7203,7 +7203,7 @@ class TestArchivedMemoClassification:
 
 
 class TestArchivedOpenMemoKindDispatch:
-    """2026-07-27 example-doctrine-repo-em memo defect fix — `brief()`'s `archived`
+    """2026-07-27 coordinator-claude-em memo defect fix — `brief()`'s `archived`
     branch unconditionally emitted `directives: []` and asserted "already
     closed" even for an archived MEMO whose terminal `status` was never
     stamped to a terminal value (`"actioned"`). A sibling EM hit this live

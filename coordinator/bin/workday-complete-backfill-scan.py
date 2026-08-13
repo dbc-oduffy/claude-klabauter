@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """workday-complete-backfill-scan.py — skipped-workday backfill detector.
 
-Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter's
+Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.workday_complete_backfill_scan. Scans for days with
 commits but no daily-summary record and emits TSV rows describing the gap.
 Feeds a nudge at `/workday-start` Step 1.85 and an auto-backfill fan-out at
@@ -15,8 +15,8 @@ Feeds a nudge at `/workday-start` Step 1.85 and an auto-backfill fan-out at
 # commit main-exclusion escape hatch, dangling-defer guard) has been fully
 # ported to coordinator_core/ops/workday_complete_backfill_scan.py (co-located
 # pytest: test_workday_complete_backfill_scan.py). This file is now a thin
-# example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
-# (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+# coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
+# (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 #
 # Exit codes (this trampoline):
 #   0 — claude-klabauter-link (transport) failure: CLAUDE_KLABAUTER_ROOT unresolved or

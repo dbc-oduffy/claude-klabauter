@@ -432,7 +432,7 @@ def test_stale_legacy_pointer_does_not_shadow_fresh_write(tmp_path, monkeypatch,
 
     legacy_pointer = _isolated_env / ".claude" / ".doe-root"
     legacy_pointer.parent.mkdir(parents=True, exist_ok=True)
-    legacy_pointer.write_text("/Users/someone-else/example-doctrine-repo\n")
+    legacy_pointer.write_text("/Users/someone-else/coordinator-claude\n")
 
     resolved = trusted_root_guard._doe_root(dict(os.environ))
     assert resolved == str(doe_root)

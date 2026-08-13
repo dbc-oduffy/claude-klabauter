@@ -3,7 +3,7 @@ coordinator_core.ops.detect_guardless_sessions — observe live `claude.exe`
 processes launched WITHOUT the coordinator plugin, after the fact.
 
 Purpose: coordinator guards reach a session only because it was launched via
-`claude-doe`, which execs `claude --plugin-dir <example-doctrine-repo>/coordinator`. A session
+`claude-doe`, which execs `claude --plugin-dir <coordinator-claude>/coordinator`. A session
 launched as bare `claude` (cmd.exe, `-NoProfile`, or explicit `claude.exe`)
 gets ZERO coordinator guards, in any repo, silently. Session records under
 `.git/coordinator-sessions/` are written BY the coordinator hooks, so a
@@ -91,7 +91,7 @@ from coordinator_core.win_portability import no_console_creationflags
 # a bare `[^"]*`/`[^']*` so a backslash immediately before the closing quote
 # is treated as escaping that quote, not as the value's own trailing
 # character — matching Windows CRT argv parsing, where
-# `--plugin-dir="X:\example-doctrine-repo\coordinator\"` (abs-path-ok: illustrative
+# `--plugin-dir="X:\coordinator-claude\coordinator\"` (abs-path-ok: illustrative
 # example command line in prose, not a runtime path reference) reads the
 # `\"` as an escaped literal quote and the real value continues past it. A
 # bare `[^"]*` stops at that `\"` and mis-parses the value short (Review:
@@ -217,7 +217,7 @@ def _is_guarded(command_line: str) -> bool:
     # literally called "coordinator". False-positive shape: any
     # --plugin-dir pointing at an unrelated directory that merely happens
     # to be named "coordinator" reads as guarded when it has nothing to do
-    # with the example-doctrine-repo coordinator plugin (Review: coordinatorcode-reviewer-5d457f48).
+    # with the coordinator-claude coordinator plugin (Review: coordinatorcode-reviewer-5d457f48).
     return value.rstrip("/\\").rstrip("\"'").endswith("coordinator")
 
 

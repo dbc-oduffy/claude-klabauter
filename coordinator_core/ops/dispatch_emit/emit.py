@@ -24,7 +24,7 @@ composing fresh. This module reuses exactly one shared primitive,
 ``workflow_scaffold._js_string_literal`` (the JS-escaping helper), and
 composes everything else itself. Neither ``_compose_script`` nor
 ``_normalize_phases`` is edited — both back ``workflow.scaffold``, a
-registered op with its own round-trip test and example-doctrine-repo veneer.
+registered op with its own round-trip test and coordinator-claude veneer.
 
 ``_normalize_phases`` is not called here at all: on an empty/omitted
 ``phases`` list it silently substitutes a single default ``{"title": "Run",
@@ -116,7 +116,7 @@ safe to emit unconditionally.
 ## Permission-mode (contract confirmation, 2026-08-13)
 
 No ``mode:``/permission-mode key is ever placed on an emitted ``agent()``
-call — example-doctrine-repo's live-tool capture found no permission-mode carrier on the
+call — coordinator-claude's live-tool capture found no permission-mode carrier on the
 ``Workflow`` agent-call path at all (options: ``label``, ``phase``,
 ``schema``, ``model``, ``effort``, ``isolation``, ``agentType``, nothing
 else). This module has no code path that emits one.

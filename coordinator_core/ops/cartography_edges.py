@@ -28,7 +28,7 @@ _cartography_edges) as a side-effect. Wired into coordinator_core.ops.__init__,
 which imports this module — both ops here are LIVE on the dispatch path.
 
 Consumption status: UNCONSUMED — neither "cartography.edges" nor
-"cartography.count_references" has a call site today. Example-doctrine-repo's frozen
+"cartography.count_references" has a call site today. Coordinator-claude's frozen
 contract (`docs/contracts/arch-engine-scripts.md`) names "cartography.edges"
 under its `arch-callgraph` lane, but the survey's Workflow script does not
 call either op; only `cartography.chunk_table` and `cartography.churn` have
@@ -90,7 +90,7 @@ DR-208 five-question affirmation (COMPUTE_ONLY; citing this handler):
   git queries"). No subprocess call is made here at all.
 Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C4 (cartography.edges), AC7.
 """
 

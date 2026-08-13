@@ -53,8 +53,8 @@ signal of its own — see module docstring's Raises note):
         case (it is a successful RPC call carrying a failure payload, not a
         transport-level exception).
 
-Spec backlink: example-doctrine-repo coordinator/skills/staff-session/SKILL.md § Step 5
-Spec backlink: example-doctrine-repo coordinator/commands/notebooklm-research.md (paper-trail archive step)
+Spec backlink: coordinator-claude coordinator/skills/staff-session/SKILL.md § Step 5
+Spec backlink: coordinator-claude coordinator/commands/notebooklm-research.md (paper-trail archive step)
 Spec backlink: claude-klabauter coordinator_core/ops/fleet/archive_paper_trail.py
 
 Negative-spec: does NOT re-implement dest-path computation, collision

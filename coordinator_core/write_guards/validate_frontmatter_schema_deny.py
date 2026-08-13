@@ -1,7 +1,7 @@
 """coordinator_core.write_guards.validate_frontmatter_schema_deny — HARD-DENY
 leg of the frontmatter-schema validator.
 
-Ported from example-doctrine-repo
+Ported from coordinator-claude
 ``coordinator/hooks/scripts/validate-frontmatter-schema.py`` (faithful port —
 see ``write_guards/INTERFACE.md``). That single 2042-line script originally
 emitted BOTH ``permissionDecision: deny`` and ``additionalContext``
@@ -85,9 +85,9 @@ Schema/manifest resolution
 ----------------------------
 The source hook resolved ``coordinator/schemas/`` and
 ``coordinator-registry.manifest.json`` relative to its own on-disk location
-inside the example-doctrine-repo checkout (schemas are example-doctrine-repo-owned doctrine, not
+inside the coordinator-claude checkout (schemas are coordinator-claude-owned doctrine, not
 Claude-klabauter-owned). Running from inside claude-klabauter, this module resolves the
-Example-doctrine-repo repo root via ``coordinator_core.ops.coordinator_doe_root.
+Coordinator-claude repo root via ``coordinator_core.ops.coordinator_doe_root.
 coordinator_doe_root()`` — the same ratified full-ladder resolver the
 advisory sibling uses (``REPO_EXAMPLE_DOCTRINE_REPO`` env override, then the
 ``machine-local`` registry, then the native clone-root resolver) — rather
@@ -96,14 +96,14 @@ than ``coordinator_core.doe_root_pointer.read_doe_root_pointer()``, which
 standardize... call sites on" (it skips the ``REPO_EXAMPLE_DOCTRINE_REPO`` override
 and the ``machine-local``/clone-root rungs entirely). Both split modules
 must resolve through the identical function, or they can silently disagree
-on which example-doctrine-repo checkout is authoritative — exactly the condition the
+on which coordinator-claude checkout is authoritative — exactly the condition the
 mutual-exclusivity guarantee above depends on not happening. Unresolvable
 root, missing manifest, or malformed manifest/schema JSON all narrow to
 "this guard produces nothing" (``check()`` returns ``None``), exactly
 mirroring the source's own ``sys.exit(0)`` on manifest-load failure — never
 a deny on infra, per the source's own "NEVER block on infra" negative-spec.
 
-Spec backlink: example-doctrine-repo
+Spec backlink: coordinator-claude
   coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
@@ -157,11 +157,11 @@ _MEMO_SCHEMA_NAMES = ("cross-repo-memo", "archived-memo")
 # The vendored, version-pinned schema corpus this module now validates
 # against — see module docstring § Schema/manifest resolution. Resolved
 # relative to this file's own on-disk location (this module runs INSIDE
-# claude-klabauter already), never from example-doctrine-repo's live working tree.
+# claude-klabauter already), never from coordinator-claude's live working tree.
 _VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "frontmatter" / "schemas"
 
 # ---------------------------------------------------------------------------
-# Torn-write retry — example-doctrine-repo's schema corpus and registry manifest are resolved
+# Torn-write retry — coordinator-claude's schema corpus and registry manifest are resolved
 # from the LIVE working tree of a sibling repo checkout (see module docstring
 # § Schema/manifest resolution), which concurrent sessions edit continuously.
 # A `check()` call can land mid-write and see a torn/partial JSON file. Every
@@ -339,16 +339,16 @@ class _Context:
 
 def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Context]:
     """Resolve the vendored schema corpus (always available in-repo) plus,
-    best-effort, the example-doctrine-repo registry manifest + the five registries
+    best-effort, the coordinator-claude registry manifest + the five registries
     derived from it. NEVER returns ``None`` for the corpus itself any more —
     that is exactly the fail-open-on-missing-sibling hole AC2 closes (see
     module docstring § Schema/manifest resolution and
     docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-corpus.md):
-    a clone without the example-doctrine-repo sibling present still gets full schema-shape
+    a clone without the coordinator-claude sibling present still gets full schema-shape
     enforcement, lineage-reachability, and grouping-approval/handoff-kind
     checks. Only the manifest-DERIVED fields (memo routing / scaffold-offer
     maps, central-EM identity) degrade to empty defaults when the manifest
-    is unresolvable or malformed — those remain genuinely example-doctrine-repo-owned routing
+    is unresolvable or malformed — those remain genuinely coordinator-claude-owned routing
     data (plan AC4 + Out of scope), not vendored, so their absence narrows
     only the memo-guard/scaffold-offer steps, never the schema-shape steps.
 
@@ -358,7 +358,7 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
     is a dict assignment (no I/O), so the ``None`` default (every call site
     that doesn't care) costs nothing. See `_capture_guard_forensics` for the
     consumer and the ABSENT-vs-TORN distinction this distinguishes: an
-    unresolvable/absent example-doctrine-repo root is recorded as ``doe_root_unresolvable``
+    unresolvable/absent coordinator-claude root is recorded as ``doe_root_unresolvable``
     (steady state, e.g. a partial install with no sibling checkout — NOT a
     failure worth capturing on every write on such a machine), while a
     manifest read that found the path present but never got a clean parse
@@ -378,7 +378,7 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
         _forensics["doe_root"] = doe_root
 
     # Schema CORPUS resolution is repointed at claude-klabauter's own vendored,
-    # version-pinned copy — no longer example-doctrine-repo's live working tree, and no
+    # version-pinned copy — no longer coordinator-claude's live working tree, and no
     # longer coupled to the manifest read below at all. The registry
     # MANIFEST stays on `doe_root`: it is routing/scaffold logic, not a
     # schema, and is explicitly out of scope for the repoint (plan AC4 +
@@ -833,9 +833,9 @@ def _memo_guard_step(
                     if to_is_central and landing_is_central:
                         pass
                     elif doe_root_realpath is None:
-                        # Fail open when the example-doctrine-repo root is unresolvable. This deliberately does NOT
+                        # Fail open when the coordinator-claude root is unresolvable. This deliberately does NOT
                         # also test `to_is_central`: `central_em_ids` is only populated once the
-                        # example-doctrine-repo root HAS resolved, so `to_is_central and doe_root_realpath is None`
+                        # coordinator-claude root HAS resolved, so `to_is_central and doe_root_realpath is None`
                         # was unsatisfiable by construction and the regex fallback below fired
                         # unconditionally on any `-em`-suffixed `to:`. With the root unresolvable we
                         # cannot tell whether `to:` is central, so the honest move is to emit
@@ -1234,7 +1234,7 @@ def _reachability_and_schema_step(
     # ZERO schema enforcement, silently. But repointing at the vendored
     # corpus also narrowed the enforced path set as an unrecorded side
     # effect, since that corpus carries far fewer `applies_to` globs than
-    # example-doctrine-repo's — a real, permanent narrowing traded for closing the total
+    # coordinator-claude's — a real, permanent narrowing traded for closing the total
     # fail-open. A guard whose reachability is a function of which schemas
     # happen to be vendored is not a guard. Keep this branch keyed on
     # content, never on corpus membership.
@@ -1272,11 +1272,11 @@ def _reachability_and_schema_step(
 def _unvendored_offerable_doc_type(
     ctx: "_Context", schemas: dict, frontmatter: Optional[dict], repo_rel: str
 ) -> Optional[dict]:
-    """Cross-reference-2026-08-06-example-doctrine-repo-em-twelve-doc-types-lost-write-enforcement:
+    """Cross-reference-2026-08-06-coordinator-claude-em-twelve-doc-types-lost-write-enforcement:
     detect a write that WOULD have matched an ``offerable: true`` manifest
     doc type but can't, purely because that type's schema is absent from the
     vendored corpus (see module docstring § Schema/manifest resolution and
-    the example-doctrine-repo cross-repo memo this line names). Returns the manifest
+    the coordinator-claude cross-repo memo this line names). Returns the manifest
     docType dict on a match, else None.
 
     This is a heuristic re-derivation of the resolution `_match_schema`
@@ -1285,7 +1285,7 @@ def _unvendored_offerable_doc_type(
     an explicit `applies_to` glob, a sidecar `.{suffix}.md` filename, or
     (the fallback for plain doc types) a `kind:` frontmatter field equal to
     the manifest `type`. It does not — and must not — read any schema
-    content, vendored or from a live example-doctrine-repo checkout: doing so would
+    content, vendored or from a live coordinator-claude checkout: doing so would
     reintroduce exactly the live-checkout dependency `b4c6df071` removed.
     False negatives here just mean a missed diagnostic, never a missed
     schema application (this function never gates `_match_schema` itself);
@@ -1333,7 +1333,7 @@ def _unvendored_offerable_message(doc_type: dict) -> str:
 def _first_result(
     payload: Dict[str, Any], _forensics: Optional[Dict[str, Any]] = None
 ) -> Optional[Tuple[str, str]]:
-    """``_forensics`` (optional) lets `check()` observe the ACTUAL example-doctrine-repo-root/
+    """``_forensics`` (optional) lets `check()` observe the ACTUAL coordinator-claude-root/
     schema-corpus state this call resolved and validated against — see
     `_capture_guard_forensics`. Every stash into it below is a reference/dict
     assignment on data already computed for the walk itself (no extra I/O,
@@ -1507,7 +1507,7 @@ def _plan_tasks_schema_identity(forensics: Dict[str, Any]) -> Tuple[str, Optiona
       - "hashed"            — schemas loaded, plan-tasks present -> real hash.
       - "absent_in_corpus"  — schemas loaded, but no plan-tasks entry at all.
       - "load_failed"       — the schema-corpus read itself failed/exhausted.
-      - "context_unavailable" — example-doctrine-repo root/manifest never resolved this call.
+      - "context_unavailable" — coordinator-claude root/manifest never resolved this call.
       - "not_loaded"        — context resolved fine, but an EARLIER step
                                (e.g. the memo-guard's unconditional own-inbox
                                deny) fired before the schema corpus was ever
@@ -1551,9 +1551,9 @@ def _capture_guard_forensics(
     Captures the state that ACTUALLY produced this call's verdict —
     ``forensics`` is populated by `_load_context`/`_first_result` from
     objects those functions already loaded for their own purposes (see
-    their docstrings); this function performs NO re-read of example-doctrine-repo's
+    their docstrings); this function performs NO re-read of coordinator-claude's
     schema corpus. The only I/O this function itself performs is a
-    best-effort ``git status`` in the example-doctrine-repo root (dirty-tree signal) and the
+    best-effort ``git status`` in the coordinator-claude root (dirty-tree signal) and the
     forensics file write — both gated to the deny/load-failure branches
     only, so an ordinary allow never reaches this function at all.
 
@@ -1647,7 +1647,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     `_unvendored_offerable_doc_type`), this returns a non-blocking
     `additionalContext` diagnostic instead of the silent `None` a genuinely-
     non-matching write gets — that silence is the regression this closes
-    (cross-repo/inbox/2026-08-06-example-doctrine-repo-em-twelve-doc-types-
+    (cross-repo/inbox/2026-08-06-coordinator-claude-em-twelve-doc-types-
     lost-write-enforcement-today.md).
     """
     forensics: Dict[str, Any] = {}
@@ -1660,7 +1660,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # Fail-open on a genuine torn read (path existed, every retry
         # attempt still failed) is exactly the unreproducible-deny shape
         # this capture exists for, even though it resolves to an ALLOW —
-        # gated on `_is_torn_read_signature` so an ordinary absent-example-doctrine-repo-root
+        # gated on `_is_torn_read_signature` so an ordinary absent-coordinator-claude-root
         # machine (a steady state, not a failure) never pays this cost.
         if _is_torn_read_signature(forensics):
             _capture_guard_forensics(

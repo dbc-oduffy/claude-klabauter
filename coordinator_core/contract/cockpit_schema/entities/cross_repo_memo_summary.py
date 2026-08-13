@@ -1,6 +1,6 @@
 """
 CrossRepoMemoSummary — outstanding cross-repo memos as a queryable snapshot
-entity for the cockpit. Pydantic port of example-doctrine-repo
+entity for the cockpit. Pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/cross-repo-memo-summary.ts` (Zod source).
 
 METADATA-ONLY: no memo bodies ship to the all-staff web tier. The cockpit
@@ -16,9 +16,9 @@ the cross-repo-memo authoring norm documented in
 Spec backlink: docs/plans/2026-06-24-cockpit-cockpit-contract-reshape.md
 Ask 7 of the cockpit-contract reshape (chunk C6-entity).
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
-Spec backlink: docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C6 —
+Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C6 —
   additive `archived` + `decision_note` fields (return-path/queryability feed; DEC-2/DEC-3).
-Spec backlink: docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C8 —
+Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C8 —
   additive `body` field (full-text content search, bounded/capped emission).
 
 NOT METADATA-ONLY AS OF C8: the `body` field ships the memo's full markdown body content

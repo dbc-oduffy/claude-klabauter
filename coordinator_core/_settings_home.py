@@ -49,10 +49,10 @@ home (not the settings home) can delegate here instead of hand-rolling their own
 `CLAUDE_HOME or HOME` chain with no Windows rung. Not a new resolver — the algorithm
 is unchanged; only its visibility widened.
 
-Spec backlink: docs/plans/2026-07-11-coordinator-core-home-claude-read-repoint.md § C1
+Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C1
 Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
 
-Port of: settings-home.sh (example-doctrine-repo b644d5a9, 2026-07-22) — `_coordinator_settings_home`,
+Port of: settings-home.sh (coordinator-claude b644d5a9, 2026-07-22) — `_coordinator_settings_home`,
 `_settings_home_realpath`, `_check_machine_local_divergence`. This module is the
 Python-native mirror for claude-klabauter-resident callers.
 

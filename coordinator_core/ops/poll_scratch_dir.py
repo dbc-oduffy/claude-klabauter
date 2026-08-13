@@ -45,8 +45,8 @@ Negative-spec:
     - No shell, no subprocess of any kind (CC-1 trivially satisfied): the bash
       oracle's `$SECONDS` loop is replaced wholesale, not wrapped.
 
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B6
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B6
+Spec backlink: pln-coordinator-ops-buildout-from--903224
     § DEC-2, DEC-7
 """
 from __future__ import annotations

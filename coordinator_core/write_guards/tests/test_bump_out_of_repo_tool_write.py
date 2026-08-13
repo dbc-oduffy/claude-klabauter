@@ -1,7 +1,7 @@
 """Tests for coordinator_core.write_guards.bump_out_of_repo_tool_write -- the
 write-confinement speed bump's `Write`/`Edit`/`MultiEdit`/`NotebookEdit` leg.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
 repo], chunk C7. Covers AC2 (a Write/Edit/MultiEdit with a path outside the
 session's repo bumps), AC13 (registered as a real `write_guards/engine.py`
 entry via CLASS/MATCHERS/PRIORITY, not a call-site patch), AC19 (those
@@ -471,7 +471,7 @@ def test_outside_any_repo_anchor_registered_target_still_bumps(tmp_path, monkeyp
 # EITHER surface -- confirmed by parity below). This is not a defect this
 # fix introduced or should have caught: EVERY real session gets its anchor
 # record written automatically by `session-start-write-bump-anchor.py`
-# (example-doctrine-repo repo) at SessionStart, before any Write/Edit tool call can
+# (coordinator-claude repo) at SessionStart, before any Write/Edit tool call can
 # happen -- a hand-constructed payload that skips that step is testing a
 # state a live session can never actually be in. Both tests below use the
 # EM's own literal payload (same tool_input, same session_id, same cwd);
@@ -557,7 +557,7 @@ def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_pat
         #   1. `_settings_home_anchor_dir()` (settings-home hub, primary read).
         #   2. `sessions_dir(cwd)` (in-repo `.git/coordinator-sessions/<sid>`,
         #      same-repo fallback read) -- missed on the first pass of this
-        #      test (example-doctrine-repo finding, verification transcript): leaving this one
+        #      test (coordinator-claude finding, verification transcript): leaving this one
         #      behind poisoned a LATER test in this same file that asserts
         #      this exact `session_id` has NO anchor, because
         #      `resolve_launch_anchor` found this leftover record first.
@@ -786,7 +786,7 @@ def test_own_repo_write_unaffected_by_temp_exemption(tmp_path, monkeypatch):
 
 
 def test_own_repo_write_into_not_yet_created_directory_does_not_bump(tmp_path, monkeypatch):
-    """example-doctrine-repo finding #1. `_resolve_target_gitdir` must walk UP to the nearest
+    """coordinator-claude finding #1. `_resolve_target_gitdir` must walk UP to the nearest
     EXISTING ancestor before resolving the target's git-dir -- a `Write` to
     `<own-repo>/newdir/file.txt` where `newdir/` does not exist yet must
     still resolve to the session's OWN repo and must NOT bump. Prior to the
@@ -810,7 +810,7 @@ def test_own_repo_write_into_not_yet_created_directory_does_not_bump(tmp_path, m
 def test_bare_relative_file_path_does_not_resolve_against_engine_process_cwd(
     tmp_path, monkeypatch
 ):
-    """example-doctrine-repo finding #3. A bare relative `file_path` (no dirname) must not have
+    """coordinator-claude finding #3. A bare relative `file_path` (no dirname) must not have
     its ancestor walk resolved against the coordinator ENGINE PROCESS's own
     cwd -- `_resolve_target_gitdir` must anchor a non-absolute path against
     the PAYLOAD's own `cwd` instead. Constructs the exact case the finding
@@ -991,7 +991,7 @@ def test_regression_git_repo_under_temp_root_still_bumps_on_tool_surface(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# example-doctrine-repo finding #2 (parity) -- the settings-home exemption. Before this fix,
+# coordinator-claude finding #2 (parity) -- the settings-home exemption. Before this fix,
 # this module contained neither `_settings_home_dir_from_env` nor a
 # `_settings_home` concept at all, so a write into the SAME destination
 # bumped here while `bump_outside_repo_write.py` (Bash surface) already
@@ -1057,7 +1057,7 @@ def test_real_git_repo_under_settings_home_still_bumps(tmp_path, monkeypatch):
 def test_settings_home_exemption_parity_with_bash_surface(tmp_path, monkeypatch):
     """AC7 -- the settings-home exemption behaves IDENTICALLY on the Bash
     surface (`bump_outside_repo_write.py`) and this tool-write surface for
-    the SAME destination. Pins the parity example-doctrine-repo finding #2 names: before this
+    the SAME destination. Pins the parity coordinator-claude finding #2 names: before this
     chunk, the Bash surface allowed and this surface bumped for an
     identical write target."""
     own = _init_repo(tmp_path, "own-repo")
@@ -1456,7 +1456,7 @@ def test_ac4_registered_repo_destination_still_bumps(tmp_path, monkeypatch):
 
 
 def test_target_is_lessons_outbox_write_helper_path_shape(tmp_path):
-    doe_root = str(tmp_path / "example-doctrine-repo")
+    doe_root = str(tmp_path / "coordinator-claude")
     assert guard._target_is_lessons_outbox_write(
         doe_root + "/state/lessons-outbox/some-lesson.yaml"
     )

@@ -8,7 +8,7 @@ must stay policy-neutral — an unscannable root is reported back as ``unreadabl
 never raised (see ``coordinator_core/ops/emit/sections/goals.py`` for the emit-path raise
 policy and its own ``test_unreadable_central_state_root_raises_not_zero_goals``).
 
-Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C1
+Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C1
 """
 
 from __future__ import annotations

@@ -33,7 +33,7 @@ Loaded by file path (``importlib.machinery.SourceFileLoader``) since
 module -- same load idiom as test_coordinator_doc_new_predecessor.py.
 
 Spec backlink: cross-repo memo
-2026-08-01-example-doctrine-repo-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
+2026-08-01-coordinator-claude-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
 Spec backlink (AC13): docs/plans/2026-08-01-baton-spine-information-integrity.md § A5
 """
 from __future__ import annotations

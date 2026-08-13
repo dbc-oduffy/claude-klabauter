@@ -101,7 +101,7 @@ coverage):
     untested branch inside one guard's own conditional message assembly).
     The corpus's own `expected_speaker` firing+control-row discipline
     bounds this gap but does not eliminate it.
-  - `coordinator/bin/*.py` CLI tooling and any example-doctrine-repo-side (coordinator-claude
+  - `coordinator/bin/*.py` CLI tooling and any coordinator-claude-side (coordinator-claude
     repo) shim prose -- out of this repo's tree.
 
 THE PREDICATE

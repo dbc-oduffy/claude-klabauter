@@ -1,9 +1,9 @@
 """
 test_machine_resolver.py — pytest coverage for coordinator_core.machine_resolver.
 
-Port of: coordinator-daily-branch.sh (example-doctrine-repo 2fbe0e77, 2026-07-19)
+Port of: coordinator-daily-branch.sh (coordinator-claude 2fbe0e77, 2026-07-19)
 Bash-parity fixture backlink: Port of: test-coordinator-daily-branch.sh
-  (example-doctrine-repo 2fbe0e77, 2026-07-19) (AC-1 always-lowercase; AC1-AC3 env/registry/hostname precedence; AC9a
+  (coordinator-claude 2fbe0e77, 2026-07-19) (AC-1 always-lowercase; AC1-AC3 env/registry/hostname precedence; AC9a
   cs_compute_machine_live performs no registry read) — mirrors
   test_daily_branch.py's sanitize_slug bash-parity table pattern.
 """

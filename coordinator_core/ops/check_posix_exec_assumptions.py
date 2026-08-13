@@ -21,16 +21,18 @@ confidence -- the tier determines whether a class can block or only report:
     one specific defect (a blocking class firing on `os.access()` inside
     `if os.name != "nt":` -- correctly platform-guarded code, not debt),
     and were PROMOTED BACK to blocking the same day once that defect was
-    fixed: `_is_windows_guarded()` (below) recognizes both a nested `If`
-    guard and the harder short-circuit `and`-chain shape (the actual
-    `retire-claude-bin.py` case), with positive-control fixtures proving
-    the fix doesn't blanket-suppress detection entirely. Demoting once the
+    fixed: `_is_windows_guarded()` (below) recognizes a nested `If` guard,
+    the harder short-circuit `and`-chain shape (the actual
+    `retire-claude-bin.py` case), and (2026-08-13) a bare, `else:`-less
+    early-return guard clause, with positive-control fixtures proving the
+    fix doesn't blanket-suppress detection entirely. Demoting once the
     cause is fixed would be consistency for its own sake at real
     enforcement cost -- report-only classes get skimmed and ignored. The
-    residual gap (a bare early-return guard clause with no `else:`) is
-    narrow and, when hit, surfaces as an immediately-resolvable EXEMPTIONS
-    case rather than a silent trap -- see the per-class failure-message
-    text in `check_against_baseline`.
+    residual gap is narrower now: a windows-test the detector does not
+    recognize as one (only os.name/sys.platform/platform.system() forms
+    are), which surfaces as an immediately-resolvable EXEMPTIONS case
+    rather than a silent trap -- see the per-class failure-message text in
+    `check_against_baseline`.
   - **Tier C, narrowed and promoted** (part of `CLASSES`) —
     `unresolved_cross_path`, promoted to BLOCKING 2026-08-13 (eng-director
     ruling, `state/audits/2026-08-13-the Director of Engineering-carveout-and-cross-path-ruling.md`
@@ -73,7 +75,7 @@ confidence -- the tier determines whether a class can block or only report:
     untrustworthy hits fleet-wide, and is absent here rather than shipped
     noisy). Zero-tolerance like Tier A (no baseline): the two repos this
     module has been run against had a small, mechanically-fixable count
-    (34 files in claude-klabauter, 1 in example-doctrine-repo), fixed outright on
+    (34 files in claude-klabauter, 1 in coordinator-claude), fixed outright on
     2026-07-28 rather than grandfathered into a shrinking baseline.
 
 Classes are independent tells and are NOT deduped against each other -- see
@@ -132,19 +134,22 @@ Tier B / blocking classes (ratcheted against a frozen baseline):
 
     NEITHER `posix_mode_bits` NOR `path_separator` fires inside a branch (a
     nested `if os.name != "nt":` / `if sys.platform.startswith("win"):`
-    etc., or an equivalent short-circuit `and`-chain) that structurally
-    never runs on Windows — that is correct cross-platform code, not debt,
-    and flagging it would train authors to route around the guard
-    (`_is_windows_guarded`, precision fix 2026-07-28 after
-    `retire-claude-bin.py:186` false-fired on exactly this shape). This fix,
-    plus positive-control fixtures proving it doesn't blanket-suppress
-    detection, is why both classes are BLOCKING here rather than demoted:
-    they were briefly report-only the same day, then promoted back once the
-    cause was fixed (see the CLASSES declaration's own comment for the full
-    history). A bare early-return guard clause with no `else:` is NOT yet
-    recognized — see that function's own docstring and the matching test's
-    docstring for the stated gap; hitting it surfaces as an EXEMPTIONS-
-    resolvable failure message, not a silent trap.
+    etc., an equivalent short-circuit `and`-chain, or a bare, `else:`-less
+    early-return guard clause) that structurally never runs on Windows —
+    that is correct cross-platform code, not debt, and flagging it would
+    train authors to route around the guard (`_is_windows_guarded`,
+    precision fix 2026-07-28 after `retire-claude-bin.py:186` false-fired on
+    the nested-`If` shape, widened 2026-08-13 to also recognize the bare
+    early-return shape). This fix, plus positive-control fixtures proving it
+    doesn't blanket-suppress detection, is why both classes are BLOCKING
+    here rather than demoted: they were briefly report-only the same day,
+    then promoted back once the cause was fixed (see the CLASSES
+    declaration's own comment for the full history). A windows-test the
+    detector does not recognize as one (only os.name/sys.platform/
+    platform.system() forms are) is the residual gap — see that function's
+    own docstring for exactly what it does and doesn't see; hitting it
+    surfaces as an EXEMPTIONS-resolvable failure message, not a silent
+    trap.
 
   - `unresolved_cross_path` — BLOCKING, zero-tolerance (no baseline, ever),
                             promoted 2026-08-13 from a WIDE, report-only
@@ -257,7 +262,7 @@ cannot fail a gate.
 This module is fleet-shaped: every function takes a `root` (the repo to
 scan), so the SAME engine backs a guard in claude-klabauter's own tree and,
 via cross-repo import (`_claude_klabauter_root.resolve_claude_klabauter_root()`), a guard
-invoked from any sibling repo's own test tier (e.g. Example-doctrine-repo) against
+invoked from any sibling repo's own test tier (e.g. Coordinator-claude) against
 ITS OWN tree and ITS OWN baseline. There is no notion of "the" tree here —
 callers always name one.
 
@@ -280,7 +285,7 @@ Anchor choice (2026-07-28 review fix, replacing an inert `HEAD`-relative
 diff): comparing against `HEAD` is structurally unable to ever fire once a
 widening commit has landed, because the instant that commit exists, `HEAD`
 IS the widened content and `current == HEAD` trivially. The two callers of
-this function (this repo's and example-doctrine-repo's own real-tree pytest suites) run
+this function (this repo's and coordinator-claude's own real-tree pytest suites) run
 `assert_baseline_not_grown` as a plain pytest assertion, necessarily AFTER
 any widening commit has already landed — neither repo wires this into a
 git pre-commit hook (staged-vs-parent-HEAD is the only diff shape where
@@ -290,7 +295,8 @@ shared-branch, many-concurrent-session shape. Anchoring to the file's own
 introducing commit instead means the diff is against something that never
 moves, so it keeps firing no matter how many commits land afterward.
 **Named residual gap** (mirrors this module's other honestly-documented
-detector gaps, e.g. `_is_windows_guarded`'s early-return case above): an
+detector gaps, e.g. `_is_windows_guarded`'s unrecognized-test-form case
+above): an
 entry that was part of the ORIGINAL frozen baseline, later fixed and
 removed, and then maliciously re-added to hide a real regression would NOT
 be caught by this function alone (it was never "new" relative to the fixed
@@ -370,7 +376,7 @@ target with an owner, not a settled row -- the same "standing reduction
 target" teeth class (b) in `shell-out-carve-outs.md` already carries for
 local git hooks.
 
-Keying (repo-scoped, closed 2026-08-03 — was the example-doctrine-repo memo of
+Keying (repo-scoped, closed 2026-08-03 — was the coordinator-claude memo of
 2026-07-28's open caveat): EXEMPTIONS is keyed
 `class -> repo_key -> relpath -> reason`, and `scan()` subtracts ONLY the
 sub-dict belonging to the repo actually being scanned. Bare-relpath keying
@@ -505,13 +511,13 @@ Negative-spec:
       matching for the same reason — a docstring citing an example path is
       documentation, not a hardcoded runtime assumption.
     - Does NOT scan non-`.py` files for classes 4-6. Bash is being retired
-      fleet-wide (see example-doctrine-repo `coordinator.local.md` P0 bash-kill
+      fleet-wide (see coordinator-claude `coordinator.local.md` P0 bash-kill
       campaign) and the remaining count is near zero; adding a shell-syntax
       parser for a near-extinct substrate was not worth the added false-
       positive surface. A `.py`-only scope is stated as a real limitation,
       not implied to be complete coverage of every interpreter in the tree.
 
-Spec backlink: example-doctrine-repo coordinator/docs/wiki/foreign-platform-path-guard.md
+Spec backlink: coordinator-claude coordinator/docs/wiki/foreign-platform-path-guard.md
   (sibling guard for a related but distinct hazard class — settings.json /
   working-repos.yaml path leakage, not execution-assumption files)
 Prior art: coordinator/bin/check-machine-path-leak.py (git-ls-files-based
@@ -542,16 +548,18 @@ _NO_WINDOW = no_console_creationflags()
 # `path_separator` and `posix_mode_bits` were briefly DEMOTED to report-only
 # on 2026-07-28 over one specific defect: the class fired on `os.access()`
 # inside `if os.name != "nt":` -- correctly platform-guarded code, not debt.
-# That defect is now FIXED (`_is_windows_guarded()` below, covering both a
-# nested `If` guard and the harder short-circuit `and`-chain shape actually
-# found in `retire-claude-bin.py`), with positive-control fixtures proving
-# the fix doesn't blanket-suppress (an inverted branch still fires, an
+# That defect is now FIXED (`_is_windows_guarded()` below, covering a
+# nested `If` guard, the harder short-circuit `and`-chain shape actually
+# found in `retire-claude-bin.py`, and (2026-08-13) a bare, `else:`-less
+# early-return guard clause), with positive-control fixtures proving the
+# fix doesn't blanket-suppress (an inverted branch still fires, an
 # ungated call still fires) -- that evidence is what earns keeping this
 # BLOCKING rather than demoting: demoting once the cause is fixed would be
 # consistency for its own sake at the cost of real enforcement (report-only
-# classes get skimmed and ignored). The one residual gap -- a bare
-# early-return guard clause with no `else:` -- is narrow and, when hit,
-# surfaces as a guard failure an author can immediately resolve via
+# classes get skimmed and ignored). The residual gap -- a windows-test the
+# detector does not recognize as one, e.g. a project-local wrapper function
+# rather than os.name/sys.platform/platform.system() -- is narrow and, when
+# hit, surfaces as a guard failure an author can immediately resolve via
 # EXEMPTIONS (see the per-class failure-message text in
 # `check_against_baseline`), not a silent trap.
 CLASSES: Tuple[str, ...] = (
@@ -643,7 +651,7 @@ _FORBIDDEN_PATH_CHARS = re.compile(r'[:*?"<>|]')
 #
 # Zero-tolerance like Tier A (no baseline, no ratchet): the two repos this
 # module has been run against had a small, mechanically-fixable violation
-# count (34 files in claude-klabauter, 1 file in example-doctrine-repo, all fixed
+# count (34 files in claude-klabauter, 1 file in coordinator-claude, all fixed
 # 2026-07-28 by inserting `encoding="utf-8"` at each site) -- small enough
 # to fix outright rather than grandfather into a shrinking baseline.
 #
@@ -800,7 +808,7 @@ _CHAIN_WALK_SETUP_SHIM_REASON = (
     "as they invoked its predecessor, and changing the invocation contract "
     "is the one thing a compat shim must not do. It retires with the shim "
     "once those call sites move to `python3 -m "
-    "coordinator_core.ops.setup_chain_walker` (asked of example-doctrine-repo-em "
+    "coordinator_core.ops.setup_chain_walker` (asked of coordinator-claude-em "
     "2026-08-03 via the doe-contract-stale-surfaces memo, item 4) — delete "
     "this entry then rather than letting it outlive the forwarder."
 )
@@ -808,7 +816,7 @@ _CHAIN_WALK_SETUP_SHIM_REASON = (
 _M8_REVIEW_TRAIL_SNAPSHOT_REASON = (
     "FROZEN REVIEW-EVIDENCE SNAPSHOT, not live code. Everything under this "
     "prefix is a verbatim point-in-time copy of the claude-klabauter engine's own "
-    "bash_guards/write_guards modules, checked into example-doctrine-repo's review trail so a "
+    "bash_guards/write_guards modules, checked into coordinator-claude's review trail so a "
     "landed review's subject can be re-read later; nothing imports, executes, "
     "or ships them, and the originals are already scanned in claude-klabauter "
     "where a fix would actually land. Scanning the snapshot double-counts the "
@@ -987,17 +995,20 @@ _REASON_WIN_SYNTAX_AS_FIXTURE = (
 
 _REASON_MSYS_TRANSLATE_WINDOWS_GUARDED = (
     "translate_msys_path()'s whole body is gated by a bare `if not "
-    "_host_is_windows(): return path` early return with no `else:` -- "
-    "exactly the KNOWN, NAMED gap in `_is_windows_guarded()` this module's "
-    "own failure message and docstring describe (a bare early-return guard "
-    "clause is not yet recognized as branch-guarding the sibling "
-    "statements that follow it). The flagged `.replace(\"/\", \"\\\\\")` "
-    "only executes once that guard has already confirmed the host IS "
-    "Windows, building a well-formed native `X:\\...` path from an "
-    "MSYS-spelled one for a subsequent native `ntpath.join` -- the correct "
-    "construct for that platform, not a POSIX assumption. Adding an "
-    "`else:` purely to satisfy the detector is exactly what the gate's own "
-    "failure message forbids."
+    "_host_is_windows(): return path` early return with no `else:` -- the "
+    "bare-early-return SHAPE is recognized by `_is_windows_guarded()` "
+    "(2026-08-13), but its TEST is not: `_host_is_windows()` is a "
+    "project-local wrapper function, not one of the recognized "
+    "os.name/sys.platform/platform.system() forms `_branch_windows_status()` "
+    "matches on, so this site is still invisible to the detector -- the "
+    "residual, NAMED gap that function's own docstring now describes. The "
+    "flagged `.replace(\"/\", \"\\\\\")` only executes once that guard has "
+    "already confirmed the host IS Windows, building a well-formed native "
+    "`X:\\...` path from an MSYS-spelled one for a subsequent native "
+    "`ntpath.join` -- the correct construct for that platform, not a POSIX "
+    "assumption. Rewriting the guard's test to a recognized form purely to "
+    "satisfy the detector, or adding an `else:`, is exactly what the gate's "
+    "own failure message forbids."
 )
 
 _REASON_PS51_TARGET_SYNTAX = (
@@ -1027,22 +1038,6 @@ _REASON_CHMOD_HOOK_POSIX_EXEC = (
     "on the platform where the mode matters at all."
 )
 
-_REASON_NORMALIZE_ENV_CHMOD_WINDOWS_GUARDED = (
-    "_ne_darwin_bash_profile_repair()'s body (including its os.chmod call "
-    "preserving the pre-existing ~/.bash_profile mode across an atomic swap) "
-    "is gated by a bare `if sys.platform == \"win32\": return` early return "
-    "with no `else:`, added in this same convergence -- exactly the KNOWN, "
-    "NAMED gap in `_is_windows_guarded()` this module's own docstring "
-    "describes (a bare early-return guard clause is not yet recognized as "
-    "branch-guarding the sibling statements that follow it). The call is "
-    "also only ever reached from main() behind its own `if os_name == "
-    "\"Darwin\":` call-site guard, a second, cross-function layer "
-    "`_is_windows_guarded()` cannot see at all since it only walks the "
-    "enclosing function's own AST. Adding a cosmetic `else:` purely to "
-    "satisfy the detector is exactly what the gate's own failure message "
-    "forbids."
-)
-
 _REASON_CHMOD_RMTREE_UNBLOCK = (
     "os.chmod(target_path, 0o777) runs inside shutil.rmtree's onerror "
     "callback to clear a read-only file/directory that is blocking "
@@ -1062,24 +1057,6 @@ _REASON_CHMOD_RMTREE_UNBLOCK = (
     "in advance which of the two node types it was called for."
 )
 
-_REASON_ASSERT_EXEC_BIT_BARE_EARLY_RETURN_GUARDED = (
-    "assert_exec_bit()'s `st.st_mode & 0o111` check is the sole caller-side "
-    "user of the `path.stat().st_mode & 0o111` construct this module "
-    "flags, and it only runs after `if os.name == \"nt\": return` -- a bare "
-    "early-return guard with no `else:`, the exact KNOWN, NAMED gap in "
-    "`_is_windows_guarded()` documented in that function's own docstring "
-    "(it recognizes a nested `If` and the short-circuit `and`-chain shape, "
-    "not this one). The function's own docstring already states the real "
-    "invariant: NTFS has no POSIX exec bit, so the assertion would be a "
-    "no-op false-negative on Windows regardless of what the installer did, "
-    "and git execs hooks through its own bundled sh rather than a "
-    "PATHEXT/CreateProcess launch, so the bit is a genuine no-op there too "
-    "-- there is nothing to port; the guard already exists and is correct, "
-    "just in a shape this detector's cross-statement analysis does not "
-    "see. Adding a cosmetic `else:` purely to satisfy the detector is the "
-    "anti-pattern this module's own docstring rejects."
-)
-
 _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY = (
     "`os.access(script_path, os.X_OK)` in `_run_one_entrypoint` only runs "
     "when `interpreter is None`, and `_resolve_entrypoint_gate_interpreter` "
@@ -1087,8 +1064,11 @@ _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY = (
     "sweep) returns `None` if-and-only-if `os.name != \"nt\"` -- see that "
     "function's own docstring and its `if os.name != \"nt\": return None` "
     "body. The guard is real, just expressed across two functions rather "
-    "than as a local branch `_is_windows_guarded()` can see (the same "
-    "documented detection gap as a bare early-return, one level removed) -- "
+    "than as a local branch `_is_windows_guarded()` can see -- that "
+    "function only walks the enclosing FUNCTION's own AST (an inline `If`, "
+    "an `and`-chain, or a same-function bare early-return), never a "
+    "second function's return-value contract, so a cross-function guard "
+    "like this one is structurally out of its reach regardless of shape -- "
     "this call never executes on Windows, where `os.access(..., os.X_OK)` "
     "would otherwise lie (returns True for any readable file). Restructuring "
     "the call site to satisfy the detector would not change what actually "
@@ -1204,11 +1184,13 @@ _RESOLVE_PYTHON_SH_IRREDUCIBILITY_REASON = (
     "shell (git-bash/MSYS) any Windows caller of a sourced bash lib "
     "already requires; there is no separate counterpart artifact because "
     "resolution spans both platforms in one script by design. Live "
-    "caller: none found by grep inside claude-klabauter -- the file's own "
-    "docstring states it is sourced by coordinator-claude-plane skills/"
-    "hooks (e.g. strangler-facade.sh via /pickup's consume block), outside "
-    "this repo's Tier-3 reach; per the ruling's Q1.b(ii), that unverified "
-    "fact is not load-bearing for this grant. Elimination-target: hot-path "
+    "caller: zero in either plane, verified 2026-08-13 -- none inside "
+    "claude-klabauter by grep, and coordinator-claude's own sweep found the single "
+    "coordinator-claude-plane consumer (the OSS coordinator-update skill) "
+    "repointed onto the COORDINATOR_PYTHON contract in their d16272a9e, "
+    "with no interface constraint asserted on this file. Per the ruling's "
+    "Q1.b(ii) the caller question was never load-bearing for this grant "
+    "either way. Elimination-target: hot-path "
     "status (if confirmed) does not authorize this file to persist -- it "
     "sets the priority of resolving the interpreter at install time and "
     "writing the resolved path, so no runtime shim runs at all."
@@ -1680,7 +1662,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/tests/test_verify_templates_bin_sync.py": _REASON_CHMOD_MODE_PRESERVATION,
             "coordinator_core/percolate/engine.py": _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY,
             "coordinator/bin/refresh-plugin-live-install.py": _REASON_CHMOD_RMTREE_UNBLOCK,
-            "coordinator/tests/test_coordinator_ensure_post_commit_hook.py": _REASON_ASSERT_EXEC_BIT_BARE_EARLY_RETURN_GUARDED,
             # C7-install (2026-08-13): shape (c), the one place an
             # EXEMPTIONS entry is the FIRST choice -- a pytest.mark.skipif
             # decorator gap _is_windows_guarded() cannot see. See reason
@@ -1709,7 +1690,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/ops/test_install_meta_repo_precommit_hook.py": _REASON_CHMOD_EXEC_FOR_SH,
             "coordinator_core/ops/test_install_post_sync_hooks.py": _REASON_CHMOD_EXEC_FOR_SH,
             "coordinator_core/ops/test_verify_coverage.py": _REASON_CHMOD_DIR_GAP,
-            "coordinator_core/ops/normalize_env.py": _REASON_NORMALIZE_ENV_CHMOD_WINDOWS_GUARDED,
             # C7-rest-a (2026-08-13): sets an arbitrary starting mode via
             # os.chmod only to assert atomic_write preserves it -- a
             # before/after relative invariant, not an absolute POSIX octal.
@@ -2298,16 +2278,83 @@ def _branch_windows_status(test: ast.AST):
     return None
 
 
+def _block_always_exits(body: "List[ast.stmt]") -> bool:
+    """True if `body`'s LAST statement unconditionally leaves the enclosing
+    function/process -- a bare `return`/`return <value>`, a `raise`, or a
+    call to `sys.exit(...)`/`os._exit(...)`. Consulted only to prove that
+    the statements FOLLOWING a bare, `else:`-less `if <windows-test>:
+    <body>` guard clause are unreachable when the test is true, so this is
+    deliberately conservative: any other trailing shape (a loop, a bare
+    `if` with just one arm, a plain expression) returns False rather than
+    guess. A false positive here would silently hide a genuinely
+    POSIX-assuming site behind a guard that doesn't actually exit."""
+    if not body:
+        return False
+    last = body[-1]
+    if isinstance(last, (ast.Return, ast.Raise)):
+        return True
+    if isinstance(last, ast.Expr) and isinstance(last.value, ast.Call):
+        call = last.value
+        if (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id in ("sys", "os")
+            and call.func.attr in ("exit", "_exit")
+        ):
+            return True
+    return False
+
+
+def _bare_exit_guard_precedes(cur: ast.AST, parent: ast.AST) -> bool:
+    """True if `cur` is a statement in one of `parent`'s statement-list
+    fields (`body`, `orelse`, `finalbody`, ...) and an EARLIER sibling in
+    that same list is a bare `if <windows-test>: <exits>` clause with no
+    `else:` whose test is true only on Windows and whose body always exits
+    (`_block_always_exits`) -- the shape `if sys.platform.startswith("win"):
+    return p` followed by the guarded code as the next sibling statement.
+    Since the guard clause has no `else:`, `cur` is only reached once the
+    test evaluated False, i.e. on a non-Windows host."""
+    for _field, value in ast.iter_fields(parent):
+        if not isinstance(value, list) or not value:
+            continue
+        idx = next((i for i, v in enumerate(value) if v is cur), None)
+        if idx is None:
+            continue
+        for sib in value[:idx]:
+            if (
+                isinstance(sib, ast.If)
+                and not sib.orelse
+                and _branch_windows_status(sib.test) == "windows"
+                and _block_always_exits(sib.body)
+            ):
+                return True
+    return False
+
+
 def _is_windows_guarded(node: ast.AST, parents: Dict[int, ast.AST]) -> bool:
     """Walks up from `node` through enclosing `If` statements (elif chains
-    are nested `If`s inside `orelse`, handled by the same loop) AND
-    enclosing `and`-chains (`os.name != "nt" and ... and os.access(...)` --
-    the real shape found in `retire-claude-bin.py`, where the guard and the
-    guarded call are short-circuit operands of the SAME boolean expression,
-    not a separate nested `If`). Returns True the moment ANY enclosing
-    guard structurally means Windows never reaches this node -- one
-    sufficient guard is enough, matching how authors actually write this
-    code."""
+    are nested `If`s inside `orelse`, handled by the same loop), enclosing
+    `and`-chains (`os.name != "nt" and ... and os.access(...)` -- the real
+    shape found in `retire-claude-bin.py`, where the guard and the guarded
+    call are short-circuit operands of the SAME boolean expression, not a
+    separate nested `If`), AND a preceding, `else:`-less bare early-return
+    guard clause in the same statement list (`if sys.platform.startswith
+    ("win"): return p` followed by the guarded code as the next sibling
+    statement, recognized via `_bare_exit_guard_precedes` /
+    `_block_always_exits`). Returns True the moment ANY enclosing guard
+    structurally means Windows never reaches this node -- one sufficient
+    guard is enough, matching how authors actually write this code.
+
+    A guard whose TEST is not one of `_branch_windows_status`'s recognized
+    forms (`os.name`/`sys.platform`/`platform.system()` compared against a
+    Windows-identifying constant, or `sys.platform.startswith("win"...)`) is
+    NOT recognized here even in the bare-early-return shape -- e.g. a
+    project-local wrapper like `if not _host_is_windows(): return` is
+    invisible to this function, deliberately: this module reuses its one
+    existing notion of "a windows test" rather than inventing a second, and
+    a false negative (treating unguarded code as guarded) is worse than
+    under-recognizing a genuinely guarded site, which merely routes its
+    author to EXEMPTIONS."""
     cur = node
     while True:
         parent = parents.get(id(cur))
@@ -2329,6 +2376,8 @@ def _is_windows_guarded(node: ast.AST, parents: Dict[int, ast.AST]) -> bool:
                 for earlier in parent.values[:idx]:
                     if _branch_windows_status(earlier) == "posix":
                         return True
+        if _bare_exit_guard_precedes(cur, parent):
+            return True
         cur = parent
 
 
@@ -2554,21 +2603,32 @@ def load_baseline(baseline_path) -> Dict[str, List[str]]:
 
 
 # Design-as-offers (PM ask, 2026-07-28): for `path_separator` and
-# `posix_mode_bits` specifically, LEAD with the known escape for the one
-# recognized gap in `_is_windows_guarded()` -- a bare early-return guard
-# clause with no `else:` -- so an author who hits that rare false positive
-# sees "this is a known gap with a sanctioned exit" first, not a bare
-# violation notice that reads as "the guard is broken, route around it."
+# `posix_mode_bits` specifically, LEAD with the known escape for the
+# residual gap in `_is_windows_guarded()` -- a windows-test it does not
+# recognize as one (a project-local wrapper function, not
+# os.name/sys.platform/platform.system()) -- so an author who hits that
+# rare false positive sees "this is a known gap with a sanctioned exit"
+# first, not a bare violation notice that reads as "the guard is broken,
+# route around it." A bare early-return guard clause with no `else:` IS
+# now recognized (2026-08-13), as is the recognized-test-inside-it shape;
+# see `_is_windows_guarded()`'s own docstring for exactly what is and
+# isn't seen.
 _GUARD_AWARE_CLASSES = ("path_separator", "posix_mode_bits")
 
 _EARLY_RETURN_ESCAPE_HINT = (
-    "  If this fires on code that IS platform-guarded via a bare early-"
-    "return clause with no `else:` (e.g. `if sys.platform.startswith"
-    "('win'): return p` followed by the guarded code as the next sibling "
-    "statement) -- that is a KNOWN, NAMED gap in `_is_windows_guarded()` "
-    "(see that function's docstring), not a false alarm to work around by "
-    "rewriting working code. Add a named EXEMPTIONS entry citing this gap; "
-    "do not add an `else:` purely to satisfy the detector."
+    "  A bare early-return guard clause with no `else:` (e.g. `if "
+    "sys.platform.startswith('win'): return p` followed by the guarded "
+    "code as the next sibling statement) IS recognized by "
+    "`_is_windows_guarded()` (2026-08-13) -- if this fires on code shaped "
+    "like that, the guard's TEST is the more likely culprit: only "
+    "os.name/sys.platform/platform.system() compared against a "
+    "Windows-identifying constant, or sys.platform.startswith('win'...), "
+    "are recognized as a windows-test, not a project-local wrapper "
+    "function (see that function's own docstring). If the test really is "
+    "one of those recognized forms and this still fires, that is a "
+    "genuine detector gap -- add a named EXEMPTIONS entry describing it. "
+    "Do not add an `else:` purely to satisfy the detector -- that was "
+    "never the remedy and still isn't."
 )
 
 

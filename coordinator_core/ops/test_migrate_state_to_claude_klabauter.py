@@ -9,7 +9,7 @@ during the port (byte-diffed stdout/stderr + exit codes, see the port's own
 completion record).
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: migrate-state-to-claude-klabauter.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: migrate-state-to-claude-klabauter.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

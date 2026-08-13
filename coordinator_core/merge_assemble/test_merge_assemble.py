@@ -3,7 +3,7 @@ edge over d5 (portability-sweep). Also covers the C3 fix: `apply()`
 actually populating the `gates` key its module docstring already claimed
 it filled in.
 
-Spec backlink: docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md, chunk C2, C3
+Spec backlink: pln-the-engine-asks-for-facts-it-a-8709a3, chunk C2, C3
 """
 from __future__ import annotations
 

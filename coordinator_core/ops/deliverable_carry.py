@@ -39,7 +39,7 @@ initiative`'s own docstring for why the caller (not this function) asserts
 the plan-input fact.
 
 Spec backlink: coordinator/skills/handoff/SKILL.md § Deliverable-spine threading
-               (D1 carry-not-remint) — example-doctrine-repo, C3d
+               (D1 carry-not-remint) — coordinator-claude, C3d
                docs/plans/2026-08-01-deliverable-id-carry-onto-executing-handoff.md
                (DR-207 DD#1) — chunk C1b
                docs/decisions/DR-207-deliverable-spine-initiative-entity.md DD#1

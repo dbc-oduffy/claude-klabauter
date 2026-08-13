@@ -14,7 +14,7 @@ stays exhaustive under that env var (the whole reason the module exists),
 and that a resolution failure raises `AdvisoryRosterUnavailable` rather than
 degrading to a short list.
 
-Spec backlink: docs/plans/2026-08-13-guard-roster-export.md, chunk C4 (AC5).
+Spec backlink: pln-guard-roster-export-minus-the-a4dec3, chunk C4 (AC5).
 """
 from __future__ import annotations
 

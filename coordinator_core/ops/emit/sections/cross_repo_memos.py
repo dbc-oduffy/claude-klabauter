@@ -42,12 +42,12 @@ A record is VALID only when title/from/to/status/created are strings, ``status``
 Records that fail land in the malformed quarantine ({path, reason}) — the exact
 partition the bash select()/negated-select() pair produces.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 8.7,
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.7,
   CrossRepoMemoSummary. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P11
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P11
 Contract spec: docs/plans/2026-06-23-cockpit-contract-ext-wave2-emit-and-queue-migration.md § C9b
-Spec backlink: docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C6
-Spec backlink: docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C8 —
+Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C6
+Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C8 —
   full memo-body content emission (bounded/capped), beyond the capped decision_note.
 
 Node-subprocess retirement: this section originally shelled out to

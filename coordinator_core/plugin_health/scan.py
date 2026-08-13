@@ -75,7 +75,7 @@ Self-registration: importing this module calls register_op("plugin_health.scan",
 as a side-effect (same pattern as plugin_health.drift / ops/engine_drift.py).
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g2/T3b
-Port of: scan-addon-health.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: scan-addon-health.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

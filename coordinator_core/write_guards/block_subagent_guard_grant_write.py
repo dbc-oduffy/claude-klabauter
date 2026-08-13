@@ -159,12 +159,6 @@ PRIORITY = 47
 #: module's defense-in-depth tool_name check).
 _INTERCEPTED_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
-#: Hand-copied, NOT imported from ``coordinator_core.session.
-#: em_guard_grant`` -- that module is chunk C1 of the same plan and had not
-#: landed on disk at authoring time (parallel wave dispatch). See module
-#: docstring Negative-spec: importing this once C1 lands is a trivial
-#: follow-up, not a design change.
-
 #: Rare-use escape hatch — read the module docstring before invoking.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_SUBAGENT_GUARD_GRANT_WRITE"
 
@@ -275,7 +269,7 @@ def _is_sentinel_path(normalized_file_path: str) -> bool:
     parent, _, basename = abs_candidate.rpartition("/")
     if parent != temp_dir.rstrip("/"):
         return False
-    return basename.startswith(_SENTINEL_PREFIX.lower())
+    return basename.startswith(_SENTINEL_PREFIX.casefold())
 
 
 def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> str:

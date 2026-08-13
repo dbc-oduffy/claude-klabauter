@@ -12,7 +12,7 @@ PyYAML-absent linescan fallback path for working-repos.yaml, and the F4 $HOME-vs
 expanduser fallback (current-machine soft-warn firing when $HOME is unset, matching
 Windows USERPROFILE-only environments).
 
-Spec backlink: docs/plans/2026-06-23-machine-path-leak-guard.md
+Spec backlink: docs/plans/2026-06-23-machine-path-leak-guard.md [DEAD-CITATION: plan file never committed to this repo]
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md
 """
 from __future__ import annotations

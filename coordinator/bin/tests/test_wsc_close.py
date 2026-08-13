@@ -18,7 +18,7 @@ Module import: wsc-close.py is a hyphenated filename, loaded by file path
 (same idiom as test_check_install_divergence.py / test-archive-stamp-cli-
 ship-handoff.py in this same tests/ dir).
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md (WSC-3 chunk).
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 (WSC-3 chunk).
 
 Run:
     python -m pytest coordinator/bin/tests/test_wsc_close.py -q
@@ -234,7 +234,7 @@ def test_tail_args_parser_accepts_every_flag_the_directive_builder_emits():
 
 
 def test_reviewer_evidence_survives_all_three_argv_hops():
-    """Regression (example-doctrine-repo memo 2026-08-13 § 2): the value was supplied in
+    """Regression (coordinator-claude memo 2026-08-13 § 2): the value was supplied in
     `decisions["review"]`, accepted by `wsc-tail.py`'s parser, and forwarded by
     the op — but neither intermediate argv layer carried it, so the op-side
     delegate-reviewer gate never saw the correlation it checks. Pins all three

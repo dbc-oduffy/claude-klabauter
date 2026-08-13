@@ -2,10 +2,10 @@
 test_emit_schema_pin — design-time gate pinning the cockpit-contract
 emission surface named by CLAUDE.md § Architecture as a hard external
 dependency: `contract.cockpit_schema.emit_schema` is the sole canonical
-regeneration path for example-doctrine-repo's frozen `coordinator/cockpit-contract/schema/
+regeneration path for coordinator-claude's frozen `coordinator/cockpit-contract/schema/
 *.json`. Relocating or renaming the module/symbol, changing the
 `out_dir`/`COCKPIT_SCHEMA_OUT_DIR` resolution contract, or changing the
-emitted bytes for a fixed input destroys example-doctrine-repo's release capability and trips
+emitted bytes for a fixed input destroys coordinator-claude's release capability and trips
 their bilateral version-bump gate (see CLAUDE.md § Architecture, this repo
 root).
 
@@ -13,9 +13,9 @@ This is a CLOSED design-time gate in the house idiom of
 `coordinator_core/frontmatter/tests/test_no_node_schema_shellout.py` /
 `test_no_bare_argv0_script_launch.py`: it does not ask "does the schema
 still validate" (a shape-level question `test_committed_emit_drift.py`
-already owns, and which is @skip_no_schema-gated on a example-doctrine-repo clone being
+already owns, and which is @skip_no_schema-gated on a coordinator-claude clone being
 present on this machine). It asks "are the EXACT bytes this port promises
-to keep stable actually stable" — unconditionally, with no example-doctrine-repo-clone
+to keep stable actually stable" — unconditionally, with no coordinator-claude-clone
 dependency, so it always runs.
 
 Three properties pinned, matching the brief's three failure classes:
@@ -62,7 +62,7 @@ from pydantic import BaseModel, Field
 
 _HEADS_UP = (
     "cockpit-contract emission is a hard external dependency (CLAUDE.md "
-    "§ Architecture): example-doctrine-repo's coordinator/cockpit-contract/schema/*.json "
+    "§ Architecture): coordinator-claude's coordinator/cockpit-contract/schema/*.json "
     "is byte-frozen from this module's output, and downstream tooling "
     "hard-throws on a MAJOR version mismatch. DO NOT regenerate the golden "
     "fixture or otherwise silence this failure locally -- give "
@@ -158,7 +158,7 @@ def test_emitted_bytes_are_pinned_for_a_fixed_input(tmp_path, monkeypatch):
     assert emitted_bytes == golden_bytes, (
         "emit_schemas' emitted bytes for a fixed, frozen input entity have "
         "changed -- this is the exact class of change that would silently "
-        "desync example-doctrine-repo's committed cockpit-contract/schema/*.json. "
+        "desync coordinator-claude's committed cockpit-contract/schema/*.json. "
         f"{_HEADS_UP}\n\n"
         f"golden:\n{golden_bytes.decode('utf-8')}\n\n"
         f"emitted:\n{emitted_bytes.decode('utf-8')}"

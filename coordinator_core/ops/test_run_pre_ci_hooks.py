@@ -23,7 +23,7 @@ Coverage:
       caller-hook-dependent per the DEC-7 note; proven here with a hook that
       is itself idempotent)
 
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B3
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B3
 """
 
 from __future__ import annotations

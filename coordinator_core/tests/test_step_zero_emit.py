@@ -1,12 +1,12 @@
 """Parity tests for coordinator_core.install.step_zero_emit.
 
-Replays the NORMATIVE conformance fixture (example-doctrine-repo-side
+Replays the NORMATIVE conformance fixture (coordinator-claude-side
 coordinator/tests/fixtures/step-zero-conformance.json, base64-encoded
 expected bytes) against this module's emit_line(), plus direct unit checks
 of json_escape()'s five-escape ordering.
 
 Spec backlink: docs/wiki/step-zero-emitter-contract.md
-Port of: step_zero_emit.sh (example-doctrine-repo 290997c7, 2026-07-22)
+Port of: step_zero_emit.sh (coordinator-claude 290997c7, 2026-07-22)
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from coordinator_core.testing.doe_root import doe_root_and_present
 
 
 def _find_fixture():
-    # example-doctrine-repo sibling repo, resolved via the shared registry-first ladder
+    # coordinator-claude sibling repo, resolved via the shared registry-first ladder
     # (coordinator_core.testing.doe_root.doe_root_and_present) rather than a
     # __file__-anchored checkout-depth guess.
     doe_root, present = doe_root_and_present()
@@ -36,7 +36,7 @@ def _find_fixture():
 _FIXTURE_PATH = _find_fixture()
 
 
-@pytest.mark.skipif(_FIXTURE_PATH is None, reason="example-doctrine-repo sibling conformance fixture not discoverable on disk")
+@pytest.mark.skipif(_FIXTURE_PATH is None, reason="coordinator-claude sibling conformance fixture not discoverable on disk")
 def test_conformance_fixture_byte_parity():
     with open(_FIXTURE_PATH, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -51,7 +51,7 @@ def test_conformance_fixture_byte_parity():
 
 
 # Hand-transcribed subset of the same fixture (kept inline so this test suite
-# does not hard-depend on the example-doctrine-repo sibling repo being checked out alongside
+# does not hard-depend on the coordinator-claude sibling repo being checked out alongside
 # claude-klabauter -- CI/sandboxed runs of just this repo still get real coverage).
 _INLINE_CASES = [
     (

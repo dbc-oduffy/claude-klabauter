@@ -9,7 +9,7 @@ that sidecar onto the main summary and delete the sidecar, so the sidecar
 never survives past one ceremony run.
 
 Replaces the inline `cat "$OBSERVER_SIDECAR" >> "$DAILY_SUMMARY"; rm
-"$OBSERVER_SIDECAR"` in example-doctrine-repo's workday-complete.md Step 4d, which had no
+"$OBSERVER_SIDECAR"` in coordinator-claude's workday-complete.md Step 4d, which had no
 existence check, no idempotency, and no failure surface: a missing daily
 summary made `cat` fail while `rm` ran anyway, silently discarding the
 sidecar's content with no error visible to the operator. Confirmed on disk
@@ -105,7 +105,7 @@ Exit codes (--scan form):
   1 — one or more orphaned sidecars found (reported to stderr, one line each).
   2 — usage error (e.g. directory does not exist).
 
-Spec backlink: coordinator/commands/workday-complete.md § Step 4d (example-doctrine-repo)
+Spec backlink: coordinator/commands/workday-complete.md § Step 4d (coordinator-claude)
 """
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ import sys
 _HEADING = "## Strategic Review"
 _SIDECAR_SUFFIX = ".observer.md"
 
-#: The analyst's stand-in for the section this script appends, per example-doctrine-repo
+#: The analyst's stand-in for the section this script appends, per coordinator-claude
 #: coordinator/docs/wiki/daily-summary-procedure.md's summary template. Its
 #: presence proves the stitch has NOT run, regardless of what headings the
 #: summary carries.

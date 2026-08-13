@@ -2,7 +2,7 @@
 Fixture tests for coordinator_core.ops.fleet.migrate_handoff_vocabulary — the
 DR-084 § C7 consumer-corpus migration op.
 
-Spec backlink: docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md § C7
+Spec backlink: pln-handoff-lifecycle-vocabulary-o-22ada6 § C7
 """
 from __future__ import annotations
 

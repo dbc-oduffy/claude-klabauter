@@ -61,7 +61,7 @@ there, and never imports or calls `coordinator_core.ops.reap_chain_ancestry_waiv
 kept in two entirely separate modules on purpose, so a bug in this gate can only ever
 misreport a count, never mutate the tracked corpus it is reporting on.
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a
 § Tasks, row W3.
 
 Negative-spec — what this module deliberately does NOT do:

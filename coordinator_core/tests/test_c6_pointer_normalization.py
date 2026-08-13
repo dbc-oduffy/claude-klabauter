@@ -13,7 +13,7 @@ Coverage:
       (the _id field was in no edge-kind set at all).
   (c) Differential-oracle agreement: coordinator_core.dag's pointer resolution (engine)
       vs. _baton_dag_oracle's independent from-scratch normalization (oracle) agree on
-      "who points at this baton" for every live baton in the example-doctrine-repo corpus (~255
+      "who points at this baton" for every live baton in the coordinator-claude corpus (~255
       files) and the claude-klabauter corpus (~95 files), checked separately for the
       predecessor-family ({'predecessor', 'predecessor_id'}) and origin_handoff-family
       ({'origin_handoff', 'origin_handoff_id'}) pointer sets. Comparison is on POINTER
@@ -186,7 +186,7 @@ class TestIdSuffixedFieldAliases:
 
 
 # ---------------------------------------------------------------------------
-# (c) Differential-oracle agreement over the real example-doctrine-repo + claude-klabauter corpora
+# (c) Differential-oracle agreement over the real coordinator-claude + claude-klabauter corpora
 # ---------------------------------------------------------------------------
 
 def _corpus_agreement(root: str, fields, edge_kinds: Set[str]) -> None:
@@ -231,8 +231,8 @@ class TestDifferentialOracleAgreement:
         doe_root = read_doe_root_pointer()
         if not doe_root or not os.path.isdir(os.path.join(doe_root, "state", "handoffs")):
             pytest.skip(
-                "example-doctrine-repo root not resolvable via read_doe_root_pointer() on this "
-                "machine — this cross-repo differential check requires a example-doctrine-repo "
+                "coordinator-claude root not resolvable via read_doe_root_pointer() on this "
+                "machine — this cross-repo differential check requires a coordinator-claude "
                 "sibling checkout and is not part of the portable pytest surface."
             )
         _corpus_agreement(doe_root, oracle.PREDECESSOR_LINK_FIELDS, {"predecessor"})
@@ -242,8 +242,8 @@ class TestDifferentialOracleAgreement:
         doe_root = read_doe_root_pointer()
         if not doe_root or not os.path.isdir(os.path.join(doe_root, "state", "handoffs")):
             pytest.skip(
-                "example-doctrine-repo root not resolvable via read_doe_root_pointer() on this "
-                "machine — this cross-repo differential check requires a example-doctrine-repo "
+                "coordinator-claude root not resolvable via read_doe_root_pointer() on this "
+                "machine — this cross-repo differential check requires a coordinator-claude "
                 "sibling checkout and is not part of the portable pytest surface."
             )
         _corpus_agreement(doe_root, oracle.ORIGIN_HANDOFF_LINK_FIELDS, {"origin_handoff"})

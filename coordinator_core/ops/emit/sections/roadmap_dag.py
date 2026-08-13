@@ -48,7 +48,7 @@ Provenance (F9 — as-implemented; see plan § C1 F9 for deviation rationale):
     a changed stub produces different node output but rag sees no content_hash delta and
     re-ingests fully.  Correctness is unaffected; invalidation granularity is reduced.
     Extending assemble_roadmap_dag's return shape to expose per-stub paths is out of scope
-    for this landing; tracked in the D3 example-doctrine-repo-confirm memo.
+    for this landing; tracked in the D3 coordinator-claude-confirm memo.
   edges → source_kind='local_fs', path='', derivation='computed'.
     Edges are derived from the blocks arrays across multiple stub files — no single
     source file, so path='' and derivation='computed' per the contract rule
@@ -58,7 +58,7 @@ Node identity: (repo, roadmap_id, stub_id).
 Edge identity: (repo, roadmap_id, from, to).
 coordinator_root_path is additive on both — not part of logical identity (F6).
 
-Spec backlink: docs/plans/2026-07-06-roadmap-dag-emit-switch.md § C1
+Spec backlink: pln-emit-first-class-roadmap-dag-i-137a28 § C1
 Parity oracle: none — new record types; Python-authoritative per D3.
 
 Negative-spec:

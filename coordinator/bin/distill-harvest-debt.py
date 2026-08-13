@@ -4,12 +4,12 @@ coordinator/bin/distill-harvest-debt.py — thin CLI wrapper over
 coordinator_core.distill.harvest_debt.
 
 Purpose: claude-klabauter's harvest-debt DR-047 distill-ceremony engine script. Parses the CANONICAL
-distillation log (run|path|disposition|fate; ASCII "->") — plus the example-doctrine-repo schema-header
+distillation log (run|path|disposition|fate; ASCII "->") — plus the coordinator-claude schema-header
 action-table format (date|action|path|...) sibling repos' live logs carry — and emits, as
 JSON on stdout, the archive/specs paths (keyed specs_dir-relative, not bare basename) that
 have never been recorded under a harvested disposition/action
 (DISTILLED/PROMOTE/harvested/deleted; see harvest_debt.HARVESTED_DISPOSITIONS) — the
-harvest-debt list — for the example-doctrine-repo distill Workflow/skill to consume.
+harvest-debt list — for the coordinator-claude distill Workflow/skill to consume.
 
 Usage:
     coordinator/bin/distill-harvest-debt.py <specs-dir> <log-path>
@@ -34,8 +34,8 @@ unset) and accepted once it probes as a real claude-klabauter checkout; the mach
 registry lookup is a fallback reached only if that probe misses (this file has been
 published/vendored to a location outside the claude-klabauter checkout).
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C4
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C6
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C4
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C6
 """
 
 from __future__ import annotations

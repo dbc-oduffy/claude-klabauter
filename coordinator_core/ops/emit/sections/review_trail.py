@@ -9,13 +9,13 @@ error, a non-object body, or an unparseable HHMMSS timestamp segment are quarant
 ``provenance.path`` and malformed-bucket ``path`` are repo-root-relative POSIX paths, never
 the lister's raw absolute output — see ``_relativize_path``.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 3, ReviewTrail
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 3, ReviewTrail
   (the embedded python3 heredoc). Byte/semantic parity port — the embedded heredoc's
   logic is reproduced in-process here via the shared ``_validate_review_trail_file``
   helper; the file lister (``coordinator_core.ops.list_review_trail_records``, itself
-  the native port of list-review-trail-records.sh, example-doctrine-repo b5a4192c, 2026-07-20) is now
+  the native port of list-review-trail-records.sh, coordinator-claude b5a4192c, 2026-07-20) is now
   called in-process — no subprocess, no bash.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P03
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P03
 """
 
 from __future__ import annotations

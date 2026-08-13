@@ -141,7 +141,7 @@ not add a dialect detector (Anti-scope), and does not change a single
 guard's own body (that is C4/C5's job) -- it only builds the capability
 those chunks wire in.
 
-Spec backlink: docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-silent.md § C2
+Spec backlink: pln-guards-reach-a-verdict-on-powe-0e4bc3 § C2
 """
 
 from __future__ import annotations

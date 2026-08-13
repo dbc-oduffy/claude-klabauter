@@ -37,7 +37,7 @@ Exit codes:
         GoalCloseDayLostSupersession on a lost clock-skew collapse, or a
         malformed envelope).
 
-Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C4
+Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C4
 """
 
 from __future__ import annotations

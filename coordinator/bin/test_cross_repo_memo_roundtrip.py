@@ -8,7 +8,7 @@ Spec backlink: cross-repo/inbox/strang-03-fixture-executor-brief (claude-klabaut
 Purpose: exercise each of the 5 coupled path-declaration sites end-to-end (a memo
 written → schema-valid → own-inbox-guarded → surfaced → swept), independently, so a
 deliberately-broken single site turns exactly that test red. Also encodes the pinned
-Example-doctrine-repo collision contract (2 tests): cross-sender same-day-same-topic survives; same-sender
+Coordinator-claude collision contract (2 tests): cross-sender same-day-same-topic survives; same-sender
 same-day-same-topic loud-fails via O_EXCL. AC9 adds an op-refusal regression case: a real
 Claude-klabauter collision refusal must exit `send` non-zero, retain the outbox, and commit nothing.
 
@@ -73,11 +73,11 @@ def _bin_dir() -> str:
 
 
 def _doe_bin_dir() -> str:
-    """Return the absolute path to the example-doctrine-repo clone's coordinator/bin dir.
+    """Return the absolute path to the coordinator-claude clone's coordinator/bin dir.
 
     Schemas (schemas/cross-repo-memo.schema.json) and hooks
     (hooks/scripts/validate-frontmatter-schema.py) are CONTRACT and stay
-    example-doctrine-repo-side permanently (commit a0bb05a0, "21 hooks + dead schema guard") —
+    coordinator-claude-side permanently (commit a0bb05a0, "21 hooks + dead schema guard") —
     they were deliberately NOT migrated with bin/lib/scripts/tests in the
     2026-07-21 executable-surface migration that relocated THIS fixture into
     claude-klabauter's own coordinator/bin/. Resolving these two artifacts off this
@@ -89,7 +89,7 @@ def _doe_bin_dir() -> str:
     _resolve_coordinator_root(): DOE_ROOT env (legacy alias, wins first) ->
     REPO_EXAMPLE_DOCTRINE_REPO env -> machine-local `repos.example_doctrine_repo` key. Fails loud
     (RuntimeError naming repos.example_doctrine_repo) rather than silently skipping the
-    two example-doctrine-repo-side sites -- a resolvable-but-wrong path would mask a real
+    two coordinator-claude-side sites -- a resolvable-but-wrong path would mask a real
     schema/hook regression as a spurious "file not found".
     """
     override = os.environ.get("DOE_ROOT", "").strip() or os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "").strip()
@@ -105,8 +105,8 @@ def _doe_bin_dir() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         raise RuntimeError(
-            "test_cross_repo_memo_roundtrip.py: cannot resolve the example-doctrine-repo "
-            f"repo root to locate its permanently-example-doctrine-repo-side schemas/ and hooks/ "
+            "test_cross_repo_memo_roundtrip.py: cannot resolve the coordinator-claude "
+            f"repo root to locate its permanently-coordinator-claude-side schemas/ and hooks/ "
             f"({exc}). Set repos.example_doctrine_repo in the machine-local registry, or "
             "set the DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO env var."
         ) from exc
@@ -146,10 +146,10 @@ def _python() -> str:
 
 
 def _sibling_example_doctrine_repo_probe() -> str:
-    """Env-independent fallback: locate the sibling example-doctrine-repo checkout by
+    """Env-independent fallback: locate the sibling coordinator-claude checkout by
     walking up from THIS file to the engine repo root, then probing that
     root's own parent directory for the fleet's conventional sibling-clone
-    name, `example-doctrine-repo` (see project CLAUDE.md "sibling example-doctrine-repo
+    name, `coordinator-claude` (see project CLAUDE.md "sibling coordinator-claude
     checkout"). Not a hand-typed absolute path -- portable to any machine
     that clones the fleet repos side-by-side, which is the established
     layout this whole file already depends on for `_doe_bin_dir()`.
@@ -176,7 +176,7 @@ def _sibling_example_doctrine_repo_probe() -> str:
         claude_klabauter_root = parent
     else:
         return ""
-    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "example-doctrine-repo")
+    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-claude")
     manifest = os.path.join(
         candidate, "coordinator", "schemas", "coordinator-registry.manifest.json"
     )
@@ -184,7 +184,7 @@ def _sibling_example_doctrine_repo_probe() -> str:
 
 
 def _resolve_doe_root_for_tests() -> str:
-    """Best-effort example-doctrine-repo sibling root, forwarded as DOE_ROOT to every
+    """Best-effort coordinator-claude sibling root, forwarded as DOE_ROOT to every
     spawned CLI invocation in this file, AND pinned into this process's own
     `os.environ` (see below `_DOE_ROOT_FOR_TESTS` bootstrap) so in-process
     imports of `coordinator_registry` (e.g. `_doe_bin_dir()`'s direct
@@ -411,8 +411,8 @@ def _repo_key_for(to: str) -> str:
 def _write_registry_toml(settings_home: str, repo_key: str, repo_path: str) -> None:
     """Write an ISOLATED machine-local registry.toml under settings_home mapping
     repo_key -> repo_path — the exact surface claude-klabauter's memo_send.py reads directly
-    via stdlib tomllib (example-doctrine-repo-ratified resolver surface, DEC/Q1). Distinct from
-    MACHINE_LOCAL_IMPL, which only affects example-doctrine-repo-side (cross-repo-memo CLI) lookups."""
+    via stdlib tomllib (coordinator-claude-ratified resolver surface, DEC/Q1). Distinct from
+    MACHINE_LOCAL_IMPL, which only affects coordinator-claude-side (cross-repo-memo CLI) lookups."""
     reg_dir = os.path.join(settings_home, "machine-local")
     os.makedirs(reg_dir, exist_ok=True)
     with open(os.path.join(reg_dir, "registry.toml"), "w", encoding="utf-8") as f:
@@ -741,7 +741,7 @@ def _write_guards_engine_module():
     Fails with the REAL cause (an import error) rather than folding a broken
     in-repo import into the `returncode != 0` assertion downstream — the same
     rationale the pre-port RuntimeError("hook not found at ...") existed for
-    when the target lived in the example-doctrine-repo sibling checkout (2026-07-23: the
+    when the target lived in the coordinator-claude sibling checkout (2026-07-23: the
     .js oracle's deletion there manifested as a spurious claude-klabauter contract
     violation). Now that the target is IN-REPO, the equivalent failure mode is
     an import error in coordinator_core.write_guards.engine itself, surfaced
@@ -1053,11 +1053,11 @@ def test_collision_cross_sender_both_survive() -> None:
         _git_init(receiver_tmpdir, initial_commit=True)
 
         # Isolated claude-klabauter-side registry: the receiver must resolve to
-        # receiver_tmpdir (matching the example-doctrine-repo-side mock above) so both sides agree
+        # receiver_tmpdir (matching the coordinator-claude-side mock above) so both sides agree
         # on the delivery target. Senders need no registry entry — memo.send's
         # own-inbox guard compares sender_worktree to the REGISTERED receiver
         # path, and neither sender root matches it; the earlier per-sender
-        # "UNREGISTERED repo" message is a non-fatal example-doctrine-repo-side warning only.
+        # "UNREGISTERED repo" message is a non-fatal coordinator-claude-side warning only.
         to = "roundtrip-collision-cli-receiver-em"
         _write_registry_toml(settings_home, _repo_key_for(to), receiver_tmpdir)
 
@@ -1307,7 +1307,7 @@ def test_ac9_op_refusal_regression() -> None:
 # C4b — archive-leg CLI roundtrip: _archive_sent_outbox_draft /
 # _commit_archived_outbox_draft (coordinator/bin/cross-repo-memo, C3).
 #
-# Spec backlink: docs/plans/2026-08-06-memo-send-sender-side-commit-leg.md,
+# Spec backlink: pln-memo-send-commits-its-own-send-4760e3,
 # chunks C3 (implementation, committed 1a5a482e7eaa) and C4 (this coverage,
 # AC3/AC10). These cases exercise the archive leg directly — via the loaded
 # dispatcher module's `_archive_sent_outbox_draft` — against isolated fixture

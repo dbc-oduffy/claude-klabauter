@@ -38,7 +38,7 @@ test_no_new_spawning_tests.py`, Rule 2): this file spawns real `git`
 `repos` fixture) and is admitted via the module-level `pytestmark` below --
 a real gate, not advisory.
 
-Spec backlink: docs/plans/2026-08-13-em-exercisable-in-band-grant-route.md § Verification
+Spec backlink: pln-an-em-exercisable-in-band-gran-6bfb4a § Verification
 Precedent: coordinator_core/bash_guards/tests/test_guard_unlock_dispatch_intercept.py
 Precedent: coordinator_core/bash_guards/tests/test_bump_foreign_repo_write.py
 Precedent: coordinator_core/session/tests/test_em_guard_grant.py (TestAC14SubagentCommitNeverComposesWithGrant)

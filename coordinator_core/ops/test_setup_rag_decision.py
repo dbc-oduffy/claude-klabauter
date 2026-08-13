@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.setup_rag_decision.
 
-Port of: setup-rag-decision.sh (example-doctrine-repo 6fb5fb37, 2026-07-22),
+Port of: setup-rag-decision.sh (coordinator-claude 6fb5fb37, 2026-07-22),
 snapshotted 2026-07-17 against coordinator/tests/test_setup_rag_decision.bats
 (T1-T10 below reproduce that corpus's env-injection matrix 1:1; T11+ cover
 the Python-port-specific additions -- probe timeout/stdin guard, unparseable
@@ -405,7 +405,7 @@ def test_unreadable_root_setup_rag_decision_returns_2_with_stderr(tmp_path, monk
 
     assert rc == 1, (
         "setup_rag_decision()'s OWN exit-code table reserves 1 for this "
-        "module's ambiguous/usage-error slot (2 is reserved for the example-doctrine-repo "
+        "module's ambiguous/usage-error slot (2 is reserved for the coordinator-claude "
         f"trampoline's own import failure, per the module docstring) -- got {rc!r}"
     )
     err = capsys.readouterr().err

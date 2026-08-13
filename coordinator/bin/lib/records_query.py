@@ -1,6 +1,6 @@
 """records_query.py — native records.query trampoline.
 
-Port of: records-query-facade.sh (example-doctrine-repo 9df969d2, 2026-07-19).
+Port of: records-query-facade.sh (coordinator-claude 9df969d2, 2026-07-19).
 
 Purpose: exposes query_records(type, where, format, limit) — a drop-in
 replacement for the retired cc_records_query bash function — dispatching the

@@ -14,7 +14,7 @@ Read-only: this op never mutates the caller's git state (no add/commit/
 stash/push/reset/checkout) — it only reads (`git diff`, `git rev-parse`) and
 writes two plain files under a snapshot directory of its own naming.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 § Wave 2 (op-classification.tsv row `snapshot-diff-and-head`).
 
 DEC-7 idempotency note (platform-hazard rated `medium` in the manifest —

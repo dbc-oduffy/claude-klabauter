@@ -16,7 +16,7 @@ Output path: state/lessons-outbox/<ISO-ts>-<slug>.yaml
 
 from_repo resolution order (same convention as cross-repo-memo):
   1. cwd git-root → reverse-lookup against machine-local repos.* table
-  2. repos.example_doctrine_repo (example-doctrine-repo repo) → "claude-central-em"
+  2. repos.example_doctrine_repo (coordinator-claude repo) → "claude-central-em"
   3. Unregistered git repo → basename of git root + "-em"
   4. Not in a git repo → "unknown-sender-em"
   Never uses `git remote get-url origin` — that yields a URL, not a shortname.
@@ -41,11 +41,11 @@ Exit-code contract:
   1  unexpected error (schema load failure, filesystem error, unexpected op result shape).
   2  invalid arguments — argparse-detected (missing/unknown flag, invalid --change-kind),
      or --target-wiki not found in the central wiki inventory (see § A7 below).
-  3  example-doctrine-repo root unresolvable — the write (or the --target-wiki inventory check) was
+  3  coordinator-claude root unresolvable — the write (or the --target-wiki inventory check) was
      SKIPPED, not silently treated as success. Remediate per the stderr message
-     (`machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo`).
+     (`machine-local set repos.example_doctrine_repo /path/to/coordinator-claude`).
 
-Negative-spec (A13): a skipped write due to an unresolvable example-doctrine-repo root is NEVER
+Negative-spec (A13): a skipped write due to an unresolvable coordinator-claude root is NEVER
 exit 0. A caller checking only `returncode == 0` must be able to trust that outcome —
 exit 0 means an entry was actually written.
 
@@ -53,7 +53,7 @@ exit 0 means an entry was actually written.
 (<doe_root>/coordinator/docs/wiki/*.md) unless the literal value 'unknown' is passed,
 or --allow-new-wiki is given (escape hatch for a genuine change_kind: wiki-new
 promotion, where the target intentionally does not exist yet). An unresolvable
-Example-doctrine-repo root during this check is the SAME exit 3 as the write-skip case above —
+Coordinator-claude root during this check is the SAME exit 3 as the write-skip case above —
 never a silently-skipped validation.
 
 --target-wiki normalization (A9): normalized to the canonical 'docs/wiki/<name>.md'
@@ -116,13 +116,13 @@ _OUTBOX_ROOT_ENV = "LESSON_PROMOTE_OUTBOX_ROOT"
 
 # Env var for test isolation — overrides the central wiki inventory directory used
 # by --target-wiki validation (A7). Mirrors _OUTBOX_ROOT_ENV's override shape: when
-# set, points DIRECTLY at a directory of .md files (not the example-doctrine-repo repo root), so tests
-# never need a real example-doctrine-repo checkout on disk to exercise validation.
+# set, points DIRECTLY at a directory of .md files (not the coordinator-claude repo root), so tests
+# never need a real coordinator-claude checkout on disk to exercise validation.
 # Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-learn-lessons-dogfood-2026-07-23.md
 # (finding A7)
 _WIKI_ROOT_ENV = "LESSON_PROMOTE_WIKI_ROOT"
 
-# Exit code for a write (or --target-wiki validation) SKIPPED because the example-doctrine-repo
+# Exit code for a write (or --target-wiki validation) SKIPPED because the coordinator-claude
 # root could not be resolved. Deliberately distinct from 0 (success) and 1 (generic
 # error) so a caller checking only `returncode == 0` can trust that outcome (A13
 # negative-spec: a skipped write is never exit 0).
@@ -138,7 +138,7 @@ _CLAUDE_HOME_ENV = cli_shared.CLAUDE_HOME_ENV
 
 # Env var for CLAUDE_KLABAUTER_ROOT override — mirrors coordinator-claude-klabauter-root.sh §4b
 # idempotency gate. Set to the claude-klabauter repo root to bypass machine-local resolution.
-# Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC1 / AC13
+# Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
 _CLAUDE_KLABAUTER_ROOT_ENV = cli_shared.CLAUDE_KLABAUTER_ROOT_ENV
 
 # Env var for DOE_ROOT override — mirrors CLAUDE_KLABAUTER_ROOT §4b idempotency gate.
@@ -155,7 +155,7 @@ class _ClaudeKlabauterUnresolvable(RuntimeError):
     exit 0) per AC13. The low-level resolver itself fails loud; this is the caller-layer
     resilience wrapper.
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
 
 # ---------------------------------------------------------------------------
@@ -246,8 +246,8 @@ def _outbox_root() -> str:
     """Return the lessons-outbox directory path.
 
     Respects LESSON_PROMOTE_OUTBOX_ROOT env var for test isolation (takes precedence).
-    Default: central state root via the example-doctrine-repo seam → <doe_root>/state/lessons-outbox/.
-    Raises _DoeUnresolvable (from coordinator_registry.doe_root()) when the example-doctrine-repo root
+    Default: central state root via the coordinator-claude seam → <doe_root>/state/lessons-outbox/.
+    Raises _DoeUnresolvable (from coordinator_registry.doe_root()) when the coordinator-claude root
     cannot be resolved and no env override is present — callers catch this and degrade
     to a SKIP with a non-zero exit (A13: never exit 0 — see legacy_fn's
     _DoeUnresolvable handler in main()).
@@ -260,7 +260,7 @@ def _outbox_root() -> str:
     override = os.environ.get(_OUTBOX_ROOT_ENV)
     if override:
         return override
-    # Central state (lessons-outbox) routes to example-doctrine-repo — doctrine class.
+    # Central state (lessons-outbox) routes to coordinator-claude — doctrine class.
     # doe_root() raises _DoeUnresolvable when repos.example_doctrine_repo is unregistered and
     # DOE_ROOT env var is not set; _DoeUnresolvable propagates to legacy_fn() catch.
     # Spec backlink: gate2-w23-state-seam-caller-switch.md § C1 / AC2
@@ -276,10 +276,10 @@ def _wiki_inventory_dir() -> str:
 
     Respects LESSON_PROMOTE_WIKI_ROOT env var for test isolation (takes precedence;
     points DIRECTLY at a directory of .md files, mirroring _OUTBOX_ROOT_ENV's
-    override shape — no real example-doctrine-repo checkout required to exercise validation).
+    override shape — no real coordinator-claude checkout required to exercise validation).
     Default: <doe_root>/coordinator/docs/wiki/.
 
-    Raises _DoeUnresolvable (from coordinator_registry.doe_root()) when the example-doctrine-repo root
+    Raises _DoeUnresolvable (from coordinator_registry.doe_root()) when the coordinator-claude root
     cannot be resolved and no env override is present.
     """
     override = os.environ.get(_WIKI_ROOT_ENV)
@@ -291,9 +291,9 @@ def _wiki_inventory_dir() -> str:
 def _list_central_wiki_targets(wiki_dir: str) -> frozenset[str]:
     """Return the canonical 'docs/wiki/<name>.md' form of every .md file in wiki_dir.
 
-    Raises RuntimeError if wiki_dir does not exist — a resolvable example-doctrine-repo root with a
+    Raises RuntimeError if wiki_dir does not exist — a resolvable coordinator-claude root with a
     missing coordinator/docs/wiki/ directory is an install-integrity problem, not a
-    graceful-skip case (contrast the example-doctrine-repo-root-unresolvable case, which IS a
+    graceful-skip case (contrast the coordinator-claude-root-unresolvable case, which IS a
     graceful-skip via _DoeUnresolvable).
     """
     if not os.path.isdir(wiki_dir):
@@ -314,7 +314,7 @@ def _validate_target_wiki(
     validation passed (or was legitimately bypassed) and normal processing should
     continue.
 
-    Bypassed (returns None without touching the example-doctrine-repo root) when:
+    Bypassed (returns None without touching the coordinator-claude root) when:
       - normalized_target_wiki is the 'unknown' sentinel (schema-documented for an
         unresolved classifier target — never a real wiki path).
       - allow_new_wiki is True (the --allow-new-wiki escape hatch, for a genuine
@@ -326,10 +326,10 @@ def _validate_target_wiki(
     this exits 2, the same family as every other argparse-detected invalid-argument
     case in this CLI.
 
-    Negative-spec (A13 interaction): an unresolvable example-doctrine-repo root during this check is
+    Negative-spec (A13 interaction): an unresolvable coordinator-claude root during this check is
     NOT a silently-skipped validation — it is the SAME _EXIT_DOE_UNRESOLVABLE (3)
     as the write-skip case, because the inventory this check needs lives under the
-    same example-doctrine-repo root the write does.
+    same coordinator-claude root the write does.
     """
     if normalized_target_wiki == _TARGET_WIKI_UNKNOWN or allow_new_wiki:
         return None
@@ -339,12 +339,12 @@ def _validate_target_wiki(
     except _DoeUnresolvable as exc:
         print(
             f"error: coordinator-lesson-promote: cannot validate --target-wiki — "
-            f"example-doctrine-repo root unresolvable: {exc}",
+            f"coordinator-claude root unresolvable: {exc}",
             file=sys.stderr,
         )
         print(
-            "  Remediation: run 'machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo'\n"
-            "  or set DOE_ROOT=/path/to/example-doctrine-repo before invoking this CLI.\n"
+            "  Remediation: run 'machine-local set repos.example_doctrine_repo /path/to/coordinator-claude'\n"
+            "  or set DOE_ROOT=/path/to/coordinator-claude before invoking this CLI.\n"
             "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
             file=sys.stderr,
         )
@@ -548,7 +548,7 @@ def _build_parser(change_kind_values: tuple[str, ...]) -> argparse.ArgumentParse
             "  1  unexpected error (schema load failure, filesystem error).\n"
             "  2  invalid arguments — including --target-wiki not found in the\n"
             "     central wiki inventory (see --allow-new-wiki).\n"
-            "  3  example-doctrine-repo root unresolvable — write (or --target-wiki\n"
+            "  3  coordinator-claude root unresolvable — write (or --target-wiki\n"
             "     validation) SKIPPED, never treated as success."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -689,7 +689,7 @@ def main(argv: list[str] | None = None) -> int:
             # A13 fix: graceful-skip on unresolvable DOE_ROOT is WARN + skip, but the
             # skip is NEVER silent success — exit _EXIT_DOE_UNRESOLVABLE (3), not 0.
             # A coordinator install without repos.example_doctrine_repo registered (pre-fleet-clone
-            # or non-example-doctrine-repo machine) WARNs, writes nothing, and reports that honestly via
+            # or non-coordinator-claude machine) WARNs, writes nothing, and reports that honestly via
             # a non-zero exit code — a caller checking only `returncode == 0` must be
             # able to trust that outcome. Negative-spec: this was PREVIOUSLY `return 0`
             # (A13 defect) — every promotion on a machine without repos.example_doctrine_repo
@@ -701,8 +701,8 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             print(
-                "  Remediation: run 'machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo'\n"
-                "  or set DOE_ROOT=/path/to/example-doctrine-repo before invoking this CLI.\n"
+                "  Remediation: run 'machine-local set repos.example_doctrine_repo /path/to/coordinator-claude'\n"
+                "  or set DOE_ROOT=/path/to/coordinator-claude before invoking this CLI.\n"
                 "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )

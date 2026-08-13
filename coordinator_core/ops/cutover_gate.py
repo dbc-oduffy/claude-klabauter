@@ -107,7 +107,7 @@ writer-only migration once, silently, in prose; this module makes that
 omission structurally unrepresentable for any record that selects
 ``value-vocabulary``.
 
-Extensionless Python consumers (FIX-D — the named house trap, example-doctrine-repo
+Extensionless Python consumers (FIX-D — the named house trap, coordinator-claude
 coordinator.local.md: "count by shebang, not by extension"): the candidate-file
 collector cannot key off ``.py`` alone. The plan's own worked example,
 ``coordinator/bin/archive-stamp-cli``, is a pure-Python file with no
@@ -130,7 +130,7 @@ does.
 
 Foreign-repo handling (Review: the Director of Engineering-cutover-review F5): this module receives
 ``repo_roots`` — the set of repos the CALLER can actually resolve a local
-path for (example-doctrine-repo + claude-klabauter ``coordinator/bin/``, per D2). For every repo named in
+path for (coordinator-claude + claude-klabauter ``coordinator/bin/``, per D2). For every repo named in
 ``gate_source.repos[]`` this module returns an ANNOTATED copy recording
 whether it was actually scanned (``scanned: bool``) alongside the record's own
 declared ``foreign`` flag — but it does NOT decide PASS/REFUSE on an
@@ -231,8 +231,8 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._pytest_child_env import pytest_child_env
 from coordinator_core.ops.fleet._common import main_worktree_root
 
-#: Repo-relative path (example-doctrine-repo-relative) of the vendored cutover schema —
-#: mirrors D2 ("schema lives example-doctrine-repo-side"). Read via `git show <ref>:<this>`,
+#: Repo-relative path (coordinator-claude-relative) of the vendored cutover schema —
+#: mirrors D2 ("schema lives coordinator-claude-side"). Read via `git show <ref>:<this>`,
 #: never vendored into claude-klabauter (unlike the frontmatter schemas
 #: `schema_drift_watch.py` watches — this schema is read live, not copied).
 _CUTOVER_SCHEMA_REPO_RELATIVE_PATH = "coordinator/schemas/cutover.schema.json"
@@ -511,7 +511,7 @@ _PYTHON_SHEBANG_RE = re.compile(r"(?:^|[/\s])python3?(?:\.\d+)?(?:$|\s)")
 def _has_python_shebang(file_path: Path) -> bool:
     """Return True iff ``file_path``'s first line is a shebang naming Python.
 
-    Named house trap (example-doctrine-repo coordinator.local.md: "count by shebang, not by
+    Named house trap (coordinator-claude coordinator.local.md: "count by shebang, not by
     extension") — several extensionless files in this fleet (e.g.
     ``coordinator/bin/archive-stamp-cli``, the plan's own worked example) are
     pure Python with no ``.py`` suffix; a collector that keys off extension
@@ -935,7 +935,7 @@ def derive(gate_source: Mapping[str, object], repo_roots: Mapping[str, Path]) ->
             enum), ``pattern`` (regex string), ``paths`` (list of repo-relative
             path strings), ``repos`` (list of ``{repo, foreign}`` objects).
         repo_roots: map of repo-name -> local filesystem root for every repo
-            this process can actually resolve (example-doctrine-repo + claude-klabauter
+            this process can actually resolve (coordinator-claude + claude-klabauter
             ``coordinator/bin/``, per D2) — a repo absent from this map is
             treated as unscanned regardless of its declared ``foreign`` flag.
 
@@ -974,14 +974,14 @@ def derive(gate_source: Mapping[str, object], repo_roots: Mapping[str, Path]) ->
 
 class CutoverSchemaResolutionError(RuntimeError):
     """Raised when ``coordinator/schemas/cutover.schema.json`` cannot be read
-    live from the example-doctrine-repo sibling clone (clone unresolvable, ``git show``
+    live from the coordinator-claude sibling clone (clone unresolvable, ``git show``
     fails, or the resolved content is not valid JSON)."""
 
 
 def resolve_cutover_schema(
     doe_repo_path: str | Path | None = None, ref: str = "HEAD"
 ) -> dict[str, object]:
-    """Resolve the example-doctrine-repo-side ``cutover.schema.json`` live, at call time.
+    """Resolve the coordinator-claude-side ``cutover.schema.json`` live, at call time.
 
     A distinct concern from derivation (``derive``, above) and from op
     wiring (C4b) — this module lands both because the schema is the shape
@@ -993,7 +993,7 @@ def resolve_cutover_schema(
     ``coordinator_core.frontmatter.schema_validate.check_schema_drift``
     (D2: "the gate reads it engine-side via
     ``git -C <doe> show HEAD:coordinator/schemas/…``, the established
-    seam") — resolves the example-doctrine-repo clone root via
+    seam") — resolves the coordinator-claude clone root via
     ``coordinator_core.frontmatter.schema_drift_watch.resolve_doe_repo_path``
     (registry-first, DR-071; never a hardcoded path or a ``Path(__file__)``
     walk — that shape is exactly what
@@ -1004,23 +1004,23 @@ def resolve_cutover_schema(
     co-vendored (D2).
 
     Args:
-        doe_repo_path: example-doctrine-repo clone root override. ``None`` (the
+        doe_repo_path: coordinator-claude clone root override. ``None`` (the
             default) resolves it via ``resolve_doe_repo_path()``.
         ref: git ref to read the schema at. Defaults to ``HEAD`` — the
-            gate always validates against the example-doctrine-repo tip, not a pin.
+            gate always validates against the coordinator-claude tip, not a pin.
 
     Returns:
         The parsed JSON Schema document as a dict.
 
     Raises:
-        CutoverSchemaResolutionError: the example-doctrine-repo clone could not be resolved,
+        CutoverSchemaResolutionError: the coordinator-claude clone could not be resolved,
             ``git show`` exited non-zero (missing ref, schema absent at
             that ref, not a git repo), or the resolved content is not
             valid JSON.
 
     Negative-spec: does NOT vendor or cache the resolved schema — every
     call re-reads live, per D2's "the gate reads it engine-side" framing.
-    Does NOT walk ``Path(__file__).parents`` to guess the example-doctrine-repo clone's
+    Does NOT walk ``Path(__file__).parents`` to guess the coordinator-claude clone's
     location under any circumstance; the only resolution path is
     ``resolve_doe_repo_path()`` or an explicit caller-supplied
     ``doe_repo_path``.
@@ -1028,7 +1028,7 @@ def resolve_cutover_schema(
     root = Path(doe_repo_path) if doe_repo_path is not None else resolve_doe_repo_path()
     if root is None:
         raise CutoverSchemaResolutionError(
-            "example-doctrine-repo sibling clone could not be resolved (REPO_EXAMPLE_DOCTRINE_REPO / "
+            "coordinator-claude sibling clone could not be resolved (REPO_EXAMPLE_DOCTRINE_REPO / "
             "registry repos.example_doctrine_repo / pointer files all absent) — cannot read "
             f"{_CUTOVER_SCHEMA_REPO_RELATIVE_PATH} at ref {ref!r}."
         )
@@ -1044,7 +1044,7 @@ def resolve_cutover_schema(
     )
     if result.returncode != 0:
         raise CutoverSchemaResolutionError(
-            f"Cannot read example-doctrine-repo {ref}:{_CUTOVER_SCHEMA_REPO_RELATIVE_PATH} from "
+            f"Cannot read coordinator-claude {ref}:{_CUTOVER_SCHEMA_REPO_RELATIVE_PATH} from "
             f"{root}: {result.stderr.strip()}"
         )
 
@@ -1052,7 +1052,7 @@ def resolve_cutover_schema(
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise CutoverSchemaResolutionError(
-            f"example-doctrine-repo {ref}:{_CUTOVER_SCHEMA_REPO_RELATIVE_PATH} is not valid JSON: {exc}"
+            f"coordinator-claude {ref}:{_CUTOVER_SCHEMA_REPO_RELATIVE_PATH} is not valid JSON: {exc}"
         ) from exc
 
 
@@ -1065,25 +1065,25 @@ def resolve_cutover_schema(
 #: Repo-name aliases this handler recognizes when building the repo_roots map
 #: `derive()` needs. A cutover record's `gate_source.repos[].repo` string is
 #: authored per-record (C3/C11-C17); several plausible spellings for the same
-#: two repos ("example-doctrine-repo" vs "example-doctrine-repo", "claude-klabauter" vs "claude-klabauter") are
+#: two repos ("coordinator-claude" vs "coordinator-claude", "claude-klabauter" vs "claude-klabauter") are
 #: all pointed at the same resolved root so a record author's casing choice
 #: doesn't silently fail to match. Extra unused aliases are harmless — derive()
 #: (C4a::_scan_repos) only consults the aliases a record's gate_source.repos[]
 #: actually names.
-_DOE_ROOT_ALIASES: tuple[str, ...] = ("example-doctrine-repo", "example-doctrine-repo", "example_doctrine_repo")
+_DOE_ROOT_ALIASES: tuple[str, ...] = ("coordinator-claude", "coordinator-claude", "example_doctrine_repo")
 _CLAUDE_KLABAUTER_ROOT_ALIASES: tuple[str, ...] = ("claude-klabauter", "claude_klabauter", "claude-klabauter")
 
 
 def _build_repo_roots(doe_root: Path) -> dict[str, Path]:
     """Build the {repo-name-alias: local root} map `derive()` scans against.
 
-    `doe_root` is the caller-resolved example-doctrine-repo worktree (this handler's own
-    `repo_root`/`main_worktree_root()` — cutover records live example-doctrine-repo-side, D2).
+    `doe_root` is the caller-resolved coordinator-claude worktree (this handler's own
+    `repo_root`/`main_worktree_root()` — cutover records live coordinator-claude-side, D2).
     The claude-klabauter root is THIS repo's own root, derived via an in-repo
     `Path(__file__)` climb — safe under `test_no_hardcoded_paths.py`'s Tooth 2
     ("in-repo climbing alone, with no sibling-repo token anywhere in the
     construction, is explicitly fine"): no sibling-repo name string appears in
-    this expression, unlike `schema_drift_watch.py`'s retired example-doctrine-repo-guessing
+    this expression, unlike `schema_drift_watch.py`'s retired coordinator-claude-guessing
     climb this repo's own hardcoded-paths gate was written against.
     """
     claude_klabauter_root = Path(__file__).resolve().parents[2]
@@ -1249,7 +1249,7 @@ def _reverify_sibling_commitment_ref(ref: str, doe_root: Optional[Path]) -> tupl
     docs/plans/2026-07-25-cutover-state-machine.md § C8's FK relationship):
     the EVIDENCE the sibling repo confirmed may live entirely in a foreign
     repo the local engine cannot scan, but the COMMITMENT RECORD attesting
-    to it is a example-doctrine-repo-local artifact (§ Cross-repo obligations,
+    to it is a coordinator-claude-local artifact (§ Cross-repo obligations,
     coordinator/docs/wiki/cutover-state-machine.md) — so this re-verification
     reads local disk only, same posture as the other three kinds.
 
@@ -1262,7 +1262,7 @@ def _reverify_sibling_commitment_ref(ref: str, doe_root: Optional[Path]) -> tupl
     reads it).
     """
     if doe_root is None:
-        return False, f"sibling-commitment-ref {ref!r}: no example-doctrine-repo repo root available to resolve against"
+        return False, f"sibling-commitment-ref {ref!r}: no coordinator-claude repo root available to resolve against"
     if not _SIBLING_COMMITMENT_REF_RE.match(ref):
         return False, f"sibling-commitment-ref {ref!r}: does not match the cross-repo-commitment filename shape"
 
@@ -1399,7 +1399,7 @@ async def _cutover_gate(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params:
         record (str, required) — path to the cutover record markdown file,
-            absolute or relative to the resolved example-doctrine-repo worktree.
+            absolute or relative to the resolved coordinator-claude worktree.
 
     Returns (coverage_gate-shaped verdict envelope):
         {

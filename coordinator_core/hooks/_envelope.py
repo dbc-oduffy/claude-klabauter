@@ -24,7 +24,7 @@ Negative-spec:
       Bash call. Pinned by
       coordinator_core/tests/test_bash_guards_avoid_hooks_package.py.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § D2
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § D2
 """
 
 from __future__ import annotations

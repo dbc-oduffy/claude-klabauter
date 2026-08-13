@@ -4,7 +4,7 @@ Stage-1 zero-tool-use write op (hooks.subagent_zero_tool_use).
 
 Covers: verified-zero and verified-N counts durable-written; absent transcript
 resolves to UNKNOWN with NO store-file creation (the load-bearing rule from the
-Example-doctrine-repo contract memo); a present-but-unreadable transcript (a directory in the
+Coordinator-claude contract memo); a present-but-unreadable transcript (a directory in the
 transcript's place, exercised without any chmod so it holds on Windows too) also
 resolves to UNKNOWN with no write; malformed/partial JSONL lines are tolerated and
 skipped without aborting the count; exact record field names + order; append
@@ -14,7 +14,7 @@ _OP_KEY_SCOPE, OP_MODULE_MAP) for the op key.
 All handlers are async; asyncio.run() is used directly in sync test functions — no
 pytest-asyncio dependency, matching coordinator_core/tests/test_hooks_bookkeeping.py.
 
-Spec backlink: cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-engine-op-contract.md
 """
 
 from __future__ import annotations
@@ -327,7 +327,7 @@ class TestAppendOrdering:
 
 # ---------------------------------------------------------------------------
 # Naming reconciliation (2026-07-26): the store records every verified count,
-# not only zero — cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-store-
+# not only zero — cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-store-
 # records-every-count.md. These tests pin BOTH halves of that decision end to
 # end: a non-zero count is durable-written AND resolves as "did-work"; a zero
 # count is durable-written AND still resolves as "zero-tool-use" via the

@@ -1,7 +1,7 @@
 """Tests for coordinator_core.resolution.facade — the Tier-A resolution
 facade's two structurally-distinct guard methods.
 
-Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md § W1-A1
+Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md § W1-A1 [DEAD-CITATION: plan file never committed to this repo]
 Bash-parity fixture reuse: coordinator_core/test_trusted_root_guard.py
 """
 
@@ -52,7 +52,7 @@ def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch
     settings_home.mkdir()
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    doe_root = tmp_path / "example-doctrine-repo"
+    doe_root = tmp_path / "coordinator-claude"
     doe_root.mkdir()
 
     env = {
@@ -155,9 +155,9 @@ def test_guard_plugin_root_mode_unrecognized_raises_value_error_parity():
 def test_guard_plugin_root_doe_root_sentinel_anchor_parity(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "example-doctrine-repo") + "\n")
+    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "coordinator-claude") + "\n")
     env = {"HOME": str(home)}
-    root = str(tmp_path / "example-doctrine-repo" / "coordinator")
+    root = str(tmp_path / "coordinator-claude" / "coordinator")
 
     expected = coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
     assert guard_plugin_root(root, mode="fail-open", env=env) == expected
@@ -200,7 +200,7 @@ def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path):
 def test_guard_plugin_root_windows_separator_and_case_normalization_parity(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    doe = tmp_path / "example-doctrine-repo"
+    doe = tmp_path / "coordinator-claude"
     (home / ".claude" / ".doe-root").write_text(str(doe).replace("\\", "/") + "\n")
     env = {"HOME": str(home)}
     root = str(doe / "coordinator")
@@ -230,7 +230,7 @@ def _happy_env(tmp_path):
     (settings_home / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    doe_root = tmp_path / "example-doctrine-repo"
+    doe_root = tmp_path / "coordinator-claude"
     doe_root.mkdir()
 
     (settings_home / "machine-local" / ".claude-klabauter-root").write_text(str(claude_klabauter_root) + "\n")
@@ -275,7 +275,7 @@ def test_resolve_operator_config_whitespace_only_sentinel_is_corrupt(tmp_path):
 def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path):
     env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / ".doe-root").write_text(
-        str(tmp_path / "example-doctrine-repo" / ".." / "evil") + "\n"
+        str(tmp_path / "coordinator-claude" / ".." / "evil") + "\n"
     )
 
     with pytest.raises(OperatorConfigError, match="doe_root"):

@@ -34,7 +34,7 @@ The three primitives, and the platform-semantics gap each one exists to absorb:
      retyped at a new call site.
 
   3. ``split_path`` -- absorbs the forward-slash-only path-split defect (9 of the
-     98 sites). ``"X:\\example-doctrine-repo\\coordinator".rsplit("/", 1)`` returns the
+     98 sites). ``"X:\\coordinator-claude\\coordinator".rsplit("/", 1)`` returns the
      whole string unsplit (there is no ``"/"`` in it at all), so a caller
      expecting ``(parent, leaf)`` silently gets ``(whole_string,)`` and a
      downstream tree-membership check double-adds the same clone. Folding
@@ -100,7 +100,7 @@ Negative-spec:
       defects, not I/O).
 
 Spec backlink: docs/research/2026-07-28-windows-simulation-test-harness-design.md
-  (example-doctrine-repo) -- Component Design, the AC-1/AC-3/AC-4 primitives this module
+  (coordinator-claude) -- Component Design, the AC-1/AC-3/AC-4 primitives this module
   builds toward. coordinator_core/tests/test_home_resolution_lint.py (this repo,
   commit c1545206) -- the standing gate whose baseline enumerates every site
   these primitives will eventually replace.
@@ -272,12 +272,12 @@ def split_path(value: str, sep: str = "/", maxsplit: int = -1, *, from_right: bo
     first so a native Windows path, a POSIX path, and an MSYS/Git-Bash
     mount-form path all split into the same segment shape.
 
-    ``"X:\\\\example-doctrine-repo\\\\coordinator".split("/")`` (no fold) returns a single
+    ``"X:\\\\coordinator-claude\\\\coordinator".split("/")`` (no fold) returns a single
     one-element list -- there is no ``"/"`` in the string at all -- which is
     exactly the F8 defect: a caller expecting ``(parent, leaf)`` from a
     ``rsplit("/", 1)`` silently got the whole string back unsplit, and a
     downstream tree-membership check double-counted the same clone. Folding
-    first makes ``split_path("X:\\\\example-doctrine-repo\\\\coordinator", maxsplit=1,
+    first makes ``split_path("X:\\\\coordinator-claude\\\\coordinator", maxsplit=1,
     from_right=True)`` behave the same as it would for the POSIX-form
     equivalent.
 

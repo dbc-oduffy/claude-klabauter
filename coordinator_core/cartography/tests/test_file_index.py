@@ -18,7 +18,7 @@ Coverage:
   (e) op handler — missing target_root raises ValueError; happy path delegates
       to build_file_index via the path_guard-contained root
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md § C2
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e § C2
 """
 
 from __future__ import annotations

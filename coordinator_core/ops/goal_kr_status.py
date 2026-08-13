@@ -66,7 +66,7 @@ Negative-spec:
   - Does NOT project `status_source`/`status_set_at` onto the cockpit wire —
     `GoalKeyResultStatus` (contract/cockpit_schema/entities/goal.py) and the
     frozen `cockpit-contract` schema JSON are untouched by this change; that
-    surface is gated by a bilateral version-bump with example-doctrine-repo and is a separate
+    surface is gated by a bilateral version-bump with coordinator-claude and is a separate
     decision. The two provenance fields exist only in the artifact-side YAML.
 """
 

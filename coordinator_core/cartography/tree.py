@@ -14,7 +14,7 @@ Load-bearing regression (AC5): this primitive must reproduce
 1,462-line figure (state/scratch/deep-architecture-survey dogfood run,
 2026-07-12) was a Haiku miscount this deterministic walk corrects.
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md § C2
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e § C2
 
 Negative-spec:
   - Does NOT classify files into architectural "systems" — that's

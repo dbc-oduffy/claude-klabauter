@@ -21,7 +21,7 @@ a duplicate lesson-outbox/central-queue entry.
 
 1. `_candidate_search_dirs()`'s central-scope improvement-queue leg was
    scanning `coordinator_registry.doe_root()` (repos.example_doctrine_repo), but commit
-   5b908173 ("central scope routes to claude-klabauter, not example-doctrine-repo — reconcile the two
+   5b908173 ("central scope routes to claude-klabauter, not coordinator-claude — reconcile the two
    implementations", 2026-07-23) repointed coordinator-queue-append's actual
    central-scope write (both its legacy `_output_path()` branch and the
    native `queue.append` op) to `cli_shared.claude_klabauter_root()` (repos.claude_klabauter)
@@ -47,7 +47,7 @@ a duplicate lesson-outbox/central-queue entry.
    resolves `repos.example_doctrine_repo` independently, on the invoking machine's REAL
    machine-local registry, not via the `MACHINE_LOCAL_IMPL` test-isolation
    stub) — diagnosing this by hand leaked one real file into the live
-   `example-doctrine-repo` sibling repo's `state/lessons-outbox/` before it was caught
+   `coordinator-claude` sibling repo's `state/lessons-outbox/` before it was caught
    and deleted. coordinator-lesson-promote now carries a
    `LESSON_PROMOTE_OUTBOX_ROOT`-forces-legacy gate mirroring
    coordinator-queue-append's pre-existing `QUEUE_APPEND_OUTPUT_ROOT` one, so

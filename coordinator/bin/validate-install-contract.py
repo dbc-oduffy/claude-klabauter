@@ -35,8 +35,8 @@ cross-repo/fleet-shared hook.
 # lines) has been fully ported to
 # coordinator_core/ops/validate_install_contract.py (claude-klabauter), with a
 # co-located pytest suite (coordinator_core/ops/test_validate_install_
-# contract.py, 27 tests). This file is now a thin example-doctrine-repo-side (contract)
-# trampoline over that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo owns
+# contract.py, 27 tests). This file is now a thin coordinator-claude-side (contract)
+# trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
 # contract/generator, claude-klabauter owns engine). The `jq` and `bash >= 4.3`
 # runtime preconditions from the bash oracle are gone — this is a
 # pure-Python port, no external binary dependency.
@@ -61,9 +61,9 @@ cross-repo/fleet-shared hook.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# example-doctrine-repo repo, not here).
+# coordinator-claude repo, not here).
 #
 # Spec backlink: docs/plans/2026-07-11-packageability-contract-fleet-doctrine.md § C4
 # Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md

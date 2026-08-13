@@ -22,7 +22,7 @@ Fixture approach: real on-disk YAML files in a tmp_path directory — matches th
 production ``state/initiatives/<id>.yaml`` shape (lesson: test-fidelity-seed-fixtures-
 in-the-real).
 
-Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C2 (AC2)
+Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C2 (AC2)
 """
 
 from __future__ import annotations

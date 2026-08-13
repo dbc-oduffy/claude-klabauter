@@ -29,7 +29,7 @@ carries roughly ~2.2ms sigma (sqrt(1.57^2 + 1.57^2) ~= 2.22). Do not treat a
 small negative or small positive `floor_delta_ms` as significant on its own --
 it is well within this combined-draw noise band.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C5
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C5
 """
 
 from __future__ import annotations

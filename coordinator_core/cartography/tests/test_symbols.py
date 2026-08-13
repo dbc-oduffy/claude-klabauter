@@ -23,7 +23,7 @@ Coverage:
       build_symbols runs any per-file work (Finding 2, 2026-07-12-codereview-
       slicecartography-substrate-b-wave)
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C4 (cartography.symbols).
 """
 

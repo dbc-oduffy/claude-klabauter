@@ -18,7 +18,7 @@ Pins three overwrite-policy legs:
 
 Spec backlink: dispatch brief "percolate-hook-files overwrite-policy repair",
 2026-07-24 (bug confirmed against
-Example-doctrine-repo coordinator/tests/test_percolate_store_copies_parity.py).
+Coordinator-claude coordinator/tests/test_percolate_store_copies_parity.py).
 """
 
 from __future__ import annotations

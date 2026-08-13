@@ -392,26 +392,26 @@ def _default_repo_root() -> Path:
     """Post-split default root: the percolation SOURCE tree (the one holding
     `setup/`), not this file's own repo root. The 2026-07-22 executable-surface
     migration moved this module into claude-klabauter while `setup/` stayed in
-    the percolation source (example-doctrine-repo / a `~/.claude` shared install), so the
+    the percolation source (coordinator-claude / a `~/.claude` shared install), so the
     old `parents[3]` walk lands on a tree with no `setup/` at all. Rung order:
       1. Co-located `setup/` beside this module's repo root — the pre-split
          layout and any install shipping both halves together; costs nothing.
       2. `coordinator_core.percolate.runtime_root`'s explained resolver (env
-         override → cwd git root → example-doctrine-repo-root pointer → shared install), whose
+         override → cwd git root → coordinator-claude-root pointer → shared install), whose
          root marker is `setup/publish-targets.portable`, exactly the data
          this module exists to reach — BUT pinned to never accept an answer
-         that resolves to the example-doctrine-repo clone itself (docs/plans/2026-08-01-percolate-
+         that resolves to the coordinator-claude clone itself (docs/plans/2026-08-01-percolate-
          root-rung-ordering.md, chunk C4, "ENSURE_REQUIRED_TARGETS DECISION").
          This module is a machine-local backfill tool, not a doctrine editor:
          `_legacy_branch` rewrites `targets_file` (`setup/publish-targets.sh`)
-         in place, and landing the example-doctrine-repo clone as this caller's answer would
+         in place, and landing the coordinator-claude clone as this caller's answer would
          redirect that rewrite into a foreign git repo's tracked file — the
          exact write-into-a-foreign-clone hazard C6/C8 exist to stop,
          arriving through this caller instead of the installer.
          The pin compares the resolved PATH (normalized via `Path.resolve()`)
          against `doe_root_pointer.read_doe_root_pointer()`'s answer (also
          normalized) rather than checking the rung *label* — the label alone
-         is an incomplete proxy: a cwd *inside* the example-doctrine-repo clone resolves via
+         is an incomplete proxy: a cwd *inside* the coordinator-claude clone resolves via
          rung 2 (`"repo-local-git"`), not rung 3 (`"doe-root-pointer"`), and a
          label-only check would miss it. The `"doe-root-pointer"` rung label
          is still excluded too, belt-and-braces, but the path comparison is
@@ -436,8 +436,8 @@ def _default_repo_root() -> Path:
         return co_located
     if rung == "doe-root-pointer":
         return co_located
-    # Review: code-reviewer — pin on the resolved *path* being the example-doctrine-repo clone,
-    # not the rung label; a cwd-inside-example-doctrine-repo-clone hit resolves via rung 2
+    # Review: code-reviewer — pin on the resolved *path* being the coordinator-claude clone,
+    # not the rung label; a cwd-inside-coordinator-claude-clone hit resolves via rung 2
     # ("repo-local-git"), which the label-only check never caught (Finding 1).
     resolved_path = Path(resolved).resolve()
     try:

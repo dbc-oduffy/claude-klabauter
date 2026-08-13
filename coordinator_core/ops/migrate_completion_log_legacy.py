@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.migrate_completion_log_legacy — idempotent monolith
-migration port of example-doctrine-repo's migrate-completion-log-legacy.sh trampoline.
+migration port of coordinator-claude's migrate-completion-log-legacy.sh trampoline.
 
 Purpose: moves legacy monthly monolith completion-log files
 (`archive/completed/YYYY-MM.md`) under `archive/completed/legacy/` so the
@@ -14,10 +14,10 @@ Invocation contexts:
     idempotency (re-entrant, safe to call repeatedly) makes this safe.
 
 Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
-import from the example-doctrine-repo polyglot trampoline (template-variant #1, mirrors
+import from the coordinator-claude polyglot trampoline (template-variant #1, mirrors
 coordinator-auto-push / handoff-gate-aging / check-no-monolith-completion-append).
 
-Port of: migrate-completion-log-legacy.sh (example-doctrine-repo 290997c7, 2026-07-22)
+Port of: migrate-completion-log-legacy.sh (coordinator-claude 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-05-19-completion-log-phase1-foundational-loop.md § Chunk 7
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 

@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.blocked.
 
-Port of: blocked.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: blocked.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: archive/specs/2026-05-05-script-first-deterministic-ops.md §T2
 """
 from __future__ import annotations

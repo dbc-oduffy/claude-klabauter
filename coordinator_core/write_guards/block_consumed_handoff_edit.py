@@ -2,9 +2,9 @@
 (mixed-shape: the claim-holder continuation leg advises non-blocking, the
 non-holder/close-intent legs still hard-deny).
 
-Python engine-ification of example-doctrine-repo's retired
+Python engine-ification of coordinator-claude's retired
 ``coordinator/hooks/scripts/block-consumed-handoff-edit.sh`` PreToolUse
-(Write|Edit|MultiEdit|NotebookEdit) hook (deleted 2026-07-16, example-doctrine-repo
+(Write|Edit|MultiEdit|NotebookEdit) hook (deleted 2026-07-16, coordinator-claude
 ``2f8b8450``), per the naked-Python hook migration (write_guards/INTERFACE.md).
 
 Purpose (ported verbatim from the reference hook): a claimed handoff
@@ -21,12 +21,12 @@ deny leads with the alternative, but the alternative is a named command, not
 a pre-built artifact). A close-intent edit is routed to the ship op instead
 of the continuation route (``_is_close_intent``; 2026-07-28 orphan-baton
 fix, example-retrieval-repo-em memo). The deny text also offers a distinct terminal-close route
-(``archive-stamp-cli ship-handoff`` — example-doctrine-repo's ergonomic veneer over
+(``archive-stamp-cli ship-handoff`` — coordinator-claude's ergonomic veneer over
 ``handoff.archive_transition`` / ``mode: stamp_only``) alongside the
 continuation route, so an operator CLOSING/shipping the workstream is not
 funneled into the recovery-only override (2026-07-21 closure-friction fix,
 memo Finding 1; deny repointed onto the ship-handoff verb once it landed
-Example-doctrine-repo-side in b22f973d). A third named route, in the continuation branch
+Coordinator-claude-side in b22f973d). A third named route, in the continuation branch
 only, covers an author CORRECTING a factual error in a body they wrote:
 ``handoff.correct_body``, a narrow possession-gated (post-C2), prose-only op
 invoked via the native ``coordinator_core.invoke`` form — never through the Edit
@@ -129,9 +129,9 @@ Negative-spec:
     (``test_guard_writes_nothing``) exists specifically to catch this.
 
 Spec backlink: coordinator/hooks/scripts/block-consumed-handoff-edit.sh (header doc,
-  retired 2026-07-16, example-doctrine-repo ``2f8b8450``)
-Ported from the retired example-doctrine-repo bash guard ``block-consumed-handoff-edit.sh``
-  (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``).
+  retired 2026-07-16, coordinator-claude ``2f8b8450``)
+Ported from the retired coordinator-claude bash guard ``block-consumed-handoff-edit.sh``
+  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
 """
 
 from __future__ import annotations

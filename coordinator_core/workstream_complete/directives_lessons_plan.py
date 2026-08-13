@@ -18,7 +18,7 @@ Consumed only by `coordinator_core.workstream_complete.__init__`'s
 assembly seam (C3) — never imported elsewhere, never run as a script.
 
 Census rows covered (`state/plan-sidecars/2026-07-26-workstream-complete-
-computed-frontage.census-steps.md`, example-doctrine-repo): Step 1, Step 1.2 mechanical
+computed-frontage.census-steps.md`, coordinator-claude): Step 1, Step 1.2 mechanical
 tail, Step 2 locate + predicate, Step 2.4 governing-plan predicate + claim
 + stamp, Step 2.4b harvest sweep.
 
@@ -370,7 +370,7 @@ def build_deferral_harvest_directives(governing_plans: list[GoverningPlan]) -> l
 
     This paragraph is spelled out because the prior wording ("surfaced in
     the Step 4 one-liner, never a ceremony halt") read as "rendered and
-    moved on" — example-doctrine-repo-em could not establish from it whether the new
+    moved on" — coordinator-claude-em could not establish from it whether the new
     fail-loud survived WSC at all, which is the one path that matters for
     a row that flipped to deferred after Phase 1.6 already harvested.
     """

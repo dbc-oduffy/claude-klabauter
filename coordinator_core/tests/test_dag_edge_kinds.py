@@ -17,10 +17,10 @@ Coverage:
   (e) referenced_by_explicit_traverses_origin_handoff — referenced_by returns
       referenced=True when called with edge_kinds={'origin_handoff'}.
 
-The out-of-default-set property for origin_handoff mirrors the example-doctrine-repo JS side
+The out-of-default-set property for origin_handoff mirrors the coordinator-claude JS side
 (walk-handoff-dag.js) per the ratified spinoff-provenance-ancestry contract.
 
-Spec backlink: docs/plans/2026-07-07-spinoff-provenance-ancestry.md (example-doctrine-repo side)
+Spec backlink: docs/plans/2026-07-07-spinoff-provenance-ancestry.md (coordinator-claude side)
 Ratification memo: cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md
 """
 

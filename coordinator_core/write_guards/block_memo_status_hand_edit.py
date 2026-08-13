@@ -89,7 +89,7 @@ both required — narrowing only one leaves the other half of the over-fire:
     fence) — fails toward deny, this module's existing conservative
     direction for an ambiguous match.
 
-Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md (chunk C3);
+Spec backlink: pln-give-the-memo-disposition-flip-e580c2 (chunk C3);
 docs/plans/2026-08-06-apply-guard-class-census.md (chunk C18)
 """
 

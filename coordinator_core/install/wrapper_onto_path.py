@@ -44,7 +44,7 @@ Negative-spec:
     - NEVER hardcodes `~/.local/bin` as a literal string on any platform --
       the target dir is always derived via `_default_wrapper_bin_dir()`.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
     § Wave 2, Mandated resolvers, DEC-2, DEC-7
 Spec backlink: state/audits/2026-07-22-command-payload-inventory/{op-classification,distinct-ops-new}.tsv
     row `install-wrapper-onto-path`

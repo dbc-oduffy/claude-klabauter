@@ -1,6 +1,6 @@
 """test_publish_gate_predicate_symmetry — regression tests for the three
 publish-gate defects reported in
-cross-repo/inbox/2026-08-05-example-doctrine-repo-em-three-publish-gates-block-the-4-0-0-percolate.md.
+cross-repo/inbox/2026-08-05-coordinator-claude-em-three-publish-gates-block-the-4-0-0-percolate.md.
 
 The load-bearing one is a PREDICATE ASYMMETRY in `file-count-delta`: the
 OBSERVED side (`guards.check_file_count_delta` -> `guards._walk_for_guard`) walks
@@ -174,7 +174,7 @@ class TestUnscannedExceptionsRatification:
         # A key that is not the destination-repo-root-relative POSIX path the
         # check compares against is silently inert, which is the worst outcome.
         assert not path.startswith("coordinator/")
-        assert "2026-08-05-example-doctrine-repo-em-three-publish-gates" in reason
+        assert "2026-08-05-coordinator-claude-em-three-publish-gates" in reason
 
     def test_preexisting_exception_still_loads(self):
         exceptions = publish._load_unscanned_exceptions()

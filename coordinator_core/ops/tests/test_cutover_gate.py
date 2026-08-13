@@ -45,7 +45,7 @@ def _write_record(
             "kind": "value-vocabulary",
             "pattern": "TARGET_TOKEN",
             "paths": ["sub"],
-            "repos": [{"repo": "example-doctrine-repo", "foreign": False}],
+            "repos": [{"repo": "coordinator-claude", "foreign": False}],
         },
     }
     fm_text = yaml.safe_dump(fm, default_flow_style=False, sort_keys=False)
@@ -78,7 +78,7 @@ def test_derived_consumer_absent_from_confirmed_refuses(tmp_path: Path) -> None:
     assert "VERDICT=REFUSE" in result["verdict_line"]
     refusal_notes = [n for n in result["notes"] if "no matching" in n.lower()]
     assert refusal_notes, result["notes"]
-    assert "example-doctrine-repo:sub/unconfirmed_writer.py" in refusal_notes[0]
+    assert "coordinator-claude:sub/unconfirmed_writer.py" in refusal_notes[0]
     assert "confirmed_consumers entry" in refusal_notes[0]
 
 
@@ -95,7 +95,7 @@ def test_derived_consumer_absent_from_confirmed_refuses_even_with_other_confirme
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "example-doctrine-repo:sub/confirmed_writer.py",
+                "id": "coordinator-claude:sub/confirmed_writer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -108,7 +108,7 @@ def test_derived_consumer_absent_from_confirmed_refuses_even_with_other_confirme
     assert "VERDICT=REFUSE" in result["verdict_line"]
     refusal_notes = [n for n in result["notes"] if "no matching" in n.lower()]
     assert refusal_notes, result["notes"]
-    assert "example-doctrine-repo:sub/unconfirmed_writer.py" in refusal_notes[0]
+    assert "coordinator-claude:sub/unconfirmed_writer.py" in refusal_notes[0]
 
 
 def test_fully_covered_record_passes(tmp_path: Path) -> None:
@@ -119,7 +119,7 @@ def test_fully_covered_record_passes(tmp_path: Path) -> None:
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "example-doctrine-repo:sub/writer.py",
+                "id": "coordinator-claude:sub/writer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }

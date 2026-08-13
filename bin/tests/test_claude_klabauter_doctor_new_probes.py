@@ -22,7 +22,7 @@ Probe-authoring invariant (per state/lessons/2026-07-04-a-diagnostic-must-always
   bootstrap failure.  A bare exception or empty result is the exact failure the doctor
   exists to prevent.  Tests assert this invariant explicitly on fault paths.
 
-Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C6
+Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C6
 """
 
 from __future__ import annotations

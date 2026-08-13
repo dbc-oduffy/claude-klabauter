@@ -189,7 +189,7 @@ def _write_registry_toml(settings_home: str, entries: dict[str, str]) -> None:
     each repos.<key> -> path — the exact surface claude-klabauter's memo.send op reads
     directly via stdlib tomllib (COORDINATOR_SETTINGS_HOME/machine-local/
     registry.toml). Distinct from MACHINE_LOCAL_IMPL, which only affects this
-    CLI's OWN (example-doctrine-repo-side) machine-local lookups."""
+    CLI's OWN (coordinator-claude-side) machine-local lookups."""
     import json as _json
     reg_dir = os.path.join(settings_home, "machine-local")
     os.makedirs(reg_dir, exist_ok=True)

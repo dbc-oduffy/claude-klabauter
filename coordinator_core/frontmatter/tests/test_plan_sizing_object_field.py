@@ -16,7 +16,7 @@ lives in coordinator_core.ops.assert_plan_sizing_citation. Nor is a citation
 ever compared against a plan's problem restatement; see the plan's Anti-scope
 for why intent-matching was ruled out.
 
-Spec backlink: docs/plans/2026-08-06-plan-sizing-citation-gate.md § C1 / AC1
+Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C1 / AC1
 """
 
 from __future__ import annotations

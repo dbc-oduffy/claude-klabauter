@@ -47,7 +47,7 @@ Write shape — flat top-level YAML frontmatter keys written/upserted:
     fast_test_cmd: <cmd>
     full_test_cmd: <cmd>
 
-Port of: coordinator/lib/setup-detect-test-cmd.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
+Port of: coordinator/lib/setup-detect-test-cmd.sh (coordinator-claude 6fb5fb37, 2026-07-22).
 Spec backlink: docs/plans/2026-06-23-setup-time-substrate-completeness.md § C1
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
     (BIG_PORT Wave C, item setup-detect-test-cmd).

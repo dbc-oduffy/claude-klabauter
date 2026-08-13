@@ -2,7 +2,7 @@
 coordinator_core.ops.tests.test_sizing_decline — the "sizing.decline" applier
 (2026-08-10, docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2).
 
-Spec backlink: docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md § C2, AC3
+Spec backlink: pln-a-terminal-status-for-a-declin-2bb298 § C2, AC3
 
 Run (from repo root):
     python3 -m pytest coordinator_core/ops/tests/test_sizing_decline.py -q

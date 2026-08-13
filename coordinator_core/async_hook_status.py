@@ -10,7 +10,7 @@ mirroring cache.py's negative-spec.
 
 `surface_and_clear` (mirroring `ahs_surface_and_clear`) is ported alongside the
 write side (`record_failure` / `status_dir`) for full parity.
-Port of: async-hook-status.sh (example-doctrine-repo c187f5b9, 2026-07-21).
+Port of: async-hook-status.sh (coordinator-claude c187f5b9, 2026-07-21).
 
 Marker shape and directory layout are BYTE-IDENTICAL to the retired bash
 producer, which remains load-bearing for any consumer still golden-diffing

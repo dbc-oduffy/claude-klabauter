@@ -2,7 +2,7 @@
 coordinator_core.ops.migrate_state_to_claude_klabauter — two-phase state/docs migration
 from ~/.claude (CLAUDE_HOME) to the claude-klabauter sibling repo (CLAUDE_KLABAUTER_ROOT).
 
-Purpose: DR-059 bash-to-naked-Python port of the example-doctrine-repo-owned script
+Purpose: DR-059 bash-to-naked-Python port of the coordinator-claude-owned script
 `coordinator/bin/migrate-state-to-claude-klabauter.sh` (~346 lines). Implements the
 two-phase cross-repo excision contract per cleanup-sweep-hazards.md §10 and
 the populate-before-repoint live-safety sequence from the C6 plan (PM-directed
@@ -26,10 +26,10 @@ Two subcommands:
     3. Removes CLAUDE_HOME originals for all source trees.
     DO NOT RUN until after: C3/C4/C12 repoint + C11 dogfood consistency gate.
 
-Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md
+Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787
                § Phase 2 / C6 / AC5 / § Execution Notes (C6a/C6b split)
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: migrate-state-to-claude-klabauter.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: migrate-state-to-claude-klabauter.sh (coordinator-claude b5a4192c, 2026-07-20)
 
 Exit codes (parity-critical, preserved from the bash oracle):
     0 — success (populate complete, or finalize complete)

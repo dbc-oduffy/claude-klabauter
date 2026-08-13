@@ -37,7 +37,7 @@ Exit codes: 0 — verdict printed (incl. vacuous zero-match). 1 — usage error
 (bad --session-id, missing --session-id argument, unresolvable origin/main,
 or a die-silent gate — see negative-spec).
 
-Port of: review-brightline-gate.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: review-brightline-gate.sh (coordinator-claude b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 Spec backlink: docs/plans/2026-06-15-brightline-session-scope-fix.md § C3
 
@@ -45,7 +45,7 @@ Cross-repo session scope (XB-6, 2026-07-29) -- the `--from-handoff` `session_ora
 computation (and the tier=A unwalked-repo ruling it feeds) now sums the
 Session-Id-trailer-matched diff across EVERY repo this session actually wrote
 into, not only the repo the ceremony happens to be invoked from. This closes a
-blind spot: a session working under the example-doctrine-repo standing cross-repo grant
+blind spot: a session working under the coordinator-claude standing cross-repo grant
 (global CLAUDE.md section Cross-repo write discipline) commits directly into
 Claude-klabauter (and, per several rows in the 2026-07-29 Windows-viability plan
 family -- MP-8's post-merge/post-checkout hook, MP-9's untracks, WS-5's belts,
@@ -228,7 +228,7 @@ _NOISE_TRACKER_RE = re.compile(r"^docs/.*-tracker\.md$")
 # Do NOT wire the shared predicate into `_is_noise_path` — a planning-artifact
 # commit is not noise (AC9: the gate stays non-vacuous; a planning artifact
 # still owes a review), it is merely cheaper-per-line than code.
-# Spec backlink: docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C7, AC8
+# Spec backlink: pln-planning-artifacts-are-a-third-77111f § C7, AC8
 #
 # SUPERSEDED IN PART (C1a, 2026-08-12): `_is_prose_bearing_path` now runs
 # BEFORE this weight is ever applied (see the `countable` filter in
@@ -716,7 +716,7 @@ class CrossRepoResolutionError(RuntimeError):
 
 def _resolve_cross_repo_roots(this_repo_root: Path) -> Dict[str, str]:
     """Resolve every OTHER repo this session may have written into under the
-    example-doctrine-repo standing cross-repo grant (global CLAUDE.md § Cross-repo write
+    coordinator-claude standing cross-repo grant (global CLAUDE.md § Cross-repo write
     discipline) — a NAMED list, never a single hardcoded second entry:
 
       "claude-klabauter" -> coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()

@@ -1,14 +1,14 @@
 """
 coordinator_core.ops.coordinator_doe_root — Port of:
-coordinator-doe-root.sh (example-doctrine-repo 09e5e5f9, 2026-07-19, sourced-lib shape, DOE-PORT R2-R6 wave).
+coordinator-doe-root.sh (coordinator-claude 09e5e5f9, 2026-07-19, sourced-lib shape, DOE-PORT R2-R6 wave).
 
-Purpose: resolves the example-doctrine-repo sibling-repo root, analogous to how CLAUDE_KLABAUTER_ROOT
+Purpose: resolves the coordinator-claude sibling-repo root, analogous to how CLAUDE_KLABAUTER_ROOT
 works for the claude-klabauter plane. The bash oracle exposes a single public shell function,
 `coordinator_doe_root`, meant to be `source`d by other bash scripts. This module
 provides the same resolution chain as a plain Python function so any coordinator_core
 caller can import it directly without shelling back out to bash.
 
-NOTE — the example-doctrine-repo-side `.sh` is a SOURCED LIB, not an executable: nothing can `source` a
+NOTE — the coordinator-claude-side `.sh` is a SOURCED LIB, not an executable: nothing can `source` a
 `.py` file, so `coordinator-doe-root.sh` is left UNCHANGED by this port (its bash
 callers keep sourcing it as-is). This module is authored so that a *future* Python
 caller (or a bash→Python cutover of one of its callers, e.g.
@@ -105,7 +105,7 @@ module as the deliberately-asymmetric counter-example. That cross-reference is n
 STALE: both resolvers are pure. The two modules agree; claude_klabauter_root's note should be
 updated when that file is next touched.
 
-Spec backlink: docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md § W2.1
+Spec backlink: docs/plans/2026-07-04-doe-authoring-repo-build-subject-matter-.md § W2.1 [DEAD-CITATION: plan file never committed to this repo]
              + docs/plans/2026-07-09-resolver-unification-v3split-01.md § C3
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Negative-spec (faithfully reproduced from the bash oracle -- do NOT "fix" mid-port):
@@ -141,7 +141,7 @@ from coordinator_core.doe_root_pointer import read_doe_root_pointer_file as _cf_
 
 _SUBPROCESS_TIMEOUT_SECS = 15
 
-# Published-manifest relpath (OSS flat layout). The private example-doctrine-repo-repo layout
+# Published-manifest relpath (OSS flat layout). The private coordinator-claude-repo layout
 # nests the same relpath under `coordinator/`. Shared by the codename-free
 # rung ladder's acceptance gate below.
 _CF_MANIFEST_RELPATH = os.path.join("schemas", "coordinator-registry.manifest.json")
@@ -175,7 +175,7 @@ def _machine_local_get(key: str) -> Optional[str]:
 def _cf_manifest_present(root: str) -> bool:
     """True if `root` contains either published manifest layout: OSS flat
     (`<root>/schemas/coordinator-registry.manifest.json`) or the private
-    example-doctrine-repo-repo shape (`<root>/coordinator/schemas/coordinator-registry.manifest.json`).
+    coordinator-claude-repo shape (`<root>/coordinator/schemas/coordinator-registry.manifest.json`).
     Gates each codename-free rung so a resolved-but-empty/unrelated directory
     is not accepted over a later, correct rung.
 
@@ -230,7 +230,7 @@ def repo_root_from_plugin_root_candidate(
         Windows, case-sensitive on POSIX) vs "casefold" (coordinator_
         registry.py — case-insensitive on every platform). See the same
         "Known cross-copy divergence" note.
-      manifest_relpath_fallback: this module's B5 fix (a private example-doctrine-repo repo
+      manifest_relpath_fallback: this module's B5 fix (a private coordinator-claude repo
         root without the marketplace marker still normalizes via the
         manifest-relpath shape). coordinator_registry.py's copy does not
         carry this fallback — pass False to reproduce its behaviour.
@@ -241,7 +241,7 @@ def repo_root_from_plugin_root_candidate(
         os.path.isdir() happens to be true. This module's own call sites
         never vary this (always effectively True).
 
-    CLAUDE_PLUGIN_ROOT is a *content* root: in the private/dev example-doctrine-repo layout
+    CLAUDE_PLUGIN_ROOT is a *content* root: in the private/dev coordinator-claude layout
     this is `<repo_root>/coordinator`, one level below the repo root this
     module's docstring contracts to return. In the OSS flat layout the
     content root and the repo root coincide. Disambiguate the same way:
@@ -486,7 +486,7 @@ def _reset_doe_root_cache() -> None:
 
 
 def coordinator_doe_root() -> Optional[str]:
-    """Resolve the example-doctrine-repo sibling-repo root via the documented rung chain.
+    """Resolve the coordinator-claude sibling-repo root via the documented rung chain.
 
     Returns the resolved absolute path, or None on hard failure (rung 4) -- the
     caller is responsible for printing the remediation message (see `main()`),
@@ -548,7 +548,7 @@ _REMEDIATION = (
     "  The machine-local registry has no 'repos.example_doctrine_repo' entry (canonical) or\n"
     "  'plugin.mirrors.coordinator-claude.live_path' entry (fallback) on this machine.\n"
     "  Remediate (choose one):\n"
-    "    machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo\n"
+    "    machine-local set repos.example_doctrine_repo /path/to/coordinator-claude\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
     "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c\n"
 )

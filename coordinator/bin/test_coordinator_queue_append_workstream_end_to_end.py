@@ -1,7 +1,7 @@
 """
 test_coordinator_queue_append_workstream_end_to_end.py — AC7 regression oracle.
 
-AC7 (docs/plans/2026-07-30-workstream-store-writer-and-parser.md, example-doctrine-repo): "A
+AC7 (docs/plans/2026-07-30-workstream-store-writer-and-parser.md, coordinator-claude): "A
 workstream minted end-to-end through the sanctioned writer alone renders with its
 deliverables, specs, and dependency_annotations — no hand-authoring step."
 

@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.check_arch_audit_staleness.
 
-Golden oracle (Port of: check-arch-audit-staleness.sh, example-doctrine-repo b5a4192c, 2026-07-20),
+Golden oracle (Port of: check-arch-audit-staleness.sh, coordinator-claude b5a4192c, 2026-07-20),
 snapshotted 2026-07-16 against a `CAAS_TEST_STATE_ROOT`-stubbed
 coordinator_state_root() (a locally patched shim -- the real coordinator lib
 resolution is not itself under test here, see test_resolve_state_root_*

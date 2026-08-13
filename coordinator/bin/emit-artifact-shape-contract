@@ -14,12 +14,12 @@ wiring) has been fully ported to coordinator_core/ops/emit_artifact_shape_contra
 (claude-klabauter), with independent parity coverage in the co-located pytest
 (coordinator_core/ops/test_emit_artifact_shape_contract.py — including a live
 structural-parity run against this trampoline's own JS predecessor). This file is now
-a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
-(example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
+(coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 Unlike coordinator-auto-push (whose ported module is a HOT per-commit path that reads
-only claude-klabauter-resident state), this op reads example-doctrine-repo-side input (coordinator/schemas/) and
-writes a example-doctrine-repo-side output (coordinator/artifact-shape-contract/ by default) — the ported
+only claude-klabauter-resident state), this op reads coordinator-claude-side input (coordinator/schemas/) and
+writes a coordinator-claude-side output (coordinator/artifact-shape-contract/ by default) — the ported
 module has no way to locate those on its own, since schemas/ lives in THIS repo, not
 Claude-klabauter. This trampoline resolves its own coordinator root and hands it to the claude-klabauter
 module via the EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT env var (module docstring
@@ -29,10 +29,10 @@ tooling that redirects output to a tmp dir keeps working unchanged.
 
 Coordinator-root resolution does NOT derive from this script's own __file__ location
 (dirname(dirname(__file__))). That mirrored the JS oracle's `COORDINATOR =
-path.join(__dirname, '..')` correctly while this executable lived in example-doctrine-repo
+path.join(__dirname, '..')` correctly while this executable lived in coordinator-claude
 (coordinator/bin/.. IS the coordinator root there) — but this file has since migrated to
 Claude-klabauter (see BACKGROUND above) while coordinator/schemas/ and
-coordinator/artifact-shape-contract/ stayed in example-doctrine-repo. Self-location now resolves to
+coordinator/artifact-shape-contract/ stayed in coordinator-claude. Self-location now resolves to
 <claude-klabauter>/coordinator, which has neither directory, so the op module would fail with a
 misleading "schemas/ not found" instead of a clear root-resolution error. Resolution now
 goes through CLAUDE_PLUGIN_ROOT (env override, wins verbatim if set) else
@@ -47,9 +47,9 @@ for this shape. On Windows, this file's co-located `.cmd` twin wins via
 macOS/Linux `python3` is the right interpreter. Caution: callers must invoke
 via the extensionless name or a resolved-interpreter prefix, never a bareword
 `.py` through git-bash — git-bash DOES honor the shebang and would exec-127
-with no `python3` present. See the carve-out in example-doctrine-repo's
+with no `python3` present. See the carve-out in coordinator-claude's
 coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
-this wiki lives in the example-doctrine-repo repo, not here).
+this wiki lives in the coordinator-claude repo, not here).
 
 Usage:
   emit-artifact-shape-contract
@@ -83,7 +83,7 @@ from coordinator_registry import _DoeUnresolvable, doe_root  # noqa: E402
 
 
 def _resolve_coordinator_root() -> str:
-    """Resolve the example-doctrine-repo-side coordinator/ root that owns schemas/ (input) and
+    """Resolve the coordinator-claude-side coordinator/ root that owns schemas/ (input) and
     artifact-shape-contract/ (default output).
 
     CLAUDE_PLUGIN_ROOT wins verbatim if set. Otherwise resolves via
@@ -93,7 +93,7 @@ def _resolve_coordinator_root() -> str:
     Does NOT derive from this script's own __file__ location — see this module's
     docstring § coordinator root resolution for why self-location broke when this
     executable migrated to claude-klabauter while schemas/ and artifact-shape-contract/
-    stayed in example-doctrine-repo.
+    stayed in coordinator-claude.
 
     Fails loud (sys.exit(2), the same DEDICATED transport/config-failure code used for
     CLAUDE_KLABAUTER_ROOT resolution failures below) if doe_root() cannot resolve.
@@ -105,7 +105,7 @@ def _resolve_coordinator_root() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            f"emit-artifact-shape-contract: cannot resolve the example-doctrine-repo repo root ({exc}). "
+            f"emit-artifact-shape-contract: cannot resolve the coordinator-claude repo root ({exc}). "
             "Set repos.example_doctrine_repo in the machine-local registry, or set the DOE_ROOT "
             "(or REPO_EXAMPLE_DOCTRINE_REPO) env var, or set CLAUDE_PLUGIN_ROOT directly.",
             file=sys.stderr,
@@ -150,7 +150,7 @@ def main() -> None:
         )
         sys.exit(2)
 
-    # This is example-doctrine-repo-side data (schemas/ input, artifact-shape-contract/ output) that
+    # This is coordinator-claude-side data (schemas/ input, artifact-shape-contract/ output) that
     # the claude-klabauter module has no way to locate on its own; hand it over via env var
     # (see module docstring, and _resolve_coordinator_root()'s own docstring, for
     # why this is NOT derived from this script's own __file__ location).

@@ -12,7 +12,7 @@ Fixtures mirror the existing `test_provision_report.py`'s `git_repo` /
 `resolve_git_root` behaves exactly as it does against a production
 checkout).
 
-Spec backlink: docs/plans/2026-08-05-in-process-writers-declare-their-writes.md C2
+Spec backlink: pln-in-process-engine-writers-decl-33016a C2
 Module under test: coordinator_core/subagent_sandbox/provision_report.py
 """
 

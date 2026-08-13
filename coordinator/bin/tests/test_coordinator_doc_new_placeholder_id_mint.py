@@ -15,7 +15,7 @@ edge. `test_placeholder_id_would_false_clear_a_blocked_by` pins that mechanism
 directly against the real pattern, so a future change that reintroduces a
 "harmless-looking" placeholder id fails here with the reason attached.
 
-Spec backlink: cross-repo/inbox/2026-08-05-example-doctrine-repo-em-placeholder-id-minting-fix-unfiled.md
+Spec backlink: cross-repo/inbox/2026-08-05-coordinator-claude-em-placeholder-id-minting-fix-unfiled.md
 Sizing: state/sizings/2026-08-05-placeholder-title-guard-at-artifact-id-m.yaml
 
 Negative-spec: does NOT assert that a real title mints any PARTICULAR id -- the mint

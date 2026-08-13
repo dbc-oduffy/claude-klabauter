@@ -33,7 +33,7 @@ Coverage:
         identically to the primitives module (single read-only surface, no
         divergent re-implementation)
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C0
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C0
 """
 
 from __future__ import annotations
@@ -421,7 +421,7 @@ def test_active_reference_guard_blocks_when_cited_both_inside_and_outside_proven
 def test_active_reference_guard_blocks_on_unknown_marker_key(tmp_path):
     # A citation inside a frontmatter block under a key that is NOT in
     # PROVENANCE_MARKER_KEYS is not recognized as a tombstone -> blocks, exactly like a
-    # plain prose citation. Ambiguity blocks; only the named, example-doctrine-repo-ratified key set is
+    # plain prose citation. Ambiguity blocks; only the named, coordinator-claude-ratified key set is
     # excluded — a lookalike key must not be inferred as a marker.
     docs = tmp_path / "docs"
     docs.mkdir()

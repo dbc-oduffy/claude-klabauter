@@ -291,7 +291,7 @@ def test_ambient_settings_home_unrelated_to_config_dir_is_not_trusted(tmp_path, 
     root. Here `config_dir` is an unrelated tmp tree, `COORDINATOR_SETTINGS_HOME`
     is unset, and `settings_home()` is monkeypatched to a SEPARATE 'ambient
     machine home' that happens to carry a healthy backup -- mirroring the
-    real example-doctrine-repo failure where only `CLAUDE_CONFIG_DIR` was set and the
+    real coordinator-claude failure where only `CLAUDE_CONFIG_DIR` was set and the
     host's real `~/.coordinator-claude-settings` leaked in. Must NOT restore
     from it: rung 3 should report no candidate, same as an empty settings
     home. Fails against the pre-fix code (which restores)."""

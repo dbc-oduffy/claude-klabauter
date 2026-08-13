@@ -20,7 +20,7 @@ Coverage:
       candidate that fails the floor still degrades (never auto-resolved
       just for being alone); empty items degrades with reason NO_CANDIDATES.
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C1
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C1
 """
 
 from __future__ import annotations
@@ -218,7 +218,7 @@ class TestResolveCandidateCore:
     def test_many_items_clear_match_auto_resolves(self):
         """A 51-item corpus with one clearly-matching title still
         auto-resolves -- this is the exact regression the arithmetic
-        auto-resolution defect (memo: example-doctrine-repo has 230 plans and 4 goals, so
+        auto-resolution defect (memo: coordinator-claude has 230 plans and 4 goals, so
         stamp mode nulled origin_plan_id on EVERY fork) is about; it must
         have failed against the old len(items) == 1 branch this helper
         replaces."""

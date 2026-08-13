@@ -56,7 +56,7 @@ from coordinator_core.session import liveness as _liveness
 # (KS-3, 2026-08-07): the sentinel tier it fed was unsound under concurrency
 # (documented last-writer-wins across concurrent sessions sharing one
 # worktree — coordinator_core/bash_guards/guard_inprocess_search.py ~L84)
-# AND its sole writer (session-init.py, the example-doctrine-repo SessionStart hook)
+# AND its sole writer (session-init.py, the coordinator-claude SessionStart hook)
 # was deleted by PM directive 2026-07-15 — no production writer survives.
 # A stale sid used to subtract nothing from the live peer set here (over-
 # refusal, noisy but fail-closed-safe); removal makes resolve_self_session_id

@@ -8,8 +8,8 @@ illegal-path gate installer — identity-gated to $HOME/.claude, idempotent,
 append-not-clobber on an existing custom hook) has been fully ported to
 coordinator_core/ops/install_meta_repo_precommit_hook.py, with characterization
 tests in the co-located test_install_meta_repo_precommit_hook.py. This file is
-now a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per
-DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per
+DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 
 2026-07-29: this trampoline calls `main_install_all`, not `main` — it drives
 BOTH the sending-side `pre-commit` gate (`main`/`_GATE_REGISTRY`) and the
@@ -27,8 +27,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Exit convention: this is a config-writer/gate-installer, not a never-block hook

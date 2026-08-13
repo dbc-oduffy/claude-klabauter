@@ -2,14 +2,14 @@
 coordinator_core.ops.workday_start_step0_reconcile — Step 0.4.5 (Reconcile
 with origin/main) for the `/workday-start` precedence-switch flow.
 
-Purpose: DR-059 bash-to-naked-Python port of the example-doctrine-repo-owned reconcile script.
+Purpose: DR-059 bash-to-naked-Python port of the coordinator-claude-owned reconcile script.
 Called by the /workday-start Step 0 flow after the branch-precedence switch
 resolves on a non-main active branch. Folds `origin/main` into the current
 branch so the active workstream stays mergeable; never abandons in-progress
 work.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: workday-start-step0-reconcile.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: workday-start-step0-reconcile.sh (coordinator-claude b5a4192c, 2026-07-20)
 
 Negative-spec: does NOT check out `main`, does NOT push, does NOT resolve
 merge conflicts itself — a conflict is left staged mid-merge-abort-cycle

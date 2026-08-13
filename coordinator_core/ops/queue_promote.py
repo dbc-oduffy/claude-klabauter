@@ -3,12 +3,12 @@ coordinator_core.ops.queue_promote — lessons-outbox appender (queue.promote op
 
 Purpose: Port of coordinator-lesson-promote. Writes ONE YAML entry to
 ``<doe_root>/state/lessons-outbox/<ISO-ts-safe>-<slug>.yaml`` for drain by the
-/learn-lessons --central procedure. Example-doctrine-repo is the central lessons repo — the
+/learn-lessons --central procedure. Coordinator-claude is the central lessons repo — the
 outbox is NOT claude-klabauter-rooted (see the "Claude-Klabauter root" note below, corrected
-2026-07-22 after 72 outbox YAMLs from a example-doctrine-repo session landed in claude-klabauter's own
+2026-07-22 after 72 outbox YAMLs from a coordinator-claude session landed in claude-klabauter's own
 ``state/lessons-outbox/`` — cross-repo contamination from a misrouted root).
 
-Byte-parity target: ``[example-doctrine-repo] coordinator/bin/coordinator-lesson-promote``.
+Byte-parity target: ``[coordinator-claude] coordinator/bin/coordinator-lesson-promote``.
 
 This is a DISTINCT writer op from ``queue.append``. Its write contract diverges
 materially (design decision, strang-08 Design decisions section):
@@ -24,9 +24,9 @@ materially (design decision, strang-08 Design decisions section):
     - Write:       upgraded to atomic temp+os.replace (non-observable output-byte change;
                    legacy was plain open() — atomicity is safe to add, not a parity break).
     - Env override: ``LESSON_PROMOTE_OUTBOX_ROOT`` (not QUEUE_APPEND_OUTPUT_ROOT).
-    - example-doctrine-repo root: NO cwd fallback on unresolvable example-doctrine-repo root (C12 negative-spec,
-      mirrored onto the example-doctrine-repo-rooted seam — same negative-spec as the claude-klabauter-rooted
-      queue.append central scope, just against the example-doctrine-repo resolver instead).
+    - coordinator-claude root: NO cwd fallback on unresolvable coordinator-claude root (C12 negative-spec,
+      mirrored onto the coordinator-claude-rooted seam — same negative-spec as the claude-klabauter-rooted
+      queue.append central scope, just against the coordinator-claude resolver instead).
 
 Output path: ``<outbox_root>/<ISO-ts-safe>-<slug>-<digest12>.yaml``
     ISO-ts-safe: ``now(utc).isoformat(timespec="seconds")`` with ``:`` and ``+`` → ``-``.
@@ -43,16 +43,16 @@ No in-memory state retained (store-less-ness invariant).
 
 Caller repo_root threading (F1): handler third arg receives ``git_common_dir(caller_worktree)``
 via ``_OP_KEY_SCOPE: common_dir`` (ipc.py). The outbox root always routes to the
-Example-doctrine-repo central root (lessons-outbox is central state owned by example-doctrine-repo, NOT
+Coordinator-claude central root (lessons-outbox is central state owned by coordinator-claude, NOT
 Claude-klabauter — claude-klabauter is just one of many senders), so ``caller_worktree`` is not used for
-path routing — but the example-doctrine-repo root MUST be resolvable; unresolvable → WARN+skip
+path routing — but the coordinator-claude root MUST be resolvable; unresolvable → WARN+skip
 exit 0.
 
 Registered as ``queue.promote`` in ops/__init__.py and classified ``OpClass.MUTATING``
 in authz/classification.py (same dispatch, strang-08 C1+C2).
 
-Spec backlink: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § C2
-Parity oracle: [example-doctrine-repo] coordinator/bin/coordinator-lesson-promote
+Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § C2
+Parity oracle: [coordinator-claude] coordinator/bin/coordinator-lesson-promote
 DR authority: docs/decisions/DR-213-queue-write-substrate-carveout.md
 """
 
@@ -88,14 +88,14 @@ _OUTBOX_ROOT_ENV = "LESSON_PROMOTE_OUTBOX_ROOT"
 
 
 class _DoeUnresolvable(RuntimeError):
-    """Raised when the example-doctrine-repo central root cannot be resolved.
+    """Raised when the coordinator-claude central root cannot be resolved.
 
     Callers catch this and degrade gracefully (WARN+skip, exit 0) per AC6.
     Negative-spec: NO cwd fallback — stop-the-rot C12 closes the cwd-fallback landmine;
     the same negative-spec applies here even though C12 was written against the
     claude-klabauter-rooted queue.append central scope (see ``coordinator_doe_root``'s own
-    fail-loud-to-None contract for the example-doctrine-repo-side rung chain).
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+    fail-loud-to-None contract for the coordinator-claude-side rung chain).
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
 
 
@@ -110,20 +110,20 @@ def _outbox_root() -> str:
     Resolution:
         1. ``LESSON_PROMOTE_OUTBOX_ROOT`` env var (test isolation).
         2. ``<doe_root>/state/lessons-outbox/`` via ``coordinator_doe_root()`` — the
-           lessons-outbox is central state owned by example-doctrine-repo (the central lessons
+           lessons-outbox is central state owned by coordinator-claude (the central lessons
            repo), NOT claude-klabauter. Matches the documented CLI oracle contract
            (``coordinator-lesson-promote``'s ``_outbox_root()``, which resolves via
            ``coordinator_registry.doe_root()``).
 
     Raises:
-        _DoeUnresolvable — when the example-doctrine-repo root is unresolvable and no env override.
+        _DoeUnresolvable — when the coordinator-claude root is unresolvable and no env override.
 
-    Negative-spec: DOES NOT fall back to cwd-relative state/ when the example-doctrine-repo root is
+    Negative-spec: DOES NOT fall back to cwd-relative state/ when the coordinator-claude root is
     unresolvable — that silent fallback was the landmine closed by stop-the-rot C12,
-    mirrored here against the example-doctrine-repo-side resolver.
+    mirrored here against the coordinator-claude-side resolver.
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C12 / AC13
-    Parity oracle: [example-doctrine-repo] coordinator/bin/coordinator-lesson-promote § _outbox_root
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C12 / AC13
+    Parity oracle: [coordinator-claude] coordinator/bin/coordinator-lesson-promote § _outbox_root
     """
     override = os.environ.get(_OUTBOX_ROOT_ENV)
     if override:
@@ -350,7 +350,7 @@ def promote_lesson(
     Raises:
         ValueError — invalid change_kind.
         RuntimeError — schema description unavailable (unexpected schema structure).
-        _DoeUnresolvable — example-doctrine-repo root unresolvable (caller degrades gracefully).
+        _DoeUnresolvable — coordinator-claude root unresolvable (caller degrades gracefully).
     """
     # Validate change_kind.
     _validate_change_kind(change_kind)
@@ -485,11 +485,11 @@ def _queue_promote_handler(
             caller_worktree=caller_worktree,
         )
     except _DoeUnresolvable as exc:
-        # AC6: graceful-degrade on unresolvable example-doctrine-repo root — WARN + skip, exit 0.
+        # AC6: graceful-degrade on unresolvable coordinator-claude root — WARN + skip, exit 0.
         logger.warning(
-            "queue.promote: example-doctrine-repo root unresolvable — skipping write: %s. "
+            "queue.promote: coordinator-claude root unresolvable — skipping write: %s. "
             "Remediation: set REPO_EXAMPLE_DOCTRINE_REPO or run "
-            "'machine-local set repos.example_doctrine_repo /path/to/example-doctrine-repo'.",
+            "'machine-local set repos.example_doctrine_repo /path/to/coordinator-claude'.",
             exc,
         )
         return {"skipped": True, "reason": str(exc)}
@@ -498,15 +498,15 @@ def _queue_promote_handler(
     # coordinator_core.ipc's module-level comment above `_SCOPE_TOUCH_PATHS_KEY`).
     # `out_path` is the ONE file this call actually wrote (promote_lesson's write
     # primitive is a single write-temp + atomic-rename) — declare exactly that.
-    # This IS a cross-repo write (the example-doctrine-repo outbox, not the caller's own
+    # This IS a cross-repo write (the coordinator-claude outbox, not the caller's own
     # worktree) — as of the 2026-08-04 F1 fix, `_record_self_reported_touches`
     # anchors containment on the CALLER's OWN repo, so this declaration is
     # SKIPPED (logged, never recorded) whenever the caller's worktree isn't
-    # the example-doctrine-repo root itself. That is deliberate, not a bug: recording a
+    # the coordinator-claude root itself. That is deliberate, not a bug: recording a
     # claim in a repo this caller has no standing in was reproduced stealing
     # a live native session's own file in that repo (see the ipc.py contract
     # comment). The write still lands on disk; it stays an orphan at the
-    # example-doctrine-repo sink, which owns its own adoption path for that residual.
+    # coordinator-claude sink, which owns its own adoption path for that residual.
     # `dispatch_message` strips this key before the wire envelope is built.
     result["_scope_touch_paths"] = [result["out_path"]]
     return result

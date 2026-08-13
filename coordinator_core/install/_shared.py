@@ -3,14 +3,14 @@ coordinator_core.install._shared — shared path/decision seams for the install
 and uninstall hubs.
 
 Port of the resolution logic duplicated (by original bash design) between
-``coordinator/lib/install-substrate.sh`` (example-doctrine-repo 6fb5fb37, 2026-07-22) and
-``coordinator/lib/uninstall-legs.sh`` (example-doctrine-repo bd5b5a96, 2026-07-19) [example-doctrine-repo
+``coordinator/lib/install-substrate.sh`` (coordinator-claude 6fb5fb37, 2026-07-22) and
+``coordinator/lib/uninstall-legs.sh`` (coordinator-claude bd5b5a96, 2026-07-19) [coordinator-claude
 repo]. The bash pairing deliberately kept these hand-synced (uninstall-legs
 re-derived install path decisions rather than sharing code) — the hitlist
 that seeded this port names that as a footgun to FIX, not reproduce, so both
 consumers here import from one module.
 
-Also carries the Port of: ``coordinator/lib/settings-hook-identity.sh`` (example-doctrine-repo
+Also carries the Port of: ``coordinator/lib/settings-hook-identity.sh`` (coordinator-claude
 c187f5b9, 2026-07-21) ``settings_hook_identity_inverse_strip`` (jq-based in
 bash; pure-Python JSON manipulation here — no jq subprocess).
 

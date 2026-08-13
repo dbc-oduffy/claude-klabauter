@@ -1,7 +1,7 @@
 """
 coordinator_core.reconcile.tests.test_commit_reality — DEC-1 matcher fixtures.
 
-Spec backlink: docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C2
+Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C2
 
 Covers the plan's required scenario matrix against a real tmp git repo:
   - clear-ship -> auto-ship

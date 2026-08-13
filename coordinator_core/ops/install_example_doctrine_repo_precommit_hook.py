@@ -1,10 +1,10 @@
 """
 coordinator_core.ops.install_example_doctrine_repo_precommit_hook — pre-commit gate-chain
-installer for example-doctrine-repo, dispatched from claude-klabauter.
+installer for coordinator-claude, dispatched from claude-klabauter.
 
-Purpose: installs (or appends onto an existing custom hook) example-doctrine-repo's
+Purpose: installs (or appends onto an existing custom hook) coordinator-claude's
 `.git/hooks/pre-commit` gate chain. Idempotent, conditional: only installs
-when the resolved target repo root IS example-doctrine-repo itself. Consumer/sibling
+when the resolved target repo root IS coordinator-claude itself. Consumer/sibling
 repos (and any other git repo) are skipped cleanly.
 
 Modelled closely on `coordinator_core.ops.install_claude_klabauter_precommit_hook` —
@@ -20,15 +20,15 @@ shared, and only because that module documents why.
 Identity guard — the ONE load-bearing divergence from the claude-klabauter installer's
 shape. `install_claude_klabauter_precommit_hook` resolves "is this the target repo"
 from its OWN file location (`_self_repo_root()`), because that module ships
-INSIDE claude-klabauter. This module does not ship inside example-doctrine-repo — it
+INSIDE claude-klabauter. This module does not ship inside coordinator-claude — it
 lives in claude-klabauter and targets a PEER repo — so there is no self-
 relative anchor to read. Identity instead resolves through the canonical
-Example-doctrine-repo-root resolver, `coordinator_core.doe_root_pointer.read_doe_root_pointer()`
+Coordinator-claude-root resolver, `coordinator_core.doe_root_pointer.read_doe_root_pointer()`
 (registry-first four-tier chain over `repos.example_doctrine_repo`, DR-071). That
 resolver returns `""` on an unresolved key and never raises (see its own
-docstring's negative-spec) — this module treats an unresolved example-doctrine-repo root as a
+docstring's negative-spec) — this module treats an unresolved coordinator-claude root as a
 CLEAN SKIP, exit 0, with a named advisory on stderr, never a traceback and
-never a block: example-doctrine-repo may legitimately not be registered on a given
+never a block: coordinator-claude may legitimately not be registered on a given
 machine, and that is not this installer's problem to fail on.
 
 The resolution is exposed as its own module-level function
@@ -36,11 +36,11 @@ The resolution is exposed as its own module-level function
 at a throwaway `tmp_path` repo — the same seam `_self_repo_root()` exposes
 in the claude-klabauter installer.
 
-Gate registry (`_GATE_REGISTRY` below) starts with exactly one gate — example-doctrine-repo-
+Gate registry (`_GATE_REGISTRY` below) starts with exactly one gate — coordinator-claude-
 claude's doctrine-weight guard (`guard-doctrine-surface-ratio.py`, under
-Example-doctrine-repo's own `coordinator/hooks/scripts/`, NOT `coordinator/bin/` — that
-subdir holds example-doctrine-repo's *other* CLI surface, not its pre-commit gate scripts).
-That script is example-doctrine-repo's own deliverable and is NOT expected to exist in
+Coordinator-claude's own `coordinator/hooks/scripts/`, NOT `coordinator/bin/` — that
+subdir holds coordinator-claude's *other* CLI surface, not its pre-commit gate scripts).
+That script is coordinator-claude's own deliverable and is NOT expected to exist in
 THIS tree (claude-klabauter). Its absence at install time fires the ordinary
 `_warn_if_gate_script_missing` ADVISORY on every run against this repo —
 that is correct, not a defect to silence. Adding a future gate is a registry
@@ -53,7 +53,7 @@ EMITTED into the hook body (repo-root-relative) — the two can never drift
 apart. Unlike the claude-klabauter installer's `_bin_dir()` (self-relative, no
 arguments, because that module's own location IS the target repo), this
 module's bin-dir helper is parameterised on the ALREADY-RESOLVED target repo
-root, because this module has no self-relative anchor into example-doctrine-repo's tree
+root, because this module has no self-relative anchor into coordinator-claude's tree
 to read.
 
 Exit-code clamping: identical contract and identical rationale to
@@ -77,8 +77,8 @@ Negative-spec:
     - Does not raise, and does not block, on an unresolved `repos.example_doctrine_repo`
       — that is a clean advisory skip (AC3), never a traceback.
     - Does not author or require `guard-doctrine-surface-ratio.py` — that
-      script is example-doctrine-repo's own deliverable, not this module's to write.
-    - Does not install into example-doctrine-repo's real, live tree, and does not
+      script is coordinator-claude's own deliverable, not this module's to write.
+    - Does not install into coordinator-claude's real, live tree, and does not
       install into claude-klabauter's own live repo either — this module and
       its CLI are built and tested against `tmp_path` throwaway repos only;
       installing/verifying the live artifact is an EM/PM-gated external
@@ -98,7 +98,7 @@ from coordinator_core import py_probe_sh as _py_probe_sh
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "install-example-doctrine-repo-precommit-hook"
+_PROG = "install-coordinator-claude-precommit-hook"
 
 
 @dataclass(frozen=True)
@@ -120,22 +120,22 @@ _GATE_REGISTRY: List[_Gate] = [
 
 
 #: Gate-script directory as repo-root-relative POSIX segments, inside
-#: example-doctrine-repo's own tree. Single source of truth for BOTH the install-time
+#: coordinator-claude's own tree. Single source of truth for BOTH the install-time
 #: existence check (resolved absolute against the target repo root) and the
 #: path EMITTED into the hook body (relative, see `_gate_block`) — so the two
-#: can never drift apart. NOT `coordinator/bin/` — that is example-doctrine-repo's
+#: can never drift apart. NOT `coordinator/bin/` — that is coordinator-claude's
 #: general CLI surface; its pre-commit gate scripts live under
 #: `coordinator/hooks/scripts/`.
 _BIN_SUBDIR = ("coordinator", "hooks", "scripts")
 
 
 def _bin_dir(repo_root: str) -> Path:
-    """The directory holding example-doctrine-repo's pre-commit gate scripts, resolved
-    against the ALREADY-RESOLVED `repo_root` (example-doctrine-repo's own root, per
+    """The directory holding coordinator-claude's pre-commit gate scripts, resolved
+    against the ALREADY-RESOLVED `repo_root` (coordinator-claude's own root, per
     `_resolve_example_doctrine_repo_target`). Unlike the claude-klabauter installer's `_bin_dir()`
     — which is self-relative because that module ships inside its own
     target — this module ships in claude-klabauter and has no self-relative
-    anchor into example-doctrine-repo's tree, so the target repo root is threaded in
+    anchor into coordinator-claude's tree, so the target repo root is threaded in
     explicitly rather than derived from `__file__`.
 
     Used for the INSTALL-TIME existence check only — never for the path
@@ -145,8 +145,8 @@ def _bin_dir(repo_root: str) -> Path:
 
 
 def _resolve_doe_root() -> str:
-    """The example-doctrine-repo repo root, per the canonical registry-first resolver —
-    the identity anchor for "is the target example-doctrine-repo". Exposed as its own
+    """The coordinator-claude repo root, per the canonical registry-first resolver —
+    the identity anchor for "is the target coordinator-claude". Exposed as its own
     function (rather than called inline) so tests can monkeypatch it to
     point at a throwaway `tmp_path` repo, the same way `_self_repo_root()`
     is independently monkeypatchable in the claude-klabauter installer. Returns `""`
@@ -312,7 +312,7 @@ def _gate_block(gate: _Gate) -> List[str]:
 #: hook and only ever appended to.
 _BODY_HEADER = (
     "#!/bin/sh\n"
-    "# example-doctrine-repo pre-commit gates — fire before doctrine drift can land.\n"
+    "# coordinator-claude pre-commit gates — fire before doctrine drift can land.\n"
 )
 
 
@@ -358,7 +358,7 @@ def _warn_if_gate_script_missing(repo_root: str, gates: List[_Gate]) -> None:
     install time rather than only discovering it at the next commit's
     runtime `[ -f ]` check (see `_gate_block`, which is the actual
     enforcement point — this is a heads-up, not a gate). `guard-doctrine-
-    surface-ratio.py` is example-doctrine-repo's own deliverable and is not expected to
+    surface-ratio.py` is coordinator-claude's own deliverable and is not expected to
     exist in claude-klabauter's tree; when this installer is exercised against
     THIS repo (never done in a real run — see module docstring), this
     ADVISORY fires on every call, which is correct behavior, not a defect."""
@@ -451,8 +451,8 @@ def _install_or_append_hook(repo_root: str, gates: List[_Gate]) -> int:
 
 
 def _resolve_example_doctrine_repo_target(target: str) -> Optional[str]:
-    """Identity guard: resolve `target` to example-doctrine-repo's own repo root, or
-    None if `target` is not a git repo / not example-doctrine-repo / example-doctrine-repo's root
+    """Identity guard: resolve `target` to coordinator-claude's own repo root, or
+    None if `target` is not a git repo / not coordinator-claude / coordinator-claude's root
     cannot presently be resolved at all (AC3 — a clean advisory skip, never a
     block)."""
     toplevel = _git_toplevel(target)
@@ -467,14 +467,14 @@ def _resolve_example_doctrine_repo_target(target: str) -> Optional[str]:
     if not doe_root:
         print(
             f"{_PROG}: ADVISORY: repos.example_doctrine_repo is unresolved (registry key and both "
-            "pointer-file rungs are empty) — skipping install; example-doctrine-repo may legitimately "
+            "pointer-file rungs are empty) — skipping install; coordinator-claude may legitimately "
             "not be registered on this machine, this is a clean no-op, not a failure.",
             file=sys.stderr,
         )
         return None
 
     if _canon(toplevel) != _canon(doe_root):
-        print(f"{_PROG}: not example-doctrine-repo ({toplevel}) — skipping.", file=sys.stderr)
+        print(f"{_PROG}: not coordinator-claude ({toplevel}) — skipping.", file=sys.stderr)
         return None
     return toplevel
 

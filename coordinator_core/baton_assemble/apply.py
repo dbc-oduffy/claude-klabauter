@@ -20,7 +20,7 @@ to the existing atomic CLI/op it names, `_run_git` (the in-process git
 read-model), and the `apply()` orchestration (brief-recompute, session
 identity, scoped commit).
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
 chunk C1
 
@@ -250,7 +250,7 @@ def _dispatch_handoff_stamp_phase(args: list[str], repo_root: Path) -> dict[str,
     emit this directive for `kind=handoff` -- d1's scaffold stamps
     `handoff_phase:continuation` itself), but the handler stays registered in
     `_CLI_DISPATCH`, one emission decision away from live. Reported by
-    example-doctrine-repo-em, 2026-07-29 cross-repo memo."""
+    coordinator-claude-em, 2026-07-29 cross-repo memo."""
     artifact_path = args[0] if args else ""
     result = _invoke_op_in_process(
         "handoff.stamp_phase", {"handoff_path": artifact_path}, repo_root

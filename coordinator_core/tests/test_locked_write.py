@@ -17,7 +17,7 @@ Coverage requirements (per chunk spec C1):
 
 POSIX guard: all tests are skipped with a clear message if fcntl is unavailable.
 
-Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-workstream.md § C1
+Spec backlink: pln-ceremony-as-pipeline-2-invert--fd1b98 § C1
 """
 
 from __future__ import annotations

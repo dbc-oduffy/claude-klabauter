@@ -33,7 +33,7 @@ is not None -- i.e. a continuation, never a fork -- and composes
 `_dispatch_handoff_supersede_predecessor`) to stamp the PREDECESSOR
 `continued` + `continued_into:<this successor>` and archive it, in the SAME
 transaction as this successor's own mint. Fixes the pathology where minting a
-continuation baton left its predecessor non-terminal forever (76/91 example-doctrine-repo
+continuation baton left its predecessor non-terminal forever (76/91 coordinator-claude
 batons). The discriminator is the plain `kind == "handoff" and
 lineage["predecessor"] is not None` predicate -- NOT the
 `j-continuation-vs-fork` judgment point below, which stays untouched
@@ -141,7 +141,7 @@ CONSUMES B0's shared resolver: `coordinator_core.resolution.facade.
 resolve_operator_config()` for settings_home/claude_klabauter_root/doe_root -- this module
 does NOT define its own local `_settings_home()`.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
 chunk C1
 
@@ -577,7 +577,7 @@ def _compute_fresh_output_path(
         return candidate
 
     # 2026-07-29 follow-up (successor-derivation archive-collision fix, see
-    # bug-report evidence at example-doctrine-repo state/handoffs/
+    # bug-report evidence at coordinator-claude state/handoffs/
     # 2026-07-29_175200_confinement-band-split-plan-awaiting-review.md §
     # Session Ledger): `_exists` must check BOTH the live `state/handoffs/`
     # location AND every known archive location, not the live location
@@ -1437,7 +1437,7 @@ def _tracking_read_frontmatter_field(
 
     Returns `(tracked_read_fn, tier_list)` -- `tier_list` is empty until the
     cascade fires a truthy `deliverable_id` read, then holds exactly one of
-    `"plan"` / `"artifact"` (the example-doctrine-repo-cascade's own vocabulary, ported
+    `"plan"` / `"artifact"` (the coordinator-claude-cascade's own vocabulary, ported
     verbatim rather than reusing "predecessor" -- see module docstring at
     `resolve_lineage`). `resolve_lineage` itself relabels an `"artifact"` hit
     to a THIRD value, `"plan-input"`, when the hit's `_predecessor_file` is
@@ -1579,35 +1579,40 @@ def _resolve_claimed_by_address_suffix(claimed_by: Optional[str]) -> str:
     """Best-effort `" (send-message-address=...)"` suffix for a collision
     warning's `claimed_by` UUID, or `""` on any resolution failure.
 
+    A thin formatter over `reachability.resolve_advisory_address` (the
+    shared bare-string resolution core, factored out so `pickup_assemble`'s
+    `send_message_address` field does not re-derive the same
+    `ResolveResult.outcome` mapping) -- this function owns only the
+    `" (send-message-address=...)"` wrapping for THIS warning's message
+    shape.
+
     Spec backlink: `state/handoffs/2026-08-13-session-owner-reachability-
     registry.md` § 3, wiring the resolver into `baton-assemble`'s
     deliverable-collision warning -- the strongest single-surface candidate
     named there. Degrades to the current UUID-only message on every failure
-    path (empty `claimed_by`, an import error, or `resolve_address` itself
+    path (empty `claimed_by`, an import error, or the resolver itself
     raising) -- resolution is advisory only and must never raise or block
     this warning (per that section's own directive).
 
     Negative-spec: the `coordinator_core.session.reachability` import is
     deliberately LOCAL to this function body, not hoisted to module scope --
     an import-time failure in that module (e.g. a future circular import)
-    then degrades identically to a runtime `resolve_address` failure,
-    through the same `except Exception: return ""` below, rather than
-    aborting this module's own import (Review: code-reviewer -- P3, local
-    import rationale)."""
+    then degrades identically to a runtime resolution failure, through the
+    same `except Exception: return ""` below, rather than aborting this
+    module's own import (Review: code-reviewer -- P3, local import
+    rationale)."""
     if not claimed_by:
         return ""
     try:
         from coordinator_core.session import reachability
 
-        result = reachability.resolve_address(claimed_by)
+        value = reachability.resolve_advisory_address(claimed_by)
     except Exception:
         return ""
 
-    if result.outcome == "reachable" and result.address:
-        return _addr_suffix(result.address)
-    if result.outcome == "own_session":
-        return _addr_suffix("<this session>")
-    return ""
+    if not value:
+        return ""
+    return _addr_suffix(value)
 
 
 def _scan_deliverable_collision(
@@ -1682,7 +1687,7 @@ def _scan_deliverable_collision(
     roadmap-baton root would still warn even though it is exactly the chain
     tip's own root. `_build_roadmap_baton_decline_judgment_point`'s own d6
     gate deliberately declines to supersede a roadmap-baton predecessor for
-    the identical reason. Example-doctrine-repo `coordinator/docs/wiki/coordinator-
+    the identical reason. Coordinator-claude `coordinator/docs/wiki/coordinator-
     tripwires.md:1454` mandates this exclusion directly: "Any backfill,
     reconciler, or convergence pass over `deliverable_id` MUST exclude
     `kind: roadmap-baton` records."
@@ -2172,7 +2177,7 @@ def resolve_lineage(
         # the existing field-walk rather than being routed to the ledger on
         # a weaker signal alone.
         #
-        # THE DEFECT this closes: example-doctrine-repo's `plan.schema.json` defines
+        # THE DEFECT this closes: coordinator-claude's `plan.schema.json` defines
         # `predecessor_handoff` as the handoff that SPAWNED this plan
         # (provenance) -- this module used to consume it as the handoff to
         # TERMINATE (a different relation). The actual supersession target
@@ -3772,8 +3777,8 @@ def _resolve_held_handoff_for_session(
     not an error: this used to hard-fail here as "ambiguous", permanently
     stranding whichever predecessor lost the coin flip at
     `deployment_state` non-terminal (see this module's own docstring's
-    "76/91 example-doctrine-repo" note). The FIRST (earliest-claimed) held handoff becomes the
-    PRIMARY predecessor -- example-doctrine-repo's `coordinator/skills/handoff/SKILL.md` §
+    "76/91 coordinator-claude" note). The FIRST (earliest-claimed) held handoff becomes the
+    PRIMARY predecessor -- coordinator-claude's `coordinator/skills/handoff/SKILL.md` §
     Predecessor identification defines the predecessor as "whatever handoff
     this session was opened with", which this extends rather than replaces
     for the N>1 case: the handoff the session was opened with is the one it
@@ -4006,7 +4011,7 @@ def _predecessor_carried_items_active(root: "Optional[Path]", predecessor: "Opti
     """True iff `predecessor` (a `lineage["predecessor"]` value -- either
     root-relative or absolute, per `resolve_lineage`'s own storage
     convention) names a file whose frontmatter carries a `carried_items:`
-    value that is itself a non-empty YAML list. Mirrors `example-doctrine-repo@HEAD:
+    value that is itself a non-empty YAML list. Mirrors `coordinator-claude@HEAD:
     coordinator/hooks/scripts/handoff-segment-inject.py`'s
     `_carried_items_active` exactly, list-type check included
     (`isinstance(items, list) and len(items) > 0`) -- a `carried_items:`
@@ -4052,7 +4057,7 @@ def _resolve_handoff_residue_active_cases(
     root: "Optional[Path]",
 ) -> set[str]:
     """Resolve the active `case:` set for this `brief()` call, matched
-    signal-for-signal against `example-doctrine-repo@HEAD:coordinator/hooks/scripts/
+    signal-for-signal against `coordinator-claude@HEAD:coordinator/hooks/scripts/
     handoff-segment-inject.py`'s `compute_active_cases` -- the consumer this
     `segments` key is meant to let retire its own copy of this computation.
     A drift here is not cosmetic: it silently changes what the consumer
@@ -4076,7 +4081,7 @@ def _resolve_handoff_residue_active_cases(
     whenever its own `_resolve_repo_root()` returns `None` (repo root
     undeterminable), and that function's docstring names the exact same
     choice ("callers degrade the `dirty-tree` case to inactive rather
-    than raising"). Verified directly against `example-doctrine-repo@HEAD:
+    than raising"). Verified directly against `coordinator-claude@HEAD:
     coordinator/hooks/scripts/handoff-segment-inject.py` -- this is an
     equivalent degrade path on both sides, not a signal-fidelity gap.
     `carried-items`

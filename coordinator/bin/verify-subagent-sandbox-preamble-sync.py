@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """verify-subagent-sandbox-preamble-sync.py — sentinel-block sync gate for scoped subagent prompts.
 
-Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter's
+Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.verify_subagent_sandbox_preamble_sync. Checks (and, with
 --fix, repairs) the `subagent-sandbox-preamble` sentinel block across the
 scoped-agent CONSUMERS array — scouts/specialists/workers/checkers/auditors
@@ -18,8 +18,8 @@ from __future__ import annotations
 # enricher/docs-checker) has been fully ported to
 # coordinator_core/ops/verify_subagent_sandbox_preamble_sync.py (co-located
 # test: coordinator_core/tests/test_verify_subagent_sandbox_preamble_sync.py).
-# This file is now a thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter
-# (engine) module, per DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns
+# This file is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter
+# (engine) module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns
 # engine).
 #
 # Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -29,9 +29,9 @@ from __future__ import annotations
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# example-doctrine-repo repo, not here).
+# coordinator-claude repo, not here).
 #
 # CLI contract preserved verbatim from the bash original:
 #     verify-subagent-sandbox-preamble-sync.py          verify (default) — non-zero on drift.
@@ -50,7 +50,7 @@ from __future__ import annotations
 #   0 — clean (no drift) / --list mode.
 #   1 — drift found (MISSING/MISMATCH/MISSING_END/MISSING_FILE — see the
 #       claude-klabauter module's own exit-code table for the full per-row mapping), OR
-#       _resolve_plugin_root() could not resolve the example-doctrine-repo repo root
+#       _resolve_plugin_root() could not resolve the coordinator-claude repo root
 #       (CLAUDE_PLUGIN_ROOT unset and doe_root() raised _DoeUnresolvable) —
 #       mirrors verify-templates-bin-sync.py's own reuse of the drift exit
 #       code for an unresolvable plugin root.
@@ -63,13 +63,13 @@ from __future__ import annotations
 #       or "bad CLI usage" (2).
 #
 # Plugin-root/script-dir resolution is reproduced HERE (not delegated to the
-# claude-klabauter module) because it is example-doctrine-repo-repo topology knowledge (CLAUDE_PLUGIN_ROOT
+# claude-klabauter module) because it is coordinator-claude-repo topology knowledge (CLAUDE_PLUGIN_ROOT
 # env var, else resolved via the shared doe_root() registry helper) — this
 # executable migrated to claude-klabauter (b644d5a9/8a28a6ca) while
-# coordinator/agents/ (the example-doctrine-repo-owned consumer files this module reads) stayed
-# in example-doctrine-repo, so this script's own parent directory no longer resolves to
+# coordinator/agents/ (the coordinator-claude-owned consumer files this module reads) stayed
+# in coordinator-claude, so this script's own parent directory no longer resolves to
 # a directory containing agents/ at all. doe_root() is the correct authority
-# for "where is the example-doctrine-repo repo," independent of where THIS script
+# for "where is the coordinator-claude repo," independent of where THIS script
 # happens to run from — mirrors verify-templates-bin-sync.py's
 # _resolve_plugin_root() fix exactly (see that script's own docstring for
 # the same self-location break and why it must not be restored). Both
@@ -100,19 +100,19 @@ def _resolve_plugin_root() -> str:
     <doe_root()>/coordinator.
 
     This does NOT derive from this script's own __file__ location. That
-    used to be correct when this executable lived in example-doctrine-repo
+    used to be correct when this executable lived in coordinator-claude
     (coordinator/bin/.. IS the plugin root there), but this file has since
     migrated to claude-klabauter (b644d5a9/8a28a6ca) while coordinator/agents/
-    stayed put in example-doctrine-repo — self-location now resolves to a directory
+    stayed put in coordinator-claude — self-location now resolves to a directory
     with no agents/ at all, silently producing MISSING_FILE rows over a
     tree that never existed instead of a loud failure. doe_root() is the
-    correct authority for "where is the example-doctrine-repo repo," independent of
+    correct authority for "where is the coordinator-claude repo," independent of
     where THIS script happens to run from. A future reader must not
     "restore" __file__-based resolution to regain oracle parity — that is
     precisely what caused this break.
 
     Fails loud (sys.exit(1)) if doe_root() cannot resolve: this is a gate
-    script, not a never-block hook, so an unresolvable example-doctrine-repo root must not
+    script, not a never-block hook, so an unresolvable coordinator-claude root must not
     degrade to an exit-0 no-op.
     """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -122,7 +122,7 @@ def _resolve_plugin_root() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            "verify-subagent-sandbox-preamble-sync.py: cannot resolve the example-doctrine-repo repo root "
+            "verify-subagent-sandbox-preamble-sync.py: cannot resolve the coordinator-claude repo root "
             f"({exc}). Set repos.example_doctrine_repo in the machine-local registry, or set "
             "the DOE_ROOT env var, or set CLAUDE_PLUGIN_ROOT directly.",
             file=sys.stderr,

@@ -11,7 +11,7 @@ every reader module's own docstring documents this as an intentional
 mirror of `coordinator_core.pickup_assemble`'s directive shape ("no
 separate shipped directive constructor exists"), so this file does not
 assert directives were built via a constructor that does not exist. It
-instead asserts every directive conforms to the example-doctrine-repo schema-of-record's
+instead asserts every directive conforms to the coordinator-claude schema-of-record's
 required directive key set (id, cli, args, depends_on, already_satisfied)
 — the structural contract that DOES apply.
 

@@ -81,7 +81,7 @@ Add this module to coordinator_core/ops/__init__.py (_EAGER_OP_MODULES) to
 trigger registration at start_server() time — owned by the shared-surface
 tail pass, not this module.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 § Wave 1 C1a; state/audits/2026-07-22-command-payload-inventory/op-classification.tsv
 row "write-identity-file-atomic"; distinct-ops-new.tsv same row (fence sites:
 commands/install.md:669, commands/install.md:818 — coordinator-claude-owned,

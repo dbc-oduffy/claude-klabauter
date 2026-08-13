@@ -24,7 +24,7 @@ mirrors `test_bx16_multiprobe_and_headtail_rewrite.py`'s own `_run_python_c`
 isolation rationale), and the two outputs are compared line-for-line.
 
 Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-
-storms.md row BX-16 (example-doctrine-repo); this file's own coverage is the grep-
+storms.md row BX-16 (coordinator-claude); this file's own coverage is the grep-
 dialect-fidelity counterpart to that plan's apostrophe-quote-safety fix
 (`test_bx16_apostrophe_quote_safety.py`) -- a different correctness axis on
 the same rewrite seam.

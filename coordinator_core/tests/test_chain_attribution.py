@@ -18,7 +18,7 @@ Coverage:
   - P1/P2 subset-relation smoke check (AC6): P1(range, sid) subset of
     P2(range, sid) for a small corpus of real commits in a fixture repo.
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a
 task A1.
 """
 

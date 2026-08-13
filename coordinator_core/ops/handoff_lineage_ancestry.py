@@ -57,7 +57,7 @@ archival walks. This op passes ``edge_kinds={'origin_handoff'}`` explicitly on
 every call; it does not accept a caller-supplied edge_kinds override, precisely so
 that this walk can never accidentally widen into lineage/coverage edges.
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C4
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C4
 Sibling: coordinator_core/ops/handoff_children.py (handoff.has_live_children family)
 
 Negative-spec:

@@ -10,7 +10,7 @@ across its fresh-pass and AC18-resumed-pass branches. This module extracts
 that sequencing into one standalone op so C1's per-step timing instrumentation
 can attribute the ~3 git commits these two steps together produce to one op,
 and so a LATER chunk (C3b — NOT this one) can move the invocation itself
-across the repo boundary into the example-doctrine-repo skill occasion without re-deriving the
+across the repo boundary into the coordinator-claude skill occasion without re-deriving the
 sequencing logic. `wsc_tail.py` still invokes this op IN-PROCESS at both call
 sites, on both the fresh pass and the AC18-resumed pass, exactly as it did
 before this extraction — this chunk changes WHERE the sequencing logic lives,
@@ -71,7 +71,7 @@ work than that one); `coordinator_core/authz/classification.py` →
 `coordinator_core/ops/__init__.py::_EAGER_OP_MODULES` eager-import entry;
 `coordinator_core/ops/_registry_map.py::OP_MODULE_MAP` lazy-import entry.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C3a.
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C3a.
 
 Second trigger (C6b, docs/plans/2026-08-04-terminal-state-propagation-join-keys.md
 § C6b): the other half of PM ruling R1 — a handoff concluding
@@ -101,7 +101,7 @@ Negative-spec (hard-won):
     `ceremony_lock` mechanism entirely.
   - Does NOT move the `wsc_tail` call site — that is C3b, a separate chunk
     with its own PM-recorded fallback (moving invocation across the repo
-    boundary into a example-doctrine-repo skill occasion needs a durable pending-work
+    boundary into a coordinator-claude skill occasion needs a durable pending-work
     sentinel). `wsc_tail.py` still invokes this op in-process at steps
     5c/5d, on both the fresh and AC18-resumed pass, exactly as before this
     extraction.

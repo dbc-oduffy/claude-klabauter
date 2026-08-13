@@ -10,7 +10,7 @@ re-implements callout-body rendering). Clean no-op (exit 0 + one-line note)
 when the roadmap dir or callout is absent — a roadmap_id with no index is
 not an error.
 
-Trust guard: before delegating, resolves and trust-checks the example-doctrine-repo
+Trust guard: before delegating, resolves and trust-checks the coordinator-claude
 coordinator root (CLAUDE_PLUGIN_ROOT env, else `~/.claude/.doe-root` pointer
 + `/coordinator`) via the canonical
 `coordinator_core.trusted_root_guard.is_trusted` — see that module for the
@@ -19,7 +19,7 @@ even though the delegate below is now a direct in-process import rather
 than a subprocess-to-node call (refresh-queries.js itself is retired — see
 Negative-spec).
 
-Port of: refresh-roadmap-callout.sh (example-doctrine-repo a1a568d2, 2026-07-22)
+Port of: refresh-roadmap-callout.sh (coordinator-claude a1a568d2, 2026-07-22)
 Spec backlink: docs/plans/2026-07-09-roadmap-callout-refresh-at-pickup-and-wsc.md § C1
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md (R1 DOE-PORT)
 

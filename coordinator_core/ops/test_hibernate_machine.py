@@ -10,7 +10,7 @@ op is re-invocable (identical results, no state accrual) — the runtime
 idempotency claim itself is vacuous per the module's DEC-7 docstring note
 (a second invocation never runs on a suspended machine).
 
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B1
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B1
 """
 from __future__ import annotations
 

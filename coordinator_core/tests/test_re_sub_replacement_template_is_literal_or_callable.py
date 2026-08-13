@@ -20,7 +20,7 @@ The canonical fix -- ``_expand_home_var``
 immune: a callable's return value is inserted verbatim, with no escape
 re-interpretation.
 
-Spec backlink: docs/plans/2026-08-07-install-dogfood-mechanical-residue.md
+Spec backlink: pln-install-dogfood-audit-mechanic-ea0784
 § Tasks C1/C2, AC1/AC3.
 
 Scope

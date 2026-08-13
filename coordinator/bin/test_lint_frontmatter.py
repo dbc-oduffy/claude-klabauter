@@ -2,13 +2,13 @@
 Self-test for coordinator/bin/lint-frontmatter.py's CLI logic
 (coordinator_core.frontmatter.schema_validate.main).
 
-Asserts exit code + JSON shape for each of the three flag shapes example-doctrine-repo's live
+Asserts exit code + JSON shape for each of the three flag shapes coordinator-claude's live
 callers consume: whole-tree --json (update-docs.md Phase 11d), whole-tree
 --strict-refs --json (workweek-complete.md Step 2.5), and --file (handoff/
 SKILL.md's write-time gate). Builds a synthetic --root fixture tree per test
 so results are independent of this repo's own live state/handoffs/ corpus.
 
-Spec backlink: docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md § A1
+Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A1
 """
 from __future__ import annotations
 

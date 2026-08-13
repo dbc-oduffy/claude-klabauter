@@ -32,7 +32,7 @@ install flow's track A/B fork. Read-only, idempotent; degrades to
 #       gate-blocking) — so there is no dedicated transport-failure code to
 #       collide with a business code (rule per porter-brief addendum § 3b).
 #
-# Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md
+# Spec backlink: docs/plans/2026-07-16-bash-to-naked-python-engine-migration.md [DEAD-CITATION: plan file never committed to this repo]
 from __future__ import annotations
 
 import os

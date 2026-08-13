@@ -26,7 +26,7 @@ Coverage:
 Fixture shape: production-shaped YAML-fenced Markdown files (---...---) mirroring the real
 plan/handoff frontmatter format.  Initiatives are minimal YAML files (label + status).
 
-Spec backlink: docs/plans/2026-07-06-claude-klabauter-deliverable-spine-factsupply-op.md § AC7
+Spec backlink: pln-claude-klabauter-deliverable-spine-fact--cd004e § AC7
 """
 
 from __future__ import annotations
@@ -821,11 +821,11 @@ def test_traversal_guard_in_initiative_id(rollup_repo: RollupRepo) -> None:
 def test_ac1_central_resolve_via_claude_klabauter_root_env(
     rollup_repo: RollupRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC1: CLAUDE_KLABAUTER_ROOT set to a tree with state/initiatives/<fk>.yaml; example-doctrine-repo-style scan
+    """AC1: CLAUDE_KLABAUTER_ROOT set to a tree with state/initiatives/<fk>.yaml; coordinator-claude-style scan
     worktree has NO local state/initiatives/ — advances_initiatives still resolves the FK
     from the central (CLAUDE_KLABAUTER_ROOT) tree.
 
-    This is the primary failure mode fixed by C1: example-doctrine-repo deliverables with a complete FK
+    This is the primary failure mode fixed by C1: coordinator-claude deliverables with a complete FK
     population return advances_initiatives=[] when the entity lives only centrally.
     """
     # --- Central (claude-klabauter) tree: holds the initiative entity ---
@@ -839,7 +839,7 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
 
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(central_root))
 
-    # --- example-doctrine-repo-style scan worktree: plan carries FK, NO local state/initiatives/ ---
+    # --- coordinator-claude-style scan worktree: plan carries FK, NO local state/initiatives/ ---
     rollup_repo.write_plan(
         "2026-07-06-doe-deliverable.md",
         deliverable_id="dlv-doe-central-ac1",
@@ -1170,7 +1170,7 @@ def test_ac9_warn_fires_exactly_once_across_sequential_calls(
 # ---------------------------------------------------------------------------
 # _machine_local_impl — settings-home repoint (AC3, C3)
 #
-# Spec backlink: docs/plans/2026-07-11-coordinator-core-home-claude-read-repoint.md § C3
+# Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C3
 # ---------------------------------------------------------------------------
 
 
@@ -1216,9 +1216,9 @@ class TestMachineLocalImplSettingsHomeRepoint:
 # indistinguishable from the genuinely-empty case unless the scan itself signals
 # partial/failed coverage. Mirrors roadmap_dag.py's scan_incomplete idiom.
 #
-# scan_incomplete is on the emitted payload as of example-doctrine-repo's be8b5d88 reader-widen
+# scan_incomplete is on the emitted payload as of coordinator-claude's be8b5d88 reader-widen
 # (coordinator_core/contract/deliverable-rollup-producer-contract.md § 5.2
-# reader-widen-before-writer-flips protocol — example-doctrine-repo's render layer now reads the
+# reader-widen-before-writer-flips protocol — coordinator-claude's render layer now reads the
 # field and appends " (partial scan)" per rendered line when it is set). These
 # tests assert the internal signal + the logged WARNING, and separately pin that
 # the wire shape carries the field through to the handler payload.
@@ -1424,7 +1424,7 @@ def test_handler_payload_wire_shape_includes_scan_incomplete_true(
 ) -> None:
     """Contract compliance pin: when a scan root is blocked and the internal
     scan_incomplete signal is True, the emitted payload carries
-    'scan_incomplete': True — on the wire as of example-doctrine-repo's be8b5d88 reader-widen
+    'scan_incomplete': True — on the wire as of coordinator-claude's be8b5d88 reader-widen
     (contract § 5.2)."""
     handoffs_dir = rollup_repo.root / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True, exist_ok=True)

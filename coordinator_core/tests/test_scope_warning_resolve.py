@@ -3,8 +3,8 @@
 Ports the bash oracle 1:1 (9 cases), plus last-field/pipe-anchoring and
 no-op-detection cases the bash suite implied but didn't directly assert.
 
-Port of: test-scope-warning-resolve.sh (example-doctrine-repo 67202df6, 2026-07-16)
-Spec backlink: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/
+Port of: test-scope-warning-resolve.sh (coordinator-claude 67202df6, 2026-07-16)
+Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/
     recipe-small-bin-clis-gate-aging-scope-soak-scope-warning.md § 3
 """
 from __future__ import annotations

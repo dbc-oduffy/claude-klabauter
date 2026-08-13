@@ -1,7 +1,7 @@
 """
 daily_day.py
 
-Port of: coordinator-daily-day.sh (example-doctrine-repo c6d97219, 2026-07-22)
+Port of: coordinator-daily-day.sh (coordinator-claude c6d97219, 2026-07-22)
 Spec backlink: docs/plans/2026-06-26-datetime-handling-coherence.md § D1, C-A1
 
 Purpose: exposes local_day(), the single authoritative source for today's date in

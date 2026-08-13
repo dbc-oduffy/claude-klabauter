@@ -11,7 +11,7 @@ Covers:
   - Structural assertions: _parse_working_repos and _resolve_sibling_path must NOT exist
     in recorder (removed under Option A — C4b; not merely unexercised).
 
-Spec backlink: docs/plans/2026-07-07-per-repo-emission-cutover.md § C4b
+Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C4b
 """
 
 from __future__ import annotations

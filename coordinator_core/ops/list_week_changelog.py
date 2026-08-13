@@ -13,7 +13,7 @@ Idempotent, read-only, exit 0 on empty (the absence IS the signal) and exit 0
 on ANY resolution failure (fail-safe advisory — mirrors the bash oracle's
 `set -uo pipefail` + `trap 'exit 0' ERR`).
 
-Port of: list-week-changelog.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: list-week-changelog.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Negative-spec (do NOT "fix" mid-port — faithfully reproduced oracle quirks):

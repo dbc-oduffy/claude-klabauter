@@ -3,7 +3,7 @@ coordinator_core.ops.install_publish_repo_precommit_hook — OSS publish-repo
 pre-commit exec-bit drift gate + illegal-path gate installer.
 
 Purpose: writes (or upgrades) `.git/hooks/pre-commit` in the OSS
-coordinator-claude publish repo with a POSIX-sh shim that runs two gates on
+Coordinator-claude publish repo with a POSIX-sh shim that runs two gates on
 every commit: (1) the exec-bit drift gate (node --test against
 coordinator/tests/plugin-ecosystem/exec-bit.test.js), and (2) the
 NTFS-illegal-path gate (coordinator/bin/check-no-illegal-paths.sh).
@@ -19,7 +19,7 @@ Upgrade-path handling: if the exec-bit gate is already installed but the
 illegal-path gate is absent (hook written before D4), the paths check is
 appended to the existing hook without regenerating it.
 
-Port of: install-publish-repo-precommit-hook.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: install-publish-repo-precommit-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlinks:
     docs/plans/2026-06-11-exec-bit-install-surface-completion.md § Chunk 5
     docs/plans/2026-06-30-cross-platform-file-naming-helper.md § Wave D4

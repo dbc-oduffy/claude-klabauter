@@ -33,7 +33,7 @@ C17b additions (child-side record + read/clear halves of the surfacing mechanism
                                          a peek); clear_failures_log truncates it to empty;
                                          both are never-raise on a missing log file.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C17a/C17b.
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C17a/C17b.
 """
 
 from __future__ import annotations

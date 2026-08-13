@@ -4,8 +4,8 @@ own docstring for the reference-hook port this is a faithful engine-ification
 of).
 
 Covers the 2026-07-24 widening (memo
-cross-repo/inbox/2026-07-24-example-doctrine-repo-em-executor-spec-surface-widening.md,
-actioning C9(c) of example-doctrine-repo's agent-citizenship provisioning plan): the fast-exit
+cross-repo/inbox/2026-07-24-coordinator-claude-em-executor-spec-surface-widening.md,
+actioning C9(c) of coordinator-claude's agent-citizenship provisioning plan): the fast-exit
 ``_PLAN_BODY_RE`` now also matches ``docs/problems/**/*.md`` in addition to
 ``docs/plans/**/*.md``, while ``docs/wiki/**`` and ``docs/decisions/**``
 remain deliberately excluded (executor authoring targets). The downstream
@@ -371,7 +371,7 @@ class TestUnenumeratedTypeNarrowing:
     as still-allow in ``TestKindResolutionFailureIsMeasuredNotConfined``
     above, unchanged by this class.
 
-    Spec backlink: docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md § C3 / AC6
+    Spec backlink: pln-deny-unenumerated-agent-types-e56d1b § C3 / AC6
     """
 
     def test_unenumerated_type_falls_through_and_denies_executing_body(

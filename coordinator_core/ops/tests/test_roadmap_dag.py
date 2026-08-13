@@ -27,7 +27,7 @@ Fixture shape: all fixture files are real ---fenced Markdown files with YAML fro
 matching the production stub handoff shape (lesson: test-fidelity-seed-fixtures-in-the-real).
 No bare in-process dict injection.
 
-Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C3/C4
+Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C3/C4
 """
 
 from __future__ import annotations

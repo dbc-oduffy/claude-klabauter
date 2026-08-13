@@ -29,7 +29,7 @@ This is now the SOLE canonical plan-tasks-spine fixture corpus — it was
 consolidated from two separate, partly-overlapping fixture dirs (this one
 and coordinator_core/frontmatter/tests/fixtures/plan-tasks-spine/, now
 retired) precisely because separate corpora meant no test could ever fail
-on a divergence between example-doctrine-repo's `_locate_tasks_block` (below) and its ported
+on a divergence between coordinator-claude's `_locate_tasks_block` (below) and its ported
 successor `coordinator_core.frontmatter.body_blocks.locate_fenced_block`.
 The fixture-name -> expected-locate-outcome table both suites parametrize
 over lives in this same dir: fixtures/plan-tasks-spine/fixture_expectations.py
@@ -115,7 +115,7 @@ if _LIB_DIR not in sys.path:
 from coordinator_data_root import data_root  # noqa: E402
 
 _HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals")
-# schemas/ is example-doctrine-repo-resident post-2026-07-22 executable-surface migration (this
+# schemas/ is coordinator-claude-resident post-2026-07-22 executable-surface migration (this
 # script moved to claude-klabauter; schemas/ did not) — resolve via the shared
 # two-rung helper rather than a bare _COORDINATOR_DIR-relative path.
 _PLAN_TASKS_SCHEMA = os.path.join(str(data_root("schemas")), "plan-tasks.schema.json")
@@ -385,7 +385,7 @@ def test_multiple_fenced_blocks_with_deferred_marker_still_soft_skips_when_no_ma
 # ===========================================================================
 # (a.1) Locate-rule PARITY against the shared expectation table.
 #
-# This is the test that closes the gap 08cbf4bd's fix exposed: example-doctrine-repo's
+# This is the test that closes the gap 08cbf4bd's fix exposed: coordinator-claude's
 # `_locate_tasks_block` and coordinator_core's `locate_fenced_block` are
 # exercised over the SAME fixture corpus via the SAME expectation table
 # (fixtures/plan-tasks-spine/fixture_expectations.py), so a future
@@ -415,7 +415,7 @@ LocateOutcome = _exp_mod.LocateOutcome
 
 @pytest.mark.parametrize("fixture_name", sorted(FIXTURE_EXPECTATIONS))
 def test_locator_parity_against_shared_expectation_table(fixture_name: str) -> None:
-    """example-doctrine-repo's `_locate_tasks_block` collapses ABSENT and MALFORMED into a
+    """coordinator-claude's `_locate_tasks_block` collapses ABSENT and MALFORMED into a
     single `None` return (see its own docstring) — the translation at this
     assertion site, not a second table, is how that collapsed shape is
     reconciled against the shared table's three-way `LocateOutcome`.
@@ -601,7 +601,7 @@ def test_coverage_checker_prompt_documents_the_exact_flag_text() -> None:
     above) and C3's prose enforcement of the SAME rule.
     """
     name = "test_coverage_checker_prompt_documents_the_exact_flag_text"
-    # agents/ is example-doctrine-repo-resident post-2026-07-22 executable-surface migration —
+    # agents/ is coordinator-claude-resident post-2026-07-22 executable-surface migration —
     # resolve via the shared two-rung helper rather than a bare
     # _COORDINATOR_DIR-relative path.
     checker_path = os.path.join(str(data_root("agents")), "plan-coverage-checker.md")
@@ -725,7 +725,7 @@ def test_harvest_call_site_second_run_is_idempotent() -> None:
 
 
 # ===========================================================================
-# (d.1) case_against carry-through (example-doctrine-repo cross-repo memo, leg 3): a
+# (d.1) case_against carry-through (coordinator-claude cross-repo memo, leg 3): a
 #     `backlogged`/deferred row's `case_against` must survive onto the
 #     harvested improvement-queue entry — and a row with none must harvest
 #     cleanly with the key simply omitted, never an empty string or a
@@ -978,7 +978,7 @@ def test_select_harvest_candidates_governed_never_falls_through_to_legacy_deferr
     """A governed plan carrying a disposition-absent `deferred: true` row must
     NOT select it — the legacy arm must stay unreachable on a governed plan,
     even when the row also carries pm_approved: true. Selecting it would be
-    exactly the hole example-doctrine-repo's memo warned about: silently opening the legacy
+    exactly the hole coordinator-claude's memo warned about: silently opening the legacy
     corpus to ungated harvest via the axis that governed plans are supposed
     to have replaced.
     """

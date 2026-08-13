@@ -35,7 +35,7 @@ Coverage:
         parseability (round-trips through split_frontmatter cleanly) and leaves
         untouched fields (title, created, nature, status, commits, loe) verbatim.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C7 (AC1, AC2).
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C7 (AC1, AC2).
 """
 
 from __future__ import annotations

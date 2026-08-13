@@ -1,5 +1,5 @@
 """
-coordinator_core.plugin_health — read-only health/currency probes for example-doctrine-repo's
+coordinator_core.plugin_health — read-only health/currency probes for coordinator-claude's
 plugin ecosystem (live-install drift, doctor-sentinel probes, addon-health scan).
 
 Sibling modules (drift.py, sentinel.py, scan.py, probe_select.py) each

@@ -10,7 +10,7 @@ one file (AC3). Also covers the digest normalization-order pin: the digest MUST 
 from the post-``\\n``-normalization body, so a literal backslash-n and a real newline in the
 otherwise-identical entry collapse to the same digest.
 
-Spec backlink: docs/plans/2026-07-08-concurrency-safe-strangled-op-writes.md § C1
+Spec backlink: pln-concurrency-safe-writes-for-th-c7ca9f § C1
 DR authority: docs/decisions/DR-213-queue-write-substrate-carveout.md § D2(i) (amended)
 Sibling harness: coordinator_core/ops/tests/test_queue_parity.py (byte-parity + write-always)
 """

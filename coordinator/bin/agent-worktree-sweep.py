@@ -38,7 +38,7 @@ coordinator_core.ops.agent_worktree_sweep for the actual scan/reap logic.
 #       failure onto either would let a caller misclassify "the engine never
 #       ran" as one of the ported script's own legitimate failure states.
 #
-# Port source: coordinator/bin/agent-worktree-sweep.py (example-doctrine-repo, this file,
+# Port source: coordinator/bin/agent-worktree-sweep.py (coordinator-claude, this file,
 # 307-line bash oracle retired on this cutover; see git log)
 # Ported to: coordinator_core/ops/agent_worktree_sweep.py (claude-klabauter)
 # Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md

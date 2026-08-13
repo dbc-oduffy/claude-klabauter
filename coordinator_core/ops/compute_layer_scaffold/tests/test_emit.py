@@ -201,10 +201,71 @@ def test_ac1_skill_name_with_triple_quote_does_not_break_out_of_docstring():
     ast.parse(text)  # must not raise SyntaxError
 
 
-def test_ac1_skill_name_with_newline_and_backslash_does_not_break_out_of_docstring():
-    tricky = "a" + "\\" + "b" + "\n" + "c"
+def test_ac1_skill_name_with_trailing_backslash_before_quotes_does_not_break_out_of_docstring():
+    """Review: coordinator:code-reviewer (P3) — the prior payload here
+    (letter, backslash, letter "b", newline, letter "c") is not a regression
+    test: the backslash-then-"b" is a valid Python escape (backspace) and a
+    bare newline inside a triple-quoted string is always legal, so this test
+    passed even with `_docstring_safe` reverted to `lambda v: v` (identity)
+    — no defect was exercised. This payload runs a bare backslash
+    immediately adjacent to a `\"\"\"` run: unescaped, the backslash
+    escapes the first `"` of that run, so the run no longer closes the
+    docstring where a naive reader (or the identity-revert case) would
+    expect, and the trailing live-code payload survives into the emitted
+    module source, unparseable. Verified by hand: with `_docstring_safe`
+    stubbed to identity this test FAILS (`SyntaxError: invalid character
+    '\N{EM DASH}'` mid-payload, confirming the injected `os.system(...)`
+    line was reached as live source), and with the real implementation it
+    PASSES.
+    """
+    tricky = '\\"""x\nimport os\nos.system(\'x\')\n"""y'
     text = compose_producer_module(tricky, ["do_thing"])
     ast.parse(text)  # must not raise SyntaxError
+
+
+def test_ac1_skill_name_with_nul_byte_rejected_fail_loud():
+    """Review: coordinator:code-reviewer (P2) — a NUL byte in skill_name
+    used to pass through all three `.replace()` calls unchanged and land
+    verbatim in the emitted text, which CPython's ast.parse()/compile()
+    always refuses (embedded NUL is never valid source, regardless of
+    escaping). Reject it fail-loud at the source instead."""
+    with pytest.raises(ValueError):
+        compose_producer_module("bad\x00name", ["do_thing"])
+
+
+def test_ac1_skill_name_with_cr_crlf_and_unicode_line_separators_renders_single_line():
+    """Review: coordinator:code-reviewer (P2) — _docstring_safe's own
+    docstring claims it "neutralizes newlines so the header always renders
+    as a single visual line"; a bare CR, CRLF, or the Unicode line
+    separators U+2028/U+2029 used to survive unescaped, each rendering as a
+    line break and breaking that contract."""
+    for tricky in ("a\rb", "a\r\nb", "a b", "a b"):
+        text = compose_producer_module(tricky, ["do_thing"])
+        ast.parse(text)  # must not raise SyntaxError
+        # Assert over the WHOLE emitted text, never over `text.splitlines()[0]`:
+        # str.splitlines() itself splits on \r, \r\n, U+2028 and U+2029, so any
+        # assertion that those are absent from its first element is true by
+        # construction and passes even with the escaper reverted to identity.
+        assert "\r" not in text
+        assert " " not in text
+        assert " " not in text
+
+
+def test_ac1_skill_name_with_named_and_numeric_escape_shapes_still_parses():
+    """Review: coordinator:code-reviewer (P3) — pins the escaping ORDER
+    (double every backslash first, then neutralize quote runs) that the
+    reviewer hand-verified neutralizes `\\N{...}`/`\\x41`/`\\uXXXX`-shaped
+    input as a structural side effect: doubling backslashes first means a
+    single backslash can never survive to start one of these escapes. A
+    future reorder of the escaping steps could silently reopen this with no
+    test to catch it — this is that test."""
+    for tricky in (
+        "a\\N{GREEK SMALL LETTER ALPHA}b",
+        "a\\x41b",
+        "a\\uXXXXb",
+    ):
+        text = compose_producer_module(tricky, ["do_thing"])
+        ast.parse(text)  # must not raise SyntaxError
 
 
 def test_ac12_compose_producer_module_performs_no_file_io(tmp_path, monkeypatch):

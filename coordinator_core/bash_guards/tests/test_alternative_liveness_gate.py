@@ -560,7 +560,7 @@ class TestCapabilityManifestOracle:
         mirroring that guard's own real, unverified "in-process, zero
         extra forks" claim about what is actually a `python3 -c`
         subprocess (see harness_capability_manifest.json's own comment;
-        roster-truth audit: example-doctrine-repo state/audits/2026-07-29-search-
+        roster-truth audit: coordinator-claude state/audits/2026-07-29-search-
         capability-roster-truth.md). The REAL, guard-scoped oracle must
         refuse to grade this LIVE just because `guard_inprocess_search::
         in-process` happens to be a true entry."""

@@ -20,7 +20,7 @@ Coverage:
     (g) absent plans_dir / specs_dir degrades to an empty cohort for that tree, not
         an error; absent log_path still fails loud via harvest_debt's own contract
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C11
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C11
 """
 
 from __future__ import annotations

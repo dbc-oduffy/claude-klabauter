@@ -45,7 +45,7 @@ Coverage:
       `ceremony_lock` (see `_ceremony_lock_guard.py` for exactly what is and
       is not covered). Not scoped to `post_commit_tail` specifically.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C3a.
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C3a.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ eligibility/authorization judgment — it only formats an already-assembled (or
 already-loaded) disposal-manifest dict into markdown. Pure function, no
 side effects.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C9/C12/C13
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C9/C12/C13
 Governing review: state/review-trail/findings/2026-07-23-the Staff Engineer-arch-ceremony-redesign-post-execution.md § 1b
 """
 

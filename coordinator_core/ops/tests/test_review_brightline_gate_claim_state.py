@@ -2,7 +2,7 @@
 Tests for coordinator_core.ops.review_brightline_gate._resolve_closing_session_id's
 ledger-first migration (C6a6).
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C6a (AC5).
 
 Covers the C1 incident directly: a seed baton whose claim was stamped while

@@ -7,17 +7,17 @@ Fires on PostToolUse for the Agent tool — one compact JSON line appended to
 
 A ROW IS A DISPATCH-OUT RECORD, NOT AN ARRIVAL — the op name says "completion"
 for cross-repo reasons (it is the JSON-RPC method id "hooks.agent_completion_log",
-wired from example-doctrine-repo's hooks.json shim; renaming it breaks that seam for no behavioural
+wired from coordinator-claude's hooks.json shim; renaming it breaks that seam for no behavioural
 gain), but PostToolUse fires when the *Agent tool call* returns, and for a
 backgrounded or named dispatch that is the moment the dispatch goes OUT, not the
 moment the subagent finishes. `logged_at` is therefore dispatch time; a row for an
 agent that was later killed with TaskStop, or that is still running, is present by
 construction. Consumers: this file carries NO arrival information whatsoever and
-cannot support a "did it complete?" check — example-doctrine-repo built exactly that cross-check
+cannot support a "did it complete?" check — coordinator-claude built exactly that cross-check
 (their runtime-tripwire skip-if-completed, wiki § 2026-06-09) on the old wording of
 this docstring; it was vacuous by construction and produced 189 false
 `em-side-trigger-loss` fires in this repo's own state/runtime-tripwire-fire-log.tsv.
-Source: cross-repo/inbox/2026-07-30-example-doctrine-repo-em-trigger-loss-nudge-reply.md.
+Source: cross-repo/inbox/2026-07-30-coordinator-claude-em-trigger-loss-nudge-reply.md.
 
 The -c compact (one-line-JSON) format is REQUIRED: downstream consumers grep
 for `"agentId":"<id>"` on a single line. Pretty-printed output would break
@@ -38,7 +38,7 @@ Negative-spec:
 R-1: dispatched_agent_id is the flattened tool_response.agentId, pending
 claude-central-em shim confirmation; op is dormant-correct if unflattenable.
 
-Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § C3
+Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C3
 """
 
 from __future__ import annotations

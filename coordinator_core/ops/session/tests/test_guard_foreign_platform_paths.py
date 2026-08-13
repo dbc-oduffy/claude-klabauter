@@ -35,7 +35,7 @@ def _posix_settings():
                 {
                     "hooks": [
                         {
-                            "command": "python3 /Users/alice/X/example-doctrine-repo/coordinator/hooks/scripts/foo.py",
+                            "command": "python3 /Users/alice/X/coordinator-claude/coordinator/hooks/scripts/foo.py",
                         }
                     ]
                 }
@@ -54,7 +54,7 @@ def _windows_corrupted_settings():
                 {
                     "hooks": [
                         {
-                            "command": "python3 X:/example-doctrine-repo/coordinator/hooks/scripts/foo.py",
+                            "command": "python3 X:/coordinator-claude/coordinator/hooks/scripts/foo.py",
                         }
                     ]
                 }
@@ -101,7 +101,7 @@ def test_posix_paths_on_windows_host_flagged():
 
 def test_clean_windows_on_windows_host_no_findings():
     windows_native = {
-        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 C:/Users/alice/example-doctrine-repo/coordinator/hooks/scripts/foo.py"}]}]},
+        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 C:/Users/alice/coordinator-claude/coordinator/hooks/scripts/foo.py"}]}]},
     }
     findings = detect_foreign_platform_paths(windows_native, host_is_windows=True)
     assert findings == []
@@ -112,8 +112,8 @@ def test_clean_windows_on_windows_host_no_findings():
 
 def test_mixed_shapes_posix_host_only_windows_shape_flagged():
     mixed = {
-        "a": "python3 /Users/alice/X/example-doctrine-repo/coordinator/hooks/scripts/ok.py",
-        "b": "python3 X:/example-doctrine-repo/coordinator/hooks/scripts/bad.py",
+        "a": "python3 /Users/alice/X/coordinator-claude/coordinator/hooks/scripts/ok.py",
+        "b": "python3 X:/coordinator-claude/coordinator/hooks/scripts/bad.py",
     }
     findings = detect_foreign_platform_paths(mixed, host_is_windows=False)
     assert len(findings) == 1
@@ -153,7 +153,7 @@ def test_url_and_unc_paths_do_not_false_positive():
 def test_suggestion_derived_from_doe_root(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / ".doe-root").write_text("/Users/alice/X/example-doctrine-repo", encoding="utf-8")
+    (config_dir / ".doe-root").write_text("/Users/alice/X/coordinator-claude", encoding="utf-8")
     settings = config_dir / "settings.json"
     import json
 
@@ -164,7 +164,7 @@ def test_suggestion_derived_from_doe_root(tmp_path):
 
     banner = evaluate_foreign_platform_paths(settings, config_dir=config_dir, host_is_windows=False)
     assert "FOREIGN-PLATFORM PATH(S) DETECTED" in banner
-    assert "/Users/alice/X/example-doctrine-repo/coordinator/hooks/scripts/foo.py" in banner
+    assert "/Users/alice/X/coordinator-claude/coordinator/hooks/scripts/foo.py" in banner
 
 
 def test_no_doe_root_suggestion_is_none(tmp_path):
@@ -185,7 +185,7 @@ def test_format_banner_names_offending_keys():
     findings = detect_foreign_platform_paths(_windows_corrupted_settings(), host_is_windows=False)
     banner = format_banner(findings, "/Users/alice/.claude/settings.json")
     assert "settings.json" in banner
-    assert "X:/example-doctrine-repo" in banner
+    assert "X:/coordinator-claude" in banner
     assert "DETECT-ONLY" in banner
 
 
@@ -296,7 +296,7 @@ def test_env_var_syntax_in_non_command_field_not_flagged():
                 {
                     "description": "On Windows use $env:COORDINATOR_CONTENT_ROOT; "
                     "on POSIX use $COORDINATOR_CONTENT_ROOT instead.",
-                    "hooks": [{"command": "python3 /Users/x/example-doctrine-repo/foo.py"}],
+                    "hooks": [{"command": "python3 /Users/x/coordinator-claude/foo.py"}],
                 }
             ]
         }
@@ -324,8 +324,8 @@ def test_windows_path_in_non_command_field_not_flagged_as_env_var_shape():
     `command` pointer) must not trip the NEW env-var-shape check (the
     pre-existing path-shape check is untouched behavior, out of scope here)."""
     data = {
-        "notes": "See X:/example-doctrine-repo/coordinator/hooks/scripts/foo.py for context.",
-        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 /Users/x/example-doctrine-repo/foo.py"}]}]},
+        "notes": "See X:/coordinator-claude/coordinator/hooks/scripts/foo.py for context.",
+        "hooks": {"PreToolUse": [{"hooks": [{"command": "python3 /Users/x/coordinator-claude/foo.py"}]}]},
     }
     findings = detect_foreign_platform_paths(data, host_is_windows=False)
     env_shapes = {"windows-env-var-syntax-on-posix-host", "posix-env-var-syntax-on-windows-host"}
@@ -548,7 +548,7 @@ def test_format_prose_banner_empty_findings_is_empty_string():
 # indistinguishable from a one-character Windows drive path unless the
 # escape-letter shape is excluded. See `_path_shape_regexes.WIN_DRIVE_RE`'s
 # own docstring for the chosen fix and its residual, and that module's own
-# docstring for the real fleet example this reproduces (example-doctrine-repo's
+# docstring for the real fleet example this reproduces (coordinator-claude's
 # `state/cockpit-emission.json`).
 
 

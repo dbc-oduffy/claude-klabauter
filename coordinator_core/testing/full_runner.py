@@ -13,7 +13,7 @@ machine-scannable tally line. Process exit is 0 iff every dispatched suite
 passed AND no `--expect`-named family was empty.
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C3 (DEC-1, DEC-10)
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C3 (DEC-1, DEC-10)
 
 Negative-spec:
     - Is NOT a shell polyglot trampoline (Finding 7) — a normal importable

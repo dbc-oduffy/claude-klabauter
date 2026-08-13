@@ -16,7 +16,7 @@ negative-spec at lines 38-50 against re-deriving `_emit`/`build_envelope`
 locally). `pickup_assemble`/`baton_assemble` are the model only for the
 CLI trampoline (C5) and package layout, never for this envelope/seam.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
 chunk C3 (D-1..D-6 live in that plan's "Key decisions" section).
 
@@ -42,7 +42,7 @@ only cadence reading it today. That is the same constraint that rejected a
 `--phase` flag: what is forbidden here is a PER-SURFACE BRANCH, not a
 parameter. A `if cadence == "mise-en-place"` guard around the threading
 would be the violation; uniform threading is not.
-Carrier ratified 2026-08-04, `cross-repo/inbox/2026-08-04-example-doctrine-repo-em-
+Carrier ratified 2026-08-04, `cross-repo/inbox/2026-08-04-coordinator-claude-em-
 mise-run-id-carrier-env-breaks-windows.md`.
 
 READ-ONLY, by construction (AC2): this module only reads disk/git state via
@@ -83,7 +83,7 @@ Negative-spec:
       reader claims it. A reader that receives a `run_id` it has no use for
       ignores it; that is self-gating, not seam logic.
     - Do NOT add a SECOND carrier for `run_id` (an env var read here, a
-      session-state lookup): PM ruling 2026-08-04, with example-doctrine-repo
+      session-state lookup): PM ruling 2026-08-04, with coordinator-claude
       concurring. The flag is the only path.
     - Do NOT construct, parse, or validate a run id in the `mint-run-id`
       dispatch either (AC7, 2026-08-04 `docs/plans/2026-08-04-engine-
@@ -149,7 +149,7 @@ EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
 #: The one carrier for "which run is asking" (ratified 2026-08-04,
-#: `cross-repo/inbox/2026-08-04-example-doctrine-repo-em-mise-run-id-carrier-env-breaks-
+#: `cross-repo/inbox/2026-08-04-coordinator-claude-em-mise-run-id-carrier-env-breaks-
 #: windows.md`). A flag rather than an environment variable because
 #: `VAR=value command` is not a line `cmd.exe` parses — the Windows
 #: `backlog-grind-assemble.cmd` launcher is the P0 path — and because each

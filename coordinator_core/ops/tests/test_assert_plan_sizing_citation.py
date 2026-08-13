@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.assert_plan_sizing_citation.
 
-Spec backlink: docs/plans/2026-08-06-plan-sizing-citation-gate.md § C3 / AC4 / AC6
+Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C3 / AC4 / AC6
 """
 from __future__ import annotations
 

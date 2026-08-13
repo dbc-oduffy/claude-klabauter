@@ -9,7 +9,7 @@ docs/plans/2026-08-13-handoff-ac-shape-template-rule-and-write-time-offer.md:
 `- [ ]`/`- [x]` checkboxes under a handoff's `## Acceptance criteria`
 heading and reports `verdict: indeterminate` when it finds the heading with
 zero of them — but the checkbox convention is stated only in
-`example-doctrine-repo coordinator/skills/plan/SKILL.md`, never in the spinoff or
+`coordinator-claude coordinator/skills/plan/SKILL.md`, never in the spinoff or
 handoff skills, and `coordinator/templates/handoffs/` holds no body
 template at all. An author following the skills they were actually given
 can write prose bullets instead, satisfying every instruction they read
@@ -114,7 +114,7 @@ Negative-spec:
     section does not get re-nagged on every later unrelated edit; only the
     edit that changes the section's state can fire.
 
-Spec backlink: docs/plans/2026-08-13-handoff-ac-shape-template-rule-and-write-time-offer.md (chunk C1)
+Spec backlink: pln-handoff-acceptance-criteria-sh-0e51f5 (chunk C1)
 """
 
 from __future__ import annotations

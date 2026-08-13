@@ -35,7 +35,7 @@ register_op("fleet.backfill_dispositionless_memos", _handler) as a side-effect.
 Added to coordinator_core/ops/__init__.py's eager-import list to trigger
 registration at process start.
 
-Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C5
+Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C5
 
 Negative-spec:
   - Does NOT git mv, git add, or git commit anything — unlike the DR-211 archival
@@ -107,20 +107,20 @@ BACKFILL_TABLE: dict[str, dict[str, str]] = {
     "2026-07-26-example-store-repo-em-workday-complete-backfill-directives-misinvoked.md": {
         "realized_by": "baf6c672",
     },
-    "2026-07-25-example-doctrine-repo-em-orient-assemble-phantom-verbs.md": {
+    "2026-07-25-coordinator-claude-em-orient-assemble-phantom-verbs.md": {
         "actioned_note": "spinoff: state/handoffs/2026-07-26-orient-assemble-p1-p2-residue-four-unrel.md",
     },
-    "2026-07-25-example-doctrine-repo-em-schema-validator-keyword-gap.md": {
+    "2026-07-25-coordinator-claude-em-schema-validator-keyword-gap.md": {
         "realized_by": "4f7a2ae2",
     },
-    "2026-07-25-example-doctrine-repo-em-planless-dispatch-sidecar-provisioning.md": {
+    "2026-07-25-coordinator-claude-em-planless-dispatch-sidecar-provisioning.md": {
         "actioned_note": (
-            "reply memo: example-doctrine-repo 2026-07-26-claude-klabauter-em-planless-dispatch-sidecar-fallback-exists.md"
+            "reply memo: coordinator-claude 2026-07-26-claude-klabauter-em-planless-dispatch-sidecar-fallback-exists.md"
         ),
     },
-    "2026-07-24-example-doctrine-repo-em-b4-author-fork-seam-and-apply-base-heads-up.md": {
+    "2026-07-24-coordinator-claude-em-b4-author-fork-seam-and-apply-base-heads-up.md": {
         "actioned_note": (
-            "reply memo: example-doctrine-repo 2026-07-26-claude-klabauter-em-b4-author-fork-seam-decision.md; "
+            "reply memo: coordinator-claude 2026-07-26-claude-klabauter-em-b4-author-fork-seam-decision.md; "
             "follow-on 17e130a1, 2fdee742"
         ),
     },
@@ -134,7 +134,7 @@ BACKFILL_TABLE: dict[str, dict[str, str]] = {
         "realized_by": "d6571942",
     },
     "2026-07-22-claude-central-em-adopt-portability-gates.md": {
-        "actioned_note": "reply memo: example-doctrine-repo 2026-07-26-claude-klabauter-em-portability-gates-already-discharged.md",
+        "actioned_note": "reply memo: coordinator-claude 2026-07-26-claude-klabauter-em-portability-gates-already-discharged.md",
     },
     "2026-07-22-claude-central-em-tests-returned-22-not-40-split-subject-kept.md": {
         "actioned_note": "spinoff: state/handoffs/2026-07-26-split-subject-test-seam-audit-13-files-n.md",
@@ -154,13 +154,13 @@ BACKFILL_TABLE: dict[str, dict[str, str]] = {
     "2026-07-26-example-cockpit-repo-em-fleet-state-memo-ingest-landed.md": {
         "actioned_note": "reply memo: cockpit 2026-07-26-claude-klabauter-em-memo-body-projection-scope-accepted.md",
     },
-    "2026-07-26-example-doctrine-repo-em-memo-send-summary-cap-discoverable-at-draft-time.md": {
+    "2026-07-26-coordinator-claude-em-memo-send-summary-cap-discoverable-at-draft-time.md": {
         "realized_by": "892045f4",
     },
-    "2026-07-26-example-doctrine-repo-em-rollup-scan-incomplete-widened.md": {
+    "2026-07-26-coordinator-claude-em-rollup-scan-incomplete-widened.md": {
         "realized_by": "0b9c5b6c",
     },
-    "2026-07-26-example-doctrine-repo-em-handoff-schema-2-1-0-carried-items-bump.md": {
+    "2026-07-26-coordinator-claude-em-handoff-schema-2-1-0-carried-items-bump.md": {
         "realized_by": "0268d303",
     },
     "2026-07-26-example-cockpit-repo-em-dr084-p4-relay-status.md": {
@@ -169,46 +169,46 @@ BACKFILL_TABLE: dict[str, dict[str, str]] = {
     "2026-07-23-example-cockpit-repo-em-dr084-disposed-successors-corpus-answers.md": {
         "actioned_note": "baton: state/handoffs/2026-07-22_152148_0b60bae8-0b1b-42cd-bcde-8581920e349b.md",
     },
-    "2026-07-25-example-doctrine-repo-em-zero-tool-use-store-records-every-count.md": {
+    "2026-07-25-coordinator-claude-em-zero-tool-use-store-records-every-count.md": {
         "realized_by": "244e4046",
     },
-    "2026-07-26-example-doctrine-repo-em-hooks-twin-retirement-confirm.md": {
+    "2026-07-26-coordinator-claude-em-hooks-twin-retirement-confirm.md": {
         "realized_by": "4f20a1a2",
     },
-    "2026-07-26-example-doctrine-repo-em-denode-lint-frontmatter-confirm.md": {
+    "2026-07-26-coordinator-claude-em-denode-lint-frontmatter-confirm.md": {
         "realized_by": "c79e66cd",
     },
-    "2026-07-26-example-doctrine-repo-em-fleet-capability-gate3-correction.md": {
+    "2026-07-26-coordinator-claude-em-fleet-capability-gate3-correction.md": {
         "actioned_note": (
-            "reply memo: example-doctrine-repo 2026-07-26-claude-klabauter-em-gate3-exemplar-already-landed-no-relay-owed.md "
+            "reply memo: coordinator-claude 2026-07-26-claude-klabauter-em-gate3-exemplar-already-landed-no-relay-owed.md "
             "(relay moot -- rag 33fa28182)"
         ),
     },
-    "2026-07-26-example-doctrine-repo-em-excision-memo-spinoff-stood-down-2026-07-08.md": {
+    "2026-07-26-coordinator-claude-em-excision-memo-spinoff-stood-down-2026-07-08.md": {
         "actioned_note": "terminal-ack: declines receiver-side build; nothing owed",
     },
-    "2026-07-26-example-doctrine-repo-em-handoff-chain-exit-code-confirm.md": {
+    "2026-07-26-coordinator-claude-em-handoff-chain-exit-code-confirm.md": {
         "actioned_note": "terminal-ack: answers a claude-klabauter question; no edit needed",
     },
-    "2026-07-26-example-doctrine-repo-em-tri-plane-citation-sweep-gap.md": {
-        "actioned_note": "terminal-ack: no such convention exists; example-doctrine-repo retains authorship",
+    "2026-07-26-coordinator-claude-em-tri-plane-citation-sweep-gap.md": {
+        "actioned_note": "terminal-ack: no such convention exists; coordinator-claude retains authorship",
     },
-    "2026-07-26-example-doctrine-repo-em-nine-baton-fixed-ack.md": {
+    "2026-07-26-coordinator-claude-em-nine-baton-fixed-ack.md": {
         "actioned_note": "terminal-ack: ack of four claude-klabauter fixes against 05bc8c8c",
     },
-    "2026-07-26-example-doctrine-repo-em-ceremony-c18-subsumed.md": {
+    "2026-07-26-coordinator-claude-em-ceremony-c18-subsumed.md": {
         "actioned_note": "terminal-ack: self-declaring no-op; subsumed by companion memo",
     },
-    "2026-07-26-example-doctrine-repo-em-coverage-gate-ack.md": {
+    "2026-07-26-coordinator-claude-em-coverage-gate-ack.md": {
         "actioned_note": "terminal-ack: pure ack of a claude-klabauter fix",
     },
-    "2026-07-26-example-doctrine-repo-em-docgen-oss-reply.md": {
+    "2026-07-26-coordinator-claude-em-docgen-oss-reply.md": {
         "actioned_note": "terminal-ack: agreement citing DR-074 precedent",
     },
-    "2026-07-26-example-doctrine-repo-em-guard-cluster-near-miss-ack.md": {
+    "2026-07-26-coordinator-claude-em-guard-cluster-near-miss-ack.md": {
         "actioned_note": "terminal-ack: pure ack; related fixes 8fb0c481, e88bc98b",
     },
-    "2026-07-26-example-doctrine-repo-em-guard-false-positives-ack.md": {
+    "2026-07-26-coordinator-claude-em-guard-false-positives-ack.md": {
         "actioned_note": "terminal-ack: pure ack; underlying fix e88bc98b",
     },
     "2026-07-26-example-cockpit-repo-em-content-hash-not-load-bearing-c9-reset-goal-filter.md": {

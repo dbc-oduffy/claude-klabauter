@@ -1,6 +1,6 @@
 """Characterization tests for coordinator_core.ops.install_claude_doe_wrapper.
 
-Port source: coordinator/commands/install.md (example-doctrine-repo) Step 3.5b, the
+Port source: coordinator/commands/install.md (coordinator-claude) Step 3.5b, the
 literal bash fence at line 892.
 Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9
 """

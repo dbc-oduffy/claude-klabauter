@@ -8,7 +8,7 @@ field every `cutover.advance` abort path (D4 refusal ladder) puts its actual
 reason in. The `exit_code == 2` branch a few lines above already prints
 notes unconditionally; this fix mirrors that on the empty-verdict path too.
 
-Spec backlink: cross-repo/inbox/2026-07-25-example-doctrine-repo-em-posix-bareword-path-provisioning.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-posix-bareword-path-provisioning.md
 
 Hermeticity follows `test_close_origin_stub_on_ship.py`'s established
 pattern: `cutover-cli` does `sys.path.insert(0, lib_dir); import cc_invoke`

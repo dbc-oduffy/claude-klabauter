@@ -281,6 +281,23 @@ def test_brief_session_stays_under_byte_budget():
     ever fails, the fix is almost never to raise this number — re-derive the
     byte cost of whatever grew and decide whether it belongs in the
     session-cadence brief at all.
+
+    2026-08-13 attribution (state/bug-backlog/2026-08-13-session-brief-byte
+    -budget-assertion-is-r-8733361330d6.yaml): this assertion went red at
+    33664 bytes, ~12% over budget. Byte-attributed by `cli` across
+    `brief('session')['directives']`: `workday-start-handoff-triage`
+    23628 of 26297 total directive bytes — overwhelmingly its `ready`
+    subcommand alone (109 lines / 19175 bytes), an uncapped query over
+    every `ready_to_fire`/`open` handoff that grows with disk contents,
+    unlike the memo/auto-reconcile judgment-point families
+    `cap_judgment_points` already bounds. Diagnosis: shape (a), a reader
+    grown past its cap — not shape (b), a stale constant. Fixed by adding
+    `_READY_LINE_CAP`/`_AWAITING_GATE_LINE_CAP` +
+    `_cap_rendered_lines` to `readers_handoff_triage.py` (post-hoc line
+    cap on the already-rendered text, same discipline as
+    `_suppress_live_ledger_claims` and `_UNRECOGNIZED_STATUS_LINE_CAP` —
+    never touches the ported query/format logic). Post-fix measurement:
+    15936 bytes. The 30000 constant was not touched.
     """
     envelope = brief("session")
     size = len(json.dumps(envelope).encode("utf-8"))

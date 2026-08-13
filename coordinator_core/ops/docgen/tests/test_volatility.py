@@ -6,7 +6,7 @@ injectable/redact-only split is correct per type, the two fully-deterministic
 types carry zero volatile fields, and the value/text redaction helpers behave
 identically regardless of quoting.
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C5 (AC5)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C5 (AC5)
 """
 
 from __future__ import annotations

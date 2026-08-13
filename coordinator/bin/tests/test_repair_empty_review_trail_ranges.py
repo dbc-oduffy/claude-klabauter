@@ -18,7 +18,7 @@ Coverage (AC7/AC8):
     untouched — never guessed at.
   - dry-run (the default — no --apply) writes nothing to any record file.
 
-Spec backlink: docs/plans/2026-08-10-caret-fix-on-the-wrong-launcher.md § C4
+Spec backlink: pln-the-caret-fix-went-to-the-laun-aff9e5 § C4
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ coordinator/bin/distill-delete-guard.py's consumption of C29's batched
 C31 `existence_map` optional-parameter seam on `resolve_realized_by` /
 `check_realized_by` / `evaluate_candidate_detailed` / `evaluate_candidate`.
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § C31
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § C31
 
 Coverage:
   shape pre-scan (CLI):

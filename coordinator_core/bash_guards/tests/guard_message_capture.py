@@ -1,7 +1,7 @@
 """coordinator_core.bash_guards.tests.guard_message_capture -- direct
 per-guard capture seam over `dispatch.GuardEntry.fn`.
 
-Spec backlink: docs/plans/2026-08-02-guard-message-size-discipline.md,
+Spec backlink: pln-runtime-measured-message-size--0669ac,
 chunk C1, § Problem's "Correction: the capture seam must attribute bytes,
 and cannot short-circuit."
 

@@ -33,7 +33,7 @@
         "live-ops",
         "sunset"
       ],
-      "description": "example-doctrine-repo-defined canonical lifecycle enum (DEC-3) — a richer ordered set than any single consumer's binary need. Consumers PROJECT/COLLAPSE this into their own layer (e.g. a consumer mapping it to a shipped|pre-launch config field); the generic-superset-to-consumer-subset mapping direction is a documented contract property, not ad-hoc per-consumer choice."
+      "description": "coordinator-claude-defined canonical lifecycle enum (DEC-3) — a richer ordered set than any single consumer's binary need. Consumers PROJECT/COLLAPSE this into their own layer (e.g. a consumer mapping it to a shipped|pre-launch config field); the generic-superset-to-consumer-subset mapping direction is a documented contract property, not ad-hoc per-consumer choice."
     },
     "vision": {
       "type": "object",
@@ -83,7 +83,7 @@
           "relationship": {
             "type": "string",
             "enum": ["competitor", "peer", "aspirational-target", "complement", "prior-art", "superseded-by", "supersedes"],
-            "description": "How this repo positions itself relative to the named project. This is the example-doctrine-repo-canonical superset; consumers project/collapse it into their own subset (e.g. a competitive-stance triple), exactly as the lifecycle enum (DEC-3) is consumer-projected — the generic-superset→consumer-subset mapping direction is a documented contract property, not a per-consumer choice."
+            "description": "How this repo positions itself relative to the named project. This is the coordinator-claude-canonical superset; consumers project/collapse it into their own subset (e.g. a competitive-stance triple), exactly as the lifecycle enum (DEC-3) is consumer-projected — the generic-superset→consumer-subset mapping direction is a documented contract property, not a per-consumer choice."
           },
           "note": {
             "type": ["string", "null"],
@@ -152,7 +152,7 @@
     },
     "maturity_axis": {
       "type": ["string", "null"],
-      "description": "OPTIONAL, consumer-set-only field (DEC-4, PM-ratified include-both). A consumer-defined maturity dimension label this repo is scored on by that consumer. Example-doctrine-repo schema does not interpret its value; absence-allowed and costs non-consuming repos nothing."
+      "description": "OPTIONAL, consumer-set-only field (DEC-4, PM-ratified include-both). A consumer-defined maturity dimension label this repo is scored on by that consumer. Coordinator-claude schema does not interpret its value; absence-allowed and costs non-consuming repos nothing."
     },
     "depends_on": {
       "type": "array",

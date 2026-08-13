@@ -14,7 +14,7 @@ disjoint surface set, never a session/day/week severity knob — see
 unconditionally for every cadence and trusts each to self-gate; this module
 is a no-op `ReaderResult()` for every cadence except `"mise-en-place"`.
 
-Scope, per example-doctrine-repo `coordinator/commands/mise-en-place.md`: mise-en-place's
+Scope, per coordinator-claude `coordinator/commands/mise-en-place.md`: mise-en-place's
 Phase 0 five readiness criteria assess a spec's SEMANTIC completeness (is the
 decision made? are downstream contracts sequenced? is this pure-executor
 work? is the footprint declarable and data-reachable? is verification
@@ -56,8 +56,8 @@ line:
    `docs/plans/2026-08-04-mise-phase-6-review-scale-is-computed-by.md`,
    chunk C1) — `/mise` Phase 6's review-scale rule, computed here instead of
    left as prose the EM evaluates. NOT "a multi-baton run is partitioned by
-   default": example-doctrine-repo retired that prose (their c8ea9b16a; `cross-repo/inbox/
-   2026-08-04-example-doctrine-repo-em-mise-phase6-partitions-by-default-does-not-
+   default": coordinator-claude retired that prose (their c8ea9b16a; `cross-repo/inbox/
+   2026-08-04-coordinator-claude-em-mise-phase6-partitions-by-default-does-not-
    survive-the-verdict.md`) after probing the shipped reader — a resolved
    `baton_count >= 2` MULTIPLIES the row-4 metrics and floors the verdict
    above the no-review rows; it never forces the partitioned row, so a
@@ -102,7 +102,7 @@ Phase 6. Three-way, deliberately:
 WHICH record is the run in flight is READ, never inferred: the caller
 supplies it as `backlog-grind-assemble brief mise-en-place --run-id
 <run-id>`, naming `state/mise-inventory/<run-id>.md` (ratified 2026-08-04,
-`cross-repo/inbox/2026-08-04-example-doctrine-repo-em-mise-run-id-carrier-env-breaks-
+`cross-repo/inbox/2026-08-04-coordinator-claude-em-mise-run-id-carrier-env-breaks-
 windows.md`). `run_id` reaches this module as a uniform keyword on EVERY
 reader's `collect()` — the seam stays cadence-agnostic and each reader
 self-gates on it exactly as it already self-gates on `cadence`.
@@ -112,7 +112,7 @@ load_family_records` (D-6, AC6, scoped to this file) — no directory glob,
 no hand-rolled YAML frontmatter parse over a backlog directory anywhere
 below.
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Spec backlink: coordinator-claude docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
 chunk C3b; docs/plans/2026-08-04-mise-phase-6-review-scale-is-computed-by.md,
 chunk C1 (point 4 above).
 
@@ -178,7 +178,7 @@ Negative-spec:
       run onward), and start-SHA ancestry (announced itself, but still
       picked a record nothing had named). The carrier is now the caller's
       own `--run-id`, ratified 2026-08-04 (`cross-repo/inbox/2026-08-04-
-      example-doctrine-repo-em-mise-run-id-carrier-env-breaks-windows.md`): "I would
+      coordinator-claude-em-mise-run-id-carrier-env-breaks-windows.md`): "I would
       rather see the inference path deleted than kept as a fallback that
       quietly reactivates on any caller that forgets the flag." There is
       therefore no `_ancestry_probe`, no candidate set, no ordering, and no
@@ -188,7 +188,7 @@ Negative-spec:
       whose established idiom is asking rather than raising.
     - Does NOT accept a SECOND carrier for the run id — no `MISE_RUN_ID`
       env fallback, no session-state lookup, no sentinel read (PM ruling,
-      2026-08-04, with example-doctrine-repo concurring). A second carrier is a second
+      2026-08-04, with coordinator-claude concurring). A second carrier is a second
       way to be wrong, and an env prefix is unreachable on the Windows
       `.cmd` launcher path (`VAR=value command` is not a line `cmd.exe`
       parses) and dead on every host across the fresh-shell-per-EM-call
@@ -340,7 +340,7 @@ _MISE_INVENTORY_DIRNAME = "mise-inventory"
 #: the dangerous one, hence exact key names only, never a fuzzy match.
 _START_SHA_FM_KEYS = ("start_sha", "starting_sha", "run_start_sha", "range_start_sha")
 
-#: The record's own run identifier, per example-doctrine-repo `coordinator/pipelines/
+#: The record's own run identifier, per coordinator-claude `coordinator/pipelines/
 #: mise-en-place/PIPELINE.md` § Phase 1 ("the record MUST open with
 #: frontmatter carrying `run_id:` and `start_sha:`") and
 #: `coordinator/commands/mise-en-place.md`'s scout brief. EXACT key only,
@@ -1142,7 +1142,7 @@ class MintedRunId(NamedTuple):
     repo-relative, forward-slash `state/mise-inventory/<run_id>.md` path it
     implies — NEVER a machine-absolute path: this repo is Windows-first, and
     an absolute-path string would platform-separate on Windows (backslashes
-    in place of `/`), and this value is also consumed by a example-doctrine-repo hook
+    in place of `/`), and this value is also consumed by a coordinator-claude hook
     in a sibling repo, where an absolute path rooted in *this* machine is
     meaningless. `__init__.py`'s `main()` serialises these two fields
     verbatim to JSON — see AC7's negative-spec: it reads

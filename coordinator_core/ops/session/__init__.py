@@ -6,5 +6,5 @@ substrate.  Class-B ops do NOT use git commit or archive_and_commit — they ope
 on untracked directories inside the git dir and carry their own safety spec
 (per-record idempotency, recency liveness, fail-closed-to-keep).
 
-Spec backlink: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C4 / § Design-decisions #2
+Spec backlink: pln-strang-11-b8-session-init-boot-f78455 § C4 / § Design-decisions #2
 """

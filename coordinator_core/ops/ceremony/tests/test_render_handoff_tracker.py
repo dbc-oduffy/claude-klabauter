@@ -20,7 +20,7 @@ Negative-spec: the fleet-aggregate ``--all-repos`` mode (and its
 spec in ``render_handoff_tracker.py`` for the removal rationale. Do not
 re-add ``--all-repos`` coverage here without re-adding the mode.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b/C9
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b/C9
 """
 
 from __future__ import annotations

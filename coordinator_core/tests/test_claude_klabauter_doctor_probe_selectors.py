@@ -28,7 +28,7 @@ All subprocess tests invoke the probe script as a subprocess (same invocation pa
 installer and bin/claude-klabauter-doctor-probe.py's direct CLI invocation) for integration-level
 fidelity.
 
-Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C6
+Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C6
 """
 
 from __future__ import annotations
@@ -729,7 +729,7 @@ class TestPythonVersionBrokenEnvelope:
     on its internal helpers — no subprocess — so they are fast and do not
     require the full install chain to be live.
 
-    Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C6
+    Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C6
     """
 
     def test_envelope_schema_version(self) -> None:

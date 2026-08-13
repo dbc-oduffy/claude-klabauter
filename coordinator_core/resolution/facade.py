@@ -9,7 +9,7 @@ discriminator — never a single generic ``validate_root()`` that would hide
 it:
 
     resolve_operator_config()   — operator-authored, gitignored, per-machine
-                                   config (settings home, claude-klabauter root/bin, example-doctrine-repo
+                                   config (settings home, claude-klabauter root/bin, coordinator-claude
                                    root). Corruption-checked ONLY: these
                                    values are typo'd or stale, never
                                    adversarial, so this method never touches
@@ -36,7 +36,7 @@ operator cannot attack their own machine) or under-apply it to harness input
 (a real security regression). Keeping them as two named methods makes that
 choice visible at every call site rather than buried in an argument.
 
-Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md § W1-A1
+Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md § W1-A1 [DEAD-CITATION: plan file never committed to this repo]
 
 Negative-spec:
   - Does NOT add symlink or world-writable checks to

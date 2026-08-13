@@ -11,7 +11,7 @@ the pytest-asyncio dependency (engine is stdlib-only; prefer no test-infra addit
 GOLDEN normalization: additionalContext embeds volatile text; assertions use ``in``
 / substring checks rather than byte-exact matching.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § C8
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C8
 """
 
 from __future__ import annotations
@@ -1005,7 +1005,7 @@ def test_unauthorized_handoff_coordinator_skill_in_tail_suppresses(tmp_path) -> 
 # dual-home-sentinel-trap C4 — single-home contract for the two dispatch-nudge
 # suppression sentinels (.dispatch-nudge-ok, .autonomous).
 #
-# Spec backlink: docs/plans/2026-07-31-dual-home-sentinel-trap.md § C4.
+# Spec backlink: pln-dual-home-sentinel-trap-one-re-de4676 § C4.
 #
 # Negative-spec: the negative half of each pair below is the load-bearing
 # assertion — it must go RED the moment anyone re-adds an OR-branch checking

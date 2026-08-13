@@ -54,7 +54,7 @@ Coverage:
                              unreachable op is invisible to a unit test that mocks the
                              op layer directly.
 
-Spec backlink: docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md § C2b
+Spec backlink: pln-teach-the-review-trail-foreign-fa3c96 § C2b
 """
 
 from __future__ import annotations

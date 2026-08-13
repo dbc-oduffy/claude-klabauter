@@ -37,7 +37,7 @@ is a three-line, directly-readable append of test 1's return value into the
 same `extra_stage_paths` list the two adjacent, already-tested renders append
 to -- see that function's own tests file for the sibling coverage this mirrors.
 
-Spec backlink: docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md
+Spec backlink: pln-teach-the-review-trail-foreign-fa3c96
 § C7 / AC12.
 """
 

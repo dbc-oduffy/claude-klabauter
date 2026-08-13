@@ -67,7 +67,7 @@ mechanisms are not alternatives to one another -- a guard can be excluded by
 
 This is the same structural failure class named upstream, one layer up, by
 a ratified tripwire family -- cite ``coordinator-tripwires.md
-§ GUARD-WIRING-SILENT-SKIP`` (example-doctrine-repo repo): "absence of a guard must
+§ GUARD-WIRING-SILENT-SKIP`` (coordinator-claude repo): "absence of a guard must
 not be indistinguishable from the guard passing... a loud warning that lets
 the operation proceed anyway is not the fix either." That entry
 cross-references its sibling ``§ BASH-POLICY-DENY-GUARD-FAIL-OPEN-
@@ -75,7 +75,7 @@ INVERSION``, which names ``block_reviewer_bash_outside_allowlist``
 explicitly (see this plan's C6). ``SILENT`` slots into this existing
 doctrine family rather than being a novel abstraction invented here.
 
-Spec backlink: docs/plans/2026-08-07-guards-reach-a-verdict-on-powershell-or-stay-silent.md § C1
+Spec backlink: pln-guards-reach-a-verdict-on-powe-0e4bc3 § C1
 """
 
 from __future__ import annotations

@@ -47,9 +47,9 @@ unwrapped, an `error` key renders the skipped state, malformed JSON likewise)
 -- the real cc_invoke() call is skipped entirely, and the seam is checked
 BEFORE CLAUDE_KLABAUTER_ROOT resolution so a test needs no live checkout.
 
-Spec backlink: example-doctrine-repo state/handoffs/2026-07-28-fold-inbox-blitz-into-workday-start-as-a.md;
-  example-doctrine-repo cross-repo/inbox/2026-07-28-example-retrieval-repo-em-inbox-blitz-proven-pattern.md;
-  example-doctrine-repo coordinator/commands/workday-start.md Step 1.45.
+Spec backlink: coordinator-claude state/handoffs/2026-07-28-fold-inbox-blitz-into-workday-start-as-a.md;
+  coordinator-claude cross-repo/inbox/2026-07-28-example-retrieval-repo-em-inbox-blitz-proven-pattern.md;
+  coordinator-claude coordinator/commands/workday-start.md Step 1.45.
 
 Negative-spec:
   - Does NOT write, move, or flip any memo's lifecycle state -- memo.blitz_buckets

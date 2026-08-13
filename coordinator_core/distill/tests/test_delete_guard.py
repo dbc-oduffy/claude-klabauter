@@ -60,7 +60,7 @@ Coverage:
     (t) a candidate that fails several guards -> eligible False, blocked_by lists
         every failing guard name
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C3
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C3
 """
 
 from __future__ import annotations

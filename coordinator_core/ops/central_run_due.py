@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.central_run_due
 
-Port of: central-run-due.sh (example-doctrine-repo b5a4192c, 2026-07-20).
+Port of: central-run-due.sh (coordinator-claude b5a4192c, 2026-07-20).
 
 Purpose: surface a "central learn-lessons run due (by VOLUME)" nudge when [universal]
 entries accrued since the last COMPLETE central run exceed a threshold. Companion to
@@ -18,11 +18,11 @@ not a gate) — this module NEVER raises out of main(); every failure path is a 
 skip line + return 0, faithfully reproducing the bash oracle's `errexit`-omitted,
 fail-open shape.
 
-Companion-script resolution: the bash oracle located its example-doctrine-repo-resident sibling scripts
+Companion-script resolution: the bash oracle located its coordinator-claude-resident sibling scripts
 (coordinator-state-root.sh, resolve-coordinator-clone.sh, learn-lessons-roots.sh,
 extract-lessons.py) via its OWN on-disk location (BASH_SOURCE[0]-relative), since it
 lived inside coordinator/bin/ itself. Ported into the claude-klabauter engine tree, that anchor is
-gone — this module re-derives the example-doctrine-repo coordinator content root via `_resolve_doe_content_root()`
+gone — this module re-derives the coordinator-claude coordinator content root via `_resolve_doe_content_root()`
 (env override → `~/.claude/.doe-root` pointer → machine-local registry → the SAME
 unconditional flat-layout fallback the oracle used) for the one remaining subprocess
 boundary (`extract-lessons.py`, already-Python, invoked via `sys.executable` — a
@@ -97,7 +97,7 @@ def _claude_home() -> str:
 
 
 def _resolve_doe_content_root(claude_home: str) -> str:
-    """Resolve the example-doctrine-repo coordinator content root (coordinator/bin, coordinator/lib).
+    """Resolve the coordinator-claude coordinator content root (coordinator/bin, coordinator/lib).
 
     Rungs (best-effort, non-fatal — mirrors the bash oracle's `2>/dev/null || true`
     sourcing of resolve-coordinator-clone.sh, plus its own unconditional final
@@ -198,7 +198,7 @@ def _learn_lessons_roots() -> List[str]:
     peer, which is authored (and ported native) in this same repo/wave.
 
     Retired bash bridge (C11, 2026-07-21): previously shelled out to the
-    example-doctrine-repo-resident `learn-lessons-roots.sh`. That script's own native Python port
+    coordinator-claude-resident `learn-lessons-roots.sh`. That script's own native Python port
     now lives at `coordinator_core.ops.learn_lessons_roots` -- calling its public
     `resolve_roots()` in-process is a reuse of the already-ported peer, not a
     re-derivation, and needed no separate bash bridge or subprocess spawn.
@@ -207,9 +207,9 @@ def _learn_lessons_roots() -> List[str]:
 
 
 def _count_universals(extract_script: str, lessons_path: str, cutoff: str) -> int:
-    """Shell out to the example-doctrine-repo-resident `extract-lessons.py` (already Python — invoked as
+    """Shell out to the coordinator-claude-resident `extract-lessons.py` (already Python — invoked as
     a subprocess, not imported, matching the oracle's own subprocess-boundary shape and
-    avoiding a direct example-doctrine-repo→claude-klabauter Python import edge). Returns 0 on any failure, matching
+    avoiding a direct coordinator-claude→claude-klabauter Python import edge). Returns 0 on any failure, matching
     the oracle's `|| continue` / missing-record_count → 0 fallback.
     """
     try:

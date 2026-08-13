@@ -45,12 +45,12 @@ Exit codes:
   4 — resolver lib missing at resolved path (fast-test skipped; RC_VALIDATE=lib-missing).
   5 — resolved fast-test command classifies Tier U (unscoped/full-suite shape) and the
        calling session holds no live Tier-U grant (RC_VALIDATE=tier-u-refused). R3+R4,
-       cross-repo/inbox/2026-07-25-example-doctrine-repo-em-validate-tier-u-shape-ruling.md — this
+       cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-ruling.md — this
        gate only READS a Tier-U grant, it never writes/consumes-by-granting one.
 
-Port of: workday-complete-step1-validate.sh (example-doctrine-repo 091c0f3e, 2026-07-19).
+Port of: workday-complete-step1-validate.sh (coordinator-claude 091c0f3e, 2026-07-19).
 The fast-test resolver (bin/coordinator-resolve-validation-cmd.py, ported from
-lib/coordinator-resolve-validation-cmd.sh, example-doctrine-repo c187f5b9, 2026-07-21, in the
+lib/coordinator-resolve-validation-cmd.sh, coordinator-claude c187f5b9, 2026-07-21, in the
 2026-07-19 debash campaign's E3-e chunk) is now called in-process — no bash-lib
 bridge subprocess spawn. The resolved fast_test_cmd itself is executed via
 `shlex.split` + direct exec (no shell) as of the 2026-07-29 debash pass —
@@ -538,7 +538,7 @@ def main() -> int:
         scoped_cmd = cmd
 
     # Classify the resolved command's SHAPE before running it (R3+R4:
-    # cross-repo/inbox/2026-07-25-example-doctrine-repo-em-validate-tier-u-shape-
+    # cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-
     # ruling.md -- this resolve-and-execute-in-process CLI is the same
     # process-boundary shape as validate-fast-and-packageability.py's
     # `fast` subcommand). Refuse rather than execute when the shape is

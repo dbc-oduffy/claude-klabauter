@@ -215,7 +215,7 @@ def main() -> int:
     # blocking path entirely (renamed `postcommit.archive_sweeps_detached`,
     # fired post-commit -- it is a TOP-LEVEL step now, not nested here); the
     # C4-Phase-2 completion-entry scaffold (and its `precommit.completion_
-    # entry` span) was removed from this op outright, example-doctrine-repo's SKILL.md now owns
+    # entry` span) was removed from this op outright, coordinator-claude's SKILL.md now owns
     # that write; and C6 split the single `precommit.coverage_gate` span into
     # separately-timed fire/join halves. The additive top-level sequence is:
     # params_and_push_mode, step1_resolve, sentinel_read, precommit_tail_total

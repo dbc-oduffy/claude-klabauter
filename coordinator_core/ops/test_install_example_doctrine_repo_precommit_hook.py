@@ -19,7 +19,7 @@ Second-highest priority: the identity-resolution suite around
 never a block.
 
 Every test builds throwaway repos under `tmp_path` — never this live repo,
-and never the real example-doctrine-repo checkout.
+and never the real coordinator-claude checkout.
 """
 from __future__ import annotations
 
@@ -85,10 +85,10 @@ def _run_hook(
 
 
 def _install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_map: dict | None = None) -> Path:
-    """Set up a throwaway repo that resolves as "example-doctrine-repo" (identity
+    """Set up a throwaway repo that resolves as "coordinator-claude" (identity
     anchor monkeypatched to this tmp_path repo), stub its gate script(s),
     and run the installer once. Returns the repo path."""
-    repo = tmp_path / "fake-example-doctrine-repo"
+    repo = tmp_path / "fake-coordinator-claude"
     repo.mkdir()
     _git_init(repo)
     # Gate scripts live at the repo-root-relative location the emitted
@@ -123,7 +123,7 @@ def test_non_example_doctrine_repo_repo_root_is_skipped_cleanly(tmp_path, monkey
     rc = main([str(other)])
     assert rc == 0
     err = capsys.readouterr().err
-    assert "not example-doctrine-repo" in err
+    assert "not coordinator-claude" in err
     assert not _hook_path(other).exists()
 
 
@@ -135,7 +135,7 @@ def test_default_target_is_cwd(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(other)
     rc = main([])
     assert rc == 0
-    assert "not example-doctrine-repo" in capsys.readouterr().err
+    assert "not coordinator-claude" in capsys.readouterr().err
 
 
 def test_unresolved_doe_root_is_a_clean_advisory_skip_not_a_block(tmp_path, monkeypatch, capsys):
@@ -161,7 +161,7 @@ def test_unresolved_doe_root_is_a_clean_advisory_skip_not_a_block(tmp_path, monk
 # ---------------------------------------------------------------------------
 
 def test_fresh_install_writes_executable_hook_containing_the_gate(tmp_path, monkeypatch, capsys):
-    repo = tmp_path / "fake-example-doctrine-repo"
+    repo = tmp_path / "fake-coordinator-claude"
     repo.mkdir()
     _git_init(repo)
     gate_dir = repo / "coordinator" / "hooks" / "scripts"
@@ -193,11 +193,11 @@ def test_fresh_install_gate_actually_executes(tmp_path, monkeypatch):
 
 
 def test_missing_gate_script_advisory_fires_at_install_time(tmp_path, monkeypatch, capsys):
-    """`guard-doctrine-surface-ratio.py` is example-doctrine-repo's own deliverable and
+    """`guard-doctrine-surface-ratio.py` is coordinator-claude's own deliverable and
     is not expected to exist in claude-klabauter's tree -- when this installer
     is exercised WITHOUT the stub gate present, the install-time ADVISORY
     must fire (Anti-scope: this is correct behavior here, not a bug)."""
-    repo = tmp_path / "fake-example-doctrine-repo"
+    repo = tmp_path / "fake-coordinator-claude"
     repo.mkdir()
     _git_init(repo)
     monkeypatch.setattr(_mod, "_resolve_doe_root", lambda: str(repo))
@@ -232,7 +232,7 @@ def test_rerun_is_idempotent_and_does_not_duplicate(tmp_path, monkeypatch, capsy
 # ---------------------------------------------------------------------------
 
 def test_appends_to_existing_foreign_hook_and_strips_trailing_exit0(tmp_path, monkeypatch, capsys):
-    repo = tmp_path / "fake-example-doctrine-repo"
+    repo = tmp_path / "fake-coordinator-claude"
     repo.mkdir()
     _git_init(repo)
     gate_dir = repo / "coordinator" / "hooks" / "scripts"

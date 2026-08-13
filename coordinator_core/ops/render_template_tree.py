@@ -4,7 +4,7 @@ coordinator_core.ops.render_template_tree — tree-walker over render-template.p
 Purpose: copy <src-tree-dir> to <dst-tree-dir>, preserving structure and dotfiles, then
 substitute {{KEY}} tokens in every file that contains them by delegating each file to
 render-template.py (co-located in this repo's coordinator/bin/ as of the coordinator/bin
-executable-surface migration, example-doctrine-repo commit b644d5a9 -- this module shells out to it,
+executable-surface migration, coordinator-claude commit b644d5a9 -- this module shells out to it,
 exactly as the bash oracle called its sibling script). Files with no {{ tokens are left as
 plain copies.
 
@@ -15,14 +15,14 @@ extend the token substitution logic; that logic lives entirely in render-templat
 is invoked via subprocess exactly as the bash oracle invoked its sibling script by relative
 path.
 
-Port of: render-template-tree.sh (example-doctrine-repo 290997c7, 2026-07-22)
+Port of: render-template-tree.sh (coordinator-claude 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-06-22-new-project-bootstrap-skill.md § C2
 
 Sibling-executable resolution: render-template.py is now co-located in THIS repo
 (coordinator/bin/render-template.py) and is resolved there first, relative to this repo's
 own root (`Path(__file__).resolve().parents[2]`) — no subprocess, no registry lookup.
 Only a checkout where the co-located sibling is somehow absent falls back to the legacy
-Example-doctrine-repo-root resolution (env override, then `machine-local` registry, mirroring
+Coordinator-claude-root resolution (env override, then `machine-local` registry, mirroring
 coordinator_core.ops.gen_doe_root_pointer's `_resolve_doe_root` tier order) as a
 compatibility safety net.
 
@@ -52,7 +52,7 @@ from coordinator_core.launchable import resolve_launchable
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
 
-_PROG = "render-template-tree.sh"  # literal program-name prefix, matches the example-doctrine-repo filename
+_PROG = "render-template-tree.sh"  # literal program-name prefix, matches the coordinator-claude filename
 
 
 def _resolve_machine_local() -> Optional[str]:
@@ -61,7 +61,7 @@ def _resolve_machine_local() -> Optional[str]:
 
 
 def _resolve_doe_root() -> "tuple[Optional[str], int]":
-    """Resolve the example-doctrine-repo clone root. Returns (root_or_None, exit_code_on_failure).
+    """Resolve the coordinator-claude clone root. Returns (root_or_None, exit_code_on_failure).
 
     Tier 1: DOE_ROOT env var (permanent legacy alias — wins first when both
         DOE_ROOT and REPO_EXAMPLE_DOCTRINE_REPO are set, per coordinator_registry.doe_root()).
@@ -117,11 +117,11 @@ def _co_located_render_single() -> Optional[str]:
 
     render-template.py migrated with render-template-tree.py in the
     coordinator/bin executable-surface migration (commit b644d5a9 in
-    example-doctrine-repo) -- it is now claude-klabauter's OWN sibling executable, not
-    example-doctrine-repo-resident content, so it is resolved relative to this repo
-    unconditionally, ahead of any example-doctrine-repo-root lookup (env override or
+    coordinator-claude) -- it is now claude-klabauter's OWN sibling executable, not
+    coordinator-claude-resident content, so it is resolved relative to this repo
+    unconditionally, ahead of any coordinator-claude-root lookup (env override or
     registry alike). REPO_EXAMPLE_DOCTRINE_REPO / the registry still govern
-    example-doctrine-repo-resident content this module has not itself absorbed (there is
+    coordinator-claude-resident content this module has not itself absorbed (there is
     none left here, but the fallback below is kept as a compatibility
     safety net for a checkout where this co-located sibling is somehow
     absent).
@@ -134,7 +134,7 @@ def _co_located_render_single() -> Optional[str]:
 
 
 def _find_render_single() -> Optional[str]:
-    """Locate render-template.py: co-located first, then the example-doctrine-repo root."""
+    """Locate render-template.py: co-located first, then the coordinator-claude root."""
     co_located = _co_located_render_single()
     if co_located is not None:
         return co_located
@@ -228,7 +228,7 @@ def main(argv: List[str]) -> int:
                 token_bearing.append(fpath)
     token_bearing.sort()
 
-    # render-template.py is always a Python script (co-located sibling or example-doctrine-repo-root
+    # render-template.py is always a Python script (co-located sibling or coordinator-claude-root
     # fallback, both resolved above) -- on Windows keep resolve_launchable's shebang
     # sniffing/.cmd-twin preference (a bare path is unexecutable there, WinError 193);
     # on POSIX prefix sys.executable so a bare exec doesn't depend on the target's own

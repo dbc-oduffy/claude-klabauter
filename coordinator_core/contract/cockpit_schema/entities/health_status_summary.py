@@ -1,5 +1,5 @@
 """
-HealthStatusSummary — pydantic port of example-doctrine-repo
+HealthStatusSummary — pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/health-status-summary.ts` (Zod
 source). Summary view over state/health/*.md lifecycle and health posture.
 

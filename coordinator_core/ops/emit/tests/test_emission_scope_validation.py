@@ -18,7 +18,7 @@ degrade-branch or structural-fallback-only behavior monkeypatch
 ``VENDOR_EMISSION_SCOPE_SCHEMA`` explicitly rather than relying on ambient vendor-tree
 absence.
 
-Spec backlink: docs/plans/2026-07-13-emission-scope-conformance-v2140.md § C1, D25 §6.
+Spec backlink: pln-claude-klabauter-emission-scope-conforma-1f0dbb § C1, D25 §6.
 """
 
 from __future__ import annotations

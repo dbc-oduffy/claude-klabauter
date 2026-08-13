@@ -9,7 +9,7 @@ the bash sourced-lib.
 Trust boundary: a resolved root is trusted iff it sits under one of four
 anchors:
   1. the marketplace-cache install (``${CLAUDE_HOME:-$HOME}/.claude/``),
-  2. the example-doctrine-repo clone at the ``.doe-root`` sentinel's content, read registry-first
+  2. the coordinator-claude clone at the ``.doe-root`` sentinel's content, read registry-first
      per DR-071 (2026-07-22 — the settings-home machine-local registry key
      ``repos.example_doctrine_repo`` is the canonical, authoritative coordinator-root
      anchor; the ``.doe-root`` file is a demoted, non-authoritative mirror),
@@ -219,7 +219,7 @@ def _doe_root(env: dict) -> str:
     registry key ``repos.example_doctrine_repo`` is the canonical, authoritative
     coordinator-root anchor; ``.doe-root`` is a demoted, non-authoritative
     mirror), durable-file-then-legacy-file fallback (Port of:
-    coordinator-trusted-root-guard.sh (example-doctrine-repo bd8cc0e9, 2026-07-22),
+    coordinator-trusted-root-guard.sh (coordinator-claude bd8cc0e9, 2026-07-22),
     updated for DR-071):
         1. registry ``repos.example_doctrine_repo``                    (canonical anchor)
         2. <settings-home>/machine-local/.doe-root          (durable file mirror)
@@ -277,9 +277,9 @@ def _norm(p: str) -> str:
 
     On Windows the same location is spelled inconsistently across the anchors
     this guard compares: ``.doe-root`` is written with forward slashes
-    (``X:/example-doctrine-repo``) while ``CLAUDE_PLUGIN_ROOT`` arrives with backslashes
-    (``X:\\example-doctrine-repo\\coordinator``), and the filesystem is case-insensitive.
-    Without normalization the example-doctrine-repo-clone anchor can never match and the guard
+    (``X:/coordinator-claude``) while ``CLAUDE_PLUGIN_ROOT`` arrives with backslashes
+    (``X:\\coordinator-claude\\coordinator``), and the filesystem is case-insensitive.
+    Without normalization the coordinator-claude-clone anchor can never match and the guard
     false-rejects a legitimately-trusted dev clone — and, worse, the ``/..``
     traversal check silently misses ``\\..``.
 
@@ -309,7 +309,7 @@ def _doe_root_rungs(env: dict) -> list[tuple[str, str]]:
     exists purely so a rejection message can show which rung produced (or
     failed to produce) the value, instead of forcing a reader to reconstruct
     it by hand as happened during the 2026-07-28 Windows install dogfood
-    (example-doctrine-repo state/2026-07-28-machine-a-install-dogfood-friction-log.md F6).
+    (coordinator-claude state/2026-07-28-machine-a-install-dogfood-friction-log.md F6).
     """
     home = _home_from_env(env)
     settings_home_dir = _settings_home_dir_from_env(env)

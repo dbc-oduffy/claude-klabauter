@@ -4,7 +4,7 @@ RUNTIME behaviour must agree. A probe that calls `module.check(payload)`
 directly bypasses the engine's two-phase ordering and cannot detect a
 swallowed slot (an incumbent hard-deny/advisory shadowing the flipped
 guard's own envelope) -- every probe here goes through the REAL entrypoint,
-`coordinator_core.write_guards.engine.evaluate`, exactly as the example-doctrine-repo
+`coordinator_core.write_guards.engine.evaluate`, exactly as the coordinator-claude
 PreToolUse dispatcher calls it.
 
 Covers the write-side wave's nine C2-C12 hard-deny -> advisory flips
@@ -32,7 +32,7 @@ Each probe:
      "is it CONFIRMED it's this guard's envelope, not an incumbent's" half
      of AC5.
 
-Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, AC5.
+Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, AC5.
 """
 from __future__ import annotations
 

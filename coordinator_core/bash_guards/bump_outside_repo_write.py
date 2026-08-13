@@ -7,7 +7,7 @@ observed incidents this plan cites as its evidence base (see the plan's own
 `abs-path-ok` marker -- not repeated here to avoid a second per-machine
 literal in this codebase) are exactly this shape.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [example-doctrine-repo
+Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
 repo], chunk C5 "Outside-repo detection, inline-interpreter classification,
 sandbox reroute".
 

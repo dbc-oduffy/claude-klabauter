@@ -9,10 +9,10 @@ manual and template-as-authoritative (`cp coordinator/templates/setup/<file>
 ~/.claude/setup/<file>`); a prior live→template --fix path was removed (it
 directly contradicted the outward-only doctrine — see
 docs/plans/2026-05-21-generic-percolation-via-coordinator-install.md § Step 3
-and the example-doctrine-repo lesson 2026-07-06-verify-templates-setup-sync-sh-fix-is-ba.yaml).
+and the coordinator-claude lesson 2026-07-06-verify-templates-setup-sync-sh-fix-is-ba.yaml).
 
-Port of: verify-templates-setup-sync.sh (example-doctrine-repo b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-05-21-generic-percolation-via-coordinator-install.md § Step 3
+Port of: verify-templates-setup-sync.sh (coordinator-claude b5a4192c, 2026-07-20)
+Spec backlink: docs/plans/2026-05-21-generic-percolation-via-coordinator-install.md § Step 3 [DEAD-CITATION: plan file never committed to this repo]
 
 Negative-spec:
     - Takes no flags. A stray positional arg (e.g. a stale caller still
@@ -98,13 +98,13 @@ def _resolve_plugin_root() -> Path:
     """Resolves the plugin root (coordinator/templates/setup/'s parent).
 
     This module does NOT derive the root from its own __file__ location:
-    it is imported from the claude-klabauter side, not from a copy of the example-doctrine-repo
+    it is imported from the claude-klabauter side, not from a copy of the coordinator-claude
     coordinator/bin/ tree, so `__file__`-relative resolution would point at
     the wrong repo entirely (claude-klabauter has no templates/ tree at all).
     It also does NOT fall back to Path.cwd() when CLAUDE_PLUGIN_ROOT is
     unset — cwd is whatever directory the caller happened to invoke from,
     a silent-wrong-root twin of the __file__ hazard this module already
-    guards against. Resolving the example-doctrine-repo repo root is the CALLER's
+    guards against. Resolving the coordinator-claude repo root is the CALLER's
     job (topology knowledge the caller has and this module does not): the
     coordinator/bin/verify-templates-setup-sync.py trampoline sets
     CLAUDE_PLUGIN_ROOT via the doe_root() registry helper before invoking
@@ -118,7 +118,7 @@ def _resolve_plugin_root() -> Path:
         return Path(env_root)
     raise PluginRootUnresolved(
         "CLAUDE_PLUGIN_ROOT is unset — cannot resolve the plugin root that "
-        "owns templates/setup/. The caller must resolve the example-doctrine-repo repo "
+        "owns templates/setup/. The caller must resolve the coordinator-claude repo "
         "root (e.g. via the coordinator_registry.doe_root() ladder) and set "
         "CLAUDE_PLUGIN_ROOT before calling main()."
     )

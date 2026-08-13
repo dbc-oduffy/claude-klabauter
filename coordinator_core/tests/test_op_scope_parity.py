@@ -1,7 +1,7 @@
 """
 coordinator_core.tests.test_op_scope_parity — Parity surface contract tests for
 OP_KEY_SCOPE, WORKTREE_SCOPED_OPS, and auth-seam read tokens (cross-repo importable
-exports, DR § AC-1b and example-doctrine-repo-shim auth-seam symmetry).
+exports, DR § AC-1b and coordinator-claude-shim auth-seam symmetry).
 
 Tests:
   - WORKTREE_SCOPED_OPS derivation integrity: equals the set of keys in OP_KEY_SCOPE
@@ -56,7 +56,7 @@ def test_records_query_is_common_dir_scoped():
     """records.query MUST be common_dir-keyed — it reads main-worktree-rooted project records,
     so the real transport (coordinator_core.invoke) must inject repo_root. A missing keying entry
     falls the op through to scope "none" → repo_root=None → the handler's empty-payload branch,
-    which turns every downstream gate (example-doctrine-repo assert-no-terminal-plans / audit-roadmap stub-coverage)
+    which turns every downstream gate (coordinator-claude assert-no-terminal-plans / audit-roadmap stub-coverage)
     into a silent dead false-passer. The differential parity suite drives the handler with an
     explicit fixture root on both sides and never exercises invoke scope-registration, so this
     membership assert is the ONLY regression that guards the real-transport path.
@@ -84,7 +84,7 @@ def test_top_level_package_importable():
 
 
 # ---------------------------------------------------------------------------
-# Auth-seam token reader parity (example-doctrine-repo-shim auth-seam consumer symmetry)
+# Auth-seam token reader parity (coordinator-claude-shim auth-seam consumer symmetry)
 # ---------------------------------------------------------------------------
 
 def test_token_readers_top_level_importable():

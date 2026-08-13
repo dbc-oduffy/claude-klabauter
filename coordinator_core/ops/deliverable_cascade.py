@@ -16,7 +16,7 @@ module `coordinator_core.ops.cascade_baton_rows` — see that module's own
 docstring for the row-level join/write mechanism; this module's role in
 AC6g is only to call it once per advanced candidate and fold its result
 into this op's own response and provenance).
-Spec backlink: docs/plans/2026-08-04-terminal-state-propagation-join-keys.md § C6 (R1, R1a)
+Spec backlink: pln-terminal-state-propagation-giv-c85539 § C6 (R1, R1a)
 
 Join key: `deliverable_id`, exact-string match against each live handoff's own frontmatter
 field — NEVER the `plan:` pointer (1 of 80 live handoffs carries it; C12 retires it). No

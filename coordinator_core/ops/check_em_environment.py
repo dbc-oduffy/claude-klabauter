@@ -26,7 +26,7 @@ Division of labour (why model is "best-effort" but effort is authoritative):
     also reads the model from the session transcript as a best-effort second
     line of defence, but degrades silently if it can't resolve the transcript.
 
-Port of: check-em-environment.sh (example-doctrine-repo 894d4bc6, 2026-07-22)
+Port of: check-em-environment.sh (coordinator-claude 894d4bc6, 2026-07-22)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Negative-spec:

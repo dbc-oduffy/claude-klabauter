@@ -16,7 +16,7 @@ Negative-spec:
     from here, and do NOT import this module from there.
 
     Also unrelated to coordinator_core.plugin_health — that package is a DIFFERENT
-    "doctor"/"health" domain: read-only drift/currency probes for example-doctrine-repo's OWN
+    "doctor"/"health" domain: read-only drift/currency probes for coordinator-claude's OWN
     plugin ecosystem (live-install git-state, venv-state, sentinel/scan health).
     It does NOT use this envelope schema (ProbeResult/BROKEN|DEGRADED|INFO|PASS)
     and is not a third tier
@@ -24,7 +24,7 @@ Negative-spec:
 
     stdlib-only: no third-party imports anywhere in this module.
 
-Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C0
+Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C0
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ class ProbeResult:
                      Overrides the worst-of path per the required/optional split described
                      in reduce_overall().
 
-    Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C0
+    Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C0
     """
 
     probe: str
@@ -150,7 +150,7 @@ def reduce_overall(results: List[ProbeResult]) -> str:
     Returns:
         One of the STATUS_VOCAB strings: BROKEN, DEGRADED, INFO, or PASS.
 
-    Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C0
+    Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C0
     """
     best: Optional[str] = None
 
@@ -220,7 +220,7 @@ def build_envelope(results: List[ProbeResult]) -> Dict[str, Any]:
     Returns:
         A dict that is JSON-serialisable with the standard library json module.
 
-    Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C0
+    Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C0
     """
     overall = reduce_overall(results)
 

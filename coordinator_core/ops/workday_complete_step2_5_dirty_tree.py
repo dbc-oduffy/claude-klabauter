@@ -89,7 +89,7 @@ module has none on hand. Two candidates were named at dispatch time:
 `coordinator_core.session.core.resolve_session_id(repo_root)` in-process.
 DECIDED: (b). `main()`'s own argv contract (`--dry-run` only) is
 UNCHANGED — no new flag. This matters beyond this module's own CLI: the
-Example-doctrine-repo-side trampoline's invocation of this module's import/`main()`, AND
+Coordinator-claude-side trampoline's invocation of this module's import/`main()`, AND
 this repo's own in-process caller
 (`coordinator_core.workday_complete.brief._compute_dirty_tree_verdict`,
 which calls `_step2_5_dirty_tree_main(["--dry-run"])` with no session
@@ -110,7 +110,7 @@ today's pre-C6 behavior, never a wider commit (see `_resolve_claim_context`).
 
 Exit codes (`main()`) — these are business codes only; this module never
 raises or resolves CLAUDE_KLABAUTER_ROOT, so it has no transport-failure concept.
-The example-doctrine-repo-side trampoline wraps this module's import/invocation and uses a
+The coordinator-claude-side trampoline wraps this module's import/invocation and uses a
 SEPARATE dedicated rc=3
 for transport failure (CLAUDE_KLABAUTER_ROOT resolution / import), per code-review
 Finding 2 (A3b) — it never reuses these business codes for that purpose:

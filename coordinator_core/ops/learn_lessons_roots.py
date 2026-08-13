@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.learn_lessons_roots — Port of: learn-lessons-roots.sh
-(example-doctrine-repo a1a568d2, 2026-07-22).
+(coordinator-claude a1a568d2, 2026-07-22).
 
 Purpose: emit every on-disk repo root that learn-lessons should process ON THIS
 MACHINE, one per line, in a stable de-duplicated order.
@@ -19,8 +19,8 @@ Contract (mirrors the bash oracle's own header verbatim):
 Companion-resolver call (C11, 2026-07-21 -- bash bridge retired): the shared
 `coordinator_core.state_root.coordinator_state_root_central()` helper (centralized
 out of this module's and `central_run_due`'s formerly-duplicated private copies)
-previously re-derived the example-doctrine-repo coordinator content root and shelled out to the
-Example-doctrine-repo-resident `coordinator-state-root --central` sourced-lib. It now calls the
+previously re-derived the coordinator-claude coordinator content root and shelled out to the
+Coordinator-claude-resident `coordinator-state-root --central` sourced-lib. It now calls the
 native `coordinator_core.state_root.coordinator_state_root(central=True)` peer
 in-process (Rule 4 of that module's 5-rule routing -- no subject/artifact given,
 so it resolves to `<coordinator_claude_klabauter_root()>/state`, the same default the bash

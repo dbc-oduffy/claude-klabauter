@@ -1,7 +1,7 @@
 """Tests for ``coordinator_core.bash_guards._guard_coverage`` -- the
 standing, re-runnable per-guard coverage measurement built for BX-11 / AC-6
 (docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md,
-Example-doctrine-repo).
+Coordinator-claude).
 
 Uses a small, hand-authored synthetic corpus throughout -- never the real
 62,487-command transcript corpus behind the 2026-07-28 baseline, which is

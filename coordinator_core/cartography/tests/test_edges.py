@@ -29,7 +29,7 @@ Coverage:
       basename), not an empty string (Finding 3, 2026-07-12-codereview-
       slicecartography-substrate-b-wave)
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C4 (cartography.edges), AC7.
 """
 
@@ -615,7 +615,7 @@ def test_rule2_negative_module_alias_target_does_not_define_helper(tmp_path):
 # ---------------------------------------------------------------------------
 # C15 — additive relative-import normalization (`to_normalized`)
 #
-# Spec backlink: docs/plans/2026-08-06-claude-klabauter-ize-the-survey-census.md § C15,
+# Spec backlink: pln-claude-klabauter-ize-the-survey-census-c-2a0dfd § C15,
 # docs/research/spike-verdicts/2026-08-06-cartography-cross-file-call-resolution.md
 # § "The count_references hazard". `to` MUST stay byte-identical on every
 # edge — normalization lands ONLY in the new `to_normalized` field.
@@ -801,7 +801,7 @@ def test_c7_internal_when_same_system(tmp_path):
 
 def test_c7_cross_system_when_caller_and_target_in_different_systems(tmp_path):
     """Target inverts to a first-party path, and the CALLER inverts to a
-    first-party path in a DIFFERENT system -> "cross-system" (example-doctrine-repo's
+    first-party path in a DIFFERENT system -> "cross-system" (coordinator-claude's
     `[BOUNDARY -> system-name]`: this call reaches INTO a different
     system)."""
     root = tmp_path / "repo"
@@ -831,7 +831,7 @@ def test_c7_cross_system_when_caller_and_target_in_different_systems(tmp_path):
 
 def test_c7_entry_when_caller_outside_mapped_system_set(tmp_path):
     """Target inverts to a first-party path, but the CALLER does not
-    resolve into the mapped system set at all -> "entry" (example-doctrine-repo's `[ENTRY]`:
+    resolve into the mapped system set at all -> "entry" (coordinator-claude's `[ENTRY]`:
     this target is reached from OUTSIDE its own system entirely). The
     caller's own file is deliberately OMITTED from `path_system_map` here —
     that omission is what makes it "outside the mapped system set", not

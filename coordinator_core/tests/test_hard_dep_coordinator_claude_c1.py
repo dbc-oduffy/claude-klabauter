@@ -1,7 +1,7 @@
 """Regression pin for AC1 — coordinator-claude flipped soft -> hard.
 
 PM ruling 2026-08-03, verbatim: "klabauter-claude-klabauter is useless without
-Example-doctrine-repo/coordinator-claude to wire into, it's a 100% hard dep for us." No DR
+Coordinator-claude/coordinator-claude to wire into, it's a 100% hard dep for us." No DR
 ever ratified `soft` — it traced only to the prose of
 docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md, which authored
 docs/install/agent-install-manifest.json. This chunk SETTLES that open
@@ -35,7 +35,7 @@ COORDINATOR_CLAUDE_ROOT / --coordinator-root (no sibling clone present) must
 exit 0 (i.e. not land in the hard set) from the walker, matching
 scripts/setup.py's existing behavior.
 
-Spec backlink: docs/plans/2026-08-03-install-chain-install-md-and-chain-walk-contract.md
+Spec backlink: pln-install-chain-install-md-for-m-c6fd94
   chunk C1 (AC1)
 
 Negative-spec: does not touch example-retrieval-repo's or example-game-repo's severity for
@@ -340,7 +340,7 @@ def test_setup_py_register_claude_klabauter_root_missing_coord_with_override_deg
 
     NEITHER key is registered in this branch — repos.claude_klabauter and
     engine.working_repos.claude_klabauter share the one guard (2026-08-05
-    example-doctrine-repo-em working-repo-rule proposal, accepted)."""
+    coordinator-claude-em working-repo-rule proposal, accepted)."""
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     monkeypatch.setattr(
         "coordinator_core.install._shared.resolve_machine_local_cli", lambda plugin_root: None
@@ -364,7 +364,7 @@ def test_setup_py_register_claude_klabauter_root_happy_path_registers_both_keys(
     both repos.claude_klabauter and engine.working_repos.claude_klabauter are
     registered to the same resolved path, and both PASS lines print.
 
-    Spec backlink: cross-repo/inbox/2026-08-05-example-doctrine-repo-em-working-repo-
+    Spec backlink: cross-repo/inbox/2026-08-05-coordinator-claude-em-working-repo-
     rule-19-keys-13-consumers-name-the-set-explicitly.md — our half is the
     install-time write of engine.working_repos.claude_klabauter alongside the
     pre-existing repos.claude_klabauter write."""

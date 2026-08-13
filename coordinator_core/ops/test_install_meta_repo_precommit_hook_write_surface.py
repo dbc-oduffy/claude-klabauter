@@ -1,6 +1,6 @@
 """Tests for `install_meta_repo_precommit_hook.WRITE_SURFACE`.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C2 (`install_meta_repo_precommit_hook` third).
 
 Purpose: proves the declaration is DERIVED from `_GATE_REGISTRY`,

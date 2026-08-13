@@ -98,7 +98,7 @@ Bookkeeping hook ops (pcore-08, D1) — write .git/coordinator-sessions/ session
 Bookkeeping hook op (W4b) — writes the PreCompact sentinel + state snapshot to tempdir:
     context_pressure_precompact — compaction sentinel + state file; MUTATING
 
-Zero-tool-use detection ops (cross-repo example-doctrine-repo contract, Stage 1 write / Stage 2 read).
+Zero-tool-use detection ops (cross-repo coordinator-claude contract, Stage 1 write / Stage 2 read).
 Naming note: the store holds one record per verified tool-use count, not only zero —
 `kind: "zero-tool-use"` names the detector, not a content filter; see
 subagent_zero_tool_use's module docstring ("Naming note") before adding a consumer.
@@ -115,7 +115,7 @@ subagent_zero_tool_use's module docstring ("Naming note") before adding a consum
                                        tool_use_count == 0 for its "zero-tool-use"
                                        verdict; returns structured data
 
-Subagent arrival-check op (cross-repo example-doctrine-repo contract, sibling of the zero-tool-use
+Subagent arrival-check op (cross-repo coordinator-claude contract, sibling of the zero-tool-use
 trio above — different question, same pull/poll posture):
     subagent_arrival_check          — pull/poll: classify one agent_id as
                                        arrived/running/unknown by tailing ONLY that
@@ -126,8 +126,8 @@ trio above — different question, same pull/poll posture):
 Spec backlinks:
     docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md
     docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md
-    cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-detection-engine-op-contract.md
-    cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-detection-verdict-viable.md
+    cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-engine-op-contract.md
+    cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-verdict-viable.md
 """
 
 from __future__ import annotations

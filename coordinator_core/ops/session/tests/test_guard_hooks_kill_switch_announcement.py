@@ -37,7 +37,7 @@ behavior, because there is none -- see the module's own "Kill-switch marker
 loudness" section docstring. A future PR that adds a write path (auto-bump
 `Expires:`, auto-delete on expiry, etc.) is a scope violation, not a bug fix.
 
-Spec backlink: example-doctrine-repo dispatch state/subagent-share/
+Spec backlink: coordinator-claude dispatch state/subagent-share/
 78b683cd-1b62-4a25-904d-954cb3c69412/coordinatorexecutor-dcbed68d.md
 (2026-07-28/29). Route-vs-answer collapse: state/handoffs/
 2026-07-30-boot-context-bloat-non-orientation-surfaces.md item 4 / AC4.

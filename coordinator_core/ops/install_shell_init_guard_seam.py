@@ -1,8 +1,8 @@
 """
-coordinator_core.ops.install_shell_init_guard_seam — example-doctrine-repo-owned rc-eval seam
+coordinator_core.ops.install_shell_init_guard_seam — coordinator-claude-owned rc-eval seam
 for claude-klabauter's stdout-emitter shell-init resource-cap guard (DR-047 split).
 
-Port source: coordinator/commands/install.md (example-doctrine-repo repo) Step 3.5b.1,
+Port source: coordinator/commands/install.md (coordinator-claude repo) Step 3.5b.1,
 the two literal bash fences at lines 932 and 950 of the source doc.
 
 Purpose (unchanged from the doc): resolve `claude-klabauter`'s root
@@ -20,7 +20,7 @@ The resolved claude-klabauter path is BAKED into the written block at install ti
 not re-resolved via `machine-local` at eval time (a cold terminal lacks it
 on PATH) — same principle as the `claude-doe`/`claude()` shim blocks.
 
-Contract: emits the exact `shell_init_guard: <status>` stdout row the example-doctrine-repo
+Contract: emits the exact `shell_init_guard: <status>` stdout row the coordinator-claude
 Phase 7 status table expects on every exit path, folding install.md's own
 if/echo wrapper into this module (M3/D9 pattern,
 docs/plans/2026-07-23-skills-carry-no-code-extirpation.md).
@@ -32,7 +32,7 @@ Negative-spec:
     - Does NOT itself invoke/import `shell-init-guard.py` — only checks its
       presence + exec bit and bakes its path into the written rc snippet;
       the guard's own stdout-emitter logic is claude-klabauter-resident and entirely
-      out of scope for this seam (DR-047: claude-klabauter owns the engine, example-doctrine-repo owns
+      out of scope for this seam (DR-047: claude-klabauter owns the engine, coordinator-claude owns
       the rc-eval seam that sources it).
 """
 

@@ -40,7 +40,7 @@ import re
 
 # Hex range 7-64 to match the ratified schema pattern
 # (`coordinator/artifact-shape-contract/artifact-shape-contract.schema.json`,
-# example-doctrine-repo DR-096 prior wave) — a SHA-256 repo's abbreviated-or-full commit
+# coordinator-claude DR-096 prior wave) — a SHA-256 repo's abbreviated-or-full commit
 # id can run past 40 hex chars.
 _SHA_HEX_RE = re.compile(r"[0-9a-fA-F]{7,64}")
 _NO_COMMIT_TOKEN_RE = re.compile(r"substantively-shipped-no-commit:\d{4}-\d{2}-\d{2}")

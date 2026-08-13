@@ -18,7 +18,7 @@ moment a caller writes `returncode != 0`. Mapping "could not check" onto
 "checked, and the answer is no" turns an unanswerable probe into a confident
 false claim about somebody else's repo.
 
-Incident of record (2026-08-03, reported by example-doctrine-repo-em): a cross-repo premise
+Incident of record (2026-08-03, reported by coordinator-claude-em): a cross-repo premise
 check reported two shas as identically "NOT in their clone". One was genuinely
 dangling; the other resolved cleanly on their branch and on origin. A true
 finding laundered into a coin flip. `coordinator/bin/cross-repo-memo` was the

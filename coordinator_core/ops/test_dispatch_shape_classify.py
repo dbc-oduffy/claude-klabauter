@@ -4,8 +4,8 @@ Golden oracle snapshotted 2026-07-17 against the bash script and its own
 co-located test suite — this file re-derives the same fixture cases directly
 against `main()`.
 
-Port of: classify-dispatch-shape.sh (example-doctrine-repo b5a4192c, 2026-07-20)
-Oracle: classify-dispatch-shape.test.sh (example-doctrine-repo a2fe06f8, 2026-07-22)
+Port of: classify-dispatch-shape.sh (coordinator-claude b5a4192c, 2026-07-20)
+Oracle: classify-dispatch-shape.test.sh (coordinator-claude a2fe06f8, 2026-07-22)
 """
 
 from __future__ import annotations
@@ -347,7 +347,7 @@ def test_no_agents_file_silent(capsys, tmp_path):
 
 def test_slug_resolution_via_script_dir(capsys, tmp_path):
     """A bare slug (no --plan-file) resolves via the docs/plans/ search order,
-    using script_dir to derive REPO_ROOT the same way the example-doctrine-repo trampoline would."""
+    using script_dir to derive REPO_ROOT the same way the coordinator-claude trampoline would."""
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(

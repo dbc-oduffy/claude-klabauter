@@ -14,7 +14,7 @@ Coverage:
   (e) symlink escape is caught (resolves outside target_root -> raises)
   (f) nested subdirectory candidate is accepted
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C2 (package foundation + containment helper).
 """
 

@@ -5,7 +5,7 @@ This module defines the schema-shape seam between the latency benchmark harness
 (qsub-03). Any change to `ConformanceRecord`'s field set or JSON shape is a
 contract change across that seam — coordinate with qsub-03 before altering it.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C1
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C1
 (AC2 field enumeration).
 
 Floor-scope semantics (load-bearing for qsub-03's interpretation of this record):

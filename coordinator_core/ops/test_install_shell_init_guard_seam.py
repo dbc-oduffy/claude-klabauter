@@ -1,6 +1,6 @@
 """
 Co-located pytest for coordinator_core.ops.install_shell_init_guard_seam
-(install.md § 3.5b.1 native port, example-doctrine-repo repo). Covers: --check-only
+(install.md § 3.5b.1 native port, coordinator-claude repo). Covers: --check-only
 reports without mutating the rc file; a live run writes the sentinel-guarded
 block and is idempotent on re-run (append-not-clobber — pre-existing rc
 content is preserved, and a second live run is a silent no-op rather than a
@@ -11,7 +11,7 @@ Never touches a real rc file — every rc path in this suite is under
 tmp_path, and REPO_CLAUDE_KLABAUTER is set explicitly per test so resolution
 never falls through to the operator's real machine-local registry.
 
-Spec backlink: coordinator/commands/install.md § 3.5b.1 [example-doctrine-repo repo]
+Spec backlink: coordinator/commands/install.md § 3.5b.1 [coordinator-claude repo]
 """
 
 from __future__ import annotations

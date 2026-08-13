@@ -37,7 +37,7 @@ nothing about what a real caller, dispatched through
 `evaluate_payload_json`, ever observes. See DR-280 §"A green suite proves
 nothing for Defect A" (quoting the sibling plan's own anti-scope note).
 
-Spec backlink: docs/plans/2026-08-07-deny-legs-reachable-and-quoted-redirects-visible.md § C1
+Spec backlink: pln-the-platform-conditioned-deny-9c8e07 § C1
 Spec backlink (governing decision): docs/decisions/DR-280-unreachable-deny-legs-retire-rather-than.md
 """
 

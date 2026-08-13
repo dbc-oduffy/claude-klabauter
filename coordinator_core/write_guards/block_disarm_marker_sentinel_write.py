@@ -30,12 +30,12 @@ Basename sourced from `_blanket_disarm.MARKER_BASENAME`, not hand-copied --
 the same discipline `block_disarm_marker_sentinel_creation.py` (the Bash
 sibling) already applies, so the write leg and the Bash leg and
 `_blanket_disarm.py` itself can never independently drift on what string
-means "the disarm marker." (A example-doctrine-repo-side hook could not do this: it cannot
-import a claude-klabauter module, so if this guard had to live in example-doctrine-repo it would
+means "the disarm marker." (A coordinator-claude-side hook could not do this: it cannot
+import a claude-klabauter module, so if this guard had to live in coordinator-claude it would
 need a hand-copied second string. It does not, because the write-guard fold
 already relocated this whole family into this repo -- see
-`docs/plans/2026-07-29-hook-fan-in-write-path.md` (example-doctrine-repo repo) and
-`coordinator/hooks/scripts/preuse-write-dispatch.py` (example-doctrine-repo repo),
+`docs/plans/2026-07-29-hook-fan-in-write-path.md` (coordinator-claude repo) and
+`coordinator/hooks/scripts/preuse-write-dispatch.py` (coordinator-claude repo),
 which fronts this package's guards in-process rather than registering a
 separate hook script per guard.)
 

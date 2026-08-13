@@ -70,8 +70,8 @@ def test_grant_leg_states_the_session_scope_and_liveness_constraint():
 def test_grant_leg_names_the_ceremonies_that_do_carry_an_implicit_grant():
     """The ceremonies that DO write an implicit grant at ceremony open must
     stay named, so the no-implicit-grant list above reads as a contrast,
-    not a standalone claim with no baseline. Verified against example-doctrine-repo's tree:
-    `coordinator/commands/workday-complete.md` (example-doctrine-repo `8a3efb1d8`),
+    not a standalone claim with no baseline. Verified against coordinator-claude's tree:
+    `coordinator/commands/workday-complete.md` (coordinator-claude `8a3efb1d8`),
     `coordinator/skills/merging-to-main/SKILL.md`, and
     `coordinator/commands/workweek-complete.md` each invoke
     `tier-u-grant-cli grant ceremony`."""

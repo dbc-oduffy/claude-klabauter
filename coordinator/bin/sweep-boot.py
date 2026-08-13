@@ -65,9 +65,9 @@ stamping the same key later is additive, not a double-count. Both side
 channels are best-effort and never raise into this trampoline's own
 already-best-effort ceremony contract.
 
-Spec backlink: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C2 / AC7
+Spec backlink: pln-strang-11-b8-session-init-boot-f78455 § C2 / AC7
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Pinned pattern, Wave 1b
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C20
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C20
 DR-215: single-process four-class sweep replaces four separate cc_invoke cold-starts.
 
 Negative-spec: this module never sources or shells to strangler-facade.sh,

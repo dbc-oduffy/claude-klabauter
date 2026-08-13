@@ -18,8 +18,8 @@ Phase ordering / scores:
 Score→phase fallback (score_to_phase): score 0 → "proposed" (not "abandoned"),
 matching the all-abandoned-group conditional that gates before this path.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — SECTION 8.16.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C3
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — SECTION 8.16.
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C3
 
 Fork-equivalence canonicalization (C4b, 2026-08-01): ``_compute_map`` and ``stamp`` both
 canonicalize each record's raw ``deliverable_id`` via
@@ -28,7 +28,7 @@ join/group key. This is a JOIN-KEY TRANSFORM ONLY — the emitted ``deliverable_
 field's shape and the write-back target are unchanged; the value becomes correct across a
 declared fork because both legs now group under one canonical key. No record's own
 ``deliverable_id`` field is ever mutated by this module.
-Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (AC6, AC6b)
+Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC6b)
 
 sedge-03 s1 review follow-on evidence note (AC6/AC9, 2026-08-11): AC6's five-zombie check
 against the live `state/cockpit-emission.json` corpus was performed as a one-off manual

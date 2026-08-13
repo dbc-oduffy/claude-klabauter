@@ -20,7 +20,7 @@ Coverage:
       committed as a resume of something it never wrote.
 
 Spec backlink: docs/decisions/DR-273-memo-transition-commit-ownership.md
-Spec backlink: docs/plans/2026-08-06-writer-side-commit-ownership-lock-gap.md § C5
+Spec backlink: pln-writer-side-commit-ownership-c-845b25 § C5
 """
 
 from __future__ import annotations

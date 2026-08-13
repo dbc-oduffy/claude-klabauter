@@ -1,6 +1,6 @@
 """coordinator_core.bash_guards — PreToolUse:Bash guard engines.
 
-Python engine-ification of example-doctrine-repo's PreToolUse:Bash guard cohort, per
+Python engine-ification of coordinator-claude's PreToolUse:Bash guard cohort, per
 the W3a/W3b naked-Python hook migration recipe
 (scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md).
 
@@ -14,9 +14,9 @@ docstring for provenance. Do NOT duplicate those primitives inside a per-guard
 module; import them from here.
 
 Public surface: `guard_roster` / `GuardRosterEntry` (see `roster.py`), the
-payload-free enumeration example-doctrine-repo's `x-effective-delivery` emitter reads
+payload-free enumeration coordinator-claude's `x-effective-delivery` emitter reads
 across the plane boundary (`docs/reference/hook-delivery-manifest.md`).
-Spec backlink: docs/plans/2026-08-13-guard-roster-export.md, chunk C2.
+Spec backlink: pln-guard-roster-export-minus-the-a4dec3, chunk C2.
 """
 
 from typing import TYPE_CHECKING, Any

@@ -3,7 +3,7 @@ Shared locator for sibling extensionless-Python CLIs in this directory
 (`coordinator-queue-append`, `coordinator-lesson-promote`, ...). Single
 source of truth for the PATH-probe + sibling-path fallback so the probe
 logic and its subprocess-cmd-list construction are not re-derived per
-caller (was triplicated pre-consolidation: example-doctrine-repo
+caller (was triplicated pre-consolidation: coordinator-claude
 docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md leaf
 already-python-cleanup).
 

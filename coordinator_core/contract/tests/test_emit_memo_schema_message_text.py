@@ -8,12 +8,12 @@ codenames to non-navigable placeholders on publish. A rendered message that
 directs a reader to go read/see a codenamed repo therefore breaks for an OSS
 mirror reader who has none of our repos. This module's `description` fields
 are rendered text — they ship inside cross-repo-memo.schema.json /
-archived-memo.schema.json, consumed by agents and example-doctrine-repo's routing hook
+archived-memo.schema.json, consumed by agents and coordinator-claude's routing hook
 — so they are in scope for that discriminator.
 
 Investigation for this chunk (C7c) found no navigation prose: the handful of
-`example-doctrine-repo` / `example-retrieval-repo` mentions inside description strings were
-historical attribution ("example-retrieval-repo-em's inbox-blitz proposal", "example-doctrine-repo-
+`coordinator-claude` / `example-retrieval-repo` mentions inside description strings were
+historical attribution ("example-retrieval-repo-em's inbox-blitz proposal", "coordinator-claude-
 claude-local extension") or `repos.<key>` functional-identifier examples,
 never a "go read <repo>" instruction. A follow-up EM ruling overrode that
 disposition: this module's emitted JSON is a row in a later chunk's
@@ -38,11 +38,11 @@ from typing import Any, Iterator
 
 from coordinator_core.contract.emit_memo_schema import emit_schemas
 
-# Mirrors the plan's discriminator examples (example-doctrine-repo, example-retrieval-repo,
+# Mirrors the plan's discriminator examples (coordinator-claude, example-retrieval-repo,
 # cockpit, example-fleet/machine-b, example-game-repo) — any codename followed closely by a
 # navigation verb ("see"/"read"/"check"/"visit") is the broken shape a
 # publish-scrub turns into a dead pointer.
-_CODENAMES = ("example-doctrine-repo", "example-retrieval-repo", "cockpit", "example-fleet", "example-game-repo")
+_CODENAMES = ("coordinator-claude", "example-retrieval-repo", "cockpit", "example-fleet", "example-game-repo")
 _NAVIGATION_PATTERN = re.compile(
     r"\b(see|read|check|visit)\b[^.]{0,60}(" + "|".join(_CODENAMES) + r")",
     re.IGNORECASE,
@@ -84,7 +84,7 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
         `repos.example_retrieval_repo`) are functional identifiers, not prose mentions,
         and are exempted below via `test_functional_repo_keys_still_present`
         rather than here."""
-        redaction_tokens = ("example-doctrine-repo", "example-retrieval-repo", "cockpit", "example-fleet", "example-game-repo")
+        redaction_tokens = ("coordinator-claude", "example-retrieval-repo", "cockpit", "example-fleet", "example-game-repo")
         emitted = emit_schemas(out_dir=tmp_path)
         for name, schema in emitted.items():
             for description in _iter_descriptions(schema):

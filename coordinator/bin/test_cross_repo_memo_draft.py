@@ -68,10 +68,10 @@ def _script_path() -> str:
 
 
 def _sibling_example_doctrine_repo_probe() -> str:
-    """Env-independent fallback: locate the sibling example-doctrine-repo checkout by
+    """Env-independent fallback: locate the sibling coordinator-claude checkout by
     walking up from THIS file to the engine repo root, then probing that
     root's own parent directory for the fleet's conventional sibling-clone
-    name, `example-doctrine-repo` (see project CLAUDE.md "sibling example-doctrine-repo
+    name, `coordinator-claude` (see project CLAUDE.md "sibling coordinator-claude
     checkout"). Not a hand-typed absolute path -- portable to any machine
     that clones the fleet repos side-by-side.
 
@@ -97,7 +97,7 @@ def _sibling_example_doctrine_repo_probe() -> str:
         claude_klabauter_root = parent
     else:
         return ""
-    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "example-doctrine-repo")
+    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-claude")
     manifest = os.path.join(
         candidate, "coordinator", "schemas", "coordinator-registry.manifest.json"
     )
@@ -105,7 +105,7 @@ def _sibling_example_doctrine_repo_probe() -> str:
 
 
 def _resolve_doe_root_for_tests() -> str:
-    """Best-effort example-doctrine-repo sibling root, forwarded as DOE_ROOT to every
+    """Best-effort coordinator-claude sibling root, forwarded as DOE_ROOT to every
     spawned CLI invocation in this file, AND pinned into this process's own
     `os.environ` (see below `_DOE_ROOT_FOR_TESTS` bootstrap) so any in-process
     import of `coordinator_registry` resolves too.
@@ -285,7 +285,7 @@ def _write_registry_toml(settings_home: str, entries: dict[str, str]) -> None:
     each repos.<key> -> path — the exact surface claude-klabauter's memo.draft/memo.send
     ops read directly via stdlib tomllib (COORDINATOR_SETTINGS_HOME/machine-local/
     registry.toml). Distinct from MACHINE_LOCAL_IMPL, which only affects this
-    CLI's OWN (example-doctrine-repo-side) machine-local lookups (sender-identity WARNING,
+    CLI's OWN (coordinator-claude-side) machine-local lookups (sender-identity WARNING,
     publish-target mirror enumeration, etc.) — the engine-side classify_receiver/
     resolve_receiver_inbox resolution this fixture needs to satisfy reads this
     file directly, bypassing MACHINE_LOCAL_IMPL entirely.
@@ -598,7 +598,7 @@ def _make_mock_machine_local_keys_and_get(tmpdir: str, key_paths: dict) -> str:
 #
 # test_draft_unresolved_receiver_warns_but_creates DELETED 2026-07-21 (same
 # cutover, additional finding beyond the dispatch brief's named list) — it
-# asserted the OLD example-doctrine-repo-local `_classify_receiver`'s "registered-but-unresolved
+# asserted the OLD coordinator-claude-local `_classify_receiver`'s "registered-but-unresolved
 # key -> WARNING, draft still created" fallthrough. That function was DELETED
 # 2026-07-21 (see coordinator/bin/cross-repo-memo:966 "_classify_receiver
 # (draft-time receiver classification) DELETED"); its sole caller now passes
@@ -745,7 +745,7 @@ def test_send_consumes_outbox() -> None:
       (e) a stamped copy survives at state/memo-outbox/sent/<topic>.md with
           status: sent, sent_at, and delivered_to naming the receiver-side path
 
-    Realises AC2. (e) pins the fix for the example-doctrine-repo-em finding that send
+    Realises AC2. (e) pins the fix for the coordinator-claude-em finding that send
     destroyed the sender's own delivery evidence rather than archiving it —
     see `_send_via_engine`/`_archive_sent_outbox_draft` in cross-repo-memo.
     """

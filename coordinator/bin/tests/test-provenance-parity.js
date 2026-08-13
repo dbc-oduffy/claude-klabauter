@@ -21,7 +21,7 @@
  * then, properties, allOf, …) are compared after recursive key-sort and allOf
  * clause-sort.
  *
- * Spec backlink: docs/plans/2026-07-02-slice-provenance-envelope.md § D4
+ * Spec backlink: docs/plans/2026-07-02-slice-provenance-envelope.md § D4 [DEAD-CITATION: plan file never committed to this repo]
  */
 
 const { describe, it } = require('node:test');

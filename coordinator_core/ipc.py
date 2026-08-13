@@ -19,7 +19,7 @@ method name. C2–C4 ops self-register by importing this module at load time. Th
 is pinned here so every wave that authors an op can import `register_op` without
 depending on the broader package init.
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C1 / C1b
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C1 / C1b
 Design spike: docs/research/2026-07-01-resident-service-architecture.md §1.6 §2.1 §2.2 §2.3
 
 Decisions:
@@ -280,8 +280,8 @@ Negative-spec (hard-won):
                                        state/scratch/artifact-distillation/<run-id>/
           - cartography.chunk_table:  emits a reduced source-file chunk table under
                                        <target_root>/state/scratch/cartography-chunk-table/<run-id>/
-                                       (--emit only; example-doctrine-repo's cross-tree consumer —
-                                       cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-
+                                       (--emit only; coordinator-claude's cross-tree consumer —
+                                       cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-
                                        chunk-table-producer-seam.md)
           D6 bounds: write-confined to the op's own named target only; create-or-full-
           rewrite only (never partial in-place mutation); no delete; no commit (landing
@@ -601,7 +601,7 @@ def _timeout_for(method: str) -> float:
 #
 # Wire shape:  { "_origin_worktree": "/abs/path/to/worktree", ... }
 #
-# Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1a
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1a
 # ---------------------------------------------------------------------------
 _ORIGIN_WORKTREE_FIELD = "_origin_worktree"
 
@@ -617,7 +617,7 @@ _ORIGIN_WORKTREE_FIELD = "_origin_worktree"
 # place) keep working unchanged — same dict/frozenset objects, just defined
 # in op_scopes.py now.
 #
-# Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1c
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1c
 # DR:            docs/decisions/2026-07-04-coordinator-core-global-multiplex-topology.md § AC-1b
 # Amendment:     docs/plans/2026-07-07-per-repo-emission-cutover.md § C3
 # Split:         cross-repo/inbox/2026-07-21-claude-central-em-python-bin-cold-invocation-minutes-per-call.md
@@ -661,7 +661,7 @@ def resolve_op_repo_key(method: str, request_repo: Optional[Path]) -> Optional[P
         ValueError — if scope requires a key but request_repo is None or the
                      path cannot be resolved to a valid git common directory.
 
-    Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1c
+    Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1c
     Amendment:     docs/plans/2026-07-07-per-repo-emission-cutover.md § C3
     """
     scope = _OP_KEY_SCOPE.get(method, "none")  # unclassified ops → no key (see table note)
@@ -703,7 +703,7 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
         Optional[Path] — canonical resolved Path if _origin_worktree is a non-empty string;
                          None if the field is absent, empty, or not a string.
 
-    Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1b
+    Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1b
     """
     raw = msg.get(_ORIGIN_WORKTREE_FIELD)
     if not raw or not isinstance(raw, str):
@@ -767,7 +767,7 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
 # `_origin_worktree` repo — never the declared path's own containing repo.
 # An earlier version anchored containment on the declared path itself so
 # that `queue.append`'s central `queue_scope` and `queue.promote`'s
-# example-doctrine-repo central-root writes (genuinely outside the caller's own
+# coordinator-claude central-root writes (genuinely outside the caller's own
 # worktree) could still be recorded. That was unsound and was reproduced
 # live: a session id is a REPO-LOCAL namespace key, not a portable identity,
 # and `session.scope.touch()` lazily calls `session.core.init()`, so
@@ -788,11 +788,11 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
 #
 # Consequence, deliberate: a declared path outside the caller's own repo is
 # SKIPPED — never recorded, never written cross-repo. `queue.promote`'s
-# writes into the example-doctrine-repo central root therefore stay unclaimed orphans
+# writes into the coordinator-claude central root therefore stay unclaimed orphans
 # at that sink. This is the CORRECT outcome, not a regression — no claim is
 # always safer than a WRONG claim, and a wrong claim here actively harms a
 # sibling repo claude-klabauter does not own. Do not "fix" this back to declared-path
-# anchoring; the example-doctrine-repo side has its own adoption path
+# anchoring; the coordinator-claude side has its own adoption path
 # (`--include-orphans`) for exactly this residual.
 #
 # Every skip is logged (never silent — see `_record_self_reported_touches`),
@@ -1016,7 +1016,7 @@ def get_op_handler(name: str) -> Optional[Callable]:
     every caller that resolves a sibling op by key (e.g. `cutover.advance`
     resolving `cutover.gate`) whenever it ran as anything other than the directly
     dispatched op. See
-    cross-repo/inbox/2026-07-25-example-doctrine-repo-em-cutover-advance-cannot-resolve-gate-op.md.
+    cross-repo/inbox/2026-07-25-coordinator-claude-em-cutover-advance-cannot-resolve-gate-op.md.
 
     Review: code-reviewer F11 — added to allow fleet-op callers to resolve handlers
     via the public op key rather than accessing the op module's private handler
@@ -1189,7 +1189,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     Validation precedence (spec-pinned — do NOT reorder):
         jsonrpc version → params type → method string → registry lookup → handler invoke
 
-    Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C1 / C1b
+    Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C1 / C1b
 
     Returns:
         On success: {"jsonrpc": "2.0", "id": id_, "result": <handler return value>}
@@ -1349,7 +1349,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # Review: code-reviewer — F5: inspect.iscoroutinefunction preferred over
     # asyncio.iscoroutinefunction (deprecated Python 3.12+); no behavior change.
     #
-    # Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C3
+    # Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
     #
     # DR-215 command-type retirement: drain/in-flight machinery removed — no concurrent
     # requests in the command-type model (one op per process). _handle_connection and
@@ -1617,17 +1617,17 @@ def dispatch_from_hook(
 ) -> dict:
     """Build a JSON-RPC 2.0 envelope, dispatch it in-process, and return the op's result.
 
-    The single engine-side home for the post-import dispatch body that seven example-doctrine-repo hook
+    The single engine-side home for the post-import dispatch body that seven coordinator-claude hook
     shims currently hand-roll identically (build envelope -> asyncio.run(dispatch_message)
-    -> unwrap result). DR-118 rules that a example-doctrine-repo-resident hook shim is a pointer only —
+    -> unwrap result). DR-118 rules that a coordinator-claude-resident hook shim is a pointer only —
     resolve the engine root, hand over the raw payload, translate the verdict into the
     harness channel, and degrade. Transport policy (the envelope shape, the dispatch call,
     error surfacing) is engine-resident, not the shim's to reimplement.
 
-    Spec backlink: cross-repo/archive/2026-07-31-example-doctrine-repo-em-dr116-seam-contents-and-ipc-hook-dispatch.md
-                   (example-doctrine-repo's DR-118 — the memo's filename says dr116 because example-doctrine-repo renumbered
-                   the ruling at execute time; DR-116 in the example-doctrine-repo tree is an unrelated
-                   record, per 2026-07-31-example-doctrine-repo-em-dr116-is-now-dr118-citation-correction.md)
+    Spec backlink: cross-repo/archive/2026-07-31-coordinator-claude-em-dr116-seam-contents-and-ipc-hook-dispatch.md
+                   (coordinator-claude's DR-118 — the memo's filename says dr116 because coordinator-claude renumbered
+                   the ruling at execute time; DR-116 in the coordinator-claude tree is an unrelated
+                   record, per 2026-07-31-coordinator-claude-em-dr116-is-now-dr118-citation-correction.md)
 
     Args:
         op_name:         the JSON-RPC "method" to dispatch.

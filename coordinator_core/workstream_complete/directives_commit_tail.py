@@ -818,7 +818,7 @@ def _review_fields_present(review: Any) -> bool:
 #: `review_<field>` spellings a caller might plausibly place directly on
 #: `decisions` instead of nesting them under `decisions["review"]`. A caller
 #: who does this looks plausible at the callsite (2026-07-30 cross-repo memo:
-#: `cross-repo/archive/2026-07-30-example-doctrine-repo-em-wsc-review-trail-passthrough-
+#: `cross-repo/archive/2026-07-30-coordinator-claude-em-wsc-review-trail-passthrough-
 #: and-memo-attribution.md` — a real session supplied `review_sha_range`,
 #: `review_reviewer`, etc. as flat keys, `_review_fields_present({})` was
 #: `False`, `--review-*` was never composed, and the tail reported
@@ -888,7 +888,7 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
     reviewer except `wsc-auto-adjudication`; that gate is advisory today and
     designed to become enforcing, so a value accepted in `decisions["review"]`
     and dropped in this argv silently defeats the correlation the gate exists
-    to establish. Spec backlink: cross-repo/inbox/2026-08-13-example-doctrine-repo-em-wsc-
+    to establish. Spec backlink: cross-repo/inbox/2026-08-13-coordinator-claude-em-wsc-
     tail-ipc-timeout-and-reviewer-evidence-drop.md § 2.
 
     Applies that same "silent drop is worse than a loud rejection" principle

@@ -1,14 +1,14 @@
 """
-coordinator_core.resolve_coordinator_clone — native peer of example-doctrine-repo's
+coordinator_core.resolve_coordinator_clone — native peer of coordinator-claude's
 ``coordinator/lib/resolve-coordinator-clone.sh`` (the unified coordinator
 install-root resolver), CLI-invocation-mode only.
 
-Purpose: the shared example-doctrine-repo-oracle resolver that C11's 13 call sites (this plan's
+Purpose: the shared coordinator-claude-oracle resolver that C11's 13 call sites (this plan's
 narrowed surface) fold into rather than each re-deriving its own
 ``bash resolve-coordinator-clone.sh --clone-root|--content-root`` subshell.
 Companion to the already-native ``coordinator_core.state_root``
 (``coordinator_state_root`` peer) — together the two modules retire every
-"shell out to a example-doctrine-repo resolver lib" bridge in C11's surface.
+"shell out to a coordinator-claude resolver lib" bridge in C11's surface.
 
 Scope note — CLI mode only, not sourced mode: all of this plan's call sites
 invoke the bash oracle as a standalone subprocess (``bash script.sh
@@ -22,7 +22,7 @@ plan's surface sources the oracle, so that branch has no native consumer to
 port for; a future caller that needs sourced-mode semantics ports that branch
 separately rather than overloading this module's contract.
 
-Port of: resolve-coordinator-clone.sh (example-doctrine-repo 290997c7, 2026-07-22), 804 lines.
+Port of: resolve-coordinator-clone.sh (coordinator-claude 290997c7, 2026-07-22), 804 lines.
 This is the Python-native mirror for claude-klabauter-resident callers, exactly as
 ``coordinator_core.state_root`` and ``coordinator_core.ops.coordinator_doe_root``
 are for their oracles.

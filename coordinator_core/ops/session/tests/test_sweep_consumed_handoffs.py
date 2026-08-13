@@ -20,7 +20,7 @@ Coverage:
   (d) a live (dry_run=false, the default) call actually archives a genuinely-eligible
       candidate — the op is not preview-only by construction, only by parameter.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C21
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C21
 
 Negative-spec:
   - Does NOT re-test the full boot-path behavioral matrix (heir succession, two-repo

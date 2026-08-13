@@ -2,7 +2,7 @@
 coordinator_core.frontmatter.tests.test_parity_memo_ops
 
 Parity harness — proves byte-identical frontmatter output between a FROZEN GOLDEN
-snapshot of the legacy JS CLI (example-doctrine-repo coordinator/bin/memo-transition.js) and the
+snapshot of the legacy JS CLI (coordinator-claude coordinator/bin/memo-transition.js) and the
 Claude-klabauter-native Python op handler for all three memo lifecycle verbs:
 
   claim   — open → in_progress
@@ -53,13 +53,13 @@ a skip — see `coordinator_core/testing/golden.py` module docstring negative-sp
 
 Regenerating goldens (deliberate, reviewed action only):
     CAPTURE_GOLDENS=1 python3 -m pytest coordinator_core/frontmatter/tests/test_parity_memo_ops.py -q
-(requires `node` on PATH and the example-doctrine-repo sibling checkout to be resolvable.)
+(requires `node` on PATH and the coordinator-claude sibling checkout to be resolvable.)
 
 Run (from the repo root):
   python3 -m pytest coordinator_core/frontmatter/tests/test_parity_memo_ops.py -v
 
 Spec backlinks:
-  example-doctrine-repo: coordinator/bin/memo-transition.js (parity oracle, frozen — not read at
+  coordinator-claude: coordinator/bin/memo-transition.js (parity oracle, frozen — not read at
     ordinary test-run time)
   Port source: coordinator_core/ops/memo_transition.py
   Plan: docs/plans/2026-07-06-memo-transition-native-python-port.md § C4, AC7
@@ -87,7 +87,7 @@ from coordinator_core.testing.golden import assert_matches_golden, is_capturing,
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
-# JS CLI path (example-doctrine-repo sibling repo) — only ever consulted during an explicit
+# JS CLI path (coordinator-claude sibling repo) — only ever consulted during an explicit
 # CAPTURE_GOLDENS=1 recapture (see `_require_oracle`/`_js_memo`).  Not resolved (and
 # not required) on an ordinary run.
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ def _require_oracle() -> None:
     docstring negative-spec). Only ever called from inside an `is_capturing()` branch."""
     if _NODE is None or not _MEMO_JS.is_file():
         raise RuntimeError(
-            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the example-doctrine-repo "
+            "CAPTURE_GOLDENS=1 recapture requires `node` on PATH and the coordinator-claude "
             f"sibling checkout ({_MEMO_JS}) to be resolvable — neither is needed for "
             "an ordinary (non-capture) run of this suite."
         )
@@ -967,7 +967,7 @@ class TestActionParity:
 # Closes a scope-drop found while porting memo-transition.js to native Python
 # (BIG_PORT item memo-transition, Wave B): the pre-existing native port predated
 # the JS oracle's distill_fate/in_repo_capture stamp-at-source fields and silently
-# dropped them on write, even though the example-doctrine-repo-side strangler facade
+# dropped them on write, even though the coordinator-claude-side strangler facade
 # (coordinator/lib/memo-transition-facade.sh) already forwarded them.
 # Spec backlink: docs/plans/2026-07-12-distill-rebuild-claude-klabauter-reliant.md § C3
 # ---------------------------------------------------------------------------
@@ -1387,7 +1387,7 @@ class TestValidationRejectionParity:
         `_demote_kind_enum_finding` in `coordinator_core/ops/memo_transition.py`, which
         filters a `field == 'kind'` cross-field finding out of the post-mutation error
         list on the RECEIVER path and warns to stderr instead. The AUTHORING-side gate
-        (`_memo_cf_kind_enum` in `schema_validate.py`, both write guards, example-doctrine-repo's
+        (`_memo_cf_kind_enum` in `schema_validate.py`, both write guards, coordinator-claude's
         direct-file-path import of `validate_frontmatter_obj`) is untouched and stays a
         hard reject — an unenumerated `kind` must never be author-set, only tolerated
         once it has already landed, so an already-landed memo with an off-enum `kind`
@@ -1539,12 +1539,12 @@ class TestValidationRejectionParity:
         reason=(
             "Distinct from test_receive_overcap_summary_truncated_and_warned's ruling (that "
             "one is a settled, permanent divergence — this one is an open quoting-style bug): "
-            "example-doctrine-repo's normalizeMemoSummary() re-serializes the grandfathered summary without YAML "
+            "coordinator-claude's normalizeMemoSummary() re-serializes the grandfathered summary without YAML "
             "quotes, diverging from claude-klabauter's Python truncated-and-quoted serialization. Both "
             "sides truncate the grandfathered summary (normalizeMemoSummary runs unconditionally "
             "on both paths, ahead of the grandfather __skip__ check) — the mismatch is quoting "
             "style only, not accept-vs-reject. expected-fail vs the frozen golden (last-known-good "
-            "live-JS-oracle capture) until example-doctrine-repo reconciles its quoting. XPASS means example-doctrine-repo reconciled "
+            "live-JS-oracle capture) until coordinator-claude reconciles its quoting. XPASS means coordinator-claude reconciled "
             "— remove this marker. See memo 2026-07-13 claude-klabauter-canonical-memo-summary-reject."
         ),
     )

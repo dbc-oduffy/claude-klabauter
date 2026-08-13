@@ -28,7 +28,7 @@ exit or a JSON-RPC error envelope. This loop does not catch, swallow, or
 retry that exception -- an erroring op fails the whole run loud, per AC9's
 "never skip it, never record it as a timing sample" contract.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C6
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C6
 (AC1, AC2, AC8).
 """
 

@@ -2,10 +2,10 @@
 coordinator_core.frontmatter.body_blocks
 
 Shared fenced-block locator for plan-body YAML blocks (e.g. the `## Tasks`
-` ```yaml plan-tasks` spine). Parity target: example-doctrine-repo
+` ```yaml plan-tasks` spine). Parity target: coordinator-claude
 `coordinator/bin/coordinator-harvest-deferrals:317-372` (`_locate_tasks_block`).
 
-Example-doctrine-repo's reference returns only the block body string (or None on any failure,
+Coordinator-claude's reference returns only the block body string (or None on any failure,
 collapsing "absent" and "malformed" into one outcome). This port diverges in
 two ways, both deliberate:
 
@@ -16,7 +16,7 @@ two ways, both deliberate:
      legitimately need to create the block when absent, but must fail-loud
      when malformed — collapsing both to `None` would erase that distinction.
   2. It returns the located block's `(start, end)` character span in the
-     source, in addition to the body text. This is net-new: example-doctrine-repo's
+     source, in addition to the body text. This is net-new: coordinator-claude's
      `_locate_tasks_block` has no span concept because it never splices back
      into the source. The span is pinned to `match.span(1)` — the fence-BODY
      span only, exclusive of the ` ```yaml plan-tasks\\n` opener and the
@@ -24,7 +24,7 @@ two ways, both deliberate:
      re-serialized YAML while leaving the fence markers themselves intact.
 
 PUBLIC CROSS-REPO SEAM (2026-07-29) — `locate_fenced_block` and
-`LocateStatus` are imported BY NAME from outside this repo. Example-doctrine-repo's
+`LocateStatus` are imported BY NAME from outside this repo. Coordinator-claude's
 write-time guard `coordinator/hooks/scripts/validate-frontmatter-schema.py`
 imports both to validate a plan's task-spine rows at authoring time (the
 gate that closes plan-tasks.schema.json's closed enums —
@@ -50,7 +50,7 @@ locate rule is heading -> fence containment for one exact info-string;
 matching any ```yaml fence would mis-locate on plans carrying unrelated
 fenced YAML.
 
-HTML-comment blanking (silent-data-loss fix, ported from the example-doctrine-repo reference):
+HTML-comment blanking (silent-data-loss fix, ported from the coordinator-claude reference):
 before any matching, `source` is scanned via a comment-blanked COPY
 (`scan_text`, every `<!--...-->` span replaced by an equal-length run of
 spaces via `re.DOTALL`) — never against `source` directly. `coordinator-doc-new`
@@ -66,7 +66,7 @@ fenced blocks still counts as 2 fences post-blanking and is still MALFORMED
 (see `multiple-fenced-blocks.md`) — blanking narrows false positives, it does
 not weaken the genuine-duplicate guard.
 
-Containment, not adjacency (fix ported from the example-doctrine-repo reference): the fence
+Containment, not adjacency (fix ported from the coordinator-claude reference): the fence
 must live INSIDE the `## <heading>` section — bounded at the next
 `^##\\s+\\S` heading, or end of document — not merely on blank lines directly
 below the heading line. Real reviewed plans routinely carry load-bearing
@@ -79,7 +79,7 @@ weakening: a genuinely misplaced fence (in a later, different section) is
 still MALFORMED.
 
 Spec backlinks:
-  coordinator/bin/coordinator-harvest-deferrals (example-doctrine-repo, lines 317-372)
+  coordinator/bin/coordinator-harvest-deferrals (coordinator-claude, lines 317-372)
 """
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def locate_fenced_block(
     """Locate the fenced block with the given info-string contained within
     the first `## <heading>` section in `source`.
 
-    Parity: example-doctrine-repo `_locate_tasks_block` (`coordinator-harvest-deferrals:317-372`).
+    Parity: coordinator-claude `_locate_tasks_block` (`coordinator-harvest-deferrals:317-372`).
     Exactly one fenced block with the given info-string must exist ANYWHERE
     in the document (post-comment-blanking, see module docstring), and it
     must live INSIDE the heading's section — bounded at the next

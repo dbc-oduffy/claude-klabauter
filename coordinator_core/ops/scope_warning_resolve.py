@@ -11,7 +11,7 @@ Log format (written by the scope-guard commit hook):
 After resolution:
     <ISO-ts> | <session_id> | foreign-staged | <file> | owner:<owner> | legitimate-mine
 
-Port source: coordinator/bin/scope-warning-resolve (example-doctrine-repo)
+Port source: coordinator/bin/scope-warning-resolve (coordinator-claude)
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, chunk B3
 See also: docs/pretooluse-deny-contract.md, docs/wiki/scoped-safety-commits.md § Phase 5
 

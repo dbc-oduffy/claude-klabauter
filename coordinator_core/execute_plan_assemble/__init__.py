@@ -8,7 +8,7 @@ collapses `/execute-plan` Phase 4's ordinal-narrated close-out sequence
 every chunk shipped, land one scoped commit) into a single named op the
 skill invokes instead of hand-sequencing git.
 
-Spec backlink: example-doctrine-repo coordinator/skills/execute-plan/SKILL.md § Phase 4
+Spec backlink: coordinator-claude coordinator/skills/execute-plan/SKILL.md § Phase 4
 """
 
 from __future__ import annotations

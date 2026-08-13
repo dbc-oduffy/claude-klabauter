@@ -6,11 +6,11 @@ every `bin/install-health/*.sh` drop-in script (lexicographic order), runs it
 via `bash <script>` with stdout/stderr passthrough, continues past individual
 failures, and aggregates a non-zero exit iff any sub-script failed. Adding a
 new install-health script is a directory drop, not a doc/orchestrator edit —
-see the example-doctrine-repo trampoline's own header note for the anti-pattern this collapses
+see the coordinator-claude trampoline's own header note for the anti-pattern this collapses
 (2026-06-16 PM callout: one inline bash block per script in commands/install.md).
 
 Dual-anchor discovery (2026-07-22, closes the plugin_root-coupling defect):
-  example-doctrine-repo deleted its entire `coordinator/bin/install-health/` drop-in directory
+  coordinator-claude deleted its entire `coordinator/bin/install-health/` drop-in directory
   (the trio: `ensure-python3-exe-shim.sh`, `check-windows-ssh-binary.sh`,
   plus the claude-klabauter-root sourced-lib `coordinator-claude-klabauter-root.sh`) under a
   PM kill-first ruling — cross-repo/inbox/2026-07-22-claude-central-em-
@@ -19,14 +19,14 @@ Dual-anchor discovery (2026-07-22, closes the plugin_root-coupling defect):
   (`<claude_klabauter_root>/coordinator/bin/install-health/`), alongside the
   orchestrator itself (`<claude_klabauter_root>/coordinator/bin/install-health-run.py`,
   a thin CLI trampoline over this module). Resolving EITHER off
-  `CLAUDE_PLUGIN_ROOT`/`plugin_root` (the example-doctrine-repo-side invoking-harness root)
-  was therefore silently wrong the moment example-doctrine-repo's directory was gone — the
+  `CLAUDE_PLUGIN_ROOT`/`plugin_root` (the coordinator-claude-side invoking-harness root)
+  was therefore silently wrong the moment coordinator-claude's directory was gone — the
   glob would look in a directory that no longer exists on that side at all,
   even for a still-live claude-klabauter-owned drop-in.
 
   Fix: `plugin_root` remains the anchor ONLY for the top-level trust gate
   (`_trusted_root`, below) — that check validates the invoking harness root
-  itself, a example-doctrine-repo-side concept unrelated to where leg content lives. Every
+  itself, a coordinator-claude-side concept unrelated to where leg content lives. Every
   claude-klabauter-side surface (the drop-in directory, and the `seed-skill-overrides`
   helper lookup) instead resolves off `coordinator_claude_klabauter_root()`
   (`coordinator_core.claude_klabauter_root`) — the canonical claude-klabauter-root resolver
@@ -42,11 +42,11 @@ Native leg registry (`_NATIVE_LEGS`) — no globbing for claude-klabauter-owned 
   in-process, via an explicit registry — never discovered through
   a `bin/install-health/*.sh` glob-and-basename-intercept, and never
   requiring a bash veneer front door. This collapses the prior two-tier
-  split (a `_NATIVE_PROBES` registry for example-doctrine-repo-deleted siblings, run
+  split (a `_NATIVE_PROBES` registry for coordinator-claude-deleted siblings, run
   unconditionally, plus a `_NATIVE_ENTRYPOINTS` glob-intercept map for
   `seed-skill-overrides` whose `.sh` sibling still existed) into one
   registry once `seed-skill-overrides`' own `.sh` sibling ALSO stopped being
-  a reliable discovery anchor for the same directionality reason (example-doctrine-repo-side
+  a reliable discovery anchor for the same directionality reason (coordinator-claude-side
   glob's own drop-in directory is gone; claude-klabauter's own copy under
   `coordinator/bin/install-health/` is a static artifact, not something a
   process needs to glob to find its OWN already-known native module).
@@ -81,7 +81,7 @@ not an advisory hook. `coordinator_claude_klabauter_root()` failing to resolve i
 live under it), so an unresolvable root cannot be silently downgraded to
 "no legs ran."
 
-Port of: install-health-run.sh (example-doctrine-repo 290997c7, 2026-07-22)
+Port of: install-health-run.sh (coordinator-claude 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Negative-spec (deliberately reproduced, not "fixed"):
@@ -119,11 +119,11 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 # install-health leg. Each entrypoint is normalized to a single
 # ``(plugin_root, claude_klabauter_root) -> int`` shape regardless of the underlying
 # module's own main() signature, and runs UNCONDITIONALLY in `main()` below
-# — no dependency on any file existing in example-doctrine-repo's (or any) drop-in directory,
+# — no dependency on any file existing in coordinator-claude's (or any) drop-in directory,
 # and no dependency on `bin/install-health/` existing at all. `display_name`
 # is used only for log/failure messages — it is NOT looked up anywhere.
 #
-# `seed-skill-overrides` needs `claude_klabauter_root` to locate its example-doctrine-repo-resident-
+# `seed-skill-overrides` needs `claude_klabauter_root` to locate its coordinator-claude-resident-
 # named-but-now-claude-klabauter-resident helper (`<claude_klabauter_root>/coordinator/bin/
 # seed-skill-overrides.py`) via the `helper_root` param — kept separate from
 # `plugin_root` (still the trust-check anchor for that module's OWN
@@ -278,7 +278,7 @@ def main(argv: List[str], script_path: Optional[str] = None) -> int:
 
     ``--check-only`` (also accepted via a pre-set ``CHECK_ONLY`` env var, e.g. from a
     caller already inside a check-only pass) propagates into ``os.environ["CHECK_ONLY"]``
-    for the whole process BEFORE any leg runs, exactly mirroring the example-doctrine-repo-side doc block's
+    for the whole process BEFORE any leg runs, exactly mirroring the coordinator-claude-side doc block's
     own ``export CHECK_ONLY=1`` / ``export CHECK_ONLY=`` behavior it collapses: every
     drop-in and native leg that self-gates on ``$CHECK_ONLY`` sees the identical signal
     it always has, whether the flag arrived via argv or an inherited env var. Any other
@@ -308,7 +308,7 @@ def main(argv: List[str], script_path: Optional[str] = None) -> int:
     # Scoped, not process-wide: a bare `os.environ["CHECK_ONLY"] = ...` here would
     # leak past this call for the life of the interpreter (2026-07-21
     # interpreter-global-state sweep) — every drop-in/native leg below still SEES
-    # the identical env-var signal the example-doctrine-repo doc block's own `export CHECK_ONLY=1` /
+    # the identical env-var signal the coordinator-claude doc block's own `export CHECK_ONLY=1` /
     # `export CHECK_ONLY=` used to set, just scoped to this run.
     with env_overlay({"CHECK_ONLY": "1" if check_only else ""}):
         return _run_legs(plugin_root, claude_klabauter_root, script_path)
@@ -351,7 +351,7 @@ def _run_legs(plugin_root: str, claude_klabauter_root: str, script_path: Optiona
     # Residual extensibility hook for a hypothetical FUTURE foreign drop-in
     # with no native peer — resolved off claude_klabauter_root (coordinator_claude_klabauter_root()),
     # NOT plugin_root: this directory is claude-klabauter's own tree
-    # (<claude_klabauter_root>/coordinator/bin/install-health/), not a example-doctrine-repo-side
+    # (<claude_klabauter_root>/coordinator/bin/install-health/), not a coordinator-claude-side
     # surface, per the dual-anchor split (see module docstring).
     health_dir = os.path.join(claude_klabauter_root, "coordinator", "bin", "install-health")
 

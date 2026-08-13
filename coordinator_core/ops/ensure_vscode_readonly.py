@@ -44,7 +44,7 @@ Negative-spec (bash-oracle parity, do NOT "fix" mid-port):
       (existing keys preserved, our two keys added/overwritten) — never a full
       replace of the pre-existing `files.readonlyInclude` object.
 
-Port of: ensure-vscode-readonly.sh (example-doctrine-repo 894d4bc6, 2026-07-22)
+Port of: ensure-vscode-readonly.sh (coordinator-claude 894d4bc6, 2026-07-22)
 Spec backlink: docs/plans/2026-05-29-handoff-tracker-system.md (edit-resistance follow-up)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 """

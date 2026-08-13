@@ -17,7 +17,7 @@ DEC-1 three-signal rule (verdict=auto-ship iff ALL THREE hold, per handoff):
         stopwords`) contribute no tokens — excluding denylisted mechanical-commit-subject
         prefixes (policy `mechanical_commit_denylist`) so a `pickup:`/`memo:`/session-init/
         handoff.transition-family/frontmatter-mutation commit is never treated as
-        completion evidence on its own (the Staff Engineer #2 / example-doctrine-repo alignment reply — the OPPOSITE
+        completion evidence on its own (the Staff Engineer #2 / coordinator-claude alignment reply — the OPPOSITE
         risk from the /pickup Step 3 bare-commit-existence false-"still-live" guard,
         `state/lessons/2026-07-09-git-log-liveness-checks-on-the-coordinat-669018b53b04.yaml`).
         (2026-07-20 claude-central-em false-positive memo, Defect 2a: a lone
@@ -59,14 +59,14 @@ capture_output=True, text=True, check=False, cwd=worktree_root. Read-only git
 subprocesses (log/cat-file/branch) are COMPUTE_ONLY-safe (ipc.py:44 carve-out);
 this module never runs a git command that mutates repo state.
 
-Spec backlink: docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C2 (DEC-1)
+Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C2 (DEC-1)
 
 Negative-spec:
   - Does NOT write any file, git object, or repo state — pure compute over
     subprocess reads and in-memory frontmatter dicts.
   - Does NOT invoke handoff.ship_and_archive or any mutating op — that is C4's job.
   - Does NOT encode the mechanical-commit denylist or any threshold constant here —
-    both come from the caller-supplied policy dict (C9); a example-doctrine-repo policy-YAML edit
+    both come from the caller-supplied policy dict (C9); a coordinator-claude policy-YAML edit
     changes matcher behavior with zero claude-klabauter code change.
   - Does NOT treat a mechanical-only commit subject match as evidence for signal (a).
   - Does NOT auto-ship when attribution is ambiguous — cross-handoff overlap always
@@ -102,7 +102,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 # extraction logic.
 
 #: The four `shipped_in_kind` values DR-096 § Decision 2 declares
-#: (`docs/decisions/DR-096-shipped-in-names-the-ship-commit.md`, example-doctrine-repo).
+#: (`docs/decisions/DR-096-shipped-in-names-the-ship-commit.md`, coordinator-claude).
 #: Kept as a code-side mirror of the schema enum (A1's schema edit is the
 #: grammar SSOT; this set is the resolver's own discriminant, per AC26 — the
 #: resolver must not infer the enum shape from the schema at runtime).
@@ -124,7 +124,7 @@ _SHIPPED_IN_KIND_CLEAR_ELIGIBLE: frozenset = frozenset({"ship-commit", "successo
 
 #: Fallback mechanical-commit-subject denylist used only when the policy dict omits
 #: `mechanical_commit_denylist` (defensive default — C9 policy_loader normally supplies
-#: this from the example-doctrine-repo-owned YAML). Kept in sync with the plan's five prefixes, plus the
+#: this from the coordinator-claude-owned YAML). Kept in sync with the plan's five prefixes, plus the
 #: archival/migration-machinery prefixes `archive_stamp.resolve_source_ship_sha` /
 #: `stamp_shipped_in`'s scope-derived walk-back added (2026-08-05): a handoff or plan's
 #: most recent toucher is very often the fleet-archive sweep or a corpus-wide vocabulary
@@ -158,7 +158,7 @@ _STOPWORD_TOKENS: frozenset = frozenset({
 #: nearly every scope entry passes through, and so carry ~zero discriminating
 #: signal for "does this commit's subject describe THIS handoff's actual work".
 #: Code-side default for the policy-driven `three_signal.subject_match_extra_
-#: stopwords` key (see `evaluate_commit_reality`); a example-doctrine-repo policy-YAML edit can
+#: stopwords` key (see `evaluate_commit_reality`); a coordinator-claude policy-YAML edit can
 #: extend or override this set with zero claude-klabauter code change.
 _STRUCTURAL_STOPWORD_TOKENS: frozenset = frozenset({
     "ops", "core", "config", "plans", "docs", "state", "tests", "lib", "bin",
@@ -628,7 +628,7 @@ def _discriminating_pathspecs_on_disk(
 #: space). The mandatory-whitespace grammar matched a form nobody could
 #: structurally write, silently disabling cross-repo scope recognition
 #: entirely. Verified against real plans: `grep -rhoE '^\s+- [a-z0-9-]+:
-#: [^ ]+' docs/plans/*.md` in example-doctrine-repo returns only no-space entries like
+#: [^ ]+' docs/plans/*.md` in coordinator-claude returns only no-space entries like
 #: `- claude-klabauter:coordinator_core/ops/plan_tasks_mutate.py`.
 #:
 #: Windows-drive-letter safety is UNCHANGED by this fix and does not depend
@@ -1053,7 +1053,7 @@ def evaluate_commit_reality(
     # Defect 2) — nested under `three_signal`, per the grammar doc's own note that
     # this mapping is "reserved for future threshold tuning... without a matcher
     # code change". Code-side defaults apply when the key/mapping is absent, so a
-    # example-doctrine-repo policy-YAML edit is the only thing needed to retune these, same as
+    # coordinator-claude policy-YAML edit is the only thing needed to retune these, same as
     # `mechanical_commit_denylist` above.
     three_signal_policy = policy.get("three_signal") or {}
     subject_match_min_tokens = three_signal_policy.get(

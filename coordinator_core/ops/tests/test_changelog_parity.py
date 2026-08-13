@@ -2,11 +2,11 @@
 coordinator_core.ops.tests.test_changelog_parity — byte-parity harness for changelog ops.
 
 Purpose: Assert the Python ops (changelog.append_day / changelog.backfill_gaps)
-produce byte-identical file content to their example-doctrine-repo oracle CLIs
+produce byte-identical file content to their coordinator-claude oracle CLIs
 (workday-complete-step9-append-changelog.py / backfill-week-changelog-gaps.py)
 for the same inputs.
 
-When example-doctrine-repo oracle scripts are absent (~/.claude/.doe-root not set or scripts missing), all
+When coordinator-claude oracle scripts are absent (~/.claude/.doe-root not set or scripts missing), all
 oracle-comparison tests are skipped with an informative message. The tests still run the
 native op in isolation to verify basic smoke behavior.
 
@@ -16,9 +16,9 @@ Coverage:
     (c) smoke: native append_day writes valid file with correct format when oracle absent
     (d) smoke: native backfill_gaps skips when HEADER.md absent
 
-Spec backlink: docs/plans/2026-07-06-strang-10-residual-writer-strangle-command-type.md § C1
-Oracle (a): [example-doctrine-repo] coordinator/bin/workday-complete-step9-append-changelog.py
-Oracle (b): [example-doctrine-repo] coordinator/bin/backfill-week-changelog-gaps.py
+Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C1
+Oracle (a): [coordinator-claude] coordinator/bin/workday-complete-step9-append-changelog.py
+Oracle (b): [coordinator-claude] coordinator/bin/backfill-week-changelog-gaps.py
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ from coordinator_core.ops.changelog_ops import (  # noqa: E402
 
 # The byte-parity assertions (append_day/backfill_gaps window-commit content)
 # read commits from a REAL repo so the emitted bytes reflect actual git log
-# output, matching what the example-doctrine-repo oracle CLIs themselves read — a mocked git
+# output, matching what the coordinator-claude oracle CLIs themselves read — a mocked git
 # would validate against invented commit data, not the oracle's real input.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -104,7 +104,7 @@ _ORACLE_BACKFILL_AVAILABLE = bool(
 
 # ---------------------------------------------------------------------------
 # inject_anchor oracle resolution — this oracle is a claude-klabauter-owned in-repo CLI
-# (coordinator/bin/workday-complete-backfill-inject-anchor.py), NOT a example-doctrine-repo
+# (coordinator/bin/workday-complete-backfill-inject-anchor.py), NOT a coordinator-claude
 # artifact behind the ~/.claude/.doe-root sentinel used above. Resolved
 # directly relative to this repo; skipped gracefully (not failed hard) if the
 # file is ever moved/absent, per the strang-10 handoff's dispatch note.
@@ -126,11 +126,11 @@ _requires_inject_anchor_oracle = pytest.mark.skipif(
 
 _requires_append_oracle = pytest.mark.skipif(
     not _ORACLE_APPEND_AVAILABLE,
-    reason="step9-append-changelog oracle not available (example-doctrine-repo not configured or absent)",
+    reason="step9-append-changelog oracle not available (coordinator-claude not configured or absent)",
 )
 _requires_backfill_oracle = pytest.mark.skipif(
     not _ORACLE_BACKFILL_AVAILABLE,
-    reason="backfill-week-changelog-gaps oracle not available (example-doctrine-repo not configured or absent)",
+    reason="backfill-week-changelog-gaps oracle not available (coordinator-claude not configured or absent)",
 )
 
 # ---------------------------------------------------------------------------
@@ -648,7 +648,7 @@ class TestAppendDaySmoke:
     """Smoke tests for changelog.append_day (no oracle required).
 
     Validates the compose_block format, file creation, and idempotency without
-    comparing against the oracle. These run even when example-doctrine-repo is not installed.
+    comparing against the oracle. These run even when coordinator-claude is not installed.
     """
 
     def test_compose_block_format(self):
@@ -1044,7 +1044,7 @@ class TestInjectAnchorByteParity:
     in-repo workday-complete-backfill-inject-anchor.py oracle's injection path.
 
     Unlike append_day/backfill_gaps, this oracle is a claude-klabauter-owned CLI resolved
-    directly at coordinator/bin/ in this repo, not a example-doctrine-repo artifact behind the
+    directly at coordinator/bin/ in this repo, not a coordinator-claude artifact behind the
     ~/.claude/.doe-root sentinel (see the module-level oracle-resolution
     comment above `_requires_inject_anchor_oracle`).
     """

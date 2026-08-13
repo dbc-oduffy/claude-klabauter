@@ -25,14 +25,14 @@ central-registry edits are DEFERRED to the EM per the concurrent-build-wave
 central-registry-deferral convention; see this chunk's
 ``central-reg/T3a-g3c.txt`` fragment.
 
-CLI entrypoint: ``main(argv)`` is the direct-import target for the example-doctrine-repo trampoline
+CLI entrypoint: ``main(argv)`` is the direct-import target for the coordinator-claude trampoline
 (``coordinator/bin/derive-session-hierarchy``, mirrors the ``handoff-gate-aging`` /
 ``scope-warning-resolve`` shape) — a plain synchronous call, NOT routed through the
 JSON-RPC handler (no event loop needed for a CLI invocation with no repo_root
 router to consult).
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3c
-Port of: derive-session-hierarchy.sh (example-doctrine-repo f0aa2d56, 2026-07-16)
+Port of: derive-session-hierarchy.sh (coordinator-claude f0aa2d56, 2026-07-16)
 
 Negative-spec:
 - Does NOT re-implement the query-records enumeration/frontmatter-parse — reuses

@@ -1,6 +1,6 @@
 """
 coordinator_core.session.core — Python engine port of the retained-in-hub
-helpers from coordinator-session.sh (Port of: example-doctrine-repo e34f2484, 2026-07-22) —
+helpers from coordinator-session.sh (Port of: coordinator-claude e34f2484, 2026-07-22) —
 the functions T0-decompose could NOT bash-extract into
 ``coordinator/lib/session/*.sh``:
 git-root/session-dir resolution, clock helpers, PID/liveness primitives,
@@ -393,8 +393,8 @@ def _win_create_time_epoch(pid_int: int) -> Optional[int]:
     no longer Windows-exclusive.
 
     Originally added for Windows (no ``ps`` binary there), then converged
-    onto by POSIX too in the 2026-07-27 ps-to-psutil port (example-doctrine-repo
-    cross-repo memo ``2026-07-27-example-doctrine-repo-em-ac6-ps-to-psutil-yes-oracle-
+    onto by POSIX too in the 2026-07-27 ps-to-psutil port (coordinator-claude
+    cross-repo memo ``2026-07-27-coordinator-claude-em-ac6-ps-to-psutil-yes-oracle-
     retired.md`` confirmed the bash ``_cs_stable_pid_alive`` parity oracle
     this POSIX arm preserved was itself retired 2026-07-22 — there is no
     remaining counterparty to diff against). ``create_time()`` is an
@@ -475,7 +475,7 @@ def stable_pid_alive(pid, stored_lstart: str = "", stored_start_epoch: str = "")
     claude session process) captured at ``init()`` time.
 
     PLATFORM SPLIT (psutil-everywhere; POSIX converged onto the Windows
-    ``create_time()`` path 2026-07-27 — the example-doctrine-repo bash ``_cs_stable_pid_alive``
+    ``create_time()`` path 2026-07-27 — the coordinator-claude bash ``_cs_stable_pid_alive``
     parity oracle this preserved was itself retired 2026-07-22, and there is
     no live counterparty left to diff against). The birth-instant fetch AND
     the tolerant epoch compare are ONE implementation shared by both
@@ -833,7 +833,7 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
     ~18 concurrent sessions sharing this worktree it names whichever
     session most recently initialized, not necessarily the caller's — see
     coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND its
-    sole writer (session-init.py, the example-doctrine-repo SessionStart hook) was
+    sole writer (session-init.py, the coordinator-claude SessionStart hook) was
     deleted by PM directive 2026-07-15 — no production writer survives, so
     it could never be refreshed. ``cwd`` is retained for API compatibility
     with existing callers even though tiers 1-3 do not use it.

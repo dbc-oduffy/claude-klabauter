@@ -3,7 +3,7 @@ coordinator_core.ops.run_pre_ci_hooks — JSON-RPC "percolate.run_pre_ci_hooks"
 operation: discover and invoke registered pre-CI publish hooks for a percolate
 target, Python-only hook contract.
 
-Purpose: replaces the percolate Step 5a fence (example-doctrine-repo skills/percolate/SKILL.md
+Purpose: replaces the percolate Step 5a fence (coordinator-claude skills/percolate/SKILL.md
 § Step 5a), which iterated ``$PERCOLATE_ROOT/setup/percolate-hooks/<target>/
 pre-ci/*.sh`` invoking each via ``bash "$hook" "<dest>"``. That shape has no
 Windows-portable equivalent (assumes bash on PATH, assumes the hooks are
@@ -59,8 +59,8 @@ register_op("percolate.run_pre_ci_hooks", ...) as a side-effect. Registration
 across the remaining three surfaces (_EAGER_OP_MODULES / _OP_KEY_SCOPE /
 _registry_map.py) lands in the separate EM-serial registration pass (CC-3).
 
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B3
-Port source: example-doctrine-repo coordinator/skills/percolate/SKILL.md § Step 5a (bash fence)
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B3
+Port source: coordinator-claude coordinator/skills/percolate/SKILL.md § Step 5a (bash fence)
 
 Negative-spec (hard-won):
   - Does NOT execute ``.sh`` hooks via bash, sh, or any shell — there is no

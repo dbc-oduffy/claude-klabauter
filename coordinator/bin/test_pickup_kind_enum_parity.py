@@ -28,11 +28,11 @@ FileNotFoundError, not a genuine drift):
   - Leg 3 (SKILL.md) was retired from this repo's tree by the 2026-07-20
     plugin-surface retirement (docs/plans/2026-07-20-retire-claude-klabauter-plugin-surface.md)
     — discovery-resolved surfaces (skills, plugins, hooks) now live only in
-    coordinator-claude (example-doctrine-repo). This repo can no longer observe that leg
+    coordinator-claude (coordinator-claude). This repo can no longer observe that leg
     at a co-located path. Rather than hardcode an absolute path to a sibling
     clone (machine-dependent, breaks on any machine without that clone), the
     path is resolved the same way every other doctrine CLI in this repo
-    resolves the example-doctrine-repo root — `coordinator_registry.doe_root()`
+    resolves the coordinator-claude root — `coordinator_registry.doe_root()`
     (DOE_ROOT env -> REPO_EXAMPLE_DOCTRINE_REPO env -> machine-local repos.example_doctrine_repo).
     When unresolvable, this leg is skipped (not silently passed) via
     pytest.skip with the reason on the record — an honest "cannot observe"
@@ -67,11 +67,11 @@ def _cross_repo_memo_path() -> str:
 
 
 def _pickup_skill_path() -> str:
-    """Resolve pickup/SKILL.md — co-located rung first, example-doctrine-repo-clone rung second.
+    """Resolve pickup/SKILL.md — co-located rung first, coordinator-claude-clone rung second.
 
     Rung 1 (co-located): schemas/skills sitting beside bin/ under the same
     coordinator root — true for any layout that hasn't split skills out.
-    Rung 2 (split-repo, current claude-klabauter layout): skills/ live only in the example-doctrine-repo
+    Rung 2 (split-repo, current claude-klabauter layout): skills/ live only in the coordinator-claude
     clone post-2026-07-20 retirement; resolved via coordinator_registry's
     shared doe_root() helper (env -> env -> machine-local), never a
     hardcoded absolute path. Raises reg._DoeUnresolvable if neither rung
@@ -145,7 +145,7 @@ def _valid_kinds_from_memo_send() -> set[str]:
     """The native engine-side send gate's `_VALID_KINDS` — imported directly,
     not regexed. Successor to schema.js's `validKinds` (retired 2026-07-22
     de-node cutover); this is the same tuple `emit_memo_schema.py` imports for
-    example-doctrine-repo's derived JSON Schema projections, so a real import here is strictly
+    coordinator-claude's derived JSON Schema projections, so a real import here is strictly
     more precise than the regex-on-a-vendored-file shape this replaces.
     """
     from coordinator_core.ops.fleet.memo_send import _VALID_KINDS
@@ -164,15 +164,15 @@ def test_pickup_pinned_enum_matches_cli_valid_kinds() -> None:
     The SKILL.md leg is skipped (not silently passed) in two cases, each
     logged with its reason rather than reached by a quiet fallthrough:
 
-      - This machine has no resolvable example-doctrine-repo clone (coordinator_registry.doe_root()
+      - This machine has no resolvable coordinator-claude clone (coordinator_registry.doe_root()
         raises reg._DoeUnresolvable) — genuinely cross-repo since the
         2026-07-20 plugin surface retirement moved skills/ out of this tree.
-      - example-doctrine-repo commit 2dc344fa ("C5: collapse pickup SKILL.md to the thin
+      - coordinator-claude commit 2dc344fa ("C5: collapse pickup SKILL.md to the thin
         classification-resolved shell") deliberately removed the M3 "Pinned
         enum:" prose line — the `kind` enum is now surfaced via a
         runtime-computed judgment point (the fired decision object), not a
         static string in SKILL.md, so there is no longer a third parseable
-        leg on example-doctrine-repo's side at all. This is example-doctrine-repo's artifact and example-doctrine-repo's design
+        leg on coordinator-claude's side at all. This is coordinator-claude's artifact and coordinator-claude's design
         choice; re-adding a parity anchor there (if wanted) is a cross-repo
         ask, not a claude-klabauter-side fix — asserting against text that no longer
         exists by design would be a false requirement on a file this repo
@@ -189,7 +189,7 @@ def test_pickup_pinned_enum_matches_cli_valid_kinds() -> None:
         skill_path = _pickup_skill_path()
     except reg._DoeUnresolvable as e:
         pytest.skip(
-            f"pickup/SKILL.md leg unobservable — example-doctrine-repo clone not resolvable on "
+            f"pickup/SKILL.md leg unobservable — coordinator-claude clone not resolvable on "
             f"this machine ({e}); CLI/engine two-way parity still enforced "
             "separately below."
         )
@@ -199,7 +199,7 @@ def test_pickup_pinned_enum_matches_cli_valid_kinds() -> None:
         pytest.skip(
             f"pickup/SKILL.md ({skill_path}) no longer carries a 'Pinned "
             "enum:' line — collapsed to a classification-resolved shell "
-            "(example-doctrine-repo commit 2dc344fa); the kind enum is now a runtime-computed "
+            "(coordinator-claude commit 2dc344fa); the kind enum is now a runtime-computed "
             "judgment point, not static prose. Nothing to parse on this leg "
             "by design; CLI/engine two-way parity still enforced separately "
             "below."
@@ -256,7 +256,7 @@ def test_cli_matches_engine_valid_kinds() -> None:
     coordinator_core/ops/fleet/memo_send.py is the newer native engine op
     strang-03/DR-210 is migrating the send verb into. Until that migration
     retires one of the two declarations, this is a real same-repo drift risk
-    and is asserted unconditionally (no example-doctrine-repo-clone dependency, never skipped).
+    and is asserted unconditionally (no coordinator-claude-clone dependency, never skipped).
     """
     cli_kinds = _parse_valid_kinds_from_cli(_cross_repo_memo_path())
     engine_kinds = _valid_kinds_from_memo_send()

@@ -1,7 +1,7 @@
 """Characterization + parity tests for coordinator_core.ops.backfill_initiative_fk.
 
-Port of: backfill-initiative-fk.sh (example-doctrine-repo 432e3285, 2026-07-22)
-Mirrors the oracle's own six test cases (test-backfill-initiative-fk.sh, example-doctrine-repo 432e3285,
+Port of: backfill-initiative-fk.sh (coordinator-claude 432e3285, 2026-07-22)
+Mirrors the oracle's own six test cases (test-backfill-initiative-fk.sh, coordinator-claude 432e3285,
 2026-07-22) plus unit coverage of the lock primitives and platform-portability additions.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ def _make_fake_coordinator_initiative(bin_dir: Path, known_ids: set) -> Path:
     closely enough to exercise this module's subprocess call + exit-code handling.
 
     Python, not bash: the real `coordinator-initiative` was ported to python3
-    (example-doctrine-repo commit 6fb5fb37) and this module invokes it via `sys.executable`
+    (coordinator-claude commit 6fb5fb37) and this module invokes it via `sys.executable`
     directly, so the fixture must be python source for that invocation to succeed."""
     script = bin_dir / "coordinator-initiative"
     known_ids_repr = repr(sorted(known_ids))

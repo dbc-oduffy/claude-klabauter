@@ -1,7 +1,7 @@
 """
 coordinator_core.plugin_health.tests.test_scan
 
-Pytest port of example-doctrine-repo coordinator/bin/scan-addon-health.sh (bash oracle,
+Pytest port of coordinator-claude coordinator/bin/scan-addon-health.sh (bash oracle,
 retired on cutover — see git log). Exercises the reader/consumer of the
 plugin_health.sentinel schema: verdict/staleness lines (pass 1),
 absent-sentinel detection (pass 2), missing SessionStart hook-script probe
@@ -18,7 +18,7 @@ plugins_root path string (e.g. a "consumer" dir name sorting before "plugins")
 (grouped, not merged) shape.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g2/T3b
-Port of: scan-addon-health.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: scan-addon-health.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

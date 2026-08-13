@@ -1,11 +1,11 @@
 """Characterization tests for coordinator_core.ops.setup_fnm_pin.
 
-Ported oracle: coordinator/tests/test_fnm_pin.bats (example-doctrine-repo) — every case
+Ported oracle: coordinator/tests/test_fnm_pin.bats (coordinator-claude) — every case
 in that plain-bash harness has a corresponding case here, run against the
 Python port instead of the bash original, plus the same env-var injection
 seams (COORDINATOR_FNM_CMD / COORDINATOR_FNM_ABSENT) used by the bash test.
 
-Port of: setup-fnm-pin.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
+Port of: setup-fnm-pin.sh (coordinator-claude 6fb5fb37, 2026-07-22).
 Spec backlink: docs/plans/2026-06-23-setup-time-substrate-completeness.md § C1d (AC6)
 """
 from __future__ import annotations

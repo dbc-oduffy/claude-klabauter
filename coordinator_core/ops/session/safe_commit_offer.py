@@ -19,7 +19,7 @@ are simply gone, is data loss waiting on a machine failure. So the stop-event
 TRIGGER reliability matters as much as the computation — see
 `docs/wiki/scoped-safety-commits.md` § 3b and the SessionEnd hook script this
 module's CLI is designed to be called from
-(`coordinator/hooks/scripts/sessionend-auto-commit.py`, example-doctrine-repo side).
+(`coordinator/hooks/scripts/sessionend-auto-commit.py`, coordinator-claude side).
 
 Composition, not new computation — same two primitives as before:
   - `coordinator_core.session.scope.compute_scope` — session-vs-session
@@ -123,7 +123,7 @@ explicit PM ruling — this module does not attempt conflict resolution for
 two sessions that both legitimately touched one file; it only prevents ONE
 session's unattended auto-commit from sweeping a peer's UNRELATED work.
 
-Spec backlink: example-doctrine-repo state/sizings/2026-07-31-safe-commit-offer-at-
+Spec backlink: coordinator-claude state/sizings/2026-07-31-safe-commit-offer-at-
 session-stop-events.yaml
 """
 
@@ -1118,7 +1118,7 @@ def _log_failed_groups_diagnostic(
 ) -> None:
     """Best-effort write to the SAME
     ``coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log`` file
-    the SessionEnd hook (`example-doctrine-repo/coordinator/hooks/scripts/
+    the SessionEnd hook (`coordinator-claude/coordinator/hooks/scripts/
     sessionend-auto-commit.py._log_diagnostic`) appends to, naming WHICH
     groups failed and why -- not merely that something did. Never raises; a
     diagnostics-write failure must not break the CLI's own exit path.

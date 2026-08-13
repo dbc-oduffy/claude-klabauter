@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.fan_out_integrator — ported from
-coordinator/bin/fan-out-integrator.sh (example-doctrine-repo, 469 lines, DOE-PORT clean-slate
-migration, variant #1 — direct-import trampoline, no registered op; example-doctrine-repo keeps the
+coordinator/bin/fan-out-integrator.sh (coordinator-claude, 469 lines, DOE-PORT clean-slate
+migration, variant #1 — direct-import trampoline, no registered op; coordinator-claude keeps the
 `.sh` filename as a polyglot trampoline over this module on cutover — nothing shells
 out to this basename from another script, so no caller repoint was needed).
 
@@ -33,13 +33,13 @@ module's `main()` never emits anything outside the three codes below):
     2 — invocation error (usage, environment — including this module's own
         PLUGIN_ROOT/snippet-file resolution failure, which folds into the oracle's
         existing "environment" exit-2 bucket rather than inventing a new code,
-        since it is a purely local/deterministic example-doctrine-repo-side resolution, not a
+        since it is a purely local/deterministic coordinator-claude-side resolution, not a
         claude-klabauter-engine transport failure; see the trampoline's own exit-3 contract
         for the transport-failure case, per docs/wiki addendum § 3b)
 
-PLUGIN_ROOT resolution: this module needs to locate two example-doctrine-repo-side snippet files
+PLUGIN_ROOT resolution: this module needs to locate two coordinator-claude-side snippet files
 (snippets/peer-scope-block.md, snippets/text-only-recovery-preamble.md) that live
-in the example-doctrine-repo repo, not in claude-klabauter. `CLAUDE_PLUGIN_ROOT` env var is rung 1 and
+in the coordinator-claude repo, not in claude-klabauter. `CLAUDE_PLUGIN_ROOT` env var is rung 1 and
 is ALWAYS set by the trampoline before it calls this module's `main()` (the
 trampoline trivially knows its own on-disk location, so this is a zero-failure
 path in the normal call shape). The remaining rungs delegate to the shared
@@ -48,7 +48,7 @@ path in the normal call shape). The remaining rungs delegate to the shared
 `coordinator_core.ops.sync_plugin_wiki._resolve_plugin_root` consumes the same
 shared resolver rather than a second independent rung ladder) so this module
 stays independently callable/testable outside the trampoline (e.g. from pytest,
-or a future non-example-doctrine-repo-trampoline caller).
+or a future non-coordinator-claude-trampoline caller).
 
 Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-port):
     - `slice_id` newline/tab containment check (mirrors bash oracle lines 184-189,
@@ -76,7 +76,7 @@ internal implementation detail (an invisible plumbing subprocess), not any
 user-visible behavior; the oracle never surfaced "python3 required" to a user
 whose environment already has this module's own Python interpreter running it.
 
-Port source: coordinator/bin/fan-out-integrator.sh (example-doctrine-repo, 469 lines,
+Port source: coordinator/bin/fan-out-integrator.sh (coordinator-claude, 469 lines,
 retained as a polyglot trampoline over this module on cutover).
 """
 from __future__ import annotations

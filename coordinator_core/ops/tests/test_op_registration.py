@@ -42,7 +42,7 @@ Coverage:
       scope-"none" wire path end-to-end for this op the same way (f) does
       for cartography.tree.
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
                 docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C5
                 docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md § C2
 """

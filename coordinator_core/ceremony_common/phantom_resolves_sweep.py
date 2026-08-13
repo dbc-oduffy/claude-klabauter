@@ -19,7 +19,7 @@ for; see `test_phantom_resolves_id_sweep.py`'s per-package provider
 registry for the part of this guard that IS package-specific).
 
 Spec backlink: cross-repo/inbox/2026-07-27-… "Generalize seam guards
-fleet-wide" dispatch (example-doctrine-repo, 2026-07-27); prior-instance spec backlink
+fleet-wide" dispatch (coordinator-claude, 2026-07-27); prior-instance spec backlink
 `docs/plans/2026-07-26-workstream-complete-computed-frontage.md`.
 """
 
@@ -88,7 +88,7 @@ def assert_no_phantom_resolves_ids(
 
 # ---------------------------------------------------------------------------
 # Package discovery -- the same `brief(`-scan technique
-# example-doctrine-repo's `test_assembler_wiring_parity.py` uses against a resolved
+# coordinator-claude's `test_assembler_wiring_parity.py` uses against a resolved
 # sibling checkout, run here directly against THIS repo's own
 # `coordinator_core/` tree (no cross-repo resolution needed -- we ARE the
 # claude-klabauter side).
@@ -103,7 +103,7 @@ def discover_brief_defining_packages(coordinator_core: Path = _COORDINATOR_CORE_
     """Map package name -> the file under it that defines `brief(`, for
     every immediate subpackage of `coordinator_core/`. First hit wins per
     package (a package defining `brief(` in two files is a separate defect
-    this discovery isn't scoped to catch) -- mirrors example-doctrine-repo's
+    this discovery isn't scoped to catch) -- mirrors coordinator-claude's
     `test_assembler_wiring_parity._brief_defining_packages` exactly, since
     both discover the same underlying fact from the same source tree."""
     found: dict[str, Path] = {}

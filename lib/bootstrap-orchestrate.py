@@ -1,11 +1,11 @@
 """bootstrap-orchestrate.py — multi-repo bootstrap orchestrator over working-repos.yaml.
 
-Thin example-doctrine-repo-side (contract) trampoline over claude-klabauter's
+Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.bootstrap_orchestrate. Discovers repos from
 working-repos.yaml, drives EXPRESS/CUSTOM selection, delegates per-repo
 bootstrap to bootstrap-repo.py, and stamps install currency. Seeds
 COORDINATOR_ROOT so the op's sibling-script resolver
-(lib/coordinator-currency.sh) finds this example-doctrine-repo clone.
+(lib/coordinator-currency.sh) finds this coordinator-claude clone.
 """
 # coordinator/lib/bootstrap-orchestrate.py — CLI trampoline over claude-klabauter
 # coordinator_core.ops.bootstrap_orchestrate.
@@ -14,11 +14,11 @@ COORDINATOR_ROOT so the op's sibling-script resolver
 # discovery, EXPRESS/CUSTOM selection, per-repo bootstrap-repo.py delegation,
 # currency stamping) has been fully ported to
 # coordinator_core/ops/bootstrap_orchestrate.py (claude-klabauter-resident, co-located
-# test_bootstrap_orchestrate.py). This file is now a thin example-doctrine-repo-side (contract)
-# trampoline over that claude-klabauter (engine) module, per DR-047 (example-doctrine-repo owns
+# test_bootstrap_orchestrate.py). This file is now a thin coordinator-claude-side (contract)
+# trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
 # contract/generator, claude-klabauter owns engine).
 #
-# Sibling-script resolution: the ported op needs to find one example-doctrine-repo-resident
+# Sibling-script resolution: the ported op needs to find one coordinator-claude-resident
 # sibling (`lib/coordinator-currency.sh`, NOT part of this port — see the
 # op module's own docstring "Cross-boundary currency delegation" section).
 # This trampoline computes its own coordinator root (it lives at
@@ -67,7 +67,7 @@ def _import_main():
 
     Also seeds COORDINATOR_ROOT (this trampoline's own coordinator/ tree) into
     the environment, if not already set, so the op's sibling-script resolver
-    (lib/coordinator-currency.sh) finds THIS example-doctrine-repo clone rather than falling
+    (lib/coordinator-currency.sh) finds THIS coordinator-claude clone rather than falling
     through its ~/.claude-install-layout rungs.
     """
     os.environ.setdefault("COORDINATOR_ROOT", _COORDINATOR_ROOT)

@@ -3,7 +3,7 @@ coordinator_core.ops.test_run_semgrep_scan
 
 Characterization tests for the "ci.run_semgrep_scan" op
 (coordinator_core.ops.run_semgrep_scan) — the diff-scoped semgrep wrapper replacing
-the example-doctrine-repo security-audit-worker fence.
+the coordinator-claude security-audit-worker fence.
 
 Coverage:
   (a) registered under exactly "ci.run_semgrep_scan" on import
@@ -19,7 +19,7 @@ Coverage:
   (h) idempotency (AC7): two invocations with identical params + unchanged tree
       state produce byte-identical results
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § Wave 2
+Spec backlink: pln-coordinator-ops-buildout-from--903224 § Wave 2
 """
 
 from __future__ import annotations

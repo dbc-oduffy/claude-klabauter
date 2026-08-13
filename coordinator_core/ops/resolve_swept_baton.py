@@ -56,7 +56,7 @@ Negative-spec:
     - Does NOT write, move, or delete anything — pure resolver, distinct from
       `archive_and_commit`'s write shape (see manifest note).
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
     § Wave 2 (unclustered), § Cross-plan coordination (DR-084 caution)
 Spec backlink: state/audits/2026-07-22-command-payload-inventory/op-classification.tsv
     row `resolve-swept-baton-in-archive`

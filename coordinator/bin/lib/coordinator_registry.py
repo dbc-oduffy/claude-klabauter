@@ -10,7 +10,7 @@ Exposed names (reconstruction rules per manifest._reconstruction key):
   QUEUE_TYPES         — frozenset of queue-delegate types
   REPO_ALIASES        — dict registryKey → shortname  (Python _REPO_KEY_ALIASES convention)
   CENTRAL_RECEIVER_IDS — frozenset of valid central EM receiver identity strings
-  REDIRECT_ALIASES    — frozenset of example-doctrine-repo-canonical home/mirror redirect aliases
+  REDIRECT_ALIASES    — frozenset of coordinator-claude-canonical home/mirror redirect aliases
                          (identity.redirectAliases; cross-repo-memo's former
                          code-pinned _DOE_CANONICAL_REDIRECT_ALIASES literal.
                          Cross-repo contract surface: the engine repo's
@@ -28,7 +28,7 @@ Shared identity-resolution functions (canonical, importable by all 4 CLIs):
   _same_path(a, b)                               — internal path-equality helper, importable by the CLIs that need direct comparison
 
 Shared state-root resolver (canonical, importable by all doctrine CLIs):
-  doe_root()                         — example-doctrine-repo repo root (Review: staff-eng MAJOR-4 —
+  doe_root()                         — coordinator-claude repo root (Review: staff-eng MAJOR-4 —
                                         env DOE_ROOT → env REPO_EXAMPLE_DOCTRINE_REPO FIRST, so the
                                         documented override is a real override again; DR-071
                                         reorder (2026-08-10) — THEN machine-local
@@ -44,7 +44,7 @@ Shared state-root resolver (canonical, importable by all doctrine CLIs):
                                         codename-free ladder must rank BELOW the registry per
                                         DR-071 — see doe_root()'s own docstring for the live
                                         incident this reorder closes.
-  _DoeUnresolvable                   — raised when example-doctrine-repo root is unresolvable; callers catch and WARN+skip (exit 0)
+  _DoeUnresolvable                   — raised when coordinator-claude root is unresolvable; callers catch and WARN+skip (exit 0)
 """
 from __future__ import annotations
 
@@ -71,12 +71,12 @@ from machine_local_impl_resolve import (  # noqa: E402
 #
 # Two live layouts since the 2026-07-22 executable-surface migration:
 #   1. Co-located    — schemas/ sits beside bin/ under the same coordinator root
-#                      (the pre-migration example-doctrine-repo layout, and any OSS install that
+#                      (the pre-migration coordinator-claude layout, and any OSS install that
 #                      ships both halves together).
 #   2. Split-repo    — this code lives in the engine repo while schemas/ stayed
-#                      in example-doctrine-repo, because schemas are CONTRACT and DR-047
-#                      splits contract to example-doctrine-repo and the engine to here. Resolve the
-#                      example-doctrine-repo root the same way every other doctrine CLI does.
+#                      in coordinator-claude, because schemas are CONTRACT and DR-047
+#                      splits contract to coordinator-claude and the engine to here. Resolve the
+#                      coordinator-claude root the same way every other doctrine CLI does.
 #
 # Rung 1 first so the co-located case costs nothing and needs no registration.
 # ---------------------------------------------------------------------------
@@ -157,9 +157,9 @@ def _mp_candidate_manifest_path(root: str) -> str | None:
     that exists, else None.
 
       <root>/schemas/coordinator-registry.manifest.json               (OSS: manifest flat at repo/plugin root)
-      <root>/coordinator/schemas/coordinator-registry.manifest.json   (private: example-doctrine-repo repo shape)
+      <root>/coordinator/schemas/coordinator-registry.manifest.json   (private: coordinator-claude repo shape)
 
-    Required because example-doctrine-repo's coordinator-claude publish row ships the manifest
+    Required because coordinator-claude's coordinator-claude publish row ships the manifest
     flat at plugin root, while the private tree has it under coordinator/.
     """
     for _relpath in (
@@ -232,7 +232,7 @@ def _mp_repo_root_from_plugin_root_candidate(candidate: str, *, allow_unchanged_
     CLAUDE_PLUGIN_ROOT is a *content* root (see
     resolve_coordinator_clone.py::resolve_content_root() rung 1, and its
     `.doe-root` pointer rung which returns `<repo_root>/coordinator`) — in
-    the private/dev example-doctrine-repo layout this is `<repo_root>/coordinator`, one level
+    the private/dev coordinator-claude layout this is `<repo_root>/coordinator`, one level
     below the repo root doe_root() must return (state/ hangs off the repo
     root, never off the coordinator/ subdir — see doe_root()'s own
     negative-spec). In the OSS flat layout the content root and the repo
@@ -378,13 +378,13 @@ if not os.path.exists(_MANIFEST_PATH):
     # (state/review-findings/2026-08-08-codename-free-partitioned/slice-B-doe-root.md),
     # whose own coverage note flagged this module as explicitly NOT reviewed/
     # reordered at the time. On a box where the registry correctly names the
-    # private example-doctrine-repo tree but a codename-free rung (e.g. a stale/published
+    # private coordinator-claude tree but a codename-free rung (e.g. a stale/published
     # marketplace install, or a `.doe-root` pointer inherited from an earlier
     # install) ALSO resolves to a directory carrying a manifest, the ladder
     # below used to win and this module's RECEIVER_EM_ALIASES / centralReceiverIds
     # were built from that (potentially scrubbed) manifest instead of the
     # registry-anchored private one — see
-    # cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-key.md
+    # cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-key.md
     # § 3 (`cross-repo-memo` send path resolving `repos.example_doctrine_repo`).
     #
     # Settings-home-first (DR-210 Amendment 2026-07-24: "resolves nothing
@@ -504,19 +504,19 @@ def _central_canonical_id() -> str:
     """The single canonical central-EM identity string.
 
     Derived from identity.centralReceiverIds[0] in the manifest — index 0 is
-    canonical by convention (mirrors example-doctrine-repo's frontmatter validator, which derives
+    canonical by convention (mirrors coordinator-claude's frontmatter validator, which derives
     its own canonical id the same way: centralReceiverIds[0]). All OTHER entries
     in the list remain valid receiver aliases (see CENTRAL_RECEIVER_IDS, which
     membership-tests the full set) — this helper exists only to name the ONE
     preferred value callers should emit/display, not to narrow what's accepted.
 
-    Negative-spec: do not hardcode "example-doctrine-repo-em" (or any central-em string) as
+    Negative-spec: do not hardcode "coordinator-claude-em" (or any central-em string) as
     a bare literal anywhere that needs the canonical id — derive it from here so
     a future manifest re-ordering of centralReceiverIds propagates automatically.
     """
     return _central_receiver_ids_raw[0]
 
-# REDIRECT_ALIASES: example-doctrine-repo-canonical home/mirror redirect aliases (identity.redirectAliases).
+# REDIRECT_ALIASES: coordinator-claude-canonical home/mirror redirect aliases (identity.redirectAliases).
 # Unlike repoAliases/centralReceiverIds above, this key is read via .get() with a
 # fallback default, NOT a required-key KeyError guard — the field is a 2026-07-21
 # promotion of what was previously a code-pinned literal in cross-repo-memo, and a
@@ -596,7 +596,7 @@ def repo_key_to_em_id(key: str) -> str:
 
     Special-case: repos.example_doctrine_repo → the manifest-derived canonical central
     identity (see _central_canonical_id() — identity.centralReceiverIds[0],
-    currently "example-doctrine-repo-em"; "claude-central-em" is a retired identity still
+    currently "coordinator-claude-em"; "claude-central-em" is a retired identity still
     valid as a receiver alias in CENTRAL_RECEIVER_IDS, but no longer the
     canonical return, so downstream comparisons converge on one current string).
 
@@ -644,9 +644,9 @@ def em_id_for_root(root: str | None, repo_key_paths: dict[str, str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Shared state-root resolver — example-doctrine-repo doctrine central-state writes
+# Shared state-root resolver — coordinator-claude doctrine central-state writes
 #
-# doe_root() is the canonical resolver for the example-doctrine-repo repo root, importable by all
+# doe_root() is the canonical resolver for the coordinator-claude repo root, importable by all
 # doctrine-writing CLIs. The resolution chain mirrors the _claude_klabauter_root() shape
 # in the CLIs but raises on failure rather than returning None — callers catch
 # _DoeUnresolvable and degrade gracefully (WARN + skip, exit 0).
@@ -682,7 +682,7 @@ _REPO_EXAMPLE_DOCTRINE_REPO_ENV = "REPO_EXAMPLE_DOCTRINE_REPO"
 
 
 class _DoeUnresolvable(RuntimeError):
-    """Raised when the example-doctrine-repo root cannot be resolved via env var (REPO_EXAMPLE_DOCTRINE_REPO,
+    """Raised when the coordinator-claude root cannot be resolved via env var (REPO_EXAMPLE_DOCTRINE_REPO,
     or the permanent legacy alias DOE_ROOT) or machine-local registry.
 
     Callers in the doctrine central write loop catch this and degrade gracefully
@@ -690,7 +690,7 @@ class _DoeUnresolvable(RuntimeError):
     this is the caller-layer resilience wrapper.
 
     Negative-spec: this exception is NOT raised for per-project (cwd-relative) writes —
-    only for central doctrine writes that require the example-doctrine-repo repo root.
+    only for central doctrine writes that require the coordinator-claude repo root.
 
     Spec backlink: docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md § C1
     """
@@ -712,7 +712,7 @@ def _registry_claude_home() -> str:
 
 
 def doe_root() -> str:
-    """Resolve the example-doctrine-repo repo root for doctrine central-state writes.
+    """Resolve the coordinator-claude repo root for doctrine central-state writes.
 
     Resolution chain — Review: staff-eng MAJOR-4 put the explicit env-var
     override rungs FIRST, ahead of the codename-free rungs, restoring
@@ -729,10 +729,10 @@ def doe_root() -> str:
     candidate that also happened to resolve (a stale marketplace install
     left from an earlier `coordinator:install`, or a genuinely published/
     scrubbed plugin cache) silently outranked the registry's correctly
-    registered private example-doctrine-repo tree — exactly the DR-071 violation B2
+    registered private coordinator-claude tree — exactly the DR-071 violation B2
     fixed in the ops-module twin, except that finding's own coverage note
     named this module as explicitly not reviewed/reordered at the time. See
-    cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-key.md
+    cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-key.md
     § 3 for the live incident this closes (`cross-repo-memo` send path
     resolving the scrubbed `repos.example_doctrine_repo` registry key via
     this exact ordering gap).
@@ -750,7 +750,7 @@ def doe_root() -> str:
           flip uses.
       3-4. `.doe-root` pointer (durable settings-home, then legacy
            `~/.claude/.doe-root`) — see _mp_doe_root_pointer_rung(). Already
-           returns the example-doctrine-repo REPO root directly (coordinator_read_doe_root_pointer()
+           returns the coordinator-claude REPO root directly (coordinator_read_doe_root_pointer()
            reads exactly that), no conversion needed. Only reached when rung 2
            returns nothing.
       5.  Claude Code's real marketplace-cache install location — see
@@ -791,7 +791,7 @@ def doe_root() -> str:
       genuinely published/scrubbed install.
       9.  Raises _DoeUnresolvable when no rung resolves.
 
-    Returns the example-doctrine-repo REPO root (e.g. /path/to/example-doctrine-repo). Callers append
+    Returns the coordinator-claude REPO root (e.g. /path/to/coordinator-claude). Callers append
     state/<class>/ to build the full write path:
       os.path.join(doe_root(), "state", "lessons-outbox")
       os.path.join(doe_root(), "state", "improvement-queue")
@@ -803,7 +803,7 @@ def doe_root() -> str:
     repos.example_doctrine_repo but for orthogonal axes (state-root vs. identity). Do NOT merge.
 
     Spec backlink: docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md § C1
-    Spec backlink: docs/plans/2026-08-07-published-engine-resolves-without-a-codename.md § C1D
+    Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
     """
     override = os.environ.get(_DOE_ROOT_ENV, "").strip()
     if override:
@@ -819,11 +819,11 @@ def doe_root() -> str:
     # per review finding B2 (state/review-findings/2026-08-08-codename-free-
     # partitioned/slice-B-doe-root.md), whose own coverage note named this
     # module as explicitly not reviewed/reordered at the time. On a box
-    # where the registry correctly names the private example-doctrine-repo tree but a
+    # where the registry correctly names the private coordinator-claude tree but a
     # codename-free rung ALSO resolves (e.g. a stale or genuinely published
     # marketplace install), the ladder below used to win, silently returning
     # a byte-copy install instead of the registry-anchored source tree — see
-    # cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-key.md
+    # cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-key.md
     # § 3.
     val = _registry_machine_local_get("repos.example_doctrine_repo")
     if val:

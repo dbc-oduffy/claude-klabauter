@@ -3,7 +3,7 @@ coordinator_core.ops.test_normalize_env
 
 Independent parity + unit coverage for normalize_env.py.
 
-Port of: normalize-env.sh (example-doctrine-repo ca30f76c, 2026-07-17)
+Port of: normalize-env.sh (coordinator-claude ca30f76c, 2026-07-17)
 
 Porter-brief lesson 1: a parity test that shells out to a retired/renamed
 oracle silently self-compares-or-skips. Section A therefore does NOT invoke

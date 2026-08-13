@@ -47,7 +47,7 @@ Allowlist: the page's oh-my-zsh cautionary case names ``~/.ssh/config`` and
 surface. Every allowlist entry below carries an inline reason; an unexplained
 entry is exactly how this test would quietly stop working.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C7, AC6.
 """
 

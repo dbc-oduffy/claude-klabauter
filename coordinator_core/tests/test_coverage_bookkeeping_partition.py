@@ -35,7 +35,7 @@ BOTH a bookkeeping path and any other (non-bookkeeping) path classifies as
 CODE, fail-closed — see coverage._classify_bookkeeping_shas.
 
 Spec backlink: cross-repo/inbox dispatch, "review-coverage gate: partition
-uncovered-by-bookkeeping" (example-doctrine-repo, 2026-07-26).
+uncovered-by-bookkeeping" (coordinator-claude, 2026-07-26).
 """
 
 from __future__ import annotations
@@ -248,7 +248,7 @@ def test_cross_repo_only_commit_is_covered(tmp_path: Path) -> None:
     bookkeeping, same as state/archive/tasks: filing or actioning a memo is
     ceremony bookkeeping, not code a reviewer could open. Regression for a
     real false-positive — a pure `git mv` of two actioned memos into
-    cross-repo/archive/ (example-doctrine-repo commit 17421262) was flagged UNCOVERED
+    cross-repo/archive/ (coordinator-claude commit 17421262) was flagged UNCOVERED
     solely because cross-repo/ was absent from _BOOKKEEPING_PATH_PREFIXES.
     """
     repo = _base_repo(tmp_path)

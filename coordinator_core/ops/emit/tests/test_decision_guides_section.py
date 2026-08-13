@@ -6,7 +6,7 @@ retirement) rather than spawning ``node bin/query-records.js`` — exercised ove
 ``tmp_path`` worktree fixture, not a subprocess mock, since there is no subprocess left
 to mock.
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P15
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P15
 """
 
 from __future__ import annotations

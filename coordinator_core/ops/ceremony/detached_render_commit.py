@@ -60,7 +60,7 @@ Negative-spec:
     contention is cheap, and doing so keeps `commit_own_artifact`'s own
     four-outcome contract (True/False x commit-landed/no-op) unchanged.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C5 (Artifact
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C5 (Artifact
 disposition residue)
 """
 

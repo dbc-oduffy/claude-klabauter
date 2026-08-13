@@ -18,7 +18,7 @@ inside the package regardless of the caller's cwd. Callers (e.g. the CLI
 runner, __main__.py) may pass an explicit path to redirect appends/reads
 elsewhere (tests use this to avoid mutating the shipped baseline file).
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C7.
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C7.
 """
 
 from __future__ import annotations

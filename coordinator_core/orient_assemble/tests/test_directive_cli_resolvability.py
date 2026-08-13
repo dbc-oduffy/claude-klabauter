@@ -6,7 +6,7 @@ already_satisfied`) but nothing about `cli` being *resolvable*. 13 emission
 sites across the four reader families shipped naming CLIs that do not
 exist — see
 state/subagent-share/conductor/phase-4/orient-assemble-fix-spec.md
-(example-doctrine-repo) for the full site-by-site inventory and fix table.
+(coordinator-claude) for the full site-by-site inventory and fix table.
 
 Oracle: `coordinator_core.install.substrate._derive_agent_helper_target_map`
 — the SAME derivation `_install_bin_resolvers` uses to generate real
@@ -22,7 +22,7 @@ forwarders already did (the incident this test module exists to prevent
 recurring).
 
 Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C3
-Spec backlink: state/subagent-share/conductor/phase-4/orient-assemble-fix-spec.md (example-doctrine-repo)
+Spec backlink: state/subagent-share/conductor/phase-4/orient-assemble-fix-spec.md (coordinator-claude)
 
 Negative-spec: does NOT hand-maintain a CLI allowlist, does NOT allowlist
 ceremony/skill names (`workday-start`, `update-docs`, etc.) to make a

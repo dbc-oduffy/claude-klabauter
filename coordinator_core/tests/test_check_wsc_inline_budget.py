@@ -1,13 +1,13 @@
 """Characterization tests for coordinator_core.ops.check_wsc_inline_budget.
 
 Ported from the bash oracle's four-case harness
-(Port of: test-inline-budget-check.sh, example-doctrine-repo 432e3285, 2026-07-22) plus a
+(Port of: test-inline-budget-check.sh, coordinator-claude 432e3285, 2026-07-22) plus a
 fatal-path case (SKILL.md not found) and a missing-argv case not covered by
 the bash harness (bash argv there is always well-formed via env-var
 defaulting; this module's argv contract is stricter).
 
 Spec backlink: wsc-asic task (2026-06-30)
-Port of: check-wsc-inline-budget.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-wsc-inline-budget.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 

@@ -21,7 +21,7 @@ and-returned, never silently skipped. This is what separates a latency
 harness from a latency-of-error-paths harness: a fast, stable erroring op
 would otherwise gate GREEN under a `min` statistic.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C0
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C0
 """
 
 from __future__ import annotations

@@ -19,9 +19,9 @@ does not modify files, dispatch agents, or commit.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# example-doctrine-repo repo, not here).
+# coordinator-claude repo, not here).
 #
 # Asserts the parallel-code-review gate's two structural properties:
 #   (1) STATIC (no args): the orthogonal lens domains in the skill's
@@ -42,7 +42,7 @@ does not modify files, dispatch agents, or commit.
 # Exit codes (parity-critical — both callers branch on these):
 #   0 — all checks passed.
 #   1 — one or more checks failed (diagnostic printed to stdout), OR the
-#       skill file / chunk manifest was not found, OR the example-doctrine-repo repo
+#       skill file / chunk manifest was not found, OR the coordinator-claude repo
 #       root could not be resolved cross-repo, OR a CLI usage error (unknown
 #       arg, missing --chunk-manifest value; these print to stderr).
 #   2 — claude-klabauter-link failure: CLAUDE_KLABAUTER_ROOT resolution failed, or

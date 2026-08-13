@@ -42,7 +42,7 @@ Coverage:
     (o) missing/non-list candidates raises ValueError
     (p) end-to-end dispatch_message smoke via the real registered wiring
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C12
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C12
 """
 
 from __future__ import annotations

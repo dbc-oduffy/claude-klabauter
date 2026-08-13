@@ -99,7 +99,7 @@ def test_inline_install_with_empty_content_root_stays_silent(tmp_path: Path, mon
     switch (see module docstring's 2026-07-31 inline-install carve-out)."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
-    doe_root = tmp_path / "example-doctrine-repo-clone"
+    doe_root = tmp_path / "coordinator-claude-clone"
     (doe_root / "coordinator").mkdir(parents=True)
     (config_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
     monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
@@ -146,7 +146,7 @@ def test_sentinel_records_why_an_empty_content_root_is_or_is_not_expected(
     # 2. Inline `--plugin-dir`: empty content root is the healthy shape.
     inline_dir = tmp_path / "inline" / ".claude"
     inline_dir.mkdir(parents=True)
-    doe_root = tmp_path / "inline" / "example-doctrine-repo-clone"
+    doe_root = tmp_path / "inline" / "coordinator-claude-clone"
     (doe_root / "coordinator").mkdir(parents=True)
     (inline_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
     run_self_probe(inline_dir)
@@ -181,7 +181,7 @@ def test_stale_doe_root_pointer_still_arms_kill_switch(tmp_path: Path, monkeypat
     it does not trust the pointer file's mere presence."""
     config_dir = tmp_path / ".claude"
     config_dir.mkdir()
-    destroyed_root = tmp_path / "example-doctrine-repo-clone-now-gone"
+    destroyed_root = tmp_path / "coordinator-claude-clone-now-gone"
     (config_dir / ".doe-root").write_text(f"{destroyed_root}\n", encoding="utf-8")
     # destroyed_root/coordinator is deliberately never created.
     monkeypatch.delenv(COORDINATOR_CONTENT_ROOT_ENV_KEY, raising=False)
@@ -210,7 +210,7 @@ def test_migrated_doe_root_pointer_stays_silent(tmp_path: Path, monkeypatch):
     config_dir.mkdir()
     settings_home_dir = home / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    doe_root = tmp_path / "example-doctrine-repo-clone"
+    doe_root = tmp_path / "coordinator-claude-clone"
     (doe_root / "coordinator").mkdir(parents=True)
     ml_dir = settings_home_dir / "machine-local"
     ml_dir.mkdir(parents=True)
@@ -239,7 +239,7 @@ def test_migrated_doe_root_empty_pointer_does_not_fall_through_to_legacy(
     config_dir.mkdir()
     settings_home_dir = home / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    doe_root = tmp_path / "example-doctrine-repo-clone"
+    doe_root = tmp_path / "coordinator-claude-clone"
     (doe_root / "coordinator").mkdir(parents=True)
     # Legacy rung: present and would resolve True on its own.
     (config_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")
@@ -267,7 +267,7 @@ def test_migrated_doe_root_unscoped_config_dir_not_consulted(tmp_path: Path, mon
     ambient_home = tmp_path / "unrelated-real-home"
     settings_home_dir = ambient_home / ".coordinator-claude-settings"
     ml_dir = settings_home_dir / "machine-local"
-    doe_root = tmp_path / "example-doctrine-repo-clone"
+    doe_root = tmp_path / "coordinator-claude-clone"
     (doe_root / "coordinator").mkdir(parents=True)
     ml_dir.mkdir(parents=True)
     (ml_dir / ".doe-root").write_text(f"{doe_root}\n", encoding="utf-8")

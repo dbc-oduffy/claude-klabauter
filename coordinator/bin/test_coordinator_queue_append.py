@@ -57,7 +57,7 @@ _REPO_ROOT_COORDINATOR_CORE = os.path.join(_REPO_ROOT, "coordinator_core")
 
 
 def _resolve_doe_root_for_tests() -> str:
-    """Best-effort example-doctrine-repo sibling root, for tests that override CLAUDE_HOME.
+    """Best-effort coordinator-claude sibling root, for tests that override CLAUDE_HOME.
 
     coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back to
     a machine-local `repos.example_doctrine_repo` lookup that is itself CLAUDE_HOME/
@@ -812,14 +812,14 @@ def test_central_scope_writes_to_claude_klabauter_root() -> None:
 
     Central state routes to _claude_klabauter_root() unconditionally, per
     docs/wiki/state-placement-law.md § Taxonomy "Central/global state" (governing law:
-    example-doctrine-repo coordinator/docs/wiki/state-placement-law.md:36). The
-    [example-doctrine-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md plan's
-    proposal to instead route this branch to example-doctrine-repo was never ratified: that plan is
+    coordinator-claude coordinator/docs/wiki/state-placement-law.md:36). The
+    [coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md plan's
+    proposal to instead route this branch to coordinator-claude was never ratified: that plan is
     `status: draft`, its AC1/AC2 are `pending`, and its own C3 is HELD with recorded
     disk proof the flip never took effect on the production path — see
     _output_path()'s own negative-spec docstring.
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC1 / AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
     Negative-spec: this branch does NOT route to DOE_ROOT or CLAUDE_HOME — both were
     superseded by the unconditional CLAUDE_KLABAUTER_ROOT route above.
 

@@ -1,5 +1,5 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""coordinator-workflow-scaffold.py — example-doctrine-repo-side veneer over the claude-klabauter
+"""coordinator-workflow-scaffold.py — coordinator-claude-side veneer over the claude-klabauter
 workflow.scaffold op.
 
 Builds the workflow.scaffold params object (name, description, phases,
@@ -8,7 +8,7 @@ shared cc_invoke_bare() transport (--bare/--params-file), and writes the
 returned Workflow skeleton `.script` text to --out or stdout. Does not
 implement the skeleton-stamper engine itself — thin transport veneer only.
 """
-# coordinator-workflow-scaffold.py — example-doctrine-repo-side veneer for the claude-klabauter workflow.scaffold op.
+# coordinator-workflow-scaffold.py — coordinator-claude-side veneer for the claude-klabauter workflow.scaffold op.
 #
 # Purpose: builds the workflow.scaffold params object from CLI flags, dispatches via
 # the shared cc_invoke.py transport seam (cc_invoke_bare(), the --bare/--params-file
@@ -69,7 +69,7 @@ implement the skeleton-stamper engine itself — thin transport veneer only.
 #       @register_op("workflow.scaffold") in workflow_scaffold.py; this exit code
 #       does NOT imply the op is unshipped.)
 #
-# Spec backlink: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md
+# Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d
 #
 # Negative-spec:
 #   - Does NOT write to disk itself when --out is omitted (stdout only).

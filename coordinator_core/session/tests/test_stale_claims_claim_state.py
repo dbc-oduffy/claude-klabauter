@@ -16,7 +16,7 @@ Fixture style mirrors ``test_stale_claims.py``'s ``_make_repo``/
 ``tests/test_claim_state_accessor.py``'s ``_write_claim_dir`` helper for the
 ledger side.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C5 (AC5).
 """
 from __future__ import annotations

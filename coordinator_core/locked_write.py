@@ -38,7 +38,7 @@ Public surface (pinned contract — do not change without updating consumers):
         holder_label: str = "",
     ) -> Iterator[None]: ...
 
-Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-invert-workstream.md § C1
+Spec backlink: pln-ceremony-as-pipeline-2-invert--fd1b98 § C1
                 state/handoffs/2026-08-07-percolate-performance-delta-sweep.md Part B
                 (`held_lock` — hold-for-a-scope wrapper around the same acquire/
                 release primitive `locked_rmw` uses, for callers that need to hold

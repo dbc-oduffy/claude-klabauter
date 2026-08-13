@@ -7,7 +7,7 @@ clone) and asserts against ground truth computed directly from `git rev-list`
 output in each test, rather than mirroring the bash oracle's assertions
 verbatim.
 
-Port of: review-coverage-core.test.sh (example-doctrine-repo c6d97219, 2026-07-22) — the bash
+Port of: review-coverage-core.test.sh (coordinator-claude c6d97219, 2026-07-22) — the bash
 oracle's assertions on the CLI's byte-shape (WARN/ERROR text, exit codes).
 
 Spec backlink: docs/plans/2026-06-23-chain-end-review-coverage-gate.md § C2

@@ -7,7 +7,7 @@ the shim's delegation contract in isolation, using a fake canonical-guard
 fixture so they don't depend on the real guard's detection rules (which are
 a separate port item).
 
-Port of: verify-no-powershell-flash.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: verify-no-powershell-flash.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """The ratchet gate for `state/bash-guards/known-red.json` (C8, AC8).
 
-Spec backlink: docs/plans/2026-08-07-guard-suite-back-to-a-gate.md § C8
+Spec backlink: pln-make-the-bash-guards-suite-a-g-2f81d6 § C8
 
 WHY THIS EXISTS
     Three prior passes at `coordinator_core/bash_guards/tests/` each cleared

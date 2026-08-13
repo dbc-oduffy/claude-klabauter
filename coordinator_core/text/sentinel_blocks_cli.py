@@ -3,7 +3,7 @@
 Thin CLI wrapper around sentinel_blocks (extract_block) for use in shell
 scripts.
 
-Port disposition: this module has NO example-doctrine-repo-side trampoline. The example-doctrine-repo `.js` CLI
+Port disposition: this module has NO coordinator-claude-side trampoline. The coordinator-claude `.js` CLI
 wrapper (coordinator/bin/lib/sentinel-blocks-cli.js) is invoked exclusively
 as `node <path> extract <file> <begin> <end>` (hardcoded `node`, never `bash`
 or direct-exec) — there is no dual-exec path for a sh/python polyglot

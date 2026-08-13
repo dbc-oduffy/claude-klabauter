@@ -101,7 +101,7 @@ def _fake_is_confined_by_roster_absence(effective_type: str) -> bool:
     roster check (``_is_confined_type`` -> ``is_confined_by_roster_absence``
     -> the REAL, unmocked ``resolve_roster()``) unmocked, so the allow/deny
     verdict this file pins depended on ambient process state this suite does
-    not control: whether ``resolve_roster()`` can actually resolve the example-doctrine-repo
+    not control: whether ``resolve_roster()`` can actually resolve the coordinator-claude
     root and read its roster sources from THIS process's environment.
     ``coordinator_core/conftest.py``'s autouse ``_quarantine_real_home``
     fixture repoints ``HOME``/``USERPROFILE`` at a throwaway tmp dir for
@@ -646,7 +646,7 @@ def test_ac4_reviewer_verdict_table_unchanged_by_removing_executor_from_set(monk
 # executor-framed deny-message content this section used to pin (no
 # "review-findings" pin, no findings-agent framing, no "dispatch a separate
 # executor" advice, names what it can run -- originally reported at
-# cross-repo/inbox/2026-08-02-example-doctrine-repo-em-executor-confinement-deny-
+# cross-repo/inbox/2026-08-02-coordinator-claude-em-executor-confinement-deny-
 # message-addresses-wrong-agent-class.md) can never render again through
 # this guard: there is no longer a deny envelope to read a reason off.
 # ``test_reviewer_executor_deny_message_parity.py``'s

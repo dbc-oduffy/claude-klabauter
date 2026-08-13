@@ -52,7 +52,7 @@ Explicitly OUT of scope for this module (verified, not absorbed):
     only; this module's touched-path classifier does no `--grep`
     interpolation, so there is nothing here for it to gate.
 
-Spec backlink: docs/plans/2026-07-27-review-trail-scope-guard.md § C1.
+Spec backlink: pln-review-trail-scope-guard-refus-d6e42c § C1.
 """
 
 from __future__ import annotations

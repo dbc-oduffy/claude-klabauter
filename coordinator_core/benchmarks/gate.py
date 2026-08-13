@@ -1,6 +1,6 @@
 """Gate verdict — pure function mapping (observed_statistic, target, tolerance, N) -> verdict.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C2 (AC3).
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C2 (AC3).
 
 This module is a deliberate leaf: zero I/O, no imports from record.py or any other
 benchmarks module. A verdict must be recomputable from the four scalar inputs alone,

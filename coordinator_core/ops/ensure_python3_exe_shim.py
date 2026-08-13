@@ -34,7 +34,7 @@ use Linux namespacing; CreateProcess is not involved), so the OS gate
 correctly no-ops.
 
 Direct-import adaptation: the bash oracle (coordinator/bin/install-health/
-ensure-python3-exe-shim.sh, example-doctrine-repo) bootstrapped a bare off-PATH
+ensure-python3-exe-shim.sh, coordinator-claude) bootstrapped a bare off-PATH
 interpreter, then shelled BACK into coordinator_core.pyresolve's print-bin
 CLI mode (a subprocess hop) because the caller was itself bash. This module
 IS that claude-klabauter process now, so it calls
@@ -46,7 +46,7 @@ oracle's own bootstrap interpreter (the bare off-PATH lookup), i.e. "the
 interpreter this process is already running under" in both shapes.
 
 Port source: coordinator/bin/install-health/ensure-python3-exe-shim.sh
-(example-doctrine-repo). The example-doctrine-repo .sh keeps its filename AND its bash-side security guard
+(coordinator-claude). The coordinator-claude .sh keeps its filename AND its bash-side security guard
 (coordinator-trusted-root-guard.sh, a bash-only sourced lib out of this
 port's scope) — it is now a thin veneer: bash runs the trust guard, then
 invokes this module's main() in a child interpreter, rather than the
@@ -100,7 +100,7 @@ platform rating on this row describes the classification's *subject*
 "already-classified" state this op could stomp on re-invocation, unlike
 `_install_shim()`'s file-mutating path above.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 """
 
 from __future__ import annotations

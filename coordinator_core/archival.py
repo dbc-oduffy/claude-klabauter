@@ -31,7 +31,7 @@ state/bug-backlog/2026-07-17-archival-reverse-membership-ignores-deployment-stat
 and state/review-trail/findings/2026-07-17-codereview-slicereconcile-open-dead-zone-coordinator-core-ops-handoff-reconcile-p.md
 (Finding 2).
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb
 § C0 (seam author), § C4 (full implementation).
 
 Negative-spec:
@@ -176,10 +176,10 @@ def _is_terminal_or_archived_child(path: str) -> bool:
         # fleet.archive_completed_handoffs' Check 3 (this module's
         # reverse_membership) while the child still names it as
         # predecessor/additional_predecessors/forked_from.  This is the interim
-        # forward-compatible subset of the fuller example-doctrine-repo lvv-04/C3 archive-safe
+        # forward-compatible subset of the fuller coordinator-claude lvv-04/C3 archive-safe
         # predicate (lifecycle-vocab roadmap) — just the in_flight hard exclusion,
         # mirroring archive_handoffs.py's Check A2 negative-spec: DR-084 renamed
-        # status consumed->claimed (dual-tolerant read window); if example-doctrine-repo lvv-04/C3
+        # status consumed->claimed (dual-tolerant read window); if coordinator-claude lvv-04/C3
         # introduces additional non-terminal deployment_state values that can
         # co-occur with status:consumed/claimed, this exclusion must be extended
         # in lockstep — or inverted to a terminal-state allowlist — or this

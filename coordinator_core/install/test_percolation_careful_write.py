@@ -2,7 +2,7 @@
 (``coordinator_core.install.substrate._percolation_and_path_steps`` +
 ``_install_one``'s ``write_strategy`` mechanism selector).
 
-Spec backlink: docs/plans/2026-08-01-percolate-root-rung-ordering.md, Tasks
+Spec backlink: pln-percolate-root-rung-ordering-c-b2f52c, Tasks
 § C6, Acceptance Criteria AC6/AC6a/AC7/AC19/AC20/AC21.
 
 New sibling module (not appended to test_install_one_overwrite_policy.py or

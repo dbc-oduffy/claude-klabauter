@@ -14,7 +14,7 @@ pass is accounted for (see negative-spec below) — this module factors
 the shared pair so neither assembler hand-maintains its own copy.
 
 Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C5, AC9
-Spec backlink: docs/plans/2026-08-08-a-best-effort-directive-cannot-fail-a-ce.md, chunk C4, AC8/AC9
+Spec backlink: pln-a-best-effort-directive-cannot-be9948, chunk C4, AC8/AC9
 
 Negative-spec:
     - Does NOT know about `hard_block` — that key is workweek-only

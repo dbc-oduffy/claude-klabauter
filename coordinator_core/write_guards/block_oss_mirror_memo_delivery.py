@@ -4,8 +4,8 @@ Closes the direct-``Write`` leg of the OSS-mirror memo hole. Modelled closely
 on ``block_home_dir_memo_delivery.py`` — same structure, same fail-open
 discipline, same use of ``coordinator_core.ops._path_guard.contained_path``.
 
-Purpose: doctrine (example-doctrine-repo ``CLAUDE.md``) is unambiguous that
-``coordinator/`` percolates ONE-WAY, example-doctrine-repo→OSS mirror only — the OSS
+Purpose: doctrine (coordinator-claude ``CLAUDE.md``) is unambiguous that
+``coordinator/`` percolates ONE-WAY, coordinator-claude→OSS mirror only — the OSS
 ``coordinator-claude`` repo (and any sibling publish-target mirror) is a
 publish DESTINATION, never a working tree, and it must NEVER receive a
 cross-repo memo: a memo delivered there sits unactioned, invisible to every

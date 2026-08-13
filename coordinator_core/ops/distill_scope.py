@@ -2,7 +2,7 @@
 coordinator_core.ops.distill_scope — JSON-RPC "distill.scope" operation.
 
 Purpose: one call composing the artifact-distillation Phase 0 scoping walk
-(reflection §1 / cockpit §1 / central-em #3 — example-doctrine-repo PIPELINE.md steps 6-11) that a
+(reflection §1 / cockpit §1 / central-em #3 — coordinator-claude PIPELINE.md steps 6-11) that a
 `/distill` run today performs by hand-reading harvest-debt + ripe-filter + sidecar-
 sweep + a handoff-frontmatter scan + an actioned-memo enumeration + a wiki-inventory
 walk, then batching and minting a run id. This op composes the existing pure library
@@ -38,7 +38,7 @@ migrates up from the library it composes):
     PM_RULING_2026_08_06_COHORT_SPECS docstrings below), never hardcoded scan
     trees: the historical handoffs (Phase-0 resolution gate: status
     ``consumed``/``claimed`` AND ``shipped_in:`` present AND
-    ``deployment_state:`` != ``abandoned`` — example-doctrine-repo PIPELINE.md § "Phase 0
+    ``deployment_state:`` != ``abandoned`` — coordinator-claude PIPELINE.md § "Phase 0
     resolution gate (handoffs)", default-on-ambiguity SKIP) and memos
     (cross-repo/archive/*.md) cohorts are now the DEFAULT CohortSpec rows
     (compute_scope's cohort_specs=None case), reproduced byte-identically;
@@ -51,10 +51,10 @@ migrates up from the library it composes):
   - wiki inventory = wiki_dirs (ordered; first is the default NEW-file home) +
     wiki_slugs (flat filename-stem -> repo-relative-path index across every wiki_dir).
     DR-146 stem-normalization constants (DR146_STRIP_SUFFIXES / DR146_DATE_PREFIX_RE /
-    DR146_MIN_STEM_LEN / STEM_PREFIX_LEN) are ported here byte-for-byte from example-doctrine-repo's
+    DR146_MIN_STEM_LEN / STEM_PREFIX_LEN) are ported here byte-for-byte from coordinator-claude's
     ``coordinator/pipelines/artifact-distillation/distill-harvest.workflow.js`` so the
     two sites can be grep-asserted for drift (this module does not itself run the
-    fuzzy-match consolidation — that stays in example-doctrine-repo's Wave-2 synth script, which is the
+    fuzzy-match consolidation — that stays in coordinator-claude's Wave-2 synth script, which is the
     consumer of this op's emitted wiki_slugs index).
 
 Chronological batching: harvest ∪ handoffs ∪ memos cohorts (sidecars/skip are NOT
@@ -70,7 +70,7 @@ no reality-check-scout judgment, no contradiction adjudication, no PM disposal
 decision — this op stops at classification/partition/batch-table emission (plan
 § Negative spec, AC12).
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C10
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C10
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D6
 """
 
@@ -111,7 +111,7 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# DR-146 stem-normalization — ported verbatim from example-doctrine-repo's
+# DR-146 stem-normalization — ported verbatim from coordinator-claude's
 # coordinator/pipelines/artifact-distillation/distill-harvest.workflow.js
 # (DR146_STRIP_SUFFIXES / DR146_DATE_PREFIX_RE / DR146_MIN_STEM_LEN /
 # STEM_PREFIX_LEN, dr146Normalize / leadingStem). Both sites MUST carry
@@ -158,7 +158,7 @@ def slugify_stem(filename_stem: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Handoff Phase-0 resolution gate (example-doctrine-repo PIPELINE.md § "Phase 0 resolution gate
+# Handoff Phase-0 resolution gate (coordinator-claude PIPELINE.md § "Phase 0 resolution gate
 # (handoffs)") — restated here per the plan's paraphrase: status consumed|claimed
 # AND shipped_in present AND NOT deployment_state == abandoned. Default on
 # ambiguity is SKIP — a missing/unparseable field never resolves eligible.
@@ -187,7 +187,7 @@ def _handoff_eligible(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # Memo self-declared-recording filter (2026-08-06 PM ruling) — a memo "wants
 # recording" when it carries memo_triage.py's own distill_fate promote-signal
-# (``ratification``/``commitment``, example-doctrine-repo's C2 schema) in its frontmatter. A
+# (``ratification``/``commitment``, coordinator-claude's C2 schema) in its frontmatter. A
 # memo with no distill_fate field, or ``ephemeral``/unknown, is never
 # self-declared — default-on-ambiguity is exclude, matching the handoff
 # resolution gate's own default-SKIP posture. This mirrors, but does not

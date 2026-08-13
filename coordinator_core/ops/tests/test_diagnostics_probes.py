@@ -11,7 +11,7 @@ a real `coordinator_core.invoke` child) live in `coordinator/bin/tests/test_cc_i
 where the spawns are counted and declared; duplicating them here would add uncounted
 spawns to a shared machine for no extra coverage.
 
-Spec backlink: docs/plans/2026-08-07-safe-target-for-transport-failure-probes.md § C1
+Spec backlink: pln-a-safe-target-for-transport-fa-7ea067 § C1
 """
 
 from __future__ import annotations

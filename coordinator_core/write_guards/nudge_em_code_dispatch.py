@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.nudge_em_code_dispatch — advisory guard.
 
-Fan-in port of the retired example-doctrine-repo PreToolUse(Write|Edit|MultiEdit) shim
+Fan-in port of the retired coordinator-claude PreToolUse(Write|Edit|MultiEdit) shim
 `coordinator/hooks/scripts/nudge-em-code-dispatch.py`, which was itself a
 thin stdin->stdout trampoline over this same module's `op()` function
 (`coordinator_core.hooks.nudge_em_code_dispatch`). Per the porting contract

@@ -2,10 +2,10 @@
 in-process ports of check_validate_commit's Checks 9-11 (schema-version-bump,
 bin/sh polyglot shebang, machine-path-leak), which previously delegated to
 bin/*.sh via subprocess-by-filename (see the module's own docstring for the
-defect this port removes: a example-doctrine-repo-side rename silently disabled the guard).
+defect this port removes: a coordinator-claude-side rename silently disabled the guard).
 
-Oracles: Port of: check-schema-version-bump.sh (example-doctrine-repo 51851112, 2026-07-21),
-check-bin-sh-polyglot.sh (example-doctrine-repo 51851112, 2026-07-21); coordinator/bin/check-machine-path-leak.py
+Oracles: Port of: check-schema-version-bump.sh (coordinator-claude 51851112, 2026-07-21),
+check-bin-sh-polyglot.sh (coordinator-claude 51851112, 2026-07-21); coordinator/bin/check-machine-path-leak.py
 (still alive, already renamed pre-port).
 
 Each check gets three cases: fires (the tripwire condition is met), clean
@@ -710,7 +710,7 @@ class TestRegistrationQuadBaselinePruning:
 # ---------------------------------------------------------------------------
 # Check 13 -- check_staged_pathspec_divergence
 #
-# Spec: SC-DR-015 (example-doctrine-repo coordinator/docs/wiki/scoped-safety-commits.md
+# Spec: SC-DR-015 (coordinator-claude coordinator/docs/wiki/scoped-safety-commits.md
 # § SC-DR-015). Empirical basis: commit 506748a0.
 # ---------------------------------------------------------------------------
 

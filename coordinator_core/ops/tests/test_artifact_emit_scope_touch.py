@@ -19,7 +19,7 @@ the real registered handler, not a synthetic one) — `_envelope.resolve_context
 are patched only to avoid the full 21-section envelope build (and its `requires_vendor_pin`
 fixture cost), not to bypass the declaration path under test.
 
-Spec backlink: docs/plans/2026-08-05-in-process-writers-declare-their-writes.md § C4
+Spec backlink: pln-in-process-engine-writers-decl-33016a § C4
 """
 
 from __future__ import annotations

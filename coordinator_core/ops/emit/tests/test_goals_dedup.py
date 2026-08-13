@@ -9,7 +9,7 @@ text) for legacy rows with no goal_id) so parallel goals within one period all s
 while re-declaring the SAME goal (same goal_id, or same legacy-identity tuple) still
 collapses to the latest ``declared_at`` record (supersession).
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P06
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P06
 """
 
 from __future__ import annotations

@@ -86,7 +86,7 @@ to this set is never a valid fix; a real change to its membership is a plan amen
 never a local executor call, enforced by the never-grows guard in
 `test_registration_quad.py`.
 
-Spec backlink: docs/plans/2026-07-25-registration-quad-completeness-gate.md § C2, AC3,
+Spec backlink: pln-registration-quad-completeness-bf0d39 § C2, AC3,
 AC4, AC12, AC13
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md
 """

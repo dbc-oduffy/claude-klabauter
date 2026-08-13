@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.test_render_posture_overlay — behavior-parity tests for
-the naked-Python port of the example-doctrine-repo-owned bash script.
+the naked-Python port of the coordinator-claude-owned bash script.
 
-Port of: render-posture-overlay.sh (example-doctrine-repo a1a568d2, 2026-07-22).
+Port of: render-posture-overlay.sh (coordinator-claude a1a568d2, 2026-07-22).
 
 Tests assert:
   - insert path (no managed block yet) appends the block, leaving the rest

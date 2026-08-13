@@ -78,7 +78,7 @@ Failure-mode analysis (why this design, not a stricter one):
     improvement over today, not added laxness: no op that worked before now
     silently no-ops, and no failure that used to be visible becomes invisible.
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C1b
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C1b
                 docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C4
                 (2026-07-21 resilient-eager-import fix — no dedicated plan doc;
                 PM-authorized same-day break-class fix, see session record)

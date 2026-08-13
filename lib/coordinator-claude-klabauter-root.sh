@@ -5,7 +5,7 @@
 # CLAUDE_HOME→~/.claude works for the coordinator meta-repo. Exposes a
 # single public function: coordinator_claude_klabauter_root.
 #
-# Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C1 / AC1
+# Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C1 / AC1
 #
 # Resolution chain (outer), in order:
 #   1. CLAUDE_KLABAUTER_ROOT env var — if already set, return it unchanged.
@@ -16,7 +16,7 @@
 #      subprocess ladder so per-invoke resolution spawns zero bash subprocesses
 #      on Windows. No subprocess spawn (bash builtin `$(<file)` read only).
 #      Falls through to rung 2 if absent/empty.
-#      Spec backlink: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C1
+#      Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C1
 #   2. machine-local get repos.claude_klabauter — delegates to the §4c four-rung
 #      discovery ladder (explicit env override → OS-keyed search-root marker
 #      autodiscovery → path-exceptions → registry.local.toml fallback).
@@ -70,7 +70,7 @@ Coordinator_claude_klabauter_root() {
   # to write <settings-home>/machine-local/.claude-klabauter-root; absence here is a
   # normal fallback state, not an error.
   #
-  # Spec backlink: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C1
+  # Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C1
   #
   # Negative-spec: does NOT spawn a subprocess (no `cat`, no external command) —
   # uses the bash builtin `$(<file)` construct so this rung is a plain read.

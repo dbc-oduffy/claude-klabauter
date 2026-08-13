@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.plan_status_transition — plan-lifecycle status stamp (stamp-implemented).
 
-Purpose: native Python port of example-doctrine-repo coordinator/bin/plan-status-transition.js —
+Purpose: native Python port of coordinator-claude coordinator/bin/plan-status-transition.js —
 the authorized writer of a plan's ``status:`` frontmatter field when a plan finishes
 execution. Deliberately thin, single-verb CLI (mirrors the JS oracle's own framing:
 a plan's lifecycle has exactly one mutating transition today, not the multi-verb
@@ -54,7 +54,7 @@ reachable from any sweep/cascade/ceremony tail, and is not present in the
 node oracle" below.
 
 Divergence from the node oracle (2026-08-06, C2): ``plan-status-transition.js``
-no longer exists on disk in example-doctrine-repo (see cross-repo/archive/2026-07-22-
+no longer exists on disk in coordinator-claude (see cross-repo/archive/2026-07-22-
 Claude-klabauter-em-plan-status-transition-wired-node-spawn-gone.md -- it was
 declared deletable once this module's ``stamp-implemented`` had zero
 remaining claude-klabauter callers routed through it). There is therefore no live
@@ -83,11 +83,11 @@ Exit codes:
 Byte-parity with the node oracle (`coordinator/bin/plan-status-transition.js`) held through
 2 -- superseded by the docs/plans/2026-08-04-terminal-state-propagation-join-keys.md § C6
 Addendum (Q4, PM-ratified 2026-08-04): hanging a cascade off this CLI's `main()` retires
-that claim deliberately -- this is now the true single writer both example-doctrine-repo's polyglot
+that claim deliberately -- this is now the true single writer both coordinator-claude's polyglot
 trampoline and claude-klabauter's own ceremony callers meet at, so it owns the third outcome above.
 
-Port source: coordinator/bin/plan-status-transition.js (example-doctrine-repo)
-Parity oracle: example-doctrine-repo coordinator/bin/plan-status-transition.js (node, hand-run
+Port source: coordinator/bin/plan-status-transition.js (coordinator-claude)
+Parity oracle: coordinator-claude coordinator/bin/plan-status-transition.js (node, hand-run
     golden-oracle diff during port -- not the coordinator/bin/plan-status-transition.test.js
     file, which was not re-run by this port).
 
@@ -98,14 +98,14 @@ Negative-spec:
       byte-identical rebuild behavior with the node oracle's own splitFrontmatter/
       readFmField/replaceFmField (bin/lib/schema.js), not a re-derivation.
     - No @register_op / no registry wiring -- this is a plain module with a
-      main(argv) CLI entry point, called by the example-doctrine-repo-side polyglot trampoline via
+      main(argv) CLI entry point, called by the coordinator-claude-side polyglot trampoline via
       direct in-process import (template-variant #1: safe-leaf early-win port),
-      NOT a JSON-RPC op. See docs/wiki (example-doctrine-repo) port template for the
+      NOT a JSON-RPC op. See docs/wiki (coordinator-claude) port template for the
       direct-import-vs-registered-op discriminator.
     - RETIRED (2026-08-04, C6 Addendum Q4, PM-ratified): "no locking, single-writer,
       not a concurrent-mutation hot path" no longer holds now that a successful
       non-no-op flip fires the terminal-state cascade (deliverable.cascade_terminal)
-      off this module's own main() -- both example-doctrine-repo's polyglot trampoline and claude-klabauter's
+      off this module's own main() -- both coordinator-claude's polyglot trampoline and claude-klabauter's
       ceremony callers meet here, so the plan's own flip write now routes through
       coordinator_core.locked_write.locked_rmw exactly like every other lifecycle
       frontmatter mutator in this repo (handoff_transition.py's _claim/_unclaim/_ship,
@@ -253,7 +253,7 @@ def _strip_unquoted_trailing_comment(raw: Optional[str]) -> Optional[str]:
 
     Negative-spec: does not STRIP a comment trailing a *closing* quote (e.g.
     ``"draft"  # note``) -- full quote-tracking (mirroring
-    ``schema.js:stripInlineComment`` in example-doctrine-repo) is out of scope for this
+    ``schema.js:stripInlineComment`` in coordinator-claude) is out of scope for this
     bounded, module-local fix. Left untouched here (returned verbatim, comment
     included), that shape is detected and fail-louded with a clear diagnostic
     by the caller (``_stamp_implemented``) rather than surfaced as a garbled

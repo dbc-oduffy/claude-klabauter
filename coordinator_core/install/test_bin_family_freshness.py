@@ -2,7 +2,7 @@
 every STATIC code-family artifact in `bin_dst` is byte-identical to its
 source — a whole-family invariant, not a per-file census.
 
-Spec backlink: docs/plans/2026-07-25-install-surface-freshness-classification.md
+Spec backlink: pln-install-surface-freshness-exte-f702c8
 § C10 / AC15. `_static_bin_family_names()` (substrate.py:1369) is the set
 already consumed by `_sweep_orphaned_agent_helpers`'s completeness check;
 this test iterates that SAME set post-install so coverage cannot silently

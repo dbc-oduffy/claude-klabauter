@@ -6,7 +6,7 @@ coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist (fail-closed,
 no escape hatch, correctly so) — it cannot run `git show` / `git diff` / `git
 log` itself. Every non-weekly review-dispatch gate therefore needs the diff
 frozen to a file BEFORE dispatch, with the reviewer pointed at the path. Five
-Example-doctrine-repo skill surfaces landed this as a hand-written `git diff > file`
+Coordinator-claude skill surfaces landed this as a hand-written `git diff > file`
 fenced shell block — a command payload the EM reads out of a markdown fence
 and retypes into a shell (unlintable, untestable, invisible to the coverage
 gate, because a fence is not a file — PM ruling, 2026-07-22). This CLI is the
@@ -56,7 +56,7 @@ never an open-coded record write). Record fields: ``sha_range`` = ``--range``,
 Emission is unconditional BY DESIGN, per that plan's discharge test: a
 mechanism that only fires when a caller remembers a flag has discharged
 nothing, and the callers that would have to remember are a sibling repo's
-prose fences (example-doctrine-repo's mise ``PIPELINE.md``, ``review-wave.mjs``) — which
+prose fences (coordinator-claude's mise ``PIPELINE.md``, ``review-wave.mjs``) — which
 relocates the obligation instead of discharging it.
 
 ``pending`` is the open state — no new record field exists for it, and no
@@ -67,7 +67,7 @@ STDOUT stays exactly one line by default (the ``.diff`` path), record or no
 record. ``parallel-review-orthogonality-guard.py``'s ``snapshot`` subcommand
 (``_cmd_snapshot``) consumes this CLI's stdout as ``proc.stdout.strip()`` — a
 whole-stdout slurp treated as one path, from which it derives the
-``.head.sha`` sibling by suffix substitution; example-doctrine-repo's fences slurp the
+``.head.sha`` sibling by suffix substitution; coordinator-claude's fences slurp the
 same way via ``$(...)`` command substitution. A second unconditional stdout
 line would silently corrupt those derived paths while still exiting 0. So
 what is opt-in is the PRINTING, never the writing: ``--print-trail-record``
@@ -135,7 +135,7 @@ Exit codes (the full matrix — freeze outcome x record outcome x flags):
         not start failing merely because record emission became automatic.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-review-diff-freeze-op-wanted.md
-Prior pattern: coordinator/skills/parallel-code-review/SKILL.md (example-doctrine-repo) — the
+Prior pattern: coordinator/skills/parallel-code-review/SKILL.md (coordinator-claude) — the
 existing frozen-diff + head.sha shape this CLI generalizes to the other five
 non-weekly review-dispatch gates.
 

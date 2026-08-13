@@ -17,7 +17,7 @@ collision`'s implementation -- deliberately, per this chunk's own dispatch
 brief: the sibling defect this workstream descends from shipped green the
 first time precisely because a fixture was written to match its reader.
 
-Spec backlink: `docs/plans/2026-08-05-duplicate-baton-deliverable-id-warn.md`,
+Spec backlink: `pln-warn-when-a-handoff-is-authore-b66a4e`,
 chunk C1 (`coordinator_core/baton_assemble/__init__.py`'s `resolve_lineage`
 and its `_scan_deliverable_collision` helper).
 """
@@ -689,7 +689,7 @@ class TestRoadmapBatonExclusion:
     roadmap-baton` candidate carrying the same `deliverable_id` is the
     DESIGNED plan -> predecessor -> mint carry (`roadmap-planning/SKILL.md`
     § D1), not a duplicate -- `_scan_deliverable_collision` must exclude it
-    regardless of `deployment_state`, per example-doctrine-repo
+    regardless of `deployment_state`, per coordinator-claude
     `coordinator/docs/wiki/coordinator-tripwires.md:1454`. Paired with a
     non-baton control to guard against an over-broad exclusion that would
     also swallow the genuine-detection case."""

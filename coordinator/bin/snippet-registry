@@ -26,7 +26,7 @@ Exit codes:
   2  unknown snippet name (list-consumers only)
   3  schema_version mismatch or absent
 
-Spec backlink: example-doctrine-repo scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
+Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
 DR backlink:   docs/decisions/2026-06-15-snippet-registry-shape.md
 Port of: coordinator/bin/snippet-registry (bash CLI, retired on cutover; see git log)
 """
@@ -57,7 +57,7 @@ from machine_local_resolve import resolve_machine_local_bin  # noqa: E402
 def _resolve_plugin_root() -> Path:
     """Resolve the coordinator root consumer relative paths (e.g. "agents/...")
     resolve against — CLAUDE_PLUGIN_ROOT override always wins; otherwise the
-    parent of the resolved snippets/ data dir (co-located or example-doctrine-repo-resident per
+    parent of the resolved snippets/ data dir (co-located or coordinator-claude-resident per
     `coordinator_data_root.data_root()`), since that parent IS the coordinator
     root under either layout.
     """

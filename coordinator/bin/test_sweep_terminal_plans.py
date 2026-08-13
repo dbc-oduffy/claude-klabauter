@@ -1,6 +1,6 @@
 """test_sweep_terminal_plans.py — self-contained test suite for sweep-terminal-plans.py.
 
-Port of: coordinator/hooks/scripts/tests/test-sweep-terminal-plans.sh (example-doctrine-repo e34f2484,
+Port of: coordinator/hooks/scripts/tests/test-sweep-terminal-plans.sh (coordinator-claude e34f2484,
 2026-07-22) — P9/P10 cases only (the deleted native-path leg); P1-P8 continue to exercise
 cs_sweep_terminal_plans, which is still live bash and out of scope here. Retargets the
 two-call dry/act dispatch shape onto the Python trampoline: route() (not route_mutation())

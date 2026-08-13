@@ -1,14 +1,14 @@
 # coordinator → conversion-census row-shape contract (DRAFT)
 
-> **What this is.** The row-shape contract for example-doctrine-repo's **conversion census** — the
+> **What this is.** The row-shape contract for coordinator-claude's **conversion census** — the
 > per-step classification record produced when converting a skill into a computed skill. It
 > defines the fields a conforming census row carries (step identity, classification, and —
 > when the step is `MIXED` — the forced mechanical/judgment split) so that claude-klabauter's
 > compute-layer scaffolder (`coordinator_core/ops/compute_layer_scaffold/`) can read a
 > conforming census and know what to generate versus stub, **without further co-design on the
-> claude-klabauter side**. Example-doctrine-repo *classifies and produces rows*; claude-klabauter *reads rows and scaffolds*.
+> claude-klabauter side**. Coordinator-claude *classifies and produces rows*; claude-klabauter *reads rows and scaffolds*.
 >
-> **Who consumes this.** A context-less example-doctrine-repo EM building the census procedure/tooling,
+> **Who consumes this.** A context-less coordinator-claude EM building the census procedure/tooling,
 > and claude-klabauter's own compute-layer scaffolder implementation. Everything needed to emit a
 > conforming row is in this file: the field table, the `classification` enum, the `MIXED`
 > split rule, and the worked example. The machine-checkable shape is
@@ -20,32 +20,32 @@
 > `MIXED`, nor how a census file is assembled, stored, or delivered to claude-klabauter. See § "Out of
 > scope — not our surface".
 >
-> **Status: DRAFT — pending example-doctrine-repo's read of the fields.** This has NOT gone through the
+> **Status: DRAFT — pending coordinator-claude's read of the fields.** This has NOT gone through the
 > co-design round-trip the FROZEN exemplars in this directory have. It ships now so
-> example-doctrine-repo can build against a concrete shape rather than waiting on a second round-trip;
+> coordinator-claude can build against a concrete shape rather than waiting on a second round-trip;
 > the counter-proposal is that the scaffolder's own output contract is already pinned by the
 > decision-object shape, and this row shape is the one genuinely open surface. **This moves to
-> FROZEN once example-doctrine-repo confirms the field set and `MIXED`-split rule against their actual
+> FROZEN once coordinator-claude confirms the field set and `MIXED`-split rule against their actual
 > classification procedure** (a cross-repo memo reply is the expected confirmation mechanism,
 > mirroring `commit-trailer-producer-contract.md`'s freeze-gate pattern). Until then, treat
-> every field here as negotiable on example-doctrine-repo's say-so, not claude-klabauter's.
+> every field here as negotiable on coordinator-claude's say-so, not claude-klabauter's.
 >
 > **Changelog:**
 > - **2026-08-13 (initial authoring, DRAFT):** authored as the deliverable discharging
 >   claude-klabauter's counter-proposal reply to
->   `cross-repo/inbox/2026-08-13-example-doctrine-repo-em-computed-conversion-vehicle.md`. Source:
+>   `cross-repo/inbox/2026-08-13-coordinator-claude-em-computed-conversion-vehicle.md`. Source:
 >   `docs/plans/2026-08-13-compute-layer-scaffolder.md`, chunk C3.
 >
 > **Spec backlinks.**
 > - Plan (source of truth): `docs/plans/2026-08-13-compute-layer-scaffolder.md`
-> - Source memo (example-doctrine-repo's proposal): `cross-repo/inbox/2026-08-13-example-doctrine-repo-em-computed-conversion-vehicle.md`
+> - Source memo (coordinator-claude's proposal): `cross-repo/inbox/2026-08-13-coordinator-claude-em-computed-conversion-vehicle.md`
 > - Machine-checkable shape: `coordinator_core/contract/conversion-census.schema.json`
 
 ---
 
 ## 0. Contract summary (read this first)
 
-Example-doctrine-repo's conversion procedure classifies each step of converting a skill into a computed
+Coordinator-claude's conversion procedure classifies each step of converting a skill into a computed
 skill. A conforming census is a list of rows; each row carries, per step: the step's identity
 (`step_id`), its `classification` (`MECHANICAL` | `JUDGMENT` | `MIXED`), and — only when
 `MIXED` — a forced split into `mechanical_part` and `judgment_part`.
@@ -53,10 +53,10 @@ skill. A conforming census is a list of rows; each row carries, per step: the st
 A scaffolder reading a conforming census can decide, per step: generate it in full
 (`MECHANICAL`), stub it for the author (`JUDGMENT`), or generate the mechanical fraction and
 stub the judgment fraction (`MIXED`). This contract fixes that read contract; it says nothing
-about how example-doctrine-repo arrives at a classification.
+about how coordinator-claude arrives at a classification.
 
 **Two roles:**
-- **example-doctrine-repo** — runs the conversion procedure, classifies each step, produces census rows.
+- **coordinator-claude** — runs the conversion procedure, classifies each step, produces census rows.
   Owns the procedure and its tooling.
 - **claude-klabauter** — reads a conforming census; the compute-layer scaffolder consumes rows
   to decide generate-vs-stub per step. Owns this row-shape contract and the scaffolder that
@@ -103,7 +103,7 @@ skill under conversion.
 ### 2.2 `MIXED` is a forced split, not an optional detail
 
 When `classification` is `MIXED`, the row MUST carry both `mechanical_part` and
-`judgment_part` — this is not an elaboration example-doctrine-repo may choose to omit. The split exists
+`judgment_part` — this is not an elaboration coordinator-claude may choose to omit. The split exists
 so the scaffolder has an unambiguous generate-vs-stub boundary within one step: it generates
 `mechanical_part`'s content and stubs `judgment_part`'s content, rather than treating the
 whole step as one opaque unit.
@@ -119,7 +119,7 @@ and their presence would signal a split that isn't there.
 **A `MIXED` row without both split fields is not a valid row.** This contract has no
 "omit-when-unsure" posture for the split fields the way the commit-trailer contract does for
 optional keys (§ 3 of that contract) — `mechanical_part`/`judgment_part` are conditionally
-**required**, not conditionally omitted. If example-doctrine-repo's procedure cannot yet name both halves
+**required**, not conditionally omitted. If coordinator-claude's procedure cannot yet name both halves
 of a `MIXED` step, the step is not yet ready to be classified `MIXED`.
 
 ---
@@ -157,13 +157,13 @@ shape (`mechanical_part`) and stubs the handler bodies (`judgment_part`).
 ## 5. Out of scope — not our surface
 
 To keep the producer/consumer boundary unambiguous, the following are **explicitly NOT part
-of this contract** and are **example-doctrine-repo's own decisions**:
+of this contract** and are **coordinator-claude's own decisions**:
 
 - **The conversion procedure itself** — what counts as a "step," how a step is judged
   `MECHANICAL` vs `JUDGMENT` vs `MIXED`, and any rubric or heuristic behind that judgment.
-  example-doctrine-repo's own design surface.
+  coordinator-claude's own design surface.
 - **The tooling that produces census rows** — how a census file is assembled, generated,
-  reviewed, or revised. Example-doctrine-repo's own build.
+  reviewed, or revised. Coordinator-claude's own build.
 - **Census file delivery/storage** — the format the census is packaged in, its filename, its
   location, or how it reaches claude-klabauter. This contract fixes the shape of one row; it does not
   fix a file format or a transport.
@@ -178,19 +178,19 @@ of this contract** and are **example-doctrine-repo's own decisions**:
 ## 6. Path to FROZEN
 
 This contract ships as **DRAFT**, not FROZEN, unlike the other producer contracts in this
-directory. It moves to **FROZEN** once example-doctrine-repo confirms, via cross-repo memo reply, that:
+directory. It moves to **FROZEN** once coordinator-claude confirms, via cross-repo memo reply, that:
 
 1. The field set (`step_id`, `classification`, `mechanical_part`, `judgment_part`, `notes`)
    matches what their classification procedure can actually produce.
 2. The `MIXED`-forced-split rule (§ 2.2, § 3) is workable against their procedure — i.e. their
    tooling can always name both halves of a step it classifies `MIXED`.
 
-Until that confirmation lands, this file and its schema are subject to change on example-doctrine-repo's
+Until that confirmation lands, this file and its schema are subject to change on coordinator-claude's
 say-so without triggering the reader-widen-before-writer-flips bump protocol the FROZEN
 exemplars in this directory use — that protocol applies only after freeze.
 
 ---
 
-<!-- producer-contract: example-doctrine-repo conversion-census row shape. DRAFT (2026-08-13), pending
-     example-doctrine-repo confirmation of the field set and MIXED-split rule. Discharges
+<!-- producer-contract: coordinator-claude conversion-census row shape. DRAFT (2026-08-13), pending
+     coordinator-claude confirmation of the field set and MIXED-split rule. Discharges
      docs/plans/2026-08-13-compute-layer-scaffolder.md C3 / AC11. -->

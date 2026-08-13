@@ -140,7 +140,7 @@ def _claude_klabauter_root():
       3. Returns None when unresolvable (caller degrades gracefully).
 
     Mirrors coordinator-queue-append._claude_klabauter_root().
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC1 / AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
     """
     override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
     if override:

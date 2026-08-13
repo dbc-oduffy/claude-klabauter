@@ -2,7 +2,7 @@
 
 Purpose: named, re-runnable successor to the one-off transcript probe that
 produced the 203,819-external-fork / 8-day baseline documented in
-``example-doctrine-repo/state/plan-sidecars/2026-07-28-bash-tax-negative-space.md``
+``coordinator-claude/state/plan-sidecars/2026-07-28-bash-tax-negative-space.md``
 ("Cost model" table). That probe was a throwaway scratchpad script
 (``extract.py`` + ``analyze4.py``, session-scoped, deleted with the scratchpad).
 This module ports its extraction + classification logic into a tested,
@@ -69,7 +69,7 @@ binaries), nested under ``by_machine`` plus one ``pooled_for_reference_only``
 block.
 
 Spec backlink: docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md § C1.
-Measurement oracle: example-doctrine-repo state/plan-sidecars/2026-07-28-bash-tax-negative-space.md.
+Measurement oracle: coordinator-claude state/plan-sidecars/2026-07-28-bash-tax-negative-space.md.
 
 Negative-spec:
   - Does NOT write to the transcript corpus or to any fleet store — pure

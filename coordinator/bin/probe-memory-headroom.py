@@ -18,7 +18,7 @@ via coordinator_core.watchdog.cs_timeout (claude-klabauter) so a stuck nvidia-sm
 PowerShell cold-start cannot stall the caller's dispatch.
 
 Windows de-bash campaign (Plan C, Wave E3-d, per-op port): Port of:
-probe-memory-headroom.sh (example-doctrine-repo 71e76370, 2026-07-21), which sourced
+probe-memory-headroom.sh (coordinator-claude 71e76370, 2026-07-21), which sourced
 coordinator/lib/coordinator-claude-klabauter-root.sh and coordinator/lib/resolve-python.sh
 to build a `cs_timeout` shell shim over a
 `python -c` subprocess dispatching coordinator_core.watchdog.cs_timeout — bash needed
@@ -64,7 +64,7 @@ Exit codes:
     2  usage error (unrecognized argument)
 
 Spec backlink: docs/plans/2026-05-30-organic-ramp-concurrency-doctrine.md SS111-114 (successor signal)
-Spec backlink: docs/plans/2026-06-27-coordinator-watchdog.md
+Spec backlink: docs/plans/2026-06-27-coordinator-watchdog.md [DEAD-CITATION: plan file never committed to this repo]
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Plan C, Wave E3-d)
 """
 from __future__ import annotations

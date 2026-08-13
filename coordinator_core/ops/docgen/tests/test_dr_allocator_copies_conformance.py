@@ -10,7 +10,7 @@ algorithm, kept deliberately separate rather than imported from one
 location (DR-083, DR-225). Nothing else guards against the two copies
 drifting apart silently — this test is that guard.
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C6 (AC5)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5)
 Negative-spec: this test does not exercise either copy's behavior (see
 ``test_dr_allocator.py`` for behavioral coverage) — it asserts byte-for-byte
 textual identity only.

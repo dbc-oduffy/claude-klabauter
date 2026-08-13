@@ -8,7 +8,7 @@ has a `.py` extension (unlike the hyphenated extensionless polyglot
 entrypoints tested elsewhere in this directory), so it is directly
 loadable without `importlib.machinery.SourceFileLoader`.
 
-Spec backlink: docs/plans/2026-07-31-plan-orphan-ownership-resolver.md, chunk C4
+Spec backlink: pln-plan-orphan-ownership-resolver-3e68bb, chunk C4
 """
 from __future__ import annotations
 

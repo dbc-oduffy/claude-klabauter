@@ -1,6 +1,6 @@
 """Tests for `render_posture_overlay.WRITE_SURFACE`.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C3d (`render-posture-overlay`).
 
 Purpose: proves the declared `rc-block` entry's marker pair byte-matches

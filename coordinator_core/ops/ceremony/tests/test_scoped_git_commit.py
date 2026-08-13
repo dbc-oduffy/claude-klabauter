@@ -382,7 +382,7 @@ def test_op_schema_rejects_non_string_deliverable_id():
 
 
 def test_message_file_path_is_rejected_not_committed_verbatim(tmp_path):
-    """Regression for `fdbff578b7dc` / `40bf1064a124` (example-doctrine-repo-em FYI memo,
+    """Regression for `fdbff578b7dc` / `40bf1064a124` (coordinator-claude-em FYI memo,
     2026-08-04): a caller composed the message in a scratchpad file and passed
     that file's PATH as `message`, expecting `-F` semantics. The op committed
     the path as the subject line and the body was lost — silently, and only
@@ -511,10 +511,10 @@ def test_no_false_integrity_breach_when_something_else_pushed(tmp_path, monkeypa
     in `_handler` -- `_remote_sha_state` -- is the only thing that can make
     this assertion pass.
 
-    Second assertion set (2026-07-30, example-doctrine-repo-em memo): suppressing the
+    Second assertion set (2026-07-30, coordinator-claude-em memo): suppressing the
     breach was only half the fix. The op still REPORTED `pushed=False` for a
     sha it had just confirmed on the remote, and `scoped-git-commit` rendered
-    that as `(not pushed)` -- three times in one example-doctrine-repo session on commits that
+    that as `(not pushed)` -- three times in one coordinator-claude session on commits that
     had all pushed. `pushed` answers "is this commit published", so a
     confirmed-present sha is `True`, whoever's push put it there.
     """

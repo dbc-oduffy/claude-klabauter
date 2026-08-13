@@ -70,7 +70,7 @@ _queue_cli = _load_cli(_QUEUE_APPEND_PATH, "coordinator_queue_append")
 
 def test_doe_root_returns_env_override():
     """doe_root() trusts DOE_ROOT env var as-is (§4b idempotency parity)."""
-    fake_root = "/fake/example-doctrine-repo-root"
+    fake_root = "/fake/coordinator-claude-root"
     with unittest.mock.patch.dict(os.environ, {"DOE_ROOT": fake_root}, clear=False):
         result = _reg.doe_root()
     assert result == fake_root
@@ -154,7 +154,7 @@ def test_central_improvement_queue_under_doe():
     """Central improvement-queue path lands under $(claude_klabauter_root)/state/improvement-queue.
 
     Rewired (DR-236, 2026-07-25): this test originally asserted DOE_ROOT routing per
-    the [example-doctrine-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md
+    the [coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md
     proposal — but that plan was never ratified (`status: draft`, AC1/AC2 `pending`,
     its own C3 HELD with recorded disk proof the flip never took effect). The CLI's
     OWN current source (`coordinator-queue-append`'s `_output_path`, negative-spec
@@ -162,7 +162,7 @@ def test_central_improvement_queue_under_doe():
     `_claude_klabauter_root()` unconditionally, per docs/wiki/state-placement-law.md § Taxonomy
     "Central/global state" and `docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md`
     (state/ is claude-klabauter's own disk-truth custody). Only coordinator-lesson-promote's
-    lessons-outbox central write genuinely routes to example-doctrine-repo (see
+    lessons-outbox central write genuinely routes to coordinator-claude (see
     test_outbox_root_under_doe_state below) — the two central-state schemas route to
     different owners, and this test previously conflated them.
     """
@@ -312,7 +312,7 @@ def test_lesson_promote_cold_warn_to_stderr(tmp_path):
 
 
 def test_lesson_promote_cold_no_file_written(tmp_path):
-    """Cold path: no file written (neither example-doctrine-repo nor claude-klabauter path)."""
+    """Cold path: no file written (neither coordinator-claude nor claude-klabauter path)."""
     _run_cold_lesson(str(tmp_path))
     written = list(tmp_path.rglob("*.yaml"))
     assert written == [], f"cold-path must write NO files; found: {written}"
@@ -409,7 +409,7 @@ def test_queue_append_cold_no_file_written(tmp_path):
 #
 # Exercises the State-2 (coordinator_core present) skipped:true branch at
 # lesson-promote lines 618-628. coordinator_core returns {"skipped": True}
-# when example-doctrine-repo is unresolvable from the native side — the CLI must WARN + exit 0
+# when coordinator-claude is unresolvable from the native side — the CLI must WARN + exit 0
 # and write nothing, matching the legacy-path _DoeUnresolvable contract.
 # ---------------------------------------------------------------------------
 

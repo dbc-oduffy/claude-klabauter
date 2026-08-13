@@ -4,7 +4,7 @@ generator.
 
 Renders the claude() shim from the coordinator template and wires exactly one
 sentinel-guarded source block into the operator's interactive rc file,
-including legacy-stopgap detection. Example-doctrine-repo owns the contract/generator surface;
+including legacy-stopgap detection. Coordinator-claude owns the contract/generator surface;
 Claude-klabauter (coordinator_core.ops.gen_claude_doe_shim) owns the engine (DR-047).
 Supports --check-only (validate without mutating live files) and --rc/
 --template overrides.
@@ -15,10 +15,10 @@ Supports --check-only (validate without mutating live files) and --rc/
 # Finish-strangler port (BIG_PORT): the bash implementation (renders the claude()
 # shim from the coordinator template, wires exactly one sentinel-guarded source
 # block into the operator's interactive rc, legacy-stopgap detection) has been
-# fully ported to coordinator_core/ops/gen_claude_doe_shim.py per DR-047 (example-doctrine-repo owns
+# fully ported to coordinator_core/ops/gen_claude_doe_shim.py per DR-047 (coordinator-claude owns
 # contract/generator, claude-klabauter owns engine). This file is now a thin trampoline
 # over that claude-klabauter (engine) module — it lives in claude-klabauter post the
-# 2026-07-22 executable-surface migration, resolving its example-doctrine-repo-owned template
+# 2026-07-22 executable-surface migration, resolving its coordinator-claude-owned template
 # via coordinator_data_root.data_root(), not a co-located script path. See the
 # claude-klabauter module's own docstring for the full design rationale (idempotency,
 # dry-run safety, Windows temp-file portability, faithful-oracle negative-spec).
@@ -30,9 +30,9 @@ Supports --check-only (validate without mutating live files) and --rc/
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# example-doctrine-repo repo, not here).
+# coordinator-claude repo, not here).
 #
 # Usage:
 #   gen-claude-doe-shim.py                    -- render shim + wire rc source line
@@ -74,9 +74,9 @@ from coordinator_data_root import data_root  # noqa: E402
 def _default_template_path(shell_family: str = "bash") -> str:
     """Mirror the bash oracle's `${_script_dir}/../templates/shell/claude-doe-shim.sh.tmpl`
     default. Resolved via `coordinator_data_root.data_root()`'s co-located/
-    example-doctrine-repo-resident two-rung chain, not a bare `__file__`-relative walk: the
+    coordinator-claude-resident two-rung chain, not a bare `__file__`-relative walk: the
     2026-07-22 executable-surface migration moved this trampoline into
-    claude-klabauter while `templates/` stayed in example-doctrine-repo (DR-047
+    claude-klabauter while `templates/` stayed in coordinator-claude (DR-047
     contract/engine split), so a `${script_dir}/../templates` walk no longer
     lands anywhere.
 

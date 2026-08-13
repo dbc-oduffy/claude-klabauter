@@ -73,7 +73,7 @@ Two new checks close this:
      wider class described in the dispatch brief: a handler that awaits something
      elsewhere but reaches its blocking call through one hop of local indirection.
 
-Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C3
+Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C3
 """
 from __future__ import annotations
 

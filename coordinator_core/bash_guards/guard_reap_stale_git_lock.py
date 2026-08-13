@@ -80,7 +80,7 @@ an uncaught exception here to "allow", but this guard does not want to
 lose its own reap side effect's cheap common-case fast return by risking a
 mid-body crash propagate past the stat check at all).
 
-Spec backlink: docs/plans/2026-08-07-git-index-lock-contention-campaign.md
+Spec backlink: docs/plans/2026-08-07-git-index-lock-contention-campaign.md [DEAD-CITATION: plan file never committed to this repo]
 (same fleet-wide lock-contention campaign ``guard_no_optional_locks.py``
 belongs to -- this guard is the self-heal leg, that one the avoidance leg).
 """

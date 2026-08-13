@@ -15,7 +15,7 @@ canonical-resolution-engine library (`coordinator_core.resolution.facade`,
 `coordinator_core.contract.decision_object.{envelope,judgment}`) rather than
 reimplementing them — see the negative-spec below.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C2
 
 Consumes-manifest (C1 census, plan § Tasks C1 body) — orchestrates, reimplements
@@ -68,7 +68,7 @@ Negative-spec:
     - `_compute_open_day_goals` never raises and never fails the ceremony —
       an unresolvable repo root or any read error degrades to an empty
       today/stale partition (mirrors `goal.close_day`'s own read-side degrade
-      posture; every claude-klabauter-op consumer in example-doctrine-repo's commands carries this
+      posture; every claude-klabauter-op consumer in coordinator-claude's commands carries this
       "offers, not nags" mandatory degradation clause).
     - Does NOT add a mutating code path — every directive names an existing
       CLI for the apply half (`coordinator_core.workday_complete.apply`) to
@@ -700,7 +700,7 @@ def _build_judgment_points(
 
     2026-08-08 evidence-wording correction (falsifier search: neither this
     module, the Step 4b/4c dispatched-worker bodies (`docs/commands/
-    workday-complete.md` Step 4, example-doctrine-repo), nor any other producer in this
+    workday-complete.md` Step 4, coordinator-claude), nor any other producer in this
     repo computes a "zero new commits AND no agent-driven changes" boolean —
     a grep across `coordinator_core/` returns only this module's own string
     literal and a review-trail diff, and the skill prose at that doc's Step 4
@@ -991,7 +991,7 @@ def main(argv: list[str]) -> int:
     """`main()`'s `brief` dispatch — `--for-date DATE`, `--only`, and
     `--scope-summary TEXT` are the only three options (mirrors
     `pickup_assemble.brief`'s CLI shape at its simplest, extended with the
-    flags the example-doctrine-repo-side `workday-complete.md` Step 2 invocation now threads
+    flags the coordinator-claude-side `workday-complete.md` Step 2 invocation now threads
     through for a targeted wrap and for the user's day-summary prose);
     prints the envelope as JSON. A malformed `--for-date` is a parser-level
     usage error here (argparse's own `error()` -> exit 2), same effective

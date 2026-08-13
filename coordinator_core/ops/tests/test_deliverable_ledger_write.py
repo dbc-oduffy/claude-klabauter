@@ -6,7 +6,7 @@ Pure tmp_path file fixtures only, no subprocesses, no `git init`-per-test fixtur
 (that pattern crashed live EM sessions on the shared tree — see
 docs/plans/2026-08-13-archive-family-coverage-restoration.md).
 
-Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C1
+Spec backlink: pln-archive-side-corpus-remediatio-3ff30d § C1
 """
 
 from __future__ import annotations
@@ -298,7 +298,7 @@ def test_special_character_value_round_trips_byte_exact(tmp_path):
 
     tricky_value = (
         "\"dlv-narrow-the-write-confinement-bump-a-publish-af3aa9\"  "
-        "# minted here; deliberately NOT example-doctrine-repo's dlv-...-276e8d — reusing it would "
+        "# minted here; deliberately NOT coordinator-claude's dlv-...-276e8d — reusing it would "
         "join our chunk evidence onto their deliverable"
     )
 

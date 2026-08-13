@@ -5,7 +5,7 @@ Purpose: Thin RPC wrapper over coordinator_core.cartography.churn's pure
 emergent-set computation. Shells out to git (read-only queries) to derive the
 three input path-lists the pure primitive needs (churned_all / catalogued /
 head_present), then delegates the actual set-arithmetic + mitigations to
-coordinator_core.cartography.churn.compute_emergent_set. Promotes example-doctrine-repo survey
+coordinator_core.cartography.churn.compute_emergent_set. Promotes coordinator-claude survey
 chunk-K (architecture-survey.md:104-120) into a tested, reusable op.
 
 Self-registration: importing this module calls register_op("cartography.churn",
@@ -47,7 +47,7 @@ Wire params:
                                        Chunk C9/2026-08-06: the tree-specific
                                        default had outlived the tree it was
                                        cut for (A5/2026-08-06 finding: on
-                                       example-doctrine-repo's tree the emergent set at that
+                                       coordinator-claude's tree the emergent set at that
                                        default was 82% noise from state/,
                                        cross-repo/, and dist/ — none of which
                                        the default names), and both sides
@@ -180,12 +180,12 @@ The four NEW fields above are ADDITIVE ONLY. `emergent`,
 `catalogued_count` keep their pre-existing semantics unchanged (AC7) — see
 Negative-spec.
 
-Spec backlink: docs/plans/2026-07-12-claude-klabauter-cartography-substrate-strand-a.md
+Spec backlink: pln-claude-klabauter-cartography-substrate-a-26eb2e
 § chunk C3 (cartography.churn); extended additively by
 docs/plans/2026-08-06-churn-emergent-detection-file-granularity.md § chunk C3.
 
 Consumption status: CONSUMED — one of only two of nine cartography op names
-with a real call site (refresh mode, example-doctrine-repo's survey.workflow.js chunk-K gate)
+with a real call site (refresh mode, coordinator-claude's survey.workflow.js chunk-K gate)
 in the survey's Workflow script today
 (docs/plans/2026-08-06-claude-klabauter-ize-the-survey-census.md § "The survey calls
 two of nine cartography op names").
@@ -193,11 +193,11 @@ two of nine cartography op names").
 Negative-spec:
   - Does NOT apply the chunk-K threshold decision (emergent non-empty OR
     churn_ratio > 0.5) — that policy belongs to the Phase-0.5 consume-gate
-    (example-doctrine-repo-owned, Part B, not executed here); this op only returns the
+    (coordinator-claude-owned, Part B, not executed here); this op only returns the
     computed sets plus the ratio and its denominator, never a boolean,
     threshold, verdict, or "action recommended" field (A5/2026-08-06: the
     decision-application boundary — op returns the number, caller keeps the
-    judgment — is load-bearing and written into example-doctrine-repo's contract for this op
+    judgment — is load-bearing and written into coordinator-claude's contract for this op
     family).
   - Does NOT write to any fleet store or state/ path — pure compute-and-
     return, no disk artifact (unlike ops/coverage_gate.py's cockpit-facing
@@ -206,7 +206,7 @@ Negative-spec:
     system_dirs, via the diff-window mechanism) — `uncatalogued` is a
     SEPARATE, RECORDED-atlas-derived field, not a replacement or
     redefinition. Existing consumers gating on `emergent`'s length (e.g.
-    example-doctrine-repo's survey.workflow.js chunk-K gate) see no behaviour change.
+    coordinator-claude's survey.workflow.js chunk-K gate) see no behaviour change.
   - Does NOT re-derive or touch `churn_ratio`'s numerator/denominator —
     the new `catalogued_source_count` is a DIFFERENT denominator
     (RecordedExpansion.considered_count), never conflated with

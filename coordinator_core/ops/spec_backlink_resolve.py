@@ -51,7 +51,7 @@ and register_op("spec_backlink.rewrite", ...) as a side-effect. Both are listed
 in coordinator_core/ops/__init__.py::_EAGER_OP_MODULES to trigger registration
 at start_server() time.
 
-Spec backlink: docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C1
+Spec backlink: pln-spec-backlinks-cite-a-stable-d-451b3e § C1
 
 Negative-spec (hard-won):
   - Does NOT derive an id from a slug on a resolution miss. `mint_deliverable_id.py`'s
@@ -61,7 +61,7 @@ Negative-spec (hard-won):
     typed MISS until C2/C5 close that gap — never a guessed path.
   - Does NOT glob per-citation. The index is built exactly once per invocation
     (module-level `_build_index` call per handler invocation, not per lookup).
-  - Does NOT eagerly build the peer-repo (example-doctrine-repo) index. Only a `<repo>:`-prefixed
+  - Does NOT eagerly build the peer-repo (coordinator-claude) index. Only a `<repo>:`-prefixed
     query triggers it.
   - Does NOT treat literal YAML `null` or an absent key as a real id — both count as
     "record lacks an id" (mirrors AC2's definition) and are excluded from the index.
@@ -164,11 +164,29 @@ class _BacklinkIndex:
     own "build once per invocation" requirement — not "once per process").
     """
 
-    __slots__ = ("plan_id_to_path", "deliverable_id_to_paths")
+    __slots__ = ("plan_id_to_path", "deliverable_id_to_paths", "path_to_ids", "basename_to_paths")
 
     def __init__(self) -> None:
         self.plan_id_to_path: Dict[str, str] = {}
         self.deliverable_id_to_paths: Dict[str, List[str]] = {}
+        # Inverse of the two maps above: path -> {"plan_id": ..., "deliverable_id": ...}.
+        # Only populated for records carrying at least one real id — this is
+        # the seam `rewrite_spec_backlinks.resolve_citation` (C3) needs: given
+        # a cited docs/plans/...md PATH, get the record's ids, not the other
+        # direction id -> path this index otherwise serves.
+        self.path_to_ids: Dict[str, Dict[str, Optional[str]]] = {}
+        # basename (with .md extension, e.g. "2026-07-10-qsub-01-....md") ->
+        # [abs path, ...]. The join key `assert_no_dangling_plan_backlinks.py`
+        # already uses (`os.path.basename(rel)`) to match a citation's dated
+        # filename against its archived twin -- reused here verbatim (not
+        # re-derived as a looser stem/slug match) so a cited docs/plans/<x>.md
+        # whose record now lives at archive/specs/<YYYY-MM>/<x>.md still
+        # resolves, and the converse (an archive-path citation whose record
+        # has moved back to docs/plans/) resolves too. Only populated for
+        # records carrying at least one real id, mirroring `path_to_ids`.
+        # More than one path sharing a basename is the existing typed
+        # AMBIGUITY outcome, never a silent pick.
+        self.basename_to_paths: Dict[str, List[str]] = {}
 
     def _add(self, plan_id: Optional[str], deliverable_id: Optional[str], path: str) -> None:
         if plan_id is not None:
@@ -178,6 +196,10 @@ class _BacklinkIndex:
             self.plan_id_to_path[plan_id] = path
         if deliverable_id is not None:
             self.deliverable_id_to_paths.setdefault(deliverable_id, []).append(path)
+        if plan_id is not None or deliverable_id is not None:
+            self.path_to_ids[path] = {"plan_id": plan_id, "deliverable_id": deliverable_id}
+            basename = os.path.basename(path)
+            self.basename_to_paths.setdefault(basename, []).append(path)
 
 
 def _index_markdown_dir(index: _BacklinkIndex, base_dir: Path) -> None:
@@ -266,7 +288,7 @@ def build_index(worktree_root: Path) -> _BacklinkIndex:
 
 
 def _doe_root_path() -> Optional[Path]:
-    """Resolve the example-doctrine-repo peer repo root via the canonical resolver.
+    """Resolve the coordinator-claude peer repo root via the canonical resolver.
 
     Reuses coordinator/bin/lib/coordinator_registry.py::doe_root() rather
     than re-deriving a ladder — see this module's docstring for why
@@ -315,6 +337,88 @@ def resolve_id(index: _BacklinkIndex, queried_id: str) -> dict:
     return _miss(queried_id)
 
 
+def _path_hit(cited_path: str, plan_id: Optional[str], deliverable_id: Optional[str]) -> dict:
+    return {
+        "outcome": "hit",
+        "cited_path": cited_path,
+        "plan_id": plan_id,
+        "deliverable_id": deliverable_id,
+    }
+
+
+def _path_miss(cited_path: str) -> dict:
+    return {"outcome": "miss", "cited_path": cited_path, "plan_id": None, "deliverable_id": None}
+
+
+def _path_ambiguity(cited_path: str, paths: List[str]) -> dict:
+    return {
+        "outcome": "ambiguity",
+        "cited_path": cited_path,
+        "plan_id": None,
+        "deliverable_id": None,
+        "candidates": paths,
+    }
+
+
+def resolve_path_with_index(index: _BacklinkIndex, worktree_root: Path, cited_path: str) -> dict:
+    """Resolve a cited `docs/plans/...md` PATH against an ALREADY-BUILT
+    `index` (see `resolve_path` for the outcome shape and the id-recovery
+    rationale). This is the multi-lookup twin: a caller resolving many
+    citations against the same worktree_root in one batch (C3/C4's per-file
+    fan-out) builds `index` exactly once via `build_index(worktree_root)` and
+    threads it through every citation lookup here, rather than each lookup
+    re-walking the corpus — the "glob over 586 plans x 2368 citations" shape
+    the plan's anti-scope names is what this seam exists to avoid.
+    """
+    cited_path = (cited_path or "").strip()
+    if not cited_path:
+        return _path_miss(cited_path)
+    abs_key = str(Path(worktree_root) / cited_path)
+    ids = index.path_to_ids.get(abs_key)
+    if ids is not None:
+        return _path_hit(cited_path, ids.get("plan_id"), ids.get("deliverable_id"))
+
+    # Exact-path miss: the cited path's record may have been git-mv'd by
+    # fleet.archive_completed_plans (docs/plans/ -> archive/specs/YYYY-MM/),
+    # or the converse. Fall back to a basename join against the SAME
+    # already-built index -- no second filesystem pass.
+    basename = os.path.basename(cited_path)
+    candidates = index.basename_to_paths.get(basename)
+    if not candidates:
+        return _path_miss(cited_path)
+    if len(candidates) > 1:
+        return _path_ambiguity(cited_path, list(candidates))
+    twin_path = candidates[0]
+    twin_ids = index.path_to_ids[twin_path]
+    return _path_hit(cited_path, twin_ids.get("plan_id"), twin_ids.get("deliverable_id"))
+
+
+def resolve_path(worktree_root: Path, cited_path: str) -> dict:
+    """Resolve a cited `docs/plans/...md` PATH to the record's `plan_id` /
+    `deliverable_id` — the inverse of `resolve()` (id -> path). This is the
+    seam `rewrite_spec_backlinks.resolve_citation` (C3) needs: it has a
+    citation's PATH, not an id, and must recover whichever real ids that
+    record carries so it can emit the `pln-`/`dlv-` preferred form.
+
+    Typed outcomes mirror `resolve()`'s: a path matching no indexed record
+    (wrong path, or a record with neither id present) is a typed MISS, never
+    a guess. A path matching an indexed record is a typed HIT carrying
+    `plan_id`/`deliverable_id` (either may be None if that record only has
+    the other).
+
+    Single-shot convenience wrapper: builds a fresh index for this one call.
+    A caller resolving MANY citations in one run (a batch/multi-file rewrite)
+    should build the index once via `build_index(worktree_root)` and call
+    `resolve_path_with_index(index, worktree_root, cited_path)` per lookup
+    instead — see that function's docstring.
+    """
+    cited_path = (cited_path or "").strip()
+    if not cited_path:
+        return _path_miss(cited_path)
+    index = build_index(worktree_root)
+    return resolve_path_with_index(index, worktree_root, cited_path)
+
+
 def resolve(worktree_root: Path, queried_id: str) -> dict:
     """Resolve `queried_id` (optionally `<repo>:`-qualified) to a typed outcome.
 
@@ -355,7 +459,7 @@ def _resolve_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params:
         id (str) — a `pln-<slug>-<hash>` or `dlv-<slug>-<hash>` id, optionally
-                   `<repo>:`-qualified for a named peer repo (e.g. Example-doctrine-repo).
+                   `<repo>:`-qualified for a named peer repo (e.g. Coordinator-claude).
 
     Returns one of three typed outcome shapes:
         {"outcome": "hit",       "queried_id": ..., "path": "<str>"}
@@ -388,7 +492,29 @@ def _rewrite_handler(params: dict, repo_root: Optional[Path] = None):
     `coordinator_core.ops.rewrite_spec_backlinks` (C3's module). Imported
     lazily inside this handler so this module imports cleanly regardless of
     whether C3's file has landed yet.
-    """
-    from coordinator_core.ops.rewrite_spec_backlinks import rewrite
 
-    return rewrite(params, repo_root=repo_root)
+    Params:
+        paths (list[str]) — the explicit file list to rewrite. The rewriter
+                            never walks the filesystem itself; the caller
+                            supplies the scope.
+
+    Returns C3's aggregate reported set:
+        {"rewritten": {<path>: [<cited_path>, ...]},
+         "unresolvable": {<path>: [<cited_path>, ...]}}
+
+    repo_root is the .git common dir (common_dir keying, per op_scopes.py);
+    the worktree is derived via main_worktree_root(repo_root), matching
+    `spec_backlink.resolve` above — resolving against .git/docs/plans rather
+    than <worktree>/docs/plans would make every citation a silent miss.
+    """
+    from coordinator_core.ops.rewrite_spec_backlinks import rewrite_spec_backlinks
+
+    paths = params.get("paths") or []
+    if repo_root is None:
+        logger.warning(
+            "spec_backlink.rewrite: repo_root is None — cannot derive worktree; "
+            "returning an empty report rather than rewriting against a wrong root."
+        )
+        return {"rewritten": {}, "unresolvable": {}}
+    worktree_root = main_worktree_root(repo_root)
+    return rewrite_spec_backlinks(paths, worktree_root=worktree_root)

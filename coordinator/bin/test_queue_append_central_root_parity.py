@@ -14,8 +14,8 @@ entries land, and they must agree:
      unconditionally.
   2. coordinator/bin/coordinator-queue-append `_output_path` (legacy/strangled
      CLI, State-1 fallback per DR-210) — previously routed the same decision to
-     the example-doctrine-repo repo via a `doe_root()` call citing a never-ratified plan
-     ([example-doctrine-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md,
+     the coordinator-claude repo via a `doe_root()` call citing a never-ratified plan
+     ([coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md,
      `status: draft`, AC1/AC2 `pending`, its own C3 HELD). Fixed to route to
      claude-klabauter, matching (1).
 

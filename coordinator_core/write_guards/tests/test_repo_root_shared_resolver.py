@@ -10,7 +10,7 @@ reached through the write_guards seam, not just true of the delegate in
 isolation -- and (b) each migrated guard still returns its prior verdict
 unchanged post-migration.
 
-Spec backlink: docs/plans/2026-08-07-no-window-subprocess-primitive.md § C3
+Spec backlink: pln-no-window-subprocess-primitive-750d2d § C3
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """test_sweep_shipped_handoffs.py — self-contained test suite for sweep-shipped-handoffs.py.
 
-Port of: test-sweep-shipped-handoffs.sh (example-doctrine-repo f703efad, 2026-07-21). Retargets the bash
+Port of: test-sweep-shipped-handoffs.sh (coordinator-claude f703efad, 2026-07-21). Retargets the bash
 oracle's contract assertions onto the Python trampoline: frontmatter-driven selection (shipped /
 abandoned / superseded), the shipped-subclass SHA-resolvability gate, the mtime staleness
 WARNING, and dispatch shape via cc_invoke.route.
@@ -18,7 +18,7 @@ comment at sweep-shipped-handoffs.py:175-185 guards against.
 Runs bash-free: `python3 test_sweep_shipped_handoffs.py` (or via the coordinator test runner).
 Exit 0 = all tests pass; non-zero = at least one failure.
 
-Spec backlink: docs/plans/2026-07-01-shipped-handoff-archive-sweep.md
+Spec backlink: pln-shipped-handoff-archive-sweep-d61d01
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 """
 from __future__ import annotations

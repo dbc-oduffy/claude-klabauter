@@ -3,8 +3,8 @@ bash_guards.dispatch_checks) -- T4a-g2, the checks left OUT OF SCOPE by the
 T4a-g1 first pass now that ``coordinator_core.session.scope.compute_scope``
 gives Check 5 a native scope-set to compare against.
 
-Oracle: example-doctrine-repo's retired ``coordinator/hooks/scripts/validate-commit.sh``
-(deleted 2026-07-20, example-doctrine-repo ``e91827a7``):
+Oracle: coordinator-claude's retired ``coordinator/hooks/scripts/validate-commit.sh``
+(deleted 2026-07-20, coordinator-claude ``e91827a7``):
   - Check 5 -- scoped-staging warn: a staged file NOT in this
     session's scope set (``compute_scope``) is WARNED on by default, and
     DENIED under ``COORDINATOR_SCOPE_STRICT=1`` (Phase 5's strict-mode
@@ -104,7 +104,7 @@ class TestCheckFiveScopedStaging:
         assert "orphan" not in out["additionalContext"]
 
         # AC6a: the scope-warnings.log `owner:` column is a documented
-        # sibling-repo (example-doctrine-repo) surface and is explicitly UNCHANGED by this
+        # sibling-repo (coordinator-claude) surface and is explicitly UNCHANGED by this
         # plan -- the machine token stays the literal "orphan" even though
         # the operator-facing sentence above no longer says it.
         log = Path(root) / ".git" / "coordinator-sessions" / sid / "scope-warnings.log"

@@ -39,7 +39,7 @@ no-op shape above rather than raising on a missing git-mv source.
 Spec backlinks:
   - Plan: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § Wave 1 C1b
   - Fence source: coordinator/skills/merging-to-main/SKILL.md § Step 5 "Archive the
-    pending-release accumulator" (example-doctrine-repo tree; cross-repo, read-only reference)
+    pending-release accumulator" (coordinator-claude tree; cross-repo, read-only reference)
   - DR-211: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md (D1-D4, five bounds)
 
 Negative-spec:

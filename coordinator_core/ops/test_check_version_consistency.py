@@ -4,7 +4,7 @@ Tests for coordinator_core.ops.check_version_consistency.
 Mirrors the AC1-AC11 acceptance criteria of the bash oracle so the Python
 port is provably parity-equivalent, not just "looks about right".
 
-Port of: test-check-version-consistency.sh (example-doctrine-repo 894d4bc6, 2026-07-22)
+Port of: test-check-version-consistency.sh (coordinator-claude 894d4bc6, 2026-07-22)
 """
 
 from __future__ import annotations
@@ -179,7 +179,7 @@ def test_bad_root_reproduces_oracle_double_message_bug(tmp_path, capsys):
     `discover_root()`'s command-substitution subshell only kills the subshell, so
     the parent script silently continues with BUNDLE_ROOT="" and fails a SECOND
     time at the CHANGELOG-resolution step. Verified against the live bash oracle
-    on 2026-07-16 (Port of: check-version-consistency.sh, example-doctrine-repo 894d4bc6, 2026-07-22):
+    on 2026-07-16 (Port of: check-version-consistency.sh, coordinator-claude 894d4bc6, 2026-07-22):
     `bash check-version-consistency.sh --root /nonexistent` prints both lines
     below and exits 1. This module reproduces that exactly, not just the exit code.
     """

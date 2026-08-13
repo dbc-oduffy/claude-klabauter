@@ -16,7 +16,7 @@ Monkeypatch seam: ``validate.contract_declares_backlog_history`` is the named ga
 Tests that exercise the contract-present path monkeypatch it to return True directly
 (Option a from the plan's Test surface section — simpler than redirecting VENDOR_SCHEMA_BUNDLE).
 
-Spec backlink: docs/plans/2026-07-05-backlog-history-emit-gate-decouple.md § Test surface
+Spec backlink: pln-backloghistory-emit-gate-decou-22d451 § Test surface
 Amends: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C5
 """
 
@@ -122,7 +122,7 @@ class TestD9DefaultProvenanceNonNull:
     def test_provenance_uses_canonical_contract_enums(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Block-level provenance MUST use canonical ProvenanceEnvelope enum values.
 
-        Regression guard for the drift the example-doctrine-repo cockpit-contract live-emit round-trip caught:
+        Regression guard for the drift the coordinator-claude cockpit-contract live-emit round-trip caught:
         ``source_kind`` was emitted as the non-canonical internal label ``local_file`` (correct:
         ``local_fs``) and ``derivation`` as ``derived`` (correct: ``parsed``). Every sibling
         emit section (cross_repo_memos, health, backlogs, …) uses ``local_fs``/``parsed``;

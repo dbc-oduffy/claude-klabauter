@@ -41,7 +41,7 @@ POSIX guard mirrors test_priority_set.py: skipped if neither fcntl nor
 msvcrt is available (locked_rmw's lock-backend requirement, transitively
 required by priority_set.set_priority).
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-26-priority-ledger.md § C7
+Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C7
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """Tests for schema_validate.validate_frontmatter_obj() — the schema-OBJECT-in
-seam requested by example-doctrine-repo's validate-frontmatter-schema.js node-hook port (cross-repo
+seam requested by coordinator-claude's validate-frontmatter-schema.js node-hook port (cross-repo
 memo 2026-07-22, claude-central-em). Distinct from test_schema_validate.py's
 coverage of validate()/validate_frontmatter(), which are name-keyed against
 Claude-klabauter's own vendored _SCHEMAS_DIR — these tests construct schema objects
@@ -68,7 +68,7 @@ class TestValidateFrontmatterObjJsonSchemaBacked:
 
 
 class TestValidateFrontmatterObjTypeStringDateAcceptanceRegression:
-    """Standing-ruling pin (example-doctrine-repo PM + claude-klabauter PM, cross-repo memo 2026-08-06):
+    """Standing-ruling pin (coordinator-claude PM + claude-klabauter PM, cross-repo memo 2026-08-06):
     a `datetime.date`/`datetime.datetime` value against a declared
     `type: string` field must still validate — PyYAML's bare-date coercion
     feeds this validator ~700 artifacts' worth of date-typed values across

@@ -5,13 +5,13 @@ is expressed against, so C3 (type enumeration) and C4 (render) author against ON
 frozen contract rather than each inventing its own reading of the 22 JSON files
 under ``templates/``. This module is validation-only — it does NOT render a
 document (that pure ``(doc_type, resolved_field_values) -> str`` function is C4's
-surface) and does NOT enumerate the canonical type set from the example-doctrine-repo manifest
+surface) and does NOT enumerate the canonical type set from the coordinator-claude manifest
 (that internal function, unioning manifest + known supplements, is C3's surface).
 Neither this module nor any sibling in this package registers an IPC op — see
 the package docstring.
 
 Substrate finding this format encodes (plan Problem section, verified against all
-22 ``_scaffold_*`` bodies in example-doctrine-repo's ``coordinator-doc-new``): every scaffolder is a
+22 ``_scaffold_*`` bodies in coordinator-claude's ``coordinator-doc-new``): every scaffolder is a
 PURE function of already-resolved strings — no subprocess, no git, no filesystem
 access inside any builder — and the entire conditional surface reduces to exactly
 THREE idioms, each reused independently across fields:
@@ -94,11 +94,11 @@ Two frontmatter *styles* exist on top of the field grammar:
     ``additionalProperties: false`` upstream means the field list is exhaustive.
     A ``whole_document`` template's ``body`` MUST be ``null``.
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C2 (AC3)
-Oracle: /coordinator/bin/coordinator-doc-new (example-doctrine-repo clone) — every ``_scaffold_*`` fn.
+Spec backlink: pln-strang-12-document-generation--75a7eb § C2 (AC3)
+Oracle: /coordinator/bin/coordinator-doc-new (coordinator-claude clone) — every ``_scaffold_*`` fn.
 Negative-spec: this module does not write files, does not shell out, and does not
 import ``coordinator_core.ops.emit.doe_drift`` — the byte-identity conformance
-harness against the live example-doctrine-repo oracle is C6's surface, not this one's.
+harness against the live coordinator-claude oracle is C6's surface, not this one's.
 """
 
 from __future__ import annotations
@@ -307,7 +307,7 @@ def available_template_types(directory: str | Path | None = None) -> list[str]:
     """Return the sorted ``doc_type`` values for every template staged on disk.
 
     This is a disk-enumeration convenience for tests/tooling — it is NOT the
-    canonical type-enumeration function C3 authors (which reads the example-doctrine-repo manifest
+    canonical type-enumeration function C3 authors (which reads the coordinator-claude manifest
     and unions in known supplements, then asserts set-equality against it per
     AC4). Do not substitute this for that check.
     """

@@ -58,7 +58,7 @@ register_op("deliverable.cascade_backstop_sweep") as a side-effect. Added to
 coordinator_core/ops/__init__.py's eager-import table so registration fires
 at start_server() time.
 
-Spec backlink: docs/plans/2026-08-04-terminal-state-propagation-join-keys.md § C6c (AC6d)
+Spec backlink: pln-terminal-state-propagation-giv-c85539 § C6c (AC6d)
 
 NEGATIVE-SPEC:
   - Does NOT write, anywhere, under any code path. No `locked_rmw`, no

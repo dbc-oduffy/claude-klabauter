@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.handoff_archive_transition — "handoff.archive_transition" op.
 
-Purpose: single native-Python composition of example-doctrine-repo's bash orchestrator
-coordinator-handoff-archive.sh — collapses the example-doctrine-repo bash -> node -> python hop
+Purpose: single native-Python composition of coordinator-claude's bash orchestrator
+coordinator-handoff-archive.sh — collapses the coordinator-claude bash -> node -> python hop
 chain into ONE in-process op. Four modes, all operating on one handoff .md path:
 
   chain (default)  — UNCONDITIONAL live-children guard; if safe AND the
@@ -45,7 +45,7 @@ the handoff on disk and return a graceful (exit_code:0) skip -- retention is
 NEVER an error, and (as of the fix below) never suppresses the supersede
 status flip either, only the archival git-mv.
 
-Status-flip-precedes-guard fix (2026-07-27, cross-repo example-doctrine-repo incident
+Status-flip-precedes-guard fix (2026-07-27, cross-repo coordinator-claude incident
 "handoff-archive-transition supersede silently no-ops"): the supersede
 mutation (status:claimed + deployment_state:continued + continued_into) used
 to run AFTER the live-children guard's early-return, so a live child — which
@@ -152,7 +152,7 @@ Reuse (no reimplementation of tested internals):
   - coordinator_core.ops.handoff_children._handoff_has_live_children (the guard)
   - coordinator_core.ops.fleet._common.handoff_archive_dest / archive_and_commit / Move
 
-Terminal-state precondition (example-doctrine-repo, 2026-07-26, plan C7): the git-mv
+Terminal-state precondition (coordinator-claude, 2026-07-26, plan C7): the git-mv
 block at the tail of this op (all modes that reach it — chain, stamp_shipped,
 supersede; stamp_only never reaches it, it returns before the move) is now
 gated on the CANDIDATE'S OWN on-disk deployment_state already being terminal
@@ -245,13 +245,13 @@ fails closed for anything outside `state/handoffs/` ∪ ARCHIVE_ROOT_SUBDIRS,
 and every OTHER mode's allowlist is completely unchanged (still
 `state/handoffs/` only).
 
-Port of: coordinator-handoff-archive.sh (example-doctrine-repo c47b0268, 2026-07-19).
-Spec: cross-repo example-doctrine-repo 7-bug route item 4 (this op). DR-059 (engine-tier bash
+Port of: coordinator-handoff-archive.sh (coordinator-claude c47b0268, 2026-07-19).
+Spec: cross-repo coordinator-claude 7-bug route item 4 (this op). DR-059 (engine-tier bash
 bugs route to claude-klabauter).
 
 --- Position A: no branch-tip fallback, no Session-Id trailer-correction walk ---
 
-The example-doctrine-repo bash oracle (and this op's earlier faithful port) stamped shipped_in
+The coordinator-claude bash oracle (and this op's earlier faithful port) stamped shipped_in
 via stamp_shipped_in(allow_branch_tip_fallback=True): when the handoff's
 scope: paths resolved to no commit, it fell back to guessing the current
 branch tip. On a shared work/* branch, that guess can land a SIBLING
@@ -284,7 +284,7 @@ Negative-spec:
     handoff.stamp op call.
   - Does NOT change handoff_ship_archive.py's behavior or scope -- that op
     remains the event-driven ship+archive composite for the /workstream-complete
-    call site; this op is the faithful port of the example-doctrine-repo archive-ceremony CLI
+    call site; this op is the faithful port of the coordinator-claude archive-ceremony CLI
     for /handoff Step 1 and callers that need the 4-mode flag surface
     (stamp_shipped / stamp_only / supersede / chain) and the unconditional
     live-children guard in one call.
@@ -745,7 +745,7 @@ def _supersede_continued(
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.archive_transition" — the 4-mode handoff archive ceremony.
 
-    Faithful native-Python port (Port of: coordinator-handoff-archive.sh, example-doctrine-repo
+    Faithful native-Python port (Port of: coordinator-handoff-archive.sh, coordinator-claude
     c47b0268, 2026-07-19). See module docstring for the full mode/order
     contract and the Position-A no-branch-tip-fallback rationale.
 
@@ -1183,7 +1183,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     superseded = False
 
     # ------------------------------------------------------------------
-    # successor_path resolution (example-doctrine-repo, 2026-07-26) — resolves the
+    # successor_path resolution (coordinator-claude, 2026-07-26) — resolves the
     # SUCCESSOR's own sha internally, BEFORE the scope-derived-selection
     # warning below (so that warning correctly no-ops once resolution
     # succeeds — stamp_kind is no longer "scope-derived" at that point).
@@ -1221,7 +1221,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 mode,
             )
 
-    # DR-096 (example-doctrine-repo, 2026-07-26): scope-derivation is retired as the
+    # DR-096 (coordinator-claude, 2026-07-26): scope-derivation is retired as the
     # PREFERRED write-time strategy but survives as a narrowing legacy path
     # here — this op has no `--sha` call shape, so every stamp attempt with
     # no caller-supplied sha silently fell into `kind="scope-derived"`
@@ -1352,7 +1352,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # ------------------------------------------------------------------
     # supersede: status:claimed + deployment_state:continued +
     # continued_into:<successor> — BEFORE the live-children guard (2026-07-27
-    # fix, cross-repo example-doctrine-repo incident: "supersede silently no-ops"). PM ruling:
+    # fix, cross-repo coordinator-claude incident: "supersede silently no-ops"). PM ruling:
     # "as soon as a successor baton exists, the predecessor is by definition
     # no longer in flight" — a live claim holder is IRRELEVANT to that fact.
     # The status flip is NOT gated on `_handoff_has_live_children`'s

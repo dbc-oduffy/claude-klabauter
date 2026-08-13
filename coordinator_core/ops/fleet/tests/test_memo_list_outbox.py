@@ -14,7 +14,7 @@ Test surface (docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md):
 Harness: asyncio.run() in sync test functions — no pytest-asyncio dependency.
 Pattern: mirrors test_memo_draft.py's real-git-repo sender fixture.
 
-Spec backlink: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md
+Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745
 """
 
 from __future__ import annotations

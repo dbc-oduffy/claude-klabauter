@@ -11,7 +11,7 @@ Covers:
   - `_write_doctor_sentinel` writes `vendor_drift` alongside the untouched original
     7 keys, without altering their shape.
 
-Spec backlink: cross-repo/inbox/2026-07-26-example-doctrine-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md
+Spec backlink: cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
 Sibling coverage: bin/tests/test_claude_klabauter_doctor_schema_drift_probe.py (probe-level
 wiring of local_version/doe_version into `data["drifted"]`, tested upstream of
 this file's sentinel-reduction layer).
@@ -85,7 +85,7 @@ class TestSentinelVendorDriftReduction:
                 "remediation": "re-vendor",
                 "data": {
                     "status": "DRIFT",
-                    "doe_repo_path": "/fake/example-doctrine-repo",
+                    "doe_repo_path": "/fake/coordinator-claude",
                     "checked": 12,
                     "drifted": [
                         {
@@ -126,7 +126,7 @@ class TestSentinelVendorDriftReduction:
                 "remediation": "—",
                 "data": {
                     "status": "MATCH",
-                    "doe_repo_path": "/fake/example-doctrine-repo",
+                    "doe_repo_path": "/fake/coordinator-claude",
                     "checked": 12,
                     "drifted": [],
                     "indeterminate": [],
@@ -183,7 +183,7 @@ class TestWriteDoctorSentinelVendorDriftKey:
                 "remediation": "re-vendor",
                 "data": {
                     "status": "DRIFT",
-                    "doe_repo_path": "/fake/example-doctrine-repo",
+                    "doe_repo_path": "/fake/coordinator-claude",
                     "checked": 12,
                     "drifted": [
                         {

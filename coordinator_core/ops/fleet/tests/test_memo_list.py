@@ -16,7 +16,7 @@ C2 test surface (docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C2
 Harness: asyncio.run() in sync test functions — no pytest-asyncio dependency.
 Pattern: mirrors test_memo_send.py's registry fixture factory.
 
-Spec backlink: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C2
+Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C2
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def _write_doe_manifest(
     """Write a .doe-root sentinel + coordinator-registry.manifest.json fixture.
 
     Mirrors test_memo_check_addressee.py's `_write_doe_manifest` pattern —
-    a hermetic tmp_path-scoped manifest, never the real machine's example-doctrine-repo tree.
+    a hermetic tmp_path-scoped manifest, never the real machine's coordinator-claude tree.
 
     The sentinel lands on the DR-071 ladder's durable rung
     (`<settings-home>/machine-local/.doe-root`), not the pre-2026-07-28
@@ -333,7 +333,7 @@ class TestEnumerationAliasesAndCentral:
     def test_is_central_from_settings_home_sentinel_with_no_legacy_pointer(
         self, tmp_path, monkeypatch
     ):
-        """The example-doctrine-repo receiver is flagged is_central when the ONLY doe-root pointer
+        """The coordinator-claude receiver is flagged is_central when the ONLY doe-root pointer
         on the machine is the durable `<settings-home>/machine-local/.doe-root`.
 
         This is the exact shape of every machine installed since
@@ -345,7 +345,7 @@ class TestEnumerationAliasesAndCentral:
         rendered "repos.example_doctrine_repo not registered on this machine" on a machine
         where the receiver was registered and delivery to it worked.
         """
-        doe_repo = tmp_path / "example-doctrine-repo-repo"
+        doe_repo = tmp_path / "coordinator-claude-repo"
         doe_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": str(doe_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -358,7 +358,7 @@ class TestEnumerationAliasesAndCentral:
         _write_doe_manifest(
             claude_home,
             tmp_path,
-            {"identity": {"centralReceiverIds": ["central-em", "example-doctrine-repo-em"]}},
+            {"identity": {"centralReceiverIds": ["central-em", "coordinator-claude-em"]}},
             doe_root=doe_repo,
         )
         # The legacy rungs must be genuinely absent — both the retired location

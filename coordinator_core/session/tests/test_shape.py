@@ -2,7 +2,7 @@
 coordinator_core.session.tests.test_shape — parity tests for
 coordinator_core.session.shape.
 
-Port of: session-shape.sh (example-doctrine-repo e34f2484, 2026-07-22).
+Port of: session-shape.sh (coordinator-claude e34f2484, 2026-07-22).
 
 Two strategies, per the recipe:
   (a) boundary-matrix transcription of the bash oracle's contracts
@@ -442,7 +442,7 @@ class TestProducerSet:
         indistinguishably from an ordinary open-vocabulary command name on
         disk, defeating the three-state distinguishability the design rests
         on. An exact sentinel and an unrelated real command name must both
-        still pass -- this guard is narrow, not a re-enumeration of example-doctrine-repo's
+        still pass -- this guard is narrow, not a re-enumeration of coordinator-claude's
         open command vocabulary.
         """
         repo = _make_repo(tmp_path)
@@ -458,7 +458,7 @@ class TestProducerSet:
     def test_capture_record_carries_exactly_two_keys(self, tmp_path):
         """The capture-side record is `typed_command` + `captured_at`, and nothing else.
 
-        example-doctrine-repo's landed `session-shape.schema.json` (x-schema-version 1.1.0)
+        coordinator-claude's landed `session-shape.schema.json` (x-schema-version 1.1.0)
         declares this object `additionalProperties: false` with both keys
         required, so an extra key here is a hard validation failure on their
         side rather than a harmless addition. `op_identity` in particular

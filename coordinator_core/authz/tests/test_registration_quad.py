@@ -11,7 +11,7 @@ fifth surface, `_EAGER_OP_MODULES` (`coordinator_core/ops/__init__.py`), added t
 the gap `roadmap.link_stubs` demonstrated live on 2026-08-05 — see
 `registration_quad.py`'s module docstring § Fifth surface.
 
-Spec backlink: docs/plans/2026-07-25-registration-quad-completeness-gate.md § C3,
+Spec backlink: pln-registration-quad-completeness-bf0d39 § C3,
 AC5, AC6, AC7
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md
 """

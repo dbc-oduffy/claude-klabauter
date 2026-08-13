@@ -2,7 +2,7 @@
 coordinator_core.hooks.subagent_zero_tool_use_surface — thin pure-read surfacing op.
 
 Purpose: Stage 2 (read side) of the zero-tool-use detection cross-repo contract with
-Example-doctrine-repo. Returns this session's `kind == "zero-tool-use"` durable records — written
+Coordinator-claude. Returns this session's `kind == "zero-tool-use"` durable records — written
 by hooks.subagent_zero_tool_use — in append order, as structured JSON-RPC result
 data. This is new ground: no existing hooks.* op returns structured data (every prior
 op returns an advisory envelope via _envelope.py); this op returns a plain dict
@@ -14,8 +14,8 @@ did zero tool calls (see hooks.subagent_zero_tool_use's module docstring, "Namin
 note"). `kind == "zero-tool-use"` identifies which detector wrote the record, not
 its count. A caller that treats every returned record as a zero-tool-use detection
 will misreport healthy agents; filter each record's own `tool_use_count == 0`
-yourself (example-doctrine-repo's consumer does this — see
-cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-store-records-every-count.md).
+yourself (coordinator-claude's consumer does this — see
+cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-store-records-every-count.md).
 hooks.subagent_zero_tool_use_resolve does this filtering per-agent already, if a
 single verdict rather than the raw record list is what you need.
 
@@ -27,7 +27,7 @@ Return shape (pinned):
         "store_present": <bool>,
     }
 
-Append order is load-bearing: example-doctrine-repo's own consumer tracks delivery with a count-or-offset
+Append order is load-bearing: coordinator-claude's own consumer tracks delivery with a count-or-offset
 cursor on their side (per-session, exactly-once), which is only stable if this op
 always returns records in the same order they were written. Do not sort, dedup, or
 reorder records here.
@@ -36,16 +36,16 @@ Negative-spec:
     THIN and PURE-READ — no state mutation of any kind:
       - Does NOT mark anything "surfaced". There is no surfaced/unsurfaced state
         anywhere in this op or in the on-disk schema; exactly-once delivery is
-        tracked entirely example-doctrine-repo-side via their own per-session cursor file.
+        tracked entirely coordinator-claude-side via their own per-session cursor file.
       - Does NOT perform "dispatched but no record arrived" reconciliation. That gap
-        detection is example-doctrine-repo-side, layered onto their own existing dispatch-tracking loop
+        detection is coordinator-claude-side, layered onto their own existing dispatch-tracking loop
         which already owns dispatched-agents.txt / agent-audit.jsonl and the
         false-positive suppressors a fresh engine-side reconciler would have to
         re-derive from scratch.
       - Does NOT add atomicity/locking machinery. Pure read of an append-only file;
         no shared mutable state to race, and each session owns its own store file.
       - Does NOT register or handle a `TaskCompleted` case — evaluated and rejected
-        example-doctrine-repo-side (no `agent_id`, no transcript pointer in that payload); a handler
+        coordinator-claude-side (no `agent_id`, no transcript pointer in that payload); a handler
         here would be a dead trigger.
 
     A missing store file is NOT an error — it means the session dispatched no
@@ -61,7 +61,7 @@ Negative-spec:
     same kind-discriminated shape) — it is NOT counted in `skipped_lines`, since it
     parsed correctly and is simply out of scope for this surface op.
 
-Spec backlink: cross-repo/inbox/2026-07-25-example-doctrine-repo-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-engine-op-contract.md
 """
 
 from __future__ import annotations

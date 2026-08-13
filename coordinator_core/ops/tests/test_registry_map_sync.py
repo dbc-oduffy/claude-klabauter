@@ -32,7 +32,7 @@ Coverage:
              (_eager_import_all()) covers a map gap and dispatch is never
              worse than pre-C4 eager-import correctness.
 
-Spec backlink: docs/plans/2026-07-14-claude-klabauter-windows-portability.md section C4
+Spec backlink: pln-claude-klabauter-windows-portability-a48fac section C4
 """
 
 from __future__ import annotations

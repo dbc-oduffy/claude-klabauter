@@ -1,7 +1,7 @@
 """
 coordinator_core.session.identity — teammate identity resolution.
 
-Port of: identity.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
+Port of: identity.sh (coordinator-claude 6fb5fb37, 2026-07-22).
 
 Purpose: subagent-side reconstruction of the canonical EM-side agent id from
 the harness-supplied ``agent_id`` (as seen from inside a dispatched
@@ -40,7 +40,7 @@ from typing import Any, Dict, Optional
 #: CS_CANONICAL_AGENT_ID_RE — single source of truth for the bare-hex
 #: unnamed-agent format predicate. Format: lowercase hex, >= 12 chars, no
 #: upper bound. Port of ``CS_CANONICAL_AGENT_ID_RE``
-#: (example-doctrine-repo coordinator-session.sh, e34f2484, 2026-07-22).
+#: (coordinator-claude coordinator-session.sh, e34f2484, 2026-07-22).
 CANONICAL_AGENT_ID_RE = re.compile(r"^[a-f0-9]{12,}$")
 
 #: Named-teammate grammar: ``a<name>-<16hex>``. The greedy ``(.+)`` capture
@@ -199,7 +199,7 @@ def resolves_em_audience(
     predicate True. That is out of scope by PM ruling (DECISIONS.md D1):
     these locks exist "not out of safety from malicious attack but because
     doctrine alone cannot keep amnesiac Claudes from machine-degrading or
-    otherwise deleterious behavior," and example-doctrine-repo's own
+    otherwise deleterious behavior," and coordinator-claude's own
     ``bash-guard-threat-model.md`` names the actor "an eager subagent, not
     an adversary." A predicate a determined subagent could forge still
     fully discharges that threat model — do not harden it; hardening

@@ -1,5 +1,5 @@
 """
-bin-templates-manifest.py — single source of truth for which of example-doctrine-repo's
+bin-templates-manifest.py — single source of truth for which of coordinator-claude's
 `coordinator/templates/bin/` artifacts claude-klabauter's installer classifies as
 `code` vs `operator-config`, and how it installs each one.
 
@@ -10,8 +10,8 @@ Imported (never executed) by:
     loaded that way)
 
 `ml_bin` (`coordinator_core/install/substrate.py`'s `plugin_root / "templates"
-/ "bin"`) resolves to example-doctrine-repo's tree — every artifact this manifest names is
-authored and owned by example-doctrine-repo; claude-klabauter only classifies and copies it. That
+/ "bin"`) resolves to coordinator-claude's tree — every artifact this manifest names is
+authored and owned by coordinator-claude; claude-klabauter only classifies and copies it. That
 classification used to live in four hand-maintained tuples
 (`_ML_FAMILY_FILES` / `_CH_FAMILY_FILES` / `_ML_EXPLICIT_FILES` /
 `_PLATFORM_LOCALIZE_FILES`) hardcoded against a directory claude-klabauter does not
@@ -23,11 +23,11 @@ else — the parity test
 build if `templates/bin/` gains a file this manifest does not classify, or
 if an entry here no longer exists on disk.
 
-Spec backlink: docs/plans/2026-07-25-install-surface-freshness-classification.md
+Spec backlink: pln-install-surface-freshness-exte-f702c8
                § C12 / AC19 / AC20
 
 Every entry's `artifact_class` is `"code"` and `force_overwrite` is `True` —
-per C1 (already landed), none of example-doctrine-repo's `templates/bin/` artifacts is
+per C1 (already landed), none of coordinator-claude's `templates/bin/` artifacts is
 operator-config; a stale destination is always repaired on re-install. C12
 does NOT re-decide this — it transcribes C1's landed decision verbatim.
 `exec_bit` is the POSIX permission bit `_install_one` applies at the
@@ -37,13 +37,13 @@ destination (NOT a code/config classifier — see substrate.py's own
 
 Negative spec: do NOT add `_CH_FAMILY_FILES`'s three names here
 (`claude-home`, `_claude_home.py`, `claude-home.cmd`). Their source is
-`coordinator/lib/claude-home/` — CLAUDE-KLABAUTER'S OWN tree, not example-doctrine-repo's
+`coordinator/lib/claude-home/` — CLAUDE-KLABAUTER'S OWN tree, not coordinator-claude's
 `templates/bin/` — so they are out of this manifest's scope by
 construction; `_CH_FAMILY_FILES` stays a separate, hand-maintained tuple in
 substrate.py. Likewise `_RM_FAMILY_FILES` (`_resolve_claude_klabauter.py`, sourced
 from `coordinator/lib/resolve-claude-klabauter/`) is out of scope for the same
 reason. Folding either in would make this manifest's own parity test lie —
-it walks example-doctrine-repo's `templates/bin/` directory, and neither family's source
+it walks coordinator-claude's `templates/bin/` directory, and neither family's source
 lives there.
 """
 
@@ -53,7 +53,7 @@ from typing import NamedTuple
 
 
 class BinTemplateEntry(NamedTuple):
-    """One example-doctrine-repo `templates/bin/` artifact's install classification.
+    """One coordinator-claude `templates/bin/` artifact's install classification.
 
     `artifact_class`: "code" | "operator-config" (declared by AC19; every
         current entry is "code" per C1's landed decision — see module
@@ -122,7 +122,7 @@ LAUNCHER_TEMPLATE_FILES: "tuple[BinTemplateEntry, ...]" = (
     BinTemplateEntry("claude-doe-launcher.ps1.tmpl", "code", False, True),
 )
 
-# Union of every group above — the complete classification of example-doctrine-repo's
+# Union of every group above — the complete classification of coordinator-claude's
 # `templates/bin/` directory. The parity test asserts this set's name
 # collection is EXACTLY the on-disk listing (minus __pycache__), in both
 # directions.

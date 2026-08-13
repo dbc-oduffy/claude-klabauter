@@ -2,7 +2,7 @@
 coordinator_core.ops.tests.test_completion_ops_reconcile — REOPENED session_id
 git-resolution path parity coverage for completion.reconcile_commits.
 
-Byte-parity oracle — Port of: reconcile-completion-commits.sh (example-doctrine-repo 432e3285, 2026-07-22), Zone A (pre-append-mode-fork) —
+Byte-parity oracle — Port of: reconcile-completion-commits.sh (coordinator-claude 432e3285, 2026-07-22), Zone A (pre-append-mode-fork) —
 merge-base resolution, chain-slug expansion (Axis 1 multi-session widening),
 multi-session Session-Id: trailer collection, SHA canonicalization, and the
 id-provenance-mismatch probe. Fixture pattern mirrors
@@ -605,7 +605,7 @@ class TestDryRun:
 
 class TestDryRunReturnShapeInvariant:
     """The two early-return no-ops (merge_base_unresolved, delta_count == 0) MUST
-    return the SAME payload shape under dry_run True and False — example-doctrine-repo's facade
+    return the SAME payload shape under dry_run True and False — coordinator-claude's facade
     extracts .no_op/.appended/.merge_base_unresolved via jq; a shape desync
     between modes would break it (both branches precede the dry_run gate, so
     this is really an assertion that the gate placement didn't leak)."""

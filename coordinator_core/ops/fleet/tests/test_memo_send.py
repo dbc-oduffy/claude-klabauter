@@ -16,7 +16,7 @@ Harness: asyncio.run() in sync test functions — no pytest-asyncio dependency.
 Pattern: real temp git repos for receiver (git check-ignore needs an actual git repo);
          CLAUDE_HOME monkeypatched for registry isolation.
 
-Spec backlink: docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md § C2
+Spec backlink: pln-strang-03-cross-repo-memo-send-40d84e § C2
 """
 
 from __future__ import annotations
@@ -229,7 +229,7 @@ def _make_doe_manifest(
     """Write .doe-root sentinel and a fake coordinator-registry.manifest.json.
 
     Creates a doe-root dir, writes the manifest with the given aliases, and
-    points the DR-071 doe-root ladder at it. Mirrors the shape ratified in example-doctrine-repo
+    points the DR-071 doe-root ladder at it. Mirrors the shape ratified in coordinator-claude
     consult 2026-07-05 strang-03 follow-up, Q2.
 
     The doe-root is this fixture's own `repos.example_doctrine_repo` when registered —
@@ -246,7 +246,7 @@ def _make_doe_manifest(
     Returns the doe_root Path for callers that need it.
     """
     if central_ids is None:
-        central_ids = ["claude-central-em", "central-em", "central", "example-doctrine-repo-em"]
+        central_ids = ["claude-central-em", "central-em", "central", "coordinator-claude-em"]
     if redirect_aliases is None:
         redirect_aliases = []
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
@@ -2410,7 +2410,7 @@ class TestRegistryEnumeratedAllowedSet:
     def test_registry_key_convention(self):
         """Receiver EM identity → repos.* key conversion follows the correct convention."""
         assert _receiver_em_to_repo_key("example-retrieval-repo-em") == "repos.example_retrieval_repo"
-        assert _receiver_em_to_repo_key("example-doctrine-repo-em") == "repos.example_doctrine_repo"
+        assert _receiver_em_to_repo_key("coordinator-claude-em") == "repos.example_doctrine_repo"
         assert _receiver_em_to_repo_key("claude-klabauter-em") == "repos.claude_klabauter"
         # Without -em suffix (bare shortname is also accepted)
         assert _receiver_em_to_repo_key("example-retrieval-repo") == "repos.example_retrieval_repo"
@@ -2547,7 +2547,7 @@ class TestInternalHelpers:
 class TestCollisionFailLoud:
     """C4: same-day/same-topic collision → fail-loud (refuse, no silent clobber).
 
-    Collision semantics ratified in C1 (DR-214 D2 criterion 4, example-doctrine-repo-normative 2026-07-05):
+    Collision semantics ratified in C1 (DR-214 D2 criterion 4, coordinator-claude-normative 2026-07-05):
     read-before-write → refuse on same-day/same-topic collision.
     Prior art: the Staff Engineer finding #2b; improvement-queue 2026-06-23-hot-shared-branch-a-cross-
     repo-memo-repl.yaml (canonical same-day/same-topic replace/clobber source); memo
@@ -2558,7 +2558,7 @@ class TestCollisionFailLoud:
         DR-214: docs/decisions/DR-214-send-class-cross-tree-write-boundary.md § D2 criterion 4
 
     Negative-spec: nonce/content-hash suffix is NOT a test variant — that would require a
-    example-doctrine-repo-coordinated filename-contract change across all 5 lockstep sites (strang-03 § C4).
+    coordinator-claude-coordinated filename-contract change across all 5 lockstep sites (strang-03 § C4).
     """
 
     def test_same_topic_second_act_refused(self, tmp_path, monkeypatch):
@@ -2662,7 +2662,7 @@ class TestCollisionFailLoud:
     def test_collision_cross_sender_both_survive(self, tmp_path, monkeypatch):
         """DR-026: two DIFFERENT senders, same topic + same day → both memos survive.
 
-        Mirrors example-doctrine-repo's test_collision_cross_sender_both_survive (cross-repo-memo-
+        Mirrors coordinator-claude's test_collision_cross_sender_both_survive (cross-repo-memo-
         roundtrip.test.py) — the whole point of the DR-026 sender-namespaced
         filename is that an N-repo broadcast reply with an identical topic slug
         on the same day does not collapse into a single-writer collision. Both
@@ -3203,13 +3203,13 @@ class TestNoMemoIndex:
 
 
 # ===========================================================================
-# 10. Receiver alias resolution via example-doctrine-repo manifest (example-doctrine-repo consult 2026-07-05 strang-03 Q2)
+# 10. Receiver alias resolution via coordinator-claude manifest (coordinator-claude consult 2026-07-05 strang-03 Q2)
 # ===========================================================================
 
 class TestReceiverAliasResolution:
     """Manifest-driven alias resolution for _receiver_em_to_repo_key.
 
-    Spec backlink: example-doctrine-repo consult 2026-07-05 strang-03 follow-up, Q2.
+    Spec backlink: coordinator-claude consult 2026-07-05 strang-03 follow-up, Q2.
     Aliases (identity.repoAliases) and central IDs (identity.centralReceiverIds)
     are read from coordinator-registry.manifest.json via the .doe-root sentinel.
     """
@@ -3453,7 +3453,7 @@ class TestFrontmatterSelfValidation:
 class TestComposedMemoYamlSchemaValid:
     """Parse claude-klabauter's REAL _compose_memo output as YAML and assert schema shape.
 
-    Closes the residual conformance gap the example-doctrine-repo round-trip fixture cannot catch:
+    Closes the residual conformance gap the coordinator-claude round-trip fixture cannot catch:
     the fixture SIMULATES the claude-klabauter write shape at most sites rather than driving
     claude-klabauter's own op, and test_act_written_memo_has_schema_valid_frontmatter (above)
     only asserts via substrings ('status: open' in content) — neither actually
@@ -3554,7 +3554,7 @@ class TestCentralReceiverResolution:
     Bug: the plain convention fallback in _receiver_em_to_repo_key mapped each
     central id independently ('claude-central-em' -> 'repos.claude_central',
     'central-em' -> 'repos.central', 'central' -> 'repos.central',
-    'example-doctrine-repo-em' -> 'repos.example_doctrine_repo') — only 'example-doctrine-repo-em' happened to
+    'coordinator-claude-em' -> 'repos.example_doctrine_repo') — only 'coordinator-claude-em' happened to
     match the machine-local registry's actual central entry (repos.example_doctrine_repo),
     so sending to the canonical alias 'claude-central-em' silently refused
     (exit_code:1) even though central IS registered under a different id.
@@ -3566,7 +3566,7 @@ class TestCentralReceiverResolution:
 
     def test_claude_central_em_resolves_to_example_doctrine_repo_path(self, tmp_path, monkeypatch):
         """claude-central-em (the canonical claude-klabauter-side central alias) resolves — was broken."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
@@ -3584,7 +3584,7 @@ class TestCentralReceiverResolution:
 
     def test_central_em_resolves_to_example_doctrine_repo_path(self, tmp_path, monkeypatch):
         """central-em fans in to the same registered central key."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
@@ -3600,7 +3600,7 @@ class TestCentralReceiverResolution:
 
     def test_bare_central_resolves_to_example_doctrine_repo_path(self, tmp_path, monkeypatch):
         """'central' (bare, no -em suffix) fans in to the same registered central key."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
@@ -3615,17 +3615,17 @@ class TestCentralReceiverResolution:
         assert memo_path.parent.parent == example_doctrine_repo_repo / "cross-repo"
 
     def test_example_doctrine_repo_em_still_resolves_regression_guard(self, tmp_path, monkeypatch):
-        """example-doctrine-repo-em (the pre-fix working case) keeps working after the fan-in fix."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        """coordinator-claude-em (the pre-fix working case) keeps working after the fan-in fix."""
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
         result = _run(_memo_send(
-            _base_params(to="example-doctrine-repo-em", dry_run=False, topic="example-doctrine-repo-em-regression")
+            _base_params(to="coordinator-claude-em", dry_run=False, topic="coordinator-claude-em-regression")
         ))
 
-        assert result["exit_code"] == 0, f"example-doctrine-repo-em must still resolve: {result}"
+        assert result["exit_code"] == 0, f"coordinator-claude-em must still resolve: {result}"
         memo_path = Path(result["acted"][0]["id"])
         assert memo_path.exists()
         assert memo_path.parent.parent == example_doctrine_repo_repo / "cross-repo"
@@ -3633,7 +3633,7 @@ class TestCentralReceiverResolution:
     def test_non_central_receiver_unchanged(self, tmp_path, monkeypatch):
         """A non-central receiver (example-retrieval-repo-em) resolves to its own repo, unaffected."""
         rag_repo = _make_receiver_git_repo(tmp_path, "rag-repo")
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(
             tmp_path, {"example_retrieval_repo": rag_repo, "example_doctrine_repo": example_doctrine_repo_repo}
         )
@@ -3675,12 +3675,12 @@ class TestCentralReceiverResolution:
 
     def test_resolve_receiver_inbox_central_fanin_direct_unit(self, tmp_path, monkeypatch):
         """Direct unit test of _resolve_receiver_inbox's central fan-in resolution."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
-        for central_id in ("claude-central-em", "central-em", "central", "example-doctrine-repo-em"):
+        for central_id in ("claude-central-em", "central-em", "central", "coordinator-claude-em"):
             inbox_dir, receiver_repo_path, all_repos = _resolve_receiver_inbox(central_id)
             assert inbox_dir is not None, f"{central_id!r} must resolve an inbox"
             assert receiver_repo_path == example_doctrine_repo_repo, (
@@ -3703,8 +3703,8 @@ class TestCentralReceiverResolution:
 #
 # Problem this closes: `_compose_memo` stamped `to:` verbatim from whatever
 # central/redirect alias the caller typed (`claude-central-em`, `central-em`,
-# `central`, `example-doctrine-repo-em`, `.claude-em`, `claude-home`, `coordinator-claude`,
-# `coordinator-claude-em` all address the SAME example-doctrine-repo seat) — a reader could not
+# `central`, `coordinator-claude-em`, `.claude-em`, `claude-home`, `coordinator-claude`,
+# `coordinator-claude-em` all address the SAME coordinator-claude seat) — a reader could not
 # verify by inspection that two differently-addressed memos landed at the
 # same receiver. Fix: _memo_resolver.canonical_receiver_id() derives the ONE
 # repo-matching central id, and memo_send.py stamps THAT into `to:` instead
@@ -3720,14 +3720,14 @@ class TestCanonicalReceiverIdStamping:
 
     @pytest.mark.parametrize(
         "alias",
-        ["claude-central-em", "central-em", "central", "example-doctrine-repo-em"],
+        ["claude-central-em", "central-em", "central", "coordinator-claude-em"],
     )
     def test_every_central_alias_stamps_same_canonical_to(
         self, tmp_path, monkeypatch, alias
     ):
         """Every central alias resolves to the SAME registered repo AND stamps
         the SAME canonical `to:` value — one seat, one name in the corpus."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
@@ -3739,11 +3739,11 @@ class TestCanonicalReceiverIdStamping:
         assert result["exit_code"] == 0, result
         memo_path = Path(result["acted"][0]["id"])
         stamped_to = self._read_to_field(memo_path)
-        assert stamped_to == "example-doctrine-repo-em", (
+        assert stamped_to == "coordinator-claude-em", (
             f"alias {alias!r} must stamp the repo-matching canonical id "
-            f"'example-doctrine-repo-em', got {stamped_to!r}"
+            f"'coordinator-claude-em', got {stamped_to!r}"
         )
-        assert result["acted"][0]["receiver"] == "example-doctrine-repo-em"
+        assert result["acted"][0]["receiver"] == "coordinator-claude-em"
 
     @pytest.mark.parametrize(
         "redirect_alias",
@@ -3758,7 +3758,7 @@ class TestCanonicalReceiverIdStamping:
         route redirect aliases to a registered repo (a separate, pre-existing
         concern this fix does not touch — memo.check_addressee owns that
         redirect-MATCH path per _memo_resolver's module docstring)."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(
@@ -3766,8 +3766,8 @@ class TestCanonicalReceiverIdStamping:
             redirect_aliases=[".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em"],
         )
 
-        assert _canonical_receiver_id(redirect_alias) == "example-doctrine-repo-em"
-        assert _canonical_receiver_id("claude-central-em") == "example-doctrine-repo-em"
+        assert _canonical_receiver_id(redirect_alias) == "coordinator-claude-em"
+        assert _canonical_receiver_id("claude-central-em") == "coordinator-claude-em"
 
     def test_non_central_receiver_stamped_unchanged(self, tmp_path, monkeypatch):
         """A non-central receiver (example-retrieval-repo-em) is stamped as-is — no rewrite."""
@@ -3805,7 +3805,7 @@ class TestCanonicalReceiverIdStamping:
     ):
         """A dry-run preview's `receiver` field must equal the `to:` the act
         path actually stamps — same canonicalization, same value, both paths."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "example-doctrine-repo-repo")
+        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
         claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
@@ -3823,7 +3823,7 @@ class TestCanonicalReceiverIdStamping:
         memo_path = Path(result["acted"][0]["id"])
         stamped_to = self._read_to_field(memo_path)
 
-        assert previewed_receiver == stamped_to == "example-doctrine-repo-em"
+        assert previewed_receiver == stamped_to == "coordinator-claude-em"
 
     def test_read_central_receiver_ids_graceful_degradation(self, tmp_path, monkeypatch):
         """No .doe-root/manifest → _read_central_receiver_ids returns empty set, no raise."""
@@ -4521,11 +4521,11 @@ class TestSupersedesListForm:
 
     def test_redelivery_filename_slugs_first_reference_of_a_list(self):
         listed = _redelivery_filename(
-            "2026-07-28", "example-doctrine-repo-em", "topic",
+            "2026-07-28", "coordinator-claude-em", "topic",
             ["2026-07-20-a.md", "2026-07-21-b.md"],
         )
         scalar = _redelivery_filename(
-            "2026-07-28", "example-doctrine-repo-em", "topic", "2026-07-20-a.md",
+            "2026-07-28", "coordinator-claude-em", "topic", "2026-07-20-a.md",
         )
         assert listed == scalar
 
@@ -4533,7 +4533,7 @@ class TestSupersedesListForm:
 # ===========================================================================
 # Sender-outbox sent-stamp (write-back onto the SENDER's own draft copy)
 #
-# Root cause: verified cross-repo/inbox finding, example-doctrine-repo-em — send
+# Root cause: verified cross-repo/inbox finding, coordinator-claude-em — send
 # dispatched to the receiver and removed the sender's local draft, but
 # nothing ever wrote delivery evidence back onto the sender's own outbox
 # copy. See memo_send._stamp_sender_outbox_sent's docstring for the
@@ -4636,7 +4636,7 @@ class TestSenderOutboxSentStamp:
         delivered_id = result["acted"][0]["id"]
         # Portable form: receiver-repo-relative, not the absolute machine
         # path — see _portable_delivered_to_form. Absolute home paths tracked
-        # into a sent memo redden example-doctrine-repo's test_no_posix_home_path_citations gate.
+        # into a sent memo redden coordinator-claude's test_no_posix_home_path_citations gate.
         expected_relpath = Path(delivered_id).resolve().relative_to(
             receiver_repo.resolve()
         ).as_posix()
@@ -4743,7 +4743,7 @@ class TestSenderOutboxSentStamp:
 # Sender-side sent-memo ledger (append-only, UNCONDITIONAL on a draft
 # existing — closes the one-shot-form chunk-closure gap)
 #
-# Root cause: cross-repo memo, example-doctrine-repo-em, 2026-08-04 — a plan chunk in a
+# Root cause: cross-repo memo, coordinator-claude-em, 2026-08-04 — a plan chunk in a
 # sending repo whose deliverable is a memo has no local evidence the memo
 # shipped when sent via the legacy one-shot flag form (no memo.draft, so
 # _stamp_sender_outbox_sent's conditional stamp never fires). See

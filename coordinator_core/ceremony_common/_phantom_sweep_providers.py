@@ -35,7 +35,7 @@ static source-text scan of `residue.py` asserting it always emits
 `directives=[]` and never passes a non-empty `resolves=`. That pin was
 honest only while `residue.py`'s only judgment point ever built a
 `resolves`-free disposition — an approved, part-executed plan
-(example-doctrine-repo `docs/plans/2026-07-26-review-skill-computed-residue.md`; its
+(coordinator-claude `docs/plans/2026-07-26-review-skill-computed-residue.md`; its
 C3/C4/C5/C13 rows landed here in `0859fb56`, the rest are outstanding)
 will change that, and a static pin cannot notice its own premise going
 stale. `sweep_review_assemble` below replaces it with a real dynamic
@@ -44,7 +44,7 @@ actually emits rather than asserting today's shape — exactly the standing
 this file's other providers hold.
 
 Spec backlink: cross-repo/inbox/2026-07-27-… "Generalize seam guards
-fleet-wide" dispatch (example-doctrine-repo, 2026-07-27).
+fleet-wide" dispatch (coordinator-claude, 2026-07-27).
 """
 
 from __future__ import annotations

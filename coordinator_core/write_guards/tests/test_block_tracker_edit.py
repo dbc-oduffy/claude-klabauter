@@ -15,7 +15,7 @@ while every sibling flip in the slice has one; add coverage for the
 advisory envelope shape, the reworded "OFFER:" prefix, and the removed
 `permissionDecision` key. -->
 
-Spec backlink: docs/plans/2026-08-06-apply-guard-class-census.md, chunk C4.
+Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, chunk C4.
 """
 
 from __future__ import annotations

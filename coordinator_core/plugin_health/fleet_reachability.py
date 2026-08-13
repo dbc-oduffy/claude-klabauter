@@ -1,13 +1,13 @@
 """
 coordinator_core.plugin_health.fleet_reachability — FAIL-LOUD delete-safety
-gate for claude-klabauter `coordinator/bin/` oracles the example-doctrine-repo fleet still
+gate for claude-klabauter `coordinator/bin/` oracles the coordinator-claude fleet still
 consumes.
 
 Purpose: catch the `c79e66cd` regression class at delete-time — claude-klabauter
-deleted `lint-frontmatter.js` while example-doctrine-repo skills still cited
+deleted `lint-frontmatter.js` while coordinator-claude skills still cited
 `bin/lint-frontmatter` — instead of relying on an operator to remember to
 grep the fleet before every delete. This is the north-star "discharge, don't
-enumerate" answer (example-doctrine-repo coordinator/docs/wiki/invisible-doctrine.md):
+enumerate" answer (coordinator-claude coordinator/docs/wiki/invisible-doctrine.md):
 a durable artifact that fails a test at delete-time, not a directive an
 operator is trusted to run by hand.
 
@@ -40,7 +40,7 @@ Axes compared:
         a different family than the forwarder loop, see
         `_AGENT_HELPER_RESERVED_NAMES`, but still a real fleet-cited oracle)
     Each is included because it independently satisfies the same test: a
-    file example-doctrine-repo actually cites via `bin/<name>` lives there AND carries the
+    file coordinator-claude actually cites via `bin/<name>` lives there AND carries the
     `.cmd`/`.ps1` Windows-launcher-twin tell that marks it invoked as an
     executable, not read as a library-internal helper. A directory is NOT
     added to this list merely because it contains a `.py` file whose stem
@@ -48,7 +48,7 @@ Axes compared:
     "Documented residual blind spots" for what a name with no oracle in any
     of these three directories means (a genuine unmet demand, not a
     reason to widen the scan further).
-  - Demand: example-doctrine-repo fleet consumers, derived from a regex sweep of
+  - Demand: coordinator-claude fleet consumers, derived from a regex sweep of
     `coordinator/{skills,commands,hooks,pipelines}` `.md` files for the
     `bin/<name>` invocation form, NARROWED to genuine live-invocation
     demand by two independent structural filters (2026-07-27 widening —
@@ -66,7 +66,7 @@ Axes compared:
 
 Both sides are NORMALIZED to a common stem before diffing (strip a trailing
 `.py`/`.js`/`.sh`, matching `_derive_agent_helper_target_map`'s own
-`.py`-strip convention extended to the extensions example-doctrine-repo fences actually cite):
+`.py`-strip convention extended to the extensions coordinator-claude fences actually cite):
 a fence citing `bin/query-records` and a live `query-records.js` oracle are
 the SAME oracle for reachability purposes — this gate answers "does an
 oracle by this name exist in some form", not "does the extension match".
@@ -80,8 +80,8 @@ WARN-only contract exists because ITS drift is expected to self-heal on the
 next install pass; a fleet-consumed oracle with no surviving claude-klabauter entry
 does not self-heal — it is a live breakage the next consumer install hits.
 
-Skip-masking guard: a clean `skipped=True, ok=True` result when example-doctrine-repo is
-unresolvable (the OSS-consumer / no-example-doctrine-repo-checkout persona — genuinely nothing
+Skip-masking guard: a clean `skipped=True, ok=True` result when coordinator-claude is
+unresolvable (the OSS-consumer / no-coordinator-claude-checkout persona — genuinely nothing
 to compare) is NOT itself a failure. But a skip on a machine where
 `repos.example_doctrine_repo` IS registered would silently reproduce the exact blind
 spot this gate exists to close — `assert_registered_implies_no_skip()` below
@@ -89,12 +89,12 @@ is the CI-facing assertion that catches that shape; see
 `test_fleet_reachability.py` for its wiring.
 
 Documented residual blind spots (do not pretend coverage beyond these):
-  - A example-doctrine-repo fence ADDED after this gate last ran (i.e. between a claude-klabauter delete
-    landing and a later example-doctrine-repo-side citation) is invisible to a gate run BEFORE
+  - A coordinator-claude fence ADDED after this gate last ran (i.e. between a claude-klabauter delete
+    landing and a later coordinator-claude-side citation) is invisible to a gate run BEFORE
     that fence existed — this gate is a delete-time check, not a continuous
     monitor. An optional `/workday-start` WARN net over the same primitive is
     out of scope here.
-  - Non-fence example-doctrine-repo consumers — a Python module, a Workflow script, or any
+  - Non-fence coordinator-claude consumers — a Python module, a Workflow script, or any
     caller that does not cite `bin/<name>` in Markdown prose inside the
     swept directories — are invisible to a regex sweep by construction. The
     sweep is deliberately restricted to `*.md` (see `_SWEEPABLE_SUFFIX`) for
@@ -129,12 +129,12 @@ Documented residual blind spots (do not pretend coverage beyond these):
     this gate after the 2026-07-27 namespace-qualification narrowing.
     `claude-klabauter-doctor-probe` is the confirmed live instance today
     (`workday-start.md`'s "written by claude-klabauter's `bin/claude-klabauter-doctor-probe.py`"
-    is its only example-doctrine-repo citation, and it is bare). Accepted trade: the
+    is its only coordinator-claude citation, and it is bare). Accepted trade: the
     alternative — treating every bare `bin/` mention as demand — is what
     produced the `check-fixture-sync` / `ensure-coordinator-venv` /
     `coordinator-handoff-archive` false positives this same pass fixes, and
     a bare mention cannot be told apart from those without interpreting
-    prose. Closing this residual requires example-doctrine-repo to cite real oracles via one
+    prose. Closing this residual requires coordinator-claude to cite real oracles via one
     of the two qualified forms, not a widening of this gate's own regex.
 
 Invocation surfaces: `pytest coordinator_core/plugin_health/tests/
@@ -150,7 +150,7 @@ surface. (Review: code-reviewer — this paragraph names the invocation
 surfaces explicitly so a future reader does not have to infer them from the
 bare `if __name__ == "__main__"` entry point.)
 
-Spec backlink: docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md D3
+Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 D3
 (original gate). Widened 2026-07-27 (commit 411f80ac's own follow-up finding —
 "the remaining set is not yet the true one") to scan `<repo-root>/bin/` and
 `coordinator/lib/` alongside `coordinator/bin/`: the live set was narrower
@@ -170,7 +170,7 @@ and `_is_namespace_qualified_citation` (token-class: require a
 before treating a `bin/<name>` match as demand, dropping bare mentions that
 are structurally indistinguishable from a per-consumer-repo convention or a
 retired-artifact backlink). See "Demand" above and the two functions' own
-docstrings for the verified-against-example-doctrine-repo's-tree false positives each one
+docstrings for the verified-against-coordinator-claude's-tree false positives each one
 closes, and the residual-blind-spots list for the accepted coverage trade
 (`claude-klabauter-doctor-probe`'s bare-only citation).
 """
@@ -189,9 +189,9 @@ from coordinator_core.machine_resolver import registry_get
 _PROG = "fleet-reachability"
 
 # Directory names `_derive_agent_helper_target_map` excludes from its own
-# scan (see that function's docstring) — a example-doctrine-repo fence citing `bin/lib/...`,
+# scan (see that function's docstring) — a coordinator-claude fence citing `bin/lib/...`,
 # `bin/tests/...`, etc. is citing a subdirectory, never a bare-name CLI, so
-# these tokens are dropped from the example-doctrine-repo demand set rather than compared as
+# these tokens are dropped from the coordinator-claude demand set rather than compared as
 # oracle names.
 _NON_ORACLE_SUBDIR_NAMES = {
     "lib",
@@ -203,7 +203,7 @@ _NON_ORACLE_SUBDIR_NAMES = {
     "__pycache__",
 }
 
-# The settings-home bin invocation form example-doctrine-repo fences cite, in both its bare
+# The settings-home bin invocation form coordinator-claude fences cite, in both its bare
 # (`bin/query-records`) and extensioned (`bin/query-records.js`) shapes, plus
 # the plain `coordinator/bin/<name>` form skills reference in prose. A
 # leading alnum requirement excludes prose ellipses (`bin/...`) and
@@ -219,7 +219,7 @@ _DOE_BIN_TOKEN_RE = re.compile(r"\bbin/([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9]
 # "Demand" bullet — settings-home-forwarder-seam and bare `coordinator/bin/`
 # citations both live in skill/command/hook/pipeline Markdown). A `.py` test
 # fixture that happens to embed a `coordinator/bin/<name>.sh` path literal
-# (e.g. a regression-guard docstring or an assertion payload) is example-doctrine-repo-internal
+# (e.g. a regression-guard docstring or an assertion payload) is coordinator-claude-internal
 # test scaffolding, never a fenced demand on claude-klabauter's oracle surface — sweep
 # only `.md` so that class of file cannot contribute a spurious token.
 _SWEEPABLE_SUFFIX = ".md"
@@ -233,7 +233,7 @@ _SWEEPABLE_SUFFIX = ".md"
 #
 # 2026-07-27 finding (see spec backlink below): a BARE `bin/<name>` with
 # nothing namespace-specific before it is NOT reliably a claude-klabauter-oracle
-# demand -- it is exactly as often a generic convention example-doctrine-repo's own prose
+# demand -- it is exactly as often a generic convention coordinator-claude's own prose
 # addresses to the READER'S OWN repo (`workday-start.md`'s "Repos with
 # paired cross-repo writers ship a `bin/check-fixture-sync.sh`" -- a
 # per-consumer-repo file, never a claude-klabauter oracle) or a retired-artifact
@@ -252,7 +252,7 @@ _SWEEPABLE_SUFFIX = ".md"
 # instance of that residual gap today (see module docstring's blind-spot
 # list) -- accepted because the alternative (treating every bare `bin/`
 # mention as demand) is what produced three false positives in the same
-# 2026-07-27 fleet-reachability report and forced a retracted memo to example-doctrine-repo.
+# 2026-07-27 fleet-reachability report and forced a retracted memo to coordinator-claude.
 _QUALIFYING_PATH_MARKERS = ("coordinator/", "templates/")
 
 
@@ -295,7 +295,7 @@ _GLOB_TRUNCATION_RE = re.compile(r"[-_.]*\*")
 
 # Review: code-reviewer — `.cmd` added: every `.py`/extensionless oracle in
 # `coordinator/bin/` gets a generated `.cmd` Windows-launcher twin
-# (`coordinator/bin/gen-launcher-shim.py`); a example-doctrine-repo fence citing the literal
+# (`coordinator/bin/gen-launcher-shim.py`); a coordinator-claude fence citing the literal
 # `bin/<name>.cmd` form would otherwise normalize to `<name>.cmd` and never
 # match the `.py`-stripped claude-klabauter stem, a false-positive FAIL.
 _KNOWN_ORACLE_EXTENSIONS = (".py", ".js", ".sh", ".cmd")
@@ -303,7 +303,7 @@ _KNOWN_ORACLE_EXTENSIONS = (".py", ".js", ".sh", ".cmd")
 _SWEEP_SUBDIRS = ("skills", "commands", "hooks", "pipelines")
 
 # Path-shape exclusions from the demand sweep: a `.md` file living at one of
-# these structural locations is evidence ABOUT example-doctrine-repo's own tree (a test
+# these structural locations is evidence ABOUT coordinator-claude's own tree (a test
 # fixture, a retirement-guard's own assertion, a changelog entry, a working
 # plan doc), never a live invocation surface a fleet consumer actually
 # follows. 2026-07-27 finding: the oracle's own dispatch brief named
@@ -316,14 +316,14 @@ _SWEEP_SUBDIRS = ("skills", "commands", "hooks", "pipelines")
 # backlink in `pipelines/update-docs/handoff-archival.md`, resolved by the
 # namespace-qualification fix above instead). This exclusion set is kept as
 # a second, independent structural discriminator regardless -- confirmed
-# real occurrences on example-doctrine-repo's own tree: `coordinator/hooks/tests/
+# real occurrences on coordinator-claude's own tree: `coordinator/hooks/tests/
 # block-destructive-rm.security-review.md` (a code-review artifact, not a
-# hook example-doctrine-repo ever tells an agent to invoke) and
+# hook coordinator-claude ever tells an agent to invoke) and
 # `coordinator/pipelines/artifact-distillation/tests/phase3d-fixtures/**`
 # (pipeline test fixtures).
 #
 # Deliberately NOT a filename-substring match on "review" (e.g. `*-review*`)
-# despite that being the brief's own suggested exclusion class: example-doctrine-repo's own
+# despite that being the brief's own suggested exclusion class: coordinator-claude's own
 # tree has genuine, live, fleet-invoked skill/command entrypoints named
 # exactly that shape -- `commands/parallel-code-review.md`,
 # `commands/enrich-and-review.md`, `skills/review/SKILL.md` -- and a
@@ -337,7 +337,7 @@ _EXCLUDED_PATH_SEGMENTS = frozenset({"tests", "test", "archive", "archived"})
 
 
 def _is_excluded_from_invocation_surface(rel_path: Path) -> bool:
-    """True when `rel_path` (relative to example-doctrine-repo's repo root) is a
+    """True when `rel_path` (relative to coordinator-claude's repo root) is a
     non-invocation-surface file class per `_EXCLUDED_PATH_SEGMENTS`'s own
     docstring -- a test/fixture directory, an archived directory, a
     CHANGELOG, or a `docs/plans/` working doc -- rather than live prose a
@@ -407,7 +407,7 @@ def _is_system_path_citation(text: str, bin_start: int) -> bool:
 
 def _normalize(name: str) -> str:
     """Strip a trailing known oracle extension and lowercase — the common
-    stem both the claude-klabauter-derived name and the example-doctrine-repo-cited token are compared
+    stem both the claude-klabauter-derived name and the coordinator-claude-cited token are compared
     on. See module docstring's "Both sides are NORMALIZED" section for why
     extension-exactness is deliberately not part of this gate's contract."""
     for ext in _KNOWN_ORACLE_EXTENSIONS:
@@ -420,10 +420,10 @@ def _normalize(name: str) -> str:
 @dataclass
 class FleetReachabilityResult:
     """ok=True -> no fleet-consumed oracle is missing (or a clean skip);
-    ok=False -> at least one example-doctrine-repo-cited `bin/<name>` has no surviving claude-klabauter
+    ok=False -> at least one coordinator-claude-cited `bin/<name>` has no surviving claude-klabauter
     oracle. `skipped=True` means no comparison was possible (claude-klabauter root
-    and/or example-doctrine-repo root unresolvable) — distinct from a clean zero-missing
-    result. `missing` carries the un-normalized example-doctrine-repo-cited tokens (for
+    and/or coordinator-claude root unresolvable) — distinct from a clean zero-missing
+    result. `missing` carries the un-normalized coordinator-claude-cited tokens (for
     readability) whose normalized stem has no claude-klabauter match; empty when
     `ok=True`.
 
@@ -466,9 +466,9 @@ def _claude_klabauter_oracle_names(oracle_dirs: List[Path]) -> Set[str]:
 
 
 def _doe_demand_tokens(doe_root: Path) -> Set[str]:
-    """Regex-sweep example-doctrine-repo's coordinator/{skills,commands,hooks,pipelines}
+    """Regex-sweep coordinator-claude's coordinator/{skills,commands,hooks,pipelines}
     for `bin/<name>` citations, normalized to a common stem. Non-existent
-    swept subdirs are skipped (a leaner example-doctrine-repo checkout is not an error).
+    swept subdirs are skipped (a leaner coordinator-claude checkout is not an error).
 
     Two independent structural filters narrow the sweep to genuine
     fleet-invocation demand (see each filter's own docstring for the
@@ -562,7 +562,7 @@ def check_fleet_reachability(
     (`test_fleet_reachability.py`). `agent_bin` / `extra_oracle_dirs` /
     `doe_root` / `ledger_path` are explicit overrides for tests; a caller
     that omits any of them gets the real resolution ladder (claude-klabauter's own
-    `coordinator_claude_klabauter_root()`, example-doctrine-repo's `read_doe_root_pointer()`, and
+    `coordinator_claude_klabauter_root()`, coordinator-claude's `read_doe_root_pointer()`, and
     `relocation_ledger`'s own `default_ledger_path()` — all registry-first,
     see each resolver's own docstring).
 
@@ -609,7 +609,7 @@ def check_fleet_reachability(
         return FleetReachabilityResult(
             ok=True,
             skipped=True,
-            lines=[f"[skip] {_PROG}: example-doctrine-repo root unresolvable — nothing to compare"],
+            lines=[f"[skip] {_PROG}: coordinator-claude root unresolvable — nothing to compare"],
         )
 
     claude_klabauter_oracles = _claude_klabauter_oracle_names([resolved_agent_bin] + resolved_extra_dirs)
@@ -639,7 +639,7 @@ def check_fleet_reachability(
                 demand_count=0,
                 lines=[
                     f"[warn] {_PROG}: 0 fleet-cited oracle(s) found in the swept surface — nothing "
-                    "was compared; a genuinely clean sweep of a real example-doctrine-repo tree always finds "
+                    "was compared; a genuinely clean sweep of a real coordinator-claude tree always finds "
                     "some citations, so this is reported distinctly rather than as an identical-"
                     "looking [ok]"
                 ]
@@ -668,11 +668,11 @@ def assert_registered_implies_no_skip() -> None:
     """CI-facing skip-masking guard (see module docstring). Raises
     AssertionError if `repos.example_doctrine_repo` IS registered on this machine but
     `check_fleet_reachability()` still skipped — a silent skip on a machine
-    that CAN resolve example-doctrine-repo would reproduce this gate's own blind spot.
+    that CAN resolve coordinator-claude would reproduce this gate's own blind spot.
     No-ops (does not raise, does not skip a caller's own pytest) when
     `repos.example_doctrine_repo` is not registered — that persona legitimately has
     nothing to compare, and asserting non-skip there would be the OSS/
-    no-example-doctrine-repo-checkout false positive this guard must not introduce."""
+    no-coordinator-claude-checkout false positive this guard must not introduce."""
     if not registry_get("repos.example_doctrine_repo"):
         return
     result = check_fleet_reachability()

@@ -2,7 +2,7 @@
 coordinator_core.ops.tests.test_handoff_reconcile_close_terminal_defects
 
 Regression coverage for the two break-class defects reported cross-repo
-(cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-terminal-and-scrub-
+(cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-
 key.md § 1-2), both landing on `handoff.reconcile_close_terminal` and its
 `handoff_transition._close` seam:
 

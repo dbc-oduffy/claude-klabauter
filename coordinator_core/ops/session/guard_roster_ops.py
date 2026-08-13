@@ -4,15 +4,15 @@ coordinator_core.ops.session.guard_roster_ops — eager listing seam for the
 the six ops brought over from the `~/.claude` advisory/nudge command hooks.
 
 NEGATIVE SPEC — this is NOT carrier membership. It does not enumerate what
-Example-doctrine-repo's `postuse-advisory-dispatch.py` delivers, and must never be read
-as though it does. Verified against example-doctrine-repo's live `hooks.json` on 2026-08-13
-(memo 2026-08-13-example-doctrine-repo-em-advisory-carrier-boundary-diverges-and-script-tail-answer.md):
+Coordinator-claude's `postuse-advisory-dispatch.py` delivers, and must never be read
+as though it does. Verified against coordinator-claude's live `hooks.json` on 2026-08-13
+(memo 2026-08-13-coordinator-claude-em-advisory-carrier-boundary-diverges-and-script-tail-answer.md):
 that carrier issues exactly two `dispatch_message()` calls —
 `hooks.postuse_advisory_dispatch` and `hooks.track_touched_files` (the latter
 bookkeeping, not advisory) — so exactly one of the six names below is
 carrier-delivered. Of the rest, `suggest_sonnet_research` and
 `nudge_named_agent_report_delivery` have their own separate live
-registrations; `nudge_foreground_agent_dispatch`'s example-doctrine-repo script is fully
+registrations; `nudge_foreground_agent_dispatch`'s coordinator-claude script is fully
 deregistered and its logic now runs as a pure-Python port with no claude-klabauter call
 at all; `nudge_em_code_dispatch` has zero registrations under any name;
 `nudge_unauthorized_handoff`'s logic is reached by direct function import
@@ -26,14 +26,14 @@ registration edit — never this tuple.
 
 Purpose: `coordinator_core.ipc::_REGISTRY` only reflects whatever has been
 imported so far in this process — under `COORDINATOR_CORE_LAZY_OPS=1` a
-naive read of it is silently PARTIAL. Example-doctrine-repo's `x-effective-delivery` manifest
+naive read of it is silently PARTIAL. Coordinator-claude's `x-effective-delivery` manifest
 treats an incomplete listing as worse than an absent one (`stale` outranks
 `absent` in its own reader semantics —
 docs/reference/hook-delivery-manifest.md § The five states). This module
 forces the advisory hook modules to import before reading, so the listing
 it returns is exhaustive rather than import-order-dependent.
 
-Spec backlink: docs/plans/2026-08-13-guard-roster-export.md § C3 / AC5.
+Spec backlink: pln-guard-roster-export-minus-the-a4dec3 § C3 / AC5.
 See also: docs/reference/hook-delivery-manifest.md § Natural emitter source
 ("postuse-advisory-dispatch.py ... resolves into coordinator_core.hooks,
 whose ops register by import-time side effect with no listing API").
@@ -51,7 +51,7 @@ the package's other two populations — bookkeeping ops that write
 ops — there is no data structure encoding it anywhere in this tree, only
 that docstring. `_PORTED_ADVISORY_HOOK_OP_NAMES` below mirrors it as data
 rather than re-deriving it structurally — and that grouping is *originating*,
-not current: three of the six were given their own independent example-doctrine-repo
+not current: three of the six were given their own independent coordinator-claude
 registrations after the port, and one has none at all, which is precisely the
 divergence the NEGATIVE SPEC above records.
 

@@ -18,7 +18,7 @@ future `defaults.HOOK_PORT` (or equivalent) slot is documented here rather than 
 the manifest; when that tier lands, add a `defaults.HOOK_PORT` key to `budget-manifest.json` and
 extend this resolver's op_class handling accordingly. It is NOT present in the manifest today.
 
-Spec backlink: docs/plans/2026-07-10-qsub-01-latency-benchmark-harness.md § C3
+Spec backlink: pln-qsub-01-per-op-end-to-end-late-53ff10 § C3
 """
 
 from __future__ import annotations

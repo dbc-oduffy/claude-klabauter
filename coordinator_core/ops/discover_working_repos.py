@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.discover_working_repos — Port of:
-discover-working-repos.sh (example-doctrine-repo 6fb5fb37, 2026-07-22, DOE-PORT variant #1 —
+discover-working-repos.sh (coordinator-claude 6fb5fb37, 2026-07-22, DOE-PORT variant #1 —
 direct-import trampoline, no registered op).
 
 Purpose: three-tier working-repo discovery for `/setup` Phase 2 Step 4. Prints
@@ -24,7 +24,7 @@ Known oracle gap (faithfully preserved, NOT fixed in this port — see
 `_decode_projects_dir_name`): the projects-dir basename decode always
 backslash-joins hyphen-split tokens, even for non-drive-letter (POSIX-form)
 entries — i.e. on macOS/Linux, where Claude Code activity-record directory
-names look like `-Users-example-operator-X-example-doctrine-repo`, Tier A's naive decode produces a
+names look like `-Users-example-operator-X-coordinator-claude`, Tier A's naive decode produces a
 backslash path that will not exist on disk, and there is no greedy-decode
 fallback for that shape (the oracle's own comment calls this "out of scope").
 Tier A is effectively Windows-only in practice; Tier A.5 and Tier B are the
@@ -72,7 +72,7 @@ def _fs_probe_path(p: str) -> str:
     identity. On non-Windows hosts this is a pure identity function — POSIX
     paths are POSIX paths there, so today's behavior is unchanged.
 
-    Spec backlink: X:/example-doctrine-repo/tasks/2026-07-20-install-dogfood-friction.md
+    Spec backlink: X:/coordinator-claude/tasks/2026-07-20-install-dogfood-friction.md
     """
     if os.name != "nt":
         return p
@@ -169,7 +169,7 @@ def _is_git_root(posix_dir: str) -> bool:
     --show-toplevel`), while `os.path.realpath` emits native separators
     (backslashes on Windows), so a plain `==` never holds on Windows even
     when the two paths name the same directory on disk (`toplevel=
-    'X:/example-doctrine-repo'` vs `canon='X:\\example-doctrine-repo'`). `samefile` resolves
+    'X:/coordinator-claude'` vs `canon='X:\\coordinator-claude'`). `samefile` resolves
     separators, drive-letter case, and 8.3 short names via the filesystem,
     which is the identity check actually intended here. Falls back to a
     normcase/normpath string comparison if `samefile` raises `OSError`
@@ -177,7 +177,7 @@ def _is_git_root(posix_dir: str) -> bool:
     comparison — a real race on a shared tree); returns False only if both
     approaches fail to establish identity.
 
-    Spec backlink: X:/example-doctrine-repo/tasks/2026-07-20-install-dogfood-friction.md
+    Spec backlink: X:/coordinator-claude/tasks/2026-07-20-install-dogfood-friction.md
     """
     if not os.path.isdir(posix_dir):
         return False

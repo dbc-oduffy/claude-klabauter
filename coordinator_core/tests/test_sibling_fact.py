@@ -23,7 +23,7 @@ Coverage (the Staff Engineer F10 — authored in the C2 chunk itself, not deferr
       the 2026-07-08 pathology, reproduced against a fixture, never a copied
       literal.
 
-Spec backlink: docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C2, § C8
+Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb § C2, § C8
 """
 
 from __future__ import annotations

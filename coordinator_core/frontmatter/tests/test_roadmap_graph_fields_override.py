@@ -1,7 +1,7 @@
 """SC-DR-016's condition of ratification, pinned in code.
 
 `_cf_spinoff_roadmap_requires_graph` ships as a hard deny with no SC-DR-003
-warn-first soak, cleared under SC-DR-016 (example-doctrine-repo
+warn-first soak, cleared under SC-DR-016 (coordinator-claude
 `coordinator/docs/wiki/scoped-safety-commits.md`) because its oracle is
 self-contained. That clearance is CONDITIONAL: SC-DR-014's criterion (3) is
 defined in terms of an override path, so the record requires a public override

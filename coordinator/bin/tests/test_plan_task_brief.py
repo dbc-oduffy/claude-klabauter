@@ -1,7 +1,7 @@
 """test_plan_task_brief.py — proving tests for `coordinator/bin/plan-task-brief.py`,
 the single-task ad-hoc dispatch-brief lift over a plan's `## Tasks` spine.
 
-Spec backlink: cross-repo/inbox/2026-08-13-example-doctrine-repo-em-pcli-02-plan-task-brief-copyout.md
+Spec backlink: cross-repo/inbox/2026-08-13-coordinator-claude-em-pcli-02-plan-task-brief-copyout.md
 
 Invokes the CLI as a subprocess (python plan-task-brief.py ...) rather than
 importing it, exercising the real exit-code contract (0/1/2), stdout/stderr

@@ -10,14 +10,14 @@ scout" advisory at researcher-altitude. An agent_id that resolves to nothing
 (malformed, absent, or unrecognised shape) is NOT suppressed.
 
 The deep-research plugin conditional message is preserved faithfully from
-Port of: suggest-sonnet-research.sh (example-doctrine-repo 3a561713, 2026-07-22). If the plugin
+Port of: suggest-sonnet-research.sh (coordinator-claude 3a561713, 2026-07-22). If the plugin
 directory is absent, a condensed install-prompt variant is used instead.
 
 Negative-spec:
     Do NOT block or deny — this hook is advisory only. Subagent suppression is the
     only path to no_advisory(); all other fires return allow_advisory().
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md § C2
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C2
 """
 
 from __future__ import annotations

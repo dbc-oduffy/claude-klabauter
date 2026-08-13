@@ -19,9 +19,9 @@ Tests:
   11. --target-wiki 'unknown' bypasses the inventory check (schema sentinel).
   12. --target-wiki normalization: bare name / .md-suffixed / already-canonical all
       collapse to the identical 'docs/wiki/<name>.md' string in the written YAML.
-  13. Example-doctrine-repo root unresolvable during --target-wiki validation → exit 3,
+  13. Coordinator-claude root unresolvable during --target-wiki validation → exit 3,
       remediation naming `machine-local set repos.example_doctrine_repo`, nothing written.
-  14. Example-doctrine-repo root unresolvable at write time (validation bypassed via
+  14. Coordinator-claude root unresolvable at write time (validation bypassed via
       'unknown') → exit 3 via the legacy_fn path, nothing written.
   15. change_kind: skill-edit with a SKILL.md --target-wiki round-trips
       byte-identically (no docs/wiki/ collapse, no inventory validation) and
@@ -104,7 +104,7 @@ def _wiki_root_with(tmpdir: str, *names: str) -> str:
     Returns the directory path, suitable for LESSON_PROMOTE_WIKI_ROOT — this is the
     A7-validation-isolation counterpart to LESSON_PROMOTE_OUTBOX_ROOT: it lets tests
     exercise --target-wiki validation against a known, disposable inventory instead
-    of depending on a real example-doctrine-repo checkout being present on the test runner.
+    of depending on a real coordinator-claude checkout being present on the test runner.
     """
     wiki_dir = os.path.join(tmpdir, "wiki-inventory")
     os.makedirs(wiki_dir, exist_ok=True)
@@ -649,11 +649,11 @@ def test_target_wiki_normalization_collapses_equivalent_forms() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 13 — example-doctrine-repo root unresolvable during --target-wiki validation → exit 3
+# Test 13 — coordinator-claude root unresolvable during --target-wiki validation → exit 3
 # ---------------------------------------------------------------------------
 
 def test_doe_unresolvable_during_validation_exits_three() -> None:
-    name = "Test 13 — example-doctrine-repo root unresolvable during --target-wiki validation → exit 3, nothing written"
+    name = "Test 13 — coordinator-claude root unresolvable during --target-wiki validation → exit 3, nothing written"
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
         env = {"LESSON_PROMOTE_OUTBOX_ROOT": outbox}
@@ -676,11 +676,11 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 14 — example-doctrine-repo root unresolvable at write time (validation bypassed) → exit 3
+# Test 14 — coordinator-claude root unresolvable at write time (validation bypassed) → exit 3
 # ---------------------------------------------------------------------------
 
 def test_doe_unresolvable_at_write_time_exits_three() -> None:
-    """Test 14 — example-doctrine-repo root unresolvable at write time (validation bypassed via 'unknown') → exit 3.
+    """Test 14 — coordinator-claude root unresolvable at write time (validation bypassed via 'unknown') → exit 3.
 
     Rewired (de-node cutover, 480ad8f8 / W0.5 Option B+C, 2026-07-19): this test used
     to force a totally seam-absent CLAUDE_KLABAUTER_ROOT (`_force_legacy_route_env`) to route the
@@ -708,7 +708,7 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
     import io as _io
     import unittest.mock as _mock
 
-    name = "Test 14 — example-doctrine-repo root unresolvable at write time (validation bypassed via 'unknown') → exit 3"
+    name = "Test 14 — coordinator-claude root unresolvable at write time (validation bypassed via 'unknown') → exit 3"
     cli_path = _script_path()
     loader = importlib.machinery.SourceFileLoader("coordinator_lesson_promote_t14", cli_path)
     spec = _importlib_util.spec_from_loader("coordinator_lesson_promote_t14", loader)
@@ -727,7 +727,7 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
             cli_mod, "_describe_schema_node",
             return_value={"enums": {"change_kind": ["doctrine-edit", "wiki-append", "skill-edit"]}},
         ),
-        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="example-doctrine-repo"),
+        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
         _mock.patch.object(cli_mod, "_current_repo_root", return_value="/fake/repo"),
         _mock.patch.object(
             cli_mod, "_write_entry",
@@ -748,7 +748,7 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
     if rc != 3:
         raise AssertionError(f"{name}: " + (f"expected exit 3; got {rc}. stderr: {captured_err.getvalue()!r}"))
     if "Lesson outbox entry written" in captured_out.getvalue():
-        raise AssertionError(f"{name}: " + (f"stdout claims a write happened despite unresolvable example-doctrine-repo root: {captured_out.getvalue()!r}"))
+        raise AssertionError(f"{name}: " + (f"stdout claims a write happened despite unresolvable coordinator-claude root: {captured_out.getvalue()!r}"))
     if "machine-local set repos.example_doctrine_repo" not in captured_err.getvalue():
         raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {captured_err.getvalue()!r}"))
 

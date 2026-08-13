@@ -20,7 +20,7 @@ Flags carried by every invocation (AC3):
     capture_output=True, text=True — every wrapper returns decoded stdout/stderr;
         callers never need to touch raw bytes or re-invoke with different capture flags.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C1 (AC3 foundation).
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C1 (AC3 foundation).
 
 Negative-spec (hard-won):
   - Does NOT shell out to bash, node, or any `.sh`/`.js` script — `git` only (AC2).
@@ -342,7 +342,7 @@ def diff_quiet(cwd: Union[str, Path], paths: Optional[Sequence[str]] = None) -> 
     # `commit_gates`' EOL-phantom filter, which exists precisely to absorb
     # phantom-dirty entries; the flag would leave every phantom permanently
     # dirty and re-filtered on each ceremony (the flapping-count symptom in
-    # example-doctrine-repo's bash-on-windows-gotchas.md § 11). The contention win here is
+    # coordinator-claude's bash-on-windows-gotchas.md § 11). The contention win here is
     # small anyway -- this is a narrow per-path diff, not the whole-tree status
     # scan the adoption pass targets.
     args = ["diff", "--quiet"]
@@ -683,7 +683,7 @@ def commit_with_message_file(
 #     deliberately-staged partial-hunk content (claude-klabauter 506748a0).
 #   a bare `git commit` (or one whose pathspec is a DIRECTORY, which matches
 #     whatever lands inside it AT COMMIT TIME) commits THE INDEX, silently
-#     absorbing whatever a peer session staged (example-doctrine-repo 726925b2).
+#     absorbing whatever a peer session staged (coordinator-claude 726925b2).
 # `commit_scoped()` is the single entrypoint that computes which mechanism
 # is safe for a given explicit path set from OBSERVED index/worktree state
 # (via `diverging_paths()`), rather than asking the caller to pick.
@@ -1350,7 +1350,7 @@ def commit_scoped(
 # because there is no "diverged vs agree" question to compute: the caller
 # IS the sole author of this content by construction.
 #
-# Spec backlink: docs/plans/2026-08-06-writer-side-commit-ownership-lock-gap.md
+# Spec backlink: pln-writer-side-commit-ownership-c-845b25
 # chunk C2. Admitted as DR-211 Invariant 4's THIRD sanctioned commit form by
 # docs/decisions/DR-272-inplace-mutation-with-self-commit.md § 3 (deliberately
 # NOT declared an instance of form 2 -- see that record's § 3.1 for why one

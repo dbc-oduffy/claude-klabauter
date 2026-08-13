@@ -1,5 +1,5 @@
 """
-backlog_history time-series block — pydantic port of example-doctrine-repo
+backlog_history time-series block — pydantic port of coordinator-claude
 `coordinator/cockpit-contract/src/entities/backlog-history.ts` (Zod source).
 Cockpit's producer-emitted backlog-trend charts; a nested singular object on
 SnapshotEnvelope.

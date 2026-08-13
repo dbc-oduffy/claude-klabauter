@@ -8,12 +8,12 @@ console-script entrypoint regardless of `__init__.py`'s registry-wiring
 state); `__init__.py` re-exports it via a PEP 562 module-level
 `__getattr__` (lazy), NOT a top-of-file `from .emit_schema import
 CONTRACT_VERSION` — see that `__getattr__`'s own comment for why an eager
-import there collides with example-doctrine-repo's `python -m
+import there collides with coordinator-claude's `python -m
 coordinator_core.contract.cockpit_schema.emit_schema` invocation shape
 (`regen-cockpit-schema.py:208`) and produces a spurious `RuntimeWarning`
 on their release-critical regeneration console. Unlike
 `test_committed_emit_drift.py::test_committed_bundle_version_matches_contract_version`
-(which is `@skip_no_schema`-gated on example-doctrine-repo's committed schema dir being
+(which is `@skip_no_schema`-gated on coordinator-claude's committed schema dir being
 present), this test asserts identity/object-equality between the two
 importable names directly and needs no external schema dir — it ALWAYS
 runs, so a reintroduced second literal cannot silently slip past a

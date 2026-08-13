@@ -1,6 +1,6 @@
 """
 PlanSummary — summary view over docs/plans/*.md lifecycle and status.
-Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/entities/plan-summary.ts`
+Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/plan-summary.ts`
 (Zod source).
 
 Spec backlink: state/roadmap/cockpit-contract-ext-2026-06-22/COORDINATOR-RESOLUTIONS.md
@@ -88,7 +88,7 @@ class PlanSummary(BaseModel):
     """Free-text source tag (roadmap slug, spinoff id, etc.); null if absent."""
 
     # ── Deliverable spine identity fields (D9 present-as-null) ───────────────
-    # Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § C1.
+    # Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § C1.
 
     deliverable_id: str | None
     """

@@ -3,7 +3,7 @@ coordinator_core.session.tests.test_scope — parity tests for
 coordinator_core.session.scope (session touch-tracking + scoped-staging-set
 computation).
 
-Port of: scope.sh (example-doctrine-repo e34f2484, 2026-07-22).
+Port of: scope.sh (coordinator-claude e34f2484, 2026-07-22).
 
 Two strategies (per the T4a test pattern):
   (a) The scope.sh boundary matrix transcribed 1:1 — the touch()
@@ -1921,7 +1921,7 @@ class TestComputeScope:
         ``touched_set``) must NOT appear in `result.skipped` -- putting it
         there widened `skipped`'s documented meaning ("candidates of mine
         that were withheld") to include a path that was never a candidate,
-        and example-doctrine-repo's coordinator-safe-commit renders `skipped` as "skipping
+        and coordinator-claude's coordinator-safe-commit renders `skipped` as "skipping
         <path> — owned by session <owner>", which would show an operator a
         skipping line for a file they never touched. Instead it surfaces in
         `result.orphans` (Step 5's plain my_scope/other_owner check, with no
@@ -3145,7 +3145,7 @@ class TestParseFormatTouchEvent:
     def test_format_keeps_microseconds_when_zero(self):
         """`isoformat()` omits the microsecond field entirely when it is zero,
         which silently drops the resolution the `>=` mtime comparison depends
-        on and breaks the exact-line schema contract example-doctrine-repo re-pins against."""
+        on and breaks the exact-line schema contract coordinator-claude re-pins against."""
         from datetime import datetime, timezone
 
         when = datetime(2026, 8, 3, 14, 37, 37, 0, tzinfo=timezone.utc)

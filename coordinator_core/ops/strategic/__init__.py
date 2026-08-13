@@ -7,7 +7,7 @@ Track B competitor_deltas derivation, and the draft.yaml writer) so the top-leve
 op module stays a thin RPC wrapper — same split as coordinator_core.cartography/
 (primitives) vs coordinator_core.ops.cartography_*.py (RPC wrappers).
 
-Spec backlink: docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md § C1
+Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C1
 """
 
 from __future__ import annotations

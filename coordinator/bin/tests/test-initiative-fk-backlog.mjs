@@ -105,7 +105,7 @@ function improvementQueueBase(overrides = {}) {
     status: "open",
     surface: "coordinator/bin/query-records.js",
     proposed_action: "Improve it",
-    from_repo: "example-doctrine-repo",
+    from_repo: "coordinator-claude",
     change_kind: "script-edit",
   }, overrides);
 }

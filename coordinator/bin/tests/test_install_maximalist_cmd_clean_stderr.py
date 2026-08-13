@@ -29,7 +29,7 @@ none of the known mangling signatures and that the process exits 0.
 Windows-only: skipped entirely on non-Windows platforms, matching the
 sibling `.cmd`-launcher tests' convention of gating on os.name.
 
-Spec backlink: example-doctrine-repo state/2026-07-28-machine-a-install-dogfood-friction-log.md § F3
+Spec backlink: coordinator-claude state/2026-07-28-machine-a-install-dogfood-friction-log.md § F3
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 """
 coordinator_core.subagent_sandbox.tests.test_g2_c13_lens_template_fit -- G2
 chunk C13 regression net (docs/plans/2026-07-24-g2-plan-pipeline-sidecar-
-contract.md, C13, example-doctrine-repo): does each of the five surviving plan-pipeline
+contract.md, C13, coordinator-claude): does each of the five surviving plan-pipeline
 lenses' `report_type_map:`-assigned template (`assessment` / `review-findings` /
 `run-report`) actually accommodate the lens's real provisioned output shape?
 
@@ -52,12 +52,12 @@ _doe_root, _doe_present = doe_root_and_present()
 
 #: The surviving G2 plan-pipeline lenses this chunk covers, and the template
 #: type this test asserts `report_type_map:` (coordinator/subagent-sandbox-
-#: policy.yaml, example-doctrine-repo) still resolves each of them to. A change here
+#: policy.yaml, coordinator-claude) still resolves each of them to. A change here
 #: (in either direction) means the C13 finding above needs re-verification
 #: against fresh live output, not a silent test-literal update.
 #:
 #: `coordinator:code-architect` was the sixth entry and is deliberately absent:
-#: the agent was RETIRED by PM ruling in example-doctrine-repo `ab2889499` (2026-07-30,
+#: the agent was RETIRED by PM ruling in coordinator-claude `ab2889499` (2026-07-30,
 #: "delete the agent nobody ever dispatched"), which unwired its `report_type_map`
 #: row along with the agent body, its registry rows, and its provisioning entry.
 #: This is the re-verification this comment demands, not a literal bump: the
@@ -94,7 +94,7 @@ def _policy_path() -> Path:
 def report_type_map() -> dict:
     if not _doe_present or not _policy_path().exists():
         pytest.skip(
-            "sibling example-doctrine-repo checkout with coordinator/subagent-sandbox-policy.yaml not found"
+            "sibling coordinator-claude checkout with coordinator/subagent-sandbox-policy.yaml not found"
         )
     data = yaml.safe_load(_policy_path().read_text(encoding="utf-8"))
     return data["report_type_map"]

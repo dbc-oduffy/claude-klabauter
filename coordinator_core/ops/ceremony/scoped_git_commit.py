@@ -76,7 +76,7 @@ pathspec, or a git that cannot answer — stays `commit_failed=True`, so a
 genuine refusal (a failing `pre-commit` hook, whose paths are still dirty
 after the pipeline's rollback) is never laundered into a success.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 § DEC-3, Wave 1 C1d.
 
 Sink-side ownership enforcement: REMOVED (2026-08-08, PM ruling),
@@ -299,7 +299,7 @@ def _reject_path_shaped_message(message: str) -> Optional[str]:
     """Return a rejection reason if `message` is a FILE PATH rather than a
     subject line, or `None` if it reads as prose.
 
-    Landed 2026-08-04 on a example-doctrine-repo-em FYI memo (`2026-08-04-example-doctrine-repo-em-
+    Landed 2026-08-04 on a coordinator-claude-em FYI memo (`2026-08-04-coordinator-claude-em-
     zero-join-amendment-in-force-and-your-commit-messages.md`): commits
     `fdbff578b7dc` and `40bf1064a124` on `work/machine-b/2026-07-21to26` have
     a `/private/tmp/.../scratchpad/*.txt` path as their subject line and an
@@ -803,7 +803,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         lands the sha yields `PUSH_STATE_PUSHED`, because from every
         caller's point of view the commit IS on the remote. Rendering that
         case as a failure is the false negative this tri-state exists to
-        kill (example-doctrine-repo-em memo, 2026-07-30).
+        kill (coordinator-claude-em memo, 2026-07-30).
 
         Conditionally present (only when "committed" is False):
           "commit_failed": bool,       # True iff a gate or the commit step

@@ -1,6 +1,6 @@
 """Tests for coordinator_core.meta_repo_identity — parity checks against
-Port of: coordinator-is-meta-repo.sh (example-doctrine-repo 6fb5fb37, 2026-07-22) and its
-corpus at Port of: test-state-root.sh (example-doctrine-repo 6fb5fb37, 2026-07-22) §
+Port of: coordinator-is-meta-repo.sh (coordinator-claude 6fb5fb37, 2026-07-22) and its
+corpus at Port of: test-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22) §
 "Bonus: coordinator_is_meta_repo direct tests".
 """
 

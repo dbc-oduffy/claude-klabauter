@@ -41,7 +41,7 @@ EM-serial registration pass per CC-3; this module carries only its own
 `register_op`.
 
 Contract: params {} -> {platform: str, method: str, dispatched: bool}
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B1
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B1
 Parent plan:   docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § DEC-6
 """
 

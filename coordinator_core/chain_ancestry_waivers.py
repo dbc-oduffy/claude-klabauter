@@ -26,7 +26,7 @@ must NOT grow a parameter that lets a caller pick between this shape and
 waiver kinds — they stay distinct artifact kinds with distinct provenance
 and distinct trust bases (gate-derived vs. PM-granted), per AC3.
 
-Spec backlink: docs/plans/2026-07-31-review-trail-chain-ancestry-discriminator.md § C1
+Spec backlink: pln-teach-the-review-trail-foreign-fa3c96 § C1
 """
 
 from __future__ import annotations

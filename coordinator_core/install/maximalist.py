@@ -3,8 +3,8 @@ coordinator_core.install.maximalist — cold maximalist coordinator install
 phase-sequence orchestrator.
 
 Naked-Python port of ``coordinator/scripts/install-maximalist.sh``
-[example-doctrine-repo repo] — the F11 "hand-run ~15 scripts in order" collapse into
-ONE re-runnable command. The example-doctrine-repo-side polyglot trampoline (same filename,
+[coordinator-claude repo] — the F11 "hand-run ~15 scripts in order" collapse into
+ONE re-runnable command. The coordinator-claude-side polyglot trampoline (same filename,
 ``.sh`` KEPT per the template-variant #1 convention § "avoid N caller edits
 with zero functional benefit", since ``README.md``/``INSTALL.md``/the
 packageability manifest's ``programmatic_entry_point`` hardcode
@@ -23,7 +23,7 @@ CLAUDE_KLABAUTER_ROOT before it can even import ``main`` below. Once import succ
 the trampoline does a plain **in-process import** of ``main`` here —
 template-variant #1 (like ``coordinator-auto-push``), NOT the IPC/
 ``cc_invoke`` op path. This orchestrator itself further shells out to a mix
-of example-doctrine-repo-side sub-scripts (some already-ported polyglot trampolines, some
+of coordinator-claude-side sub-scripts (some already-ported polyglot trampolines, some
 still bash-only) via ``subprocess.run`` per phase, matching the bash
 oracle's own subprocess-per-phase shape — that per-phase subprocess fan-out
 is internal to ``run()``/``main()``, distinct from how the trampoline
@@ -43,7 +43,7 @@ Documented divergence from the bash oracle (structural, not a scope-drop):
   - The bash-4-version guard (BASH_VERSINFO[0]<4) at the top of the oracle
     existed because the SCRIPT ITSELF used bash-4-only syntax. This module
     is plain Python — the concern is structurally inapplicable, not silently
-    dropped. The example-doctrine-repo-side trampoline (a sh/python polyglot, like every other
+    dropped. The coordinator-claude-side trampoline (a sh/python polyglot, like every other
     ported trampoline in this migration) still parses cleanly on bash 3.2
     per DR-148 (its re-exec line is a bare string under sh).
   - Phase 3 Step 1 (install-substrate) is called via a **direct in-process
@@ -61,17 +61,17 @@ Documented divergence from the bash oracle (structural, not a scope-drop):
     check-install-singularity, capture-fan-out-threshold,
     platform-localize, coordinator-setup-state record setup_concluded) are
     now **direct in-process calls**, same idiom as Step 3.5c's
-    gen-settings-hooks (DR-059). Each example-doctrine-repo-side ``.sh``/``.py`` this module
+    gen-settings-hooks (DR-059). Each coordinator-claude-side ``.sh``/``.py`` this module
     used to spawn was ALREADY only a thin polyglot trampoline back into a
     ``coordinator_core.ops``/``coordinator_core.install``/
     ``coordinator_core.hooks`` module living in THIS package (grepped at
     port time — none of the ten carries real business logic of its own);
     the prior paragraph's "belongs to THEIR repo" rationale never actually
-    applied to these ten, only to genuinely-example-doctrine-repo-owned, still-bash siblings
+    applied to these ten, only to genuinely-coordinator-claude-owned, still-bash siblings
     (e.g. the ``bin/install-health/*.sh`` drop-ins ``install-health-run``
     itself still fans out to) that remain subprocess-delegated because they
     carry logic this repo has no business duplicating.
-    register-coordinator-mirror's own example-doctrine-repo-local "coordinator live path"
+    register-coordinator-mirror's own coordinator-claude-local "coordinator live path"
     resolution used to shell out to ``resolve-coordinator-clone.sh
     --for-content`` (script-relative bash spawn, with a ``claude-home
     plugins`` fallback). DR-079 (2026-07-21) repoints Tier 1 to the native
@@ -110,7 +110,7 @@ Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 Spec backlink: coordinator/commands/install.md (Phase 1-7); tasks/2026-07-08-install-dogfood-friction.md § F11
 Prior bash implementation: coordinator/scripts/install-maximalist.sh (622 lines,
     retired as the live body but the filename/CLI contract preserved verbatim
-    by the example-doctrine-repo-side polyglot trampoline — see git log for the prior body).
+    by the coordinator-claude-side polyglot trampoline — see git log for the prior body).
 """
 
 from __future__ import annotations
@@ -446,8 +446,8 @@ def _claude_home_cli_argv(*args: str) -> List[str]:
 
 
 def _resolve_coordinator_live_path() -> str:
-    """example-doctrine-repo-local "coordinator live path" fact -- the one piece of genuinely
-    example-doctrine-repo-owned resolution logic register-coordinator-mirror.sh's trampoline
+    """coordinator-claude-local "coordinator live path" fact -- the one piece of genuinely
+    coordinator-claude-owned resolution logic register-coordinator-mirror.sh's trampoline
     used to perform before handing off to the (already claude-klabauter-native)
     ``coordinator_core.ops.register_coordinator_mirror`` engine module via
     ``--live-path``. Reproduced here (not duplicated engine-side) now that
@@ -459,7 +459,7 @@ def _resolve_coordinator_live_path() -> str:
     (``--for-content`` is a retained legacy alias, identical resolution
     ladder). DR-079 (2026-07-21) repoints this tier from a script-relative
     bash spawn to a direct in-process call now that the native port exists;
-    the example-doctrine-repo bash oracle remains the source of truth this port mirrors, but
+    the coordinator-claude bash oracle remains the source of truth this port mirrors, but
     is no longer subprocess-invoked here.
     Tier 2 (defensive fallback, native resolver raises):
     ``claude-home plugins`` + flat-layout join.
@@ -769,11 +769,11 @@ def _install_claude_doe_wrapper(
     Pure-Python inline (the bash oracle does this inline too, not via a sub-script).
 
     ``wrapper_src`` is deliberately NOT derived from ``coord_root`` (the
-    resolved example-doctrine-repo-clone ``coordinator/`` dir) -- the executable ``bin/``
+    resolved coordinator-claude-clone ``coordinator/`` dir) -- the executable ``bin/``
     surface migrated wholesale to claude-klabauter in commit ``b644d5a9``
     (2026-07-22), so ``claude-doe`` now lives at
-    ``<claude_klabauter_root>/coordinator/bin/claude-doe``, not under the example-doctrine-repo clone.
-    ``coord_root`` still correctly houses ``templates/`` (example-doctrine-repo doctrine
+    ``<claude_klabauter_root>/coordinator/bin/claude-doe``, not under the coordinator-claude clone.
+    ``coord_root`` still correctly houses ``templates/`` (coordinator-claude doctrine
     content, untouched by that migration) for the sibling shim/launcher
     generators, so this split is DR-047's contract/engine boundary, not an
     inconsistency. ``claude_klabauter_root`` is an explicit param (not a
@@ -1011,13 +1011,13 @@ def _run_body(
 
     print("install-maximalist.sh -- cold maximalist install orchestrator")
     print(f"  Coordinator root : {coord_root}")
-    print(f"  example-doctrine-repo clone root   : {doe_clone}")
+    print(f"  coordinator-claude clone root   : {doe_clone}")
     print(f"  Mode             : {'--check-only (read-only)' if check_only else 'live (mutating)'}")
     print(f"  Interactive      : {'no (--non-interactive)' if non_interactive else 'yes'}")
 
     # -- Phase A -- structural fork classification (informational; read-only) --
     # Retired the ["bash", detect-existing-claude-home.sh] spawn (C13): that
-    # example-doctrine-repo-side script was only a thin polyglot trampoline back into THIS
+    # coordinator-claude-side script was only a thin polyglot trampoline back into THIS
     # repo's coordinator_core.ops.detect_existing_claude_home -- called
     # in-process now, matching Step 3.5c's precedent (DR-059).
     orch.phase_header("Detect existing Claude home state (informational)")
@@ -1085,12 +1085,12 @@ def _run_body(
     os.environ["PATH"] = env["PATH"]
 
     # -- Phase 3 Step 1b -- install-health-run --
-    # Retired the ["bash", install-health-run.sh] spawn (C13): that example-doctrine-repo-side
+    # Retired the ["bash", install-health-run.sh] spawn (C13): that coordinator-claude-side
     # script was only a thin polyglot trampoline back into THIS repo's
     # coordinator_core.ops.install_health_run -- called in-process now. The
     # orchestrator's own OWN sub-scripts (bin/install-health/*.sh drop-ins)
     # remain bash and are still subprocess-delegated BY that module -- out of
-    # C13's scope (a genuinely example-doctrine-repo/plugin-owned drop-in surface, not a
+    # C13's scope (a genuinely coordinator-claude/plugin-owned drop-in surface, not a
     # trampoline back into this package).
     from coordinator_core.ops.install_health_run import (  # local import: avoid import cost on --help
         main as _install_health_run_main,
@@ -1207,7 +1207,7 @@ def _run_body(
             )
 
     # -- Step 3.5a.1 -- gen-doe-root-pointer --
-    # Retired the ["bash", gen-doe-root-pointer.sh] spawn (C13): that example-doctrine-repo-side
+    # Retired the ["bash", gen-doe-root-pointer.sh] spawn (C13): that coordinator-claude-side
     # script was only a thin polyglot trampoline back into THIS repo's
     # coordinator_core.ops.gen_doe_root_pointer -- called in-process now.
     from coordinator_core.ops.gen_doe_root_pointer import (  # local import: avoid import cost on --help
@@ -1226,7 +1226,7 @@ def _run_body(
     # Same migrated-`bin/` bug class as `_install_claude_doe_wrapper`'s
     # `claude-doe` below: this script lives at
     # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-root-pointer.py` post
-    # b644d5a9, not under the example-doctrine-repo clone's `coord_root/bin/`.
+    # b644d5a9, not under the coordinator-claude clone's `coord_root/bin/`.
     py_bin = shutil.which("python3") or shutil.which("python")
     if py_bin:
         claude_klabauter_pointer_args = ["--check-only"] if check_only else []
@@ -1246,20 +1246,20 @@ def _run_body(
         )
 
     # -- Step 3.5a.2 -- gen-claude-doe-shim --
-    # Retired the ["bash", gen-claude-doe-shim.sh] spawn (C13): that example-doctrine-repo-side
+    # Retired the ["bash", gen-claude-doe-shim.sh] spawn (C13): that coordinator-claude-side
     # script was only a thin polyglot trampoline back into THIS repo's
     # coordinator_core.ops.gen_claude_doe_shim -- called in-process now.
     from coordinator_core.ops.gen_claude_doe_shim import (  # local import: avoid import cost on --help
         main as _gen_claude_doe_shim_main,
     )
 
-    # `gen_claude_doe_shim.main()` has no co-located example-doctrine-repo-side script path of
+    # `gen_claude_doe_shim.main()` has no co-located coordinator-claude-side script path of
     # its own to derive the oracle's `${_script_dir}/../templates/shell/...`
-    # default from -- its own docstring says the example-doctrine-repo trampoline resolves
+    # default from -- its own docstring says the coordinator-claude trampoline resolves
     # that default and always passes `--template` explicitly. `coord_root`
-    # (this repo's resolved example-doctrine-repo-clone `coordinator/` dir) is exactly that
+    # (this repo's resolved coordinator-claude-clone `coordinator/` dir) is exactly that
     # default location: `<coord_root>/templates/shell/claude-doe-shim.sh.tmpl`
-    # -- `templates/` is example-doctrine-repo doctrine content, unaffected by the b644d5a9
+    # -- `templates/` is coordinator-claude doctrine content, unaffected by the b644d5a9
     # `bin/` migration, so `coord_root` (not `claude_klabauter_root`) is correct here.
     # D7 cold-install dogfood fix (2026-07-24): this call site previously
     # omitted `--template` entirely, so every `--check-only` (and live) run
@@ -1281,7 +1281,7 @@ def _run_body(
 
     # -- Step 3.5b.2 -- gen-claude-doe-launcher --
     # Retired the ["bash", gen-claude-doe-launcher.sh] spawn (C13): that
-    # example-doctrine-repo-side script was only a thin polyglot trampoline back into THIS
+    # coordinator-claude-side script was only a thin polyglot trampoline back into THIS
     # repo's coordinator_core.ops.gen_claude_doe_launcher -- called
     # in-process now.
     from coordinator_core.ops.gen_claude_doe_launcher import (  # local import: avoid import cost on --help
@@ -1290,8 +1290,8 @@ def _run_body(
 
     # Same class of bug as the shim call site above: `gen_claude_doe_launcher`
     # has no co-located script path to derive its `--template-dir` default
-    # from, and expects the example-doctrine-repo trampoline to pass it explicitly (default
-    # location: `<coord_root>/templates/bin` -- also example-doctrine-repo doctrine content,
+    # from, and expects the coordinator-claude trampoline to pass it explicitly (default
+    # location: `<coord_root>/templates/bin` -- also coordinator-claude doctrine content,
     # unaffected by the `bin/` migration). `--check-only` first for the same
     # logged-argv-substring reason as the shim call site.
     _launcher_tmpl_dir = os.path.join(coord_root, "templates", "bin")
@@ -1369,7 +1369,7 @@ def _run_body(
             )
         elif hooks_status == "skipped (clone absent)":
             orch.skip_note(
-                f"{_hooks_desc} -- example-doctrine-repo clone not resolved yet; complete Step 3.5a "
+                f"{_hooks_desc} -- coordinator-claude clone not resolved yet; complete Step 3.5a "
                 "(gen-doe-root-pointer / repos.example_doctrine_repo seed) first, then re-run."
             )
         else:
@@ -1378,9 +1378,9 @@ def _run_body(
 
     # -- Step 5 -- register-coordinator-mirror --
     # Retired the ["bash", register-coordinator-mirror.sh] spawn (C13): that
-    # example-doctrine-repo-side script was a thin polyglot trampoline over THIS repo's
+    # coordinator-claude-side script was a thin polyglot trampoline over THIS repo's
     # coordinator_core.ops.register_coordinator_mirror -- but it ALSO
-    # resolved a genuinely example-doctrine-repo-owned fact (the "coordinator live path") before
+    # resolved a genuinely coordinator-claude-owned fact (the "coordinator live path") before
     # handing off via --live-path. That resolution (_resolve_coordinator_live_path,
     # verbatim port of the trampoline's own helper) now runs here; the engine
     # module itself is called in-process.
@@ -1502,7 +1502,7 @@ def _run_body(
 
     # -- Step 7.5 -- check-install-singularity (always runs, incl. --check-only) --
     # Retired the ["bash", check-install-singularity.sh] spawn (C13): that
-    # example-doctrine-repo-side script was only a thin polyglot trampoline back into THIS
+    # coordinator-claude-side script was only a thin polyglot trampoline back into THIS
     # repo's coordinator_core.install.check_install_singularity -- called
     # in-process now.
     from coordinator_core.install.check_install_singularity import (  # local import: avoid import cost on --help
@@ -1518,7 +1518,7 @@ def _run_body(
 
     # -- Step 8 -- capture-fan-out-threshold --
     # Retired the ["bash", capture-fan-out-threshold.sh] spawn (C13): that
-    # example-doctrine-repo-side script was only a thin polyglot trampoline back into THIS
+    # coordinator-claude-side script was only a thin polyglot trampoline back into THIS
     # repo's coordinator_core.ops.capture_fan_out_threshold -- called
     # in-process now.
     from coordinator_core.ops.capture_fan_out_threshold import (  # local import: avoid import cost on --help
@@ -1557,7 +1557,7 @@ def _run_body(
 
     # -- Phase 7 Step 0 -- record setup_concluded receipt (idempotent) --
     # Retired the ["bash", coordinator-setup-state.sh] spawn (C13): that
-    # example-doctrine-repo-side script was only a thin polyglot trampoline back into THIS
+    # coordinator-claude-side script was only a thin polyglot trampoline back into THIS
     # repo's coordinator_core.ops.coordinator_setup_state -- called
     # in-process now.
     if check_only:
@@ -1641,7 +1641,7 @@ def main(argv: List[str]) -> int:
     if not coord_root or not doe_clone:
         print(
             "install-maximalist: CLAUDE_PLUGIN_ROOT and REPO_EXAMPLE_DOCTRINE_REPO must both be set "
-            "by the caller (the example-doctrine-repo-side trampoline self-resolves and exports both before "
+            "by the caller (the coordinator-claude-side trampoline self-resolves and exports both before "
             "invoking this module).",
             file=sys.stderr,
         )

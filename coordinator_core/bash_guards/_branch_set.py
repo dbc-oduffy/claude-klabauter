@@ -37,7 +37,7 @@ as a first-class param throughout, and C5 calls it with a payload-derived
 against the same repo as everything else or it silently degrades callers to
 empty/zero.
 
-Spec backlink: docs/plans/2026-08-01-branch-creation-seam-guards.md chunk C3
+Spec backlink: pln-branch-creation-seam-canonical-6f938d chunk C3
 """
 from __future__ import annotations
 

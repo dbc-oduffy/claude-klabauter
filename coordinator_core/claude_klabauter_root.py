@@ -1,15 +1,15 @@
 """
 coordinator_core.claude_klabauter_root — ported from coordinator/lib/coordinator-claude-klabauter-root.sh
-(example-doctrine-repo clean-slate migration, sourced-lib variant — example-doctrine-repo .sh is left untouched; its ~60
+(coordinator-claude clean-slate migration, sourced-lib variant — coordinator-claude .sh is left untouched; its ~60
 `source coordinator-claude-klabauter-root.sh` callers switch to `import coordinator_core.claude_klabauter_root`
 in a later gated wave, per port-template variant "SOURCED LIB").
 
 Purpose: resolves the claude-klabauter sibling-repo root, analogous to how CLAUDE_HOME->~/.claude
 works for the coordinator meta-repo. Mirror-image of `coordinator_core.ops.gen_doe_root_pointer`
-(which resolves DOE_ROOT from inside a example-doctrine-repo-clone-relative context) — this module resolves
+(which resolves DOE_ROOT from inside a coordinator-claude-clone-relative context) — this module resolves
 CLAUDE_KLABAUTER_ROOT for callers already running inside the claude-klabauter engine.
 
-Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C1 / AC1
+Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C1 / AC1
 Windows portability rung: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C1
 
 Resolution chain (unchanged from the bash oracle), in order:
@@ -162,7 +162,7 @@ def coordinator_claude_klabauter_root() -> str:
 # its own module docstring), but `coordinator_core` loading the shim by path
 # creates no such dependency back onto it.
 #
-# Spec backlink: docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md § C4 (wrapper half)
+# Spec backlink: pln-two-tier-engine-root-resolutio-024269 § C4 (wrapper half)
 #
 # C5 (engine/edit skew advisory) hook: deliberately NOT reimplemented here.
 # The advisory only ever fires when the resolution class comes back
@@ -175,7 +175,7 @@ def coordinator_claude_klabauter_root() -> str:
 # `_reset_skew_advisory()` below is a thin test-seam passthrough, not a
 # parallel check. Do not add a duplicate stderr write here — it would
 # double the advisory for every in-process caller that goes through this
-# wrapper. Spec backlink: docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md § C5
+# wrapper. Spec backlink: pln-two-tier-engine-root-resolutio-024269 § C5
 
 #: `coordinator_core/claude_klabauter_root.py`'s parent-of-parent is the claude-klabauter repo
 #: root — no chicken-and-egg with resolving the very root this module exists

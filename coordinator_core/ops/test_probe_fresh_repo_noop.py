@@ -6,7 +6,7 @@ throwaway directory trees under tmp_path, and the registered JSON-RPC handler
 against claude-klabauter's own working tree, and never via a mutating git
 command (this op does not invoke git at all; only pathlib checks).
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 (wave 1, chunk w2-fresh-repo-noop)
 """
 

@@ -9,7 +9,7 @@ resolve-coordinator-clone) stay byte-identical between the live install copy
 (settings-home/bin/, falling back to the pre-migration ~/.claude/bin/) and
 the source-of-truth template copy shipped under coordinator/templates/bin/
 — so `coordinator/bin/publish.py` ships an up-to-date mirror to consumer
-projects, and so a live install never silently drifts from the fix example-doctrine-repo
+projects, and so a live install never silently drifts from the fix coordinator-claude
 shipped in the template. See docs/wiki/portable-code-substrate.md and
 docs/wiki/eager-agent-calibration.md § Template mirrors.
 
@@ -54,11 +54,11 @@ per-file loop with a single diagnostic line and exit code 1 in BOTH modes
 this must be a hard failure rather than five per-file NOT_PRESENT/TMPL_MISSING
 lines.
 
-Port of: verify-templates-bin-sync.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: verify-templates-bin-sync.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-05-20-eager-agent-calibration.md § Chunk 1
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Repointed + direction-reversed per cross-repo memo:
-  cross-repo/archive/2026-08-03-example-doctrine-repo-em-templates-bin-sync-gate-watches-the-pre-migration-home.md
+  cross-repo/archive/2026-08-03-coordinator-claude-em-templates-bin-sync-gate-watches-the-pre-migration-home.md
 
 Negative-spec:
     - CLAUDE_HOME resolution in the FALLBACK path is Convention A verbatim
@@ -91,7 +91,7 @@ Negative-spec:
     - `--fix` copies file CONTENT only — it never applies or clears an
       exec bit. Destination mode is left exactly as it was found (matches
       `_install_one`, which only ORs `0o111` in when `exec_bit` is
-      truthy and never clears a bit; example-doctrine-repo's templates are already
+      truthy and never clears a bit; coordinator-claude's templates are already
       `100755` in git where relevant, so preserving destination mode is
       the correct behaviour here, not an oversight).
     - No reverse (live -> template) flag exists here. Capturing an
@@ -100,7 +100,7 @@ Negative-spec:
       need its own, differently-named entrypoint if ever built; it is not
       a mode of this gate.
     - The bash oracle (verify-templates-bin-sync.sh) has been retired by
-      example-doctrine-repo's bash clean-slate migration and no longer exists in example-doctrine-repo
+      coordinator-claude's bash clean-slate migration and no longer exists in coordinator-claude
       — there is no live oracle left to stay byte-parity-locked against.
       This module's behaviour is now defined by this docstring and its
       co-located test, not by oracle parity.

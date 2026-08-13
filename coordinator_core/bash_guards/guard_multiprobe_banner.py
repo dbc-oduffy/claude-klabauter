@@ -52,7 +52,7 @@ only toward a CONFIRMED outlet" gap fix): this module used to render its
 deny/advisory around a FIXED, generic ``outlet_example`` regardless of
 whether the sibling rewrite chain entry would actually produce a rewrite
 for THIS exact command -- a caller-text-inventory finding
-(`state/audits/2026-07-29-bash-guard-caller-text-inventory.md` § 2, example-doctrine-repo
+(`state/audits/2026-07-29-bash-guard-caller-text-inventory.md` § 2, coordinator-claude
 repo) named this the cheapest available promotion in this row ("the
 sibling `check_multiprobe_banner_rewrite` chain entry already computes the
 literal per-command rewrite; this guard's own message could reuse that

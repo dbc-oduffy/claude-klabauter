@@ -1,7 +1,7 @@
 """Registration-completeness invariants for `guard_message_corpus.py`,
 moved out of that module's import-time scope into ordinary test bodies.
 
-Spec backlink: docs/plans/2026-08-07-install-dogfood-mechanical-residue.md,
+Spec backlink: pln-install-dogfood-audit-mechanic-ea0784,
 chunk C3, F13a. `guard_message_corpus.py` previously carried six bare
 `assert` statements at module scope. A failing import-time assert turns one
 missing registration into an import failure for EVERY test module that

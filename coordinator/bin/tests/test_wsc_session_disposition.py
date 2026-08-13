@@ -17,7 +17,7 @@ extensionless polyglot entrypoints (`session-claim-cli`,
 
 Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md
 (M3 chunk WSC-1); ported source:
-Example-doctrine-repo coordinator/skills/workstream-complete/SKILL.md Step 0.
+Coordinator-claude coordinator/skills/workstream-complete/SKILL.md Step 0.
 
 Run:
     python -m pytest coordinator/bin/tests/test_wsc_session_disposition.py -q

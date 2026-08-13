@@ -24,7 +24,7 @@ Coverage:
   (g) liveness() predicate table — spot checks against the freeze manifest's
       frozen mapping (full sweep lives in test_records_query_parity.py)
 
-Spec backlink: docs/plans/2026-07-06-strang-11-c11-12-records-query-op.md § C1a
+Spec backlink: pln-strang-11-c11-12-native-record-e92436 § C1a
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4d-g1c
 """
 
@@ -750,7 +750,7 @@ class TestDirectoryScanFailureSignal:
 # ---------------------------------------------------------------------------
 # Legacy prose-queue invisibility signal (DR-115 —
 # docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md,
-# example-doctrine-repo repo). Six sibling repos still carry pre-migration line-per-row prose
+# coordinator-claude repo). Six sibling repos still carry pre-migration line-per-row prose
 # queues that were previously silently unread by this query — this signal
 # makes that invisibility loud rather than indistinguishable from "empty".
 # ---------------------------------------------------------------------------
@@ -1046,7 +1046,7 @@ class TestNewTypeGlobCoverage:
     original 4, plus ``goal`` (added when a sibling repo's goal-coverage-scan
     port reported false-empty against this op — see module Negative-spec),
     plus ``research-synthesis``/``gap-report``/``coverage-audit`` (added
-    2026-07-22 — 3 live example-doctrine-repo runtime consumers, same false-empty shape),
+    2026-07-22 — 3 live coordinator-claude runtime consumers, same false-empty shape),
     plus ``archived-memo`` (added 2026-07-24 — JS-vs-native parity, C3),
     plus ``cutover`` (added 2026-07-25 — schema-recognised, genuine
     record-shaped collection with a live producer landing, same "wire it"
@@ -1192,21 +1192,21 @@ class TestPriorityLedgerTypeCollectsAndParses:
 
 class TestTypeToGlobDerivedGate:
     """Derive-and-gate parity check: ``_TYPE_TO_GLOB`` (hand-maintained) vs.
-    ``build_type_to_glob`` (schema-derived from example-doctrine-repo's ``coordinator/schemas/
+    ``build_type_to_glob`` (schema-derived from coordinator-claude's ``coordinator/schemas/
     *.schema.json``). Fails loud when a record-shaped schema type is present
     in the derived registry but absent from BOTH ``_TYPE_TO_GLOB`` and the
     exclusion set below — this is exactly the shape of gap that let ``goal``
     go unqueryable until a sibling repo's goal-coverage-scan port reported
     false-empty results (see records_query.py module Negative-spec).
 
-    Skips when the example-doctrine-repo checkout is unresolvable via the machine-local
+    Skips when the coordinator-claude checkout is unresolvable via the machine-local
     registry — same posture as ``test_schema_validate.py``'s ``_DOE_REPO``
     skip guard.
     """
 
     # Resolved via the canonical coordinator_core.testing.doe_root pointer-file
     # resolver, not a relative-sibling-checkout guess — see that module's
-    # docstring for why a hardcoded parents[N]/"example-doctrine-repo" walk is retired
+    # docstring for why a hardcoded parents[N]/"coordinator-claude" walk is retired
     # rather than mirrored here.
     _doe_root_str = resolve_doe_root()
     _DOE_REPO = Path(_doe_root_str) if _doe_root_str else None
@@ -1257,7 +1257,7 @@ class TestTypeToGlobDerivedGate:
         "prior-art-check":         "record-shaped (docs/plans/*.prior-art-check.md) — not yet wired, out of scope for this fix",
         "problem-set":             "record-shaped (docs/problems/*.md) — not yet wired, out of scope for this fix",
         "review-findings":         "record-shaped (state/review-trail/findings/*.md) — not yet wired, out of scope for this fix",
-        "review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in example-doctrine-repo's coordinator/skills/review/residue/ tree, outside this repo's own worktree (0 on-disk in claude-klabauter) — same shape as the 'skill' exclusion below, not query-servable from this repo",
+        "review-residue-manifest": "record-shaped, yaml-frontmatter glob (**/skills/review/residue/*.md); every instance lives in coordinator-claude's coordinator/skills/review/residue/ tree, outside this repo's own worktree (0 on-disk in claude-klabauter) — same shape as the 'skill' exclusion below, not query-servable from this repo",
         "review-sidecar":          "record-shaped (docs/plans/*.review.md) — not yet wired, out of scope for this fix",
         "run-report":              "record-shaped, wildcard-dir glob (state/subagent-share/*/*.md) — not yet wired, out of scope for this fix",
         "skill":                   "record-shaped, wildcard-dir glob (plugins/coordinator/skills/*/SKILL.md); also lives outside this repo's own worktree (~/.claude plugin tree) — not yet wired, out of scope for this fix",
@@ -1268,7 +1268,7 @@ class TestTypeToGlobDerivedGate:
     def _skip_if_unresolvable(self):
         if self._SCHEMAS_DIR is None or not self._SCHEMAS_DIR.is_dir():
             pytest.skip(
-                f"example-doctrine-repo sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
+                f"coordinator-claude sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
                 "— skipping derive-and-gate parity check (no live disk dependency "
                 "for an ordinary run)."
             )
@@ -1521,13 +1521,13 @@ class TestNewTypeMarkdownListFormatEndToEnd:
 class TestSiblingExclusionDerivedFromWiredSet:
     """Derive-and-gate check pinning the equivalence claim in
     ``_apply_sibling_exclusion``'s docstring: the map-local filter (derived
-    only from ``_TYPE_TO_GLOB``) is sound ONLY as long as no UNWIRED example-doctrine-repo
+    only from ``_TYPE_TO_GLOB``) is sound ONLY as long as no UNWIRED coordinator-claude
     schema glob is a more-specific sibling of a WIRED glob under the same
     directory — that is exactly the condition under which this op's filter
     would silently diverge from the oracle's all-schemas filter. Fails loud
-    the moment a new example-doctrine-repo schema breaks that equivalence.
+    the moment a new coordinator-claude schema breaks that equivalence.
 
-    Skips when the example-doctrine-repo checkout is unresolvable via the machine-local
+    Skips when the coordinator-claude checkout is unresolvable via the machine-local
     registry — same posture as ``TestTypeToGlobDerivedGate``.
     """
 
@@ -1548,7 +1548,7 @@ class TestSiblingExclusionDerivedFromWiredSet:
     def _skip_if_unresolvable(self):
         if self._SCHEMAS_DIR is None or not self._SCHEMAS_DIR.is_dir():
             pytest.skip(
-                f"example-doctrine-repo sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
+                f"coordinator-claude sibling schemas dir unresolvable at {self._SCHEMAS_DIR} "
                 "— skipping derive-and-gate sibling-exclusion check (no live disk "
                 "dependency for an ordinary run)."
             )

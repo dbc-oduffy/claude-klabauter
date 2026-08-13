@@ -20,7 +20,7 @@ Tests assert:
 
 All handlers are async; we use asyncio.run() in sync test functions — no pytest-asyncio.
 
-Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § C5
+Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C5
 """
 
 from __future__ import annotations

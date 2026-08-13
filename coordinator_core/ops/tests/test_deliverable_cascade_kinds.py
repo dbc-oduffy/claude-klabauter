@@ -8,7 +8,7 @@ one AC (named in its docstring/name) per the plan's own instruction not to fold
 several ACs into one assertion (a broken layer must not hide behind a passing
 sibling).
 
-Spec backlink: docs/plans/2026-08-10-sizing-objects-join-the-deliverable-spine.md § C6
+Spec backlink: pln-sizing-objects-join-the-delive-53c06a § C6
 
 Negative-spec: does NOT promote the spike's own throwaway probe script into this
 suite (throwaway-probe discipline, per the plan body) — every test here is
@@ -519,7 +519,7 @@ def test_ac9_planless_sizing_is_unkeyed_not_ambiguous(tmp_path):
 
 def test_ac10_vendored_sizing_schema_version_is_pinned():
     """Discharge for the prohibition (not the prohibition itself): a version
-    bump reds this loudly, with the example-doctrine-repo coordinate to check named in the
+    bump reds this loudly, with the coordinator-claude coordinate to check named in the
     failure message, rather than relying on an executor remembering the
     rule. See the vendored schema's own x-bump-note for the coordinate."""
     schema_path = (
@@ -529,7 +529,7 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
     pinned = "1.14.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
-        f"{pinned!r} — check example-doctrine-repo@1fabbc9c3 "
+        f"{pinned!r} — check coordinator-claude@1fabbc9c3 "
         "(coordinator/schemas/sizing-object.schema.json) for a correspondingly "
         "recorded answer before re-pinning this test."
     )
@@ -538,16 +538,16 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
 # Review: staff-eng — Finding 11: C0 vendored FOUR schemas, but only
 # sizing-object carried a version-pin regression above — roadmap/goal/
 # initiative reopened the identical EQUAL_VERSION_SHAPE_DRIFT silent-divergence
-# hazard C0 exists to close, the moment example-doctrine-repo bumps any of the other three.
+# hazard C0 exists to close, the moment coordinator-claude bumps any of the other three.
 # Table-driven so a future vendored schema is one row, not a new function.
 _VENDORED_SCHEMA_VERSION_PINS = (
-    # Re-pinned 1.8.0 -> 1.14.0 on example-doctrine-repo's four-field probe/intent widen
+    # Re-pinned 1.8.0 -> 1.14.0 on coordinator-claude's four-field probe/intent widen
     # (1fabbc9c3), vendored here at f0085198a. The recorded answer AC1 demands
-    # is memo 2026-08-13-example-doctrine-repo-em-sizing-object-schema-widened-1-14-0.md.
-    ("sizing-object.schema.json", "1.14.0", "example-doctrine-repo@1fabbc9c3 (coordinator/schemas/sizing-object.schema.json)"),
-    ("roadmap.schema.json", "1.3.0", "example-doctrine-repo coordinator/schemas/roadmap.schema.json"),
-    ("goal.schema.json", "1.2.0", "example-doctrine-repo coordinator/schemas/goal.schema.json"),
-    ("initiative.schema.json", "1.1.0", "example-doctrine-repo coordinator/schemas/initiative.schema.json"),
+    # is memo 2026-08-13-coordinator-claude-em-sizing-object-schema-widened-1-14-0.md.
+    ("sizing-object.schema.json", "1.14.0", "coordinator-claude@1fabbc9c3 (coordinator/schemas/sizing-object.schema.json)"),
+    ("roadmap.schema.json", "1.3.0", "coordinator-claude coordinator/schemas/roadmap.schema.json"),
+    ("goal.schema.json", "1.2.0", "coordinator-claude coordinator/schemas/goal.schema.json"),
+    ("initiative.schema.json", "1.1.0", "coordinator-claude coordinator/schemas/initiative.schema.json"),
 )
 
 

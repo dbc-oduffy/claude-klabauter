@@ -38,7 +38,7 @@ optimization without re-deriving the confinement guarantee some other way
 first.**
 
 Spec backlink: coordinator_core/bash_guards/dispatch_checks.py (``_override``)
-and coordinator/hooks/scripts/preuse-bash-dispatch.py (example-doctrine-repo repo,
+and coordinator/hooks/scripts/preuse-bash-dispatch.py (coordinator-claude repo,
 stdin-only / in-process-no-shell-exec hook entry point).
 """
 
@@ -100,19 +100,19 @@ class TestInlineAndEnvWrapperPrefixesCannotDisarmAGuard:
 @pytest.mark.real_home
 class TestHookEntryPointStdinOnlyNoShellExec:
     """Structural properties of the hook entry point itself
-    (``preuse-bash-dispatch.py``, example-doctrine-repo repo) that back the boundary --
+    (``preuse-bash-dispatch.py``, coordinator-claude repo) that back the boundary --
     read from source since the entry point isn't importable as a module
     (it's a `python3 -c ... runpy.run_path(...)` hooks.json registration,
     not a package).
 
-    ``real_home`` because these are live-tree read-only oracles: the example-doctrine-repo
+    ``real_home`` because these are live-tree read-only oracles: the coordinator-claude
     checkout is resolved through the machine-local registry rung of
     ``read_doe_root_pointer``, and conftest's home quarantine points that
     rung at a throwaway dir, which would turn every method here into a
     permanent skip. Nothing in this class writes."""
 
     def _source(self) -> str:
-        # Two-repo layout: hook script lives in example-doctrine-repo, engine in
+        # Two-repo layout: hook script lives in coordinator-claude, engine in
         # claude-klabauter (this repo). The sibling checkout is resolved
         # through the canonical registry-first ladder
         # (``doe_root_pointer.read_doe_root_pointer``, DR-071), never by
@@ -129,7 +129,7 @@ class TestHookEntryPointStdinOnlyNoShellExec:
         )
         if not candidate or not os.path.isfile(candidate):
             pytest.skip(
-                "example-doctrine-repo checkout not resolvable via the doe_root_pointer "
+                "coordinator-claude checkout not resolvable via the doe_root_pointer "
                 "ladder (registry `repos.example_doctrine_repo`, durable `.doe-root`, "
                 "legacy `.doe-root`); resolved root was %r, hook candidate "
                 "%r." % (doe_root, candidate)

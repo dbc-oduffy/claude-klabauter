@@ -11,7 +11,7 @@ the load-bearing companion case that must NOT raise), and the AC13
 repo_root-threading invariant in `tracker_entities`'s membership-edge
 emitters.
 
-Spec backlink: docs/plans/2026-08-11-designated-holder-repo-for-unowned-identity.md
+Spec backlink: pln-designated-holder-repo-for-uno-d11d4d
 chunk C4.
 
 Fixture discipline: every case monkeypatches `registry_get` and

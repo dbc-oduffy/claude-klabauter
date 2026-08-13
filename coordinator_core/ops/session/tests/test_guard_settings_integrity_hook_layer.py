@@ -30,7 +30,7 @@ test_guard_settings_integrity.py, which now force-stubs this module's
 conjunct via an autouse fixture so its fixtures don't need a resolvable
 hook layer at all.
 
-Spec backlink: example-doctrine-repo `state/subagent-share/
+Spec backlink: coordinator-claude `state/subagent-share/
 78b683cd-1b62-4a25-904d-954cb3c69412/coordinatorexecutor-8cc51fd5.md`
 (this fix's originating dispatch, 2026-07-28).
 """
@@ -241,7 +241,7 @@ def test_settings_side_hook_entry_foreign_platform_path_is_unhealthy(tmp_path, m
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "python3 X:/example-doctrine-repo/coordinator/hooks/scripts/foo.py",
+                            "command": "python3 X:/coordinator-claude/coordinator/hooks/scripts/foo.py",
                         }
                     ],
                 }

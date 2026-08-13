@@ -11,7 +11,7 @@ behaviour-preservation oracle).
 
 Run: python -m pytest coordinator_core/contract/tests/test_residue_segments.py -q
 
-Spec backlink: docs/plans/2026-08-13-shared-residue-segment-loader.md, chunk C1
+Spec backlink: pln-factor-the-residue-segment-loa-e63300, chunk C1
 """
 from __future__ import annotations
 

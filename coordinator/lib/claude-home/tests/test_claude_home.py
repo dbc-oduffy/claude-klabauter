@@ -179,7 +179,7 @@ class TestHomeResolution(unittest.TestCase):
 class TestResolveHomeBase(unittest.TestCase):
     """resolve_home_base() must match home_dir() exactly — it delegates to it.
 
-    Spec backlink: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C6
+    Spec backlink: pln-home-resolution-gate-family-ma-e5c146 § C6
     """
 
     def setUp(self):
@@ -229,7 +229,7 @@ class TestClaudeHomeShim(unittest.TestCase):
     fails, or if this test needed path surgery beyond ordinary import, the
     shim has not done its job.
 
-    Spec backlink: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C6
+    Spec backlink: pln-home-resolution-gate-family-ma-e5c146 § C6
     """
 
     def setUp(self):

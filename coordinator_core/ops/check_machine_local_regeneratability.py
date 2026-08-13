@@ -12,13 +12,13 @@ from the machine-local registry and flags:
 
 Wired into: /workstream-complete Step 2.95 (`coordinator/skills/workstream-complete/SKILL.md`).
 
-Port of: check-machine-local-regeneratability.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-machine-local-regeneratability.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-06-22-invariant-verification-observers.md § C1
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Offer shape: exit 0 always; findings to stderr; silent on clean.
 
-Exit codes (parity-critical — the example-doctrine-repo trampoline forwards this verbatim):
+Exit codes (parity-critical — the coordinator-claude trampoline forwards this verbatim):
     0 — always. This is an offer-shaped observer; it never blocks a caller,
         regardless of parse errors, missing HOME, or missing machine-local CLI.
 
@@ -40,12 +40,12 @@ Negative-spec (do NOT "fix" while porting):
       of the plan above (DR-132 conformance) added a second, equally bounded arm: a dotted
       key matches a family entry that is a strict dotted-prefix of it — e.g.
       ``engine.working_repos.example_doctrine_repo`` is satisfied by a bare ``"engine.working_repos"``
-      entry. Example-doctrine-repo has declared that exact family entry on their plane (delivery memo
-      cross-repo/inbox/2026-08-07-example-doctrine-repo-em-dr132-conformance-fixture-delivered.md:
+      entry. Coordinator-claude has declared that exact family entry on their plane (delivery memo
+      cross-repo/inbox/2026-08-07-coordinator-claude-em-dr132-conformance-fixture-delivered.md:
       "The prefix-family match arm on the consumer side remains yours."). Do NOT widen this
       into an open glob for other keys, and do NOT add ``engine.working_repos.*`` (or any
-      spelling of it) to ``COORDINATOR_OWNED_KEYS`` here — that namespace is example-doctrine-repo-authored
-      and example-doctrine-repo owns its regeneratability answer; this module only supplies the arm that can
+      spelling of it) to ``COORDINATOR_OWNED_KEYS`` here — that namespace is coordinator-claude-authored
+      and coordinator-claude owns its regeneratability answer; this module only supplies the arm that can
       match a family entry, not the key or the classification.
       Reachability note (review-flagged 2026-08-07): the ``engine.working_repos`` arm has
       NO production call-site in claude-klabauter today. Check 1 in ``main()`` only iterates
@@ -53,14 +53,14 @@ Negative-spec (do NOT "fix" while porting):
       is deliberately absent from that list (see above) — so no ``canon_key`` the
       production loop produces can ever reach the ``regen_key == family`` branch for
       this family. The arm currently fires only in this module's own unit tests
-      (direct calls to ``_key_matches_regen_entry``). It exists anyway because example-doctrine-repo
+      (direct calls to ``_key_matches_regen_entry``). It exists anyway because coordinator-claude
       declared the bare family entry ``"engine.working_repos" = "idempotent-regeneratable"``
       on their plane and stated the consumer-side match arm is ours to supply
-      (cross-repo/inbox/2026-08-07-example-doctrine-repo-em-dr132-conformance-fixture-delivered.md)
+      (cross-repo/inbox/2026-08-07-coordinator-claude-em-dr132-conformance-fixture-delivered.md)
       — deliberate forward-looking infrastructure for whichever module (presumably
-      example-doctrine-repo's own regeneratability checker) owns a ``canon_key`` list containing
+      coordinator-claude's own regeneratability checker) owns a ``canon_key`` list containing
       ``engine.working_repos.*``, not dead code. Do NOT assume Check 1 exercises this
-      arm today, and do NOT "helpfully" add the example-doctrine-repo key to ``COORDINATOR_OWNED_KEYS``
+      arm today, and do NOT "helpfully" add the coordinator-claude key to ``COORDINATOR_OWNED_KEYS``
       to make it reachable — that would violate the negative-spec above.
     - Bash read the ``[regeneratability]`` table and the flat top-level tables via a
       subprocess'd Python helper (mktemp'd heredoc) because bash cannot parse TOML
@@ -115,7 +115,7 @@ COORDINATOR_OWNED_KEYS: List[str] = [
 # Family-prefix match arms (AC8, docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md
 # chunk C6b): a bare family entry in [regeneratability] satisfies any dotted key that has
 # it as a strict dotted-prefix. Named and bounded — not a general glob (see module
-# docstring negative-spec). "engine.working_repos" is example-doctrine-repo-declared on their plane; claude-klabauter
+# docstring negative-spec). "engine.working_repos" is coordinator-claude-declared on their plane; claude-klabauter
 # only supplies the arm that can match it, not the key itself (COORDINATOR_OWNED_KEYS is
 # deliberately NOT extended with any engine.working_repos.* spelling).
 FAMILY_PREFIX_ENTRIES: List[str] = [

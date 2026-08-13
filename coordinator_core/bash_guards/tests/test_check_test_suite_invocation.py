@@ -195,7 +195,7 @@ def test_top_level_em_powershell_tool_unscoped_suite_denied_without_grant(grant_
 # ---------------------------------------------------------------------------
 # Start-Process -ArgumentList argv-reconstruction fix (2026-08-07 -- guard
 # bypass measured live via `dispatch.evaluate_payload_json`, see
-# `cross-repo/inbox/2026-08-07-example-doctrine-repo-em-powershell-suite-guard-
+# `cross-repo/inbox/2026-08-07-coordinator-claude-em-powershell-suite-guard-
 # converted-and-wave2-findings.md` Finding 1). Unlike the plain-string
 # PowerShell class above, this shape genuinely needed the `_dialect.py`
 # argv-reconstruction seam: a bare bash-`shlex` pass fuses `-ArgumentList
@@ -892,7 +892,7 @@ def test_classify_command_core_does_not_raise_on_malformed_configured():
 
 def test_classify_command_core_chained_fast_test_cmd_classifies_both_segments_as_tier_f():
     """Regression (2026-07-25 cockpit Tier-F-unreachable report), UPDATED
-    2026-07-25 for R1 (cross-repo/inbox/2026-07-25-example-doctrine-repo-em-validate-
+    2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-
     tier-u-shape-ruling.md): with ``fast_test_cmd`` chained (``pnpm run
     typecheck && pnpm run test``) and invoked verbatim, BOTH segments are
     matched by the configured-cmd containment leg (not just the trailing
@@ -1200,7 +1200,7 @@ class TestGrantLeg:
 
     def test_em_tier_f_chained_no_grant_denied_as_tier_u(self, grant_repo, free_mutex, monkeypatch):
         """Regression (2026-07-25 cockpit Tier-F-unreachable report),
-        UPDATED 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-example-doctrine-repo-
+        UPDATED 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-claude-
         em-validate-tier-u-shape-ruling.md): a CHAINED configured
         fast_test_cmd (``pnpm run typecheck && pnpm run test``), invoked
         verbatim, still has BOTH segments recognized by the configured-cmd
@@ -1359,7 +1359,7 @@ class TestGrantLeg:
         real resolver file (not just a monkeypatched stub) -- i.e. the
         fast_test_cmd match is genuinely recognized, not silently dropped.
 
-        Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-example-doctrine-repo-
+        Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-claude-
         em-validate-tier-u-shape-ruling.md): the fixture's fast_test_cmd
         (``python3 -m pytest -m 'not cadence'``, a marker filter -- not a
         file/dir/node-id scope) is an unscoped-runner SHAPE, so it now

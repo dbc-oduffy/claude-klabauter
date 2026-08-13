@@ -48,8 +48,8 @@ Negative-spec:
       parent directory, and git-unavailable all return the structured
       `{"error": ...}` shape, not a result with an empty repo_root.
 
-Spec backlink: docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § B5
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B5
+Spec backlink: pln-coordinator-ops-buildout-from--903224
     § Mandated resolvers (normalize_native_path row), DEC-2, DEC-7
 """
 from __future__ import annotations

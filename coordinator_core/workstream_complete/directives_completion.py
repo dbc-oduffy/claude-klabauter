@@ -2,7 +2,7 @@
 coordinator_core.workstream_complete.directives_completion — directive and
 read-only-gate builders for the completion-entry + execution-record-fold
 cluster of `/workstream-complete` (SKILL.md Steps 2.6, 2.6.7, 2.6.8, 2.6b of
-the pre-conversion spine — example-doctrine-repo
+the pre-conversion spine — coordinator-claude
 coordinator/skills/workstream-complete/SKILL.md:180-278).
 
 Purpose: computes the mechanical half of "archive uncaptured work" (Step

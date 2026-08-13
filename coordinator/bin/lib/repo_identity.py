@@ -1,7 +1,7 @@
 """coordinator/bin/lib/repo_identity.py -- the ONE checked repo-root
 resolver for the `coordinator/bin` script family.
 
-Spec backlink: docs/plans/2026-08-11-one-checked-resolver-for-the-bin-family.md
+Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C1.
 
 Public signature (this is the contract every other chunk in the plan,
@@ -116,9 +116,10 @@ with how many times you pay it; this memo is about an answer that cannot
 become a different answer no matter how many times you ask, which is a
 different shape entirely.
 
-This memo shape is established in-fleet, not novel: `docs/wiki/claude-klabauter-
-ownership-boundary.md:254` names process-scope memoization as the primary
-design (not incidental) for exactly this "resolve once per process"
+This memo shape is established in-fleet, not novel: the in-fleet memo-shape
+wiki page under `docs/wiki/` (its ownership-boundary doc, line 254) names
+process-scope memoization as the primary design (not incidental) for
+exactly this "resolve once per process"
 pattern, and `docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-
 amplification-gate.md:692` already ships a `(sha_range, session_id)`-keyed
 memo of the same shape.

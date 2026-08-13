@@ -204,7 +204,7 @@ def assert_paths_in_session_scope(
     coordinator_core.ops.session.safe_commit_offer.compute_offer(session_id, cwd)
     ["safe_paths"] — OR, when `allow_orphans` is True AND the caller clears
     the positive-evidence check below, a member of that same call's
-    ``["orphans"]`` (dirty, claimed by no session at all — example-doctrine-repo doctrine,
+    ``["orphans"]`` (dirty, claimed by no session at all — coordinator-claude doctrine,
     scoped-safety-commits.md:131, already rules that unclaimed dirt joins the
     calling session). `allow_orphans` never relaxes the peer-claimed case: a
     path claimed by a LIVE peer session still denies regardless of this flag
@@ -277,7 +277,7 @@ def assert_paths_in_session_scope(
     The deny reason NAMES the classification (rather than a bare "path
     outside session scope") so a caller can tell an orphan denial from a
     peer-claimed one, AND enumerates the full pathspec rather than stopping
-    at the first denied path (cross-repo ruling SC-DR-019, example-doctrine-repo: "A
+    at the first denied path (cross-repo ruling SC-DR-019, coordinator-claude: "A
     scoped-commit refusal is per-path, not per-commit. Commit the
     uncontested remainder immediately, then wait holding only the contested
     path" — mechanical only if the refusal names every contested path AND
@@ -673,7 +673,7 @@ def _classify_denied_path(
 
     THE LIVE SET IS PER-REPO, SO THE ORACLE MUST BE cwd-SCOPED (break-class
     fix, 2026-08-07 pass 2; cross-repo memo
-    `2026-08-07-example-doctrine-repo-em-scoped-commit-calls-a-live-peer-dead-and-reapable`).
+    `2026-08-07-coordinator-claude-em-scoped-commit-calls-a-live-peer-dead-and-reapable`).
     Session registries live at `<repo>/.git/coordinator-sessions/`, so
     "is <sid> live?" is only answerable relative to a repo. This function
     previously called the ZERO-ARG `coordinator_core.liveness.
@@ -682,7 +682,7 @@ def _classify_denied_path(
     across repos (a sibling's `coordinator-safe-commit` shim reaching this
     engine), every peer session of the TARGET repo is structurally absent
     from the live set, so branch 2 fired on a demonstrably live peer:
-    reproduced on 2026-08-07 as `session_live(sid, example-doctrine-repo) is True` while
+    reproduced on 2026-08-07 as `session_live(sid, coordinator-claude) is True` while
     `session_live(sid, None) is False` from a claude-klabauter cwd, for a session whose
     `last_activity` was 5 seconds old. Use the cwd-scoped
     `coordinator_core.session.liveness.live_session_ids(cwd)` — the same

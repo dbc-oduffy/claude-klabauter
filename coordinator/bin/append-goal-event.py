@@ -68,12 +68,12 @@ failure). Faithfully carried over, not "fixed" mid-port:
         unimportable, op-level ValueError such as missing/invalid --period,
         --period-value, or --text, timeout, malformed envelope).
 
-Spec backlink: docs/plans/2026-07-04-strang-01-tc3-emission-port-facade-respin.md § C3
+Spec backlink: pln-strang-01-respin-tc3-emission--bdd397 § C3
 Prior backlink: docs/plans/2026-06-22-cockpit-tc-3-coordinator-emission.md § C2
 Finish backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T2 AC4
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Parity oracle (this port): coordinator/bin/append-goal-event-facade.test.sh
-(example-doctrine-repo a2fe06f8, 2026-07-22)
+(coordinator-claude a2fe06f8, 2026-07-22)
 """
 
 from __future__ import annotations

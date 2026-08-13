@@ -6,7 +6,7 @@ inbox/archive co-located layout: `cross-repo/*.md` (non-README) moves into
 `cross-repo/inbox/`, `archive/cross-repo/*` moves into `cross-repo/archive/`,
 and the now-empty top-level `archive/cross-repo/` is removed. Migration logic
 lives claude-klabauter-side in coordinator_core.ops.migrate_cross_repo_layout; this
-file is a thin example-doctrine-repo-side trampoline.
+file is a thin coordinator-claude-side trampoline.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from __future__ import annotations
 # the bash implementation has been fully ported to
 # coordinator_core/ops/migrate_cross_repo_layout.py (co-located pytest:
 # coordinator_core/ops/test_migrate_cross_repo_layout.py). This file is now a
-# thin example-doctrine-repo-side (contract) trampoline over that claude-klabauter (engine) module, per
-# DR-047 (example-doctrine-repo owns contract/generator, claude-klabauter owns engine).
+# thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per
+# DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
 #
 # Not a JSON-RPC op — plain in-process import + call (template-variant #1),
 # same shape as coordinator-auto-push / handoff-gate-aging. This is a
@@ -39,9 +39,9 @@ from __future__ import annotations
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# example-doctrine-repo repo, not here).
+# coordinator-claude repo, not here).
 #
 # Usage:
 #   cd <repo-root>

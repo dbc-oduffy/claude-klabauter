@@ -2,7 +2,7 @@
 coordinator_core.ops.fleet._memo_resolver — shared receiver-registry resolver.
 
 Purpose: ONE canonical machine-local-registry → receiver-inbox resolution surface,
-factored out of `memo_send.py` (example-doctrine-repo-ratified 2026-07-05 Q1 resolver, already-shipped)
+factored out of `memo_send.py` (coordinator-claude-ratified 2026-07-05 Q1 resolver, already-shipped)
 so every memo verb — `memo.send` (memo_send.py), `memo.list` (C2), `memo.draft`/
 `memo.compose` (C5) — consumes this ONE implementation rather than forking a second
 registry-resolution layer. Landed by C3 of
@@ -15,7 +15,7 @@ Spec backlink:
     memo_send.py and hardened to fail-loud-only").
     docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C3, AC3.
     Parity source (resolution rules only, not the fallback this hardens away):
-    example-doctrine-repo coordinator/bin/cross-repo-memo receiver-resolution section.
+    coordinator-claude coordinator/bin/cross-repo-memo receiver-resolution section.
 
 Negative-spec:
   - Does NOT fall back to a sender-parent-folder scan (or ANY directory scan) on
@@ -38,11 +38,11 @@ Negative-spec:
     implementation picked the first match found while iterating an unordered
     `set`, which was non-deterministic under genuine multi-registration
     misconfiguration; this replaces silent-arbitrary-pick with fail-loud.
-  - Does NOT import example-doctrine-repo's `coordinator_registry` Python loader (DR-210 §1
+  - Does NOT import coordinator-claude's `coordinator_registry` Python loader (DR-210 §1
     negative-spec, reaffirmed) — direct `registry.toml`/`registry.local.toml`
     read via stdlib `tomllib` remains the sanctioned surface.
   - Does NOT hardcode any alias, central-receiver id, or registry key literal —
-    all come from the example-doctrine-repo-ratified manifest (`coordinator-registry.manifest.json`)
+    all come from the coordinator-claude-ratified manifest (`coordinator-registry.manifest.json`)
     or from the pure convention-mapping rule.
 
 Public API
@@ -61,30 +61,30 @@ Functions:
         The machine-local registry directory (`<settings-home>/machine-local`).
         Never raises.
   - `read_doe_identity() -> dict`
-        The example-doctrine-repo registry manifest's `identity` object — THE one manifest read
-        in this module, resolving the example-doctrine-repo root through the canonical DR-071
+        The coordinator-claude registry manifest's `identity` object — THE one manifest read
+        in this module, resolving the coordinator-claude root through the canonical DR-071
         ladder (`coordinator_core.doe_root_pointer.read_doe_root_pointer()`:
         registry `repos.example_doctrine_repo`, then `<settings-home>/machine-local/
         .doe-root`, then the legacy `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`).
         Graceful degradation: `{}` on any resolution/read/parse failure.
         Never raises.
   - `read_receiver_aliases() -> dict[str, str]`
-        `{shortname: registryKey}` from the example-doctrine-repo manifest's `identity.repoAliases`.
+        `{shortname: registryKey}` from the coordinator-claude manifest's `identity.repoAliases`.
         Graceful degradation: returns `{}` if the manifest does not resolve.
         Never raises.
   - `read_central_receiver_ids() -> set[str]`
-        Lowercased `identity.centralReceiverIds` from the example-doctrine-repo manifest (via
+        Lowercased `identity.centralReceiverIds` from the coordinator-claude manifest (via
         `read_doe_identity()`). Graceful degradation: returns `set()` on any
         read/parse failure. Never raises.
   - `read_redirect_aliases() -> set[str]`
-        Lowercased, stripped `identity.redirectAliases` from the example-doctrine-repo manifest —
+        Lowercased, stripped `identity.redirectAliases` from the coordinator-claude manifest —
         the set of receiver ids that redirect to *self* (e.g. `.claude-em`,
         `coordinator-claude`, all redirecting to `claude-central-em`). Graceful
         degradation: returns `set()` if the manifest does not resolve, is
         unparseable, or the field is absent from a given manifest.
         Never raises. Consumed by `memo.check_addressee`'s redirect-MATCH path
         (defect-1); this module never hardcodes the alias literals themselves —
-        example-doctrine-repo promoted `identity.redirectAliases` into the manifest 2026-07-21.
+        coordinator-claude promoted `identity.redirectAliases` into the manifest 2026-07-21.
   - `read_registry_repos() -> dict[str, str]`
         `{repos.<key>: <abs-path-string>}` merged from `registry.toml` (baseline)
         + `registry.local.toml` (local overrides win). Returns `{}` when NEITHER
@@ -110,7 +110,7 @@ Functions:
         `{alias: owner_em_id}` merged from `registry.toml` (baseline) + `registry.local.toml`
         (local overrides win) `[publish.mirrors.<key>]` nested tables. Alias set per mirror
         key: the mechanically-derived pair (`<hyphenated-key>`, `<hyphenated-key>-em`) plus
-        any explicit `<key>.aliases` list entries — mirrors the example-doctrine-repo cross-repo-memo CLI's
+        any explicit `<key>.aliases` list entries — mirrors the coordinator-claude cross-repo-memo CLI's
         `_derive_mirror_alias_set` (bin/cross-repo-memo). A mirror key with no `.owner`
         contributes no aliases (an incomplete/malformed mirror table is silently excluded,
         not fail-loud — see negative-spec). Returns `{}` when neither registry file is
@@ -130,7 +130,7 @@ Functions:
         is a central id (`identity.centralReceiverIds`) or a redirect alias
         (`identity.redirectAliases`) — both fan in to the same registered
         central repo, so both canonicalize to the SAME id (today, that's
-        `example-doctrine-repo-em` -> `repos.example_doctrine_repo`, never hardcoded — derived by
+        `coordinator-claude-em` -> `repos.example_doctrine_repo`, never hardcoded — derived by
         the same fan-in scan `resolve_receiver_inbox` uses). For any other
         receiver id, returns the input stripped/lowercased, unchanged
         otherwise — this is the addressee-gate normalization: a memo's
@@ -204,7 +204,7 @@ class AmbiguousReceiverError(Exception):
     """Raised when a central receiver id fans in to more than one registered key.
 
     identity.centralReceiverIds names several ids (e.g. 'central-em',
-    'example-doctrine-repo-em') that are all supposed to fan in to ONE authoritative
+    'coordinator-claude-em') that are all supposed to fan in to ONE authoritative
     registry key. If more than one distinct repos.* key is registered across
     that id set, the manifest and the machine-local registry disagree about
     which repo is "central" — fail loud rather than arbitrarily pick one.
@@ -269,7 +269,7 @@ def registry_home() -> Path:
     In that case the settings-home resolution (`machine_local_dir()`, honouring
     CLAUDE_HOME/COORDINATOR_SETTINGS_HOME) is authoritative.
 
-    Spec backlink: docs/plans/2026-07-11-coordinator-core-home-claude-read-repoint.md § C2 (site 9)
+    Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C2 (site 9)
     """
     override = os.environ.get(_MACHINE_LOCAL_IMPL_ENV)
     if override:
@@ -280,13 +280,13 @@ def registry_home() -> Path:
 
 
 def read_doe_identity() -> dict:
-    """Return the example-doctrine-repo registry manifest's `identity` object, or `{}`.
+    """Return the coordinator-claude registry manifest's `identity` object, or `{}`.
 
-    THE ONE example-doctrine-repo-manifest read in this module — `read_receiver_aliases()`,
+    THE ONE coordinator-claude-manifest read in this module — `read_receiver_aliases()`,
     `read_central_receiver_ids()` and `read_redirect_aliases()` are three
     projections over it, not three independent sentinel readers.
 
-    example-doctrine-repo-root resolution delegates to `coordinator_core.doe_root_pointer.
+    coordinator-claude-root resolution delegates to `coordinator_core.doe_root_pointer.
     read_doe_root_pointer()`, the repo's canonical DR-071 ladder:
         1. registry `repos.example_doctrine_repo`                (canonical anchor)
         2. <settings-home>/machine-local/.doe-root    (durable file mirror)
@@ -300,7 +300,7 @@ def read_doe_identity() -> dict:
     on a machine where delivery to that receiver worked: `is_central` was
     False for every candidate because the central-id set was empty.
 
-    Graceful degradation: returns {} if no example-doctrine-repo root resolves, or the manifest
+    Graceful degradation: returns {} if no coordinator-claude root resolves, or the manifest
     is absent/unreadable/unparseable. Intentionally NOT fail-loud (unlike
     read_registry_repos) — the manifest is an ergonomic convenience layer, not
     the load-bearing repos.* registry itself. Never raises.
@@ -321,7 +321,7 @@ def read_doe_identity() -> dict:
         raw_root = read_doe_root_pointer()
         if not raw_root.strip():
             _LOG.warning(
-                "_memo_resolver: no example-doctrine-repo root resolved (registry repos.example_doctrine_repo, "
+                "_memo_resolver: no coordinator-claude root resolved (registry repos.example_doctrine_repo, "
                 "<settings-home>/machine-local/.doe-root, and the legacy "
                 "${CLAUDE_HOME:-$HOME}/.claude/.doe-root all came back empty) — "
                 "manifest-backed receiver identity resolution disabled",
@@ -344,15 +344,15 @@ def read_doe_identity() -> dict:
         return identity if isinstance(identity, dict) else {}
     except Exception as exc:
         _LOG.warning(
-            "_memo_resolver: failed to read the example-doctrine-repo registry manifest: %s", exc
+            "_memo_resolver: failed to read the coordinator-claude registry manifest: %s", exc
         )
         return {}
 
 
 def read_receiver_aliases() -> dict[str, str]:
-    """Return {shortname: registryKey} from the example-doctrine-repo manifest's identity.repoAliases.
+    """Return {shortname: registryKey} from the coordinator-claude manifest's identity.repoAliases.
 
-    example-doctrine-repo-ratified alias surface: example-doctrine-repo consult 2026-07-05 strang-03 follow-up, Q1.
+    coordinator-claude-ratified alias surface: coordinator-claude consult 2026-07-05 strang-03 follow-up, Q1.
     Manifest + doe-root resolution: `read_doe_identity()` (DR-071 ladder).
 
     Graceful degradation: returns {} if the manifest does not resolve — the
@@ -369,15 +369,15 @@ def read_receiver_aliases() -> dict[str, str]:
         return aliases
     except Exception as exc:
         _LOG.warning(
-            "_memo_resolver: failed to read receiver aliases from example-doctrine-repo manifest: %s", exc
+            "_memo_resolver: failed to read receiver aliases from coordinator-claude manifest: %s", exc
         )
         return {}
 
 
 def read_central_receiver_ids() -> set[str]:
-    """Return the lowercased set of central receiver EM ids from the example-doctrine-repo manifest.
+    """Return the lowercased set of central receiver EM ids from the coordinator-claude manifest.
 
-    example-doctrine-repo-ratified central-receiver surface: identity.centralReceiverIds in
+    coordinator-claude-ratified central-receiver surface: identity.centralReceiverIds in
     <doe-root>/coordinator/schemas/coordinator-registry.manifest.json (same
     manifest, same DR-071 doe-root ladder as read_receiver_aliases(), via
     read_doe_identity()).
@@ -394,20 +394,20 @@ def read_central_receiver_ids() -> set[str]:
         return central_ids
     except Exception as exc:
         _LOG.warning(
-            "_memo_resolver: failed to read central receiver ids from example-doctrine-repo manifest: %s", exc
+            "_memo_resolver: failed to read central receiver ids from coordinator-claude manifest: %s", exc
         )
         return set()
 
 
 def read_redirect_aliases() -> set[str]:
-    """Return the lowercased, stripped set of redirect-alias ids from the example-doctrine-repo manifest.
+    """Return the lowercased, stripped set of redirect-alias ids from the coordinator-claude manifest.
 
     Sibling reader of read_central_receiver_ids() — same read_doe_identity()
     ladder → graceful-degradation-to-empty structure. Reads
     identity.get("redirectAliases", []): receiver ids that
-    redirect to *self* (e.g. Example-doctrine-repo's `.claude-em` / `claude-home` /
+    redirect to *self* (e.g. Coordinator-claude's `.claude-em` / `claude-home` /
     `coordinator-claude` / `coordinator-claude-em`, all redirecting to
-    `claude-central-em`). Example-doctrine-repo promoted `identity.redirectAliases` into the
+    `claude-central-em`). Coordinator-claude promoted `identity.redirectAliases` into the
     manifest 2026-07-21; a manifest that lacks the field (or is absent/
     unreadable) still degrades to `set()` per the graceful-degradation
     contract below.
@@ -428,7 +428,7 @@ def read_redirect_aliases() -> set[str]:
         return redirect_aliases
     except Exception as exc:
         _LOG.warning(
-            "_memo_resolver: failed to read redirect aliases from example-doctrine-repo manifest: %s", exc
+            "_memo_resolver: failed to read redirect aliases from coordinator-claude manifest: %s", exc
         )
         return set()
 
@@ -436,10 +436,10 @@ def read_redirect_aliases() -> set[str]:
 def read_registry_repos() -> dict[str, str]:
     """Read repos.* keys from the machine-local registry (baseline + local layer).
 
-    example-doctrine-repo-ratified resolver surface (example-doctrine-repo consult 2026-07-05 strang-03 follow-up, Q1):
+    coordinator-claude-ratified resolver surface (coordinator-claude consult 2026-07-05 strang-03 follow-up, Q1):
     direct registry.toml + registry.local.toml read via stdlib tomllib is the
     sanctioned surface for the engine. The coordinator_registry Python loader
-    [example-doctrine-repo-side, DR-210:58] is explicitly NOT used here.
+    [coordinator-claude-side, DR-210:58] is explicitly NOT used here.
 
     Layer order: registry.toml (tracked baseline) merged with registry.local.toml
     (per-machine local overrides). Only non-empty string values are included —
@@ -489,15 +489,15 @@ def read_registry_repos() -> dict[str, str]:
 # Publish-target mirrors (OSS distribution destinations, e.g. `coordinator-claude`,
 # `deep-research-claude`) are NOT EM working trees — they are outward `publish.sh`
 # destinations. A memo addressed `to` a mirror is invisible to any EM and gets
-# clobbered on the next publish run (mirrors example-doctrine-repo cross-repo-memo's
+# clobbered on the next publish run (mirrors coordinator-claude cross-repo-memo's
 # `_is_publish_target_em` / `_get_publish_target_owners` guard, C4 2026-06-30).
 # Mirrors live in the SAME `registry.toml`/`registry.local.toml` files
 # `read_registry_repos()` reads, under a DISTINCT `[publish.mirrors.<key>]`
 # namespace (never `repos.*` — mirrors were removed from `repos.*` by the
 # 2026-06-30 registry-publish-vs-working-targets migration).
 #
-# Spec backlink: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C5 (AC5)
-#                 Parity source: example-doctrine-repo coordinator/bin/cross-repo-memo
+# Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C5 (AC5)
+#                 Parity source: coordinator-claude coordinator/bin/cross-repo-memo
 #                 `_get_publish_target_owners` / `_derive_mirror_alias_set`.
 # ---------------------------------------------------------------------------
 
@@ -582,10 +582,10 @@ def _read_merged_publish_mirrors() -> dict[str, dict]:
 
         # Shape 2: flat quoted-dotted key, the `machine-local set` output
         # format — `"publish.mirrors.<key>.<field>" = "<value>"`. Only the
-        # three known per-mirror fields are recognised (matches the example-doctrine-repo
+        # three known per-mirror fields are recognised (matches the coordinator-claude
         # CLI's own `.owner`/`.path`/`.aliases` sentinel set); `aliases` is
         # newline-joined text here (mirrors `_machine_local_get(...)
-        # .splitlines()` on the example-doctrine-repo CLI side), split into a list to match
+        # .splitlines()` on the coordinator-claude CLI side), split into a list to match
         # the nested-table shape's list-of-strings contract.
         for raw_key, val in data.items():
             if not isinstance(raw_key, str) or not raw_key.startswith(_FLAT_PREFIX):
@@ -611,7 +611,7 @@ def read_publish_mirror_owners() -> dict[str, str]:
     with no `.owner` contributes no aliases (an incomplete/malformed mirror
     table is silently excluded, not fail-loud — see negative-spec).
 
-    Alias derivation per mirror key (mirrors example-doctrine-repo `_derive_mirror_alias_set`):
+    Alias derivation per mirror key (mirrors coordinator-claude `_derive_mirror_alias_set`):
       - Mechanically-derived pair: `<hyphenated-key>` and `<hyphenated-key>-em`
         (e.g. `coordinator_claude` -> `coordinator-claude`, `coordinator-claude-em`).
       - Plus any explicit `<key>.aliases` list entries (legacy short-forms not
@@ -645,7 +645,7 @@ def read_publish_mirror_owners() -> dict[str, str]:
             # 2026-08-07 incident fix: a mirror declared via `.path` alone
             # (no `.owner` set — the exact claude_klabauter registration
             # gap) must still classify as a publish target, mirroring the
-            # example-doctrine-repo CLI's `_get_publish_target_owners` placeholder-owner fix.
+            # coordinator-claude CLI's `_get_publish_target_owners` placeholder-owner fix.
             owner = (
                 f"<owner unset — run: machine-local set "
                 f"publish.mirrors.{mirror_key}.owner <em-id>>"
@@ -832,19 +832,19 @@ def receiver_em_to_repo_key(receiver_em_id: str) -> str:
        Example: 'example-retrieval-repo-em' → 'repos.example_retrieval_repo'.
 
     Central receiver IDs (identity.centralReceiverIds in the manifest, e.g. 'central-em',
-    'example-doctrine-repo-em') are NOT resolved through this function's convention path — they
+    'coordinator-claude-em') are NOT resolved through this function's convention path — they
     fan-in to a single authoritative registry key via read_central_receiver_ids() +
     the central-resolution branch in resolve_receiver_inbox (multiple aliases, one
     registered repo). This function remains the non-central resolution path.
 
-    example-doctrine-repo-ratified alias surface: example-doctrine-repo consult 2026-07-05 strang-03 follow-up, Q1.
+    coordinator-claude-ratified alias surface: coordinator-claude consult 2026-07-05 strang-03 follow-up, Q1.
     """
     shortname = receiver_em_id[:-3] if receiver_em_id.endswith("-em") else receiver_em_id
     # Review: code-reviewer — removed unreachable `if not shortname` guard; _validate_send_params
     # rejects empty `to` before this point, so the "-em"-alone → empty-shortname path is
     # unreachable from the handler. Caller gets repos. (missing suffix), correctly fails lookup.
 
-    # Manifest alias lookup (example-doctrine-repo-ratified; alias set is small and stable).
+    # Manifest alias lookup (coordinator-claude-ratified; alias set is small and stable).
     aliases = read_receiver_aliases()
     if shortname in aliases:
         return "repos." + aliases[shortname]
@@ -888,14 +888,14 @@ def canonical_receiver_id(receiver_em_id: str) -> str:
     See module docstring's Public API entry for the full contract. Existence of
     this function answers the addressee-gate verifiability problem: a receiver
     seat is addressable via several aliases (`claude-central-em`, `central-em`,
-    `central`, `example-doctrine-repo-em`, plus redirect aliases like `coordinator-claude`)
+    `central`, `coordinator-claude-em`, plus redirect aliases like `coordinator-claude`)
     that all fan in to ONE registered repo — without canonicalization, a memo's
     stamped `to:` echoes whichever alias the sender typed, and a reader cannot
     verify by inspection that two differently-addressed memos went to the same
     seat.
 
     Negative-spec: does NOT hardcode any alias/central-id literal — the
-    central-id and redirect-alias sets are read declaratively from the example-doctrine-repo
+    central-id and redirect-alias sets are read declaratively from the coordinator-claude
     manifest (`read_central_receiver_ids()`, `read_redirect_aliases()`), same
     discipline as every other reader in this module.
     """
@@ -933,15 +933,15 @@ def resolve_receiver_inbox(
         see module docstring).
 
     Central receivers (receiver_em_id in identity.centralReceiverIds, e.g.
-    'claude-central-em', 'central-em', 'central', 'example-doctrine-repo-em') fan in to a
+    'claude-central-em', 'central-em', 'central', 'coordinator-claude-em') fan in to a
     single authoritative registry key: every central id maps through the same
     convention/alias rules any other receiver would use, but only ONE of those
     ids is expected to have a registered repos.* entry on a given machine
-    (today, that's 'example-doctrine-repo-em' → repos.example_doctrine_repo — never hardcoded here,
+    (today, that's 'coordinator-claude-em' → repos.example_doctrine_repo — never hardcoded here,
     always derived by scanning the manifest's central-id set, in sorted order,
-    against the registered repos). This mirrors the example-doctrine-repo cross-repo-memo CLI's
+    against the registered repos). This mirrors the coordinator-claude cross-repo-memo CLI's
     "central is not a repos.* key — anchored on repos.example_doctrine_repo" special-case
-    without importing example-doctrine-repo's coordinator_registry or hardcoding the literal key.
+    without importing coordinator-claude's coordinator_registry or hardcoding the literal key.
 
     Raises:
         RegistryReadError: propagated from read_registry_repos() on genuine
@@ -977,20 +977,20 @@ def same_repo_path(a: Path, b: Path) -> bool:
 
     `samefile` when both exist; `normcase`+`realpath` fallback so an absent
     repo (a registry entry pointing at a not-yet-cloned sibling) never
-    raises. Mirrors example-doctrine-repo CLI's `_same_path` helper (`bin/cross-repo-memo`).
+    raises. Mirrors coordinator-claude CLI's `_same_path` helper (`bin/cross-repo-memo`).
 
     THE ONE path-equality helper for receiver/self resolution in
     `coordinator_core` — `memo_check_addressee.py` imports this rather than
     carrying its own copy (2026-07-26 subprocess-elision spinoff).
 
     DRIFT SEAM — a third copy exists that CANNOT import this one:
-    `_same_repo_path` in example-doctrine-repo's `coordinator/hooks/scripts/_engine_root.py`.
+    `_same_repo_path` in coordinator-claude's `coordinator/hooks/scripts/_engine_root.py`.
     That module bootstraps engine resolution, so importing `coordinator_core`
     would close a cycle; it reimplements these exact semantics by necessity.
     Changing the semantics here (not the implementation — the ANSWER for some
     pair of paths) silently desynchronizes the engine-working-repo gate that
     reads it, and no test on either side catches the divergence. Claude-Klabauter owns
-    this note; a semantics change here ships with a memo to `example-doctrine-repo-em`.
+    this note; a semantics change here ships with a memo to `coordinator-claude-em`.
     """
     try:
         return os.path.samefile(str(a), str(b))
@@ -1002,19 +1002,19 @@ def same_repo_path(a: Path, b: Path) -> bool:
 
 def resolve_self_em_id(self_root: Path) -> str:
     """Resolve a repo root path to its OWN EM identity string — the claude-klabauter-
-    side port of the example-doctrine-repo CLI's `_sender_em_id()` / `em_id_for_root()`
+    side port of the coordinator-claude CLI's `_sender_em_id()` / `em_id_for_root()`
     (`bin/cross-repo-memo:1204-1220`, `bin/lib/coordinator_registry.py:
     263-284`).
 
     Path-matches `self_root` against every registered `repos.*` entry
     (central included — a repo registered under `repos.example_doctrine_repo` resolves
     to `_repo_key_to_self_em_id('repos.example_doctrine_repo')`, i.e.
-    `'example-doctrine-repo-em'` today, the SAME id `em_id_for_root`'s dedicated
+    `'coordinator-claude-em'` today, the SAME id `em_id_for_root`'s dedicated
     central-canonical branch produces, without a second special case here).
     Falls back to the unregistered-repo convention
     (`basename(self_root) + '-em'`) when no registered path matches, or when
     the registry cannot be read at all — self-identity derivation is
-    best-effort/display-only (mirrors the example-doctrine-repo CLI's own "self_em is
+    best-effort/display-only (mirrors the coordinator-claude CLI's own "self_em is
     best-effort/display-only" comment at the `--check-addressee` call site)
     and must never raise.
 
@@ -1028,7 +1028,7 @@ def resolve_self_em_id(self_root: Path) -> str:
     `_repo_key_to_receiver_em_id` suggestion helper below — a matched repo
     key that requires `REPO_ALIASES` translation (e.g.
     `example_game_workbench_repo` -> `example-game-repo` -> `example-game-repo-em`) must resolve to
-    the SAME id the example-doctrine-repo CLI's `repo_key_to_em_id` produces for the same key,
+    the SAME id the coordinator-claude CLI's `repo_key_to_em_id` produces for the same key,
     or `compute_reply_closure`'s sender-id match silently breaks for every
     aliased repo (2026-07-26 review finding 1).
     """
@@ -1047,7 +1047,7 @@ def _repo_key_to_self_em_id(repo_key: str) -> str:
     """Alias-aware inverse of the registry key -> EM id mapping, for
     `resolve_self_em_id` ONLY — the load-bearing self-identity form.
 
-    Mirrors the example-doctrine-repo CLI's `repo_key_to_em_id`
+    Mirrors the coordinator-claude CLI's `repo_key_to_em_id`
     (`bin/lib/coordinator_registry.py:235-260`): checks
     `read_receiver_aliases()`'s reverse mapping (registry-key suffix ->
     alias shortname) before falling back to the naive underscore->dash
@@ -1094,7 +1094,7 @@ def _nearest_receiver_matches(
     """Shared candidate-pool + fuzzy-match internals for the did-you-mean surfaces below.
 
     Candidate pool: every currently-registered `repos.*` key (converted back to
-    its conventional receiver-em-id form), plus every example-doctrine-repo-manifest alias
+    its conventional receiver-em-id form), plus every coordinator-claude-manifest alias
     shortname whose aliased registry key is itself currently registered. Only
     receivers actually present in `all_repos` are ever candidates — this never
     suggests an id that would ALSO fail to resolve.

@@ -1,9 +1,9 @@
 """
 coordinator_core.ops.test_check_em_environment — behavior-parity tests for the
-naked-Python port of the example-doctrine-repo-owned check-em-environment.sh bash script
-(Port of: check-em-environment.sh, example-doctrine-repo 894d4bc6, 2026-07-22).
+naked-Python port of the coordinator-claude-owned check-em-environment.sh bash script
+(Port of: check-em-environment.sh, coordinator-claude 894d4bc6, 2026-07-22).
 
-Mirrors the oracle's own suite (Port of: test-check-em-environment.sh, example-doctrine-repo
+Mirrors the oracle's own suite (Port of: test-check-em-environment.sh, coordinator-claude
 894d4bc6, 2026-07-22):
 clean-env silence, effort-axis warn, model-axis warn, both-axes warn, and the
 always-exit-0 invariant. HOME / CLAUDE_PROJECT_DIR point at tmp_path fixtures

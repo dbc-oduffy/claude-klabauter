@@ -6,8 +6,8 @@ mutations invoked at pickup-time (claim), supersession-time (supersede), and
 stamp-only archival-time (ship).  Each verb is ONE atomic file write (no
 half-mutated on-disk intermediate); post-mutation schema validation gates the write.
 
-Spec backlink: example-doctrine-repo coordinator/bin/handoff-transition.js
-Port source:   example-doctrine-repo coordinator/bin/handoff-transition.js
+Spec backlink: coordinator-claude coordinator/bin/handoff-transition.js
+Port source:   coordinator-claude coordinator/bin/handoff-transition.js
 
 Verb contracts (mirrored from the JS spec):
 
@@ -86,7 +86,7 @@ Verb contracts (mirrored from the JS spec):
       old field name consumed_by is ALSO stripped if present)
     - gate_dependency: STRIPPED entirely on the flip to ready_to_fire (remove the
       key, not blank it — the ready_to_fire→gate_dependency-forbidden cross-field
-      rule requires absence; mirrors gate-recheck --cleared, matches example-doctrine-repo parity)
+      rule requires absence; mirrors gate-recheck --cleared, matches coordinator-claude parity)
     - pickup_ready: preserved untouched (authorial-intent record)
     - Optional `note` (str): when non-empty, stamps park_note: in FRONTMATTER
       (replace if present, insert after deployment_state if absent) — never
@@ -860,7 +860,7 @@ def _repark(handoff_path: str, worktree: Path, repo_root: Path) -> dict:
 
     Fail-loud (exit_code=1, no write) when deployment_state is not currently
     in_flight — repark is defined ONLY as the in_flight → ready_to_fire
-    transition (mirror example-doctrine-repo handoff-transition.js:367-400, esp. 385-389).
+    transition (mirror coordinator-claude handoff-transition.js:367-400, esp. 385-389).
     Idempotency: no-op when deployment_state is already ready_to_fire.
     gate_dependency is STRIPPED entirely on the flip to ready_to_fire (schema
     cross-field rule — a stale gate_dependency can survive onto an in_flight node).
@@ -1126,7 +1126,7 @@ def _close(
         # preserve. Replace if present (covers a stale true AND a stale
         # already-quoted value); insert if absent (a record minted before
         # pickup_ready existed gets the same guarantee going forward).
-        # Spec: cross-repo/inbox/2026-08-10-example-doctrine-repo-em-reconcile-close-
+        # Spec: cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-
         # terminal-and-scrub-key.md § 1.
         if read_fm_field(fm, "pickup_ready") is not None:
             fm = replace_fm_field(fm, "pickup_ready", "false")
@@ -1437,7 +1437,7 @@ def _unclaim(
         # cross-field rule requires absence (not blank). A node can reach in_flight
         # still carrying a stale gate_dependency (claim does not strip it), so
         # unclaim must retire it defensively or fail-loud on that input. Mirrors
-        # gate-recheck --cleared and the example-doctrine-repo handoff-transition.js unclaim writer (cross-writer parity).
+        # gate-recheck --cleared and the coordinator-claude handoff-transition.js unclaim writer (cross-writer parity).
         fm = _retire_gate_dependency(fm)
 
         # gate_evidence STRIPPED (C7, AC10) on the same flip to ready_to_fire,
@@ -1491,7 +1491,7 @@ def _unclaim(
 # ---------------------------------------------------------------------------
 
 #: KEBAB -> SNAKE translation table (the dispatch brief's "one thing most
-#: likely to be got wrong"). Example-doctrine-repo's ratified gate_evidence.legs[].kind
+#: likely to be got wrong"). Coordinator-claude's ratified gate_evidence.legs[].kind
 #: vocabulary (coordinator_core/frontmatter/schemas/handoff.schema.json) is
 #: kebab-case (file-exists, frontmatter-field, commit-ancestor, ...) —
 #: coordinator_core.sibling_fact's three I/O primitives are snake_case
@@ -2043,11 +2043,11 @@ def _retire_gate_evidence(fm: str, *, rechecked_by_this_clear: bool = True) -> s
 _SIBLING_PROSE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*")
 
 #: One narrowly-scoped, DOCUMENTED bare-word alias — not a general alias
-#: mechanism. This repo's own doctrine (CLAUDE.md) uses bare "example-doctrine-repo" as the
+#: mechanism. This repo's own doctrine (CLAUDE.md) uses bare "coordinator-claude" as the
 #: standing shorthand for the `example_doctrine_repo` sibling throughout its prose, and
 #: the spinoff's own motivating incident (its "What this covers" section) is
-#: itself a bare-"example-doctrine-repo" `gate_dependency:` sentence ("example-doctrine-repo 'finalizing its
-#: contract'"), not a hyphenated "example-doctrine-repo" one — so the un-hyphenated form
+#: itself a bare-"coordinator-claude" `gate_dependency:` sentence ("coordinator-claude 'finalizing its
+#: contract'"), not a hyphenated "coordinator-claude" one — so the un-hyphenated form
 #: is the dominant real-corpus shape this table exists to catch, not an edge
 #: case. Extending this table for other repos' informal names is a judgment
 #: call for a future chunk/PM ruling, not a local addition here.
@@ -2068,7 +2068,7 @@ def _registered_sibling_repo_named_in_prose(prose: str) -> Optional[str]:
     Token shape: prose is scanned for identifier-like runs
     (`[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*`), each lowercased and
     hyphen-normalised to underscore to match this repo's own `repos.<id>`
-    naming convention (e.g. "example-doctrine-repo" -> "example_doctrine_repo", "claude-klabauter"
+    naming convention (e.g. "coordinator-claude" -> "example_doctrine_repo", "claude-klabauter"
     -> "claude_klabauter" — the same convention CLAUDE.md's own prose uses
     throughout). `_SIBLING_PROSE_ALIASES` covers the one documented bare-word
     exception (see its own docstring).
@@ -2199,12 +2199,12 @@ def _gate_recheck(
     `at` is always stamped into last_gate_recheck (replace if present, insert after
     gate_dependency if absent). `cleared` additionally flips deployment_state:
     awaiting_gate → ready_to_fire and STRIPS gate_dependency entirely (remove the
-    key, not blank it — matches example-doctrine-repo wire semantics and the schema's
+    key, not blank it — matches coordinator-claude wire semantics and the schema's
     ready_to_fire→gate_dependency-forbidden if/then rule).
 
     Fail-loud (exit_code=1, no write) when deployment_state is not currently
     awaiting_gate — gate-recheck is defined ONLY as the awaiting_gate
-    re-check/clear transition (mirror example-doctrine-repo handoff-transition.js:432-500).
+    re-check/clear transition (mirror coordinator-claude handoff-transition.js:432-500).
     Idempotency: with `cleared`, no-op ONLY when deployment_state is already
     ready_to_fire. A bare re-run always re-stamps last_gate_recheck.
 

@@ -46,7 +46,7 @@ the candidates themselves are the entire product. This is the first
 assembler in the family whose `directives[]` is unconditionally empty --
 not a case that matches an existing empty-directives sibling.
 
-Contract (frozen, reviewed): example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
 
 Negative-spec:
     - Do NOT add a mutating code path or an `apply.py` module here -- this

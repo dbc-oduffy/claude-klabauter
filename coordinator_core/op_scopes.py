@@ -50,7 +50,7 @@ from typing import Dict
 # listed explicitly; a missing entry is an oversight, not a silent promotion
 # to working-tree-scoped (which would require a key).
 #
-# Spec backlink: docs/plans/2026-07-04-coordinator-core-global-multiplex-migration.md § C1c
+# Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1c
 # DR:            docs/decisions/2026-07-04-coordinator-core-global-multiplex-topology.md § AC-1b
 # Amendment:     docs/plans/2026-07-07-per-repo-emission-cutover.md § C3
 # ---------------------------------------------------------------------------
@@ -72,8 +72,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Same class as handoff.has_live_children above — reads from the main-
     # worktree-rooted state/handoffs + archive/handoffs subtrees.
     "handoff.blocked_by_dependents":         "common_dir",
-    # Reference implementation only — deregistered from example-doctrine-repo's Agent PreToolUse matcher
-    # (2026-07-31 parallel-emitter race); the live reroute is example-doctrine-repo's
+    # Reference implementation only — deregistered from coordinator-claude's Agent PreToolUse matcher
+    # (2026-07-31 parallel-emitter race); the live reroute is coordinator-claude's
     # _foreground_dispatch_strip.py port. A scope entry here is not a liveness claim.
     "hooks.nudge_foreground_agent_dispatch": "common_dir",
     "hooks.nudge_em_code_dispatch":          "common_dir",
@@ -180,7 +180,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: cross-repo memo, 2026-08-06 architecture survey.
     "cartography.op_edges":                  "none",
     # goals.reassess_krs — no repo_root-derived state access, all paths (goals_dir,
-    # bin_dir, signal_repo_root) are explicit caller-supplied params from the example-doctrine-repo-side
+    # bin_dir, signal_repo_root) are explicit caller-supplied params from the coordinator-claude-side
     # trampoline, which resolves them itself exactly as the original bash script
     # derived SCRIPT_DIR/REPO_ROOT from its own BASH_SOURCE location.
     "goals.reassess_krs":                    "none",
@@ -334,7 +334,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # handoff.archive_transition — the 4-mode (chain/stamp_shipped/stamp_only/
     # supersede) archive-ceremony op;
     # derives worktree via main_worktree_root(common_dir), same as handoff.stamp/
-    # handoff.transition/handoff.ship_and_archive. Spec: cross-repo example-doctrine-repo 7-bug
+    # handoff.transition/handoff.ship_and_archive. Spec: cross-repo coordinator-claude 7-bug
     # route item 7. Position A (PM-ratified 2026-07-15): no branch-tip fallback,
     # no Session-Id correction walk — item-7 eliminated at source, not patched.
     "handoff.archive_transition":            "common_dir",
@@ -418,7 +418,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # spec_backlink.resolve / spec_backlink.rewrite — keyed on git_common_dir: both
     # read the same corpus shape (docs/plans/*.md, archive/specs/**, state/sizings/**)
     # via main_worktree_root(common_dir), same class as deliverable.rollup above.
-    # Spec: docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md § C1
+    # Spec: pln-spec-backlinks-cite-a-stable-d-451b3e § C1
     "spec_backlink.resolve":                 "common_dir",
     "spec_backlink.rewrite":                 "common_dir",
     # queue.* write ops — keyed on git_common_dir: handlers derive caller worktree via
@@ -536,7 +536,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # --all-repos mode ignores repo_root entirely (enumerates every machine-local-registered
     # repos.* repo, not the caller's own tree) — same "some branches ignore repo_root" shape
     # as session.record_pickup; common_dir is still the correct default-mode scope.
-    # Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b/C9
+    # Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b/C9
     "ceremony.render_handoff_tracker":       "common_dir",
     # strang-10 A+B residual writer strangle — changelog / completion / review-trail write ops.
     # Keyed on git_common_dir: changelog.* + review_trail.write write main-worktree-rooted state/
@@ -582,7 +582,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main-worktree-rooted docs/, state/ and the bundled plugin wiki, the same
     # surfaces records.query and memo.triage resolve through. show_top would be
     # wrong — none of the eight gates reads per-worktree git state the way
-    # coverage.gate does. Memo: example-doctrine-repo-em updatedocs-gates-structured-verdicts.
+    # coverage.gate does. Memo: coordinator-claude-em updatedocs-gates-structured-verdicts.
     "updatedocs.gates":                       "common_dir",
     # distill.scope — keyed on git_common_dir: composes harvest_debt/ripe_filter/
     # sidecar_sweep over the CALLER's own main-worktree-rooted archive/specs,
@@ -885,7 +885,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # doctrine.assert_cross_reference_counts — common_dir: reads the CALLER's own
     # skills/**/*.md + docs/wiki/**/*.md doctrine tree; must resolve
     # main_worktree_root(common_dir) or the count assertion silently reads claude-klabauter's
-    # own tree instead of the caller's (coordinator-claude/example-doctrine-repo).
+    # own tree instead of the caller's (coordinator-claude/coordinator-claude).
     "doctrine.assert_cross_reference_counts": "common_dir",
     # percolate.check_inverse_drift — "none": dest_dir/marker_path are explicit
     # caller-supplied params (the publish target), matching the percolate.run/
@@ -918,7 +918,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # cartography-chunk-table/<run_id>/ — DR-228 § D6 (amended) sanctions the
     # write; scope classification is unaffected by that (still "none", since
     # no repo-specific _origin_worktree state is read).
-    # Spec: cross-repo/inbox/2026-08-06-example-doctrine-repo-em-cartography-chunk-table-producer-seam.md
+    # Spec: cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-chunk-table-producer-seam.md
     "cartography.chunk_table":                 "none",
     # ceremony.chunk_commits — "none": same cartography.* / workflow.validate
     # target-resolution model (explicit caller-supplied plan_path, any repo,
@@ -933,7 +933,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # caller-cwd defect (d4d429d21) was fixed in the bin/ forwarder rather
     # than by resolving against a forwarded --repo, which would have made the
     # op's answer depend on where it was dispatched from.
-    # Spec: cross-repo/inbox/2026-08-10-example-doctrine-repo-em-chunk-commits-forwarder-relative-path.md
+    # Spec: cross-repo/inbox/2026-08-10-coordinator-claude-em-chunk-commits-forwarder-relative-path.md
     "ceremony.chunk_commits":                  "none",
     # install.detect_python3_appx_stub — "none": inspects the operator's own machine
     # (PATH-resolved python3 interpreter), not any repo state; mirrors engine.drift/
@@ -959,7 +959,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # coverage.gate op it wraps (reads per-worktree git log state), not common_dir.
     "coverage.halt_on_uncovered":              "show_top",
     # ceremony.init_anchor_injection_state — "none": resolves coordinator-claude/
-    # example-doctrine-repo root via coordinator_doe_root(), a fixed cross-repo target, not the
+    # coordinator-claude root via coordinator_doe_root(), a fixed cross-repo target, not the
     # caller's own worktree.
     "ceremony.init_anchor_injection_state":    "none",
     # install.write_shell_rc_guard_block / install.wrapper_onto_path — "none": both
@@ -1006,7 +1006,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # git commit history (most recent commit on the branch being merged), which is
     # per-worktree state, same class as coverage.gate.
     "merge.quiet_activity_gate":               "show_top",
-    # schema.drift_gate — "none": resolves the example-doctrine-repo sibling clone (env var /
+    # schema.drift_gate — "none": resolves the coordinator-claude sibling clone (env var /
     # registry pointer, same ladder as the advisory probe) and claude-klabauter's own fixed
     # vendored-schemas dir; touches no per-worktree/per-repo caller state.
     "schema.drift_gate":                       "none",
@@ -1169,7 +1169,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # git-provenance under the caller's repo git_common_dir, same class as
     # handoff.match_candidates and session.boot_sweep; omitting this would
     # classify claude-klabauter's own handoffs instead of the caller's when invoked
-    # cross-repo from a example-doctrine-repo fence.
+    # cross-repo from a coordinator-claude fence.
     "session.resolve_chain_terminal_disposition": "common_dir",
     # session.rotate_orphan_sweep_log — common_dir: must match
     # session.boot_sweep's existing common_dir entry for the SAME
@@ -1248,7 +1248,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # plugin_health.forwarder_drift — "none": inspects the operator's OWN
     # settings-home/claude-klabauter install state (settings-home bin/, the retired
     # ~/.claude/bin compat mirror, coordinator/bin/ via the claude-klabauter-root
-    # resolver, example-doctrine-repo's own prompt-surface trees) — never the caller's
+    # resolver, coordinator-claude's own prompt-surface trees) — never the caller's
     # repo_root. The handler's own docstring says so explicitly: "repo_root is
     # accepted for handler-signature parity but IGNORED". Same "none" class as
     # plugin_health.drift/plugin_health.scan.
@@ -1281,7 +1281,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
 # Public parity surface (cross-repo contract) — DR § AC-1b
 #
 # OP_KEY_SCOPE       — read-only view of the op→scope keying table. A consumer
-#                      (e.g. Example-doctrine-repo's coordinator-core-shim) imports this to keep its
+#                      (e.g. Coordinator-claude's coordinator-core-shim) imports this to keep its
 #                      _origin_worktree-injection allowlist in lock-step with the
 #                      engine's registered scopes, instead of hand-mirroring it
 #                      (which drifts silently the next time an op's scope changes).

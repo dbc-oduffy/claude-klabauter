@@ -25,7 +25,7 @@ first-class). Same seam-patching pattern as
 ``test_block_subagent_commit.py``.
 
 Spec backlink: coordinator_core/bash_guards/block_subagent_commit.py
-Spec backlink: docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md
+Spec backlink: pln-confine-subagent-bash-by-allow-7c2901
   chunk C2
 """
 

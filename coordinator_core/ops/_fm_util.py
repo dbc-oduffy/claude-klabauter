@@ -5,7 +5,7 @@ Purpose: Single implementation of the frontmatter scalar extractor, replacing th
 duplicate definitions in ``handoff_author_fork._extract_frontmatter_scalar`` and
 ``review_trail_write._extract_frontmatter_field``.  Both callers import from here.
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C3
 Review: code-reviewer — promoted from duplicate to shared module (F3); YAML
         quote-stripping added to prevent silent mismatch on quoted scalar values (F4).
 

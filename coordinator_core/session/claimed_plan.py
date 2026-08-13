@@ -28,7 +28,7 @@ Two entrypoints, two different contracts:
     loud with ``DivergentDeliverableIdError`` — a handoff chain spanning
     several plans carries an id differing from every one of them, so the two
     rungs disagreeing is the expected steady state, not the anomaly the error
-    text implies (example-doctrine-repo-em memo, 2026-08-10, with repro).
+    text implies (coordinator-claude-em memo, 2026-08-10, with repro).
 
     Tier (b) exists, and is load-bearing (not polish), because the tier (a)
     write is DOCUMENTED best-effort: ``claim_plan`` wraps the
@@ -51,11 +51,11 @@ Two entrypoints, two different contracts:
     fast-path shortcut cannot answer, since it only ever names ONE plan
     regardless of how many claims are actually held.
 
-Spec backlink: docs/plans/2026-08-01-deliverable-id-carry-onto-executing-handoff.md § C1a
+Spec backlink: pln-carry-the-plan-s-deliverable-i-e81513 § C1a
 (DR-207 DD#1: mint a stable ``deliverable_id`` once at the earliest artifact and carry it
 verbatim; ``/handoff`` derives from the session's active/predecessor plan and mints only
 when no parent id is discoverable from context — this module is that discovery step.)
-Second spec backlink: docs/plans/2026-08-10-a-commit-trailer-that-names-the-session.md § C1a
+Second spec backlink: pln-a-commit-trailer-that-names-th-ce8a2e § C1a
 (the commit-trailer producer needs the FULL set of held plan claims, not one arbitrary pick).
 
 Negative-spec:

@@ -2407,7 +2407,7 @@ def test_session_shape_handoff_path_peer_misattribution_rejected(repo):
     it.  The session's real predecessor handoff (consumed_by: sid) lives
     elsewhere on disk and must be found via the recovery scan instead.
 
-    Originating incident: example-doctrine-repo 2026-07-09 — a /workstream-complete
+    Originating incident: coordinator-claude 2026-07-09 — a /workstream-complete
     nearly stamped a live peer workstream's handoff as shipped because the
     session-shape.json pickup.handoff pointed at the peer's handoff.
     """
@@ -4193,7 +4193,7 @@ def test_disposition_detector_b_rejected_hit_warnings_surfaced(git_repo, tmp_pat
 # ---------------------------------------------------------------------------
 # STEP_2_65C flip half + STEP_2_65B bulk-eligibility evidence (C2)
 # ---------------------------------------------------------------------------
-# Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C2
+# Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C2
 #
 # Coverage:
 #   (C2-a) step_2_65c_resolving_op_names_resolve — D-node names memo.transition:resolve,

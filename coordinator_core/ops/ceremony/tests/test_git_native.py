@@ -26,7 +26,7 @@ Coverage:
                                          "bash", "sh", "node", or any ".sh"/".js" token
                                          (AC2 mechanical enforcement at the C1 layer).
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C1.
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C1.
 """
 
 from __future__ import annotations

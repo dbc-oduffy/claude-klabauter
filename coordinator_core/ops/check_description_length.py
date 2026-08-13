@@ -13,7 +13,7 @@ field character count against a three-tier limit:
 Wired into: /workweek-complete (advisory only — non-blocking; see
 coordinator/docs/wiki/workday-workweek-cadence.md).
 
-Port of: check-description-length.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-description-length.sh (coordinator-claude b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Exit codes (parity-critical):

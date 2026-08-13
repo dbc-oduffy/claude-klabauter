@@ -112,7 +112,7 @@ if sys.version_info < (3, 11):
 import tomllib  # stdlib, 3.11+
 
 # coordinator_core is engine-owned (this repo), not on sys.path by default for
-# a coordinator/bin script (example-doctrine-repo-side) — resolve this script's own co-located
+# a coordinator/bin script (coordinator-claude-side) — resolve this script's own co-located
 # CLAUDE_KLABAUTER_ROOT (self-location-first, never a machine-local registry lookup for
 # a checkout this script already lives inside) rather than importing
 # coordinator_core.machine_resolver/_machine_local in-process, per this

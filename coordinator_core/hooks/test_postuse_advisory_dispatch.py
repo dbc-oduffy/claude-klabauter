@@ -851,9 +851,9 @@ def test_handler_existing_advisories_unaffected_by_non_agent_tool_name():
 
 
 # ---------------------------------------------------------------------------
-# Fourth check: the unauthorized-handoff nudge folded in from example-doctrine-repo's separate
+# Fourth check: the unauthorized-handoff nudge folded in from coordinator-claude's separate
 # PostToolUse(Write) registration (cross-repo memo
-# 2026-08-06-example-doctrine-repo-em-postuse-fold-nudge-unauthorized-handoff.md).
+# 2026-08-06-coordinator-claude-em-postuse-fold-nudge-unauthorized-handoff.md).
 # ---------------------------------------------------------------------------
 
 
@@ -928,7 +928,7 @@ def test_handler_unauthorized_handoff_survives_absent_session_id():
 
 
 def test_handler_unauthorized_handoff_silent_when_stub_omits_file_path():
-    """example-doctrine-repo's dispatcher stub must map tool_input.file_path/content into params.
+    """coordinator-claude's dispatcher stub must map tool_input.file_path/content into params.
     Until it does, the fourth check stays silent and the other three still fire."""
     import asyncio
     import unittest.mock as mock

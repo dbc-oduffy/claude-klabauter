@@ -9,7 +9,7 @@ tool call into two append-only T-event logs:
     resolving to a known agent shape.)
 
 Port of the retired ~/.claude/plugins/coordinator/hooks/scripts/
-track-touched-files.sh (deleted 2026-07-22, example-doctrine-repo ``3a561713``).
+track-touched-files.sh (deleted 2026-07-22, coordinator-claude ``3a561713``).
 
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.
 Returns no_advisory() (empty dict) on every invocation path.
@@ -52,9 +52,9 @@ and ``session/claims.py::atomic_dedup_append`` already write, so the claim/relea
 projection (``_last_verb_map``) reads one dialect across all three writers instead of
 mis-reading a bare-line legacy record from this one.
 
-Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § C1
-Spec backlink: docs/plans/2026-08-03-scope-guard-peer-claim-release.md § C7
-Spec backlink: docs/plans/2026-08-03-track-touched-files-emits-t-events.md § C1
+Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C1
+Spec backlink: pln-release-a-peer-session-s-path--d04deb § C7
+Spec backlink: pln-track-touched-files-emits-t-ev-0befc7 § C1
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ def _get_lock(path: str) -> "asyncio.Lock":
 
 # ---------------------------------------------------------------------------
 # Agent-id resolution — Port of: coordinator-session.sh::resolve_subagent_identity
-# (example-doctrine-repo e34f2484, 2026-07-22)
+# (coordinator-claude e34f2484, 2026-07-22)
 #
 # Three resolution paths (including the C10 named-teammate
 # extension; docs/plans/2026-06-30-loe-dispatch-undercount-teammate-shape.md § C10):
@@ -323,7 +323,7 @@ def _bootstrap_session(
 # Atomic append (blocking — call via to_thread WHILE holding the per-file
 # asyncio.Lock).
 #
-# Port of: cs_atomic_dedup_append from coordinator-session.sh (example-doctrine-repo e34f2484,
+# Port of: cs_atomic_dedup_append from coordinator-session.sh (coordinator-claude e34f2484,
 # 2026-07-22), made EVENT-AWARE (plan docs/plans/2026-08-03-track-touched-
 # files-emits-t-events.md § C1, matching the EM-ratified precedent already
 # landed for session/claims.py::atomic_dedup_append). The dedup fast-exit that
@@ -424,9 +424,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     matcher is exactly those four tools, a path written **through Bash** — a generator,
     a formatter, ``python bin/*.py``, an engine op rewriting a state file — records NO
     claim here. ``compute_scope`` then sees a dirty file with no record anywhere and,
-    per example-doctrine-repo's ``scoped-safety-commits.md:131``, joins it to the CALLING session: a
+    per coordinator-claude's ``scoped-safety-commits.md:131``, joins it to the CALLING session: a
     co-toucher can take a live peer's Bash-authored content into ``my_scope``. This
-    predates the claim-release workstream and is accepted on example-doctrine-repo's side too.
+    predates the claim-release workstream and is accepted on coordinator-claude's side too.
 
     Do NOT "fix" this by widening the matcher to Bash. Three mechanisms were tried and
     each is unsound in the WIDENING direction, which is the direction this record exists

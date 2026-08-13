@@ -22,10 +22,10 @@ HEAD (this plan's own review pass): (a)+(b) alone is 100%
 `coordinator:`-prefixed and excludes all harness built-ins and 14 plugin
 agents.
 
-    (a) the four map keys of example-doctrine-repo's `coordinator/subagent-sandbox-policy.yaml`
+    (a) the four map keys of coordinator-claude's `coordinator/subagent-sandbox-policy.yaml`
         (`report_sidecar`, `report_type_map`, `contract_blocks`,
         `dispatch_tier`) -- resolved via `_load_policy_roster`.
-    (b) the agent definitions under example-doctrine-repo's `coordinator/agents/*.md`, keyed
+    (b) the agent definitions under coordinator-claude's `coordinator/agents/*.md`, keyed
         `coordinator:<name-frontmatter-field>` -- resolved via
         `_load_agents_roster`.
     (c) `_HARNESS_BUILTIN_TYPES` (Anthropic-owned harness built-ins, not
@@ -36,7 +36,7 @@ agents.
         `_load_plugin_roster`.
 
 FAIL CLOSED, but only on the two PEER-REPO sources ((a)/(b)). An unreadable
-or empty example-doctrine-repo-side roster DENIES -- getting this backwards silently restores
+or empty coordinator-claude-side roster DENIES -- getting this backwards silently restores
 the loophole. The plugin half of (c) is LOCAL install state (this machine's
 own `~/.claude/plugins/`), not a live peer-repo checkout someone else could
 be mid-rebase on, so an absent/unreadable plugins directory degrades to an
@@ -49,14 +49,14 @@ AC10 -- THE ROSTER-LOAD-FAILURE REASON IS SELF-DESCRIBING. Every `_RosterError`
 names the exact path attempted and distinguishes MISSING ENTIRELY (the path
 does not exist -- a path/install defect) from PRESENT BUT UNPARSEABLE/
 UNREADABLE (an OSError or YAMLError reading a path that exists -- a
-peer-repo edit in flight, e.g. mid-rebase on the example-doctrine-repo checkout), so an
+peer-repo edit in flight, e.g. mid-rebase on the coordinator-claude checkout), so an
 operator debugs the two differently without reading source. Deliberately NO
 last-good cache as the mitigation -- a stale cache would silently re-open
 the loophole for a type deleted from the roster, which is a new pattern
 this plan's own anti-scope forbids; the self-describing reason is the whole
 mitigation.
 
-DENY ENVELOPE -- copied in shape, not reinvented, from example-doctrine-repo's
+DENY ENVELOPE -- copied in shape, not reinvented, from coordinator-claude's
 `coordinator/hooks/scripts/block-dispatch-suite-invocation.py`
 (`_precision_deny_envelope` / its deny writer): `hookSpecificOutput` with
 `permissionDecision: "deny"` + `permissionDecisionReason`, exit 0 on the
@@ -96,11 +96,11 @@ Two entrypoints:
         matching this package's own `bash_guards.*` `check()` idiom. Used by
         this repo's tests and by any in-process caller.
     main()          -- stdin-JSON / stdout-JSON / exit-0 standalone script,
-        matching example-doctrine-repo's `block-dispatch-suite-invocation.py` calling
+        matching coordinator-claude's `block-dispatch-suite-invocation.py` calling
         convention, for direct `hooks.json` registration on the Agent
-        matcher (example-doctrine-repo-side wiring; out of scope for this chunk).
+        matcher (coordinator-claude-side wiring; out of scope for this chunk).
 
-Spec backlink: docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md § C1 / AC1-AC4 / AC10
+Spec backlink: pln-deny-unenumerated-agent-types-e56d1b § C1 / AC1-AC4 / AC10
 
 COMPOSITION WITH `enforce_agent_model_pin` (2026-08-11). Once this module's
 own enumeration verdict comes back clean (roster resolved AND `subagent_type`
@@ -113,7 +113,7 @@ happens on the enumerated-pass leg, never on a deny leg. This module's own
 the pin leg is ever reached (one hatch, one meaning) -- it already returns
 `None` earlier in `check()`, before the roster lookup that gates the
 delegation. WHY compose into this seam rather than register a second one:
-registration is example-doctrine-repo-side (`coordinator/hooks/hooks.json`), and reusing the
+registration is coordinator-claude-side (`coordinator/hooks/hooks.json`), and reusing the
 one already-registered `PreToolUse(Agent)` entry lands the pin guard live
 with no cross-repo registration ask. The import is function-local inside
 `check()` -- `enforce_agent_model_pin` imports `resolve_model_pins` from
@@ -138,7 +138,7 @@ CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
 #: AC2 -- deliberately hyphenated (own convention, matches the sibling
-#: example-doctrine-repo guard's own marker), anchored to line start (leading whitespace
+#: coordinator-claude guard's own marker), anchored to line start (leading whitespace
 #: allowed), case-sensitive, requires a non-empty (non-whitespace-only)
 #: reason. Honored only in `tool_input["prompt"]` -- the text the
 #: dispatching caller authored in THIS tool call, never a value read from
@@ -161,7 +161,7 @@ _OVERRIDE_MARKER_RE = re.compile(
 #: (the fork inherits your full conversation context and always runs on
 #: your model -- a `model` override is ignored); any other type -- or
 #: omitting it -- starts a fresh agent." Confirmed by live measurement, not
-#: only by reading the schema: example-doctrine-repo-em measured a real fork dispatch
+#: only by reading the schema: coordinator-claude-em measured a real fork dispatch
 #: reaching `PreToolUse(Agent)` with `subagent_type` as the literal string
 #: `"fork"`. It never materializes as a file under any of the three
 #: filesystem legs ((a) policy map keys, (b) coordinator/agents/*.md, (c)
@@ -886,7 +886,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def main() -> int:
     """Standalone stdin-JSON / stdout-JSON / exit-0 entrypoint, matching
-    example-doctrine-repo's `block-dispatch-suite-invocation.py` calling convention -- see
+    coordinator-claude's `block-dispatch-suite-invocation.py` calling convention -- see
     module docstring "Two entrypoints".
     """
     try:

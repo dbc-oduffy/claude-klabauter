@@ -72,8 +72,8 @@ class TestEmitSchemas:
             )
 
     def test_bump_class_and_note_stamped(self, tmp_path: Path) -> None:
-        """example-doctrine-repo bump-class annotation (memo
-        2026-07-27-example-doctrine-repo-em-bump-class-shipped-and-a-correction.md):
+        """coordinator-claude bump-class annotation (memo
+        2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md):
         x-bump-class/x-bump-note sit immediately alongside x-schema-version
         on both entities so a future emitter edit cannot silently drop
         them and re-open the vendored-schema drift commit 5140d176 closed."""
@@ -211,10 +211,10 @@ class TestByKindNeverArmedAtRealDeliveryShape:
 
 
 class TestToRepoFieldPresentAndOptional:
-    """example-doctrine-repo parity (2026-07-27): `to_repo` was a example-doctrine-repo-local vendored
+    """coordinator-claude parity (2026-07-27): `to_repo` was a coordinator-claude-local vendored
     extension on both schemas that claude-klabauter's generation permanently
     re-drifted every regen. The field now comes home to the emitter, byte-
-    identical to example-doctrine-repo's carried copy, on both entities — and stays optional
+    identical to coordinator-claude's carried copy, on both entities — and stays optional
     (historical memos and archived memos predate it and must keep
     validating)."""
 

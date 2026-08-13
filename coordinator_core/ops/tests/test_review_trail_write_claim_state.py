@@ -2,7 +2,7 @@
 Tests for `review_trail_write._resolve_workstream` / `_scan_workstream`
 resolving handoff ownership ledger-first via `claim_state.resolve_claim_state`.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C6a5 (AC5).
 
 Covers the desynced-baton case this chunk exists to fix: the tracked

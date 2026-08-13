@@ -50,14 +50,14 @@ Self-registration: importing this module calls register_op("commit.anchors", _ha
 as a side-effect. Add this module to coordinator_core/ops/__init__.py to trigger
 registration at start_server() time.
 
-Spec backlink: docs/plans/2026-07-04-claude-klabauter-commit-anchor-stamper.md § D2 / C1-op
+Spec backlink: pln-claude-klabauter-commit-anchor-stamper-q-29b891 § D2 / C1-op
 
 Negative-spec (hard-won):
   - Does NOT write any git object (no git commit, git add, git notes, or
     git interpret-trailers --in-place).
   - Does NOT write any file under state/, archive/, or any other coordinator substrate path.
   - Does NOT stage the trailer via a temp file — returns text only; the mutation (injecting
-    into the commit message) is git's own mechanism, executed by the hook (example-doctrine-repo surface, D3).
+    into the commit message) is git's own mechanism, executed by the hook (coordinator-claude surface, D3).
   - Does NOT emit Session-Id: — the prepare-commit-msg hook already stamps that separately.
   - Does NOT emit any key it cannot resolve unambiguously; precision over recall at every
     key boundary (claude-klabauter-commit-anchor-stamper.md § Anti-scope: a wrong anchor is worse than
@@ -98,7 +98,7 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Nature prefix taxonomy
-# Spec backlink: docs/plans/2026-07-04-claude-klabauter-commit-anchor-stamper.md § D1
+# Spec backlink: pln-claude-klabauter-commit-anchor-stamper-q-29b891 § D1
 # ---------------------------------------------------------------------------
 
 #: Closed enum of valid Nature values (slice-1, additive-only per cockpit co-design).
@@ -485,7 +485,7 @@ def _handler(
     """JSON-RPC "commit.anchors" handler — COMPUTE_ONLY, sync.
 
     Purpose: Derives a git-trailer block from the staged diff and live read-model and
-    returns it as text. The prepare-commit-msg hook (example-doctrine-repo surface, D3) injects the block
+    returns it as text. The prepare-commit-msg hook (coordinator-claude surface, D3) injects the block
     into the commit message. Returns {"trailers": ""} when nothing is resolvable.
 
     Sync (not async): all I/O in this handler and its full call tree is synchronous

@@ -20,7 +20,7 @@ Coverage:
       the parser's actual (permissive) contract rather than requiring exact
       YAML-spec column alignment.
 
-Spec backlink: docs/plans/2026-07-26-structured-sibling-evidence-gates.md
+Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb
 (the write-side twin of this bug, C0) and
 coordinator_core/ops/handoff_gate_aging.py's C6 scope-boundary note, which
 was written against the exact silent-truncation bug this module now closes.

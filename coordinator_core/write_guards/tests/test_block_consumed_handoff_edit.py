@@ -15,7 +15,7 @@ outright, not narrowed. ``TestGuardWritesNothing`` is the regression pin;
 Also covers the 2026-07-21 closure-friction fix (memo
 cross-repo/inbox/2026-07-21-claude-central-em-consumed-handoff-guard-closure-friction.md,
 Finding 1): both deny-reason strings offer a third, terminal-close route
-(``archive-stamp-cli ship-handoff`` — example-doctrine-repo's veneer over
+(``archive-stamp-cli ship-handoff`` — coordinator-claude's veneer over
 ``handoff.archive_transition`` / ``mode: stamp_only``) alongside the
 continuation route and the recovery-only override.
 

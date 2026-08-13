@@ -379,7 +379,7 @@ def test_sweep_stale_markers_does_not_remove_prefix_matched_stray_suffix(tmp_pat
 
 
 def test_sweep_stale_markers_does_not_unlink_live_marker_when_ended_id_is_its_prefix(tmp_path):
-    """example-doctrine-repo finding #7, AC8. `_SESSION_ID_FORMAT_RE` permits `abc` as a valid
+    """coordinator-claude finding #7, AC8. `_SESSION_ID_FORMAT_RE` permits `abc` as a valid
     session id and also permits `abcdef` -- a string-prefix of one another.
     An ended session `abc` must never unlink live session `abcdef`'s marker
     via a prefix match on the delete path."""

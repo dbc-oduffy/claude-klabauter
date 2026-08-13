@@ -16,7 +16,7 @@ Negative-spec (DR-215/C8 — vacated surface):
     The re-introduction path (DR-215 § 6): a future cross-language live caller re-adds
     a ~150 LOC transport shim; token provisioning can be wired back then.
 
-Spec backlink: docs/plans/2026-07-04-pcore-09-correctness-hardening-primitives.md § C1
+Spec backlink: pln-pcore-09-correctness-hardening-6afda5 § C1
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md § 7 (vacated by DR-215/C8)
 """
 

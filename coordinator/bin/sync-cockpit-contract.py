@@ -39,10 +39,10 @@ from coordinator_data_root import data_root  # noqa: E402
 
 def _default_canonical() -> str | None:
     """Resolve the canonical cockpit-contract schema path via
-    `coordinator_data_root.data_root()`'s co-located/example-doctrine-repo-resident two-rung
+    `coordinator_data_root.data_root()`'s co-located/coordinator-claude-resident two-rung
     chain, not a bare `__file__`-relative walk: the 2026-07-22
     executable-surface migration moved this script into claude-klabauter while
-    `cockpit-contract/` (contract data, DR-047) stayed in example-doctrine-repo, so a
+    `cockpit-contract/` (contract data, DR-047) stayed in coordinator-claude, so a
     `${script_dir}/../cockpit-contract` walk no longer lands anywhere.
 
     Returns None if data_root can't resolve it — an explicit --canonical or

@@ -6,7 +6,7 @@ repos (JS x2, Python x2) into a single discover -> run -> report pipeline,
 with mandatory bundled-venv exclusion and real pass/fail exit-code semantics.
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a
 
 Negative-spec: this package ships NO committed `test_*.py` fixture dummies — every
 synthetic fixture file used by this package's own tests is generated under pytest's

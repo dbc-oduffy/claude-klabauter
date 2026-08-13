@@ -6,7 +6,7 @@ artifact and returns the clean, unquoted value — no trailing newline. Designed
 deliverable-spine id/FK fields (deliverable_id, initiative) where values are simple
 strings that never contain '#'.
 
-Port of: read-frontmatter-field.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: read-frontmatter-field.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Negative-spec (deliberate fidelity to the bash oracle — do NOT "fix"):

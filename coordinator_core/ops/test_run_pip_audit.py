@@ -3,7 +3,7 @@ coordinator_core.ops.test_run_pip_audit
 
 Characterization tests for the "ci.run_pip_audit" op
 (coordinator_core.ops.run_pip_audit) — the pip-audit external-tool wrapper
-replacing the example-doctrine-repo agents/dep-cve-auditor.md:68 fence.
+replacing the coordinator-claude agents/dep-cve-auditor.md:68 fence.
 
 subprocess.run is monkeypatched throughout: these tests must not require
 pip-audit to actually be installed (per the plan's chunk design note).
@@ -24,7 +24,7 @@ Coverage:
   (i) idempotency (AC7): double invocation with identical inputs and an
       identical mocked subprocess result returns an identical response
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 § Wave 2 (run cluster)
 """
 

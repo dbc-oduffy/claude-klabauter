@@ -161,7 +161,7 @@ def test_named_dispatch_with_no_prompt_still_advises() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# Registration — the op must be reachable by its dotted id, since the example-doctrine-repo-side hook
+# Registration — the op must be reachable by its dotted id, since the coordinator-claude-side hook
 # script dispatches it by name.
 # --------------------------------------------------------------------------------------
 

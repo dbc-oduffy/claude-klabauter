@@ -61,7 +61,7 @@ C13's job, written only on explicit PM-approval-time params), no delete, no
 commit, no git write of any kind — this op stops at guard-evaluation +
 manifest-assembly (plan § Negative spec, AC12).
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C12
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C12
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D1, D3
 """
 

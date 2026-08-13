@@ -11,7 +11,7 @@ explicitly rather than a chdir). Liveness is driven by writing/omitting
 does for its Layer-2 recency cases.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 2
-Spec backlink: example-doctrine-repo docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
+Spec backlink: coordinator-claude docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ class TestCheckTierUGrantLiveness:
     def test_meta_less_session_falls_back_to_dir_mtime_and_is_treated_live(self, tmp_path):
         # No meta.json at all for the granting session (e.g. cs_init hasn't
         # flushed yet), but the grant file exists. liveness.session_live's
-        # meta-less fallback (example-doctrine-repo 642195ba / 88929bea, see liveness.py) reads
+        # meta-less fallback (coordinator-claude 642195ba / 88929bea, see liveness.py) reads
         # dir mtime as the recency source rather than defaulting to
         # confirmed-dead -- a session mid-init is presumed live, not dead.
         # This is Layer-2 recency behavior this module inherits verbatim,

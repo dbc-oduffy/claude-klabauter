@@ -1,11 +1,11 @@
 """Tests for coordinator_core.ops.check_machine_local_regeneratability.
 
-Golden oracle snapshotted 2026-07-17 against the example-doctrine-repo-side bats-equivalent fixture
+Golden oracle snapshotted 2026-07-17 against the coordinator-claude-side bats-equivalent fixture
 corpus (cases a-d) plus additional edge cases for the in-process TOML parsing
 this port introduces (no subprocess helper).
 
-Port of: check-machine-local-regeneratability.sh (example-doctrine-repo b5a4192c, 2026-07-20)
-Oracle: check-machine-local-regeneratability.test.sh (example-doctrine-repo a2fe06f8, 2026-07-22)
+Port of: check-machine-local-regeneratability.sh (coordinator-claude b5a4192c, 2026-07-20)
+Oracle: check-machine-local-regeneratability.test.sh (coordinator-claude a2fe06f8, 2026-07-22)
 """
 
 from __future__ import annotations

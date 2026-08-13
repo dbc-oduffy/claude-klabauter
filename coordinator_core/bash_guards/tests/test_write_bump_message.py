@@ -1,7 +1,7 @@
 """Tests for coordinator_core.bash_guards._write_bump_message -- the
 write-confinement speed bump's shared deny copy.
 
-Spec backlink: docs/plans/2026-08-03-narrow-write-confinement-bump.md,
+Spec backlink: pln-narrow-the-write-confinement-b-d10f79,
 chunk C2. Covers AC3 (publish-class copy names the mirror's owner and never
 "repos you don't own"), AC7 (every new/changed variant fits
 `_message_size.MESSAGE_PROSE_CAP_BYTES`, measured by `measure_envelope` --
@@ -51,7 +51,7 @@ def _init_repo(tmp_path: Path, name: str = "repo") -> Path:
     return root
 
 
-_TARGET_REPO = "example-doctrine-repo"
+_TARGET_REPO = "coordinator-claude"
 _SESSION_REPO = "claude-klabauter"
 _SESSION_ID = "751ab9de-9319-4d63-b174-36145a4a3045"
 _SANDBOX_ROOT = "state/subagent-share/751ab9de-9319-4d63-b174-36145a4a3045"

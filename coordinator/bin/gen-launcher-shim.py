@@ -192,7 +192,7 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # RAW-CMDLINE-PRESERVATION ENTRYPOINTS (2026-08-08, caret-eating .cmd shim defect)
 #
 # state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml
-# (example-doctrine-repo): populating a .cmd launcher's %1..%9/%* batch parameters
+# (coordinator-claude): populating a .cmd launcher's %1..%9/%* batch parameters
 # silently strips any literal `^` from each argument BEFORE the launcher
 # body ever runs — this happens during cmd.exe's OWN command-line parse,
 # ahead of anything the generated launcher body could do about it (measured:
@@ -214,7 +214,7 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # surfaces per that module's own docstring (a hyphenated-filename generator
 # module has no ordinary `import` form). `scoped-git-commit` and
 # `cross-repo-memo` were added to `_RAW_CMDLINE_TARGETS` per
-# cross-repo/inbox/2026-08-07-example-doctrine-repo-em-cmd-forwarder-drops-everything-
+# cross-repo/inbox/2026-08-07-coordinator-claude-em-cmd-forwarder-drops-everything-
 # after-a-newline.md (both take multi-line arguments as a matter of course —
 # commit messages, memo bodies) but this set was NOT updated at the time,
 # leaving the install path that renders launchers via THIS generator

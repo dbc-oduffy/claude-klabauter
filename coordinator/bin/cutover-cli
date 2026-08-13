@@ -89,7 +89,7 @@ def _usage(prog: str) -> int:
 def _repo_root_for(record_path: str) -> str:
     """Resolve the git repo root the record lives under.
 
-    Records live example-doctrine-repo-side (`state/roadmap/lifecycle-vocab/cutovers/`, per plan
+    Records live coordinator-claude-side (`state/roadmap/lifecycle-vocab/cutovers/`, per plan
     § D2/D5), never under this claude-klabauter checkout — the engine call itself
     crosses that boundary (C4c's `resolve_doe_repo_path()`), so this forwarder
     resolves relative to the record's OWN containing repo, not `_SCRIPT_DIR`.

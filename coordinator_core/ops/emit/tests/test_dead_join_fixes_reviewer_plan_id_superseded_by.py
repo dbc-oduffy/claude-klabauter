@@ -14,7 +14,7 @@ the real data sat under a different key or in a file never joined):
      Finding 1: this is an intra-section self-join, not a cross-section join, so it belongs in
      the section porter that already has the full plan set in scope).
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P10
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P10
 """
 
 from __future__ import annotations

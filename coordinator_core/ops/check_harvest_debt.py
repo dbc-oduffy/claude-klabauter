@@ -5,14 +5,14 @@ Purpose: count plan files under archive/specs/**/*.md that are absent from
 the canonical distillation log (state/distillation-log.md). Plans there are
 "harvest debt" — they exist in the archive but /distill has not yet processed
 them. Prints a one-line nudge to stdout when the debt count exceeds 5; silent
-otherwise. This is the example-doctrine-repo workday-start nudge probe, distinct from
+otherwise. This is the coordinator-claude workday-start nudge probe, distinct from
 coordinator_core.distill.harvest_debt (the deterministic specs_dir-relative
 engine backing /distill's own bin/distill-harvest-debt.py CLI) — the two
 intentionally use DIFFERENT keying strategies (basename here vs
 specs_dir-relative there) and serve different consumers; do not conflate or
 merge them.
 
-Port of: check-harvest-debt.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-harvest-debt.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Matching strategy (INTENTIONALLY basename-only, not specs_dir-relative):

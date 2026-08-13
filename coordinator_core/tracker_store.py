@@ -8,7 +8,7 @@ EOF. Each repo that wants a sovereign tracker instantiates this module
 against its own ``repo_root`` / ``state/sovereign-tracker/`` — this module
 is a library, not a fleet-wide service, and holds no op registration.
 
-Spec backlink: docs/plans/2026-07-28-sat-01-sovereign-tracker-substrate.md
+Spec backlink: pln-sat-01-sovereign-tracker-subst-a66742
 § Pinned module interface, § The multi-machine correction (DEC-3/DEC-5).
 
 Ordering contract: ``read_events`` FILTERS to ``applied_at``-populated
@@ -643,7 +643,7 @@ def fold_observed_set(*, repo_root: Path) -> dict | None:
         on every quiet re-fold once the vector stops moving, rather than
         silently doing nothing.
 
-    Spec backlink: docs/plans/2026-07-28-sat-01b-observed-set-fold-actuator.md
+    Spec backlink: pln-sat-01b-observed-set-fold-actu-8b3f7a
     § Design, § Tasks C1.
     """
     shard_dir = repo_root / EVENTS_DIR_RELPATH
@@ -797,7 +797,7 @@ def resolve_observed_set(
     first-wave ask (§ Design, "The prefix-closure/`unknown` predicate is
     provisional"). Revisit if their answer names a different contract.
 
-    Spec backlink: docs/plans/2026-07-28-sat-01b-observed-set-fold-actuator.md
+    Spec backlink: pln-sat-01b-observed-set-fold-actu-8b3f7a
     § Design, "Resolution, and the three-valued return"; § Tasks C2.
     """
     observed_set = marker.get("observed_set")
@@ -906,7 +906,7 @@ def resolve_observed_set_for_event(
     docstring for the pending-cockpit-answer caveat, which applies here too
     since this function delegates to it.
 
-    Spec backlink: docs/plans/2026-07-28-sat-01b-observed-set-fold-actuator.md
+    Spec backlink: pln-sat-01b-observed-set-fold-actu-8b3f7a
     § Design, "The event→marker mapping"; § Tasks C2.
     """
     machine = event.get("machine")

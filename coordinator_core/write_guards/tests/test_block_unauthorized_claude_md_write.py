@@ -3,7 +3,7 @@ coordinator_core.write_guards.block_unauthorized_claude_md_write -- the
 CLAUDE.md-class write guard DR-104 (2026-07-27) reintroduces over DR-058
 for one path class only (see the module's own docstring).
 
-Three tests here are load-bearing acceptance criteria per example-doctrine-repo
+Three tests here are load-bearing acceptance criteria per coordinator-claude
 docs/plans/2026-07-27-claude-md-altitude-triage.md § C4, not coverage:
 
   AC8 (TestSubagentOriginatedDenied) -- a SUBAGENT-originated payload
@@ -271,10 +271,10 @@ class TestRealScopeEqualsStatedScope:
         all), not a direction test -- the growth/shrink comparison is
         pinned separately (``TestDirectionalDenyGrowthOnly``). Pin growth
         True here so this scope assertion does not depend on this dev
-        machine's real example-doctrine-repo checkout's CLAUDE.md byte content.
+        machine's real coordinator-claude checkout's CLAUDE.md byte content.
         """
         monkeypatch.setattr(guard, "_is_growth", lambda *a, **kw: True)
-        _deny(monkeypatch, "CLAUDE.md", cwd="/Users/alice/X/example-doctrine-repo")
+        _deny(monkeypatch, "CLAUDE.md", cwd="/Users/alice/X/coordinator-claude")
 
     @pytest.mark.parametrize(
         "file_path",

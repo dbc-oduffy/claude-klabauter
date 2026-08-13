@@ -15,14 +15,14 @@ backlog member).
 Shard (D5, per-machine append-only — NOT a shared file; goals-log shard precedent): rows are
 appended to ``<R>/state/backlog-snapshots.<machine>.jsonl`` where ``<machine>`` is the hostname
 slug (lowercased, non-[a-z0-9] runs collapsed to '-'), matching the
-``goals-log.<machine>.jsonl`` slug convention (Port of: append-goal-event.sh, example-doctrine-repo
+``goals-log.<machine>.jsonl`` slug convention (Port of: append-goal-event.sh, coordinator-claude
 b5a4192c, 2026-07-20).
 
 MUTATING op (writes coordinator substrate ONLY — never rag's relational store; dual-write ban,
 DR-208 / tri-plane DD#1). Registered as ``backlog.record`` in ops/__init__.py and classified
 ``OpClass.MUTATING`` in authz/classification.py (same chunk, per plan § C4 / AC2).
 
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § C4
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C4
 Amendment: docs/plans/2026-07-07-per-repo-emission-cutover.md § C4b (Option A — drop fleet walk)
 """
 

@@ -4,7 +4,7 @@ scoped to (repo, coordinator_root_path), partitioned today/stale (§ C2), and th
 close-out write leg that re-appends a row at its same goal_id with a terminal
 status (§ C3).
 
-Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C2/C3
+Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C2/C3
 """
 
 from __future__ import annotations

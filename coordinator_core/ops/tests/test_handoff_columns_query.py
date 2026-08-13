@@ -26,7 +26,7 @@ Coverage:
   (d) the git-log subprocess spawn count for a multi-record query is O(1),
       asserted via a monkeypatched subprocess.run counter.
 
-Spec backlink: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3
+Spec backlink: pln-a-pull-surface-for-cockpit-the-b8e2f3 § C3
 """
 
 from __future__ import annotations

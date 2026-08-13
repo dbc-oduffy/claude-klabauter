@@ -45,7 +45,7 @@ _SUMMARY_MAX_CHARS = 120
 # no usable summary resolves (docs/plans/2026-08-07-memo-summary-cap-warn-at-
 # draft.md § C1/AC3). A PM-authored placeholder VALUE, not a comment — the
 # trailing-YAML-comment route for surfacing the cap on the `summary:` line
-# was tried and rejected (both `read_fm_field` and example-doctrine-repo's `_parse_outbox_file`
+# was tried and rejected (both `read_fm_field` and coordinator-claude's `_parse_outbox_file`
 # are line-oriented, comment-unaware parsers; see memo_draft._BODY_PLACEHOLDER's
 # comment block for the verified failure). The double space after the first
 # sentence is deliberate — it is what makes the stated count come out — so it
@@ -107,7 +107,7 @@ def derive_prose_summary(body: str) -> str:
     with a trailing '…' when the result is still too long.
 
     Returns "" when body has no surviving prose line (mirrors the prior
-    all-blank-body fallback in memo_send._compose_memo / example-doctrine-repo's _derive_summary).
+    all-blank-body fallback in memo_send._compose_memo / coordinator-claude's _derive_summary).
     """
     for line in body.splitlines():
         stripped = line.strip()

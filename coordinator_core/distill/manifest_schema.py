@@ -19,7 +19,7 @@ business logic (harvest/ripeness/guard computation stays in the op modules that
 compose coordinator_core/distill/*, per DEC-5). Every manifest shape below carries
 ``schema_version`` as its FIRST key; an unknown FORWARD version (newer than this
 module knows) is a fail-loud consumption error, a matching (or older, known)
-version is silent — mirrors example-doctrine-repo's own disposal-manifest schema_version precedent
+version is silent — mirrors coordinator-claude's own disposal-manifest schema_version precedent
 (artifact-distillation-harvest.md, itself mirroring DR-082).
 
 Canonical-body sha: the disposal manifest is JSON, not markdown-with-frontmatter,
@@ -36,7 +36,7 @@ Negative-spec: this module performs no writes, no subprocess calls, and makes no
 PM-authorization or guard-verdict judgment calls — it only shapes and validates
 the dicts the op tier assembles and stamps.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C9
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C9
 """
 
 from __future__ import annotations

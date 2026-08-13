@@ -1,7 +1,7 @@
 """
 test_file_attribution — parse/reject tests for the FileAttribution aggregate entity.
 
-Pytest port of example-doctrine-repo `coordinator/cockpit-contract/test/file-attribution.test.ts`.
+Pytest port of coordinator-claude `coordinator/cockpit-contract/test/file-attribution.test.ts`.
 
 FileAttribution is a per-(session_id, file_path) aggregate — one row per
 DISTINCT file a session touched, with link_type breakdown counts and

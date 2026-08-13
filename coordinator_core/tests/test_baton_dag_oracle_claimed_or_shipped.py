@@ -9,7 +9,7 @@ axis, and the negative case a never-claimed, never-shipped baton with only a
 successor-named child's naming convention pointing at it -- the exact
 discriminator hazard DR-242 forbids treating as sufficient (§ 3 of that DR).
 
-Spec backlink: DR-242, C5a of docs/plans/2026-07-28-handoff-close-path-fail-loud.md.
+Spec backlink: DR-242, C5a of pln-handoff-close-path-fail-loud-b-db23e8.
 """
 from __future__ import annotations
 

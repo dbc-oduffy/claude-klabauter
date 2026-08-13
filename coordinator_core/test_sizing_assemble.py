@@ -17,7 +17,7 @@ winning over pm-decision, the combined appetite_exceeded + pm-decision
 next_move, and a spec-dispatch CLI smoke test.
 
 Also covers the 2026-08-05 premise-provenance detent (cross-repo memo
-2026-08-05-example-doctrine-repo-em-premise-provenance-detent-sizing-assemble.md):
+2026-08-05-coordinator-claude-em-premise-provenance-detent-sizing-assemble.md):
 `premise_unproven` / `premise_not_applicable` firing on resized L/XL across
 all three non-plan routes, NOT firing at XS/S/M nor for
 executed/unrecorded/None, unconditional validation on the express_lane
@@ -299,7 +299,7 @@ def test_xxl_unprobed_fires_on_promotion_from_xl_with_empty_evidence():
 def test_xxl_unprobed_fires_on_noop_clamp_from_xxl_with_empty_evidence():
     # Cell (b): --tshirt XXL --probe-signal raise, empty scout_evidence ->
     # resolves XXL (no-op clamp, resized == tshirt) AND still emits
-    # xxl_unprobed -- the missed cell example-doctrine-repo's reply named.
+    # xxl_unprobed -- the missed cell coordinator-claude's reply named.
     decision = sa.route(
         estimate={"tshirt": "XXL"}, probe_signal="raise", scout_evidence=[]
     )
@@ -552,7 +552,7 @@ def test_premise_detents_do_not_fire_for_non_read_non_not_applicable(provenance)
 
 def test_premise_unproven_fires_at_m_plan_routed():
     # M is in _PREMISE_DETENT_TSHIRTS but NOT in _LARGE_TSHIRTS — the gap
-    # this dispatch closes (example-doctrine-repo-em was hand-reading M for this).
+    # this dispatch closes (coordinator-claude-em was hand-reading M for this).
     decision = sa.route(
         appetite="large", estimate={"tshirt": "M"}, premise_provenance="read"
     )
@@ -871,7 +871,7 @@ def test_absent_appetite_narration_omits_appetite_clause_and_never_says_none():
 
 @pytest.mark.parametrize("tshirt", sa.TSHIRT_ORDER)
 def test_route_invariant_across_appetite_presence(tshirt):
-    # AC2 — the invariance test example-doctrine-repo explicitly asked for: for every t-shirt,
+    # AC2 — the invariance test coordinator-claude explicitly asked for: for every t-shirt,
     # `route` is identical across appetite absent / small / medium / large.
     routes = {
         sa.route(estimate={"tshirt": tshirt})["route"],
@@ -953,7 +953,7 @@ def test_write_guard_validate_frontmatter_schema_deny_accepts_real_xxl_sizing_ob
 
     doe_root, doe_present = doe_root_and_present()
     if not doe_present:
-        pytest.skip("sibling example-doctrine-repo checkout not found")
+        pytest.skip("sibling coordinator-claude checkout not found")
     monkeypatch.setattr(guard, "coordinator_doe_root", lambda: doe_root)
 
     import yaml
@@ -986,8 +986,8 @@ def test_sizing_object_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/sizing-object.schema.json"
         ).read_text(encoding="utf-8")
     )
-    # 1.14.0 since the four-field widen (cross-repo memo 2026-08-13-example-doctrine-repo-
-    # em-sizing-object-schema-widened-1-14-0.md, example-doctrine-repo-side commit 1fabbc9c3)
+    # 1.14.0 since the four-field widen (cross-repo memo 2026-08-13-coordinator-claude-
+    # em-sizing-object-schema-widened-1-14-0.md, coordinator-claude-side commit 1fabbc9c3)
     # added `intent_source`, `precedent`, `boundary_in_notch`, and `probe` as
     # optional top-level properties, and widened `scout_evidence.items` to
     # accept an object. Bump class moves to `nested-field-additive`: `probe` is
@@ -1001,7 +1001,7 @@ def test_sizing_object_schema_version_and_bump_class():
     # exposure — the widened type is what protects the hand-authored record.
     #
     # CORRECTION to the note this replaces, which said to hold a bump because
-    # an unequal version otherwise goes silent: it does not. Example-doctrine-repo's
+    # an unequal version otherwise goes silent: it does not. Coordinator-claude's
     # `test_vendored_schema_matches_doe_source` asserts version equality HARD
     # (coordinator/tests/test_vendored_schema_version_parity.py, the
     # doe_version == claude_klabauter_version assert) and only reaches the shape-hash
@@ -1013,7 +1013,7 @@ def test_sizing_object_schema_version_and_bump_class():
     assert schema["x-schema-version"] == "1.14.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
-    # schema, not a waiting state. Example-doctrine-repo's `9f4c0c17b` (2026-08-10, "schemas: drop
+    # schema, not a waiting state. Coordinator-claude's `9f4c0c17b` (2026-08-10, "schemas: drop
     # the bump-class the 1.10.0 label reconciliation never earned") removed the
     # key deliberately, replacing it with a `$comment`: that bump was
     # label-reconciliation-only with zero shape effect, so it earned no class.
@@ -1023,11 +1023,11 @@ def test_sizing_object_schema_version_and_bump_class():
     # local copy that appears to is a pre-`9f4c0c17b` vendoring.
     #
     # Do NOT hand-restore the key here: that would manufacture drift against a
-    # deliberate decision, and example-doctrine-repo's `test_vendored_schema_matches_doe_source`
+    # deliberate decision, and coordinator-claude's `test_vendored_schema_matches_doe_source`
     # hashes shape. And do NOT read a red here as a re-vendor signal — restoring
-    # the key would mean reverting `9f4c0c17b`, which example-doctrine-repo-em has stated
+    # the key would mean reverting `9f4c0c17b`, which coordinator-claude-em has stated
     # they will not do (memo
-    # 2026-08-13-example-doctrine-repo-em-bump-class-deliberately-absent.md).
+    # 2026-08-13-coordinator-claude-em-bump-class-deliberately-absent.md).
     assert "x-bump-class" not in schema
 
 
@@ -1088,22 +1088,22 @@ def test_vendored_schema_widened_enums_order_exact():
         "xxl_unprobed",
         "goal_setting_pm_gated",
         # Appended by the sizing-guard-flags widen (1.9.0). Order-exact and
-        # append-at-end: enum ORDER is load-bearing against example-doctrine-repo's
+        # append-at-end: enum ORDER is load-bearing against coordinator-claude's
         # EQUAL_VERSION_SHAPE_DRIFT gate, and these are the exact bytes their
         # side stamps 1.9.0 against.
         "boundary_counted_in_notch",
         "scout_evidence_mention_count",
         # Appended by the routine-ask-sized-XL widen (2026-08-11). Same
-        # order-exact, append-at-end discipline as the two above — example-doctrine-repo's
+        # order-exact, append-at-end discipline as the two above — coordinator-claude's
         # canonical copy needs these three in exactly this position before
         # their parity gate goes green (memo sent same day).
         "intent_em_elaborated",
         "precedent_shipped_before",
         "probe_raise_on_substrate_condition",
-        # 1.12.0: example-doctrine-repo-em's counter — the symmetric mark on ask-scope,
+        # 1.12.0: coordinator-claude-em's counter — the symmetric mark on ask-scope,
         # so the notch-preserving answer is no longer the unmarked one.
         "probe_raise_ask_scope_asserted",
-        # 1.13.0: the breadth arm (cross-repo memo 2026-08-12-example-doctrine-repo-em-
+        # 1.13.0: the breadth arm (cross-repo memo 2026-08-12-coordinator-claude-em-
         # sizing-breadth-arm.md, adopted). Same order-exact, append-at-end
         # discipline as every widen above — never re-sort.
         "probe_raise_on_breadth",
@@ -1126,7 +1126,7 @@ def test_vendored_schema_enums_stay_parity_with_the_engine_tuples():
     bump that forgot the tuple) could land and stay green, since neither
     side's suite reads the other's source of truth. This test closes that
     gap directly: engine tuple and vendored schema enum, compared ORDER-EXACT
-    (not set-equal — order is load-bearing against example-doctrine-repo's
+    (not set-equal — order is load-bearing against coordinator-claude's
     EQUAL_VERSION_SHAPE_DRIFT gate, same as the hardcoded-literal tests
     above)."""
     import json
@@ -1171,7 +1171,7 @@ def test_post_size_prompt_tshirts_covers_every_tshirt_order_notch_from_m_up():
 
 
 # --- Sizing-lobby guards become required flags (cross-repo memo
-# --- 2026-08-10-example-doctrine-repo-em-sizing-guard-flags.md) ------------------------
+# --- 2026-08-10-coordinator-claude-em-sizing-guard-flags.md) ------------------------
 #
 # Both flags replay the --premise-provenance shape: a typed answer that
 # reaches the validator, an advisory detent, a next_move advisory, and no
@@ -1557,7 +1557,7 @@ def test_new_detents_are_declared_in_the_enum():
 
 
 # ---------------------------------------------------------------------------
-# The ask-scope symmetric mark (example-doctrine-repo-em's counter, 1.12.0).
+# The ask-scope symmetric mark (coordinator-claude-em's counter, 1.12.0).
 #
 # Without it, `substrate-condition` cost the EM the raise while `ask-scope`
 # cost nothing and was recorded nowhere queryable — an honesty gradient where
@@ -1623,7 +1623,7 @@ def test_ask_scope_detent_is_declared_in_the_enum():
 
 
 # ---------------------------------------------------------------------------
-# The breadth arm (cross-repo memo 2026-08-12-example-doctrine-repo-em-sizing-breadth-
+# The breadth arm (cross-repo memo 2026-08-12-coordinator-claude-em-sizing-breadth-
 # arm.md, adopted): a raise resting solely on a touchpoint COUNT is a
 # dispatch shape, not a size signal, and must not move the notch — same
 # suppression contract as `substrate-condition`, distinct detent.

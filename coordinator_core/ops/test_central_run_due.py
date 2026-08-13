@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.central_run_due.
 
-Port of: central-run-due.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: central-run-due.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 """
 
@@ -22,10 +22,10 @@ from coordinator_core.ops.central_run_due import (
 
 
 def _make_doe_content_root(tmp_path: Path) -> Path:
-    """Build a minimal example-doctrine-repo-shaped coordinator/ tree with the one remaining
+    """Build a minimal coordinator-claude-shaped coordinator/ tree with the one remaining
     subprocess-boundary sibling this module shells out to (extract-lessons.py,
     already-Python — see module docstring), so main() can run end-to-end without
-    the real example-doctrine-repo repo. `coordinator-state-root.sh` and `learn-lessons-roots.sh`
+    the real coordinator-claude repo. `coordinator-state-root.sh` and `learn-lessons-roots.sh`
     are retired bash bridges as of C11 (2026-07-21) — their native peers are
     exercised via monkeypatch in `_run_main`, not via on-disk fake scripts.
     """

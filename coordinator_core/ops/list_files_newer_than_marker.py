@@ -43,7 +43,7 @@ identical on-disk state and identical params returns byte-identical output.
 No state is mutated (§ op-classification audit idempotency-hazard column:
 "none — read-only listing capped at 20 results; no state mutated").
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
                § Wave 2 — Low-risk new modules, "list" cluster.
 """
 

@@ -1,6 +1,6 @@
 """test_cc_invoke_timeout_remedy.py — TimeoutExpired remedy text, not an install accusation.
 
-Spec backlink: docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md § C5 / AC7
+Spec backlink: pln-the-claim-index-the-commit-gat-5d33ee § C5 / AC7
 
 Prior text (BOTH `cc_invoke()` and `cc_invoke_bare()` TimeoutExpired branches, cc_invoke.py)
 read "Verify CLAUDE_KLABAUTER_ROOT (<path>) and coordinator_core installation" on every timeout — wrong
@@ -120,7 +120,7 @@ class TestTimeoutExceededMessageShape(_ComputedCeilingFixture):
 
     def test_names_engine_budget_knob_on_ok_branch(self) -> None:
         """The FLOOR sentence alone misleads on the engine-budget-bound branch (the
-        example-doctrine-repo-em wsc_tail incident: CC_INVOKE_TIMEOUT_SECS=300 changed nothing
+        coordinator-claude-em wsc_tail incident: CC_INVOKE_TIMEOUT_SECS=300 changed nothing
         because the binding term was the engine's own op budget). The message must name
         COORDINATOR_DISPATCH_TIMEOUT_SECS as the knob that raises that budget."""
         msg = _mod._timeout_exceeded_message(_OP, _COMPUTED_CEILING)

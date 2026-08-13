@@ -8,7 +8,7 @@ writes repo substrate or forms a durable store (claude-klabauter's store-less
 invariant — a future write-capable variant would need DR-211's five-bound
 admission test).
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C0
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C0
 """
 
 from __future__ import annotations

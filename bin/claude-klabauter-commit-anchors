@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-bin/claude-klabauter-commit-anchors — Commit anchor trailer emitter for the example-doctrine-repo prepare-commit-msg hook.
+bin/claude-klabauter-commit-anchors — Commit anchor trailer emitter for the coordinator-claude prepare-commit-msg hook.
 
-Purpose: Invoked by the example-doctrine-repo `prepare-commit-msg` git hook. Calls the claude-klabauter
+Purpose: Invoked by the coordinator-claude `prepare-commit-msg` git hook. Calls the claude-klabauter
 `commit.anchors` op via the command entrypoint (`python3 -m coordinator_core.invoke`),
 prints the returned trailer block verbatim to stdout, then exits 0. MUST fail-open on
 every error path: if the engine import fails, the subprocess times out, the response is
@@ -36,7 +36,7 @@ Success response (stdout from invoke):
   {"jsonrpc":"2.0","id":1,"result":{"trailers":"<text>"}}
   → print result.trailers verbatim; if empty, print nothing.
 
-Spec backlink: docs/plans/2026-07-04-claude-klabauter-commit-anchor-stamper.md § C3-shim
+Spec backlink: pln-claude-klabauter-commit-anchor-stamper-q-29b891 § C3-shim
 
 Negative-spec (hard-won):
   - NEVER exits non-zero under any circumstances.
@@ -124,7 +124,7 @@ def _git_common_dir(repo_root: str) -> Optional[str]:
 # Precedence:  COORDINATOR_SESSION_ID → CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID
 # (KS-6, 2026-08-07 — widened to match the canonical
 # coordinator_core.session.core.SESSION_ENV_PRECEDENCE ladder; this script
-# runs in example-doctrine-repo's git-hook context and invokes claude-klabauter only via the
+# runs in coordinator-claude's git-hook context and invokes claude-klabauter only via the
 # subprocess command entrypoint, so it keeps a hand-mirrored env-var-only
 # copy rather than importing coordinator_core directly — a change to the
 # canonical ladder must be mirrored here too.)
@@ -141,7 +141,7 @@ def _resolve_session_id(repo_root: Optional[str], common_dir: Optional[str] = No
     `coordinator_core/bash_guards/guard_inprocess_search.py` ~L84 — ~18
     concurrent sessions on one shared worktree means even a freshly-written
     sentinel hands session A the id of whichever session wrote last; (2) its
-    writer was `session-init.py` (example-doctrine-repo SessionStart hook), deleted by
+    writer was `session-init.py` (coordinator-claude SessionStart hook), deleted by
     PM directive 2026-07-15 ("full-kill-keep-fast-orientation") — no
     production writer survives anywhere, contrary to this module's earlier
     "written by session-init.sh SessionStart hook" comment. `repo_root` and

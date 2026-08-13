@@ -16,7 +16,7 @@ a real op invocation -- this module intentionally does no internal timing of
 its own so the measured wall-clock band matches the real cold-start shape a
 caller would experience.
 
-Spec backlink: docs/plans/2026-07-28-sat-01-sovereign-tracker-substrate.md § C5 (AC3).
+Spec backlink: pln-sat-01-sovereign-tracker-subst-a66742 § C5 (AC3).
 """
 
 from __future__ import annotations

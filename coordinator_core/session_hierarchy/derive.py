@@ -15,7 +15,7 @@ walk. Emits synthetic workstream-type nodes grouping sessions by workstream
 slug.
 
 Byte-parity port: this is a field-for-field transliteration of the jq program
-embedded in derive-session-hierarchy.sh (example-doctrine-repo f0aa2d56, 2026-07-16) — the jq
+embedded in derive-session-hierarchy.sh (coordinator-claude f0aa2d56, 2026-07-16) — the jq
 program WAS the business logic (hitlist class 4). Every branch below cites the
 mirrored jq clause so a future diff against the retired bash stays checkable.
 
@@ -52,7 +52,7 @@ Negative-spec:
   pass in ``derive()`` for merge semantics.
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3
-Port of: derive-session-hierarchy.sh (example-doctrine-repo f0aa2d56, 2026-07-16)
+Port of: derive-session-hierarchy.sh (coordinator-claude f0aa2d56, 2026-07-16)
 """
 
 from __future__ import annotations

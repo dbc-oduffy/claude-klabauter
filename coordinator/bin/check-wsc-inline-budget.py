@@ -15,8 +15,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in example-doctrine-repo's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the example-doctrine-repo repo, not
+carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
 here).
 
 Exit codes (parity-critical — workweek-complete.md:289 pipes through
@@ -31,7 +31,7 @@ Env overrides (for testing — mirrors the retired bash script's contract):
   WSC_BASELINE_FILE  — substitute a different baseline file path
 
 Spec backlink: wsc-asic task (2026-06-30) / skill-step-parallelization.md § wsc wiring rule
-Port of: check-wsc-inline-budget.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: check-wsc-inline-budget.sh (coordinator-claude b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

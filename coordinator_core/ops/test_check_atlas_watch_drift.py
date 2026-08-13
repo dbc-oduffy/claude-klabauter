@@ -2,7 +2,7 @@
 test_check_atlas_watch_drift.py — pytest unit tests for
 coordinator_core.ops.check_atlas_watch_drift.
 
-Port source: coordinator/tests/test_atlas_watch_drift.py (example-doctrine-repo, bash-oracle
+Port source: coordinator/tests/test_atlas_watch_drift.py (coordinator-claude, bash-oracle
 subprocess tests) — reauthored here as direct in-process calls against the
 ported Python module (`run(argv, cwd=...)`), same fixtures/assertions.
 
@@ -28,7 +28,7 @@ from coordinator_core.ops import check_atlas_watch_drift
 from coordinator_core.ops.check_atlas_watch_drift import run
 
 # Declared, not excused: this file spawns real git because the ported bash-oracle
-# contract (test_atlas_watch_drift.py, example-doctrine-repo) depends on real commit/mtime
+# contract (test_atlas_watch_drift.py, coordinator-claude) depends on real commit/mtime
 # state in `docs/architecture/systems/` that `check_atlas_watch_drift.run()` reads
 # via git plumbing -- no mock stands in for that. Each test builds its own fresh
 # tmp_path repo via `_init_repo`, so mutation-heavy staleness scenarios need

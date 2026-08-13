@@ -7,7 +7,7 @@ Status -> ok mapping under test:
     DRIFT         -> ok=False (the only blocking case)
     MATCH         -> ok=True
     INDETERMINATE -> ok=True (inability to check must never block a merge)
-    UNRESOLVED    -> ok=True (no example-doctrine-repo clone on this machine — not applicable)
+    UNRESOLVED    -> ok=True (no coordinator-claude clone on this machine — not applicable)
 
 Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-coordinator-doc-new-category-no-validation.md
 """
@@ -94,17 +94,17 @@ class TestEvaluate:
         assert "could not compare" in (result["message"] or "")
 
     def test_unresolved_passes_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No example-doctrine-repo clone on this machine is not-applicable, not a failure."""
+        """No coordinator-claude clone on this machine is not-applicable, not a failure."""
         _patch_scan(
             monkeypatch,
-            _report("UNRESOLVED", summary="no example-doctrine-repo clone resolved on this machine"),
+            _report("UNRESOLVED", summary="no coordinator-claude clone resolved on this machine"),
         )
 
         result = evaluate()
 
         assert result["ok"] is True
         assert result["status"] == "UNRESOLVED"
-        assert "no example-doctrine-repo clone" in (result["message"] or "")
+        assert "no coordinator-claude clone" in (result["message"] or "")
 
     def test_multiple_drifted_schemas_all_named(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_scan(

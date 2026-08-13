@@ -14,7 +14,7 @@ DISTINCT MECHANISM from `doc_staleness.py` — separate op, separate tests,
 separate verdict. Do not fold the two together.
 
 Spec backlink: docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C6b, AC12, AC13
-               (example-doctrine-repo)
+               (coordinator-claude)
 
 v1 positive surface (what gets extracted and checked):
     - path tokens inside shell/py fenced code blocks that look repo-relative
@@ -38,7 +38,7 @@ that gap, applied in this order (`resolve_token`), stopping at the first hit:
         DOC'S OWN DIRECTORY (e.g. a citation in `coordinator/README.md`
         tried at `<repo_root>/coordinator/<token>`). A hit here is `ok`,
         never a finding — this is the fix for the plugin-root false-positive
-        class (measured: 26 spurious findings against example-doctrine-repo's own
+        class (measured: 26 spurious findings against coordinator-claude's own
         `coordinator/README.md` before this piece existed, 24 of them this
         exact shape). A doc at the repo root makes this identical to (b), so
         root-level docs are unaffected. Resolution is containment-checked —

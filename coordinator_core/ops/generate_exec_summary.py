@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.generate_exec_summary — Port of: generate-exec-summary.sh
-(example-doctrine-repo b5a4192c, 2026-07-20).
+(coordinator-claude b5a4192c, 2026-07-20).
 
 Purpose: populate the two MANAGED sections (identity, progress) of a per-repo
 docs/exec-summary.md from disk artifacts (README.md/CLAUDE.md,

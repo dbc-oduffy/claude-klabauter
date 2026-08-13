@@ -79,7 +79,7 @@
 # coordinator_core/archive_stamp.py module docstring for the per-function
 # exit-code contract — cs_stamp_plan_implemented is now a plain 0/1 contract,
 # having moved to an in-process plan_status_transition.main() call with no
-# node/example-doctrine-repo-root resolution step of its own).
+# node/coordinator-claude-root resolution step of its own).
 # A missing/unresolvable CLAUDE_KLABAUTER_ROOT (this trampoline's own transport failure,
 # distinct from any mapped function's business exit code) exits 3 — the
 # dedicated code below, since that failure means "the claude-klabauter engine could not
@@ -445,7 +445,7 @@ def main(argv: list[str]) -> int:
         return mod.cs_ship_handoff(handoff_path, archive=archive, sha=sha, force=force)
 
     if subcmd == "claim-handoff" or _DEPRECATED_ALIASES.get(subcmd) == "claim-handoff":
-        # consume-handoff retained as a deprecated alias — example-doctrine-repo has ~5
+        # consume-handoff retained as a deprecated alias — coordinator-claude has ~5
         # live doc/skill references to it that this change does not own.
         if not rest:
             return _usage(f"archive-stamp-cli {subcmd} <handoff_path>")

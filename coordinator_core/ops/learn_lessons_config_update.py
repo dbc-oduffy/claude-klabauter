@@ -16,7 +16,7 @@ Otherwise print a one-line hint to stderr advising registration via
 machine-local. NEVER mutates a tracked file. Always returns 0 (idempotent;
 safe as a Phase 0 call).
 
-Port of: learn-lessons-config-update.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: learn-lessons-config-update.sh (coordinator-claude b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
 Negative-spec:

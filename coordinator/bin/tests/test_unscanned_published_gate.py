@@ -429,8 +429,8 @@ class TestLoadUnscannedExceptions:
 
         Entry 2, `bin/depersonalize-identity.example.yaml`, was Group B of
         state/audits/2026-08-05-first-full-payload-identity-findings.md and
-        stayed deliberately UNRATIFIED until example-doctrine-repo's EM and PM confirmed
-        the exclusion (cross-repo/inbox/2026-08-05-example-doctrine-repo-em-three-publish-
+        stayed deliberately UNRATIFIED until coordinator-claude's EM and PM confirmed
+        the exclusion (cross-repo/inbox/2026-08-05-coordinator-claude-em-three-publish-
         gates-block-the-4-0-0-percolate.md): the file is the per-operator
         identity-rewrite data-file TEMPLATE, whose body is worked substitution
         examples, so the depersonalize transform would rewrite its own

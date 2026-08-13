@@ -12,7 +12,7 @@ close-out consumer) is a per-caller policy decision that does not belong in a sh
 context-free reader — see ``coordinator_core/ops/emit/sections/goals.py`` for the emit
 path's raise-on-unreadable policy.
 
-Spec backlink: docs/plans/2026-07-25-day-goal-close-out-lifecycle.md § C1
+Spec backlink: pln-day-scoped-goal-close-out-life-69a25c § C1
 """
 
 from __future__ import annotations

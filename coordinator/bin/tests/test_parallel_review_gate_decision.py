@@ -3,7 +3,7 @@
 Purpose: Unit tests for parallel-review-gate-decision.py — the gate-decision
 assembler ported from coordinator/skills/parallel-code-review/SKILL.md's
 Gating Rules 1-4, Chunking algorithm, and $RESOLVER_EXIT branch table
-(example-doctrine-repo plan 2026-07-24-computed-skills-b8-review-ci-cluster.md chunk C3).
+(coordinator-claude plan 2026-07-24-computed-skills-b8-review-ci-cluster.md chunk C3).
 
 Test coverage:
   T1  compute_gate_decision — Rule 4 (--force) wins over everything

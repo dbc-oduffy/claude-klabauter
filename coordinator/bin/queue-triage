@@ -15,7 +15,7 @@ the op's in-envelope exit_code/error refusal shape). Every leg prints the
 op's ratified response envelope as JSON to stdout unchanged — this CLI adds
 no rendering, no summarization, no second copy of any envelope shape.
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C7
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C7
 
 Op keys (do not confuse the third with `queue.scaffold_baton` — the module
 that registers it is `queue_scaffold_baton.py` by filename convention only;

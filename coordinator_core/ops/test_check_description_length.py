@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.check_description_length.
 
-Golden oracle (Port of: check-description-length.sh, example-doctrine-repo b5a4192c, 2026-07-20),
+Golden oracle (Port of: check-description-length.sh, coordinator-claude b5a4192c, 2026-07-20),
 snapshotted 2026-07-16 against the real $HOME/.claude/plugins tree (positive,
 mixed pass/fail) and synthetic negative corpora (missing plugins dir, mixed
 pass/PM-GATED/description-budget/fail skills).

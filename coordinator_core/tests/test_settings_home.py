@@ -6,7 +6,7 @@ Covers all three precedence rungs (AC1):
   2. CLAUDE_HOME override with COORDINATOR_SETTINGS_HOME unset.
   3. Default ~/.coordinator-claude-settings with both unset.
 
-Spec backlink: docs/plans/2026-07-11-coordinator-core-home-claude-read-repoint.md § C1
+Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C1
 """
 
 from __future__ import annotations
@@ -140,22 +140,22 @@ def test_machine_local_dir_is_settings_home_slash_machine_local(monkeypatch):
 
 def test_normalize_native_path_converts_msys_mount_form(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
-    assert normalize_native_path("/x/example-doctrine-repo") == Path("X:/example-doctrine-repo")
+    assert normalize_native_path("/x/coordinator-claude") == Path("X:/coordinator-claude")
 
 
 def test_normalize_native_path_converts_cygdrive_mount_form(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
-    assert normalize_native_path("/cygdrive/x/example-doctrine-repo") == Path("X:/example-doctrine-repo")
+    assert normalize_native_path("/cygdrive/x/coordinator-claude") == Path("X:/coordinator-claude")
 
 
 def test_normalize_native_path_leaves_native_forward_slash_form_unchanged(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
-    assert normalize_native_path("X:/example-doctrine-repo") == Path("X:/example-doctrine-repo")
+    assert normalize_native_path("X:/coordinator-claude") == Path("X:/coordinator-claude")
 
 
 def test_normalize_native_path_leaves_native_backslash_form_unchanged(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
-    assert normalize_native_path(r"X:\example-doctrine-repo") == Path(r"X:\example-doctrine-repo")
+    assert normalize_native_path(r"X:\coordinator-claude") == Path(r"X:\coordinator-claude")
 
 
 def test_normalize_native_path_handles_empty_string(monkeypatch):
@@ -170,7 +170,7 @@ def test_normalize_native_path_leaves_relative_path_unchanged(monkeypatch):
 
 def test_normalize_native_path_is_noop_on_posix(monkeypatch):
     monkeypatch.setattr("coordinator_core._settings_home.os.name", "posix")
-    assert normalize_native_path("/x/example-doctrine-repo") == Path("/x/example-doctrine-repo")
+    assert normalize_native_path("/x/coordinator-claude") == Path("/x/coordinator-claude")
 
 
 def test_normalize_native_path_drive_root_no_trailing_path(monkeypatch):

@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.sync_plugin_wiki.
 
-Port of: sync-plugin-wiki.sh (example-doctrine-repo b5a4192c, 2026-07-20), 162 lines.
+Port of: sync-plugin-wiki.sh (coordinator-claude b5a4192c, 2026-07-20), 162 lines.
 Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 """
 

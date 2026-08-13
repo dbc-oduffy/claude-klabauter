@@ -67,7 +67,7 @@ Negative-spec:
     - Does NOT special-case a fixed extension allowlist — every extension
       found is counted, a strict superset of the fence's enumerated clauses.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 § Wave 2 "detect" cluster; manifest row in
 state/audits/2026-07-22-command-payload-inventory/op-classification.tsv.
 """

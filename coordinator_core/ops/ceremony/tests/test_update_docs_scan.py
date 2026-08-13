@@ -23,7 +23,7 @@ Coverage:
       CROSSREPO_ARCHIVE_ACTIONED_FLOOR_DAYS are named module constants, not
       inline literals scattered through the classification bodies
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C17
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C17
 """
 
 from __future__ import annotations

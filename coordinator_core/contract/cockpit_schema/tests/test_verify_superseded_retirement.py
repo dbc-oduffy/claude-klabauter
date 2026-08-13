@@ -2,12 +2,12 @@
 test_verify_superseded_retirement — regression guard for the 2026-06-26
 `superseded` handoff-status retirement.
 
-Port of: verify-superseded-retirement.sh (example-doctrine-repo 7cca4d4c, 2026-07-16)
+Port of: verify-superseded-retirement.sh (coordinator-claude 7cca4d4c, 2026-07-16)
 (T6 disposition (a): rewrite-as-pytest — the invariant it guards, no live
 `HandoffSummary` record emits `status: superseded`, is a still-live contract
 rule, not dead bash machinery).
 
-AC4/AC5 (grep-only ACs the original example-doctrine-repo plan table covers via inline greps,
+AC4/AC5 (grep-only ACs the original coordinator-claude plan table covers via inline greps,
 not this dedicated script) are out of scope here — only ac1/ac2/ac3/ac6 (the
 four the original `.sh` covers) are ported.
 
@@ -15,15 +15,15 @@ Spec backlink: docs/plans/2026-06-26-retire-superseded-handoff-status.md
 
 Retiring-ruling backlink: 2026-08-02 fast-tier stale-test triage
 (tasks/mise-verify/triage-C-cockpit.md § test_verify_superseded_retirement.py,
-AC2). AC2 used to also assert `coordinator/CLAUDE.md` (example-doctrine-repo-side) exists and
+AC2). AC2 used to also assert `coordinator/CLAUDE.md` (coordinator-claude-side) exists and
 doesn't list the retired status vocabulary. That file was deliberately
-retired: example-doctrine-repo commit `e8f9051db` ("C10/C11: finish the coordinator/CLAUDE.md
+retired: coordinator-claude commit `e8f9051db` ("C10/C11: finish the coordinator/CLAUDE.md
 retirement and re-point every citation") deleted it, ratified in an earlier
 `0c90dc50d` ("C2+C3: rewrite global doctrine in system terms; retire
 coordinator/CLAUDE.md as a doctrine surface"). Its content was NOT relocated
 to one successor file — `e8f9051db`'s own diff dispositions each of its
 sections independently (mechanize / re-route / state-in-full / delete /
-accept-unenforced), and a live check of example-doctrine-repo's current root `CLAUDE.md` and
+accept-unenforced), and a live check of coordinator-claude's current root `CLAUDE.md` and
 `global-doctrine/CLAUDE.md` confirms neither carries any handoff-status
 content today (grep -in for "handoff" or "status:" against both: zero
 doctrine hits). AC2's actual guarantee — no handoff WRITER surface prescribes
@@ -50,7 +50,7 @@ from coordinator_core.contract.cockpit_schema.tests.conftest import (
 # `coordinator/cockpit-contract/test/` resolves to `coordinator/`, NOT the
 # repo root — every path below is `coordinator/`-relative, not
 # `DOE_CLONE`-relative directly. Guarded (not evaluated at collection time
-# when example-doctrine-repo is absent) since @skip_no_doe only fires inside the test body.
+# when coordinator-claude is absent) since @skip_no_doe only fires inside the test body.
 def _coordinator_dir():
     return COCKPIT_CONTRACT_DIR.parent
 
@@ -74,8 +74,8 @@ def test_ac1_no_handoff_record_carries_status_superseded():
 def test_ac2_no_handoff_writer_surface_prescribes_status_superseded():
     """No handoff WRITER surface prescribes status: superseded.
 
-    `coordinator/CLAUDE.md` (example-doctrine-repo-side) was one of the four surfaces this AC
-    originally checked; it was deliberately retired (example-doctrine-repo `e8f9051db`, ratified
+    `coordinator/CLAUDE.md` (coordinator-claude-side) was one of the four surfaces this AC
+    originally checked; it was deliberately retired (coordinator-claude `e8f9051db`, ratified
     in `0c90dc50d`) with no single successor file inheriting its content — see
     module docstring. Dropped from this checklist rather than repointed at a
     guessed replacement.
@@ -97,7 +97,7 @@ def test_ac2_no_handoff_writer_surface_prescribes_status_superseded():
 
     # AC2's subject is the RETIREMENT of `superseded`, not the enum's exact membership.
     # Exact-equality against [active, consumed] made this assertion break on any
-    # legitimate widen — it fired on DR-084's dual-vocabulary P0 widen (example-doctrine-repo e75c6c7a:
+    # legitimate widen — it fired on DR-084's dual-vocabulary P0 widen (coordinator-claude e75c6c7a:
     # status += open/claimed), which the vocabulary-overhaul plan mandates. Assert the
     # retirement itself so the guarantee survives the widened window and the P4 narrow.
     handoff_schema_doc = json.loads(handoff_schema.read_text())
@@ -131,7 +131,7 @@ def test_ac6_ts_zod_mirror_retirement_complete_7cca4d4c():
     AC6 originally asserted: enum narrowed in the Zod SOURCE (`src/entities/summaries.ts`),
     writer schema narrowed, reader schema deliberately tolerant, and schema-bundle version ==
     the Zod source's `CONTRACT_VERSION`. Every one of those assertions READ the TS/Zod mirror
-    (`src/`) — example-doctrine-repo commit `7cca4d4c` (2026-07-16) deleted that mirror wholesale in favor of
+    (`src/`) — coordinator-claude commit `7cca4d4c` (2026-07-16) deleted that mirror wholesale in favor of
     claude-klabauter's pydantic emitter as sanctioned canonical (see
     `cross-repo/archive/2026-07-16-claude-central-em-cockpit-{emitter-ownership,crossrepo-write-and-emitter-dependency}.md`).
     A test that re-parses a deleted tree cannot run — the ORIGINAL `@skip_no_ts_mirror` guard
@@ -147,7 +147,7 @@ def test_ac6_ts_zod_mirror_retirement_complete_7cca4d4c():
     cc = _coordinator_dir()
     ts_mirror_dir = cc / "cockpit-contract" / "src"
     assert not ts_mirror_dir.exists(), (
-        f"TS/Zod mirror {ts_mirror_dir} is present — expected retired since example-doctrine-repo 7cca4d4c "
+        f"TS/Zod mirror {ts_mirror_dir} is present — expected retired since coordinator-claude 7cca4d4c "
         "(2026-07-16). If a mirror was deliberately reintroduced, this AC's original "
         "content assertions (enum narrowing, schema/version parity read from the Zod "
         "source) need to be restored, not this absence check."

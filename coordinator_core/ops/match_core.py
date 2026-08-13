@@ -32,7 +32,7 @@ early-return on absent directory).
 COMPUTE_ONLY invariant: this module never writes files, issues git commands, or
 mutates any coordinator substrate (DR-208).
 
-Spec backlink: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C1
+Spec backlink: pln-claude-klabauter-fork-provenance-creatio-01c09f § C1
 """
 
 from __future__ import annotations

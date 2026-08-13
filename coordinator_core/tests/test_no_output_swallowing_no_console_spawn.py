@@ -43,7 +43,7 @@ TEST TREE EXCLUDED, deliberately: a test that wanted the child's output
 would have captured it, so losing it cannot move an assertion. Partitioned
 via `spawn_policy.is_test_tree_site`, the same seam the sibling gate uses.
 
-Spec backlink: docs/plans/2026-08-07-no-window-subprocess-primitive.md § C6,
+Spec backlink: pln-no-window-subprocess-primitive-750d2d § C6,
 AC5 (this gate closes the property that AC5's gate does not measure).
 """
 

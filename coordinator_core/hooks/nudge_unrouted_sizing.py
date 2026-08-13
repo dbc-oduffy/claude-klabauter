@@ -161,7 +161,7 @@ in question ever fired.
       open fork, the precise failure this exemption exists to prevent (see
       above). The fix was to key on the DETENT, not `fork`'s nullity.
     - The near-miss this generalisation is filed FROM, not merely alongside:
-      example-doctrine-repo's first draft of the post-size-prompt exemption proposed detecting
+      coordinator-claude's first draft of the post-size-prompt exemption proposed detecting
       the new halt from the ABSENCE of `appetite` in the sizing-object — since
       appetite absence is exactly the shape the post-size prompt flow produces.
       That is the fork misread one field over: appetite absence is the shape
@@ -188,19 +188,19 @@ Negative-spec:
       all and cannot reach that seam's code by construction; `"execute-plan" not in
       _ROUTABLE_ROUTES` is pinned by its own test so this stays true even as the
       module grows. `goal-setting` and `roadmap` are excluded by the same rule for a
-      different reason: both are PM-gated rooms, not EM-enterable ones — per example-doctrine-repo
+      different reason: both are PM-gated rooms, not EM-enterable ones — per coordinator-claude
       `coordinator/skills/goal-setting/SKILL.md` and `coordinator/skills/roadmap-planning/
       SKILL.md`, each carrying a frontmatter `description: "PM-GATED. ..."` — so
       falsifiable by grepping those two files, not by memory. `shape` is the one
       exception worth naming precisely: it is PM-COLLABORATIVE, not frontmatter-gated
       the same way, so "PM-gated" as a blanket label overstates its own posture even
-      though it is likewise excluded here. Example-doctrine-repo separately accepted the
+      though it is likewise excluded here. Coordinator-claude separately accepted the
       `goal_setting_pm_gated` detent (chunk body, this plan), which means this
       exclusion is no longer the ONLY line holding the PM-gate boundary for
       `goal-setting` — it is now a second, independent guard, though it was designed
-      as the sole line of defense had example-doctrine-repo declined that detent. Caveat: the RULE's
+      as the sole line of defense had coordinator-claude declined that detent. Caveat: the RULE's
       truth for `goal-setting` and `roadmap` rests on frontmatter living in ANOTHER
-      REPO (example-doctrine-repo), so no test in this repo can pin it — if example-doctrine-repo ever un-gates
+      REPO (coordinator-claude), so no test in this repo can pin it — if coordinator-claude ever un-gates
       either skill, this exclusion becomes silently wrong until someone notices.
     - The **plan->execute-plan** seam (second seam, live as of this module's second seam
       addition — see "Seam naming" below) NEVER fires on the pre-execute PM authorization
@@ -258,7 +258,7 @@ useful first check but is NOT the house-authoritative subagent test — a dispat
 subagent's Stop payload does not always carry `agent_id`, and `CLAUDE_CODE_SESSION_ID`
 is explicitly documented as unreliable for this purpose (it inherits the dispatching
 EM's own id inside a subagent process). The house-authoritative test, per
-`coordinator/hooks/scripts/runtime-tripwire-em-check.py` (example-doctrine-repo repo; docstring
+`coordinator/hooks/scripts/runtime-tripwire-em-check.py` (coordinator-claude repo; docstring
 ~lines 26-45, implementation ~1585-1600): a firing `session_id` found under
 `<git-common-dir>/coordinator-sessions/.agents/<session_id>/em-session-id.txt` is a
 SUBAGENT session, full stop — never fire. `_is_subagent_session` below is that same
@@ -284,7 +284,7 @@ that row's OWN subagent transcript, via the EXACT same running-vs-arrived
 determination `runtime-tripwire-em-check.py` already computes for its own overrun
 suppression — `coordinator_core.hooks.subagent_arrival_check`'s `_handler` (state
 `"arrived"` / `"running"` / `"unknown"`, called directly in-process rather than over
-the example-doctrine-repo-side IPC round-trip that script needs) — rather than authoring a second,
+the coordinator-claude-side IPC round-trip that script needs) — rather than authoring a second,
 divergent "is a dispatch still running" answer; two surfaces disagreeing about that
 question is itself a defect class this deliberately avoids. `dispatched-agents.txt`
 rows are read exactly as that script reads them (tab-separated `agent_id, model,
@@ -339,7 +339,7 @@ The overlap case ("Fixed the parser and committed. Next I'll take this into
 
 This is a STRONGER discharge of
 `state/lessons/2026-07-28-a-detector-s-suppressor-must-not-key-on-c91c411f46ed.yaml`
-(example-doctrine-repo repo, status `open`, born from this hook's structural sibling
+(coordinator-claude repo, status `open`, born from this hook's structural sibling
 `nudge_harness_directive_dispatch.py`'s own F2 finding) than a correctly-ordered
 suppressor would be: that lesson's failure mode is a suppressor that can veto a
 genuine tell, and a design with no suppressor at all has no vetoing mechanism to get
@@ -354,8 +354,8 @@ and falls back to `nudge_harness_directive_dispatch.last_assistant_text`'s own
 bounded tail-read — imported and reused directly rather than re-derived, per that
 sibling's own documented preference for this exact fallback shape.
 
-Spec backlink: two-repo change, example-doctrine-repo-side transport shim companion in
-`coordinator/hooks/scripts/` (example-doctrine-repo repo). Live incident 2026-07-31, session 66339b3f.
+Spec backlink: two-repo change, coordinator-claude-side transport shim companion in
+`coordinator/hooks/scripts/` (coordinator-claude repo). Live incident 2026-07-31, session 66339b3f.
 """
 
 from __future__ import annotations
@@ -401,11 +401,11 @@ def _get_arrival_check():
 
 # ---------------------------------------------------------------------------
 # Sizing-object match criteria — all four must hold (schema:
-# coordinator/schemas/sizing-object.schema.json, example-doctrine-repo repo).
+# coordinator/schemas/sizing-object.schema.json, coordinator-claude repo).
 # ---------------------------------------------------------------------------
 
 # Membership rule, not a fixed count: routes whose room an EM can enter WITHOUT a
-# PM utterance. `goal-setting` and `roadmap` are excluded because example-doctrine-repo's
+# PM utterance. `goal-setting` and `roadmap` are excluded because coordinator-claude's
 # `coordinator/skills/{goal-setting,roadmap-planning}/SKILL.md` frontmatter marks
 # each `description: "PM-GATED. ..."` — see the module docstring's Negative-spec
 # section for the full account, including why "PM-gated" is not the right blanket
@@ -472,7 +472,7 @@ _MAX_TRACK_MIN_ENV = "RUNTIME_TRIPWIRE_MAX_TRACK_MIN"
 _DEFAULT_MAX_TRACK_MIN = 90
 
 # Per-model runtime-threshold env vars — same names and same defaults as
-# runtime-tripwire-em-check.py's `_runtime_threshold_minutes` (example-doctrine-repo repo), so
+# runtime-tripwire-em-check.py's `_runtime_threshold_minutes` (coordinator-claude repo), so
 # the two surfaces cannot silently drift apart on what "still within a plausible
 # runtime" means for a given model.
 _OPUS_MIN_ENV = "RUNTIME_TRIPWIRE_OPUS_MIN"
@@ -1035,7 +1035,7 @@ def _skill_invoked(transcript_path: str, target_skills: frozenset[str]) -> bool:
 def _is_subagent_session(session_id: str, repo_root: str) -> bool:
     """Return True iff `session_id` is a CONFIRMED subagent session, house-authoritative.
 
-    Per runtime-tripwire-em-check.py (example-doctrine-repo repo, docstring ~lines 26-45,
+    Per runtime-tripwire-em-check.py (coordinator-claude repo, docstring ~lines 26-45,
     implementation ~1585-1600): a firing session_id found under
     `<git-common-dir>/coordinator-sessions/.agents/<session_id>/em-session-id.txt`
     is a dispatched subagent's own session, not the EM's. This is a SECOND, narrower
@@ -1241,7 +1241,7 @@ def _text_trips_tell(text: str, referent_re: "re.Pattern[str]" = _ROUTE_REFERENT
     message trips it. See the module docstring's "Text half" section for why this
     no-suppressor design is a STRONGER discharge of the cited lesson
     (`state/lessons/2026-07-28-a-detector-s-suppressor-must-not-key-on-c91c411f46ed.yaml`,
-    example-doctrine-repo repo) than a correctly-ordered suppressor would be.
+    coordinator-claude repo) than a correctly-ordered suppressor would be.
 
     The tell alone is not enough (F4): a route referent (the resolved route's
     own skill name or route noun) must appear in the same sentence as the tell
@@ -1336,7 +1336,7 @@ def op(payload: dict) -> dict | None:
     entering it.
 
     Returns ``{"message": <str>}`` when either seam should fire, ``None``
-    otherwise. Transport is owned by the caller (the example-doctrine-repo-resident stdin/stderr
+    otherwise. Transport is owned by the caller (the coordinator-claude-resident stdin/stderr
     shim) — this op decides only *whether* to speak, matching
     nudge_harness_directive_dispatch's own transport-seam split.
 
@@ -1433,7 +1433,7 @@ def op(payload: dict) -> dict | None:
     # Routed through the shared envelope-builder chokepoint (coordinator_core.
     # _hook_envelope) so this op's message is captured by the C6 instrumentation
     # seam, same as every other prose-carrying hook op. op()'s own external
-    # contract ({"message": <str>}, consumed by the example-doctrine-repo-resident stdin/stdout
+    # contract ({"message": <str>}, consumed by the coordinator-claude-resident stdin/stdout
     # shim per this function's docstring) is unchanged: the builder's
     # additionalContext is extracted back out immediately, so the returned
     # message text is byte-identical to before this routing — no envelope

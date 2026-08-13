@@ -2,7 +2,7 @@
 coordinator_core.roadmap.tests.test_graph — independent parity regression net for
 coordinator_core.roadmap.graph, re-derived from the acceptance criteria (AC1-AC3,
 plus the F0/F1/F2 checkDependencyOrder cases) documented in the bash/JS oracle's own
-test file (coordinator/bin/tests/test-roadmap-graph.js, example-doctrine-repo) rather than by
+test file (coordinator/bin/tests/test-roadmap-graph.js, coordinator-claude) rather than by
 re-asserting this port's own transcription — each case below was independently
 re-run against the oracle (``node coordinator/bin/lib/roadmap-graph.js``) to confirm
 the expected values before being hardcoded here.

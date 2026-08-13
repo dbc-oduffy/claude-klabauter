@@ -419,7 +419,7 @@ def _check_head_tail_plumbing_powershell(
         # is a nag, not a service. Same disposition `check_multiprobe_banner_
         # rewrite` already takes on its own no-applicable-rewrite exit.
         # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        # 2026-08-11-coordinator-claude-em-advisory-fires-with-no-rewrite.md
         return None
     (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
     if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
@@ -463,7 +463,7 @@ def _check_head_tail_plumbing_powershell(
         # offer is a nag, not a service. Same disposition `check_multiprobe_
         # banner_rewrite` already takes on its own no-applicable-rewrite exit.
         # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        # 2026-08-11-coordinator-claude-em-advisory-fires-with-no-rewrite.md
         return None
 
     if kind in ("find", "ls") and not os.path.exists(parsed["path"]):
@@ -556,7 +556,7 @@ def check_head_tail_plumbing_rewrite(
         # is a nag, not a service. Same disposition `check_multiprobe_banner_
         # rewrite` already takes on its own no-applicable-rewrite exit.
         # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        # 2026-08-11-coordinator-claude-em-advisory-fires-with-no-rewrite.md
         return None
     (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
     if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
@@ -606,7 +606,7 @@ def check_head_tail_plumbing_rewrite(
         # offer is a nag, not a service. Same disposition `check_multiprobe_
         # banner_rewrite` already takes on its own no-applicable-rewrite exit.
         # Silent per the measured fleet-wide fire volume: cross-repo/inbox/
-        # 2026-08-11-example-doctrine-repo-em-advisory-fires-with-no-rewrite.md
+        # 2026-08-11-coordinator-claude-em-advisory-fires-with-no-rewrite.md
         return None
 
     # Fail open when the upstream `find`/`ls` root does not resolve on THIS

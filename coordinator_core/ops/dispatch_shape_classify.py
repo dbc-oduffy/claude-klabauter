@@ -43,7 +43,7 @@ only; stdout is unused. Silent on pass. A transport/import failure at the trampo
 layer degrades to exit 0 (loud on stderr) for the same reason — this is a
 best-effort advisory tool, never a caller-facing blocking gate.
 
-Port of: classify-dispatch-shape.sh (example-doctrine-repo b5a4192c, 2026-07-20, 339 lines)
+Port of: classify-dispatch-shape.sh (coordinator-claude b5a4192c, 2026-07-20, 339 lines)
 Spec backlink: docs/plans/2026-06-22-invariant-verification-observers.md § C3
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -118,7 +118,7 @@ def _resolve_plan_file(plan_slug: str, script_dir: Optional[str]) -> Optional[st
     """Resolve a plan slug to a docs/plans/ file.
 
     Search order mirrors the bash oracle: $(pwd)/docs/plans, then (when script_dir
-    is known — the example-doctrine-repo-side trampoline's own directory, NOT this claude-klabauter module's
+    is known — the coordinator-claude-side trampoline's own directory, NOT this claude-klabauter module's
     directory) REPO_ROOT/../../docs/plans and REPO_ROOT/../docs/plans, where
     REPO_ROOT = dirname(script_dir). First hit wins: exact `<slug>.md`, else a
     `*<slug>*.md` prefix match (see negative-spec re: ordering).
@@ -344,7 +344,7 @@ not distinguishable from the available records.
 
 def main(argv: List[str], *, script_dir: Optional[str] = None) -> int:
     """Entry point. Always returns 0 (offer-shaped observer — never blocks the
-    caller); see module docstring § OFFER SHAPE. `script_dir` is the example-doctrine-repo-side
+    caller); see module docstring § OFFER SHAPE. `script_dir` is the coordinator-claude-side
     trampoline's own directory (`os.path.dirname(os.path.abspath(__file__))` at
     the `.sh` trampoline, NOT this module's directory) — required to reproduce the
     oracle's REPO_ROOT-relative docs/plans/ search when a bare slug is given."""

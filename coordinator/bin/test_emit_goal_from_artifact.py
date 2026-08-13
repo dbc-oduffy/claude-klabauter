@@ -114,7 +114,7 @@ key_results:
 created: "2026-07-07"
 owner: doe-em
 period: repo
-period_value: "example-doctrine-repo-2026"
+period_value: "coordinator-claude-2026"
 """
 
 FIXTURE_TOOLING = """schema: goal
@@ -252,7 +252,7 @@ def test_emit_goal_from_artifact(tmp_path):
     # --- T3/T4/T5: invocation carries period / period_value / identity-chain text ---
     inv = lines1[0]
     assert "--period repo" in inv, inv
-    assert "example-doctrine-repo-2026" in inv, inv
+    assert "coordinator-claude-2026" in inv, inv
     assert "goal-legibility" in inv, inv
 
     # --- T6: two goal artifacts -> two invocations ---

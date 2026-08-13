@@ -1,7 +1,7 @@
 """test_assert_cwd — pytest tests for coordinator/bin/assert-cwd.py.
 
 Spec backlink: scratchpad/scout-D-claude-klabauter-sizing.md § Item 2 (new-project
-cwd-assert, example-doctrine-repo new-project/SKILL.md:76).
+cwd-assert, coordinator-claude new-project/SKILL.md:76).
 
 Subprocess-driven (not in-process import): assert-cwd's whole contract is
 "read the CALLING process's cwd via `git rev-parse --show-toplevel`" -- an

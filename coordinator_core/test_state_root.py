@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.state_root — the 5-rule state-root seam resolver.
 
-Port of: coordinator-state-root.sh (example-doctrine-repo 6fb5fb37, 2026-07-22) (de-bash W2)
+Port of: coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22) (de-bash W2)
 
 The four sibling resolver ladders (doe_root, claude_klabauter_root, artifact classify,
 is_meta_repo) are each covered by their own test modules; here we monkeypatch
@@ -24,7 +24,7 @@ from coordinator_core import state_root as sr
 from coordinator_core.artifact_subject import Subject
 from coordinator_core.meta_repo_identity import MetaRepoResolutionError
 
-_DOE = "/repos/example-doctrine-repo"
+_DOE = "/repos/coordinator-claude"
 _CLAUDE_KLABAUTER = "/repos/claude-klabauter"
 _SIBLING = "/repos/some-sibling"
 
@@ -61,7 +61,7 @@ def stub_peers(monkeypatch):
     return monkeypatch
 
 
-# --- Rule 1: central + subject=doctrine -> example-doctrine-repo state -----------------------
+# --- Rule 1: central + subject=doctrine -> coordinator-claude state -----------------------
 
 
 def test_rule1_doctrine_routes_to_doe_state(stub_peers):
@@ -72,7 +72,7 @@ def test_rule1_doctrine_fail_loud_no_claude_klabauter_fallback(stub_peers):
     stub_peers.setattr(sr, "coordinator_doe_root", lambda: None)
     with pytest.raises(sr.StateRootError) as exc:
         sr.coordinator_state_root(central=True, subject="doctrine")
-    assert "example-doctrine-repo" in str(exc.value) or "example_doctrine_repo" in str(exc.value)
+    assert "coordinator-claude" in str(exc.value) or "example_doctrine_repo" in str(exc.value)
     # Must NOT silently fall through to claude-klabauter state.
     assert _CLAUDE_KLABAUTER not in str(exc.value)
 
@@ -234,7 +234,7 @@ def test_rule5_sibling_repo_fail_loud_when_it_is_the_published_mirror(stub_peers
 
 
 def test_rule5_sibling_repo_unaffected_when_mirror_registered_elsewhere(stub_peers):
-    # A legitimate sibling repo (e.g. Example-retrieval-repo, example-doctrine-repo) still resolves
+    # A legitimate sibling repo (e.g. Example-retrieval-repo, coordinator-claude) still resolves
     # normally even when SOME OTHER path is the registered published mirror
     # -- the guard must not over-fire against every sibling repo, only the
     # one that actually IS the mirror clone.

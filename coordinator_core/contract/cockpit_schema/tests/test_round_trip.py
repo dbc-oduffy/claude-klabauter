@@ -2,10 +2,10 @@
 test_round_trip — Round-trip contract test (AC: a validated instance
 round-trips through JSON serialize/deserialize on every entity).
 
-Pytest port of example-doctrine-repo `coordinator/cockpit-contract/test/round-trip.test.ts`.
+Pytest port of coordinator-claude `coordinator/cockpit-contract/test/round-trip.test.ts`.
 
 For every entity in ENTITY_SCHEMAS:
- - a fixture file exists under fixtures/<name>.json (in the example-doctrine-repo clone),
+ - a fixture file exists under fixtures/<name>.json (in the coordinator-claude clone),
  - the fixture passes pydantic validation,
  - serialising and re-validating the validated value round-trips cleanly.
 

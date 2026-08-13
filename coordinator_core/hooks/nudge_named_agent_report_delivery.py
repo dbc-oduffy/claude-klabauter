@@ -73,7 +73,7 @@ Negative-spec:
     2.1.220 (2026-07-30): updatedInput does not bind for the Agent tool — see
     ``nudge_foreground_agent_dispatch`` § REROUTE REVERTED TO DENY.
 
-Spec backlink: docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md
+Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ eligible agent's run-report sidecar, across BOTH of that module's homes:
 the session-keyed ``state/subagent-share/<session_id>/`` tree, and the
 plan-derivable ``state/plan-sidecars/`` tree the four G2 emitters use
 (canonical spec § 2.7, `state/subagent-share/conductor/seam-adjudication.md`,
-Example-doctrine-repo). Both trees carry the identical ``## Exit interview`` shape --
+Coordinator-claude). Both trees carry the identical ``## Exit interview`` shape --
 this module walks them the same way and folds the results into one report.
 
 This is deliberately the smallest useful tool: walk the sidecar tree(s),
@@ -24,7 +24,7 @@ of the four emitters' provisioned doc IS the lens output -- there is no
 separate vestigial subagent-share file for a plan-side dispatch to also
 harvest.
 
-Spec backlink: docs/plans/2026-07-13-subagent-run-report-autoprovision.md
+Spec backlink: pln-claude-klabauter-subagent-run-report-aut-f51428
 (the sidecar this module reads); this module itself is the harvest leg
 of coordinator baton G0 (agent citizenship), leg (c).
 """

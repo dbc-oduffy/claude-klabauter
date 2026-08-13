@@ -22,7 +22,7 @@ Coverage:
         directly against active_reference_guard)
     (i) a non-sidecar file alongside sidecars is ignored entirely
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C2
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C2
 """
 
 from __future__ import annotations

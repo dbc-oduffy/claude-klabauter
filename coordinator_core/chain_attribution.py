@@ -50,7 +50,7 @@ Explicitly OUT of scope for this module (verified, not absorbed):
     membership, not trailer/grep attribution), different signals, no shared
     git query. Out of this family (adjudication § 10.7 item 9).
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a
 task A1; full contract in
 state/subagent-share/e5523616-4128-4a05-b6fe-706574127f41/fork-adjudication.md
 § 10.2-10.3, § 10.7.

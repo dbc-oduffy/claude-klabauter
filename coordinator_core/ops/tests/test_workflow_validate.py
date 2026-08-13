@@ -24,7 +24,7 @@ test_op_registration.py per its established pattern), covering:
       asserted to produce the expected ERROR/WARN findings (false-negative
       guard).
 
-Spec backlink: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md § C2
+Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d § C2
 """
 
 from __future__ import annotations

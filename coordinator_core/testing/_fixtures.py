@@ -14,7 +14,7 @@ tests without pytest double-registering it: a `conftest.py` requested as a
 re-exports `fixture_tree` from here so in-package tests keep the local-conftest path.
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C1 (conftest.py)
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C1 (conftest.py)
 
 Negative-spec:
     - Does NOT write any fixture file under `coordinator_core/` on disk — every

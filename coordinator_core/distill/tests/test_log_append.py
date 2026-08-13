@@ -38,7 +38,7 @@ Coverage:
     (o) --batch with one bad row exits 1 with a JSON error and writes nothing
     (p) single-row invocation shape unchanged (backward compat)
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C7
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C7
 """
 
 from __future__ import annotations

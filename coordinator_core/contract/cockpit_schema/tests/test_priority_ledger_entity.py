@@ -3,7 +3,7 @@ test_priority_ledger_entity — parse/reject tests for `PriorityLedgerEntry`
 (C6b, `entities/priority_ledger_entry.py`).
 
 Spec backlink: docs/plans/2026-07-26-priority-ledger.md § C6b
-Spec backlink: coordinator/schemas/priority-ledger.schema.json (example-doctrine-repo repo)
+Spec backlink: coordinator/schemas/priority-ledger.schema.json (coordinator-claude repo)
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ with an optional GitHub-release publish step (ops `release.cut_tag` and
 `release.cut_tag_and_publish`).
 
 Purpose: native replacement for the two release-tagging fences in
-`coordinator/skills/merging-to-main/SKILL.md` (example-doctrine-repo):
+`coordinator/skills/merging-to-main/SKILL.md` (coordinator-claude):
 
   - Mode A (`tag_anchor: git-tag`, SKILL.md:~481-497) — annotated-tag-only
     disclosure, no GitHub Release. Native op: `release.cut_tag`.
@@ -87,9 +87,9 @@ Op contract (C0a manifest):
     scope: common_dir (tag refs + the published release object are
     repo-wide, shared across every linked worktree of the same repo).
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
-Fence source: coordinator/skills/merging-to-main/SKILL.md:251 (example-doctrine-repo, Mode A)
-              coordinator/skills/merging-to-main/SKILL.md:290 (example-doctrine-repo, Mode B)
+Spec backlink: pln-coordinator-ops-buildout-from--903224
+Fence source: coordinator/skills/merging-to-main/SKILL.md:251 (coordinator-claude, Mode A)
+              coordinator/skills/merging-to-main/SKILL.md:290 (coordinator-claude, Mode B)
 """
 
 from __future__ import annotations

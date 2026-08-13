@@ -1,10 +1,10 @@
 """
 test_dep_free_validator_compat — compatibility proof for the "one format" claim.
 
-Pytest port of example-doctrine-repo `coordinator/cockpit-contract/test/dep-free-validator-compat.test.ts`.
+Pytest port of coordinator-claude `coordinator/cockpit-contract/test/dep-free-validator-compat.test.ts`.
 
 Purpose: demonstrate that the dependency-free JSON-Schema-subset validator
-(T4d's `coordinator_core.frontmatter.schema_validate`, ported from example-doctrine-repo
+(T4d's `coordinator_core.frontmatter.schema_validate`, ported from coordinator-claude
 `coordinator/bin/lib/schema.js` — used by hooks, bash, CI) can READ and
 validate records against a cockpit-emitted JSON Schema
 (`schema/<entity>.schema.json`). This substantiates the ccos-1 architecture
@@ -41,7 +41,7 @@ from coordinator_core.contract.cockpit_schema.tests.conftest import (
 
 
 def _validate_record(record: dict, schema: dict):
-    """Twin of example-doctrine-repo `bin/lib/schema.js`'s `validateRecord(record, schema)` —
+    """Twin of coordinator-claude `bin/lib/schema.js`'s `validateRecord(record, schema)` —
     ported minus the schema-version gate (irrelevant here: cockpit-emitted
     schemas carry no `x-schema-version`) and cross-field rules (keyed on
     `x-schema-name`, which cockpit-emitted schemas never carry — see

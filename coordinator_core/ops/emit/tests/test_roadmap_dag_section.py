@@ -10,7 +10,7 @@ Exercises collect() with concrete fixtures:
       kind tag is stripped; malformed rows routed and stripped similarly.
   (f) no-roadmap_id skip — roadmap records without roadmap_id are silently skipped.
 
-Spec backlink: docs/plans/2026-07-06-roadmap-dag-emit-switch.md § C1
+Spec backlink: pln-emit-first-class-roadmap-dag-i-137a28 § C1
 """
 
 from __future__ import annotations

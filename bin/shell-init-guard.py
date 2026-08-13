@@ -2,11 +2,11 @@
 bin/shell-init-guard.py — pure stdout emitter for the interactive-shell resource-cap guard.
 
 Purpose: Prints two bash guard lines (`ulimit -S -f <blocks>` + `shopt -s failglob`) that
-the calling shell evaluates directly. Invoked from the ~/.bashrc eval seam (example-doctrine-repo-owned):
+the calling shell evaluates directly. Invoked from the ~/.bashrc eval seam (coordinator-claude-owned):
 
     eval "$(python3 <path>/bin/shell-init-guard.py 2>/dev/null)"
 
-DR-047 cross-repo split: example-doctrine-repo owns the ~/.bashrc seam and the eval invocation; claude-klabauter owns
+DR-047 cross-repo split: coordinator-claude owns the ~/.bashrc seam and the eval invocation; claude-klabauter owns
 this pure emitter engine. The two sides communicate only through stdout (bash to eval) and
 one env var, `COORDINATOR_OVERRIDE_FSIZE_CAP`, read by this script to size the cap.
 

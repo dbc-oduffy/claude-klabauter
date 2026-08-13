@@ -30,7 +30,7 @@ def _write_ledger(path: Path, entries: list) -> None:
 
 def _entry(**overrides) -> dict:
     base = {
-        "old_repo": "coordinator-claude (example-doctrine-repo)",
+        "old_repo": "coordinator-claude (coordinator-claude)",
         "old_path": "bin/validate-install-contract.sh",
         "new_repo": "test_repo",
         "new_path": "coordinator/bin/validate-install-contract.py",
@@ -118,7 +118,7 @@ def test_moved_entry_is_retired_is_false(tmp_path: Path) -> None:
 def test_describe_moved_entry() -> None:
     entry = rl.RelocationEntry(
         disposition="moved",
-        old_repo="coordinator-claude (example-doctrine-repo)",
+        old_repo="coordinator-claude (coordinator-claude)",
         old_path="bin/validate-install-contract.sh",
         new_repo="claude_klabauter",
         new_path="coordinator/bin/validate-install-contract.py",
@@ -201,7 +201,7 @@ def test_find_relocation_narrows_by_old_repo(tmp_path: Path) -> None:
     assert (
         rl.find_relocation(
             "bin/validate-install-contract.sh",
-            old_repo="coordinator-claude (example-doctrine-repo)",
+            old_repo="coordinator-claude (coordinator-claude)",
             ledger_path=ledger_path,
         )
         is None

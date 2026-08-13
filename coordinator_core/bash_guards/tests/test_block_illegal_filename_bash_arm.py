@@ -19,7 +19,7 @@ Negative-spec:
     candidate sources beyond what already existed -- this file targets the
     C3 redirect-extraction regression specifically (plan AC6/AC7/AC9).
 
-Spec backlink: docs/plans/2026-08-07-deny-legs-reachable-and-quoted-redirects-visible.md, C3
+Spec backlink: pln-the-platform-conditioned-deny-9c8e07, C3
 """
 from __future__ import annotations
 

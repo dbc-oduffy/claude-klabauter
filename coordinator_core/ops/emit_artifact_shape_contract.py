@@ -1,20 +1,20 @@
 """
 coordinator_core.ops.emit_artifact_shape_contract — emit a versioned JSON Schema
-contract from the coordinator schema registry (example-doctrine-repo coordinator/schemas/*.yaml
+contract from the coordinator schema registry (coordinator-claude coordinator/schemas/*.yaml
 + *.schema.json).
 
 shell-doc-ok: this changelog quotes real JSON-Schema `$defs`/`$ref`/`$id` pointer
 syntax throughout (the artifact this module emits) — accurate documentation, not
 a shell paste hazard. `>=`/`->` occurrences below are version-bump/rewrite prose.
 
-Port source: example-doctrine-repo coordinator/bin/emit-artifact-shape-contract.js (642 lines).
+Port source: coordinator-claude coordinator/bin/emit-artifact-shape-contract.js (642 lines).
 Spec backlink: archive/specs/2026-06/2026-06-25-example-initiative-tc-4-fleet-machinery-contract-emit.md § Chunk B1
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, BIG_PORT Wave B
                item emit-artifact-shape-contract
 
 PURPOSE
 Emits `artifact-shape-contract/artifact-shape-contract.schema.json` (written under the
-Example-doctrine-repo coordinator/ tree, NOT claude-klabauter) — a stable, versioned JSON Schema contract
+Coordinator-claude coordinator/ tree, NOT claude-klabauter) — a stable, versioned JSON Schema contract
 (draft-2020-12) carrying:
   (a) One JSON Schema per registered schema type (under `$defs`).
   (b) The cross-type liveness mapping as first-class contract data (tc-0 D2 forward
@@ -34,7 +34,7 @@ Schema registry, not Zod TypeScript. Separate artifact, separate version line, n
 shared module.
 
 CONTRACT_VERSION history (condensed — full per-bump rationale lives in the JS oracle's
-own header comment, example-doctrine-repo coordinator/bin/emit-artifact-shape-contract.js:36-49,
+own header comment, coordinator-claude coordinator/bin/emit-artifact-shape-contract.js:36-49,
 preserved there as the historical record; this port carries only the CURRENT pin):
   1.9.0  (2026-06-xx) session-events-summary $def removed (no vendored consumer, additive-safe).
   1.10.0-1.11.0 (2026-07-03) ProvenanceEnvelope sub-shape injected + same-day D9 fix.
@@ -55,12 +55,12 @@ preserved there as the historical record; this port carries only the CURRENT pin
     artifacts the narrowed contract rejects. MAJOR, mirroring the cockpit contract's
     own P3 MAJOR (3.0.0) for the same vocabulary flip. Erratum source:
     cross-repo/archive/2026-07-22-claude-central-em-return-to-doe-actioned.md Ask 2
-    (example-doctrine-repo's 4bd0e4f1 regen shipped the narrowed body still stamped 1.19.0).
+    (coordinator-claude's 4bd0e4f1 regen shipped the narrowed body still stamped 1.19.0).
   2.1.0  (2026-07-27) handoff-archived read-tolerance widening, MINOR: (1) `status`
     enum gains `consumed`, (2) `origin_handoff_id` widened to anyOf[string, null],
     (3) `applies_to` widened to a recursive glob. All three additive/widening — no
-    `$defs` removed, no enum value narrowed. Ratified example-doctrine-repo-side in
-    example-doctrine-repo coordinator/artifact-shape-contract/DECISIONS.md 2.1.0 row; that row
+    `$defs` removed, no enum value narrowed. Ratified coordinator-claude-side in
+    coordinator-claude coordinator/artifact-shape-contract/DECISIONS.md 2.1.0 row; that row
     notes the bundle regen is claude-klabauter-run and lagged the ratification — this bump
     discharges that lag.
   3.0.0  (2026-07-28) MAJOR: schema_to_json_schema's `_isJsonSchema` branch now
@@ -85,7 +85,7 @@ preserved there as the historical record; this port carries only the CURRENT pin
   3.1.0  (2026-08-03) MINOR: derivation gains 'synthesized' — a lawful fourth
     processing stage for an agent-synthesized secondary source (no lawful value
     existed for this today; production artifact dsrc-03 carried 'rolled_up', which
-    its own producer documented as wrong). Governance-ratified example-doctrine-repo-side
+    its own producer documented as wrong). Governance-ratified coordinator-claude-side
     (cockpit-contract/DECISIONS.md D42, twin note artifact-shape-contract/
     DECISIONS.md) as the claude-klabauter-side half of the D31 emitter-ownership split — D42
     ratifies the enum widen, this bump lands the bytes. Additive-only: one enum
@@ -107,11 +107,11 @@ preserved there as the historical record; this port carries only the CURRENT pin
     converts an unresolvable ref into a resolvable intra-bundle one — no `$defs`
     removed, no enum narrowed, no field/required removed. Reported by
     example-retrieval-repo-ue-addon-em (consumer-side containment, per-file demotion to a
-    violation row), relayed and verified by example-doctrine-repo-em; contract-owner ruled `tasks`
-    stays in-contract, no example-doctrine-repo-side schema edit needed (the source `$id` convention at
+    violation row), relayed and verified by coordinator-claude-em; contract-owner ruled `tasks`
+    stays in-contract, no coordinator-claude-side schema edit needed (the source `$id` convention at
     `coordinator/schemas/plan.schema.json:120` is correct as authored — only the
     bundling pass had the gap). See
-    cross-repo/inbox/2026-08-03-example-doctrine-repo-em-artifact-contract-external-ref-survives-bundling.md.
+    cross-repo/inbox/2026-08-03-coordinator-claude-em-artifact-contract-external-ref-survives-bundling.md.
   4.0.0  (2026-08-04) MAJOR: `$defs.review.properties.reviewer` enum narrows from persona
     names to agent-registry role slugs — `the Staff Engineer`/`sid`/`the Data Science Reviewer`/`the Front-End Reviewer`/`the UX Reviewer`/`the Director of Engineering` are
     dropped; `staff-eng`/`staff-game-dev`/`staff-data-sci`/`senior-front-end`/`staff-ux`/
@@ -119,16 +119,16 @@ preserved there as the historical record; this port carries only the CURRENT pin
     A persona name is meaningless as a wire value to an OSS consumer who renamed their
     agents or runs none at all; personas survive as human-facing display aliases only.
     Six enum members REMOVED — textbook non-additive, so MAJOR per the bump rule below,
-    and consumers must re-vendor. Source narrow: example-doctrine-repo `coordinator/schemas/review.schema.json`
+    and consumers must re-vendor. Source narrow: coordinator-claude `coordinator/schemas/review.schema.json`
     1.0.0->2.0.0. `schema_count` unchanged at 61 — no $defs added or removed.
-    Landed by example-doctrine-repo-em under per-session PM assent (no standing cross-repo grant);
+    Landed by coordinator-claude-em under per-session PM assent (no standing cross-repo grant);
     announced before the edit in
-    cross-repo/inbox/2026-08-04-example-doctrine-repo-em-contract-version-bump-owed-4-0-0-and-im-landing-it.md.
-    Recorded honestly: the example-doctrine-repo side first regenerated this bundle claiming NO bump was owed,
+    cross-repo/inbox/2026-08-04-coordinator-claude-em-contract-version-bump-owed-4-0-0-and-im-landing-it.md.
+    Recorded honestly: the coordinator-claude side first regenerated this bundle claiming NO bump was owed,
     citing the same-window-catch-up convention (the 2.1.0/2026-07-28 and 3.0.0/2026-07-31
     no-bump rows). That was wrong — those rows are catch-up regens for a narrow already
     major-bumped at source in an earlier commit, whereas this is the narrow's FIRST landing,
-    structurally the 2.0.0 case. Caught by example-doctrine-repo-side review before the close, not by a consumer.
+    structurally the 2.0.0 case. Caught by coordinator-claude-side review before the close, not by a consumer.
   5.0.0  (2026-08-05) hnd- id pattern narrow: `handoff_id`, `predecessor_id` and
     `origin_handoff_id` now carry `^hnd-(?!placeholder-replace-with)[a-z0-9-]+-[0-9a-f]{6}$`,
     excluding the scaffolder's placeholder slug. Pattern-narrow is non-additive by the same
@@ -139,7 +139,7 @@ preserved there as the historical record; this port carries only the CURRENT pin
     naming one RESOLVED and silently cleared instead of dangling. Mint-site guard
     (claude-klabauter f67a1d859530) landed FIRST and the fleet-wide corpus sweep SECOND, so this
     narrow strands nothing — verified across 7 coordinator repos, 1588 id-field values, zero
-    stranded. Mirrors handoff.schema.json's own 4.0.0 -> 5.0.0 (example-doctrine-repo 0391ab20c), which is the
+    stranded. Mirrors handoff.schema.json's own 4.0.0 -> 5.0.0 (coordinator-claude 0391ab20c), which is the
     source this contract regenerates from.
   6.0.0  (2026-08-05) dlv- id pattern narrow: `deliverable_id`'s string arm gains
     `^dlv-(?!placeholder-replace-with)[0-9a-zA-Z][0-9a-zA-Z.-]*$` (null arm untouched — null is
@@ -150,29 +150,29 @@ preserved there as the historical record; this port carries only the CURRENT pin
     Deliberately NOT a mirror of 5.0.0's character class. `[a-z0-9-]` strands 24 live ids
     fleet-wide, all legitimate `dlv-<stub_id>` mints, because mint_deliverable_id's
     mint-from-stub path passes stub_id through verbatim with no case-folding — 23 uppercase in
-    example-doctrine-repo (`computed-skills-B*`, `agent-fleet-G*` families) and 1 dot-bearing in
+    coordinator-claude (`computed-skills-B*`, `agent-fleet-G*` families) and 1 dot-bearing in
     example-retrieval-repo-ue-addon. Hence case-permissive, `.`-admitting, and NOT anchored on
     `-[0-9a-f]{6}` (the stub-origin shape carries no hex suffix; the corpus holds
     trailing-dash-before-hex slug-truncation artifacts). Verified twice independently: claude-klabauter
-    swept 7 repos / 2200 non-null values, zero rejections; example-doctrine-repo re-derived on their own corpus,
+    swept 7 repos / 2200 non-null values, zero rejections; coordinator-claude re-derived on their own corpus,
     675 values, zero rejections, and confirmed the 23-id stranding count separately.
     SEQUENCING — THIS CONSTANT MOVES BEFORE THE BODY IT DESCRIBES, DELIBERATELY. The schema
-    edit is example-doctrine-repo's: `coordinator/schemas/handoff.schema.json` is authored there and VENDORED
-    here (`check_schema_drift` is a byte-for-byte tamper-check against example-doctrine-repo HEAD), so at this
+    edit is coordinator-claude's: `coordinator/schemas/handoff.schema.json` is authored there and VENDORED
+    here (`check_schema_drift` is a byte-for-byte tamper-check against coordinator-claude HEAD), so at this
     commit claude-klabauter's vendored copy does NOT yet carry the pattern and this emitter's output body
     is unchanged. That is not a violation of the bump rule below, which forbids two different
     bodies sharing one stamp — not one body briefly spanning two stamps. It is a hard
-    precondition: example-doctrine-repo's `coordinator/tests/test_artifact_shape_contract_freshness.py`
+    precondition: coordinator-claude's `coordinator/tests/test_artifact_shape_contract_freshness.py`
     regenerates the bundle in-memory through THIS module against THEIR live schemas and diffs
     it against their committed bundle, so with the constant still at 5.0.0 their only options
     were to commit a red freshness gate or to commit a changed body stamped 5.0.0 — handing
     example-retrieval-repo/cockpit a narrowed domain under an unchanged version. Both doors shut until
-    this moves. No consumer is exposed by the ordering: the stamped artifact lives in example-doctrine-repo's
+    this moves. No consumer is exposed by the ordering: the stamped artifact lives in coordinator-claude's
     tree, so until they regenerate, no committed bundle anywhere carries 6.0.0. Their landing
     commit (pattern + regen + pin refresh + handoff.schema.json 5.0.0 -> 6.0.0 +
     plan.schema.json 1.6.0 -> 2.0.0) closes the window. Cross-repo edits were declined in both
     directions per DR-127 — no standing commit grant exists either way.
-  6.1.0  (2026-08-13) `peer-set-entry` enters the bundle: example-doctrine-repo registered
+  6.1.0  (2026-08-13) `peer-set-entry` enters the bundle: coordinator-claude registered
     `coordinator/schemas/peer-set-entry.schema.json` at dead2ed6b (per-repo peer-set entry,
     code-comparison C2) and this emitter has never emitted it. `schema_count` 62 -> 63,
     `$defs` +1, zero removed. MINOR per the bump rule below — the delta is entirely additive.
@@ -182,14 +182,14 @@ preserved there as the historical record; this port carries only the CURRENT pin
     `sizing-object.scout_evidence.items.type: string` becomes `items.anyOf: [string, object]`,
     a widen.
     SEQUENCING — same shape as 6.0.0 above, one severity down: the constant moves before the
-    body it describes. Example-doctrine-repo's `test_artifact_shape_contract_freshness.py` regenerates in-memory
+    body it describes. Coordinator-claude's `test_artifact_shape_contract_freshness.py` regenerates in-memory
     through THIS module against THEIR live schemas, so with the constant at 6.0.0 their only
     doors were a red freshness gate or a changed body stamped 6.0.0 — two bodies under one
     stamp, which the bump rule forbids. No consumer is exposed in the window: the stamped
-    artifact lives in example-doctrine-repo's tree, so until they regenerate no committed bundle anywhere carries
+    artifact lives in coordinator-claude's tree, so until they regenerate no committed bundle anywhere carries
     6.1.0. They regenerate, commit the bundle, and own the DECISIONS.md row on their side; claude-klabauter
     owns only this constant. Cross-repo edits stay declined in both directions per DR-127.
-    Requested in cross-repo/inbox/2026-08-13-example-doctrine-repo-em-contract-not-pinned-bump-6-1-0-owed-first.md.
+    Requested in cross-repo/inbox/2026-08-13-coordinator-claude-em-contract-not-pinned-bump-6-1-0-owed-first.md.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -226,7 +226,7 @@ Exit codes (parity-critical):
       EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT env var, or the schemas directory is
       missing). The JS oracle has no equivalent state (it always resolves its own
       __dirname-relative COORDINATOR constant) — this rc is new surface introduced by
-      the cross-repo split (this module runs claude-klabauter-side, schemas live example-doctrine-repo-side) and is
+      the cross-repo split (this module runs claude-klabauter-side, schemas live coordinator-claude-side) and is
       deliberately a code the business logic never returns (porter-brief addendum § 3b).
 """
 from __future__ import annotations
@@ -252,8 +252,8 @@ from coordinator_core.session.declared_writes import declare_write
 
 CONTRACT_VERSION = "6.1.0"
 
-# Env var read by main() to locate the example-doctrine-repo coordinator/ root (schemas/ input,
-# artifact-shape-contract/ default output). Set by the example-doctrine-repo-side polyglot trampoline,
+# Env var read by main() to locate the coordinator-claude coordinator/ root (schemas/ input,
+# artifact-shape-contract/ default output). Set by the coordinator-claude-side polyglot trampoline,
 # which computes this from its own __file__ location (bin/../ = coordinator/) before
 # calling main(argv) — mirrors how the JS oracle derives COORDINATOR from __dirname.
 COORDINATOR_ROOT_ENV = "EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT"
@@ -471,7 +471,7 @@ def _derive_axis_mapping(record_type: str, field: str, values: List[str]) -> dic
 # Explicit display-order tuples for the handoff axes (status, deployment_state).
 # HANDOFF_TERMINAL_STATUS / HANDOFF_TERMINAL_DEPLOYMENT (lifecycle_constants,
 # the SSOT) are unordered frozensets, but this contract is a vendored,
-# byte-identity-checked artifact (example-doctrine-repo's test_artifact_shape_contract_freshness.py
+# byte-identity-checked artifact (coordinator-claude's test_artifact_shape_contract_freshness.py
 # regenerates and diffs against a committed bundle) — a `sorted()` derivation
 # would silently reorder consumer-facing bytes on any future Python/hash-seed
 # change with no version bump. Order is therefore hand-authored here once, and
@@ -572,7 +572,7 @@ LIVENESS_MAPPING: dict = {
             "axis": "status",
             "note": "deployment_state is IGNORED for plan (plans have no deployment_state).",
             # Derived like its single-axis siblings below (2026-07-27, superseding the
-            # prior literal-dict holdout): example-doctrine-repo coordinator/tests/
+            # prior literal-dict holdout): coordinator-claude coordinator/tests/
             # test_plan_status_enum_parity.py now cross-checks this mapping's KEYS
             # against plan.schema.json's status enum by importing this module and
             # reading LIVENESS_MAPPING directly (value-based), rather than
@@ -820,7 +820,7 @@ SUB_SHAPES: dict = {
 # `#/$defs/<name>`, whenever `<name>` is a key in the assembled `defs`. General over
 # every `$defs` entry (not plan-tasks-specific) so a second such ref added later is
 # caught by the same pass rather than needing its own bespoke fix. Cross-repo memo:
-# cross-repo/inbox/2026-08-03-example-doctrine-repo-em-artifact-contract-external-ref-survives-bundling.md
+# cross-repo/inbox/2026-08-03-coordinator-claude-em-artifact-contract-external-ref-survives-bundling.md
 # shell-doc-ok: quotes real JSON-Schema `$defs`/`$ref` pointer syntax, not shell.
 _CROSS_SCHEMA_REF_PREFIX = "https://coordinator.local/schemas/"
 _CROSS_SCHEMA_REF_SUFFIX = ".schema.json"
@@ -1041,9 +1041,9 @@ _USAGE = (
     "usage: emit-artifact-shape-contract\n"
     "\n"
     "Emits artifact-shape-contract/artifact-shape-contract.schema.json into the\n"
-    "example-doctrine-repo coordinator root. Takes no arguments.\n"
+    "coordinator-claude coordinator root. Takes no arguments.\n"
     "\n"
-    "NOTE — this writes into a SIBLING repo's working tree (example-doctrine-repo owns\n"
+    "NOTE — this writes into a SIBLING repo's working tree (coordinator-claude owns\n"
     "artifact-shape-contract/; claude-klabauter owns the sole regeneration path). The write is\n"
     "deterministic and uncommitted; claim it with the peer rather than leaving it for\n"
     "them to find in a diff.\n"
@@ -1054,12 +1054,12 @@ _USAGE = (
 
 
 def main(argv: List[str]) -> int:
-    """CLI entry: resolve the example-doctrine-repo coordinator root from the environment and emit.
+    """CLI entry: resolve the coordinator-claude coordinator root from the environment and emit.
 
     This op takes NO arguments, and says so rather than emitting anyway. It previously
     accepted argv and ignored it wholesale "for signature parity" — which made
     `--help` a silent peer-tree write: the operator reaching for an interface got a
-    regenerated bundle in example-doctrine-repo's working tree instead of usage text. Any argv
+    regenerated bundle in coordinator-claude's working tree instead of usage text. Any argv
     that is not a help flag is a config failure (exit 2, the module's dedicated
     transport/config code), never a no-op that proceeds to write.
 

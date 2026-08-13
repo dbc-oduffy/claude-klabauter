@@ -12,7 +12,7 @@ False` reports an unparseable file as clean — this gate's core dependency
 (`sites_in_source`) instead raises `SpawnParseError`, and this module
 propagates that as a loud test failure rather than swallowing it.
 
-Spec backlink: docs/plans/2026-08-06-shell-spawn-regrowth-gate.md, C3.
+Spec backlink: pln-shell-spawn-regrowth-gate-cens-097e21, C3.
 See also tasks/shell-spawn-regrowth-gate/PINNED-API.md.
 """
 

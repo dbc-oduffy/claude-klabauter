@@ -8,7 +8,7 @@ chain, coordinator/lib/coordinator-claude-klabauter-root.sh):
   2. `machine-local get repos.claude_klabauter` CLI.
   3. Hard failure (RuntimeError) with remediation text.
 
-Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C1 / AC1
+Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C1 / AC1
 """
 
 from __future__ import annotations

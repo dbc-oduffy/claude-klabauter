@@ -5,7 +5,7 @@ docs/plans/2026-08-04-ownership-inherited-at-dispatch.md.
 
 The plan's central design (a dispatch-time declared-provenance set, C1/C2/C3/C3b)
 was REFUSED by cross-repo ruling SC-DR-021
-(example-doctrine-repo `coordinator/docs/wiki/scoped-safety-commits.md` @ `bedc7e0e2927`, token
+(coordinator-claude `coordinator/docs/wiki/scoped-safety-commits.md` @ `bedc7e0e2927`, token
 `A-CLAIM-IS-WHAT-YOU-WROTE-NOT-WHAT-YOU-PLANNED`). This chunk (C4) is NOT dead —
 it is the standing tripwire that stops the rejected write-time-attribution
 design from re-entering silently, and is now MORE load-bearing than before the
@@ -26,7 +26,7 @@ Three tripwires:
     below (grepped across `coordinator_core/`, excluding tests/docstrings/the
     definition itself) and asserted exactly — a new caller fails loudly and
     names itself, rather than silently passing a "count didn't change" check.
-    Pinned against example-doctrine-repo's `scoped-safety-commits.md` SC-DR-001 negative-spec:
+    Pinned against coordinator-claude's `scoped-safety-commits.md` SC-DR-001 negative-spec:
     "The architecture never attributes Bash writes at write time and does not
     need to."
 
@@ -44,7 +44,7 @@ Negative-spec: this module asserts nothing about the REFUSED design (AC1-3,
 AC7, AC10) — those rows are dead. It asserts only that the two surviving
 negative pins hold.
 
-Spec backlink: docs/plans/2026-08-04-ownership-inherited-at-dispatch.md § C4 / AC6 / AC11.
+Spec backlink: pln-ownership-inherited-at-dispatc-2a211f § C4 / AC6 / AC11.
 """
 
 from __future__ import annotations
@@ -411,7 +411,7 @@ class TestAC5AllowOrphansDoesNotWiden:
     syntax, both of which survive a comment reflow and neither of which
     survives a behavioural widening.
 
-    Spec backlink: docs/plans/2026-08-04-ownership-inherited-at-dispatch.md
+    Spec backlink: pln-ownership-inherited-at-dispatc-2a211f
     § AC5.
     """
 
@@ -553,7 +553,7 @@ _CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.p
 #: invocations outside `claim_index.py` itself and outside any tests/ path
 #: are therefore `_warn_recent_edits` and `claims._clear_path_claim_if_dead`
 #: (the dead-holder release path for the PATH-TOUCH claim plane, landed per
-#: cross-repo/archive/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+#: cross-repo/archive/2026-08-11-coordinator-claude-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md) -- the decision record this pin's own
 #: docstring asks for before widening.
 _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
@@ -612,7 +612,7 @@ class TestClaimIndexLookupCallSitesDoNotWiden:
     appearing anywhere in `coordinator_core/` (a second ownership-gate-shaped
     check, reached from a different sink) fails loudly and names itself.
 
-    Spec backlink: docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md
+    Spec backlink: pln-the-claim-index-the-commit-gat-5d33ee
     § C7.
     """
 

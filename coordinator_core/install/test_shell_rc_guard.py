@@ -6,7 +6,7 @@ check-only (no mutation), double-invocation idempotency (AC7), the
 native-Windows no-op branch, and the `install.write_shell_rc_guard_block`
 JSON-RPC handler's params/response contract.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 """
 from __future__ import annotations
 

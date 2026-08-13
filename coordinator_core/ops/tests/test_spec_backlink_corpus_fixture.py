@@ -3,7 +3,7 @@ coordinator_core.ops.tests.test_spec_backlink_corpus_fixture
 
 Certification self-test for the `spec_backlink_corpus` fixture
 (coordinator_core/ops/tests/conftest.py), authored for the C1/C2/C3 chunk
-trio of docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md.
+trio of pln-spec-backlinks-cite-a-stable-d-451b3e.
 
 Asserts the fixture actually builds the corpus shape those three chunks'
 stub bodies depend on, so an unverified fixture is never propagated to three

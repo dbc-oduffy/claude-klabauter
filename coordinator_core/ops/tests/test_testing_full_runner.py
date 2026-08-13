@@ -12,7 +12,7 @@ failing tree, and that the scope-"none" `target_root` param is resolved AND
 path-guarded (a literal `..` traversal segment is rejected).
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C5 (DEC-9)
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C5 (DEC-9)
 
 Negative-spec:
     - Does NOT write any dummy `test_*.py` fixture file anywhere under

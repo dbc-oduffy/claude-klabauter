@@ -4,7 +4,7 @@ coordinator_core.orient_assemble.tests.test_desync_repair_surface — C3:
 desync repair (`exit_code != 0`) as a judgment point, while a clean
 dry-run entry (`exit_code: 0, applied: False`) stays silent.
 
-Spec backlink: docs/plans/2026-08-13-unwritable-handoff-records-fail-loudly.md, chunk C3
+Spec backlink: pln-unwritable-handoff-records-fai-66a69f, chunk C3
 
 Negative-spec:
     - A `reconciled[]` entry with `exit_code: 0` (dry-run-clean OR applied)

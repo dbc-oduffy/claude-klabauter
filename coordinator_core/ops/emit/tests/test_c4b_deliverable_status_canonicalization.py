@@ -12,7 +12,7 @@ map is built directly in each test (via a `state/deliverable-equivalence.yaml` w
 under `tmp_path`, or passed straight as a dict to `_compute_map`) — never read from the
 repo's real artifact, which is C3b's concern and may not exist while this chunk runs.
 
-Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (AC6, AC6b)
+Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC6b)
 """
 
 from __future__ import annotations

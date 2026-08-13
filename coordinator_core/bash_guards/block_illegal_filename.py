@@ -1,6 +1,6 @@
 """coordinator_core.bash_guards.block_illegal_filename — advisory guard.
 
-Python engine-ification of the BEST-EFFORT Bash arm ONLY of example-doctrine-repo's
+Python engine-ification of the BEST-EFFORT Bash arm ONLY of coordinator-claude's
 ``coordinator/hooks/scripts/block-illegal-filename.sh`` PreToolUse hook, per
 the W3a/W3b naked-Python hook migration recipe
 (scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md
@@ -98,8 +98,8 @@ call inside the check function body").
 
 Spec backlink: docs/plans/2026-06-30-cross-platform-file-naming-helper.md § D1
 Tripwire entry: docs/wiki/coordinator-tripwires.md § BLOCK-ILLEGAL-FILENAME
-Port of: block-illegal-filename.sh (Bash arm; example-doctrine-repo e91827a7, 2026-07-20)
-         ; coordinator-safe-name.sh (csn_check) (example-doctrine-repo 721a71f4, 2026-07-21)
+Port of: block-illegal-filename.sh (Bash arm; coordinator-claude e91827a7, 2026-07-20)
+         ; coordinator-safe-name.sh (csn_check) (coordinator-claude 721a71f4, 2026-07-21)
 """
 
 from __future__ import annotations

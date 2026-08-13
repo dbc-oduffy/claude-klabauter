@@ -1,8 +1,8 @@
 """
 coordinator_core.write_guards.block_subagent_archive_write — Python
-engine-ification of example-doctrine-repo's retired
+engine-ification of coordinator-claude's retired
 ``coordinator/hooks/scripts/block-subagent-archive-write.sh`` PreToolUse
-hook (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``).
+hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
 
 Purpose: unconditional backstop blocking subagent writes anywhere under
 ``archive/`` outside two narrow, dated carve-outs. Per-dispatch prose
@@ -41,11 +41,11 @@ rule. What this guard blocks is unsanctioned wrap-up self-logging into
 gets a sanctioned door (allow-condition (5)), never an override.
 
 Spec backlink: archive/specs/2026-05-27-cqcs-cluster1-delegate-constraint-adherence.md § E5
-Ported from the retired example-doctrine-repo bash guard ``block-subagent-archive-write.sh``
-  (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``).
+Ported from the retired coordinator-claude bash guard ``block-subagent-archive-write.sh``
+  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
 
 Widened 2026-08-03 to close a naming-dependent hole (see
-``cross-repo/inbox/2026-08-03-example-doctrine-repo-em-archive-write-guard-pincer.md``):
+``cross-repo/inbox/2026-08-03-coordinator-claude-em-archive-write-guard-pincer.md``):
 the guard now gates on RAW ``agent_id`` presence (any non-empty value),
 the exact complement of
 ``block_em_hand_edit_pending_review_integration.py``'s own EM/subagent

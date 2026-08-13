@@ -11,7 +11,7 @@ Fixtures reuse the same `_make_repo`/`_archive_handoff` recipe as
 `chain_reached_terminal_close` classifies each fixture chain identically here
 and there.
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § W2
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § W2
 
 Negative-spec:
   - Does NOT exercise `chain_ancestry_waivers.py`'s own predicate/mint logic

@@ -271,7 +271,7 @@ X_MISSING_SIGNALS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # STEP_2_65B bulk-eligibility classifier (C2)
 # ---------------------------------------------------------------------------
-# Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md
+# Spec backlink: pln-give-the-memo-disposition-flip-e580c2
 #   § C2 / AC4a — PM ruling (2026-07-26) on the bulk no-action-needed fast path.
 
 

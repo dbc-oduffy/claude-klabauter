@@ -46,7 +46,7 @@ Call sites become::
     run([*resolve_launchable(script), *args])
 
 Resolution order (Windows only -- see the POSIX note below):
-    1. ``<script>.cmd`` twin, if present. ``example-doctrine-repo/coordinator/bin/`` deliberately
+    1. ``<script>.cmd`` twin, if present. ``coordinator-claude/coordinator/bin/`` deliberately
        ships ``.cmd`` twins alongside its shebang scripts (see
        ``coordinator_core.install.substrate`` Step C10a-2) precisely because
        CreateProcess cannot exec a shebang. Prefer the twin when it exists: it is the
@@ -127,7 +127,7 @@ def _shebang_launcher(script_path: str) -> List[str]:
     docstring) -- on POSIX this helper is never consulted, since the OS
     already does the honoring, more completely than we ever could. On
     Windows it is checked BEFORE the extension-keyed
-    ``_INTERPRETER_BY_SUFFIX`` map: the example-doctrine-repo bash-clean-slate residual
+    ``_INTERPRETER_BY_SUFFIX`` map: the coordinator-claude bash-clean-slate residual
     migration (``docs/plans/2026-07-16-bash-clean-slate-residual-migration.md``)
     ported several ``bin/*.sh`` oracles' CONTENT to Python before their
     filename caught up, leaving transitional ``.sh``-named files whose body
@@ -306,7 +306,7 @@ def resolve_by_shebang(script_path: str) -> List[str]:
     ``coordinator_core.ops.install_health_run``) that iterate a directory of
     ``*.sh``-suffixed scripts whose actual interpreter may not be bash: the
     ``.sh`` suffix is sometimes kept purely so a directory glob still finds
-    the drop-in (see ``example-doctrine-repo/coordinator/bin/install-health/
+    the drop-in (see ``coordinator-claude/coordinator/bin/install-health/
     seed-skill-overrides.sh``, which is pure Python under a ``.sh`` name).
     Running such a script as ``bash <script>`` dies immediately on its first
     non-bash line; this function reads the shebang instead of assuming it.

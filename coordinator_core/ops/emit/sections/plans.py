@@ -52,9 +52,9 @@ the seam reuses ``coordinator_core.ops.records_query._apply_plan_filename_filter
 port that JSON-RPC ``records.query`` uses, so this section never re-derives that filter
 locally. See ``_query_plan_records`` for the root/cwd and fail-open parity notes.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 8.6,
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.6,
   PlanSummary. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P10
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P10
   (upstream: docs/plans/2026-06-23-cockpit-contract-ext-wave2-emit-and-queue-migration.md § C4b).
 """
 
@@ -342,7 +342,7 @@ def _apply_superseded_by(records: list[dict]) -> None:
     (``additionalProperties: false``); a leaked staging key would reject the whole envelope
     at the consumer's Zod parse. No staging key is ever visible in ``collect()``'s return value.
 
-    Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P10
+    Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P10
     """
     # Pop the staging key from every record first, building the forward index as we go.
     forward: dict[str, list[str]] = {}

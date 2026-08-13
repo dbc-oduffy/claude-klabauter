@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.example_retrieval_repo_detect — SessionStart banner: generic
-Example-retrieval-repo freshness (Port of: example-retrieval-repo-detect.sh, example-doctrine-repo d39ab164,
+Example-retrieval-repo freshness (Port of: example-retrieval-repo-detect.sh, coordinator-claude d39ab164,
 2026-07-16 / example-retrieval-repo-detect.ps1, W4b bash-to-python-migration cohort).
 
 Emits one of four banner shapes as a single string (empty string == silent
@@ -26,13 +26,13 @@ Kill-switch: env COORDINATOR_HOOK_EXAMPLE_RETRIEVAL_REPO_DETECT_DISABLED=1 disab
 Example-Game-Repo dedupe: `.example-game-repo/` or `Saved/ExampleGameRepoProjectRag` found walking up
 from cwd => silent exit; the example-game-repo-specific hook owns that banner.
 
-Called IN-PROCESS by the thin example-doctrine-repo SessionStart stub
+Called IN-PROCESS by the thin coordinator-claude SessionStart stub
 (coordinator/hooks/scripts/example-retrieval-repo-detect.py), mirroring
 preuse-write-dispatch.py's direct-import shape — no IPC round trip, no
 register_op(); this is a pure, side-effect-free banner computation, not a
 mutating op.
 
-Spec backlink: X:/example-doctrine-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.8
+Spec backlink: X:/coordinator-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.8
 """
 
 from __future__ import annotations

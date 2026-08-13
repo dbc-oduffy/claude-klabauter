@@ -2,7 +2,7 @@
 """coordinator-session-loe.py — Read helper: compute LoE (Level of Effort)
 metrics for a coordinator session and emit a t-shirt size.
 
-Port of: coordinator-session-loe.sh (example-doctrine-repo b644d5a9, 2026-07-22).
+Port of: coordinator-session-loe.sh (coordinator-claude b644d5a9, 2026-07-22).
 Reads three signals for a given session (total agent
 dispatches, Opus-model dispatches, EM token consumption) and applies the
 threshold table below (mirrors coordinator/config/loe-thresholds.yaml) to

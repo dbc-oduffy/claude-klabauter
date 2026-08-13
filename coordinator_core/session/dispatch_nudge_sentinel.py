@@ -4,7 +4,7 @@ the ``.dispatch-nudge-ok`` suppression sentinel, keyed by session id.
 
 This sentinel has exactly ONE home: the platform temp directory, resolved via
 ``tempfile.gettempdir()``. Nothing in either repo (claude-klabauter or
-Example-doctrine-repo) writes any other home — verified by census, not assumed. The
+Coordinator-claude) writes any other home — verified by census, not assumed. The
 reader ``nudge_em_code_dispatch.py`` historically carried a second, git-tree
 candidate location (``<repo_root>/coordinator-sessions/<sid>/.dispatch-nudge-ok``)
 that nothing ever wrote; C2 deletes it as part of this plan.
@@ -36,7 +36,7 @@ sentinel had two writers and two homes, so it correctly kept two reads.
 Do not read this module as evidence that dual-home reads are always wrong —
 they are not; DR-222 is the counterexample.
 
-Spec backlink: docs/plans/2026-07-31-dual-home-sentinel-trap.md § C1.
+Spec backlink: pln-dual-home-sentinel-trap-one-re-de4676 § C1.
 
 Negative-spec:
     - Do NOT hardcode ``/tmp`` or reach for ``tempfile.gettempdir()``

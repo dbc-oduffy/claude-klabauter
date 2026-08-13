@@ -3,7 +3,7 @@ coordinator_core.session.shape — the per-session ``session-shape.json``
 observable: pickup / memo-action / plan-claim write-moment facts, plus
 on-demand magnitude derivation.
 
-Port of: session-shape.sh (example-doctrine-repo e34f2484, 2026-07-22).
+Port of: session-shape.sh (coordinator-claude e34f2484, 2026-07-22).
 
 Writes/reads ``.git/coordinator-sessions/<sid>/session-shape.json`` — the
 per-session observable that ceremonies read once instead of grep/inferring
@@ -217,7 +217,7 @@ def session_shape_set(
     Negative-spec: do NOT gate the stale-reap on session-liveness; a pre-init
     session would false-reap a live mid-merge lock.
 
-    Spec backlink: docs/plans/2026-07-02-ceremony-as-pipeline-v1-session-state-co.md § C1 (AC2)
+    Spec backlink: pln-ceremony-as-pipeline-v1-session-state-co-596280 § C1 (AC2)
     """
     if not sid:
         raise ValueError("session_id required")
@@ -355,7 +355,7 @@ def session_shape_read(sid: str, cwd: Optional[str] = None) -> str:
     not a parsed dict; the file body is returned verbatim (including its
     trailing newline), while the skeleton is emitted as compact JSON.
 
-    Spec backlink: docs/plans/2026-07-02-ceremony-as-pipeline-v1-session-state-co.md § C1
+    Spec backlink: pln-ceremony-as-pipeline-v1-session-state-co-596280 § C1
     """
     if not sid:
         raise ValueError("session_id required")
@@ -391,7 +391,7 @@ def session_shape_read(sid: str, cwd: Optional[str] = None) -> str:
 #: is rejected, because a typo here (e.g. ``"unresolvd"``) would otherwise
 #: be written silently and render as an ordinary open-vocabulary command
 #: name downstream, defeating the three-state distinguishability the whole
-#: design rests on. This is NOT a re-enumeration of example-doctrine-repo's open command
+#: design rests on. This is NOT a re-enumeration of coordinator-claude's open command
 #: vocabulary -- an unrelated real command name never matches closely
 #: enough to trip the guard.
 _TYPED_COMMAND_SENTINELS = ("other-command", "unresolved")
@@ -435,7 +435,7 @@ def producer_set(
     records in this design and they are deliberately different shapes:
 
       - CAPTURE-side (this function, ``session-shape.json``):
-        ``typed_command`` + ``captured_at``. Example-doctrine-repo's landed
+        ``typed_command`` + ``captured_at``. Coordinator-claude's landed
         ``session-shape.schema.json`` (x-schema-version 1.1.0) declares this
         object ``additionalProperties: false`` with both keys REQUIRED, so an
         extra ``op_identity`` key here is a hard validation failure on their
@@ -464,7 +464,7 @@ def producer_set(
 
     Negative-spec: do NOT validate ``typed_command`` against the coordinator
     command vocabulary here. That vocabulary is declared single-point in
-    example-doctrine-repo (their AC-6, with its own parity test); re-enumerating it on
+    coordinator-claude (their AC-6, with its own parity test); re-enumerating it on
     this side would create a second source of truth that drifts silently.
     Any non-empty ``str`` is accepted by design -- the closed members
     (``"other-command"`` / ``"unresolved"``) are the contract this side
@@ -480,7 +480,7 @@ def producer_set(
     indistinguishable "ordinary command name" on disk.
 
     Spec backlink: state/sizings/2026-08-12-producer-axis-claude-klabauter-engine-half.yaml
-    Spec backlink (cross-repo contract): example-doctrine-repo
+    Spec backlink (cross-repo contract): coordinator-claude
         docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md D6
     """
     if typed_command is not None and not isinstance(typed_command, str):
@@ -528,7 +528,7 @@ def producer_read(sid: str, cwd: Optional[str] = None) -> Optional[dict]:
         loudly instead, so the two are never confused by a caller that only
         checks for ``None``.
 
-    Spec backlink: docs/plans/2026-08-05-session-shape-attribution-structural-gate.md
+    Spec backlink: pln-session-shape-attribution-key--05dd14
     """
     if not sid:
         raise ValueError("session_id required")
@@ -593,7 +593,7 @@ def session_shape_magnitude(sid: str, cwd: Optional[str] = None) -> str:
       Count DISTINCT lines in ``<sdir>/touched.txt`` (the bash
       ``sort -u | wc -l`` dedup). Guard: absent ``touched.txt`` -> 0.
 
-    Spec backlink: docs/plans/2026-07-02-ceremony-as-pipeline-v1-session-state-co.md § C5
+    Spec backlink: pln-ceremony-as-pipeline-v1-session-state-co-596280 § C5
     """
     if not sid:
         raise ValueError("session_id required")

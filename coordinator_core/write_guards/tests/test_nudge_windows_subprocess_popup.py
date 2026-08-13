@@ -1,7 +1,7 @@
 """Behavioral tests for coordinator_core.write_guards.nudge_windows_subprocess_popup
 -- the console-popup authoring advisory, post-DR-077.
 
-Covers DR-077 (example-doctrine-repo docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md),
+Covers DR-077 (coordinator-claude docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md),
 routed via cross-repo memo
 cross-repo/archive/2026-07-21-claude-central-em-popup-guard-fragment-scoped-false-denials-dr077.md:
 

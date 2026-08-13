@@ -20,7 +20,7 @@ This is deliberately additive: it does not restructure or rename the
 hyphenated `claude-home/` directory, and it does not turn that directory
 into a real Python package. It is a sibling file, not a member of it.
 
-Spec backlink: docs/plans/2026-08-07-home-resolution-gate-family-reference-rule.md § C6
+Spec backlink: pln-home-resolution-gate-family-ma-e5c146 § C6
 """
 from __future__ import annotations
 

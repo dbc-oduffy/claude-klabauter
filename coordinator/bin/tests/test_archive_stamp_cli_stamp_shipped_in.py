@@ -19,7 +19,7 @@ Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `archive-stamp-cli` is an extensionless polyglot entrypoint, not a `.py`
 module — same load idiom as the sibling ship-handoff test.
 
-Spec backlink: DR-096 (example-doctrine-repo, 2026-07-26, "kind must be REQUIRED at the
+Spec backlink: DR-096 (coordinator-claude, 2026-07-26, "kind must be REQUIRED at the
 seam, not defaulted silently"), `coordinator_core/archive_stamp.py`'s
 `stamp_shipped_in` docstring (kind cross-validation + default-shaped-caller
 guidance), `coordinator_core/ops/handoff_stamp.py`'s `_SHIPPED_IN_KIND_ENUM`.

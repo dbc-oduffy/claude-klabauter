@@ -4,7 +4,7 @@ handoff triage query (stale-executing-plan advisory, ready-to-fire listing,
 awaiting-gate listing) plus a fourth source, the tiered plan-orphan census
 (`_read_orphaned_plans`).
 
-Purpose: import example-doctrine-repo's `workday-start-handoff-triage.py` CLI's
+Purpose: import coordinator-claude's `workday-start-handoff-triage.py` CLI's
 read-only subcommands (`_cmd_stale_plans`, `_cmd_ready`, `_cmd_awaiting_gate`)
 AS-IS — no reimplementation of their query/format logic — and translate their
 captured stdout into the shared decision-object shape, per
@@ -67,9 +67,97 @@ from coordinator_core.orient_assemble.reader_result import (
 #: this bucket is NOT spec'd as "loud, one line per plan" the way P1
 #: `authorized_orphan` is (it's a diagnostic tally, not an actionable
 #: tier), and it grows with disk contents (11 entries on claude-klabauter, 28 on
-#: example-doctrine-repo at time of writing) — bound it the way `cap_judgment_points`
+#: coordinator-claude at time of writing) — bound it the way `cap_judgment_points`
 #: bounds other unbounded per-item lists (Review: code-reviewer — Finding 3).
 _UNRECOGNIZED_STATUS_LINE_CAP = 10
+
+#: Cap on rendered lines for the `ready` / `awaiting-gate` listings. Neither
+#: subcommand is bounded by the source CLI — each is a query over ALL
+#: matching handoffs — and both grow with disk contents; on this branch
+#: `ready` alone rendered 109 lines / ~19.2KB, the single largest
+#: contributor to `brief('session')`'s byte-budget overage (see
+#: state/bug-backlog/2026-08-13-session-brief-byte-budget-assertion-is-r-8733361330d6.yaml).
+#: Bounded post-hoc, the same way `_UNRECOGNIZED_STATUS_LINE_CAP` bounds
+#: the orphan census's diagnostic tier and `_suppress_live_ledger_claims`
+#: already filters this module's rendered text post-hoc rather than
+#: touching the ported query/format logic: keep the query's own first N
+#: lines (never re-sorted or re-ranked here) plus one trailing "+K more"
+#: line naming the exact CLI invocation that lists the rest.
+_READY_LINE_CAP = 15
+_AWAITING_GATE_LINE_CAP = 15
+
+#: The exact separator line `_cmd_awaiting_gate` (`coordinator/bin/
+#: workday-start-handoff-triage.py`) prints between its two concatenated
+#: listings (the full `awaiting_gate` set, then the `--older-than 6d` stale
+#: subset). Used only to SPLIT the captured text before capping each
+#: section independently (Review: code-reviewer — Finding [P2]) — never to
+#: re-derive or reformat either section's content, matching this module's
+#: own "invoke the ported CLI as-is" negative-spec.
+_AWAITING_GATE_SEPARATOR = "--- awaiting_gate, older than 6d ---"
+
+
+def _cap_rendered_lines(text: str, cap: int, *, subcommand: str) -> str:
+    """Cap `text` (a captured, already-rendered markdown-list body) at `cap`
+    lines, appending a blank line and one trailing "+K more" line naming the
+    subcommand that lists the rest when the cap binds. The blank line keeps
+    a markdown renderer from parsing the notice as a continuation of the
+    last kept `- [...]` list item (Review: code-reviewer — Finding [P3],
+    downstream renderer not confirmed cheaply reachable from this slice; the
+    blank-line separation is the safe default regardless of renderer).
+    Returns `text` unchanged when under cap — never re-sorts or re-derives
+    the kept lines' order."""
+    lines = text.split("\n")
+    if len(lines) <= cap:
+        return text
+    withheld = len(lines) - cap
+    kept = lines[:cap]
+    kept.append("")
+    kept.append(
+        f"+{withheld} more — run `workday-start-handoff-triage {subcommand}` "
+        "to see them all"
+    )
+    return "\n".join(kept)
+
+
+def _cap_awaiting_gate_listing(text: str, cap: int, *, subcommand: str) -> str:
+    """Cap `_cmd_awaiting_gate`'s captured two-section output (full
+    `awaiting_gate` listing, then `_AWAITING_GATE_SEPARATOR`, then the >6d
+    stale subset) by capping EACH section independently, rather than
+    capping their concatenation as one blob.
+
+    Review: code-reviewer — Finding [P2]. Capping the concatenation let the
+    full listing alone reach `cap` and silently swallow the separator plus
+    the ENTIRE stale-escalated section, with no signal that a semantically
+    distinct escalation tier was among what was withheld (the reader's own
+    docstring promises "the gated handoffs plus the coarse stale subset").
+    Splitting on the separator first — present only when `_cmd_awaiting_gate`
+    found a non-empty stale subset — and capping each half against the same
+    `cap`/`subcommand` keeps the stale tier visible whenever it exists,
+    independent of how long the full listing is. Also fixes Finding [P3]:
+    the separator line is excluded from both halves' line counts, so each
+    half's "+K more" count means exactly withheld handoffs, not withheld
+    lines including a header.
+
+    No separator present (empty stale subset) — falls through to the plain
+    single-listing cap, unchanged from before this fix.
+    """
+    sep_index = text.find(_AWAITING_GATE_SEPARATOR)
+    if sep_index == -1:
+        return _cap_rendered_lines(text, cap, subcommand=subcommand)
+
+    full_part = text[:sep_index].rstrip("\n")
+    stale_part = text[sep_index + len(_AWAITING_GATE_SEPARATOR):].lstrip("\n")
+    capped_full = _cap_rendered_lines(full_part, cap, subcommand=subcommand)
+    capped_stale = _cap_rendered_lines(stale_part, cap, subcommand=subcommand)
+    # Review: code-reviewer — Finding [P3]. An empty full listing with a
+    # non-empty stale subset is reachable (`_cmd_awaiting_gate` prints the
+    # separator only when the stale subset is non-empty, but prints the full
+    # listing unconditionally, including when it's empty) — omit the empty
+    # half instead of joining it in, which would otherwise emit a stray
+    # leading blank line before the separator.
+    if not capped_full:
+        return f"{_AWAITING_GATE_SEPARATOR}\n{capped_stale}"
+    return f"{capped_full}\n{_AWAITING_GATE_SEPARATOR}\n{capped_stale}"
 
 #: Module-locally derived repo root (precedent: readers_health_reaper.py's
 #: own `_REPO_ROOT = Path(__file__).resolve().parents[2]`) — passed
@@ -239,6 +327,7 @@ def _read_ready() -> ReaderResult:
     text = _suppress_live_ledger_claims(text, common_dir=_ready_common_dir())
     if not text.strip():
         return ReaderResult()
+    text = _cap_rendered_lines(text, _READY_LINE_CAP, subcommand="ready")
     return ReaderResult(
         directives=[
             {
@@ -263,6 +352,9 @@ def _read_awaiting_gate() -> ReaderResult:
     text, _exit_code = _capture_stdout(_cmd_awaiting_gate, argparse.Namespace())
     if not text.strip():
         return ReaderResult()
+    text = _cap_awaiting_gate_listing(
+        text, _AWAITING_GATE_LINE_CAP, subcommand="awaiting-gate"
+    )
     return ReaderResult(
         directives=[
             {

@@ -71,7 +71,7 @@ Negative-spec:
   - Never raises: any unexpected input shape, oversized file, or parse
     failure returns None (ALLOW/no-op).
 
-Spec backlink: docs/plans/2026-08-06-shell-spawn-regrowth-gate.md § C5
+Spec backlink: pln-shell-spawn-regrowth-gate-cens-097e21 § C5
 Grep anchors: SHELL-SPAWN-REGROWTH-GATE
 """
 

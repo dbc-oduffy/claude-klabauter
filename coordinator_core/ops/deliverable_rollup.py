@@ -4,7 +4,7 @@ coordinator_core.ops.deliverable_rollup — JSON-RPC "deliverable.rollup" COMPUT
 Purpose: Given a ``deliverable_id`` wire parameter, scans the deliverable-spine read-model
 (plan frontmatter, stub handoff frontmatter) for artifacts carrying that id, then unions
 their non-null ``initiative`` FKs and resolves each to its ``state/initiatives/<id>.yaml``
-entry. Returns structured fields only — no prose is composed here; example-doctrine-repo owns the render.
+entry. Returns structured fields only — no prose is composed here; coordinator-claude owns the render.
 
 The scan surface covers four paths:
   docs/plans/*.md          — primary; deliverable_id + initiative FK co-occur here most
@@ -32,7 +32,7 @@ Self-registration: importing this module calls register_op("deliverable.rollup",
 as a side-effect. Add this module to coordinator_core/ops/__init__.py to trigger registration
 at start_server() time.
 
-Spec backlink: docs/plans/2026-07-06-claude-klabauter-deliverable-spine-factsupply-op.md § C2
+Spec backlink: pln-claude-klabauter-deliverable-spine-fact--cd004e § C2
 Producer contract: coordinator_core/contract/deliverable-rollup-producer-contract.md
 
 Fork-equivalence join (chunk C4c): `_scan_artifacts_by_deliverable_id`'s match predicate
@@ -40,7 +40,7 @@ canonicalizes both the queried `deliverable_id` and each artifact's own frontmat
 via `coordinator_core.ops.deliverable_equivalence.canonicalize` before comparing, so a query
 for either leg of a DD#1-declared fork pair returns the union of artifacts under both legs.
 This is a read-time join-key transform only — no frontmatter field or emitted output is ever
-mutated. Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (AC6, AC6b)
+mutated. Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC6b)
 
 Negative-spec (hard-won):
   - ZERO git subprocess — HARD INVARIANT. This op reads on-disk frontmatter and YAML only.
@@ -150,7 +150,7 @@ def _claude_klabauter_root() -> Optional[str]:
         2. ``machine-local get repos.claude_klabauter``.
         3. Returns None when unresolvable; callers degrade gracefully (WARN+skip).
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
     override = os.environ.get(_CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
     if override:
@@ -212,7 +212,7 @@ def _central_initiatives_dir(worktree_root: Path) -> Path:
            WARN is NOT emitted for the coincident-dir case (claude-klabauter's own worktree where
            central root resolves and happens to equal the worktree root).
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC13
     """
     global _RESOLVED_CENTRAL_ROOT, _CENTRAL_ROOT_RESOLVED, _CENTRAL_ROOT_WARNED
 
@@ -500,7 +500,7 @@ def _handler(
     scan_incomplete: _scan_artifacts_by_deliverable_id also returns whether a scan
     root (docs/plans, state/handoffs, or archive/handoffs) could not be fully
     enumerated (e.g. permission-denied); a WARNING is logged naming the blocked
-    root. That signal is on the wire as of example-doctrine-repo's be8b5d88 reader-widen (their
+    root. That signal is on the wire as of coordinator-claude's be8b5d88 reader-widen (their
     render layer appends " (partial scan)" per rendered line when it is set) —
     it is emitted here as an explicit bool on every payload, including the
     safe-empty shapes.
@@ -560,7 +560,7 @@ def _handler(
         # Unknown deliverable — safe-empty is the correct response, not an error.
         # scan_incomplete=True means this "0 matches" may instead be a blocked scan
         # root — the WARNING already logged inside _scan_artifacts_by_deliverable_id
-        # is today's only signal of that; scan_incomplete is on the wire as of example-doctrine-repo's
+        # is today's only signal of that; scan_incomplete is on the wire as of coordinator-claude's
         # be8b5d88 reader-widen, so it is passed through here rather than dropped.
         # Review: code-reviewer — use _empty_payload to avoid dual maintenance of the safe-null shape.
         return _empty_payload(deliverable_id, scan_incomplete=scan_incomplete)

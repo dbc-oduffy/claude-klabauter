@@ -2,7 +2,7 @@
 coordinator_core.ops.migrate_branch_canonical_case — one-shot mixed-case
 work/* branch remediation.
 
-Purpose: DR-059 bash-to-naked-Python port of the example-doctrine-repo-owned script
+Purpose: DR-059 bash-to-naked-Python port of the coordinator-claude-owned script
 `coordinator/bin/migrate-branch-canonical-case.sh` (~140 lines). Fixes two
 distinct failure modes caused by Windows/macOS case-insensitive filesystems
 diverging from git's case-sensitive ref model:
@@ -22,7 +22,7 @@ Idempotent: a second invocation on an already-canonical repo is a pure no-op.
 
 Spec backlink: docs/plans/2026-05-07-mixed-case-branch-creation-tripwire.md
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: migrate-branch-canonical-case.sh (example-doctrine-repo b5a4192c, 2026-07-20)
+Port of: migrate-branch-canonical-case.sh (coordinator-claude b5a4192c, 2026-07-20)
 
 Exit codes (parity-critical, preserved from the bash oracle):
     0 — no-op (no mixed-case refs found) OR migration succeeded
@@ -71,7 +71,7 @@ from coordinator_core.install._shared import env_overlay
 
 # Literal program-name prefix — preserved verbatim from the retired .sh's own
 # $0-derived banner/usage text so oracle-diff stdout parity holds regardless
-# of what the example-doctrine-repo-side trampoline file is actually named. Mirrors the same
+# of what the coordinator-claude-side trampoline file is actually named. Mirrors the same
 # `_PROG` convention used by ops/handoff_gate_aging.py.
 _PROG = "migrate-branch-canonical-case.sh"
 

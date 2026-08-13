@@ -79,7 +79,7 @@ exercises them. Do not fold the widened families into the standing gate's
 default without first burning down that audit's worklist -- that is a
 follow-up workstream, not a narrowing of this one.
 
-Spec backlink: docs/plans/2026-08-07-no-window-subprocess-primitive.md § C6, AC5.
+Spec backlink: pln-no-window-subprocess-primitive-750d2d § C6, AC5.
 """
 
 from __future__ import annotations

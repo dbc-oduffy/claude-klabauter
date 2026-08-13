@@ -3,7 +3,7 @@ fixture_expectations.py — the single shared expectation table for the
 plan `## Tasks`-spine fenced-block LOCATE rule.
 
 Two independent implementations of one locate rule exist:
-  - example-doctrine-repo's `_locate_tasks_block` (coordinator/bin/coordinator-harvest-deferrals:317-372),
+  - coordinator-claude's `_locate_tasks_block` (coordinator/bin/coordinator-harvest-deferrals:317-372),
     which returns `str | None` (the fence body, or `None` on either failure mode).
   - `coordinator_core.frontmatter.body_blocks.locate_fenced_block`, whose docstring
     claims parity with the former and returns a typed `LocateResult` distinguishing
@@ -31,8 +31,8 @@ tomorrow). A fixture inapplicable to one locator's own scope (see
 entry, never as a separate applicability list.
 
 Translating between the two locators' return shapes is the CALLING test's job,
-not this module's: example-doctrine-repo's locator collapses `ABSENT` and `MALFORMED` into a
-single `None` return, so a caller comparing against example-doctrine-repo's `_locate_tasks_block`
+not this module's: coordinator-claude's locator collapses `ABSENT` and `MALFORMED` into a
+single `None` return, so a caller comparing against coordinator-claude's `_locate_tasks_block`
 should assert `result is None` iff `FIXTURE_EXPECTATIONS[name].outcome is not
 LocateOutcome.LOCATED`, and a caller comparing against
 `coordinator_core.frontmatter.body_blocks.LocateStatus` should compare

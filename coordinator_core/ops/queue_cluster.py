@@ -25,7 +25,7 @@ canonical entry handle" (coordinator_core/ops/queue_append.py module
 docstring) -- derived here from the `path` query_records() already returns,
 so callers never re-parse an id back out of a basename themselves.
 
-Spec backlink: docs/plans/2026-07-23-queue-triage-terminus-ops.md § C3
+Spec backlink: pln-queue-triage-terminus-ops-clus-043c40 § C3
 
 Negative-spec:
   - Does NOT add a `triage_mode` flag or any switch that bakes a caller's
@@ -68,7 +68,7 @@ ALL_SIGNALS: tuple[str, ...] = (SIGNAL_TAG, SIGNAL_DIRECTORY, SIGNAL_KEYWORD)
 """The closed signal enum, in output-ordering order (tag, directory, keyword).
 
 Pinned by coordinator_core/ops/tests/test_queue_cluster.py::test_signal_enum_pinned --
-Example-doctrine-repo's `/debt-triage` Step 6b suppresses the "directory" signal by literal
+Coordinator-claude's `/debt-triage` Step 6b suppresses the "directory" signal by literal
 string comparison against this exact value. Renaming or re-casing a member
 here does not raise on their side; it silently stops matching, and the next
 triage run hands their ceremony one un-suppressed, oversized cluster as a

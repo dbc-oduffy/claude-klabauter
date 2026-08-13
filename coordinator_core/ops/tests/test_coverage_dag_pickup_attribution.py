@@ -41,7 +41,7 @@ Follows the fixture-building pattern established in
 test_coverage_dag_chain_set_cross_branch.py (_init_repo / _git helpers) and
 test_coverage_dag_deliverable_attribution.py (closing-handoff shape).
 
-Spec backlink: docs/plans/2026-08-10-chain-attribution-pickup-author.md § C3
+Spec backlink: pln-chain-attribution-substitutes-5b209a § C3
 """
 
 from __future__ import annotations

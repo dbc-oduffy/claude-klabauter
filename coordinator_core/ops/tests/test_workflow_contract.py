@@ -24,7 +24,7 @@ Coverage:
     (k) run_checks — end-to-end severity map (ERROR only impure-meta +
         forbidden-globals)
 
-Spec backlink: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md § C1
+Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d § C1
 """
 
 from __future__ import annotations

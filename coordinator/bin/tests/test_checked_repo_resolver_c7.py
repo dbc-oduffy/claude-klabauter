@@ -1,7 +1,7 @@
 """test_checked_repo_resolver_c7.py -- C7 test surface for the three
 class-A goal/priority doors repointed onto the C1 checked resolver.
 
-Spec backlink: docs/plans/2026-08-11-one-checked-resolver-for-the-bin-family.md
+Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C7 / AC2-AC5, AC10.
 
 This module is C7's own -- no other chunk writes to it. C1's own module

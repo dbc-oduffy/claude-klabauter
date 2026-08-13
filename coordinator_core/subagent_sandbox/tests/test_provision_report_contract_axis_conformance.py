@@ -4,7 +4,7 @@ coordinator_core.subagent_sandbox.tests.test_provision_report_contract_axis_conf
 reads/writes equals the set `CONTRACT.md`'s "Axis inventory (machine-checked)"
 section documents, in BOTH directions.
 
-This is what makes the cross-repo grammar coupling between example-doctrine-repo's
+This is what makes the cross-repo grammar coupling between coordinator-claude's
 `subagent-sandbox-policy.yaml` and claude-klabauter's `provision_report.py` discharge
 by test rather than by a human remembering to keep two files in lockstep --
 canonical spec `state/subagent-share/conductor/seam-adjudication.md` § 2.3.
@@ -38,7 +38,7 @@ _CONTRACT_PATH = Path(__file__).resolve().parents[1] / "CONTRACT.md"
 _INDIRECT_STDIN_AXES = {"agent_type", "subagent_type", "agent_id"}
 
 #: CLI flags that are pure invocation plumbing (policy-file location,
-#: working directory) -- not part of the example-doctrine-repo<->claude-klabauter wire GRAMMAR this
+#: working directory) -- not part of the coordinator-claude<->claude-klabauter wire GRAMMAR this
 #: contract pins, so deliberately excluded from the axis inventory both
 #: here and in CONTRACT.md.
 _PLUMBING_CLI_FLAGS = {"policy", "cwd"}

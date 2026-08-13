@@ -14,12 +14,12 @@ Covers:
   - defect paths: unknown doc_type, missing required ``value`` field, missing
     placeholder value — all raise ``RenderError``, never a silent KeyError/None
 
-This module does NOT assert byte-identity against the live example-doctrine-repo oracle (C6's
+This module does NOT assert byte-identity against the live coordinator-claude oracle (C6's
 surface) and does NOT assert the no-write/no-subprocess structural property
 formally (C7's surface, a standing test) — it stays inside C4's own contract:
 the render function is correct against the template format for every idiom.
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C4 (AC6)
+Spec backlink: pln-strang-12-document-generation--75a7eb § C4 (AC6)
 """
 
 from __future__ import annotations

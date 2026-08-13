@@ -72,14 +72,14 @@ treatment as ``run-report``'s ``dispatched_by`` (same
 precedence chain) — one harness session, shared identity, deterministic across
 a single test process's subprocess boundary, not wall-clock/mint-derived.
 
-Negative-spec: this module does not read the live example-doctrine-repo clone, does not shell out,
+Negative-spec: this module does not read the live coordinator-claude clone, does not shell out,
 and does not mint or resolve any value itself — it is a pure, static field-policy
 registry plus small mapping/text redaction helpers. Injecting a shared value into
 the oracle's own CLI invocation, and invoking the live oracle at all, is C6's
 surface (the byte-identity conformance harness), not this one's.
 
-Spec backlink: docs/plans/2026-07-21-strang-12-doc-generation-strangle.md § C5 (AC5)
-Oracle: /coordinator/bin/coordinator-doc-new (example-doctrine-repo clone) — ``_mint_deliverable_id``,
+Spec backlink: pln-strang-12-document-generation--75a7eb § C5 (AC5)
+Oracle: /coordinator/bin/coordinator-doc-new (coordinator-claude clone) — ``_mint_deliverable_id``,
 ``_mint_artifact_id``, ``_mint_plan_id``, ``_current_branch``, the
 ``--branch``/``--deliverable-id`` argparse flags, and every ``_scaffold_*`` call
 site's ``created``/``date``/``dispatched_at``/``spawned_at`` emission.

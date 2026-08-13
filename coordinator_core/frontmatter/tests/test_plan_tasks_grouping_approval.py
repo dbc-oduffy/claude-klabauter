@@ -1,7 +1,7 @@
 """Tests for the grouping-approval authorization predicate (2026-07-29).
 
-Contract: cross-repo/archive/2026-07-29-example-doctrine-repo-em-grouping-approval-contract.md
-(actioned; moved from inbox/ to archive/), as amended by our reply (example-doctrine-repo
+Contract: cross-repo/archive/2026-07-29-coordinator-claude-em-grouping-approval-contract.md
+(actioned; moved from inbox/ to archive/), as amended by our reply (coordinator-claude
 cross-repo/inbox/2026-07-29-claude-klabauter-em-grouping-approval-contract-confirmed.md).
 
 The predicate replaces the per-row `pm_approved` boolean with three
@@ -57,7 +57,7 @@ def _rows(tasks_yaml: str) -> list[dict]:
 # digest.
 #
 # Review: code-reviewer (Finding 1) — re-pointed from `spun_off` to
-# `backlogged`. Example-doctrine-repo's 2026-08-05 ruling relaxed `spun_off` out of the
+# `backlogged`. Coordinator-claude's 2026-08-05 ruling relaxed `spun_off` out of the
 # pm_approved/grouping-approval gate entirely and gave it its own ungated
 # grouping (C3); every test built on this fixture that expects the
 # grouping-approval predicate to actually GATE the closed row needs a
@@ -107,7 +107,7 @@ class TestGovernedDiscriminator:
     anywhere in this repo (no plan schema declares `schema_version`), so it
     was always unsatisfied and `is_governed_plan` returned False for every
     plan that will ever be authored here, including a fully-approved one.
-    See cross-repo/inbox/2026-07-29-example-doctrine-repo-em-grouping-discriminator-correction.md.
+    See cross-repo/inbox/2026-07-29-coordinator-claude-em-grouping-discriminator-correction.md.
     """
 
     def test_no_block_is_legacy(self):
@@ -145,11 +145,11 @@ class TestLegacyUnchanged:
 
     def test_legacy_row_rule_still_demands_pm_approved(self):
         """The per-row gate at schema_validate.py's row rule is untouched for
-        the legacy corpus — example-doctrine-repo asked for exactly this and every existing
+        the legacy corpus — coordinator-claude asked for exactly this and every existing
         `pm_approved: true` row in both corpora depends on it.
 
         Review: code-reviewer (Finding 1) — re-pointed from `spun_off` to
-        `backlogged`: example-doctrine-repo's 2026-08-05 ruling relaxed `spun_off` out of this
+        `backlogged`: coordinator-claude's 2026-08-05 ruling relaxed `spun_off` out of this
         gate entirely, so it no longer demonstrates the gate firing.
         """
         row = {
@@ -175,7 +175,7 @@ class TestLegacyUnchanged:
         assert _cf_plan_tasks_disposition_shape(row, governed=True) is None
 
     def test_spun_off_never_requires_pm_approved(self):
-        """Named regression pin for example-doctrine-repo's 2026-08-05 ruling (C3/C8): `spun_off`
+        """Named regression pin for coordinator-claude's 2026-08-05 ruling (C3/C8): `spun_off`
         is CLOSED but requires NO pm_approved in legacy mode, unlike
         `backlogged`/`wont_do` above. C8's commit message claimed this
         coverage existed; it did not — this is the first named test for it.
@@ -249,7 +249,7 @@ class TestPredicate:
         assert 'sha256:' in error['hint']
 
     def test_spun_off_exempt_from_grouping_approval_even_when_unapproved(self):
-        """Named regression pin for example-doctrine-repo's 2026-08-05 ruling (C3/C8): a
+        """Named regression pin for coordinator-claude's 2026-08-05 ruling (C3/C8): a
         governed plan with a closed `spun_off` row and NO `spun_off`
         grouping_approvals block at all (and no `defer` approval covering
         it either) must still admit — `spun_off` occupies its own C3
@@ -489,7 +489,7 @@ class TestDigestNegativeSpec:
 
     def test_re_dispositioning_changes_both_touched_groupings(self):
         """Review: code-reviewer (Finding 1) — `before` re-pointed from
-        `spun_off` to `backlogged`: since example-doctrine-repo's 2026-08-05 ruling gave
+        `spun_off` to `backlogged`: since coordinator-claude's 2026-08-05 ruling gave
         `spun_off` its OWN grouping, it was never in `defer` to begin with,
         so this transition no longer touched `defer` at all and the
         assertion below was vacuously true against the empty-set digest.

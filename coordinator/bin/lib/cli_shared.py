@@ -1,8 +1,8 @@
-"""cli_shared.py — shared CLI/arg/IO boilerplate for example-doctrine-repo-resident coordinator bin/ CLIs.
+"""cli_shared.py — shared CLI/arg/IO boilerplate for coordinator-claude-resident coordinator bin/ CLIs.
 
 Consolidation target for the ~150 LoC of near-verbatim duplication between
 coordinator-queue-append and coordinator-lesson-promote (both write structured
-YAML entries into claude-klabauter/example-doctrine-repo-routed state directories and resolve their own
+YAML entries into claude-klabauter/coordinator-claude-routed state directories and resolve their own
 from_repo identity from cwd git context). Extracts exactly four primitives:
 
   - machine_local_get / machine_local_repos_keys — `machine-local` CLI bridge
@@ -14,7 +14,7 @@ from_repo identity from cwd git context). Extracts exactly four primitives:
     bounded and fail-loud-after-cap-exhausted (never a silent overwrite, never
     a bare first-collision FileExistsError)
 
-Example-doctrine-repo-resident (NOT coordinator_core-resident): this is call-site/CLI plumbing —
+Coordinator-claude-resident (NOT coordinator_core-resident): this is call-site/CLI plumbing —
 arg parsing support, path resolution for THIS repo's machine-local registry —
 not engine-owned business logic, so it does not cross the DR-047 boundary.
 Consistent with cc_invoke.py's own residency alongside this module.
@@ -143,7 +143,7 @@ def claude_klabauter_root() -> str | None:
     WARN + skip. The low-level shell primitive coordinator-claude-klabauter-root.sh hard-errors;
     this is the Python caller-layer resilience wrapper.
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § AC1 / AC13
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § AC1 / AC13
     """
     override = os.environ.get(CLAUDE_KLABAUTER_ROOT_ENV, "").strip()
     if override:
@@ -157,7 +157,7 @@ def resolve_from_repo(root: str | None = None) -> str:
 
     Resolution order (same convention as cross-repo-memo._sender_em_id):
       1. cwd git-root -> reverse-lookup against machine-local repos.* table
-      2. repos.example_doctrine_repo (example-doctrine-repo repo) -> "claude-central-em"
+      2. repos.example_doctrine_repo (coordinator-claude repo) -> "claude-central-em"
       3. Unregistered git repo -> basename of git root + "-em"
       4. Not in a git repo -> "unknown-sender-em"
       Never uses `git remote get-url origin` — that yields a URL, not a shortname.

@@ -21,7 +21,7 @@ deny leg allows unconditionally when no `agent_id` is present, so the only
 callers who ever see the deny are dispatched subagents. Confirmed live
 2026-08-08: a subagent hit the deny, ran the named remediation verbatim, and
 produced a grant record reading `granted_by: "pm"` for an edit no human
-authorized (`cross-repo/inbox/2026-08-08-example-doctrine-repo-em-claude-md-grant-self-
+authorized (`cross-repo/inbox/2026-08-08-coordinator-claude-em-claude-md-grant-self-
 minted-as-pm.md`). The intended flow -- EM obtains PM ratification, EM
 acquires the grant, EM dispatches, the subagent's write inherits the EM's
 grant via shared-session-id resolution -- stays intact under this fix; only
@@ -283,19 +283,25 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
     POSTURE" -- this only ever renders for a dispatched subagent, never the
     EM).
 
-    Tone per this chunk's brief, functional not decorative: this deny fires
-    almost exclusively on agents acting in good faith, so it does not frame
-    the caller's own work as suspect. It states the STRUCTURAL reason a
+    `deny_kind` and `cmd` are accepted for call-site parity with the
+    classifier but deliberately UNUSED in the rendered text below -- a
+    dispatched subagent is never shown the governed module path, the
+    gated subcommand, or its own attempted command, because any of those
+    is a pasteable recipe to the one audience this guard exists to keep in
+    the dark (see module docstring "THE HOLE THIS CLOSES" -- this is the
+    exact self-clearing shape confirmed live 2026-08-08). Tone per this
+    chunk's brief, functional not decorative: this deny fires almost
+    exclusively on agents acting in good faith, so it does not frame the
+    caller's own work as suspect. It states the STRUCTURAL reason a
     dispatched subagent cannot itself confirm PM ratification -- it never
     speaks to the PM directly, only hears what its EM tells it, true of
     every subagent on every dispatch -- and hands the agent the pieces its
     BLOCKED report needs, never a command the agent could run itself to
-    clear its own gate (that self-clearing shape is precisely the defect
-    this module exists to close; see module docstring "THE HOLE THIS
-    CLOSES"). Matches the register of `block_unauthorized_claude_md_write.
-    _deny_reason` (C4), read as the tone precedent for this text.
+    clear its own gate. Matches the register of
+    `block_unauthorized_claude_md_write._deny_reason` (C4), read as the
+    tone precedent for this text.
     """
-    cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
+    del deny_kind, cmd
     return (
         "BLOCKED: acquiring a CLAUDE.md write grant is an EM action, not a "
         "dispatched agent's.\n\n"
@@ -304,8 +310,6 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
         "dispatch carries a PM ratification; it only hears what its EM "
         "tells it. Confirming that is the EM's call, not something to "
         "resolve from here. Report BLOCKED to your EM with:\n"
-        f"  Governed surface: `{deny_kind}`\n"
-        f"  Command attempted: {cmd_safe}\n"
         "  Reason: grant acquisition is EM-only; a subagent's write "
         "should inherit the EM's own grant via shared-session-id "
         "resolution, not mint one of its own.\n"

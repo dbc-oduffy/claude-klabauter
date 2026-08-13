@@ -28,7 +28,7 @@ Provides two modes:
                    Spec backlink: docs/plans/2026-07-24-computed-skills-b5-
                    planning-cluster.md § C12.
 
-Port source: coordinator/bin/roadmap-number-stubs.js (example-doctrine-repo), 387 LoC.
+Port source: coordinator/bin/roadmap-number-stubs.js (coordinator-claude), 387 LoC.
 Domain vocabulary: stub, sprint, wave, topological linearization, blocked_by edge,
 dependency-monotone, (sprint, wave) slot, roadmap_id, spinoff-roadmap.
 Spec backlink: docs/plans/2026-06-28-roadmap-stub-numbering-dependency-order.md § C2
@@ -57,7 +57,7 @@ Exit codes (faithful to the oracle CLI):
 Negative-spec / documented scope adaptations from the oracle:
   - ``resolve_root()`` deliberately does NOT reproduce the oracle's ``__dirname``
     -relative fallback heuristic (``path.resolve(__dirname, '../../../../')``) --
-    that heuristic assumed a fixed directory depth between the script and the example-doctrine-repo
+    that heuristic assumed a fixed directory depth between the script and the coordinator-claude
     plugin's ``bin/`` folder, a relationship that has no analog once the CLI is a
     claude-klabauter-resident Python module (``__file__`` lives under
     ``claude-klabauter/coordinator_core/roadmap/``, unrelated to any consumer repo's
@@ -368,7 +368,7 @@ def _reconcile_edges_file_count(
     match) edges file is therefore always treated as "nothing to reconcile"
     here — never a process exit.
 
-    Spec backlink: docs/plans/2026-08-05-roadmap-graph-enforcement-gap.md § C1.
+    Spec backlink: pln-roadmap-dependency-graph-close-6192fb § C1.
 
     Returns:
         ``None`` if there is nothing to reconcile against (no file, multiple
@@ -441,7 +441,7 @@ def _query_roadmap_baton_records(
 
     Shared by ``run_check_mode`` and ``run_state_mode`` — see
     ``_roadmap_state_error_exit`` for the paired decision helper.
-    Spec backlink: docs/plans/2026-08-05-roadmap-graph-enforcement-gap.md § C7.
+    Spec backlink: pln-roadmap-dependency-graph-close-6192fb § C7.
 
     Returns:
         ``(live + arch, live_raised, arch_raised)``.
@@ -479,7 +479,7 @@ def _roadmap_state_error_exit(
     clean empty result.
 
     Shared by ``run_check_mode`` and ``run_state_mode``.
-    Spec backlink: docs/plans/2026-08-05-roadmap-graph-enforcement-gap.md § C7.
+    Spec backlink: pln-roadmap-dependency-graph-close-6192fb § C7.
 
     Returns:
         ``2`` if roadmap state could not be established (having already

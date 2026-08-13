@@ -1031,7 +1031,7 @@ def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
     directs the author to the PM WITHOUT naming a command that would satisfy
     the gate (D4, as amended by the 2026-07-29 grouping-approval contract).
 
-    Uses `backlogged` rather than `spun_off` (2026-08-05): example-doctrine-repo's ruling
+    Uses `backlogged` rather than `spun_off` (2026-08-05): coordinator-claude's ruling
     relaxed `spun_off`'s pm_approved requirement unconditionally, so it no
     longer exercises this gate in either legacy or governed mode — see
     `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`. `backlogged` remains
@@ -1042,7 +1042,7 @@ def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
     unblock: stamp pm_approved: true first". That was the defect, not the
     feature: the field being checked was one the same agent could set one
     command earlier, so the gate printed its own key and the test held it
-    there. Example-doctrine-repo's contract makes the requirement explicit — whatever refuses
+    there. Coordinator-claude's contract makes the requirement explicit — whatever refuses
     must direct the author to ask the PM, and must NOT print a stamp
     command, a CLI invocation, or any other means of satisfying the field
     without one.

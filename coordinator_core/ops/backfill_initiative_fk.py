@@ -1,15 +1,15 @@
 """
 coordinator_core.ops.backfill_initiative_fk
 
-Port of: backfill-initiative-fk.sh (example-doctrine-repo 432e3285, 2026-07-22). BIG_PORT wave,
-direct-import trampoline variant #1 — no `register_op`, no IPC; the example-doctrine-repo-side polyglot
+Port of: backfill-initiative-fk.sh (coordinator-claude 432e3285, 2026-07-22). BIG_PORT wave,
+direct-import trampoline variant #1 — no `register_op`, no IPC; the coordinator-claude-side polyglot
 trampoline imports and calls `main()` in-process, exactly like
 coordinator_core.hooks.auto_push / coordinator_core.ops.handoff_gate_aging.
 
 Purpose: idempotent batch-attach tool. Reads (artifact-path, initiative-id) TSV pairs
 from a file or stdin and attaches the `initiative:` FK to each artifact's YAML
 frontmatter via the sibling `coordinator-initiative attach` CLI (a python3 script as of
-Example-doctrine-repo commit 6fb5fb37; invoked via `sys.executable`, not shelled out through bash).
+Coordinator-claude commit 6fb5fb37; invoked via `sys.executable`, not shelled out through bash).
 One-shot backfill tool; safe to re-run on a partially-processed mapping.
 
 Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-doe-land-d-slice.md § F4 (AC8)
@@ -20,7 +20,7 @@ Public API:
         single positional TSV path, or "-"/absent for stdin), plus an optional
         `--script-dir VALUE` (or `--script-dir=VALUE`) flag that this function
         parses out before treating the remaining argv as the positional path.
-        `script_dir` (the explicit kwarg, or the argv flag) is the example-doctrine-repo
+        `script_dir` (the explicit kwarg, or the argv flag) is the coordinator-claude
         trampoline's own bin/ directory — used to resolve the sibling
         `coordinator-initiative` executable via a plain same-directory join, exactly
         as the bash oracle's `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
@@ -52,7 +52,7 @@ Exit-code contract (byte-parity with the bash oracle):
        processing all pairs (fail-loud, matches oracle's `exit 1` on `$errors -gt 0`).
     (transport/import failure — CLAUDE_KLABAUTER_ROOT resolution or `coordinator_core` import
     failing before this module is even reached — is NOT a code this function can
-    return; it is handled by the example-doctrine-repo trampoline itself, which uses a DEDICATED exit
+    return; it is handled by the coordinator-claude trampoline itself, which uses a DEDICATED exit
     code 2 for that case per the porter addendum §3b fail-loud-gate-script rule,
     since this tool is a mutating fail-loud CLI, not a best-effort/never-block one.)
 
@@ -96,7 +96,7 @@ Departure from the oracle (additive robustness, not a behavior change to any tes
 path):
     - Invokes `coordinator-initiative` via `[sys.executable, coordinator_initiative_path,
       ...]` rather than shebang-exec of a bare path. `coordinator-initiative` was ported
-      from bash to python3 (example-doctrine-repo commit 6fb5fb37); invoking the running
+      from bash to python3 (coordinator-claude commit 6fb5fb37); invoking the running
       interpreter directly needs NO shebang interpretation at all — strictly stronger
       than the earlier bash-resolution approach's Windows-portability workaround (no
       shebang interpretation on Windows was the old bash-resolution rationale; this

@@ -35,7 +35,7 @@ def test_contract_version_matches_vendored_pin():
     Delegates to `validate.assert_version_consistency()` so this test and the production
     guard it exists to spotlight can never drift apart in what they check — a failure here
     raises the SAME `ContractPinError`, whose message already states the remediation
-    (re-vendor from the example-doctrine-repo cockpit-contract-release tag via
+    (re-vendor from the coordinator-claude cockpit-contract-release tag via
     `python bin/claude-klabauter-revendor-cockpit-contract.py`, or bump CONTRACT_VERSION to match).
     """
     schema_version = validate.assert_version_consistency()
@@ -43,6 +43,6 @@ def test_contract_version_matches_vendored_pin():
         f"cockpit-contract version desync — claude-klabauter's own CONTRACT_VERSION={CONTRACT_VERSION} "
         f"but the vendored schema bundle .version={schema_version}. A CONTRACT_VERSION bump "
         "must land in the SAME commit as the vendored bundle re-vendor (or vice versa) — "
-        "remediation: re-vendor from the example-doctrine-repo cockpit-contract-release tag "
+        "remediation: re-vendor from the coordinator-claude cockpit-contract-release tag "
         "(python bin/claude-klabauter-revendor-cockpit-contract.py)."
     )

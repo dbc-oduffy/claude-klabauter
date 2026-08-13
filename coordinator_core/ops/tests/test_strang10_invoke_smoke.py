@@ -30,9 +30,9 @@ Each test:
 Negative-spec:
     - Does NOT call handlers directly (that is the byte-parity tests' job).
     - Does NOT edit op modules, registration files, or any file outside this test.
-    - Does NOT require example-doctrine-repo oracle scripts — all 5 ops run for real without oracle dependency.
+    - Does NOT require coordinator-claude oracle scripts — all 5 ops run for real without oracle dependency.
 
-Spec backlink: docs/plans/2026-07-06-strang-10-residual-writer-strangle-command-type.md § C5
+Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C5
 Strang-07 postmortem: byte-parity ≠ invoke-path proof (prior-art Claim #16).
 DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md
 """

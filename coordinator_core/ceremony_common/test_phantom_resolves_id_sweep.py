@@ -18,7 +18,7 @@ sweep ever ran against it — the exact failure mode the prior workstream_
 complete-only guard could not catch for any OTHER package.
 
 Spec backlink: cross-repo/inbox/2026-07-27-… "Generalize seam guards
-fleet-wide" dispatch (example-doctrine-repo, 2026-07-27). Prior single-package
+fleet-wide" dispatch (coordinator-claude, 2026-07-27). Prior single-package
 instance: `coordinator_core/workstream_complete/test_workstream_complete.py`.
 """
 

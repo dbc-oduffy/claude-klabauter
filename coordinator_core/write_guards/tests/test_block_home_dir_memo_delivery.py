@@ -1,7 +1,7 @@
 """Behavioral tests for
 coordinator_core.write_guards.block_home_dir_memo_delivery.
 
-Cross-checked against the example-doctrine-repo reference hook by the differential
+Cross-checked against the coordinator-claude reference hook by the differential
 harness (coordinator/tests/test_write_guard_fan_in_differential.py, C5) --
 this file covers the port's own local behavior: the stderr-noise regression
 found in review (a non-matching containment root must be an ordinary

@@ -1,4 +1,4 @@
-"""Phase-4 personal-data audit — the example-doctrine-repo→OSS publish boundary's last-line scrub for
+"""Phase-4 personal-data audit — the coordinator-claude→OSS publish boundary's last-line scrub for
 operator identity leaking into the public coordinator-claude mirror.
 
 Python port of the `perl_match` / `perl_any` / `perl_has_disallowed` machinery and

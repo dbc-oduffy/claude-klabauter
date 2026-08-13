@@ -1,8 +1,8 @@
 """coordinator_core.write_guards.block_tracker_edit — advisory guard.
 
-Python engine-ification of example-doctrine-repo's retired
+Python engine-ification of coordinator-claude's retired
 ``coordinator/hooks/scripts/block-tracker-edit.sh`` PreToolUse
-(Write|Edit|MultiEdit|NotebookEdit) hook (deleted 2026-07-16, example-doctrine-repo
+(Write|Edit|MultiEdit|NotebookEdit) hook (deleted 2026-07-16, coordinator-claude
 ``2f8b8450``), per the naked-Python hook migration (write_guards/INTERFACE.md).
 
 Purpose (ported verbatim from the reference hook): blocks runtime Write/Edit
@@ -31,8 +31,8 @@ project moves work), the backslash/slash-run normalization, and the deny
 reason text — the latter with one deliberate divergence, the renderer
 command named in the offer (see the renderer note above).
 
-Ported from the retired example-doctrine-repo bash guard ``block-tracker-edit.sh``
-  (deleted 2026-07-16, example-doctrine-repo ``2f8b8450``).
+Ported from the retired coordinator-claude bash guard ``block-tracker-edit.sh``
+  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
 
 CLASS is "advisory" per DR-277 (2026-08-06 guard-class census;
 ``docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md``) — was
@@ -83,7 +83,7 @@ def _extract_file_path(tool_name: str, tool_input: Dict[str, Any]) -> str:
 
 def _normalize(file_path: str) -> str:
     """Backslash -> forward slash, then collapse slash runs (F5 fix parity
-    with block-completion-monolith-write.sh, example-doctrine-repo ``2f8b8450``, 2026-07-16)."""
+    with block-completion-monolith-write.sh, coordinator-claude ``2f8b8450``, 2026-07-16)."""
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")

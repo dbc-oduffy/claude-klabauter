@@ -11,7 +11,7 @@ transition-event PAYLOADS; it never touches the store's locking, sharding,
 or ordering machinery, and it never persists a lifecycle status — status is
 computed by `tracker_projection` at read time, never stored here.
 
-Spec backlink: docs/plans/2026-08-11-sat-03-event-sourced-completion-core.md
+Spec backlink: pln-sat-03-event-sourced-completio-c270a1
 § Tasks C2 (AC7, AC11 partially) — the substrate C3 (per-axis idempotency
 scoping), C4 (reopen cascade), and C5 (snapshot/compaction) build on.
 

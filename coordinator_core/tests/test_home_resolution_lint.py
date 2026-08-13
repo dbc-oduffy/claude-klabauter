@@ -6,7 +6,7 @@ repo's scan roots, exclusions, and forward-slash scope to the shared engine
 ledger (`_home_resolution_lint_baseline.py`, unchanged, 98 known sites).
 The four AST rules themselves no longer live in this file -- see the
 engine module's docstring for why (extraction design:
-`example-doctrine-repo/docs/research/2026-07-28-fleet-lint-distribution-design.md`).
+`coordinator-claude/docs/research/2026-07-28-fleet-lint-distribution-design.md`).
 Every other fleet repo gets its own shim of this same shape, importing the
 identical engine live rather than a vendored copy, so a fifth rule is one
 edit to the engine and reaches every repo on its next `pytest` run with no
@@ -15,7 +15,7 @@ re-publish step.
 Four independent, structural (AST-based) scans, each its own test so a
 failure names precisely which shape tripped rather than "the lint failed".
 Spec backlink: `docs/research/2026-07-28-windows-simulation-test-harness-design.md`
-(example-doctrine-repo) Component Design § 2 -- this file implements that blueprint's
+(coordinator-claude) Component Design § 2 -- this file implements that blueprint's
 static-shape tier. The blueprint's fifth shape (a docstring/comment that
 *describes* home resolution in bash spelling -- `${CLAUDE_HOME:-$HOME}`) is
 already covered by the standing `test_docstring_shell_paste_hazard.py` gate
@@ -236,7 +236,7 @@ def test_colon_join_baseline_has_no_stale_entries():
 def test_no_forward_slash_only_path_split():
     """A forward-slash-only path split (`p.rsplit("/", 1)`) is invisible to
     any test built only from POSIX-form fixtures and silently mishandles a
-    real Windows path (`X:\\example-doctrine-repo\\coordinator`) -- F8's root cause.
+    real Windows path (`X:\\coordinator-claude\\coordinator`) -- F8's root cause.
     Correct form: fold the backslash first (`.replace("\\\\", "/")`) before
     splitting, or split on `os.sep`.
     """

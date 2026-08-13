@@ -10,7 +10,7 @@ inert in production despite passing tests. This test asserts on the CALL
 (``mock.assert_called_once_with(..., repo_root=<worktree_root>)``), not
 merely that the op still runs, per the C6b2wire dispatch brief.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md § C6b2wire
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3 § C6b2wire
 
 Negative-spec:
 - Does NOT re-test ``derive()``'s own ledger-first resolution logic — that is

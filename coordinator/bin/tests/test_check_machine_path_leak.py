@@ -15,7 +15,7 @@ Covers:
     Hard blocks    — /home/<name>/, C:/Users/, X:\\ backslash → exit 1
     Non-target     — non-sentinel filename ignored → exit 0 + "nothing to check"
 
-Spec backlink: docs/plans/2026-06-23-machine-path-leak-guard.md
+Spec backlink: docs/plans/2026-06-23-machine-path-leak-guard.md [DEAD-CITATION: plan file never committed to this repo]
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md
 
 Run: python3 -m pytest <settings-home>/coordinator/bin/tests/test_check_machine_path_leak.py

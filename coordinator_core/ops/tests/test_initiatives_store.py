@@ -10,14 +10,14 @@ Coverage:
   (c) target_date        — is either None (burn-down shape) or a valid ISO YYYY-MM-DD string
   (d) status_enum        — status is in canonical-4 {active, paused, shipped, abandoned}
   (e) gate_b_constraint  — ALL currently seeded files use status: active (Gate-B constraint;
-                           non-active is reserved until example-doctrine-repo InitiativeStatus source widen lands)
+                           non-active is reserved until coordinator-claude InitiativeStatus source widen lands)
   (f) id_filename_match  — id field matches the YAML filename stem
   (g) fixture_roundtrip  — real on-disk YAML fixture files (in tmp_path) parse correctly via
                            _simple_yaml_load (lesson: test-fidelity-seed-fixtures-in-the-real)
   (h) optional_fields    — status_reason and description are absent or string (never crash)
   (i) catch_all_present  — the catch-all burn-down bucket is present and has target_date: null
 
-Spec backlink: docs/plans/2026-07-05-claude-klabauter-served-initiative-roadmap-read-model.md § C1
+Spec backlink: pln-claude-klabauter-served-initiative-roadm-8e0492 § C1
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ def test_status_in_canonical_4(initiative_file: tuple[Path, dict]) -> None:
 def test_gate_b_constraint_status_active(initiative_file: tuple[Path, dict]) -> None:
     """(e) Gate-B constraint: ALL currently seeded files must use status: active.
 
-    Non-active statuses (paused, shipped, abandoned) are reserved until the example-doctrine-repo
+    Non-active statuses (paused, shipped, abandoned) are reserved until the coordinator-claude
     InitiativeStatus source widen vendors in claude-klabauter (Gate B).  Setting a non-active
     status before Gate B produces cockpit records the vendored Zod validator rejects.
     See SCHEMA.md § Gate B constraint.
@@ -164,7 +164,7 @@ def test_gate_b_constraint_status_active(initiative_file: tuple[Path, dict]) -> 
     status = data.get("status")
     assert status == "active", (
         f"{path.name}: Gate-B constraint violated — status must be 'active' until "
-        f"example-doctrine-repo InitiativeStatus source widen lands, found {status!r}"
+        f"coordinator-claude InitiativeStatus source widen lands, found {status!r}"
     )
 
 

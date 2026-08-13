@@ -2,11 +2,11 @@
 coordinator_core.distill.log_normalize — one-time legacy-log NORMALIZER (C8).
 
 Purpose: migrate a repo's legacy pipe-table distillation log (columns
-`date | action | path | last_sha | belongs_to_spec | reason`) to the example-doctrine-repo C1 canonical
+`date | action | path | last_sha | belongs_to_spec | reason`) to the coordinator-claude C1 canonical
 schema (`## Run <run-id>` headers, rows `- <path> -> <disposition>, <fate> (run: <run-id>)`)
 so no repo carries a legacy shape going forward. Run exactly once per repo.
 
-Disposition mapping (example-doctrine-repo contract §7, binding on this surface — DR-053, exact-string
+Disposition mapping (coordinator-claude contract §7, binding on this surface — DR-053, exact-string
 match on `action`, NO regex / NO case-fold; the enumeration below is the entire
 recognized set):
     ARCHIVED         -> DISTILLED   (keyed on legacy `path`)
@@ -25,7 +25,7 @@ under `skipped` with an "unrecognized action" reason, never dropped from the row
 §7's fail-loud discipline depends on this distinction: a permissive/case-folding matcher
 would risk silently swallowing a future action whose name merely resembles a known one.
 
-Field mapping (example-doctrine-repo contract §7):
+Field mapping (coordinator-claude contract §7):
     legacy `path`            -> canonical `<path>`, for every action EXCEPT distill-harvest
     legacy `belongs_to_spec` -> canonical `<path>`, for distill-harvest ONLY (DR-053: the
                                  harvest-debt reader keys on specs-dir-relative paths;
@@ -80,8 +80,8 @@ not delete the legacy file; the original is preserved in-place at `backup_path` 
 copy, never overwritten if already present), and the canonical file is written to
 `log_path` only after that backup succeeds.
 
-Spec backlink: docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md § C8;
-Example-doctrine-repo/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
+Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C8;
+Coordinator-claude/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
 
 Arrow-dialect migration (2026-08-06) — `normalize_arrow_dialects_log`
 ----------------------------------------------------------------------
@@ -89,7 +89,7 @@ A second, independent normalizer in this module for a THIRD non-canonical input 
 distinct from the legacy pipe-table format above: a log that is ALREADY under real
 `## Run <run-id>` headers, where some rows parse as canonical and others are arrow-edged
 near-misses that `_common._ROW_RE` rejects. Source: inbound memo
-`cross-repo/inbox/2026-08-06-example-doctrine-repo-em-distill-log-correction-the-defect-is-ours.md`
+`cross-repo/inbox/2026-08-06-coordinator-claude-em-distill-log-correction-the-defect-is-ours.md`
 (retracting an earlier, wrong ask to loosen `_RUN_HEADER_RE`/`_ROW_RE` — those canonical
 matchers are correct and are NOT modified by this module; a non-conforming log is fixed by
 migrating its rows, never by loosening the reader).
@@ -176,7 +176,7 @@ ACTION_DISPOSITION_MAP = {
     "DELETE": "EPHEMERAL",
     "distill-harvest": "DISTILLED",
 }
-"""Legacy `action` -> canonical `disposition`, example-doctrine-repo-blessed (contract §7, binding,
+"""Legacy `action` -> canonical `disposition`, coordinator-claude-blessed (contract §7, binding,
 DR-053). Exact-string match only — deliberately NOT case-folded, so `distill-harvest`
 (lowercase, hyphenated) and `ARCHIVED`/`DELETED`/`DELETE` (uppercase) coexist as
 distinct literal keys rather than being normalized to one case. Any `action` value not
@@ -546,7 +546,7 @@ reader-side treatment of lowercase `deleted`."""
 _ARROW_RUN_HEADER_RE = re.compile(r"^##\s+Run\s+(?P<run_id>\S+)(?:\s+.*)?$")
 """Permissive header-line matcher, local to this module only, used solely to associate
 arrow-dialect rows with their enclosing run for canonical rendering. Deliberately more
-permissive than `_common._RUN_HEADER_RE` (which is binding as example-doctrine-repo's canonical parser and
+permissive than `_common._RUN_HEADER_RE` (which is binding as coordinator-claude's canonical parser and
 is NOT modified here, per the retracted `distill-log-parser-discards-every-run` memo) —
 it tolerates trailing prose after the run-id token (e.g. `## Run 2026-05-06 (harvest
 sweep) — description`) purely so this scanner can locate the enclosing run_id for a row;

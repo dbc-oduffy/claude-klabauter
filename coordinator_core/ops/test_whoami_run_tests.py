@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.whoami_run_tests.
 
-Port of: run-tests.sh (example-doctrine-repo 6fb5fb37, 2026-07-22). Golden-oracle parity
+Port of: run-tests.sh (coordinator-claude 6fb5fb37, 2026-07-22). Golden-oracle parity
 targets (captured 2026-07-17): fresh provision -> full suite green (exit 0); provisioned +
 selector -> exit 0; provisioned + missing-file selector -> pytest exit 4.
 Full end-to-end venv provisioning is exercised only in the `slow` marker

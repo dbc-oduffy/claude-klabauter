@@ -18,7 +18,7 @@ A guard assertion pins ``read_schema_version() >= (2, 14, 0)`` so this test fail
 than false-greening if it is ever run against a pre-2.14.0 pin (where the pass no-ops and (ii)
 would be vacuous).
 
-Spec backlink: docs/plans/2026-07-13-emission-scope-conformance-v2140.md § C4 / AC6, D25 §6.
+Spec backlink: pln-claude-klabauter-emission-scope-conforma-1f0dbb § C4 / AC6, D25 §6.
 """
 
 from __future__ import annotations

@@ -5,9 +5,9 @@ parity test for C8b's ``render_repo_section`` port of ``render-handoff-tracker.j
 Golden-fixture provenance (load-bearing for AC12's "full-fidelity" claim): the
 checked-in fixture tree at ``tests/fixtures/render_handoff_tracker/`` and the golden
 output at ``tests/fixtures/render_handoff_tracker_golden.md`` were captured by running
-the REAL example-doctrine-repo ``bin/render-handoff-tracker.js`` (``renderRepoSection`` export) against
+the REAL coordinator-claude ``bin/render-handoff-tracker.js`` (``renderRepoSection`` export) against
 the fixture tree, via a small node harness — BEFORE the node source is removed, per
-the plan's "reconstruct from example-doctrine-repo:85006468^" discipline. The only normalization applied
+the plan's "reconstruct from coordinator-claude:85006468^" discipline. The only normalization applied
 to the captured output is replacing the live ``<!-- generated: ... -->`` timestamp with
 the ``{{GENERATED}}`` placeholder this test also substitutes in the Python output before
 comparing (the timestamp line is intentionally excluded from ``render_repo_section``'s
@@ -26,7 +26,7 @@ frontmatter block) surfaced as a fail-loud row, and (C9-parity) three
 real node ``renderRepoSection`` AFTER this addition, so the golden file's
 ``## Execution Handoffs`` section is itself parity-verified, not hand-authored.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C8b
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b
 """
 
 from __future__ import annotations

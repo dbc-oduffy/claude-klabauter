@@ -19,7 +19,7 @@ test_coverage_gate, test_handoff_children, test_mcp_shim).
 All async op handlers are exercised via asyncio.run() in plain sync test functions
 to avoid the pytest-asyncio dependency (engine is stdlib-only; no test-infra additions).
 
-Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C8
+Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C8
 """
 
 from __future__ import annotations

@@ -1,8 +1,8 @@
-"""debash-scorecard.py — how close is the example-doctrine-repo tree to zero `.sh`?
+"""debash-scorecard.py — how close is the coordinator-claude tree to zero `.sh`?
 
 Answers "have we rid ourselves of bash yet?" as a number, not an investigation.
 
-The PM directive of record is CLEAN-SLATE: zero `.sh` in the example-doctrine-repo tree, with an
+The PM directive of record is CLEAN-SLATE: zero `.sh` in the coordinator-claude tree, with an
 irreducible floor of one bootstrap file (`resolve-python.sh` — corrected from two
 on 2026-07-22; `spawn-hidden.sh` did not hold up as irreducible and has been
 ported, see MASTER-disposition.md §6). The full per-file disposition lives in
@@ -68,7 +68,7 @@ FLOOR = ()
 
 
 def repo_root() -> Path:
-    """Resolve the example-doctrine-repo repo root from git, falling back to this file's tree."""
+    """Resolve the coordinator-claude repo root from git, falling back to this file's tree."""
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -167,7 +167,7 @@ def delta(now: int, was: int) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Report progress toward zero .sh in the example-doctrine-repo tree.")
+    ap = argparse.ArgumentParser(description="Report progress toward zero .sh in the coordinator-claude tree.")
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     ap.add_argument(
         "--list",

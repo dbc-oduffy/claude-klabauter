@@ -1,6 +1,6 @@
 """
 coordinator_core.session.claude_md_grant — session-scoped PM authorization
-grant for CLAUDE.md-class writes, per example-doctrine-repo
+grant for CLAUDE.md-class writes, per coordinator-claude
 docs/plans/2026-07-27-claude-md-altitude-triage.md § C5.
 
 Modeled DIRECTLY on ``coordinator_core.session.grant`` (the Tier-U grant,
@@ -96,7 +96,7 @@ internal to this trampoline — there is no CLAUDE_KLABAUTER_ROOT indirection he
 since the module already lives in ``coordinator_core``, so 3 is reserved
 for import-shape errors only).
 
-Spec backlink: example-doctrine-repo docs/plans/2026-07-27-claude-md-altitude-triage.md § C5
+Spec backlink: coordinator-claude docs/plans/2026-07-27-claude-md-altitude-triage.md § C5
 Precedent: coordinator_core/session/grant.py (Tier-U grant, DR-088 layer 5)
 Precedent (persistence-shape cross-check, per C5's own instruction):
     coordinator_core/workday_complete/autonomous_verb.py — that module

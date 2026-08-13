@@ -11,7 +11,7 @@ caller now invokes this CLI, or imports coordinator_core.trusted_root_guard
 directly where the call site is already Python).
 
 Trust-core + mode semantics are NOT reimplemented here — this is a thin argv
-passthrough to coordinator_core.trusted_root_guard (DR-047: example-doctrine-repo owns
+passthrough to coordinator_core.trusted_root_guard (DR-047: coordinator-claude owns
 contract, claude-klabauter owns engine).
 
 This CLI is now the sole non-Python entrypoint for the trust-core check.
@@ -34,7 +34,7 @@ Exit codes (parity with the former bash sourced-lib function's contract):
       the business-rejection code above (porter addendum §3/3b) — a
       claude-klabauter-link failure must not read as "untrusted root".
 
-Spec backlink: docs/plans/2026-07-19-bash-clean-slate-residual-migration.md
+Spec backlink: docs/plans/2026-07-19-bash-clean-slate-residual-migration.md [DEAD-CITATION: plan file never committed to this repo]
                § unit-coordinator-session-family
 Canonical trust-core: coordinator_core.trusted_root_guard (claude-klabauter) —
                        prose/trust-core doc-of-record remains

@@ -1,6 +1,6 @@
 """
 IntelligenceSignal — example-market-data-repo signal fact (Level-2 aggregate).
-Pydantic port of example-doctrine-repo `coordinator/cockpit-contract/src/entities/intelligence-signal.ts`
+Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/intelligence-signal.ts`
 (Zod source).
 
 Second of two v2.16.0 example-market-data-repo emission entities. Per-repo (D25

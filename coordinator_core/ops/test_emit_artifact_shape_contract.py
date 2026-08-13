@@ -1,12 +1,12 @@
 """Characterization tests for coordinator_core.ops.emit_artifact_shape_contract.
 
-Port source: example-doctrine-repo coordinator/bin/emit-artifact-shape-contract.js (retired
+Port source: coordinator-claude coordinator/bin/emit-artifact-shape-contract.js (retired
 2026-07-24, D1 of docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md
 — zero fleet callers per the fleet-reachability gate, no trampoline). Independently
-re-derives the assertions from example-doctrine-repo coordinator/bin/tests/
+re-derives the assertions from coordinator-claude coordinator/bin/tests/
 test-emit-artifact-shape-contract.js (not a re-assertion of this module's own
 transcription) — each `it(...)` block in that file has a corresponding test here,
-run against a FRESH emit of the real example-doctrine-repo coordinator/schemas/ tree, plus a
+run against a FRESH emit of the real coordinator-claude coordinator/schemas/ tree, plus a
 synthetic-schema-dir unit suite that exercises field_to_json_schema/schema_to_json_schema
 edge cases directly (no cross-repo dependency).
 
@@ -55,7 +55,7 @@ def _run_python_emit(tmp_path: Path, monkeypatch) -> dict:
 @pytest.fixture()
 def bundle(tmp_path, monkeypatch):
     if not _SIBLING_AVAILABLE:
-        pytest.skip("example-doctrine-repo sibling repo (coordinator/schemas) not available")
+        pytest.skip("coordinator-claude sibling repo (coordinator/schemas) not available")
     return _run_python_emit(tmp_path, monkeypatch)
 
 
@@ -288,7 +288,7 @@ def test_missing_coordinator_root_env_returns_2(monkeypatch):
 
 class TestArgvIsNotIgnored:
     """`main` once accepted argv and discarded it, so `--help` emitted the bundle into
-    example-doctrine-repo's working tree instead of printing usage. These pin that an operator
+    coordinator-claude's working tree instead of printing usage. These pin that an operator
     reaching for an interface, or fat-fingering a flag, never triggers a peer-tree write.
     """
 
@@ -339,7 +339,7 @@ def test_sub_shapes_collision_returns_1(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Cross-schema $ref rewrite (2026-08-03, contract v3.2.0). Regression coverage for
-# cross-repo/inbox/2026-08-03-example-doctrine-repo-em-artifact-contract-external-ref-survives-bundling.md:
+# cross-repo/inbox/2026-08-03-coordinator-claude-em-artifact-contract-external-ref-survives-bundling.md:
 # a $id-style cross-schema $ref (https://coordinator.local/schemas/<name>.schema.json)
 # must be rewritten to its bundled #/$defs/<name> location, and an unregistered target
 # must refuse to emit rather than ship an unresolvable ref.
@@ -406,11 +406,11 @@ def test_registered_cross_schema_ref_rewritten_to_intra_bundle_pointer(tmp_path,
 # ---------------------------------------------------------------------------
 # Real-tree parity — re-derives every assertion from the JS oracle's own test
 # file (test-emit-artifact-shape-contract.js) independently against a fresh
-# Python emit. Skipped when the example-doctrine-repo sibling repo isn't checked out.
+# Python emit. Skipped when the coordinator-claude sibling repo isn't checked out.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _SIBLING_AVAILABLE, reason="example-doctrine-repo sibling repo not available for real-tree parity check")
+@pytest.mark.skipif(not _SIBLING_AVAILABLE, reason="coordinator-claude sibling repo not available for real-tree parity check")
 class TestRealTreeParity:
     def test_version_pin(self, bundle):
         # Deliberately a LITERAL, not CONTRACT_VERSION — the `bundle` fixture emits
@@ -423,7 +423,7 @@ class TestRealTreeParity:
         assert bundle["version"] == "6.1.0"
 
     def test_no_external_ref_values_anywhere_in_bundle(self, bundle):
-        # Regression for cross-repo/inbox/2026-08-03-example-doctrine-repo-em-artifact-contract-
+        # Regression for cross-repo/inbox/2026-08-03-coordinator-claude-em-artifact-contract-
         # external-ref-survives-bundling.md — assert over the WHOLE serialized bundle
         # (not just $defs.plan) so a future second such ref trips this too, not only
         # the one known offender.

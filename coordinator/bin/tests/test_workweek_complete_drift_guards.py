@@ -3,7 +3,7 @@
 
 Purpose: unit tests for coordinator/bin/workweek-complete-drift-guards.py —
 the M3 chunk WWC-3 port of five genuine bash-logic fences out of
-Example-doctrine-repo's `coordinator/commands/workweek-complete.md`:
+Coordinator-claude's `coordinator/commands/workweek-complete.md`:
 description-length/enabledPlugins-drift advisory dispatch, the change-aware
 dep-manifest CVE-recheck (manifest-presence gate + 14-day window), the
 schema-drift-gate three-way rc branch, the repo-wide ShellCheck sweep loop,

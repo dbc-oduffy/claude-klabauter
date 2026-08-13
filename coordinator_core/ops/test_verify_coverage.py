@@ -2,7 +2,7 @@
 coordinator_core.ops.test_verify_coverage
 
 Independent parity tests for coordinator_core.ops.verify_coverage, the port of
-Example-doctrine-repo's retired bash/JS coverage-sweep oracle. Each test builds its own
+Coordinator-claude's retired bash/JS coverage-sweep oracle. Each test builds its own
 scaffolded fixture tree and asserts the surfaced/silenced orphan categories
 directly against the ported functions -- these do NOT re-derive the port's own
 transcription, they independently reconstruct the expected verdict from the
@@ -471,7 +471,7 @@ def test_files_scanned_count_excludes_unread_candidates(tmp_path):
 #
 # The former JS-oracle byte-for-byte cross-check
 # (test_json_output_matches_js_oracle_byte_for_byte) is retired: the recovered
-# JS oracle (last independent at example-doctrine-repo `93887f6f^`) diverges from the native op
+# JS oracle (last independent at coordinator-claude `93887f6f^`) diverges from the native op
 # at HEAD on `scanIncomplete`/`scanErrors`/`filesScanned` -- fields the native
 # op legitimately added after the JS oracle was retired. The byte-parity
 # assertion was already false, not merely
@@ -535,7 +535,7 @@ def test_json_envelope_top_level_keys_are_stable(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Marker-vocabulary discriminator -- fence/sentinel/marker/block prose
-# (cross-repo memo 2026-08-06-example-doctrine-repo-em-verify-coverage-extractor-
+# (cross-repo memo 2026-08-06-coordinator-claude-em-verify-coverage-extractor-
 # marker-vocabulary.md)
 # ---------------------------------------------------------------------------
 

@@ -4,7 +4,7 @@ Purpose: Provide the two liveness predicates (+ the heartbeat write) that
 coordinator_core operations depend on. As of the de-bash W2 leg (2026-07-19)
 this module DELEGATES to the in-process native port
 ``coordinator_core.session.liveness`` / ``coordinator_core.session.core``
-rather than shelling out to the example-doctrine-repo bash ``coordinator-session.sh`` — the
+rather than shelling out to the coordinator-claude bash ``coordinator-session.sh`` — the
 Windows critical path can no longer depend on a POSIX shell (PM mandate:
 kill ALL bash on the critical path). The public surface
 (``resolve_live_session_ids`` / ``cs_claim_holder_live`` /
@@ -29,7 +29,7 @@ Single-liveness-key invariant (D5, pcore-03): every consumer routes through the
 one ``session.liveness.session_live`` decision; no PID fields are duplicated
 into claim dirs or any Python structure here.
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § D5,
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § D5,
 § C0, § AC9; docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4a-g1
 (native port); de-bash W2 liveness leg (seam wire).
 """
@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 # 3-rung __file__-walk + resolve-coordinator-clone subprocess ladder this
 # function used to run is GONE: coordinator-session.sh was retired
 # repo-wide (migrated to claude-klabauter's coordinator/lib/coordinator_session.py,
-# not to a example-doctrine-repo-side sibling __file__ can walk to), so every one of those
+# not to a coordinator-claude-side sibling __file__ can walk to), so every one of those
 # rungs always missed. The ladder collapses to a single call through the
 # canonical claude-klabauter-root resolver (coordinator_core.claude_klabauter_root) — no
 # __file__-walking, no hardcoded sibling names, no subprocess spawn (and
@@ -111,7 +111,7 @@ def _lib_path() -> Optional[str]:
 # ---------------------------------------------------------------------------
 #
 # The cache key is the RESOLVED SESSIONS DIR, not a bare timestamp (break-class
-# fix, 2026-08-07; cross-repo memo `2026-08-07-example-doctrine-repo-em-scoped-commit-
+# fix, 2026-08-07; cross-repo memo `2026-08-07-coordinator-claude-em-scoped-commit-
 # calls-a-live-peer-dead-and-reapable`). This function is zero-arg and resolves
 # its registry from the PROCESS cwd, so in a process that touches two repos --
 # ordinary in a fleet where one engine serves sibling clones -- an unkeyed
@@ -198,7 +198,7 @@ def update_last_activity(session_dir: str, iso: str) -> None:
                      (e.g. .git/coordinator-sessions/<sid>/).
         iso:         ISO-8601 timestamp string to write as last_activity.
 
-    Spec backlink: docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md § D4, C0
+    Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § D4, C0
     """
     # Review: code-reviewer (F3) — guard against empty or relative session_dir and
     # empty iso; a relative path would resolve against the process cwd rather than

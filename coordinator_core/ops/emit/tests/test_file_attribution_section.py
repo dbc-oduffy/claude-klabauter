@@ -342,7 +342,7 @@ def test_relativize_posix_in_repo():
 
 
 def test_relativize_posix_out_of_repo():
-    result = _relativize_or_exclude("/Users/x/example-doctrine-repo/sub/file.py", PurePosixPath("/Users/x/claude-klabauter"))
+    result = _relativize_or_exclude("/Users/x/coordinator-claude/sub/file.py", PurePosixPath("/Users/x/claude-klabauter"))
     assert result is None
 
 
@@ -384,7 +384,7 @@ def test_relativize_windows_shaped_case_insensitive_drive_and_components():
 
 def test_relativize_windows_shaped_out_of_repo():
     result = _relativize_or_exclude(
-        r"C:\Users\x\example-doctrine-repo\sub\file.py", Path(r"C:\Users\x\claude-klabauter")
+        r"C:\Users\x\coordinator-claude\sub\file.py", Path(r"C:\Users\x\claude-klabauter")
     )
     assert result is None
 

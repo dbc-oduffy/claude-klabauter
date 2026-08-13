@@ -5,7 +5,7 @@ directory equals an expected absolute path.
 
 Purpose: a generic session-cwd inheritance guard. Ports the one-line Phase-3
 new-project ceremony assert `[ "$(git rev-parse --show-toplevel)" = "<abs>" ]
-|| exit 1` (example-doctrine-repo new-project/SKILL.md) into a naked-Python CLI so the ceremony
+|| exit 1` (coordinator-claude new-project/SKILL.md) into a naked-Python CLI so the ceremony
 fence can invoke a settings-home forwarder instead of hand-rolling the git
 subprocess + string-compare inline.
 

@@ -2,7 +2,7 @@
 coordinator_core.session.tests.test_liveness — parity tests for
 coordinator_core.session.liveness.
 
-Port of: liveness.sh (example-doctrine-repo 6aa77d4b, 2026-07-21).
+Port of: liveness.sh (coordinator-claude 6aa77d4b, 2026-07-21).
 
 Oracle bash functions cited per test class:
   - is_session_live       -> _cs_is_session_live
@@ -27,7 +27,7 @@ is cross-platform).
 NEGATIVE-SPEC (2026-07-22 parity-retire-fold,
 state/review-trail/findings/2026-07-22-parity-retire-fold-plan.md § 7 C1):
 this module absorbed the former test_liveness_parity.py, which cross-checked
-this module's session_live against the example-doctrine-repo bash oracle
+this module's session_live against the coordinator-claude bash oracle
 (coordinator/lib/session/liveness.sh's _cs_session_live). That oracle was
 retired at 6aa77d4b ("A2-a: delete liveness.sh, cut over coordinator-session.sh
 to session-liveness-cli") and its trampoline shell deleted outright at
@@ -353,7 +353,7 @@ class TestSessionLive:
 
 
 class TestSessionLiveMetalessRecencyFallback:
-    """Wrongful-takeover fallback (example-doctrine-repo 642195ba / 88929bea):
+    """Wrongful-takeover fallback (coordinator-claude 642195ba / 88929bea):
     ``session_live``'s Layer 2 must NOT read a meta-less/unparseable session
     dir as instantly-DEAD by defaulting to epoch-0 recency — a mid-write dir
     (meta.json not yet flushed) is a LIVE session, not a takeable one. The

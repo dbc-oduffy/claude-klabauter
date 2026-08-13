@@ -5,7 +5,7 @@ coordinator-doc-new — scaffold a conformant coordinator document (handoff, spi
 
 Spec backlink: docs/plans/2026-06-25-example-initiative-tc-0-canonical-baton-shape.md § C4 (D3)
 Spec backlink (A4): docs/plans/2026-06-25-example-initiative-tc-4-fleet-machinery-contract-emit.md § A4
-Spec backlink (C3b): docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, D2, D3, C3b
+Spec backlink (C3b): pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, D2, D3, C3b
 
 Purpose: Emit conformant frontmatter + the canonical section skeleton for a baton
 artifact, writing it to a file. The EM fills the body via Edit. This is the GENERATE
@@ -217,7 +217,7 @@ _ensure_engine_on_path()
 # every non-ledger-owing doc type on an unresolvable engine; this restores the
 # file's own fail-open convention while keeping the six ledger-owing scaffolders
 # loud on the same failure.
-# Spec backlink: docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C2
+# Spec backlink: pln-ledger-owing-handoff-kinds-emi-648818 § C2
 try:
     from coordinator_core.session_ledger import SESSION_LEDGER_BLOCK_LINES  # noqa: E402
 except ImportError:  # noqa: BLE001 -- best-effort import; unresolvable engine degrades to None
@@ -385,7 +385,7 @@ def _sanitize_session_segment(seg: str) -> str:
 #
 # Resolution order:
 #   1. cwd git-root → reverse-lookup against machine-local repos.* table
-#   2. Example-doctrine-repo repo (repos.example_doctrine_repo) path-match → "claude-central-em"
+#   2. Coordinator-claude repo (repos.example_doctrine_repo) path-match → "claude-central-em"
 #   3. Unregistered git repo → basename of git root + "-em"
 #   4. Not in a git repo → "unknown-sender-em"
 #
@@ -505,7 +505,7 @@ def _stamp_completion_scaffold_liveness(repo_root: str | None) -> None:
     relative import. Never raises -- a liveness-stamp failure must not surface as a
     scaffold failure.
 
-    Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C17b (four missing
+    Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C17b (four missing
     stamp_liveness call sites -- completion_scaffold leg).
     """
     if not repo_root:
@@ -542,7 +542,7 @@ def _assert_no_archived_handoff_twin(out_path: str, handoff_id: str | None, repo
     scaffold on an environment this tool already tolerates elsewhere.
 
     Spec backlink: docs/audits/2026-07-26-handoff-live-archive-duplication-origin.md
-    (example-doctrine-repo); coordinator_core.handoff_creation_guard (claude-klabauter) — the
+    (coordinator-claude); coordinator_core.handoff_creation_guard (claude-klabauter) — the
     shared guard this call delegates to, also enforced at the two engine-side
     handoff-creation ops (handoff.author_fork, handoff.scaffold_from_queue).
     """
@@ -613,9 +613,9 @@ def _assert_scaffold_content_valid(content: str, out_path: str, repo_root: str |
     the generated content triggers the hard exit.
 
     Spec backlink: cross-repo memo
-    2026-08-01-example-doctrine-repo-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
+    2026-08-01-coordinator-claude-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
     § "Also worth noting regardless of the above".
-    Spec backlink (C3): docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C3
+    Spec backlink (C3): pln-ledger-owing-handoff-kinds-emi-648818 § C3
     """
     if not repo_root:
         return
@@ -746,8 +746,8 @@ def _mint_deliverable_id(
     caller doesn't pass one.
     Returns None on any failure (graceful — callers emit 'null' in that case).
 
-    Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, C3b
-    Spec backlink (AC2 carry-path logging): docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C1
+    Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, C3b
+    Spec backlink (AC2 carry-path logging): pln-deliverable-id-fork-remediatio-894e26 § C1
     Negative-spec: does NOT re-mint when deliverable_id is supplied — carry path only.
     Negative-spec: does NOT write to disk — pure identity computation.
     """
@@ -1011,7 +1011,7 @@ def _is_placeholder_title(title: str) -> bool:
     every polluted record is a live false-clear edge. An absent id dangles honestly
     and is trivially sweepable; a wrong one is indistinguishable from a right one.
 
-    Spec backlink: cross-repo/inbox/2026-08-05-example-doctrine-repo-em-placeholder-id-minting-fix-unfiled.md
+    Spec backlink: cross-repo/inbox/2026-08-05-coordinator-claude-em-placeholder-id-minting-fix-unfiled.md
     Sizing: state/sizings/2026-08-05-placeholder-title-guard-at-artifact-id-m.yaml
 
     Negative-spec: matches on the scaffold's own sentinel prefix, NOT on the word
@@ -1116,7 +1116,7 @@ def _plan_slug_from_path(plan_path: str) -> str:
     E.g.: docs/plans/2026-06-09-executor-sidecar-flight-recorder.md
           → executor-sidecar-flight-recorder
 
-    Port of: fan-out-dispatch.sh § PLAN_SLUG (example-doctrine-repo 65e5d199, 2026-07-19)
+    Port of: fan-out-dispatch.sh § PLAN_SLUG (coordinator-claude 65e5d199, 2026-07-19)
     Negative-spec: if the basename has no YYYY-MM-DD- prefix the full basename (minus .md)
     is used as-is — no error is raised, matching fan-out-dispatch.sh fallback behaviour.
     Negative-spec: if stripping the date prefix and .md suffix yields an empty string (e.g.
@@ -1288,7 +1288,7 @@ def _delegate_to_workflow_scaffold() -> None:
     other scaffolders resolve the repo root implicitly, so this delegate preserves
     that ergonomic default rather than requiring every caller to pass --repo.
 
-    Spec backlink: docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md
+    Spec backlink: pln-workflow-skeleton-stamper-maki-adab0d
     Negative-spec: does NOT parse or validate --name/--phase/--pattern here — the
     veneer owns all flag parsing and the op contract. This function only forwards.
     """
@@ -1388,7 +1388,7 @@ def _validate_category(value: str) -> None:
 # this constant exists to close.
 # Owned by coordinator_core.session_ledger (the parser's own package) — imported here,
 # not re-typed, so emitter and parser cannot drift independently.
-# Spec backlink: docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C1/C2
+# Spec backlink: pln-ledger-owing-handoff-kinds-emi-648818 § C1/C2
 _SESSION_LEDGER_BLOCK: list[str] | None = SESSION_LEDGER_BLOCK_LINES
 
 
@@ -1516,7 +1516,7 @@ def _scaffold_handoff(
     defaults to 'infra' unchanged when not supplied (behavior-preserving default).
     Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-coordinator-doc-new-category-no-validation.md
 
-    Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, D2, C3b
+    Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, D2, C3b
     Spec backlink (handoff_id): docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md § C1
     Spec backlink (handoff_phase): docs/plans/2026-07-17-execution-handoff-phase-doe-contract.md § C4
     Spec backlink (origin_handoff_id/predecessor_id): cross-repo memo
@@ -1757,7 +1757,7 @@ def _scaffold_spinoff(
     see _scaffold_handoff's docstring for the full carry-not-mint contract.
     Omitted entirely (not null) when not supplied.
 
-    Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, D2, C3b
+    Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, D2, C3b
     Spec backlink (handoff_id): docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md § C1
     Spec backlink (origin_handoff_id/predecessor_id): cross-repo memo
     2026-07-22-claude-klabauter-em-c2-id-companions (ask 1);
@@ -1872,7 +1872,7 @@ def _scaffold_roadmap_baton(
     scaffold's optional-omit convention above.
 
     Spec backlink: docs/plans/2026-06-29-cli-scaffold-deterministic-docs.md § C3c
-    Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, D2, C3b
+    Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, D2, C3b
     Spec backlink (handoff_id): docs/plans/2026-08-01-baton-spine-information-integrity.md § A5 (AC13)
 
     category (--category) is validated against _HANDOFF_CATEGORY_ENUM before the
@@ -2299,8 +2299,8 @@ def _scaffold_plan(
     commented-optional-key skeleton is left unchanged (no behavior change).
 
     Spec backlink: docs/plans/2026-06-25-example-initiative-tc-1-records-consolidation.md § C5
-    Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1, D3, C3b
-    Spec backlink: docs/plans/2026-08-06-plan-sizing-citation-gate.md § AC2
+    Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, D3, C3b
+    Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § AC2
     """
     today = _today()
     _pid = _yaml_quote(plan_id) if plan_id else "null"
@@ -2970,7 +2970,7 @@ def _scaffold_goal(title: str) -> str:
         f"created: {today}",
         "# owner: PLACEHOLDER  # optional — EM or workstream identifier",
         "period: week  # required by emitter — day | week | repo | quarter | year",
-        "period_value: \"PLACEHOLDER\"  # required: e.g. 2026-W28 (week), 2026-07-07 (day), example-doctrine-repo-2026 (repo), Q3-2026 (quarter), 2026 (year)",
+        "period_value: \"PLACEHOLDER\"  # required: e.g. 2026-W28 (week), 2026-07-07 (day), coordinator-claude-2026 (repo), Q3-2026 (quarter), 2026 (year)",
         "# weekly_perceptible: true  # optional — TOP-LEVEL goal-scope flag, distinct from the per-KR field above",
         "# parent_goal_id: null  # optional — FK to a parent quarter/repo OKR goal_id, or null",
         f"# goal_id: {_yaml_quote(goal_id)}  # optional — deterministic sha1(repo|root|period|period_value|text); this is the structured-records (C15) facet key, DISTINCT from the wire goal_id (append-goal-event.py derives its own hash from id-prefixed text and currently ignores --goal-id); populate once period/period_value/objective are final",
@@ -3006,7 +3006,7 @@ def _scaffold_sizing(title: str, deliverable_id: str | None = None) -> str:
     Output path: state/sizings/YYYY-MM-DD-<slug>.yaml.
 
     Spec backlink: docs/plans/2026-07-24-sizing-lobby-core.md § C1/C3
-    Spec backlink: docs/plans/2026-08-10-a-sizing-mints-the-join-key-that-closes-it.md § C1
+    Spec backlink: pln-a-sizing-mints-the-join-key-th-8eaca3 § C1
     Negative-spec: does NOT emit prose body content or `---` frontmatter
     fences — whole-document-yaml match_mode, matching _scaffold_goal.
     Does NOT resolve the sizing halt — `fork` scaffolds `null`;
@@ -3084,7 +3084,7 @@ def _scaffold_strategic_self_description(title: str) -> str:
         "  kind: none  # none | url | claude-session — see schema $defs for the required payload shape of the other two kinds",
         "  label: \"<call-to-action label>\"",
         "hero_asset: null  # OPTIONAL hero image/screenshot URI — present-as-null when absent, never omit this key",
-        "# maturity_axis: null  # OPTIONAL, consumer-set-only field — example-doctrine-repo schema does not interpret its value",
+        "# maturity_axis: null  # OPTIONAL, consumer-set-only field — coordinator-claude schema does not interpret its value",
         "# depends_on: []  # OPTIONAL, consumer-set-only field — repo_identity tuples this repo depends on",
     ]
     return "\n".join(lines) + "\n"
@@ -3106,7 +3106,7 @@ def _scaffold_research_synthesis(title: str) -> str:
     query-records --since/--older-than (reads fm.created); `date:` is excluded from
     temporal filtering and would cause research-synthesis records to be silently skipped.
 
-    Spec backlink: docs/plans/2026-06-29-deep-research-queryable-index-layer.md § C6
+    Spec backlink: docs/plans/2026-06-29-deep-research-queryable-index-layer.md § C6 [DEAD-CITATION: plan file never committed to this repo]
     Negative-spec: does NOT emit body prose — section headers + HTML comments only.
     The research-synthesizer authors the body; the scaffolder provides the shape.
     """
@@ -3199,7 +3199,7 @@ def _scaffold_run_report(
     coordinator_core.subagent_sandbox.provision_report._frontmatter emits
     (C6, commit 8571f7f22273, corrected in C6b after a staff review found
     C6's original all-null-subfields shape was schema-invalid). Field shape
-    matches the printf the retired fan-out-dispatch.sh (example-doctrine-repo 65e5d199,
+    matches the printf the retired fan-out-dispatch.sh (coordinator-claude 65e5d199,
     2026-07-19) used to emit for the fields it still shares.
 
     This function is the former _scaffold_flight_recorder, renamed and extended
@@ -3379,7 +3379,7 @@ def _scaffold_subagent_sidecar(
     """Generate a subagent-sidecar decision-object container.
 
     Schema-of-record: schemas/decision-object.schema.json $defs/subagent_sidecar
-    (example-doctrine-repo-owned CONTRACT artifact — this scaffolder is the claude-klabauter-side GENERATE
+    (coordinator-claude-owned CONTRACT artifact — this scaffolder is the claude-klabauter-side GENERATE
     altitude, not a schema fork). Reuses the run-report dispatch frontmatter
     shape (plan/chunk/dispatched_at/dispatched_by/status/agent_type/spawned_at/
     commits/sidecar_schema — see _scaffold_run_report) and layers the THREE
@@ -3676,7 +3676,7 @@ def _safe_output_roots() -> list:
         it's set to something tempfile itself wouldn't resolve to).
       - /tmp and /var/folders (POSIX fixed paths; harmless no-ops on Windows).
 
-    Spec backlink: docs/plans/2026-07-03-stop-the-rot-claude-klabauter-state-home-placement.md § C10 / AC7
+    Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C10 / AC7
     """
     roots = []
     repo_root = _current_repo_root()
@@ -3896,7 +3896,7 @@ Examples:
       --out state/scratch/migrate-baton-shape.workflow.js
 
 Spec backlink: docs/plans/2026-06-25-example-initiative-tc-0-canonical-baton-shape.md § C4
-Spec backlink (workflow): docs/plans/2026-07-12-workflow-skeleton-stamper-claude-klabauter-engine.md
+Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
 """,
     )
 

@@ -27,7 +27,7 @@ against a representative envelope shaped exactly like each guard's own
 trigger command.
 
 Spec backlink: docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md
-(example-doctrine-repo) row H6.
+(coordinator-claude) row H6.
 """
 from __future__ import annotations
 

@@ -56,7 +56,7 @@ Windows: the sh-shim re-exec the trampoline performs costs
 ~326ms/invocation on Windows versus invoking the same Python body directly
 (1306ms via the shim vs 980ms direct, byte-identical output — measured in
 `state/audits/2026-07-20-sh-suffixed-python-trampolines.md` in the
-Example-doctrine-repo clone, not this repo; the path is qualified deliberately, and
+Coordinator-claude clone, not this repo; the path is qualified deliberately, and
 its absence here is not evidence it is missing — see
 `coordinator/bin/check-sh-suffix-polyglot.py`'s own docstring, which cites
 the same figure the same way). That tax is paid on EVERY invocation,

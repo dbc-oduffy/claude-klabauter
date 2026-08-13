@@ -5,7 +5,7 @@ Mirrors the bash oracle case-for-case (zero / one / multiple / invalid-commit)
 plus additional coverage for the case-insensitive fallback path and CLI
 usage/exit-code parity.
 
-Port of: parse-resolves-trailer.test.sh (example-doctrine-repo 3a561713, 2026-07-22)
+Port of: parse-resolves-trailer.test.sh (coordinator-claude 3a561713, 2026-07-22)
 """
 
 from __future__ import annotations

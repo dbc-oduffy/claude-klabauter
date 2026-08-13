@@ -8,7 +8,7 @@ docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
 
 Coverage (parity-oracle assertions, per the deleted
 `tests/wsc-asic/test-wsc-commit-parity.sh` recovered from
-`example-doctrine-repo:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`):
+`coordinator-claude:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`):
   (c)  deletion_block_gate passes on a well-formed message (Kept block only,
        no staged deletions).
   (c2) deletion_block_gate fails on a malformed message (Deleted-claimed path
@@ -33,7 +33,7 @@ contract):
                                    unattributable report, rename destination-only
                                    handling.
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C3 (AC10).
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C3 (AC10).
 """
 
 from __future__ import annotations

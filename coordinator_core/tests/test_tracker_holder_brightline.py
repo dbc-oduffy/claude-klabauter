@@ -1,6 +1,6 @@
 """Brightline guards for the designated-holder-repo plan (chunk C5, deliverables a+b).
 
-Spec backlink: docs/plans/2026-08-11-designated-holder-repo-for-unowned-identity.md
+Spec backlink: pln-designated-holder-repo-for-uno-d11d4d
 chunk C5. Deliverable (c) — the DR-241 amendment — already landed separately
 (commit 686660b0873f) and is NOT this file's concern.
 

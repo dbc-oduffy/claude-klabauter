@@ -15,7 +15,7 @@ Coverage:
       stays silent for one that is fresh.
   (d) check_stale never raises on a missing/corrupt liveness file.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C17b.
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C17b.
 """
 
 from __future__ import annotations

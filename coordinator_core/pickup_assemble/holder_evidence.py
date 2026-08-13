@@ -21,7 +21,7 @@ a new one. See `liveness.py`'s own module docstring: a caught liveness
 exception is an INDETERMINATE read, never confirmed-dead, and this module
 must never launder that into a `False`.
 
-Spec backlink: docs/plans/2026-07-24-pickup-code-computed-decision-surface.md
+Spec backlink: pln-pickup-as-a-code-computed-deci-7394dc
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
     § C3. `_liveness_basis` is kept below as an alias for this module's own
     internal caller (`holder_evidence`).
 
-    Vocabulary (five values; see `live_session_verdicts`'s docstring for the
+    Vocabulary (six values; see `live_session_verdicts`'s docstring for the
     full per-arm derivation):
       "harness-registry"      — harness-written process identity, stronger
                                  evidence than `"stable-pid"`; `age_sec` is
@@ -95,6 +95,21 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
                                  present and parseable.
       "recency-window-mtime"  — Layer 2 recency fallback with the meta-less/
                                  mid-write mtime-substitution recency source.
+      "harness-registry-elsewhere" — `session_verdict`-ONLY (never produced
+                                 by `live_session_verdicts`'s whole-corpus
+                                 scan, which never leaves this repo's own
+                                 session dirs): no session dir for
+                                 `holder_sid` exists in THIS repo, but a
+                                 confirmed harness-registry record for it
+                                 does — a live session working in ANOTHER
+                                 repo, most likely, but inferred from
+                                 dir-absence alone, so worded "elsewhere",
+                                 never "confirmed reachable". `age_sec` is
+                                 NOT meaningful on this basis either —
+                                 `session_verdict`'s third tuple slot carries
+                                 the peer's `cwd` string here instead, which
+                                 this function's own three-way unpack
+                                 discards.
       "unknown"               — either the underlying process-liveness check
                                  itself raised (never launder that into a
                                  stronger claim than can be supported), or
@@ -277,7 +292,7 @@ def holder_evidence(
     Always returns a dict with these keys (each `None` when unknown):
       liveness_basis        - "harness-registry" | "stable-pid" |
                                  "recency-window" | "recency-window-mtime" |
-                                 "unknown"
+                                 "harness-registry-elsewhere" | "unknown"
       last_activity_age_sec  - int seconds since meta.json's last_activity
       holder_goal            - meta.json's "goal" field
       holder_goal_state       - "declared" | "undeclared" | "unreadable" —

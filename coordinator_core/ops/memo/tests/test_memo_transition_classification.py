@@ -10,7 +10,7 @@ Coverage:
 Test convention: mirrors test_authz_contract.py (classify) and
 test_http_invoke.test_mutating_op_rw_token_returns_403 (403 gate).
 
-Spec backlink: docs/plans/2026-07-05-strang-09-memo-transition-op-strangle.md § C2
+Spec backlink: pln-strang-09-memo-transition-op-s-fec3a1 § C2
 """
 
 from __future__ import annotations

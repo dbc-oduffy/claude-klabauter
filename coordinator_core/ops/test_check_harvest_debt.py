@@ -1,10 +1,10 @@
 """
 Tests for coordinator_core.ops.check_harvest_debt.
 
-Golden-parity fixtures mirror the example-doctrine-repo bash-original oracle case-for-case — this
+Golden-parity fixtures mirror the coordinator-claude bash-original oracle case-for-case — this
 file is the pytest analog of that bats-style suite, not a fresh test design.
 
-Port of: test-harvest-debt-nudge.sh (example-doctrine-repo 3a561713, 2026-07-22)
+Port of: test-harvest-debt-nudge.sh (coordinator-claude 3a561713, 2026-07-22)
 """
 
 from __future__ import annotations

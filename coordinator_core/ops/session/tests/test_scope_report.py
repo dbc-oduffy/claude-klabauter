@@ -240,7 +240,7 @@ class TestAssertPathsInSessionScope:
         # it only read DEAD because the zero-arg oracle resolved its session
         # registry from the PROCESS cwd (the real claude-klabauter checkout) instead of
         # `cwd` (this tmp repo), where "other" does not exist at all. That is
-        # the same cross-repo miss the example-doctrine-repo incident hit against a real
+        # the same cross-repo miss the coordinator-claude incident hit against a real
         # peer. With the oracle cwd-scoped, the end-to-end path now earns the
         # right verdict against the real oracle — which is what this
         # assertion was always meant to prove.
@@ -523,7 +523,7 @@ class TestAlreadyCleanClassification:
 class TestClassifyDeniedPathLiveness:
     """`_classify_denied_path`'s ownership branch must EARN "live", never
     assert it from a bare format-string interpolation of `compute_offer`'s
-    reason field (break-class fix, 2026-08-07 — example-doctrine-repo report). Three
+    reason field (break-class fix, 2026-08-07 — coordinator-claude report). Three
     branches, exercised directly against a minimal offer dict so each is
     deterministic — liveness monkeypatched at the `scope_report` module
     seam rather than relying on a real session's actual live/dead state.

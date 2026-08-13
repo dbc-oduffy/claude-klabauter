@@ -1,7 +1,7 @@
 """Characterization + parity tests for coordinator_core.ops.register_coordinator_mirror.
 
-Port of: register-coordinator-mirror.sh (example-doctrine-repo 6fb5fb37, 2026-07-22).
-Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 5 / AC-7
+Port of: register-coordinator-mirror.sh (coordinator-claude 6fb5fb37, 2026-07-22).
+Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 5 / AC-7 [DEAD-CITATION: plan file never committed to this repo]
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from coordinator_core.ops.register_coordinator_mirror import (
     resolve_registry_path,
 )
 
-_LIVE_PATH = "/Users/alice/X/example-doctrine-repo/coordinator"
+_LIVE_PATH = "/Users/alice/X/coordinator-claude/coordinator"
 
 
 @pytest.fixture(autouse=True)

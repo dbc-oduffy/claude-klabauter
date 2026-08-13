@@ -40,11 +40,11 @@ CLAUDE_HOME_PY = _REPO_ROOT / "coordinator" / "lib" / "claude-home" / "_claude_h
 # not the resolver itself — verified: invoking it against a scratch HOME
 # raises "resolver not installed ... run /coordinator:setup". The actual
 # resolver (the bash oracle's original target, once at
-# templates/bin/coordinator-settings-home) lives only in the example-doctrine-repo
+# templates/bin/coordinator-settings-home) lives only in the coordinator-claude
 # sibling repo now — same cross-repo boundary as detect-hardware.sh/
 # spawn-hidden.sh's caller class (this repo's own CLAUDE.md: "Discovery-
 # resolved surfaces ... belong in coordinator-claude, not here"). T6-T8
-# resolve it via the example-doctrine-repo root pointer and skip (not fail) when that
+# resolve it via the coordinator-claude root pointer and skip (not fail) when that
 # sibling checkout is unavailable on this machine.
 _CLI_REL = "coordinator/templates/bin/coordinator-settings-home"
 
@@ -75,7 +75,7 @@ def _run_cli(fake_home: Path, subcmd: str | None = None, extra_env: dict[str, st
     cli = _resolve_cli()
     if cli is None:
         pytest.skip(
-            "example-doctrine-repo root not resolvable via coordinator_core.doe_root_pointer "
+            "coordinator-claude root not resolvable via coordinator_core.doe_root_pointer "
             "on this machine (or the resolver is missing there) — the CLI this "
             "test targets is not vendored in claude-klabauter; not a defect in "
             "claude-klabauter."

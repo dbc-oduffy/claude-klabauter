@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.append_integrator_dispositions — one-call writer for the
 `review-integrator`'s ONE sanctioned sidecar write (`agents/review-integrator.md`
-§ Sidecar Immutability, example-doctrine-repo): the bulk `## Integrator Dispositions` block
+§ Sidecar Immutability, coordinator-claude): the bulk `## Integrator Dispositions` block
 appended to a reviewer findings sidecar after every finding has been triaged.
 
 Purpose: close the seam between "the integrator applied every finding" and
@@ -80,7 +80,7 @@ Spec backlink: cross-repo dispatch defect surfaced 2026-07-29 (EM hand-diagnosed
   the disposition block to the reviewer's sidecar, leaving files blocked with no
   signal pointing at the omission).
 Sibling guard: coordinator_core/write_guards/block_em_hand_edit_pending_review_integration.py
-Sibling doctrine: example-doctrine-repo coordinator/agents/review-integrator.md
+Sibling doctrine: coordinator-claude coordinator/agents/review-integrator.md
   § Sidecar Disposition Annotation
 """
 
@@ -101,12 +101,12 @@ from coordinator_core.win_portability import no_console_creationflags
 #: example block byte-for-byte; the sixth is ours and is described below.
 #:
 #: `verified-no-action` (sixth entry) is a claude-klabauter-side extension, NOT part of
-#: example-doctrine-repo's example block. It is appended LAST, deliberately, so a block
+#: coordinator-claude's example block. It is appended LAST, deliberately, so a block
 #: using only the original five buckets still emits byte-identically to
 #: today — the byte-parity claim in this module's docstring survives for all
 #: existing usage. Inserting it anywhere else would break that claim
 #: silently. Do not "sort" it into the middle in a future tidying pass; it
-#: stays last pending example-doctrine-repo's own adoption of the bucket.
+#: stays last pending coordinator-claude's own adoption of the bucket.
 #:
 #: `verified-no-action` means: the integrator independently VERIFIED the
 #: finding and concluded no artifact change is needed. It is NOT
@@ -137,7 +137,7 @@ _BUCKET_YAML_KEY = {
 #: The agent types whose DELIVERABLE is a finding set, and which may therefore
 #: receive an `## Integrator Dispositions` block: the code-reviewer family plus
 #: the six Opus reviewer personas. Membership mirrors exactly the types
-#: example-doctrine-repo's `report_type_map:` routes to the `review-findings` or
+#: coordinator-claude's `report_type_map:` routes to the `review-findings` or
 #: `staff-eng-review` provisioning templates — that map is the REASON for this
 #: membership, never a runtime input. This module must not read a peer repo's
 #: policy file to decide a gate; the drift risk is carried by
@@ -152,7 +152,7 @@ _BUCKET_YAML_KEY = {
 #: set decides which sidecars can RECEIVE a disposition block. Widening the
 #: guard to match would start blocking EM edits on every persona review, which
 #: nothing asks for. The divergence is intentional; it is not drift.
-# Membership verified 2026-08-10 against example-doctrine-repo's live
+# Membership verified 2026-08-10 against coordinator-claude's live
 # `coordinator/subagent-sandbox-policy.yaml` `report_type_map:` block — the
 # six `staff-eng-review`-mapped personas below match that file's rows
 # verbatim. Re-check against that file if either side drifts; this repo has
@@ -307,11 +307,11 @@ def _build_block(buckets: Dict[str, List[str]], rationale: Optional[str]) -> str
     for bucket in BUCKET_ORDER:
         ids = buckets.get(bucket) or []
         # The original five buckets always render (even empty, as `[]`) to
-        # match example-doctrine-repo's documented example exactly. `verified-no-action`
+        # match coordinator-claude's documented example exactly. `verified-no-action`
         # is a claude-klabauter-side extension: it renders ONLY when actually used, so
         # a call using none of it still emits byte-identical output to a
         # pre-extension five-bucket block — the byte-parity claim this
-        # module's docstring makes about example-doctrine-repo's example.
+        # module's docstring makes about coordinator-claude's example.
         if bucket == "verified-no-action" and not ids:
             continue
         rendered = "[" + ", ".join(ids) + "]"

@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.bootstrap_repo.
 
-Port of: bootstrap-repo.sh (example-doctrine-repo a1a568d2, 2026-07-22)
+Port of: bootstrap-repo.sh (coordinator-claude a1a568d2, 2026-07-22)
 Spec backlink: docs/plans/2026-05-29-it-just-works-agentic-install-currency.md § Chunk 2
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md (BIG_PORT wave)
 
@@ -9,11 +9,11 @@ Fixture note: Stage 3 calls the natively-ported
 `coordinator_core.install.scaffold_structure.scaffold_canonical_structure`
 in-process (C4 retired the `scaffold-canonical-structure.sh` bridge; C11
 rewired this call site onto it). Stage 4 still shells out to one genuine
-Example-doctrine-repo-resident sibling this port does NOT own (`check-install-divergence.py`).
+Coordinator-claude-resident sibling this port does NOT own (`check-install-divergence.py`).
 Tests stub a minimal `canonical-structure.yaml` manifest + template for stage 3
 and a minimal fake for stage 4's `check-install-divergence.py`, under a
 throwaway `COORDINATOR_ROOT`, so the suite is self-contained and does not
-depend on the sibling example-doctrine-repo repo being checked out on the test machine.
+depend on the sibling coordinator-claude repo being checked out on the test machine.
 """
 from __future__ import annotations
 
@@ -182,7 +182,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
     Review: code-reviewer (Finding 1) -- must also neutralize the rung 2-4
     fallback's ambient machine state (real `~/.claude/.doe-root` + machine-local
     registry), or this test silently passes/fails depending on whether the
-    executing machine happens to carry a real example-doctrine-repo checkout."""
+    executing machine happens to carry a real coordinator-claude checkout."""
     empty_root = tmp_path / "empty-coordinator"
     bin_dir = empty_root / "bin"
     bin_dir.mkdir(parents=True)

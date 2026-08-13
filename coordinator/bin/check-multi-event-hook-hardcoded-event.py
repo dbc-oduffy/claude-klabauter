@@ -42,7 +42,7 @@ Usage:
     --hooks-json <path>   Explicit path to hooks.json. Defaults to
                           hooks/hooks.json resolved via
                           coordinator_data_root.data_root("hooks") (co-located,
-                          then example-doctrine-repo-resident — hooks/ moved to example-doctrine-repo in the
+                          then coordinator-claude-resident — hooks/ moved to coordinator-claude in the
                           2026-07-22 executable-surface migration; see
                           DR-047).
 
@@ -84,10 +84,10 @@ if _LIB_DIR not in sys.path:
 
 def _default_hooks_json() -> str:
     """Resolve the default hooks.json path via `coordinator_data_root.data_root()`'s
-    co-located/example-doctrine-repo-resident two-rung chain, not a bare `__file__`-relative walk.
+    co-located/coordinator-claude-resident two-rung chain, not a bare `__file__`-relative walk.
 
     The 2026-07-22 executable-surface migration moved this script into
-    claude-klabauter while `hooks/` stayed in example-doctrine-repo (DR-047 contract/engine
+    claude-klabauter while `hooks/` stayed in coordinator-claude (DR-047 contract/engine
     split), so a `coordinator/hooks/hooks.json` walk relative to this file no
     longer lands anywhere. Resolved lazily (called only when no explicit
     --hooks-json is given) so an unresolvable default cannot explode at import

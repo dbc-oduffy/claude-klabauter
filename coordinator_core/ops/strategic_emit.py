@@ -6,7 +6,7 @@ Purpose: the claude-klabauter engine op that emits the curated strategic self-de
 `strategic-emission.json` feed — the SIBLING of `cockpit-emission.json`
 (coordinator_core/ops/emit/envelope.py:569), NOT a section inside it (PM-ratified
 2026-07-12 route decision: the closed cockpit-contract envelope schema forecloses adding a
-strategic array without a example-doctrine-repo contract change + re-vendor; this op emits a separate feed that
+strategic array without a coordinator-claude contract change + re-vendor; this op emits a separate feed that
 reuses rag's ProvenanceEnvelope record shape instead). This is the emit sibling of
 `strategic.generate` (coordinator_core/ops/strategic_generate.py), which only ever writes the
 DRAFT — reconciling draft into the curated canonical is a separate, human-invoked ceremony
@@ -39,7 +39,7 @@ Reply fields (result object in JSON-RPC response):
                           status == "emitted".
 
 If-exists posture (pinned, NOT this op's judgment call): canonical present -> emit; canonical
-absent -> typed no-op, no file written, no crash. Absence is caught upstream by example-doctrine-repo's
+absent -> typed no-op, no file written, no crash. Absence is caught upstream by coordinator-claude's
 repo-setup Phase 3l scaffold + workweek-complete Step 4i nag — this op never
 synthesizes/curates/repairs the canonical itself.
 

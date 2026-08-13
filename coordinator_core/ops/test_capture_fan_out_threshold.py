@@ -2,7 +2,7 @@
 Tests for coordinator_core.ops.capture_fan_out_threshold.
 
 Mirrors the oracle's coverage (Port of: capture-fan-out-threshold.test.sh,
-Example-doctrine-repo a2fe06f8, 2026-07-22, AC7): absent-key write, no-clobber re-run, env-clobber
+Coordinator-claude a2fe06f8, 2026-07-22, AC7): absent-key write, no-clobber re-run, env-clobber
 non-suppression (env layer is irrelevant here since this module only ever
 calls `machine-local keys`/`set`, never reads
 MACHINE_LOCAL_FAN_OUT_LARGE_WAVE_THRESHOLD itself), --check-only no-mutation,

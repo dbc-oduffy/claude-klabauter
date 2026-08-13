@@ -3,21 +3,21 @@ coordinator_core.hooks.coordinator_reminder -- SessionStart(startup|clear|compac
 
 Purpose: renders the light-touch "Quick Orient" heredoc + capability-catalog for
 all project repos. Ported 1:1 from the retired
-coordinator/hooks/scripts/coordinator-reminder.sh (deleted 2026-07-16, example-doctrine-repo
+coordinator/hooks/scripts/coordinator-reminder.sh (deleted 2026-07-16, coordinator-claude
 ``d39ab164``), with ONE intentional deletion:
 the dead PROJECT_TYPE/PROJECT_SUBTYPES coordinator.local.md frontmatter parse
 -- verified dead by full-file read; neither variable is
 referenced anywhere later in the bash source (the heredoc and the
 capability-catalog read use neither). See
-X:/example-doctrine-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md
+X:/coordinator-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md
 Sec 2.4.
 
 Transport: plain synchronous function, imported directly and called in-process by
-the example-doctrine-repo-side thin stub (coordinator/hooks/scripts/coordinator-reminder.py),
+the coordinator-claude-side thin stub (coordinator/hooks/scripts/coordinator-reminder.py),
 mirroring the preuse-write-dispatch.py -> write_guards.engine transport shape --
 NOT the register_op()/IPC resident-dispatch path used by coordinator_core.hooks'
 Pre/PostToolUse siblings (this hook is not on that resident-engine dispatch path;
-Example-doctrine-repo resolves claude-klabauter-root and imports this module directly, same as
+Coordinator-claude resolves claude-klabauter-root and imports this module directly, same as
 write_guards.engine.evaluate_payload_json).
 
 Contract:

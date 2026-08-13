@@ -7,7 +7,7 @@ mirror-surface names themselves (see `directives.py`'s module docstring and
 session/day/week severity knob.
 
 Purpose, per docs/plans/2026-07-26-backlog-grind-computed-frontage.md, chunk
-C3e: `/dogfood` (example-doctrine-repo `coordinator/skills/dogfood/SKILL.md`) is a
+C3e: `/dogfood` (coordinator-claude `coordinator/skills/dogfood/SKILL.md`) is a
 loop-controller, structurally closer to a state machine than a triage
 pipeline — its six gate types are ALL judgment and stay in the skill surface
 (D-1's own gate-topology corroboration cites dogfood as "highest gate
@@ -30,7 +30,7 @@ serializes commits at wave gates") describes one active loop at a time, so
 "most recent" is the live session, never a cross-session concatenation.
 
 Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
-chunk C3e; example-doctrine-repo `coordinator/skills/dogfood/SKILL.md` § Per-Iteration
+chunk C3e; coordinator-claude `coordinator/skills/dogfood/SKILL.md` § Per-Iteration
 Mode Artifact / § Switch-Gears Protocol / § Flight Recorder Directory
 (read-only source for this chunk — not edited here; C11 owns that file).
 

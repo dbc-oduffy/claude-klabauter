@@ -28,10 +28,10 @@ the emitted array ordering is identical, and the concurrency was a latency optim
 not a semantic (now moot — there is no remote call left to fan out). Emit-DERIVED fields are
 not applicable to this entity.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) — § SECTION 7,
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 7,
   CoordinatorRoots. Byte/semantic parity port (parity with the gh-backed path retired
   2026-07-29 per the PM ruling above).
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P07
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P07
 
 Consumer deduplication contract (S3-F7 deferral — NOT a claude-klabauter fix; cockpit's responsibility):
 Post-cutover, cockpit receives coordinator_roots entries for claude-klabauter from TWO sources:

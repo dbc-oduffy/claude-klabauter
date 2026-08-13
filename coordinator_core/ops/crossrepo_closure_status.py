@@ -59,7 +59,7 @@ Negative-spec:
     in the module docstring, not silently patched over.
   - Does NOT write any file, shard, or artifact — pure read + compute + return.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C15 / AC7
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C15 / AC7
 """
 
 from __future__ import annotations

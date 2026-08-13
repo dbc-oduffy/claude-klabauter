@@ -8,9 +8,9 @@ for this shape. On Windows, this file's co-located `.cmd` twin wins via
 macOS/Linux `python3` is the right interpreter. Caution: callers must invoke
 via the extensionless name or a resolved-interpreter prefix, never a bareword
 `.py` through git-bash — git-bash DOES honor the shebang and would exec-127
-with no `python3` present. See the carve-out in example-doctrine-repo's
+with no `python3` present. See the carve-out in coordinator-claude's
 coordinator/docs/wiki/bash-on-windows-gotchas.md § Carve-out (cross-repo —
-this wiki lives in the example-doctrine-repo repo, not here). There is no `.test.py`
+this wiki lives in the coordinator-claude repo, not here). There is no `.test.py`
 sibling and no separate polyglot trampoline line — this file is the
 pure-`.py`-with-`.cmd` shape end to end.
 
@@ -174,7 +174,7 @@ _TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 #
 # Spec backlink: docs/plans/2026-05-23-cross-repo-inbox-archive-restructure.md § B2
 #
-# The example-doctrine-repo repo (repos.example_doctrine_repo in the machine-local registry) is the
+# The coordinator-claude repo (repos.example_doctrine_repo in the machine-local registry) is the
 # authoritative delivery target for central memos. `--to claude-central-em`
 # (or any alias) resolves to repos.example_doctrine_repo — NOT to ~/.claude.
 #
@@ -234,21 +234,21 @@ _PUBLISH_TARGET_OWNERS_CACHE: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
-# example-doctrine-repo-canonical home/mirror redirect — MANIFEST-DRIVEN (R1 2026-07-15; promoted
+# coordinator-claude-canonical home/mirror redirect — MANIFEST-DRIVEN (R1 2026-07-15; promoted
 # to schemas/coordinator-registry.manifest.json § identity.redirectAliases 2026-07-21)
 #
 # Spec backlink: cross-repo/inbox/2026-07-14-claude-em-claude-home-redirects-to-doe-in-all-cases.md
 # Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-check-addressee-op-facade-repoint.md
 #   § "Defect 1 (redirect-alias MATCH)"
 #
-# On a example-doctrine-repo system, ~/.claude and coordinator-claude are the SAME central
+# On a coordinator-claude system, ~/.claude and coordinator-claude are the SAME central
 # surface — the Claude Code harness resolves coordinator plugin source live from
-# the example-doctrine-repo repo's coordinator/ tree; ~/.claude is the live-install, not a
+# the coordinator-claude repo's coordinator/ tree; ~/.claude is the live-install, not a
 # distinct working tree, and we don't do active work there. `.claude-em` /
 # `claude-home` / `coordinator-claude` / `coordinator-claude-em` must therefore
 # ALWAYS redirect to the canonical central identity (_DOE_CANONICAL_REDIRECT_OWNER),
 # on every machine that installs
-# example-doctrine-repo — this is a structural fact about the repo layout, not a per-machine
+# coordinator-claude — this is a structural fact about the repo layout, not a per-machine
 # preference.
 #
 # Originally (R1, 2026-07-15) this was a hardcoded Python constant, deliberately
@@ -268,7 +268,7 @@ _PUBLISH_TARGET_OWNERS_CACHE: dict[str, str] | None = None
 # contract surface: claude-klabauter's coordinator_core/ops/fleet/_memo_resolver.py
 # `read_redirect_aliases()` reads it declaratively as the receiving half of this
 # same promotion (their negative-spec forbids hardcoding the literal on their
-# side) — a future editor should not treat this as example-doctrine-repo-private.
+# side) — a future editor should not treat this as coordinator-claude-private.
 # ---------------------------------------------------------------------------
 
 _DOE_CANONICAL_REDIRECT_OWNER = _central_canonical_id()
@@ -351,8 +351,8 @@ def _derive_mirror_alias_set(mirror_key: str) -> frozenset[str]:
     """Compute all receiver-EM aliases for a publish mirror registry key.
 
     Standard pair (mechanically derivable from the key):
-      <hyphenated-key>     (e.g. coordinator-claude)
-      <hyphenated-key>-em  (e.g. coordinator-claude-em)
+      <hyphenated-key>     (e.g. Coordinator-claude)
+      <hyphenated-key>-em  (e.g. Coordinator-claude-em)
 
     Plus any explicit aliases stored in publish.mirrors.<key>.aliases
     (newline-separated by machine-local get — used for legacy short-forms that
@@ -443,7 +443,7 @@ def _normalize_receiver_id(receiver_em_id: str) -> str:
 
 def _is_publish_target_em(receiver_em_id: str) -> bool:
     """True when receiver_em_id (case/whitespace-normalised) names a publish-target
-    repo, OR a code-pinned example-doctrine-repo-canonical home/mirror alias (R1).
+    repo, OR a code-pinned coordinator-claude-canonical home/mirror alias (R1).
 
     Publish targets are outward distribution mirrors, not EM working trees.
     Memos sent there are invisible and get clobbered on next publish.
@@ -464,7 +464,7 @@ def _is_publish_target_em(receiver_em_id: str) -> bool:
 
 
 def _publish_target_owner(receiver_em_id: str) -> str | None:
-    """Return the owning-EM identity for a publish-target mirror (or example-doctrine-repo-canonical
+    """Return the owning-EM identity for a publish-target mirror (or coordinator-claude-canonical
     home/mirror alias), or None.
 
     The owner is the EM working tree that authors and stewards the mirror — the
@@ -489,7 +489,7 @@ def _publish_target_owner(receiver_em_id: str) -> str | None:
 def _redirect_kind(receiver_em_id: str) -> str | None:
     """Classify which flavour of _is_publish_target_em rejection applies.
 
-    Returns "home" when the normalised id is one of the code-pinned example-doctrine-repo-canonical
+    Returns "home" when the normalised id is one of the code-pinned coordinator-claude-canonical
     home/mirror aliases (`_DOE_CANONICAL_REDIRECT_ALIASES`) — takes precedence
     over "publish" so a receiver that happened to appear in both would still get
     the accurate ~/.claude-is-not-a-mirror wording, not the OSS-mirror wording.
@@ -521,7 +521,7 @@ def _publish_target_rejection_msg(receiver_em_id: str, owner: str, hint: str = "
 
 
 def _home_redirect_rejection_msg(receiver_em_id: str, owner: str, hint: str = "") -> str:
-    """Rejection text for a example-doctrine-repo-canonical home/mirror alias --to (R1).
+    """Rejection text for a coordinator-claude-canonical home/mirror alias --to (R1).
 
     Sibling to `_publish_target_rejection_msg`, split out because that message's
     "publish-target OSS distribution mirror" wording is FALSE for `.claude-em` /
@@ -536,7 +536,7 @@ def _home_redirect_rejection_msg(receiver_em_id: str, owner: str, hint: str = ""
     """
     return (
         f"cross-repo-memo: cannot deliver to '{receiver_em_id.strip()}': on a "
-        f"example-doctrine-repo system, ~/.claude and coordinator-claude are the same central "
+        f"coordinator-claude system, ~/.claude and coordinator-claude are the same central "
         f"surface (we don't do active work in ~/.claude), owned by `{owner}`, not a "
         f"separate EM working tree. Route this concern to its owner: `--to {owner}`.{hint}"
     )
@@ -575,7 +575,7 @@ def _print_receiver_unresolved_error(to: str) -> int:
         print(
             f"cross-repo-memo: cannot deliver to central ('{to}') — "
             f"repos.example_doctrine_repo is not registered on this machine.\n"
-            f"  Remediation: machine-local set repos.example_doctrine_repo <path-to-example-doctrine-repo-repo>.",
+            f"  Remediation: machine-local set repos.example_doctrine_repo <path-to-coordinator-claude-repo>.",
             file=sys.stderr,
         )
         return 1
@@ -858,7 +858,7 @@ def _render_receiver_listing(candidates: list) -> str:
 
     Purpose: the invoke-and-render half of the --list-receivers A8 strangler
     trampoline — sources ALL section content (central-first header, sibling
-    receivers, publish mirrors, example-doctrine-repo-canonical-home aliases, trailing note)
+    receivers, publish mirrors, coordinator-claude-canonical-home aliases, trailing note)
     from the `memo.list` op's kind-discriminated `candidates` list, replacing
     the prior `_format_receiver_listing()`'s independent local re-derivation
     via direct `machine-local` calls. `is_central`/`aliases` arrive
@@ -877,7 +877,7 @@ def _render_receiver_listing(candidates: list) -> str:
     --list-receivers trampoline above). This is an intended A8 contract
     change (map §2), not an omission.
 
-    Spec backlink: docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C2, AC2.
+    Spec backlink: pln-memo-tool-rebuild-claude-klabauter-owns--bd5745 § C2, AC2.
     """
     receivers = [c for c in candidates if c.get("kind") == "receiver"]
     mirrors = [c for c in candidates if c.get("kind") == "publish_mirror"]
@@ -898,7 +898,7 @@ def _render_receiver_listing(candidates: list) -> str:
         )
         lines.append(
             f"  {cid}   → {central.get('repo_path')} "
-            f"(example-doctrine-repo repo — coordinator home)"
+            f"(coordinator-claude repo — coordinator home)"
         )
         if alias_str:
             lines.append(f"{cont_indent}aliases: {alias_str}")
@@ -909,7 +909,7 @@ def _render_receiver_listing(candidates: list) -> str:
     else:
         lines.append(
             f"  {cid}   → (repos.example_doctrine_repo not registered on this "
-            "machine) (example-doctrine-repo repo — coordinator home)"
+            "machine) (coordinator-claude repo — coordinator home)"
         )
     lines.append("")
 
@@ -935,12 +935,12 @@ def _render_receiver_listing(candidates: list) -> str:
                 f"(OSS distribution mirror — address the owner, not the mirror)"
             )
 
-    # example-doctrine-repo-canonical home/mirror aliases (R1) — sourced from the op's
+    # coordinator-claude-canonical home/mirror aliases (R1) — sourced from the op's
     # `identity.redirectAliases` enumeration (empty today, not an error, until
-    # example-doctrine-repo promotes the manifest field — see memo_list.py's own docstring).
+    # coordinator-claude promotes the manifest field — see memo_list.py's own docstring).
     lines.append("")
     lines.append(
-        "  example-doctrine-repo-canonical home aliases (NOT directly addressable — always redirect "
+        "  coordinator-claude-canonical home aliases (NOT directly addressable — always redirect "
         f"to {_DOE_CANONICAL_REDIRECT_OWNER}):"
     )
     for a in home_aliases:
@@ -949,7 +949,7 @@ def _render_receiver_listing(candidates: list) -> str:
     lines.append(
         "Note: publish-target mirrors are outward OSS distribution mirrors (e.g. "
         "deep-research), not EM working trees — addressing them as --to is "
-        "rejected, and the rejection names the owner. Example-doctrine-repo-canonical home aliases "
+        "rejected, and the rejection names the owner. Coordinator-claude-canonical home aliases "
         "(listed above, when the manifest has promoted them) are a separate case: "
         "they're not distribution mirrors at all, just the same central surface "
         f"as {_DOE_CANONICAL_REDIRECT_OWNER} under a different name. Route any concern "
@@ -959,10 +959,10 @@ def _render_receiver_listing(candidates: list) -> str:
 
 
 def _central_receiver_path() -> str | None:
-    """Return the example-doctrine-repo repo path for the central receiver, or None if not registered.
+    """Return the coordinator-claude repo path for the central receiver, or None if not registered.
 
     Central delivery resolves to repos.example_doctrine_repo in the machine-local registry
-    (the example-doctrine-repo repo), NOT to ~/.claude. If repos.example_doctrine_repo is absent, returns
+    (the coordinator-claude repo), NOT to ~/.claude. If repos.example_doctrine_repo is absent, returns
     None — the caller must hard-error with a central-specific remediation message.
 
     Spec backlink: docs/plans/2026-05-23-cross-repo-inbox-archive-restructure.md § B2 (DM1)
@@ -983,7 +983,7 @@ def _resolve_receiver_path(receiver_em_id: str) -> tuple[str | None, bool]:
 
     Two-branch resolution, mirroring em_id_for_root on the sender side:
       1. Central special-case: if receiver_em_id is any member of _CENTRAL_RECEIVER_IDS
-         (case/whitespace-normalised), return the example-doctrine-repo repo path via
+         (case/whitespace-normalised), return the coordinator-claude repo path via
          _central_receiver_path(). Central is NOT a repos.* sibling key — it resolves
          to repos.example_doctrine_repo specifically. Returns (None, False) when repos.example_doctrine_repo
          is absent (clean absence — caller hard-errors with a central-specific
@@ -1114,7 +1114,7 @@ def _current_repo_root() -> str | None:
 # `_resolve_receiver_path`, which run this scan strictly after those checks).
 #
 # Operators keep active repos co-located (e.g. `/Users/example-operator/X/` holds
-# example-doctrine-repo, example-retrieval-repo, claude-klabauter, example-cockpit-repo,
+# coordinator-claude, example-retrieval-repo, claude-klabauter, example-cockpit-repo,
 # example-market-data-repo as sibling git repos) — when the registry itself is
 # unreadable, a same-named sibling directory next to the sender's own repo
 # root is a reasonable fallback guess, PROVIDED it is exact (never
@@ -2113,8 +2113,8 @@ def _print_premise_check_advisory(
     nothing pinned has no premise this process can address, so the offer is to
     pin it — not a description of a grep for the sender to go run.
 
-    Lifecycle rule (2026-08-03, example-doctrine-repo-em memo — see
-    cross-repo/inbox/2026-08-03-example-doctrine-repo-em-premise-check-advisory-fires-
+    Lifecycle rule (2026-08-03, coordinator-claude-em memo — see
+    cross-repo/inbox/2026-08-03-coordinator-claude-em-premise-check-advisory-fires-
     after-delivery.md): the advisory belongs to the stage that OWNS the
     editable buffer, not to send. `_cmd_draft` and `_cmd_compose` both hold
     `state/memo-outbox/<topic>.md` open for edits at the moment they call
@@ -2125,14 +2125,14 @@ def _print_premise_check_advisory(
     ALREADY been committed into the receiver's tree via
     `_verify_delivery_landed` — the unpinned arm can only describe what
     could have been pinned, so it prints as a receipt, not an offer. Send's
-    call site is kept regardless: example-doctrine-repo explicitly wants a post-hoc "this went
+    call site is kept regardless: coordinator-claude explicitly wants a post-hoc "this went
     out unpinned" signal even when it's too late to act on, AND it is the
     ONLY reachable emission for the legacy one-shot flag form (`main()`'s
     flag-only send arm) that bypasses the outbox buffer entirely — draft/
     compose never see that path.
 
     That one-shot form gets its OWN receipt arm, `stage="send_oneshot"`
-    (example-doctrine-repo-em memo, 2026-08-03): the pins ARE takeable on that form —
+    (coordinator-claude-em memo, 2026-08-03): the pins ARE takeable on that form —
     the --scoped-to-* flags parse there and a complete triple short-circuits
     to `_run_scoped_premise_checks` above — so routing it to the generic
     send receipt advised re-running at `draft`/`compose`, a lifecycle that
@@ -2520,7 +2520,7 @@ def _scoped_to_errors(kind: str | None, scoped_to: dict[str, str | None] | None)
     triple is required regardless of kind: 'artifact' (non-empty str),
     exactly one of 'version' (non-empty str) or 'sha' (7-40 hex str), and
     'seam' (non-empty str) — else fail loud. This mirrors claude-klabauter's
-    memo_send.py and example-doctrine-repo's schema.js:2290 exactly; do not reintroduce a
+    memo_send.py and coordinator-claude's schema.js:2290 exactly; do not reintroduce a
     kind-based gate here — the old "required when kind=ask/proposal" rule
     was the actual source of sender friction being fixed (see
     cross-repo/inbox/2026-07-21-claude-klabauter-em-scoped-to-engine-fixed-gate-is-yours.md).
@@ -2803,7 +2803,7 @@ def _cmd_draft(args: argparse.Namespace) -> int:
         # route_mutation raises RouteMutationError (a RuntimeError subclass
         # with a `.result` attribute) on ANY non-zero exit_code — both the
         # collision failed-envelope (exit_code:2) and every classify/setup
-        # rejection land here. Collision keeps example-doctrine-repo's historical exit 2
+        # rejection land here. Collision keeps coordinator-claude's historical exit 2
         # (checked first, unaffected by rejection_class). For every other
         # rejection, the op's classification-rejection envelope carries a
         # `rejection_class` field (claude-klabauter commit a5003f50) that we map to a
@@ -3315,7 +3315,7 @@ def _send_via_engine(
     Shared by `_cmd_send` (topic-file send) and main()'s ordinary flag-only
     send arm. The receiver-side filename, gitignore delivery guard,
     containment check, and collision refusal are composed/enforced
-    claude-klabauter-side (memo_send.py); example-doctrine-repo no longer recomputes the filename (DEC-3)
+    claude-klabauter-side (memo_send.py); coordinator-claude no longer recomputes the filename (DEC-3)
     or writes the memo content directly (Q-c hard, DEC-2).
 
     `outbox_path`, when not None, is best-effort archived to
@@ -3349,7 +3349,7 @@ def _send_via_engine(
             "claude-klabauter engine to send cross-repo memos."
         )
 
-    # kind materialization: example-doctrine-repo's inputs treat kind as optional (reader
+    # kind materialization: coordinator-claude's inputs treat kind as optional (reader
     # defaults to 'ask'); claude-klabauter's op requires a non-None kind (DEC-4).
     invoke_kind = kind or "ask"
 
@@ -3435,7 +3435,7 @@ def _send_via_engine(
     # The claude-klabauter memo.send op commits the delivered memo into the receiver repo
     # itself, all hooks neutralized via `-c core.hooksPath=<empty-tmpdir>`
     # (DR-211 D2 criterion 3 retired; DR-214 mechanism — see claude-klabauter
-    # coordinator_core/ops/fleet/memo_send.py). Example-doctrine-repo does NOT re-commit here: the
+    # coordinator_core/ops/fleet/memo_send.py). Coordinator-claude does NOT re-commit here: the
     # previous _commit_delivered_memo call on this path was redundant, and
     # because the receiver tree is routinely dirty under concurrent-EM git, its
     # `git commit -- <memo>` consistently exited non-zero with "no changes added
@@ -3473,7 +3473,7 @@ def _send_via_engine(
     # caller that passes it) — that form has no draft/compose stage, so the
     # generic send receipt would name a lifecycle it never used. Route it to
     # the arm that names the remedy takeable on ITS invocation shape instead
-    # (example-doctrine-repo-em memo, 2026-08-03).
+    # (coordinator-claude-em memo, 2026-08-03).
     _print_premise_check_advisory(
         to,
         receiver_path,
@@ -3821,7 +3821,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
             print(
                 f"cross-repo-memo send: cannot deliver to central ('{to}') — "
                 f"repos.example_doctrine_repo is not registered on this machine.\n"
-                f"  Remediation: machine-local set repos.example_doctrine_repo <path-to-example-doctrine-repo-repo>.",
+                f"  Remediation: machine-local set repos.example_doctrine_repo <path-to-coordinator-claude-repo>.",
                 file=sys.stderr,
             )
             return 1
@@ -3844,7 +3844,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
     # Dispatch the write through the claude-klabauter engine (DR-210 graduation). The
     # receiver-side filename, gitignore delivery guard, containment check, and
     # collision refusal are now composed/enforced claude-klabauter-side (memo_send.py);
-    # example-doctrine-repo no longer recomputes the filename (DEC-3) or writes the memo content
+    # coordinator-claude no longer recomputes the filename (DEC-3) or writes the memo content
     # directly (Q-c hard, DEC-2) — see the _cmd_send docstring / plan DEC-1..5.
     sender = _sender_em_id()
 
@@ -4219,7 +4219,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
             except RuntimeError as exc:
                 # Covers seam-absent, transport failure, AND the op's setup-
                 # error (missing draft / status != "draft" / unparseable
-                # frontmatter — all exit_code:1). Map to example-doctrine-repo exit 1.
+                # frontmatter — all exit_code:1). Map to coordinator-claude exit 1.
                 print(f"cross-repo-memo compose: {exc}", file=sys.stderr)
                 _print_route_mutation_failure_reasons(exc)
                 return 1
@@ -4281,12 +4281,12 @@ def _build_legacy_parser() -> argparse.ArgumentParser:
 
         The --to argument accepts a receiver-EM identifier resolved two ways:
           1. The canonical central receiver (aliases: claude-central-em, central-em,
-             central) → the example-doctrine-repo repo (repos.example_doctrine_repo in the machine-local
+             central) → the coordinator-claude repo (repos.example_doctrine_repo in the machine-local
              registry). Run --list-receivers for its current canonical id. Central
              delivery requires repos.example_doctrine_repo to be registered; if absent, the CLI
              hard-errors with a remediation message. (Do NOT hand-author into
              ~/.claude/cross-repo/inbox/ — --to claude-central-em still delivers to
-             the example-doctrine-repo repo, which is the correct delivery surface.)
+             the coordinator-claude repo, which is the correct delivery surface.)
           2. A sibling repo, by convention:
                <receiver>-em → repos.<receiver, dashes→underscores>
                e.g. <your-repo>-em → repos.<your_repo>
@@ -4336,7 +4336,7 @@ def _build_legacy_parser() -> argparse.ArgumentParser:
             "claude-central-em). Sibling repos resolve to repos.<name> "
             "in the machine-local registry by convention. The central receiver "
             "(aliases: claude-central-em, central-em, central) delivers to the "
-            "example-doctrine-repo repo (repos.example_doctrine_repo "
+            "coordinator-claude repo (repos.example_doctrine_repo "
             "in the machine-local registry) — requires repos.example_doctrine_repo to be "
             "registered. Run `cross-repo-memo --list-receivers` to see every valid "
             "target (central + registered siblings). If a repo isn't registered on "
@@ -4462,7 +4462,7 @@ def _build_legacy_parser() -> argparse.ArgumentParser:
         help=(
             "OPTIONAL. Basename (or path — normalized to basename) of the "
             "inbound memo this send replies to, e.g. "
-            "2026-07-25-example-doctrine-repo-em-some-ask.md. Must name a memo present "
+            "2026-07-25-coordinator-claude-em-some-ask.md. Must name a memo present "
             "in THIS repo's own cross-repo/inbox/ or cross-repo/archive/ "
             "(searched recursively) — checked before anything is written to "
             "the receiver, and the send fails loud on a typo/unresolvable "
@@ -4810,7 +4810,7 @@ def _build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 def _cmd_version() -> int:
-    """Print this running script's identity and flag drift from the canonical example-doctrine-repo source.
+    """Print this running script's identity and flag drift from the canonical coordinator-claude source.
 
     Spec backlink: cross-repo/inbox/2026-07-20-claude-klabauter-em-stale-cross-repo-memo-shim-on-path.md
     § Ask 2 ("Consider a version/self-check"). A stale copy on PATH (e.g. a
@@ -4874,7 +4874,7 @@ def _cmd_version() -> int:
         )
         return 2
     print(
-        "WARNING: this is NOT the canonical example-doctrine-repo copy — a stale shim may be "
+        "WARNING: this is NOT the canonical coordinator-claude copy — a stale shim may be "
         "shadowing it on PATH (e.g. a machine-local ~/bin/cross-repo-memo). "
         f"Compare with: diff {self_path} {canonical_real}",
         file=sys.stderr,
@@ -5495,7 +5495,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Resolve receiver repo path. _resolve_receiver_path handles both the
     # central special-case (--to claude-central-em / central-em / central →
-    # repos.example_doctrine_repo, the example-doctrine-repo repo) and the fall-through to the repos.*
+    # repos.example_doctrine_repo, the coordinator-claude repo) and the fall-through to the repos.*
     # registry.
     # Spec backlink: docs/plans/2026-05-23-cross-repo-inbox-archive-restructure.md § B2
     receiver_path, receiver_diagnostic_already_printed = _resolve_receiver_path(args.to)
@@ -5539,7 +5539,7 @@ def main(argv: list[str] | None = None) -> int:
     # action_taken_at self-stamp, not a receiver-repo delivery). Repointing this
     # arm onto the engine would either silently drop the self-receipt semantics
     # (memo lands status:open, contradicting the caller's --decision) or require
-    # engine-side scope this plan's op explicitly excludes. Example-doctrine-repo retains the
+    # engine-side scope this plan's op explicitly excludes. Coordinator-claude retains the
     # direct-write pipeline for --self-receipt only; the ordinary (non-self-
     # receipt) flag-only send below is the DR-210 graduation target and is
     # repointed onto cc_invoke.route_mutation("memo.send", …), mirroring _cmd_send.

@@ -11,7 +11,7 @@ Verifies:
 No emit() call is made here — this test has no vendored-pin dependency and runs on any
 dev box without having run bin/claude-klabauter-revendor-cockpit-contract.py.
 
-Spec backlink: docs/plans/2026-07-06-roadmap-dag-emit-switch.md § C0 / D2
+Spec backlink: pln-emit-first-class-roadmap-dag-i-137a28 § C0 / D2
 """
 
 from __future__ import annotations

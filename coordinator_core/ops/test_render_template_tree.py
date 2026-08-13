@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.render_template_tree.
 
-Port of: render-template-tree.sh (example-doctrine-repo 290997c7, 2026-07-22).
+Port of: render-template-tree.sh (coordinator-claude 290997c7, 2026-07-22).
 Spec backlink: docs/plans/2026-06-22-new-project-bootstrap-skill.md § C2
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ def _write_render_template_sh(bin_dir: Path) -> Path:
 
     Implements the same CLI contract (<path> -o <path> KEY=VALUE...) and the same
     fail-loud-on-unsubstituted-token behavior as the real bash oracle, without
-    depending on the example-doctrine-repo clone being present on the test machine.
+    depending on the coordinator-claude clone being present on the test machine.
     """
     script = bin_dir / "render-template.py"
     script.write_text(
@@ -93,7 +93,7 @@ def _make_happy_src(tmp_path: Path) -> Path:
 
 
 def test_happy_path_renders_and_copies(tmp_path, monkeypatch, doe_root):
-    # Force the example-doctrine-repo-root fallback rung: co-located resolution now wins
+    # Force the coordinator-claude-root fallback rung: co-located resolution now wins
     # unconditionally, so this test's fixture-authored render-template.py
     # (staged under doe_root) would otherwise never run.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
@@ -112,7 +112,7 @@ def test_happy_path_renders_and_copies(tmp_path, monkeypatch, doe_root):
 
 
 def test_dst_may_be_pre_existing_empty_dir(tmp_path, monkeypatch, doe_root):
-    # Force the example-doctrine-repo-root fallback rung — see test_happy_path_renders_and_copies.
+    # Force the coordinator-claude-root fallback rung — see test_happy_path_renders_and_copies.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
     monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
     src = _make_happy_src(tmp_path)
@@ -169,7 +169,7 @@ def test_unsubstituted_token_fails_loud(tmp_path, monkeypatch, doe_root, capsys)
 
 
 def test_missing_render_template_sh_fails(tmp_path, monkeypatch):
-    # Force the example-doctrine-repo-root fallback rung so the empty example-doctrine-repo clone (no
+    # Force the coordinator-claude-root fallback rung so the empty coordinator-claude clone (no
     # render-template.py sibling) is actually consulted, rather than the
     # real co-located script this repo ships winning unconditionally.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
@@ -186,7 +186,7 @@ def test_missing_render_template_sh_fails(tmp_path, monkeypatch):
 
 
 def test_doe_root_unresolvable_fails(tmp_path, monkeypatch):
-    # Force the example-doctrine-repo-root fallback rung so example-doctrine-repo-root unresolvability is
+    # Force the coordinator-claude-root fallback rung so coordinator-claude-root unresolvability is
     # actually reached, rather than short-circuited by the real
     # co-located script this repo ships.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)

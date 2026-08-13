@@ -174,11 +174,11 @@ def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
 def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     """Resolve the coordinator bin dir to bake into the installed hook body.
 
-    Post-2026-07 executable-surface migration (example-doctrine-repo commit b644d5a9), the
+    Post-2026-07 executable-surface migration (coordinator-claude commit b644d5a9), the
     coordinator-claude *executables* (`coordinator-auto-push`,
     `coordinator-prepare-commit-msg`, ...) live under the engine repo's
     `coordinator/bin/`, while `plugin.mirrors.coordinator-claude.source_path`
-    (example-doctrine-repo) still correctly means "where is coordinator-claude SOURCE" —
+    (coordinator-claude) still correctly means "where is coordinator-claude SOURCE" —
     it is consumed by the OSS-publish target resolution and must NOT be
     repointed at the engine repo. Executable resolution is a genuinely separate
     concern from source resolution, hence the dedicated rung below.
@@ -187,7 +187,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     the directory — a rung whose directory exists but lacks `script_name`
     falls through rather than returning a bin dir with nothing runnable in
     it. This is the fix for the 2026-07 silent-breakage: the prior isdir-only
-    guards passed against an emptied-out example-doctrine-repo bin dir and reproduced the dead
+    guards passed against an emptied-out coordinator-claude bin dir and reproduced the dead
     hook on every regeneration.
 
     Rung 1: `<bin_dir>/machine-local get plugin.mirrors.coordinator-claude.source_path`

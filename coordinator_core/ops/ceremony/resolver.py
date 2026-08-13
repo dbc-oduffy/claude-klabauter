@@ -20,7 +20,7 @@ unchanged under a public name — that function's implementation stays in
 ``coordinator_core/ops/fleet/archive_handoffs.py``; relocating its body is
 out of this chunk's scope).
 
-Spec backlink: docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C5
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C5
 ("First promote the shared resolver helpers ... to a public
 coordinator_core/ops/ceremony/resolver.py ... that both wsc_resolve and this
 tail import from — reuse via public contract, not private-import reach
@@ -78,7 +78,7 @@ def resolve_in_repo(worktree_root: Path, candidate_path: str) -> Path | None:
 
     Guards against a producer-written pickup.handoff that is absolute or
     uses ../ traversal to escape the invoking repo — the foreign-repo bleed
-    defect (a example-retrieval-repo handoff mis-bound into a example-doctrine-repo ceremony).  Containment,
+    defect (a example-retrieval-repo handoff mis-bound into a coordinator-claude ceremony).  Containment,
     not mere existence, is the invariant: hf must live under THIS repo.
 
     Negative-spec: do NOT downgrade to a string-prefix check — resolve() first;
@@ -264,7 +264,7 @@ def detect_git_provenance_consumed(
     --find-renames --name-status`` with a per-commit ``%(trailers:key=Session-
     Id,valueonly)`` marker line, mirroring the bash oracle's own
     ``awk -v sid=`` pass line-for-line (see
-    ``example-doctrine-repo/coordinator/skills/workstream-complete/SKILL.md`` Step 0,
+    ``coordinator-claude/coordinator/skills/workstream-complete/SKILL.md`` Step 0,
     Detector B). Collects EVERY match across the range (not just the first —
     unlike the bash oracle's awk ``exit`` at first hit — so a DAG-pickup
     session that shipped/archived N predecessor handoffs this run gets all N

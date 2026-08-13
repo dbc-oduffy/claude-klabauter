@@ -1,7 +1,7 @@
 """Tests for coordinator_core.data_root.
 
 Mirrors the fixture shape of coordinator/bin/lib's own coordinator_data_root.py
-tests (co-located rung, example-doctrine-repo-resident rung, both-rungs-fail hard error) but
+tests (co-located rung, coordinator-claude-resident rung, both-rungs-fail hard error) but
 exercises the coordinator_core-native module, which delegates rung 2 to
 coordinator_core.ops.coordinator_doe_root.coordinator_doe_root() instead of
 coordinator_registry.doe_root() — see data_root.py's module docstring for why.

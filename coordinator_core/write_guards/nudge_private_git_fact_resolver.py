@@ -108,7 +108,7 @@ Negative-spec:
   - Never raises: any unexpected input shape, oversized file, or parse
     failure returns None (ALLOW/no-op).
 
-Spec backlink: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md § D3
+Spec backlink: pln-spawn-storm-culprit-taxonomy-p-805aa9 § D3
 Grep anchors: SPAWN-STORM-CULPRIT-TAXONOMY D3
 """
 

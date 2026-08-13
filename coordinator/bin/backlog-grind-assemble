@@ -7,7 +7,7 @@
 # pickup-assemble and baton-assemble): a plain in-process function call
 # after resolving CLAUDE_KLABAUTER_ROOT, no cc_invoke/IPC hop.
 #
-# Contract: example-doctrine-repo coordinator/docs/wiki/computed-skills.md
+# Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
 # Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
 # chunk C5
 # Registration seam: a new engine capability registers by shipping a thin
@@ -29,7 +29,7 @@
 #     `--run-id` names which run of the asking surface is asking — for
 #     mise-en-place, the `state/mise-inventory/<run-id>.md` record whose
 #     range the Phase-6 verdict is computed over. Ratified 2026-08-04
-#     (cross-repo/inbox/2026-08-04-example-doctrine-repo-em-mise-run-id-carrier-env-
+#     (cross-repo/inbox/2026-08-04-coordinator-claude-em-mise-run-id-carrier-env-
 #     breaks-windows.md) as a FLAG rather than an environment variable:
 #     `VAR=value command` is not a line cmd.exe parses, so an env carrier is
 #     unreachable through backlog-grind-assemble.cmd — the Windows P0 path.

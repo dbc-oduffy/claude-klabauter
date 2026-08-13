@@ -3,7 +3,7 @@ coordinator_core.install.write_surface — the write-surface declaration
 protocol every install-side writer in this repo exports its write surface
 through.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md,
+Spec backlink: pln-writer-declared-write-surface-49d3bd,
 chunk C1
 
 Purpose: the writer-declared write-surface manifest exists so that "what did
@@ -11,7 +11,7 @@ install touch on disk" has one authoritative, machine-checkable answer
 instead of three hand-maintained prose mirrors going stale independently
 (the registry-manifest precedent this plan cites, `docs/wiki/
 coordinator-core-engine.md`). This module is the vocabulary a writer
-declares AGAINST — the frozen, external, eight-kind taxonomy example-doctrine-repo accepted
+declares AGAINST — the frozen, external, eight-kind taxonomy coordinator-claude accepted
 2026-08-06, plus the container shapes (`WriteSurfaceEntry`, its two
 sibling clause forms, and `WriteSurfaceDeclaration`) a peer chunk (C2/C3)
 imports to write one `WriteSurfaceDeclaration` per writer module.
@@ -122,8 +122,8 @@ WRITE_SURFACE_KINDS: tuple[str, ...] = (
     "structured-file-key",
     "line-membership",
 )
-"""The frozen, externally-agreed eight-kind vocabulary. Final as of example-doctrine-repo's
-2026-08-06 acceptance memo; example-doctrine-repo's schema warns rather than fails on an
+"""The frozen, externally-agreed eight-kind vocabulary. Final as of coordinator-claude's
+2026-08-06 acceptance memo; coordinator-claude's schema warns rather than fails on an
 unrecognized kind, so a ninth kind is a one-line addition on their side and
 never blocks emission on ours — but it is never a reason to invent a kind
 here without updating this tuple first."""
@@ -191,7 +191,7 @@ class WriteSurfaceEntry:
     text) previously had no structural signal a record was synthetic
     rather than a real declared surface. Deliberately NOT a new `kind`
     value: `WRITE_SURFACE_KINDS` is the frozen, externally-agreed
-    eight-kind vocabulary example-doctrine-repo's schema consumes (see that tuple's
+    eight-kind vocabulary coordinator-claude's schema consumes (see that tuple's
     docstring) -- a marker field avoids touching that cross-repo contract."""
     unset_group: str | None = None
     """Non-None only for an entry whose reversal must be treated as an
@@ -199,7 +199,7 @@ class WriteSurfaceEntry:
     sharing the same `unset_group` value must all be reversed together, so
     an uninstall can never strand a partially-removed group. Deliberately
     NOT a new `kind` value: `WRITE_SURFACE_KINDS` is the frozen,
-    externally-agreed eight-kind vocabulary example-doctrine-repo's schema consumes (see
+    externally-agreed eight-kind vocabulary coordinator-claude's schema consumes (see
     that tuple's docstring) -- a marker field avoids touching that
     cross-repo contract."""
 

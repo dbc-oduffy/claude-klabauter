@@ -22,13 +22,13 @@ Spec backlink:
     docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md § C2
     DR-214: docs/decisions/DR-214-send-class-cross-tree-write-boundary.md (D2 admission)
     DR-211 D2 criterion 3 retirement (send only): PM directive 2026-07-21 —
-    delivered-memo commit ported from example-doctrine-repo coordinator/bin/cross-repo-memo
+    delivered-memo commit ported from coordinator-claude coordinator/bin/cross-repo-memo
     _commit_delivered_memo (~line 1590-1756), adapted to this file's async
     git-subprocess convention; mechanism amended 2026-07-21 (DR-214
     amendment, the Staff Engineer approach-review REQUIRES_CHANGES) to an all-hooks-off
     `-c core.hooksPath=<empty-tmpdir>` commit, replacing the initial
     `--no-verify` addition (which did not bypass `prepare-commit-msg`).
-    Parity source: example-doctrine-repo coordinator/bin/cross-repo-memo (schema-valid emission + B3 guard)
+    Parity source: coordinator-claude coordinator/bin/cross-repo-memo (schema-valid emission + B3 guard)
     Lesson: 2026-07-05-common-dir-keyed-ops-must-derive-the-wor.yaml (worktree derivation)
     Lesson: 2026-07-05-externally-triggered-ops-must-contain-wi.yaml (wire-path containment)
     Precedent: pcore-11 traversal-rejection 5296973
@@ -95,7 +95,7 @@ Negative-spec:
     2026-07-22-claude-central-em-snippet-sync-adoption-and-body-drop-
     verdict.md). A DERIVED summary (the `summary` param omitted) is
     untouched — `derive_prose_summary` already self-caps. This is a
-    DELIBERATE divergence from any clamp/truncate behavior in example-doctrine-repo's mirror
+    DELIBERATE divergence from any clamp/truncate behavior in coordinator-claude's mirror
     (`cross-repo-memo:1810-1830`'s parity note) — the former silent
     `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is exactly the defect the routed
     memo root-caused (a 120-char summary truncated mid-sentence on a
@@ -128,7 +128,7 @@ Negative-spec:
     key ever emitted).
   - Does NOT leave the one-shot (flag-only, no `memo.draft`) send path with
     zero local evidence of having happened (2026-08-04 fix, routed via a
-    cross-repo memo from example-doctrine-repo-em: a plan chunk in a sending repo whose
+    cross-repo memo from coordinator-claude-em: a plan chunk in a sending repo whose
     deliverable is a memo had no local artifact for `close-out-and-stamp`'s
     anti-self-attestation `disposition_ref` ancestry check to point at) — see
     `_append_sent_ledger`. UNLIKE `_stamp_sender_outbox_sent`, which only
@@ -226,7 +226,7 @@ _MODE = "send"
 # YYYY-MM-DD-<topic>.md filename contract (5-lockstep-site invariant).
 _TOPIC_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 
-# DR-026 sender-namespacing: byte-for-byte port of example-doctrine-repo cross-repo-memo
+# DR-026 sender-namespacing: byte-for-byte port of coordinator-claude cross-repo-memo
 # _memo_filename's sanitization regexes (coordinator/bin/cross-repo-memo ~line 1410-1418).
 _SENDER_SLUG_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _SENDER_SLUG_RUN_DASH_RE = re.compile(r"-{2,}")
@@ -234,7 +234,7 @@ _TOPIC_DOUBLED_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}-)+")
 
 # Engine actor-id for from: when the caller does not supply from_id.
 # The asyncio engine has no EM session identity; this is the engine-actor sentinel.
-# example-doctrine-repo Ask-1 concurrence: consumers key on the file at the path (schema-valid frontmatter),
+# coordinator-claude Ask-1 concurrence: consumers key on the file at the path (schema-valid frontmatter),
 # not on the writing process — an engine actor-id in from: is sufficient.
 _ENGINE_ACTOR_ID = "claude-klabauter-engine"
 
@@ -253,18 +253,18 @@ def resolve_sender_id(from_id: Optional[str]) -> str:
     `resolved_filename`/actual-write filename pair (the defect this closes:
     memo.list previously computed its preview filename with the engine actor
     id unconditionally, regardless of what `from_id` a real send would use —
-    reported by example-doctrine-repo/claude-central-em, `cross-repo-memo --dry-run` preview
-    showed `claude-klabauter-engine`-namespaced filenames for example-doctrine-repo-origin sends that
+    reported by coordinator-claude/claude-central-em, `cross-repo-memo --dry-run` preview
+    showed `claude-klabauter-engine`-namespaced filenames for coordinator-claude-origin sends that
     actually land `claude-central-em`-namespaced).
 
     A falsy `from_id` (None or empty string) resolves to `_ENGINE_ACTOR_ID` —
     the asyncio engine has no EM session identity of its own; this is the
     sentinel it signs sends with when the caller declines to declare one (see
-    the `_ENGINE_ACTOR_ID` module comment above for the example-doctrine-repo Ask-1 concurrence
+    the `_ENGINE_ACTOR_ID` module comment above for the coordinator-claude Ask-1 concurrence
     this rests on).
 
     Sender-side canonicalization: when the resolved identity is itself a
-    central/redirect alias (the example-doctrine-repo seat sending FROM e.g. `claude-central-em`
+    central/redirect alias (the coordinator-claude seat sending FROM e.g. `claude-central-em`
     or a redirect alias), it is canonicalized to the SAME repo-matching
     central id `memo.send`'s receiver-side addressee gate uses
     (`_memo_resolver.canonical_receiver_id`) — otherwise outbound filenames
@@ -913,12 +913,12 @@ def _validate_send_params(params: dict):
 def _sender_slug(sender: str) -> str:
     """Slug-sanitize a sender identity for filename namespacing (DR-026).
 
-    Byte-for-byte port of example-doctrine-repo cross-repo-memo._memo_filename's sanitization:
+    Byte-for-byte port of coordinator-claude cross-repo-memo._memo_filename's sanitization:
     lowercase, collapse any run of non-[a-z0-9-] chars to a single dash,
     collapse consecutive dashes, strip leading/trailing dashes.
 
-    Spec backlink: DR-026 (example-doctrine-repo docs/decisions/DR-026-cross-repo-memo-
-    receiver-filename-namespace.md); example-doctrine-repo coordinator/bin/cross-repo-memo
+    Spec backlink: DR-026 (coordinator-claude docs/decisions/DR-026-cross-repo-memo-
+    receiver-filename-namespace.md); coordinator-claude coordinator/bin/cross-repo-memo
     _memo_filename (~line 1410-1412).
     """
     if not sender:
@@ -937,12 +937,12 @@ def _memo_filename(today: str, sender: str, topic: str) -> str:
     O_EXCL guard in _write_memo_file — this function only changes the
     pre-collision filename shape, not the collision semantics).
 
-    Also ports example-doctrine-repo's doubled-date-prefix strip: a topic may already carry a
+    Also ports coordinator-claude's doubled-date-prefix strip: a topic may already carry a
     leading YYYY-MM-DD- prefix (e.g. reused from a prior dated filename) —
     strip a RUN of leading date prefixes before prepending today's date, so
     the result is never a doubled <date>-<date>-<topic>.md.
 
-    Negative-spec / deviation from example-doctrine-repo: example-doctrine-repo's _memo_filename falls back to a
+    Negative-spec / deviation from coordinator-claude: coordinator-claude's _memo_filename falls back to a
     bare <date>-<topic>.md when the sanitized sender reduces to empty (its
     "defensive empty-sender fallback"). This port does NOT replicate that
     fallback — memo.send's from_id always resolves to a non-empty default
@@ -1007,19 +1007,19 @@ def _redelivery_filename(
 
 
 # ---------------------------------------------------------------------------
-# Memo composition — inline, no example-doctrine-repo CLI import
+# Memo composition — inline, no coordinator-claude CLI import
 # ---------------------------------------------------------------------------
 
 def _yaml_quote(value: str) -> str:
     """Double-quote a string for YAML, escaping backslashes, double-quotes, control chars.
 
-    Mirrors memo_compose._yaml_quote (example-doctrine-repo shared lib, bin/lib/memo_compose.py).
-    Inlined here to avoid a cross-repo import dependency while the example-doctrine-repo resolver
+    Mirrors memo_compose._yaml_quote (coordinator-claude shared lib, bin/lib/memo_compose.py).
+    Inlined here to avoid a cross-repo import dependency while the coordinator-claude resolver
     surface is pending. Both implementations must stay in sync with the memo schema.
 
     Sync note: this copy adds ASCII control-char escaping (0x00-0x08, 0x0B, 0x0C,
-    0x0E-0x1F, 0x7F → \\uXXXX) that the example-doctrine-repo memo_compose._yaml_quote may lack —
-    if example-doctrine-repo's copy is updated to fix the same gap, re-sync the two implementations.
+    0x0E-0x1F, 0x7F → \\uXXXX) that the coordinator-claude memo_compose._yaml_quote may lack —
+    if coordinator-claude's copy is updated to fix the same gap, re-sync the two implementations.
     Review: code-reviewer — NUL and other bare control chars produce invalid YAML 1.1
     double-quoted strings; escaped to \\uXXXX form.
 
@@ -1112,7 +1112,7 @@ def _render_extra_field(key: str, value: Any) -> str:
     return f"{key}: {_yaml_scalar(value)}"
 
 
-# kind enum — mirrors example-doctrine-repo cross-repo-memo._VALID_KINDS (~line 1774).
+# kind enum — mirrors coordinator-claude cross-repo-memo._VALID_KINDS (~line 1774).
 _VALID_KINDS = ("ask", "consult", "fyi", "proposal")
 
 # Single source of truth for the two frontmatter literals that matter most for
@@ -1139,16 +1139,16 @@ def _self_validate_frontmatter_fields(
     """Defense-in-depth frontmatter self-check before write (invariant b).
 
     The engine bypasses the session-side PreToolUse Write hook that would
-    otherwise validate outgoing memo frontmatter against the (example-doctrine-repo-owned,
+    otherwise validate outgoing memo frontmatter against the (coordinator-claude-owned,
     NOT vendored here) cross-repo memo schema — so memo.send must self-
     enforce the required-field shape before every write.
 
-    Mirrors example-doctrine-repo cross-repo-memo._validate_outbox_frontmatter's field-presence
+    Mirrors coordinator-claude cross-repo-memo._validate_outbox_frontmatter's field-presence
     semantics (~line 1777-1815): title/from/to/created/delivery_mode must be
     non-empty; status must literally equal "open" (this is always a receiver-
-    side delivery memo — never a draft, so example-doctrine-repo's "draft" acceptance does not
+    side delivery memo — never a draft, so coordinator-claude's "draft" acceptance does not
     apply here); summary's KEY must be present but MAY be empty (mirrors
-    example-doctrine-repo's allowance that summary can be present-but-empty — memo.send permits
+    coordinator-claude's allowance that summary can be present-but-empty — memo.send permits
     an empty body, which derives to an empty summary); kind is valid-or-absent
     against the DR-214/D2-6 enum (in practice memo.send always supplies a
     non-empty kind — _validate_send_params requires it — so "absent" is not
@@ -1198,7 +1198,7 @@ def _compose_memo(
     """Compose a schema-valid cross-repo memo document (frontmatter + body).
 
     Schema-valid: to: / from: / status: open / delivery_mode: receiver-repo / kind:
-    frontmatter per the cross-repo memo schema (D2 criterion 6, example-doctrine-repo Ask-1
+    frontmatter per the cross-repo memo schema (D2 criterion 6, coordinator-claude Ask-1
     concurrence condition 1). topic lives in the filename, NOT in frontmatter
     (same as cross-repo-memo CLI convention).
 
@@ -1208,10 +1208,10 @@ def _compose_memo(
     filename date and created: frontmatter field cannot diverge across midnight.
 
     Divergence note (C9, supersedes the prior "keep in sync with memo_compose"
-    sync note): after C9 this composer is DELIBERATELY AHEAD of example-doctrine-repo's
+    sync note): after C9 this composer is DELIBERATELY AHEAD of coordinator-claude's
     memo_compose — total emission over declared params, fail-loud on unknown
     params, and nested-mapping support for `scoped_to` are claude-klabauter-owned
-    ergonomic divergences (A11), not a mirror to keep byte-identical with example-doctrine-repo's
+    ergonomic divergences (A11), not a mirror to keep byte-identical with coordinator-claude's
     copy. The nine canonical fields below keep their CURRENT fixed order and
     quoting (DR-026 / schema lockstep + the strang-03 round-trip fixture both
     depend on it) — `scoped_to` renders strictly AFTER `kind:`/`supersedes:`.
@@ -1347,11 +1347,11 @@ def _write_memo_file(target_path: Path, content: str) -> None:
         see _commit_delivered_memo.
       - Does NOT use a nonce or content-hash suffix — the YYYY-MM-DD-<topic>.md
         filename shape is a 5-site lockstep contract; changing it requires
-        example-doctrine-repo-coordinated filename-contract change across all 5 sites.
+        coordinator-claude-coordinated filename-contract change across all 5 sites.
 
     Raises:
         FileExistsError: if target_path already exists — fail-loud (C1 D2 criterion 4,
-            ratified 2026-07-05 as example-doctrine-repo-normative; O_EXCL is the atomic guard).
+            ratified 2026-07-05 as coordinator-claude-normative; O_EXCL is the atomic guard).
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(target_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
@@ -1360,7 +1360,7 @@ def _write_memo_file(target_path: Path, content: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# B3 gitignore delivery guard (D2 criterion 7; example-doctrine-repo Ask-1 concurrence condition 3)
+# B3 gitignore delivery guard (D2 criterion 7; coordinator-claude Ask-1 concurrence condition 3)
 # ---------------------------------------------------------------------------
 
 async def _git_check_ignore(receiver_repo_path: Path, rel_path: str) -> bool:
@@ -1921,9 +1921,9 @@ def _portable_delivered_to_form(receiver_repo_path: Path, delivered_path: Path) 
     `delivered_to` — receiver-repo-relative when possible, falling back to a
     `~/`-prefixed home-relative form, and only then to the absolute string.
 
-    Root cause this closes (verified cross-repo/inbox finding, example-doctrine-repo-em):
+    Root cause this closes (verified cross-repo/inbox finding, coordinator-claude-em):
     `str(delivered_path)` stamped a machine-absolute path
-    (`/Users/<name>/...`) into tracked frontmatter, which reddens example-doctrine-repo's
+    (`/Users/<name>/...`) into tracked frontmatter, which reddens coordinator-claude's
     `test_no_posix_home_path_citations` portability gate on every tracked
     sent memo. The receiver is already unambiguous from the memo's `to:` plus
     `delivery_mode: receiver-repo`, so a receiver-repo-relative path carries
@@ -1962,7 +1962,7 @@ def _stamp_sender_outbox_sent(
     paths below). False on every no-op/skip/failure branch.
 
     Root cause this closes (verified cross-repo/inbox finding,
-    example-doctrine-repo-em): `cross-repo-memo send` / `memo.send` dispatched to the
+    coordinator-claude-em): `cross-repo-memo send` / `memo.send` dispatched to the
     receiver and removed the sender's local draft, but nothing ever wrote
     delivery evidence back onto the sender's own outbox copy — the CLI's
     `os.remove(outbox_path)` (coordinator/bin/cross-repo-memo `_send_via_
@@ -2012,7 +2012,7 @@ def _stamp_sender_outbox_sent(
         `_portable_delivered_to_form`. A receiver-repo-relative path is
         preferred (the receiver is already unambiguous from `to:` plus
         `delivery_mode: receiver-repo`); an absolute home path tracked into
-        a sent memo reddens example-doctrine-repo's `test_no_posix_home_path_citations`
+        a sent memo reddens coordinator-claude's `test_no_posix_home_path_citations`
         portability gate downstream, which is the whole reason this function
         never emits one when a relative form is available.
       - Does NOT use `_yaml_quote`/hand-rolled YAML text — reuses the shared
@@ -2138,7 +2138,7 @@ def _append_sent_ledger(
     a clean +1/-0. A sibling repo adopting this shape will see the same
     one-time churn on its own first send; that is expected, not a defect.
 
-    Root cause this closes (cross-repo memo, example-doctrine-repo-em, 2026-08-04): a
+    Root cause this closes (cross-repo memo, coordinator-claude-em, 2026-08-04): a
     plan chunk in a SENDING repo whose deliverable is a cross-repo memo had
     no local evidence the memo shipped, so the chunk could never close —
     `close-out-and-stamp` only honours a `disposition_ref` that resolves to a
@@ -2178,7 +2178,7 @@ def _append_sent_ledger(
         `_portable_delivered_to_form` (receiver-repo-relative, falling back to
         `~/`-relative, only then absolute), the same rule
         `_stamp_sender_outbox_sent` follows and for the same reason: an
-        absolute home path tracked into this file would redden example-doctrine-repo's
+        absolute home path tracked into this file would redden coordinator-claude's
         `test_no_posix_home_path_citations` portability gate.
       - Does NOT truncate, rotate, or de-duplicate the ledger — strictly
         append-only; a second send of the same topic appends a second line
@@ -2833,11 +2833,11 @@ async def _memo_send(
             return build_setup_error_result(
                 _MODE, dry_run,
                 f"memo.send: receiver {to!r} is a central receiver id "
-                f"(identity.centralReceiverIds) that resolves to the example-doctrine-repo "
+                f"(identity.centralReceiverIds) that resolves to the coordinator-claude "
                 f"repo, but none of the manifest's central receiver ids is "
                 f"registered in the machine-local registry. "
                 f"Register the central repo first, e.g.: "
-                f"machine-local set repos.example_doctrine_repo <abs-path-to-example-doctrine-repo-repo>",
+                f"machine-local set repos.example_doctrine_repo <abs-path-to-coordinator-claude-repo>",
             )
         repo_key = _receiver_em_to_repo_key(to)
         # C4 (footgun #2, design-as-offers): suggest the nearest REGISTERED
@@ -3056,7 +3056,7 @@ async def _memo_send(
     # ── act path ──────────────────────────────────────────────────────────────
 
     # Fail-loud on collision (C1 D2 criterion 4; ratified fail-loud semantics;
-    # example-doctrine-repo-normative 2026-07-05; see DR-214). Pre-check gives a clean error envelope;
+    # coordinator-claude-normative 2026-07-05; see DR-214). Pre-check gives a clean error envelope;
     # _write_memo_file's O_EXCL is the atomic guard against a race.
     if collision_exists:
         return build_act_result(_MODE, [], [], [{
@@ -3078,7 +3078,7 @@ async def _memo_send(
             "reason": (
                 f"gitignore-delivery-guard: {filename!r} is gitignored in receiver repo "
                 f"{receiver_repo_path} — fix the receiver .gitignore before delivering. "
-                f"(B3 guard, D2 criterion 7, example-doctrine-repo Ask-1 concurrence condition 3)"
+                f"(B3 guard, D2 criterion 7, coordinator-claude Ask-1 concurrence condition 3)"
             ),
         }])
 

@@ -27,7 +27,7 @@ string `"true"` is NOT accepted as opt-in). A manifest that omits
 `packageability_compliance` entirely, or sets `declared: false`, SKIPS CLEAN
 (exit 0, "not opted in") rather than failing.
 
-Port of: validate-install-contract.sh (example-doctrine-repo b5a4192c, 2026-07-20; 303 lines, bash + jq)
+Port of: validate-install-contract.sh (coordinator-claude b5a4192c, 2026-07-20; 303 lines, bash + jq)
 Spec backlink: docs/plans/2026-07-11-packageability-contract-fleet-doctrine.md § C4
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
@@ -294,7 +294,7 @@ def _check_point4(manifest: dict, failures: _Failures) -> None:
 
     An empty array is valid — it honestly declares "no platform has an
     execution-verified record yet" (the correct day-one state for a
-    greenfield repo whose tested_platforms is example-doctrine-repo-derived from
+    greenfield repo whose tested_platforms is coordinator-claude-derived from
     state/platform-outcomes/ records, not hand-asserted). Only a missing
     or non-array value fails this check.
     """

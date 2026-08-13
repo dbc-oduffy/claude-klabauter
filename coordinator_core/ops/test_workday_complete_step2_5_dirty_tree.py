@@ -2,8 +2,8 @@
 Tests for coordinator_core.ops.workday_complete_step2_5_dirty_tree.
 
 Golden-fixture parity check (Review: code-reviewer F3, 2026-07-17): the
-port was ORIGINALLY authored against example-doctrine-repo's bash oracle (Port of:
-workday-complete-step2_5-dirty-tree.sh, example-doctrine-repo b5a4192c, 2026-07-20), and
+port was ORIGINALLY authored against coordinator-claude's bash oracle (Port of:
+workday-complete-step2_5-dirty-tree.sh, coordinator-claude b5a4192c, 2026-07-20), and
 byte-parity was verified at port-time (see git history for the retired
 574-line bash body). That trampoline file has since been overwritten IN
 PLACE with a Python re-exec shim over this same port module, so a live

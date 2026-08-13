@@ -4,7 +4,7 @@
 Purpose: thin, discoverable entrypoint that regenerates
 coordinator/cockpit-contract/schema/*.json by invoking claude-klabauter's Python
 emitter. Claude-klabauter (claude-klabauter) owns the emitter ENGINE
-(coordinator_core.contract.cockpit_schema.emit_schema) — this example-doctrine-repo-side
+(coordinator_core.contract.cockpit_schema.emit_schema) — this coordinator-claude-side
 script is only a wrapper that resolves the sibling repo's SOURCE tree,
 trampolines the CURRENT interpreter (sys.executable) into it by setting
 CLAUDE_KLABAUTER_ROOT and prepending claude_klabauter_root to PYTHONPATH, and spawns the
@@ -19,7 +19,7 @@ fails loud with remediation when that requirement isn't met rather than
 silently leaving the schema stale.
 
 Windows de-bash campaign (Category C — inline `python -m` veneer): this
-replaces the former bash forwarder (regen-cockpit-schema.sh, example-doctrine-repo 23d34a4c,
+replaces the former bash forwarder (regen-cockpit-schema.sh, coordinator-claude 23d34a4c,
 2026-07-19, which shelled out to a claude-klabauter-resident interpreter via
 `set -euo pipefail` plumbing). No shell is spawned anywhere in this module —
 the emitter is invoked directly via subprocess.run() with an argv list, never
@@ -36,7 +36,7 @@ Negative-spec: does NOT invoke bash, sh, or any shell. Does NOT resolve,
 reference, or spawn any interpreter from a sibling repo's private virtual
 environment — that environment is not a supported consumption channel
 (2026-07-21 cross-repo boundary; this repo's own retired-venv ruling,
-2026-07-21, applies equally). Does NOT fall back to a example-doctrine-repo-resident emitter
+2026-07-21, applies equally). Does NOT fall back to a coordinator-claude-resident emitter
 — a source-trampoline into claude-klabauter's SOURCE tree, run under an interpreter
 satisfying claude-klabauter's declared requirements, is a hard prerequisite; there is
 no legacy path to strangle back to (Category C never had a bash-fallback
@@ -47,11 +47,11 @@ authors and regenerates the schema BYTES; it has no relationship to pushing
 a release tag. A push added here would silently hand this script a publish
 responsibility it was never scoped to hold. The only guard that ever
 enforced this invariant (asserting `git push` never appears in this regen
-script) migrated into claude-klabauter's tree with `b644d5a9`; nothing on example-doctrine-repo's side
+script) migrated into claude-klabauter's tree with `b644d5a9`; nothing on coordinator-claude's side
 has watched this seam since, which is precisely why a future reader must
-resist the temptation to "just add a push here." example-doctrine-repo asked claude-klabauter to take
+resist the temptation to "just add a push here." coordinator-claude asked claude-klabauter to take
 on the publish step directly (2026-07-25); claude-klabauter declined on engineering
-grounds, and example-doctrine-repo agreed to a push-triggered GitHub Action in its own repo
+grounds, and coordinator-claude agreed to a push-triggered GitHub Action in its own repo
 instead — ratified 2026-07-25, not yet built as of that date (see the
 tag-advance section below for the current build status).
 
@@ -66,28 +66,28 @@ the default: a bare drift-check run of this script (no flag) must not touch the
 tag, or it would spuriously advance the release ref on every no-op invocation
 (AC8 violation). The tag is advanced locally only — `git tag -f`, never pushed to
 origin — and only when the regen actually changed the schema output. The origin
-push is example-doctrine-repo's surface, not claude-klabauter's, and this script deliberately does not own
+push is coordinator-claude's surface, not claude-klabauter's, and this script deliberately does not own
 it and never will (see the module-level Negative-spec above for why staying
 push-free is a governance requirement, not a gap). The release ref's publish
-mechanism is AGREED but NOT YET BUILT, as of 2026-07-25: example-doctrine-repo's PM ratified a
-push-triggered GitHub Action, to live in example-doctrine-repo's own repo, triggered by
+mechanism is AGREED but NOT YET BUILT, as of 2026-07-25: coordinator-claude's PM ratified a
+push-triggered GitHub Action, to live in coordinator-claude's own repo, triggered by
 a commit touching `coordinator/cockpit-contract/schema/`, pushing the tag
-from example-doctrine-repo's clone to example-doctrine-repo's origin. As of this writing that workflow does not
-exist — example-doctrine-repo's tree has no `.github/` directory at all — so do not read
+from coordinator-claude's clone to coordinator-claude's origin. As of this writing that workflow does not
+exist — coordinator-claude's tree has no `.github/` directory at all — so do not read
 the paragraph above as describing a running mechanism; it describes what has
 been agreed to ship, not what is shipping. Verify before relying on this: the
-presence of a workflow file under example-doctrine-repo's `.github/` is the ground
+presence of a workflow file under coordinator-claude's `.github/` is the ground
 truth, not this docstring's age. Until that Action ships, the origin tag can
 sit stale relative to the local `git tag -f` advance below, and any reader
 pinned to the origin ref — claude-klabauter's own freshness probe
 (`coordinator_core/ops/emit/doe_drift.py`) and the default re-vendor path
 (`bin/claude-klabauter-revendor-cockpit-contract.py`, which defaults to
 `refs/tags/cockpit-contract-release`) — may read an OLD contract version
-until example-doctrine-repo's side lands and starts running the Action. Claude-klabauter performs no
+until coordinator-claude's side lands and starts running the Action. Claude-klabauter performs no
 cross-repo remote write, here or anywhere else, and this script's no-push
-invariant is unconditional regardless of what example-doctrine-repo's own publish mechanism is
+invariant is unconditional regardless of what coordinator-claude's own publish mechanism is
 or whether it has shipped yet. (This module previously claimed the push
-"rides `/merge-to-main`"; that mechanism never existed — example-doctrine-repo's
+"rides `/merge-to-main`"; that mechanism never existed — coordinator-claude's
 `/merge-to-main` cuts and pushes `v*` release tags only, and this ref is
 untouched by it.)
 
@@ -135,17 +135,17 @@ _CONTRACT_SCHEMA_FILENAME = "cockpit-contract.schema.json"
 
 
 def _resolve_doe_root() -> str:
-    """Resolve the example-doctrine-repo repo root via the shared machine-local registry ladder.
+    """Resolve the coordinator-claude repo root via the shared machine-local registry ladder.
 
     This does NOT derive the root from this script's own location. That was
-    correct while this executable lived in example-doctrine-repo (SCRIPT_DIR/../.. IS
-    the example-doctrine-repo root there — the old `git rev-parse --show-toplevel` with
+    correct while this executable lived in coordinator-claude (SCRIPT_DIR/../.. IS
+    the coordinator-claude root there — the old `git rev-parse --show-toplevel` with
     cwd=_BIN_DIR mirrored the retired bash oracle exactly), but this file
     has since migrated to claude-klabauter. Self-location now resolves to the
     claude-klabauter repo root, which has no `coordinator/cockpit-contract/schema/`
-    at all — silently composing a nonexistent out_dir for example-doctrine-repo's 30 frozen
+    at all — silently composing a nonexistent out_dir for coordinator-claude's 30 frozen
     schema files instead of failing loud. This is the sole regeneration
-    path example-doctrine-repo's D13/D21 release gate depends on, so a silent wrong-root
+    path coordinator-claude's D13/D21 release gate depends on, so a silent wrong-root
     write here is the highest-stakes shape this bug takes anywhere in the
     migration. A future reader must not "restore" __file__/git-toplevel
     resolution to regain oracle parity — that is precisely what broke it.
@@ -159,14 +159,14 @@ def _resolve_doe_root() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         print(
-            f"ERROR: could not resolve the example-doctrine-repo repo root ({exc}). "
+            f"ERROR: could not resolve the coordinator-claude repo root ({exc}). "
             "Set repos.example_doctrine_repo in the machine-local registry, or set the "
             "DOE_ROOT / REPO_EXAMPLE_DOCTRINE_REPO env var.",
             file=sys.stderr,
         )
         sys.exit(2)
     if not os.path.isdir(root):
-        print(f"ERROR: resolved example-doctrine-repo repo root does not exist: {root}", file=sys.stderr)
+        print(f"ERROR: resolved coordinator-claude repo root does not exist: {root}", file=sys.stderr)
         sys.exit(2)
     return root
 
@@ -310,16 +310,16 @@ def _advance_release_tag(doe_root: str, out_dir: str) -> None:
     from the schema it points at.
 
     Local only. Does NOT push, and must NEVER push — see the module-level
-    Negative-spec: under DR-060, publishing this tag to origin is example-doctrine-repo's
+    Negative-spec: under DR-060, publishing this tag to origin is coordinator-claude's
     initiative, not claude-klabauter's, and this function adding a push would silently
     transfer the publish button to claude-klabauter's tree. Today the origin push is a
-    manual step performed in the example-doctrine-repo clone
-    (`git push origin refs/tags/cockpit-contract-release`); example-doctrine-repo is separately
+    manual step performed in the coordinator-claude clone
+    (`git push origin refs/tags/cockpit-contract-release`); coordinator-claude is separately
     wiring an automated `/workday-complete` publish step on their side, but it
     is not shipped yet, so the push is manual for now and will remain so on
     the claude-klabauter side regardless. Never an automatic side-effect of a schema
     regen and never wired to `/merge-to-main` (that command cuts and pushes
-    `v*` release tags only; this ref is a separate seam example-doctrine-repo owns). Fails loud
+    `v*` release tags only; this ref is a separate seam coordinator-claude owns). Fails loud
     on any git error; never swallowed.
     """
     version = _read_contract_version(out_dir)
@@ -342,9 +342,9 @@ def _advance_release_tag(doe_root: str, out_dir: str) -> None:
         f"Advanced local annotated tag {_RELEASE_TAG} -> HEAD (CONTRACT_VERSION {version})."
     )
     print(
-        "  NOT pushed — publishing this tag to origin is example-doctrine-repo's step to take, not "
-        "claude-klabauter's. Until example-doctrine-repo performs it (or their own automated publish step "
-        "lands), the origin tag stays stale. In the example-doctrine-repo clone:"
+        "  NOT pushed — publishing this tag to origin is coordinator-claude's step to take, not "
+        "claude-klabauter's. Until coordinator-claude performs it (or their own automated publish step "
+        "lands), the origin tag stays stale. In the coordinator-claude clone:"
     )
     print(f"    git -C {doe_root} push origin refs/tags/{_RELEASE_TAG}")
 
@@ -354,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     Deliberate isolation boundary — do not convert to an in-process
     import. This is env isolation: the emitter runs under a
     trampoline_env / PYTHONPATH that this process must not adopt for
-    itself, over `contract.cockpit_schema.emit_schema`, example-doctrine-repo's frozen-bytes
+    itself, over `contract.cockpit_schema.emit_schema`, coordinator-claude's frozen-bytes
     schema contract (see CLAUDE.md's cockpit-contract note — touch
     nothing else about this neighbourhood). Reason recorded in
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.

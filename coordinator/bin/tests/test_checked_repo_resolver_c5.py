@@ -4,7 +4,7 @@ append-goal-event.py, append-plan-session.py, prune-closed-bugs.py,
 prune-closed-improvements.py, close-origin-stub-on-ship.py, and
 coordinator-session-loe.py.
 
-Spec backlink: docs/plans/2026-08-11-one-checked-resolver-for-the-bin-family.md
+Spec backlink: pln-one-checked-resolver-for-the-c-035d59
 § C5 / AC2-AC5, AC10.
 
 C1's own module (`test_checked_repo_resolver.py`) already exhaustively

@@ -19,7 +19,7 @@ Coverage:
   (vi)   idempotence              — canonicalize(canonicalize(x, m), m) == canonicalize(x, m)
                                    for both a known-loser id and a passthrough id.
 
-Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C4 (AC6, AC12)
+Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC12)
 """
 
 from __future__ import annotations
@@ -785,12 +785,12 @@ def test_dual_read_three_way_outcome_is_distinguishable(tmp_path):
 # handling. _normalize_extracted_deliverable_id is the single shared
 # normalisation step every read site in this section routes through.
 #
-# Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C2
+# Spec backlink: pln-archive-side-corpus-remediatio-3ff30d § C2
 # ---------------------------------------------------------------------------
 
 
 def test_normalize_strips_quotes_and_trailing_inline_comment():
-    raw = '"dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"  # minted here; deliberately NOT example-doctrine-repo\'s dlv-...-276e8d'
+    raw = '"dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"  # minted here; deliberately NOT coordinator-claude\'s dlv-...-276e8d'
     assert (
         _normalize_extracted_deliverable_id(raw)
         == "dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"
@@ -896,7 +896,7 @@ def test_seed_never_emits_malformed_deliverable_id(tmp_path):
 # predecessor resolves to a superseded row naming its successor, and
 # deliverable_id stays unique across the whole ledger block.
 #
-# Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C2, C3
+# Spec backlink: pln-archive-side-corpus-remediatio-3ff30d § C2, C3
 # ---------------------------------------------------------------------------
 
 

@@ -3,7 +3,7 @@ machine_resolver.py — Python port of the machine/contributor resolver core
 (cs_compute_machine, cs_compute_machine_live, cs_compute_contributor,
 cs_compute_contributor_live).
 
-Port of: coordinator-daily-branch.sh (example-doctrine-repo 2fbe0e77, 2026-07-19).
+Port of: coordinator-daily-branch.sh (coordinator-claude 2fbe0e77, 2026-07-19).
 De-bash campaign: kill bash on the Windows critical path — this is the Zone-A
 "machine_resolver" native op (import-only module, sibling shape to daily_branch.py).
 
@@ -43,7 +43,7 @@ env-var override rung (`_machine_local.py::_env_key`) so callers/tests can pin
 a value without touching the on-disk registry.
 
 `registry_get` (public since DR-071, 2026-07-22) is this same direct-tomllib
-reader, promoted to a public name so the example-doctrine-repo-root anchor consumers listed on
+reader, promoted to a public name so the coordinator-claude-root anchor consumers listed on
 its docstring can bind to `repos.example_doctrine_repo` reset-safely without duplicating
 a second TOML parser. `_registry_get` is kept as an alias for this module's
 own pre-existing internal callers.
@@ -211,7 +211,7 @@ def registry_get(key: str) -> Optional[str]:
     docstring negative-spec).
 
     Public promotion (DR-071, 2026-07-22): this is the direct-tomllib registry
-    reader every example-doctrine-repo-root anchor consumer (``coordinator_core.doe_root_pointer``,
+    reader every coordinator-claude-root anchor consumer (``coordinator_core.doe_root_pointer``,
     ``coordinator_core.trusted_root_guard``, ``coordinator_core.
     resolve_coordinator_clone``, ``coordinator_core.install._shared``) now binds
     ``repos.example_doctrine_repo`` reads to, in preference to the ``machine-local`` CLI —

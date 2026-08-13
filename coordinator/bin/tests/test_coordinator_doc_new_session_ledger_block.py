@@ -8,7 +8,7 @@ six scaffolders share ONE canonical block (`_SESSION_LEDGER_BLOCK`), not six
 independently-typed copies of an expected literal -- a hand-copied expected
 string in the test would let six divergent literals in production pass unnoticed.
 
-Spec backlink: docs/plans/2026-08-11-ledger-owing-handoff-kinds-emit-the-sess.md § C1, AC1
+Spec backlink: pln-ledger-owing-handoff-kinds-emi-648818 § C1, AC1
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`

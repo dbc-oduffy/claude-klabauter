@@ -9,7 +9,7 @@ hours, see the module's own docstring), that `undeclared` and `duplicate_writer_
 representable (not merely detected), and that `effect="delete"` entries survive emission
 rather than being filtered.
 
-Spec backlink: docs/plans/2026-08-06-writer-declared-write-surface-manifest.md, chunk C4
+Spec backlink: pln-writer-declared-write-surface-49d3bd, chunk C4
 """
 
 from __future__ import annotations

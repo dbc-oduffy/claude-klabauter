@@ -16,7 +16,7 @@ Pure Python -- no real ``resolve_roster()`` call in any test here; each case
 monkeypatches the seam directly, matching the sibling suite's own
 identity-resolution-patching convention (see that file's own docstring).
 
-Spec backlink: docs/plans/2026-08-10-deny-unenumerated-agent-types-at-dispatch.md § C2 / AC5
+Spec backlink: pln-deny-unenumerated-agent-types-e56d1b § C2 / AC5
 """
 
 from __future__ import annotations

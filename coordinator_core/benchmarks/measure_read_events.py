@@ -41,7 +41,7 @@ to spawn -- `_read_events_probe.py` stands in for it.
 Never point this at the real `state/` tree -- every fixture is materialized
 under a fresh `tempfile.mkdtemp` root and torn down in a `finally`.
 
-Spec backlink: docs/plans/2026-07-28-sat-01-sovereign-tracker-substrate.md § C5 (AC3).
+Spec backlink: pln-sat-01-sovereign-tracker-subst-a66742 § C5 (AC3).
 """
 
 from __future__ import annotations

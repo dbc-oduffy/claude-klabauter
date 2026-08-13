@@ -20,7 +20,7 @@ env var; this module falls back to `Path.cwd()` when the env var is absent
 (direct/test invocation, matching the bash oracle's own `cd`-relative
 resolution when sourced ad hoc).
 
-Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (example-doctrine-repo)
+Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (coordinator-claude)
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
 Exit codes (parity-critical, preserved from the bash oracle):
@@ -42,7 +42,7 @@ Negative-spec (retired/never-had patterns — do NOT reintroduce):
       validate the marker's contents, only preserves the byte string.
     - Does NOT reproduce the bash oracle's `find ... | wc -l` leading-space
       padding on the SYNC line's file count — BSD-vs-GNU-`wc`-width-
-      dependent cosmetic noise, never parsed downstream; see the example-doctrine-repo-side
+      dependent cosmetic noise, never parsed downstream; see the coordinator-claude-side
       trampoline's matching negative-spec note.
 """
 

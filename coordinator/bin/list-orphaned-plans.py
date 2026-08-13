@@ -29,7 +29,7 @@ count, and any unrecognized_status entries. Read-only, advisory-only — same
 "never blocks" posture as `plan.list_stale_executing` (see that op's own
 docstring): this CLI never fails a ceremony or a commit, so it always exits 0.
 
-Spec backlink: docs/plans/2026-07-31-plan-orphan-ownership-resolver.md, chunk C4
+Spec backlink: pln-plan-orphan-ownership-resolver-3e68bb, chunk C4
 
 Negative-spec:
     - Does NOT scan docs/plans/ itself — calls

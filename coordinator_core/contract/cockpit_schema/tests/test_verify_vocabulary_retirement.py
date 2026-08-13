@@ -9,11 +9,11 @@ locks the NARROWED enums in claude-klabauter's own vendored frontmatter schema p
 re-vendored at C7) and corpus-scans the live+archived handoff tree for
 stragglers still carrying the retired vocabulary.
 
-Unlike ``test_verify_superseded_retirement.py`` this is NOT example-doctrine-repo-clone-gated
+Unlike ``test_verify_superseded_retirement.py`` this is NOT coordinator-claude-clone-gated
 (``@skip_no_doe``) — the schema pair and the handoff corpus it scans are both
-local to this repo, not read from the example-doctrine-repo clone.
+local to this repo, not read from the coordinator-claude clone.
 
-Spec backlink: docs/plans/2026-07-22-handoff-lifecycle-vocabulary-overhaul-scope.md § C7
+Spec backlink: pln-handoff-lifecycle-vocabulary-o-22ada6 § C7
 
 Retiring-ruling backlink: 2026-08-02 fast-tier stale-test triage
 (tasks/mise-verify/triage-C-cockpit.md § test_verify_vocabulary_retirement.py).
@@ -60,7 +60,7 @@ _DEPLOYMENT_STATE_ENUM = [
     "awaiting_gate", "ready_to_fire", "in_flight", "shipped", "continued", "closed",
 ]
 # Version FLOOR, not an equality pin. Claude-klabauter re-vendors this schema pair from
-# example-doctrine-repo rather than authoring it, so an equality pin goes red on every upstream
+# coordinator-claude rather than authoring it, so an equality pin goes red on every upstream
 # re-vendor whether or not the vocabulary actually regressed — a standing
 # false positive by construction (it fired three times between C7 and
 # 2026-08-02: 2.0.0 -> 2.1.0 -> 2.3.0 archived, 2.0.0 -> 4.0.0 live, none of
@@ -148,7 +148,7 @@ def test_schema_pair_versions_at_or_past_the_c7_floor():
 
     Negative-spec: deliberately NOT an equality pin on either schema. The two
     versions have drifted independently since C7 (4.0.0 live, 2.3.0 archived)
-    and will keep drifting — claude-klabauter re-vendors this pair from example-doctrine-repo rather than
+    and will keep drifting — claude-klabauter re-vendors this pair from coordinator-claude rather than
     authoring it. See _MIN_SCHEMA_VERSION for why the floor is the assertion
     that carries signal and the equality pin was the one that did not.
     """

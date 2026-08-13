@@ -15,8 +15,8 @@ the invoking process's cwd. `invoking_repo` (the repo id of the tree the ceremon
 actually ran in) and `surface_sha` (the SHA of the repo PROVIDING the surface under
 test) diverge exactly when a canary run on one machine exercises a surface resolved
 from a different repo's clone via `--plugin-dir` (see schema field descriptions for
-both). The surface-providing repo here is always the example-doctrine-repo/coordinator repo — this tool
-lives in `coordinator/bin/`, so the surface it measures is always a example-doctrine-repo-owned surface —
+both). The surface-providing repo here is always the coordinator-claude/coordinator repo — this tool
+lives in `coordinator/bin/`, so the surface it measures is always a coordinator-claude-owned surface —
 resolved via `coordinator_registry.doe_root()` (env `DOE_ROOT` -> machine-local
 registry `repos.example_doctrine_repo` -> raise), NOT via `.doe-root`-file-read or cwd. `doe_root()`
 delegates to the same machine-local registry the `.doe-root` pointer file itself is
@@ -159,9 +159,9 @@ def _resolve_machine() -> str:
 
 
 def _surface_root() -> str:
-    """Resolve the surface-providing repo root (always the example-doctrine-repo/coordinator repo —
+    """Resolve the surface-providing repo root (always the coordinator-claude/coordinator repo —
     this tool lives under `coordinator/bin/`, so the surface it measures is always
-    example-doctrine-repo-owned). Delegates entirely to `coordinator_registry.doe_root()`; raises
+    coordinator-claude-owned). Delegates entirely to `coordinator_registry.doe_root()`; raises
     `_DoeUnresolvable` when neither `DOE_ROOT` nor the machine-local registry
     resolve it — callers must catch and report, not silently default to cwd."""
     return doe_root()

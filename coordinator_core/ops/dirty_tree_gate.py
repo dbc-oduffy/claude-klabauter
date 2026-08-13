@@ -21,7 +21,7 @@ Classification rules applied in order; first match wins for each dirty path:
 The script does NOT auto-dispose case-(c) paths — disposition (commit /
 stash / name-owner) stays EM judgment in the calling skill's prose.
 
-Port of: dirty-tree-gate.sh (example-doctrine-repo 894d4bc6, 2026-07-22)
+Port of: dirty-tree-gate.sh (coordinator-claude 894d4bc6, 2026-07-22)
 Spec backlink: docs/plans/2026-06-30-session-terminator-mechanism-unification.md C2
 
 Negative-spec:
@@ -161,7 +161,7 @@ def _build_known_scope(handoffs_dir: str, repo_root: Optional[str] = None) -> se
     holder -- ledger-first, frontmatter mirror as fallback. Was previously a
     private `^(claimed_by|consumed_by):` regex over the mirror only.
 
-    Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+    Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
     § C3 / AC4. Before this fix, a live ledger claim with a branch-reverted
     mirror dropped its `scope:` paths from `known_scope` entirely,
     reclassifying the claim holder's own in-progress files as case-(c)

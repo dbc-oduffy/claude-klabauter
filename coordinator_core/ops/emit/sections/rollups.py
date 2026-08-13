@@ -27,9 +27,9 @@ verbatim, ``created >= cutoff`` with missing-``created`` excluded, applied befor
 ``where``, per query-records.js:1469-1493) — and review-trail listing via the native
 ``coordinator_core.ops.list_review_trail_records`` module directly.
 
-Port of: emit-cockpit-snapshot.sh (example-doctrine-repo 07eedcfb, 2026-07-19) § SECTION 5 —
+Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) § SECTION 5 —
   Completion Rollup. Byte/semantic parity port.
-Spec backlink: docs/plans/2026-07-04-tc3-emission-stack-python-port-and-backlog-history.md § P05
+Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P05
 """
 
 from __future__ import annotations

@@ -70,7 +70,7 @@ Negative-spec (mirrors handoff_phase_stamp.py's negative-spec section):
     ceremony invocation, never an autonomous op chain) supplies by/at/note at
     explicit PM-approval time; this op has no default identity/timestamp/note.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C13
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C13
 Governing DR: docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D2b(vi), D3
 """
 

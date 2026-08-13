@@ -212,7 +212,7 @@ def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:
 
     Moved again, 50 -> 52, when `OVERRIDE_KEYS_DOC` split into a file-
     resolution form and a message-display form (`_helpers.py`): these guards
-    run fleet-wide via example-doctrine-repo's PreToolUse shim, so the reader is usually
+    run fleet-wide via coordinator-claude's PreToolUse shim, so the reader is usually
     sitting in some OTHER repo's tree, where the bare repo-relative path
     resolves to nothing. The display form first became a repo-qualified hint
     ("claude-klabauter " + the relative path, 2 words), then

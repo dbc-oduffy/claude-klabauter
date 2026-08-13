@@ -41,7 +41,7 @@ from coordinator_core.win_portability import no_console_creationflags
 # test file: coordinator/bin/tests/test_record_platform_outcome.py
 # CLI:       coordinator/bin/record-platform-outcome
 # schema:    coordinator/schemas/platform-outcome.schema.json — schemas/ is
-#            CONTRACT and, per DR-047, stayed in example-doctrine-repo when bin/ moved
+#            CONTRACT and, per DR-047, stayed in coordinator-claude when bin/ moved
 #            here (see coordinator_registry.py's own layout-tolerant comment).
 #            Resolved below via the already-imported coordinator_registry
 #            module rather than re-implementing its rung order.
@@ -167,7 +167,7 @@ def _setup_surface(tmp_path):
     # _run_cli() points DOE_ROOT at surface_root, which coordinator_registry's
     # own import-time manifest bootstrap also reads (DOE_ROOT wins over the
     # ambient REPO_EXAMPLE_DOCTRINE_REPO alias by design — same precedence as doe_root()).
-    # A scratch stand-in for "the example-doctrine-repo/coordinator repo" must therefore carry
+    # A scratch stand-in for "the coordinator-claude/coordinator repo" must therefore carry
     # the schemas/ manifest too, or the CLI subprocess dies at import with an
     # install-integrity FileNotFoundError before ever reaching the surface
     # logic under test.
@@ -266,7 +266,7 @@ def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
     env = dict(os.environ)
     env.pop("DOE_ROOT", None)
     # REPO_EXAMPLE_DOCTRINE_REPO is the ambient alias doe_root() also checks (d5e22cb2) —
-    # left set, it resolves the real example-doctrine-repo clone regardless of the
+    # left set, it resolves the real coordinator-claude clone regardless of the
     # MACHINE_LOCAL_IMPL stub below, defeating the "fully unresolvable" premise
     # this test exists to cover.
     env.pop("REPO_EXAMPLE_DOCTRINE_REPO", None)

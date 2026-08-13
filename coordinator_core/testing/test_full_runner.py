@@ -10,7 +10,7 @@ timeout-surfaces-as-failed discipline, against the shared `fixture_tree`
 factory (`conftest.py`, Finding 13).
 
 Port source: none — net-new (DR-059 harness authoring).
-Spec backlink: docs/plans/2026-07-19-claude-klabauter-doe-full-test-runner.md § C3
+Spec backlink: pln-claude-klabauter-python-full-test-runner-f8ca5a § C3
 
 Negative-spec:
     - Does NOT rely solely on in-process `main([...])` return-value checks

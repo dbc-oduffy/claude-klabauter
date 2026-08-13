@@ -7,7 +7,7 @@ fail-loud contract for unported `.js` flags. Does NOT exercise the live
 test_records_query.py`'s job) — `route_mutation` is monkeypatched here so
 these tests run with no CLAUDE_KLABAUTER_ROOT / repo dependency.
 
-Spec backlink: docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md § A2
+Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 § A2
 
 Converted from a hand-rolled runner (`query-records.test.py`) to a pytest-collectable
 module — the module was already unittest.TestCase-shaped, so this is a rename plus removal

@@ -643,7 +643,7 @@ def test_total_registered_step_count_is_49() -> None:
 # ---------------------------------------------------------------------------
 # classify_bulk_eligibility (C2, AC4a) — the five PM-ruled bulk-eligibility cases
 # ---------------------------------------------------------------------------
-# Spec backlink: docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md § C2 / AC4a
+# Spec backlink: pln-give-the-memo-disposition-flip-e580c2 § C2 / AC4a
 
 
 def test_bulk_eligibility_non_fyi_refused() -> None:

@@ -3,7 +3,7 @@ coordinator_core.ops.fleet._findings_reap — polarity-agnostic review-findings 
 
 Purpose: shared scan/act mechanics for the two-leg review-trail cleanup split
 (DR-218) — state/review-trail/findings/*.md sidecars are reaped by either the
-marker-PRESENT leg (a, example-doctrine-repo-owned) or the marker-ABSENT+aged leg (b, this repo's
+marker-PRESENT leg (a, coordinator-claude-owned) or the marker-ABSENT+aged leg (b, this repo's
 fleet.reap_unintegrated_findings). Both legs share the SAME scan shape, the SAME
 act-time re-verify discipline, and the SAME tracked/untracked delete mechanics —
 only the terminality PREDICATE differs. This module hoists everything
@@ -58,7 +58,7 @@ _LOG = logging.getLogger(__name__)
 _FINDINGS_SUBPATH = ("state", "review-trail", "findings")
 
 # "## Integrator Dispositions" as an anchored heading line — marker-PRESENT means
-# leg (a) (integrated, example-doctrine-repo-owned) owns the sidecar.
+# leg (a) (integrated, coordinator-claude-owned) owns the sidecar.
 _MARKER_RE = re.compile(r"^## Integrator Dispositions[ \t]*$", re.MULTILINE)
 
 

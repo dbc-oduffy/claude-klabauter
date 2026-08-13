@@ -48,7 +48,7 @@ Exit codes:
     1 — op-level setup error (bad repo_root / state_common_dir).
     2 — transport failure (native seam absent, spawn error) or op-level partial failure.
 
-Spec backlink: docs/plans/2026-07-23-wsc-tail-slim-down.md § C21
+Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C21
 Wraps: session.sweep_consumed_handoffs (native op)
 
 Liveness stamp (C2, 2026-07-23 wsc-tail-slim-down): a genuinely successful, non-dry-run

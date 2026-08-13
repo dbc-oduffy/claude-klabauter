@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.handoff_children — JSON-RPC "handoff.has_live_children" operation.
 
-Purpose: Port of: handoff-has-live-children.sh (example-doctrine-repo 50ec0809, 2026-07-19) into the
+Purpose: Port of: handoff-has-live-children.sh (coordinator-claude 50ec0809, 2026-07-19) into the
 coordinator_core resident service.  Replaces the query-records.js double-spawn with
 an in-memory frontmatter-index walk over the handoff DAG, and surfaces the exit-code
 contract (0/1/2) as reply fields for the thin bash veneer (C7) to map back to shell
@@ -28,7 +28,7 @@ RAW-PID-LIVENESS floor (enforced here, see coordinator-tripwires.md § RAW-PID-L
 this module MUST NOT call ps -p, kill -0, or psutil.pid_exists on any stored PID.
 All session-liveness queries route through coordinator_core.liveness.
 
-Spec backlink: docs/plans/2026-07-02-pcore-03-beachhead-coordinator-core.md § C4
+Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C4
 
 Negative-spec (hard-won):
   - Does NOT commit to, or modify, coordinator substrate (handoffs, review-trail, git).
@@ -117,7 +117,7 @@ gate_index`'s own existing call sites catch this (see `handoff_reconcile.py`'s
 `scan_errors` itself, so an unreadable live subtree fails closed to
 `"indeterminate"` here rather than raising past this resolver.
 
-Spec backlink: docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md § C1 (PIN-1)
+Spec backlink: pln-roadmap-baton-supersession-haz-b82ac3 § C1 (PIN-1)
 
 Negative-spec (`blocked_by_dependents`):
   - Does NOT restate the "live" predicate — composes
@@ -293,7 +293,7 @@ def _parse_edge_kinds(raw: object) -> Optional[Set[str]]:
 async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.has_live_children" handler.
 
-    Port of: handoff-has-live-children.sh (example-doctrine-repo 50ec0809, 2026-07-19) into the
+    Port of: handoff-has-live-children.sh (coordinator-claude 50ec0809, 2026-07-19) into the
     coordinator_core resident service.  Accepts the same logical parameters as
     the bash --exclude / --edge-kinds flags and returns reply fields that the
     C7 veneer maps to shell exit codes 0/1/2.
@@ -648,7 +648,7 @@ def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = Non
     that function's docstring for the resolver's full design rationale, and
     the module docstring's "`blocked_by_dependents`" section for why it is
     homed here rather than archival.py. Registration accepted by
-    example-doctrine-repo-em (cross-repo/inbox/2026-08-02-example-doctrine-repo-em-baton-lifecycle-
+    coordinator-claude-em (cross-repo/inbox/2026-08-02-coordinator-claude-em-baton-lifecycle-
     three-asks-reply.md, Ask 3).
 
     Params (all optional except candidate):

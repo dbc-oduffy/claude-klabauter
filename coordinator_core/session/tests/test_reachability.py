@@ -357,6 +357,89 @@ class TestResolveCandidates:
         assert candidates["sid-a"].address == resolved.address
 
 
+class TestResolveAdvisoryAddress:
+    """`resolve_advisory_address` — the shared bare-string resolution core
+    both `baton_assemble` and `pickup_assemble` format on top of."""
+
+    def test_reachable_returns_bare_address(self, monkeypatch):
+        snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        expected_ref = _full12("/sock/a.sock")[:6]
+        assert reachability.resolve_advisory_address("sid-a") == (
+            f"claude-klabauter-57 [{expected_ref}]"
+        )
+
+    def test_own_session_returns_marker_string(self, monkeypatch):
+        snap = {"self-sid": _record("claude-klabauter-84", "/sock/self.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: ("self-sid", snap["self-sid"]))
+
+        assert reachability.resolve_advisory_address("self-sid") == "<this session>"
+
+    def test_not_reachable_returns_empty_string(self, monkeypatch):
+        monkeypatch.setattr(hr, "snapshot", lambda: {})
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        assert reachability.resolve_advisory_address("no-such-session") == ""
+
+    def test_falsy_session_id_returns_empty_string_without_a_lookup(self, monkeypatch):
+        def _boom():
+            raise AssertionError("must not query the registry for a falsy id")
+
+        monkeypatch.setattr(hr, "snapshot", _boom)
+        assert reachability.resolve_advisory_address(None) == ""
+        assert reachability.resolve_advisory_address("") == ""
+
+
+class TestResolveAddressesBulk:
+    """`resolve_addresses_bulk` — one snapshot for the whole roster, per
+    `pickup_assemble.compute_competing_claim`'s performance requirement."""
+
+    def test_resolves_every_id_off_one_snapshot_call(self, monkeypatch):
+        snap = {
+            "sid-a": _record("claude-klabauter-57", "/sock/a.sock"),
+            "sid-b": _record("claude-klabauter-89", "/sock/b.sock"),
+        }
+        calls = {"n": 0}
+
+        def _snapshot():
+            calls["n"] += 1
+            return snap
+
+        monkeypatch.setattr(hr, "snapshot", _snapshot)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_addresses_bulk(["sid-a", "sid-b", "sid-a"])
+        assert calls["n"] == 1
+        expected_a = f"claude-klabauter-57 [{_full12('/sock/a.sock')[:6]}]"
+        expected_b = f"claude-klabauter-89 [{_full12('/sock/b.sock')[:6]}]"
+        assert result == {"sid-a": expected_a, "sid-b": expected_b}
+
+    def test_unresolvable_and_absent_ids_map_to_empty_string(self, monkeypatch):
+        snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_addresses_bulk(["sid-a", "sid-missing"])
+        assert result["sid-missing"] == ""
+
+    def test_self_session_id_maps_to_marker_string(self, monkeypatch):
+        snap = {"self-sid": _record("claude-klabauter-84", "/sock/self.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: ("self-sid", snap["self-sid"]))
+
+        result = reachability.resolve_addresses_bulk(["self-sid"])
+        assert result["self-sid"] == "<this session>"
+
+    def test_empty_input_list_returns_empty_dict(self, monkeypatch):
+        monkeypatch.setattr(hr, "snapshot", lambda: {})
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        assert reachability.resolve_addresses_bulk([]) == {}
+
+
 class TestReplayTodayCase:
     """§ Acceptance criteria: "the today-case is replayed end to end: given
     the claim-release baton's `claimed_by`, the resolver returns an address

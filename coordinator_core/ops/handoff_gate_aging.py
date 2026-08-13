@@ -18,7 +18,7 @@ aging § Thresholds) into a single fail-loud tool call.
 
 RETIREMENT OF THE STANDALONE BATCH NAG (2026-07-27, docs/plans/2026-07-26-
 gate-resolution-widen-and-migrate.md § C16): `workday-start.md` Step 1.2 no
-longer force-invokes this module as a daily batch nag. Evidence: example-doctrine-repo
+longer force-invokes this module as a daily batch nag. Evidence: coordinator-claude
 `state/audits/2026-07-27-gate-resolver-dry-run.md` (run label "post-C12c
 re-run") shows `coordinator_core.reconcile.gate_eval` already surfaces every
 `awaiting_gate` handoff that needs a human look on EVERY resolver pass,
@@ -69,7 +69,7 @@ for any direct/ad-hoc CLI run):
 `evidence-resolved`/`review-due`/`merely-aged`; else rc 2 if any signals
 `parse-error`; else rc 0. Never reached without the flag.
 
-Port of: handoff-gate-aging.sh (example-doctrine-repo 67202df6, 2026-07-16)
+Port of: handoff-gate-aging.sh (coordinator-claude 67202df6, 2026-07-16)
 Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C5c
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, chunk B3
 
@@ -113,7 +113,7 @@ second evaluator here would be the plan's named anti-scope failure mode.
 
 C6 SCOPE BOUNDARY (AC4, landed) — `gate_evidence` IS now auto-read off
 frontmatter by `scan_triage`, once both blockers commit `6aa14244` stubbed
-this against are discharged: the example-doctrine-repo-ratified `gate_evidence:` schema shape
+this against are discharged: the coordinator-claude-ratified `gate_evidence:` schema shape
 was ratified in `3c5e048d`, and `coordinator_core.dag`'s truncating
 `_parse_yaml_list_block` (a sequence-of-mappings value read as an opaque
 scalar, dropping every more-indented continuation line) is never used here —
@@ -137,7 +137,7 @@ reachable from a live directory scan whenever a handoff actually carries a
 nothing — a handoff with no `gate_evidence:` block (or a malformed one)
 resolves to `gate_evidence=None`, identical to pre-AC4 behaviour.
 
-Spec backlink: docs/plans/2026-07-26-structured-sibling-evidence-gates.md § C6/AC4
+Spec backlink: pln-structured-sibling-evidence-ga-6e2ceb § C6/AC4
 """
 
 from __future__ import annotations

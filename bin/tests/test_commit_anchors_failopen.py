@@ -19,7 +19,7 @@ contract can actually be hit.
 These are isolation tests only (no live service required). Runtime integration (shim
 talking to a real commit.anchors op) is the EM's job at merge.
 
-Spec backlink: docs/plans/2026-07-04-claude-klabauter-commit-anchor-stamper.md § C3-shim
+Spec backlink: pln-claude-klabauter-commit-anchor-stamper-q-29b891 § C3-shim
 Negative-spec: does NOT start a coordinator_core service — isolation-only.
 """
 

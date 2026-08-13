@@ -28,9 +28,9 @@ Checks — seven ProbeResult objects, in dependency order:
                          .draft.yaml is missing (SKIP, not a fault) or older than the newest
                          state/week-changelog/*.md entry (INFO nudge).
   claude-klabauter.schema.vendor_drift  OPTIONAL — every schema vendored under coordinator_core/
-                         frontmatter/schemas/ still matches example-doctrine-repo HEAD (DEGRADED on drift,
-                         DEGRADED-as-INDETERMINATE when the example-doctrine-repo clone is unreadable,
-                         SKIP when no example-doctrine-repo clone exists on this machine).
+                         frontmatter/schemas/ still matches coordinator-claude HEAD (DEGRADED on drift,
+                         DEGRADED-as-INDETERMINATE when the coordinator-claude clone is unreadable,
+                         SKIP when no coordinator-claude clone exists on this machine).
   claude-klabauter.root.pointer    OPTIONAL — claude-klabauter-root pointer file present at
                          <settings-home>/machine-local/.claude-klabauter-root and matches the resolved
                          CLAUDE_KLABAUTER_ROOT (DEGRADED, not hard FAIL, on absence/mismatch — without it,
@@ -72,7 +72,7 @@ Negative-spec:
   - Does NOT probe a resident UDS service — retired under DR-215 (command-type engine).
   - Does NOT handshake a coordinator-core shim — shim probes retired under DR-215.
 
-Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C1a
+Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1a
 """
 
 from __future__ import annotations
@@ -662,7 +662,7 @@ def _run_probe_coverage_seam(claude_klabauter_root: Path | None) -> _ProbeResult
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
 
-    Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C1b
+    Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1b
     """
     try:
         if claude_klabauter_root is None:
@@ -810,7 +810,7 @@ def _run_probe_resident_debris(claude_klabauter_root: Path | None) -> _ProbeResu
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
 
-    Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C1b
+    Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1b
     """
     try:
         debris_paths: list[str] = []
@@ -1054,7 +1054,7 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
 
-    Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C1b
+    Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1b
     """
     try:
         # sys.path already set by _run_probe_core_import (runs before this probe).
@@ -1182,7 +1182,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     a SKIP verdict (not a crash), per the always-emit-parseable-verdict contract
     for optional probes.
 
-    Spec backlink: docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C1b
+    Spec backlink: pln-rebuild-claude-klabauter-doctor-as-a-pro-f6bd22 § C1b
     """
     try:
         if claude_klabauter_root is None:
@@ -1343,7 +1343,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a SKIP verdict (not a crash), matching the optional-probe contract.
 
-    Spec backlink: docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md § C5(b)
+    Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C5(b)
     """
     try:
         if claude_klabauter_root is None:
@@ -1368,7 +1368,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
                     "on demand, not scheduled (DEC-5)."
                 ),
                 remediation=(
-                    "Optional: run strategic.generate to produce a draft, then the example-doctrine-repo "
+                    "Optional: run strategic.generate to produce a draft, then the coordinator-claude "
                     "refresh ceremony to reconcile it against the canonical "
                     "self-description.yaml."
                 ),
@@ -1434,7 +1434,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
                     "— the draft may be stale."
                 ),
                 remediation=(
-                    "Run strategic.generate to refresh the draft, then the example-doctrine-repo refresh "
+                    "Run strategic.generate to refresh the draft, then the coordinator-claude refresh "
                     "ceremony to reconcile it against the canonical self-description.yaml."
                 ),
                 required=False,
@@ -1479,22 +1479,22 @@ _VENDOR_DRIFT_PROBE = "claude-klabauter.schema.vendor_drift"
 def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.schema.vendor_drift — OPTIONAL (required=False); never gating.
 
-    Cadence surface for "has example-doctrine-repo moved since our vendored-schema pin?". Delegates the
+    Cadence surface for "has coordinator-claude moved since our vendored-schema pin?". Delegates the
     whole comparison to coordinator_core.frontmatter.schema_drift_watch, which globs
     every schema under coordinator_core/frontmatter/schemas/ and runs the non-gating
-    check_schema_drift_advisory over each against example-doctrine-repo HEAD.
+    check_schema_drift_advisory over each against coordinator-claude HEAD.
 
     Exists because that advisory had ZERO callers: claude-klabauter's vendored
-    improvement-queue.schema.json drifted ~12h behind example-doctrine-repo on 2026-07-22 and the gap was
+    improvement-queue.schema.json drifted ~12h behind coordinator-claude on 2026-07-22 and the gap was
     only found when a sibling repo's CLI rejected a value valid on their surface. This
     probe is what makes the next one self-surface — its verdict reaches
-    state/doctor-last-run.json, which example-doctrine-repo's /workday-start already reads.
+    state/doctor-last-run.json, which coordinator-claude's /workday-start already reads.
 
     Two-oracle warning (the remediation below exists for this reason): THIS probe
-    compares against example-doctrine-repo **HEAD**, while the GATING tamper-check
+    compares against coordinator-claude **HEAD**, while the GATING tamper-check
     (`check_schema_drift(..., ref=...)` in
     `coordinator_core/frontmatter/tests/test_schema_validate.py`) compares against a
-    per-schema pinned SHA in `_QUEUE_SCHEMA_PINS`. Copying example-doctrine-repo's file in by hand
+    per-schema pinned SHA in `_QUEUE_SCHEMA_PINS`. Copying coordinator-claude's file in by hand
     satisfies this probe and breaks that gate — an installing agent did exactly that
     on 2026-07-28 (state/audits/2026-07-28-windows-install-dogfood-friction.md § F3).
     The remediation therefore names `bin/claude-klabauter-revendor-schema.py`, which moves the
@@ -1504,7 +1504,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
       DRIFT          -> DEGRADED (sentinel AMBER + hint) — re-vendor.
       INDETERMINATE  -> DEGRADED, worded as INDETERMINATE — the check could not run;
                         neither a drift claim nor a clean bill of health.
-      UNRESOLVED     -> SKIP (required=False) — no example-doctrine-repo clone on this machine at all
+      UNRESOLVED     -> SKIP (required=False) — no coordinator-claude clone on this machine at all
                         (fresh install / CI without the sibling); not applicable, not
                         a fault. Surfaces in envelope.warnings / missing_optional.
       MATCH          -> PASS.
@@ -1514,7 +1514,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
         re-vendor nudge, not a broken install, and must never fail --step-zero (whose
         exit code keys off REQUIRED probes only).
       - Does NOT report a clean PASS for a comparison it could not perform; an
-        unreadable example-doctrine-repo clone is DEGRADED-as-indeterminate, never silent green, and
+        unreadable coordinator-claude clone is DEGRADED-as-indeterminate, never silent green, and
         never a false drift alarm.
       - Does NOT re-vendor anything — read-only.
       - Does NOT hard-depend on coordinator_core being importable: an ImportError
@@ -1530,7 +1530,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
     `_write_doctor_sentinel`'s `vendor_drift` sentinel key.
 
     Spec backlink: coordinator_core/frontmatter/schema_drift_watch.py module docstring;
-    cross-repo/inbox/2026-07-26-example-doctrine-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md.
+    cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md.
     """
     try:
         if claude_klabauter_root is None:
@@ -1589,7 +1589,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                 status=_INFO,
                 detail=summary,
                 remediation=(
-                    "Optional: check out the example-doctrine-repo sibling repo (or set REPO_EXAMPLE_DOCTRINE_REPO) "
+                    "Optional: check out the coordinator-claude sibling repo (or set REPO_EXAMPLE_DOCTRINE_REPO) "
                     "to enable the vendored-schema drift watch on this machine."
                 ),
                 required=False,
@@ -1609,7 +1609,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                     "It writes the bytes AND updates the gating pin in "
                     "coordinator_core/frontmatter/tests/test_schema_validate.py"
                     "::_QUEUE_SCHEMA_PINS in one verified operation. Do NOT cp the file in "
-                    "by hand: THIS probe compares against example-doctrine-repo HEAD, but the gating "
+                    "by hand: THIS probe compares against coordinator-claude HEAD, but the gating "
                     "tamper-check compares against that pinned SHA, so a hand copy turns "
                     "this probe green while breaking check_schema_drift."
                 ),
@@ -1623,7 +1623,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                 status=_DEGRADED,
                 detail=summary,
                 remediation=(
-                    "Vendored-schema drift is UNKNOWN, not clean. Verify the example-doctrine-repo "
+                    "Vendored-schema drift is UNKNOWN, not clean. Verify the coordinator-claude "
                     "clone is a readable git repo whose HEAD carries coordinator/schemas/, "
                     "then re-run the drift probe."
                 ),
@@ -1667,7 +1667,7 @@ def _run_probe_commitments_recheck(claude_klabauter_root: Path | None) -> _Probe
     reproduces on its own — one record's own title read "(now satisfied)" beside
     status: open, thirteen days on, with nothing to ever re-check it. This probe is
     what makes the corpus self-surface — its verdict reaches state/doctor-last-run.json,
-    which example-doctrine-repo's /workday-start already reads.
+    which coordinator-claude's /workday-start already reads.
 
     Verdict mapping:
       any record actionable (evidence resolved truthy, status still "open")
@@ -1820,7 +1820,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 
     Negative-spec:
       - Does NOT write the pointer file — read-only diagnostic; the writer is a
-        separate install-time step (gen-claude-klabauter-root-pointer.py, example-doctrine-repo C1b).
+        separate install-time step (gen-claude-klabauter-root-pointer.py, coordinator-claude C1b).
       - Does NOT emit BROKEN/hard-fail on absence — a missing pointer degrades
         per-invoke latency, it does not break correctness (the ladder fallback still
         resolves CLAUDE_KLABAUTER_ROOT, just slowly).
@@ -1828,7 +1828,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
 
-    Spec backlink: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C14
+    Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C14
     """
     try:
         settings_home = _resolve_settings_home()
@@ -1980,7 +1980,7 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a BROKEN verdict, never an unhandled crash.
 
-    Spec backlink: docs/plans/2026-07-14-claude-klabauter-windows-portability.md § C14
+    Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C14
     """
     try:
         if claude_klabauter_root is None:
@@ -2158,7 +2158,7 @@ def _run_probe_orphaned_execnet_gateways() -> _ProbeResult:
     Probe-authoring invariant: wraps all logic so unexpected exceptions become
     a SKIP verdict (not a crash), matching the optional-probe contract.
 
-    Spec backlink: docs/plans/2026-08-13-reap-orphaned-execnet-gateways.md § C2, AC4-AC5;
+    Spec backlink: pln-reap-orphaned-execnet-gateways-398c2c § C2, AC4-AC5;
     docs/research/spike-verdicts/2026-08-13-execnet-gateway-reap-on-abort.md.
     """
     try:
@@ -2676,7 +2676,7 @@ def _python_version_broken_envelope() -> dict[str, Any]:
     Negative-spec: Does NOT depend on tomllib — safe to call when
     _TOMLLIB_AVAILABLE is False.
 
-    Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C1
+    Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C1
     """
     # Use module-level constants to eliminate the DRY violation between this
     # function and the step-zero path in main().
@@ -2716,7 +2716,7 @@ def _manifest_broken_envelope(detail: str, remediation: str) -> dict[str, Any]:
     Honors the always-emit-parseable-verdict contract on both manifest-missing and
     manifest-unparseable paths in _load_probe_manifest().
 
-    Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C1
+    Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C1
     """
     return {
         "schema_version": 1,
@@ -2743,7 +2743,7 @@ def _manifest_broken_envelope(detail: str, remediation: str) -> dict[str, Any]:
 # Health sentinel — state/doctor-last-run.json
 #
 # Relocated from skills/doctor/SKILL.md Step 1.5 (that SKILL.md step is being
-# retired) so example-doctrine-repo's /workday-start consumer (coordinator_core.ops.
+# retired) so coordinator-claude's /workday-start consumer (coordinator_core.ops.
 # check_claude_klabauter_doctor_sentinel) keeps seeing a fresh sentinel.
 #
 # Two decisions already made (do not re-decide):
@@ -2856,8 +2856,8 @@ def _write_doctor_sentinel(envelope: dict[str, Any], claude_klabauter_root: Path
     on an older sentinel already on disk.
 
     `vendor_drift` is exactly such an additive key (2026-07-26, cross-repo
-    ratification — see cross-repo/inbox/2026-07-26-example-doctrine-repo-em-schema-drift-watch-seam-and-tolerance-ratification.md).
-    It is a DOCUMENTED PUBLIC key — external consumers (example-doctrine-repo) MAY gate a
+    ratification — see cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md).
+    It is a DOCUMENTED PUBLIC key — external consumers (coordinator-claude) MAY gate a
     commit-time check on it directly, unlike the rest of this sentinel's contents
     which are claude-klabauter-internal cadence output. See _sentinel_vendor_drift's docstring
     for its exact shape and the absent-probe-row UNKNOWN default, and

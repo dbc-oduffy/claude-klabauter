@@ -18,7 +18,7 @@ Handlers use asyncio.run() in sync test functions — no pytest-asyncio dependen
 as coordinator_core/tests/test_dispatch_message.py). Wire-level dispatch uses a PYTHONPATH-injected
 subprocess (same pattern as coordinator_core/tests/test_invoke_main.py).
 
-Spec backlink: docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md § C6
+Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C6
 """
 
 from __future__ import annotations
@@ -375,13 +375,13 @@ def _load_frozen_schema():
     doe_root = resolve_doe_root()
     if not doe_root:
         pytest.skip(
-            "No example-doctrine-repo sibling checkout resolvable (env override / machine-local "
+            "No coordinator-claude sibling checkout resolvable (env override / machine-local "
             "registry / .doe-root pointer all empty) — AC5 structural schema-subset "
             "validation requires the frozen schema from that checkout; skipping."
         )
     if not _FROZEN_SCHEMA_PATH.exists():
         pytest.skip(
-            f"example-doctrine-repo root resolved to {doe_root!r} but frozen schema absent at "
+            f"coordinator-claude root resolved to {doe_root!r} but frozen schema absent at "
             f"{_FROZEN_SCHEMA_PATH} — cross-repo file may be absent/relocated; skipping."
         )
     return json.loads(_FROZEN_SCHEMA_PATH.read_text(encoding="utf-8"))

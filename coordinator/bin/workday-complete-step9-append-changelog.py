@@ -8,7 +8,7 @@ when expressed as inline bash in the skill body. Concentrating the logic here re
 EM judgment from a mechanical procedure and makes the step idempotent and testable.
 
 Finish-strangler port (Windows de-bash campaign, chunk F1-c-step9, 2026-07-21):
-Port of: workday-complete-step9-append-changelog.sh (example-doctrine-repo 6fb5fb37, 2026-07-22),
+Port of: workday-complete-step9-append-changelog.sh (coordinator-claude 6fb5fb37, 2026-07-22),
 whose DR-216 strang-10 facade dispatched two native ops via a spawned
 `python3 -m coordinator_core.invoke` subprocess (cc_invoke.route_mutation). This port
 retires that subprocess hop entirely: `coordinator_core.ops.changelog_ops.compute_day_fields`
@@ -21,11 +21,11 @@ responsibility, unchanged (DR-216 D2(v): the op never commits).
 
 Day-anchor note (retargets the RETAIN blocker in the prior bash header): the bash
 predecessor was kept as bash specifically because
-bin/tests/test-workday-evening-tz-coherence.sh (T2; example-doctrine-repo 290997c7, 2026-07-22) grepped
+bin/tests/test-workday-evening-tz-coherence.sh (T2; coordinator-claude 290997c7, 2026-07-22) grepped
 its SOURCE TEXT for a literal `coordinator_local_day` shell assignment. That
 structural grep-proof is retargeted (this port) to assert the equivalent Python
 fact instead: this file imports and calls `coordinator_core.daily_day.local_day()`
--- the already-native Python peer of coordinator-daily-day.sh's (example-doctrine-repo c6d97219,
+-- the already-native Python peer of coordinator-daily-day.sh's (coordinator-claude c6d97219,
 2026-07-22) coordinator_local_day() (see
 coordinator_core/daily_day.py, used identically by
 coordinator_core.ops.workday_complete_backfill_scan) -- for its LOCAL_TODAY anchor,
@@ -47,7 +47,7 @@ scope-touch claim without this file reaching into
 
 Spec backlink: docs/plans/2026-07-06-dr215-fleet-ops-ceremony-wiring.md § strang-10
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § step9-changelog
-Spec backlink: docs/plans/2026-07-21-debash-consolidated-wave.md § F1-c-step9
+Spec backlink: docs/plans/2026-07-21-debash-consolidated-wave.md § F1-c-step9 [DEAD-CITATION: plan file never committed to this repo]
 Spec backlink: commands/workday-complete.md § Step 9: Append to Week-Changelog
 Spec backlink: docs/decisions/DR-276-operator-clis-record-session-writes-at-a.md
 

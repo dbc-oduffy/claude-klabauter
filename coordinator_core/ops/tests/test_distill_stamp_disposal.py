@@ -29,7 +29,7 @@ Coverage:
         via the real registered wiring, fresh stamp + idempotent re-run +
         value-mismatch refusal all exercised over the IPC surface.
 
-Spec backlink: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C13
+Spec backlink: pln-claude-klabauter-driven-ceremony-redesig-c7fe9a § C13
 """
 
 from __future__ import annotations

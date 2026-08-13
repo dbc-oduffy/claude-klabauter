@@ -1,13 +1,13 @@
 """STAGED FOR RELOCATION — final destination:
     X:/claude-klabauter/coordinator_core/hooks/context_pressure_precompact.py
-(a confined general-purpose subagent cannot write outside the example-doctrine-repo repo
+(a confined general-purpose subagent cannot write outside the coordinator-claude repo
 per subagent-sandbox-policy.yaml `confined:` — this file is staged here for
 the EM to `git mv`/copy into the claude-klabauter working tree and commit there.)
 
 coordinator_core.hooks.context_pressure_precompact — PreCompact sentinel +
 state-serialization bookkeeping op.
 
-Port of: context-pressure-precompact.sh (example-doctrine-repo d39ab164, 2026-07-16) (W4b, recipe § 2.6).
+Port of: context-pressure-precompact.sh (coordinator-claude d39ab164, 2026-07-16) (W4b, recipe § 2.6).
 
 Landing convention confirmed by `08-claude-klabauter-landing-contract.md § 1`: one file
 per hook op under `coordinator_core/hooks/`, `snake_case.py` named after the
@@ -18,7 +18,7 @@ whose product is an on-disk write side-effect, not an advisory) — see that
 file for the sibling pattern this one mirrors.
 
 Called TWO ways (both in-process, no subprocess, no bash):
-  1. Directly by the example-doctrine-repo Shape-P1 stub
+  1. Directly by the coordinator-claude Shape-P1 stub
      (`coordinator/hooks/scripts/context-pressure-precompact.py`), which
      drains stdin itself and calls `run(raw_stdin)` — this mirrors
      `preuse-write-dispatch.py` -> `write_guards.engine.evaluate_payload_json`,
@@ -41,7 +41,7 @@ ALREADY consumes the two files this module writes:
 
 The sentinel write is critical; the state write is best-effort. State-file
 failure must NOT prevent sentinel creation. `run()` must NEVER raise — the
-Example-doctrine-repo stub calls it inside its own fail-open `try/except` for defense-in-depth,
+Coordinator-claude stub calls it inside its own fail-open `try/except` for defense-in-depth,
 but `run()` also fully contains its own errors so behavior matches the
 legacy bash's unconditional `exit 0`.
 
@@ -76,7 +76,7 @@ silently invented here). `_resolve_state_root()` falls back to the same
 default the bash oracle itself falls back to when its seam is unavailable:
 `${GIT_ROOT}/state`.
 
-Spec backlink: X:/example-doctrine-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.6
+Spec backlink: X:/coordinator-claude/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.6
 """
 
 from __future__ import annotations
@@ -292,14 +292,14 @@ def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
 
 
 def run(raw_stdin: str) -> None:
-    """Entry point for the example-doctrine-repo Shape-P1 stub — direct in-process call, no
+    """Entry point for the coordinator-claude Shape-P1 stub — direct in-process call, no
     register_op/dispatch_message round-trip (mirrors
     `write_guards.engine.evaluate_payload_json`'s call shape).
 
     Args:
         raw_stdin: the raw PreCompact hook JSON payload (already drained from
             stdin by the caller — this function does no I/O of its own on
-            stdin; the example-doctrine-repo stub owns the read, matching
+            stdin; the coordinator-claude stub owns the read, matching
             `preuse-write-dispatch.py`'s ownership split).
 
     Never raises. Fail-open silently (no files written) when session_id is
@@ -326,7 +326,7 @@ def run(raw_stdin: str) -> None:
         _write_sentinel(tmpdir, session_id, transcript_path)
         _write_state_snapshot(tmpdir, session_id)
     except Exception:
-        # Defense-in-depth — run() must never raise into the example-doctrine-repo stub's
+        # Defense-in-depth — run() must never raise into the coordinator-claude stub's
         # fail-open wrapper. Every internal step already contains its own
         # errors; this is a final backstop, not the primary control.
         pass

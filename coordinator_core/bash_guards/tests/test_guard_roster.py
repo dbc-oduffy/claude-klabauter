@@ -8,7 +8,7 @@ registration exactly as `test_guard_band_membership.py::_dummy_chain` does
 -- `dispatch._build_guard_chain(...)` with an inert dummy command/payload,
 never invoking a returned `GuardEntry.fn` closure.
 
-Spec backlink: docs/plans/2026-08-13-guard-roster-export.md, chunk C4 (AC3).
+Spec backlink: pln-guard-roster-export-minus-the-a4dec3, chunk C4 (AC3).
 
 Negative spec: no assertion here pins an exact guard COUNT or a hardcoded
 name list -- the registration this file reads is actively changing under a

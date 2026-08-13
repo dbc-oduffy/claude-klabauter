@@ -9,7 +9,7 @@ Also pins the explicit requested-vs-returned reconciliation: a sha absent from t
 classified map must degrade to the same NOT_ON_MAIN/None branch as an indeterminate
 classification, never be silently read as ON_MAIN.
 
-Spec backlink: docs/plans/2026-08-07-n-plus-one-git-spawn-class-and-amplification-gate.md § C32
+Spec backlink: pln-kill-the-n-1-git-spawn-class-a-88897a § C32
 """
 
 from __future__ import annotations

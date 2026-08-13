@@ -2,7 +2,7 @@
 Tests for coordinator_core.ops.session.boot_sweep._is_consumed_at_too_recent
 resolving claimed_at ledger-first.
 
-Spec backlink: docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md
+Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C5 / C5a (AC5).
 
 Negative-spec: does not touch resolve_chain_terminal_disposition.py (C5b) or

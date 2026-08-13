@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.name_personas.
 
-Port source: coordinator/dist/publish-repo-setup/name-personas.sh (example-doctrine-repo, 291 lines).
+Port source: coordinator/dist/publish-repo-setup/name-personas.sh (coordinator-claude, 291 lines).
 """
 from __future__ import annotations
 

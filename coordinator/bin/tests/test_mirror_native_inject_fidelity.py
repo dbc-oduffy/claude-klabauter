@@ -1,6 +1,6 @@
 """Inject-fidelity test for the mirror-native `.github` CI-harness payload.
 
-Spec backlink: docs/plans/2026-08-07-publish-identity-scrub-and-two-repo-gates.md
+Spec backlink: pln-publish-time-identity-scrub-ov-0f5a9d
 chunk C6r (replaces the excised, unbuildable chunk C6 -- see that plan's C6r body
 for why a two-path drift comparison was refused: `dist/mirror-native/claude-
 klabauter/.github/` is the SOLE in-repo copy of this payload; there is no second
@@ -115,7 +115,7 @@ class TestMirrorNativeInjectFidelity:
         Every OTHER file in this payload today (CI workflow YAML, issue/PR
         templates, allowlist dotfiles, the other checker scripts, `.gitignore`,
         a stray `__pycache__` artifact) carries none of this store's scrub
-        vocabulary (no persona names, no `example-doctrine-repo`/`example_doctrine_repo` tokens, no
+        vocabulary (no persona names, no `coordinator-claude`/`example_doctrine_repo` tokens, no
         `claude-klabauter` stem) -- so the content-transform pipeline (§
         `engine._apply_content_transforms`) is a no-op on every one of them
         and byte-identical is the CORRECT expected outcome for the whole
@@ -155,7 +155,7 @@ class TestMirrorNativeInjectFidelity:
                 )
             else:
                 # No store scrub vocabulary appears in this payload's other
-                # files today (verified: none carry persona names, example-doctrine-repo
+                # files today (verified: none carry persona names, coordinator-claude
                 # tokens, or a `claude-klabauter` stem), so the content-transform
                 # pipeline is a no-op and byte-identical is the expected,
                 # asserted outcome -- not an unexamined skip.

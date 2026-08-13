@@ -3,10 +3,10 @@ identity resolver, factored out of ``block_subagent_plan_body_write.py``
 (2026-08-03) so ``block_subagent_archive_write.py`` can recognise the same
 named-teammate ``agent_id`` shape rather than carrying its own,
 narrower-fidelity bare-hex-only copy. See
-``cross-repo/inbox/2026-08-03-example-doctrine-repo-em-archive-write-guard-pincer.md``
+``cross-repo/inbox/2026-08-03-coordinator-claude-em-archive-write-guard-pincer.md``
 for the composed-defect writeup that prompted this extraction.
 
-Port of example-doctrine-repo coordinator/lib/coordinator-session.sh (example-doctrine-repo ``e34f2484``,
+Port of coordinator-claude coordinator/lib/coordinator-session.sh (coordinator-claude ``e34f2484``,
 2026-07-22) ``resolve_subagent_identity`` / ``cs_build_canonical_agent_id``.
 
 Also carries ``_read_backpointer_subagent_type`` — the
@@ -92,15 +92,15 @@ def normalize_teammate_agent_id(agent_id: str, live_session_id: str) -> str:
 
 
 def _cs_build_canonical_agent_id(name: str, short_session: str) -> str:
-    """Port of ``cs_build_canonical_agent_id``, example-doctrine-repo coordinator-session.sh
-    (example-doctrine-repo ``e34f2484``, 2026-07-22).
+    """Port of ``cs_build_canonical_agent_id``, coordinator-claude coordinator-session.sh
+    (coordinator-claude ``e34f2484``, 2026-07-22).
     """
     return f"{name}@session-{short_session}"
 
 
 def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
-    """Port of ``resolve_subagent_identity``, example-doctrine-repo coordinator-session.sh
-    (example-doctrine-repo ``e34f2484``, 2026-07-22).
+    """Port of ``resolve_subagent_identity``, coordinator-claude coordinator-session.sh
+    (coordinator-claude ``e34f2484``, 2026-07-22).
 
     Three paths, in order:
       (a) Bare hex ``^[a-f0-9]{12,}$`` -> unnamed agent fast path, returns

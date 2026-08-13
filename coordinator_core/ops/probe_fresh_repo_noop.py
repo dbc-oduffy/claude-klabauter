@@ -37,7 +37,7 @@ normal pipeline rather than false-triggering" — this op is the guard; a false 
 verdict on a populated repo must never suppress the real pipeline, so every reason is
 independently computed and ANY unmet freshness condition sets is_fresh False.
 
-Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
+Spec backlink: pln-coordinator-ops-buildout-from--903224
 (wave 1, chunk w2-fresh-repo-noop)
 
 Negative-spec:

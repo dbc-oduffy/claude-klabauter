@@ -21,7 +21,7 @@ Three named steps (plan § C5 body), all present in this module:
      of the 6 pairs' entries from ``state/deliverable-equivalence.yaml``, C3b) — assert
      each pair collapses to ONE canonical key (the DD#1 winner id) with ONE status.
 
-Spec backlink: docs/plans/2026-08-01-deliverable-id-fork-remediation.md § C5 (AC8)
+Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C5 (AC8)
 Evidence: state/audits/2026-08-01-deliverable-id-fork-population.md,
   state/audits/2026-08-01-deliverable-id-fork-population-itemized.md,
   state/deliverable-equivalence.yaml (C3b, commit 4b2506754819)
