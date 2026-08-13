@@ -53,6 +53,14 @@ from coordinator_core.ops.queue_scaffold_baton import (  # noqa: E402
     _handler,
 )
 
+import pytest
+
+# The locked_rmw write-path tests (g) resolve handoffs_dir and write batons
+# against a real git repo's common_dir — the op's write-collision guard and
+# origin_handoff resolution genuinely read real repo layout, not a value a
+# mock could substitute.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _run(coro):
     """Execute a coroutine synchronously (test helper)."""

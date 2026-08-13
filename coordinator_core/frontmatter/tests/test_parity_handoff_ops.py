@@ -94,6 +94,13 @@ import pytest
 from coordinator_core.testing.doe_root import resolve_doe_root
 from coordinator_core.testing.golden import assert_matches_golden, is_capturing, load_golden
 
+# Real-git spawn is load-bearing: fixtures build a real git repo
+# (`_init_git_repo`/`_common_dir`) so ops under test resolve the ACTUAL
+# git-common-dir/worktree layout, not a mocked path -- this parity suite's
+# whole purpose is proving real behaviour against the JS oracle. Per-test
+# repos for isolation.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _GOLDEN_NAMESPACE = "parity_handoff_ops"
 
 # ---------------------------------------------------------------------------

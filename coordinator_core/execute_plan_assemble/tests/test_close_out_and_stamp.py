@@ -61,6 +61,18 @@ import pytest
 import coordinator_core.execute_plan_assemble.close_out_and_stamp as coas
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 
+# Declared, not excused: this file exercises the op's own `_run_git`/git-log path
+# and its real, in-process commit leg (`run_commit_pipeline`, per this file's own
+# module docstring "Commit-leg tests" section) -- deliberately never mocked, since
+# proving the commit leg lands a real commit under concurrency is exactly what
+# distinguishes it from the prior mocked-commit coverage and the shell-out
+# `coordinator-safe-commit` regression it replaced. Every test runs inside a
+# freshly `git init`-ed `tmp_path`, never this repo's own working tree, so no
+# shared-state hoist is possible or attempted. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FIXTURES_DIR = (
     _REPO_ROOT / "coordinator" / "bin" / "tests" / "fixtures" / "plan-tasks-spine"

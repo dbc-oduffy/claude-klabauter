@@ -34,6 +34,7 @@ import yaml
 from coordinator_core.ops.deliverable_equivalence import (
     DeliverableDualReadMismatchError,
     DeliverableLedgerValidationError,
+    _normalize_extracted_deliverable_id,
     _reset_deliverable_ledger_cache,
     _reset_equivalence_map_cache,
     canonicalize,
@@ -769,3 +770,217 @@ def test_dual_read_three_way_outcome_is_distinguishable(tmp_path):
     result3, outcome3 = dual_read_deliverable_id(tmp_path, str(no_fm), {})
     assert outcome3 == "hit"
     assert result3 == "dlv-hit-value"
+
+
+# ---------------------------------------------------------------------------
+# archive-side-corpus-remediation C2 — _normalize_extracted_deliverable_id.
+#
+# Break-class defect: extract_fm_field is a rest-of-line parser with no notion
+# of a trailing inline YAML comment or of quoting when a comment follows a
+# quoted value; it only strips quotes when they are the literal first AND last
+# characters of the remainder. A quoted id with a trailing "# comment" fails
+# that check and returns the whole remainder (quotes, comment, and all) — and
+# a bare "null  # comment" is truthy, defeating both seed_deliverable_ledger_
+# rows's `if not raw_id: continue` guard and extract_fm_field's own bare-null
+# handling. _normalize_extracted_deliverable_id is the single shared
+# normalisation step every read site in this section routes through.
+#
+# Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C2
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_strips_quotes_and_trailing_inline_comment():
+    raw = '"dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"  # minted here; deliberately NOT example-doctrine-repo\'s dlv-...-276e8d'
+    assert (
+        _normalize_extracted_deliverable_id(raw)
+        == "dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"
+    )
+
+
+def test_normalize_null_with_trailing_comment_is_absent():
+    raw = "null  # stamped by a real /plan run — do NOT hand-fabricate"
+    assert _normalize_extracted_deliverable_id(raw) is None
+
+
+def test_normalize_tilde_is_absent():
+    assert _normalize_extracted_deliverable_id("~") is None
+
+
+def test_normalize_empty_string_is_absent():
+    assert _normalize_extracted_deliverable_id("") is None
+
+
+def test_normalize_none_is_absent():
+    assert _normalize_extracted_deliverable_id(None) is None
+
+
+# Review: coordinatorcode-reviewer c2f6a1ea — F1: YAML 1.1's null-literal set
+# includes `Null`/`NULL`, not just lowercase `null`. A hand-authored
+# `deliverable_id: Null` line must not manufacture the literal string "Null"
+# into the ledger.
+def test_normalize_capitalized_null_is_absent():
+    assert _normalize_extracted_deliverable_id("Null") is None
+
+
+def test_normalize_uppercase_null_is_absent():
+    assert _normalize_extracted_deliverable_id("NULL") is None
+
+
+def test_normalize_bare_id_unchanged():
+    assert _normalize_extracted_deliverable_id("dlv-plain-example") == "dlv-plain-example"
+
+
+def test_normalize_preserves_hash_legitimately_inside_quotes():
+    raw = '"dlv-foo#bar"'
+    assert _normalize_extracted_deliverable_id(raw) == "dlv-foo#bar"
+
+
+def test_normalize_preserves_bare_hash_with_no_preceding_whitespace():
+    # extract_fm_field only strips quotes when they are the literal first/last
+    # characters of the remainder; an unquoted value that legitimately
+    # contains '#' with no preceding whitespace is not a YAML comment.
+    assert _normalize_extracted_deliverable_id("dlv-foo#bar") == "dlv-foo#bar"
+
+
+def test_normalize_unterminated_quote_still_strips_trailing_comment():
+    # Review: coordinatorcode-reviewer f292d223 — F7: an unterminated opening
+    # quote previously fell through to `value[1:]` with no comment-stripping,
+    # leaving the trailing inline comment attached to the "id". Deliberate
+    # behaviour now: strip it exactly as the unquoted branch would.
+    raw = '"dlv-x  # a trailing comment with no closing quote'
+    assert _normalize_extracted_deliverable_id(raw) == "dlv-x"
+
+
+def test_seed_never_emits_malformed_deliverable_id(tmp_path):
+    """Pin: the seeder never emits a deliverable_id failing ^dlv-[a-z0-9-]+$,
+    including for records whose raw frontmatter carries a quoted id with a
+    trailing inline comment, or a bare `null` with a trailing inline comment."""
+    import re
+
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+
+    quoted_with_comment = handoffs_dir / "2026-01-01_000000_quoted-with-comment.md"
+    quoted_with_comment.write_text(
+        "---\n"
+        'deliverable_id: "dlv-quoted-with-comment"  # some trailing comment\n'
+        "kind: handoff\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+
+    null_with_comment = handoffs_dir / "2026-01-01_000000_null-with-comment.md"
+    null_with_comment.write_text(
+        "---\n"
+        "deliverable_id: null  # stamped by a real /plan run — do NOT hand-fabricate\n"
+        "kind: handoff\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+
+    rows = seed_deliverable_ledger_rows(tmp_path)
+
+    ok = re.compile(r"^dlv-[a-z0-9-]+$")
+    malformed = [row["deliverable_id"] for row in rows if not ok.match(row["deliverable_id"])]
+    assert malformed == []
+
+    seeded_ids = {row["deliverable_id"] for row in rows}
+    assert "dlv-quoted-with-comment" in seeded_ids
+
+
+# ---------------------------------------------------------------------------
+# archive-side-corpus-remediation C2/C3 — pins over the LANDED real repo
+# artifact (not a tmp_path fixture): the seeded ledger validates, every census
+# predecessor resolves to a superseded row naming its successor, and
+# deliverable_id stays unique across the whole ledger block.
+#
+# Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C2, C3
+# ---------------------------------------------------------------------------
+
+
+import re as _re
+
+
+def _census_predecessor_successor_pairs():
+    """Re-derive the 24 (predecessor canonical id, successor canonical id) pairs
+    from the census table via canonicalize()/load_equivalence_map — never
+    hard-coded, per the plan's Anti-scope."""
+    repo_root = Path(__file__).resolve().parents[3]
+    equivalence_map = load_equivalence_map(repo_root)
+
+    census_path = (
+        repo_root / "state" / "audits" / "2026-08-06-archive-side-zombie-census.md"
+    )
+    lines = census_path.read_text(encoding="utf-8").splitlines()
+
+    start = None
+    for index, line in enumerate(lines):
+        if line.startswith("## 1. The census"):
+            start = index
+            break
+    assert start is not None, "census § 1 section not found"
+
+    row_re = _re.compile(r"^\|\s*\d+\s*\|")
+    id_re = _re.compile(r"`([^`]+)`\s*→\s*(.+)")
+
+    pairs = []
+    for line in lines[start:]:
+        if line.startswith("**Sub-shape totals"):
+            break
+        if not row_re.match(line):
+            continue
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+
+        def _raw_and_canonical(cell):
+            match = id_re.match(cell)
+            raw = match.group(1)
+            canon_part = match.group(2).strip()
+            canon = raw if canon_part == "same" else canon_part.strip("`")
+            return raw, canon
+
+        pred_raw, _ = _raw_and_canonical(cells[2])
+        succ_raw, _ = _raw_and_canonical(cells[4])
+        pred_canonical = canonicalize(pred_raw, equivalence_map)
+        succ_canonical = canonicalize(succ_raw, equivalence_map)
+        pairs.append((pred_canonical, succ_canonical))
+
+    return pairs
+
+
+def test_landed_ledger_passes_validation():
+    """The real, on-disk ledger (C2's seed + C3's overlay) validates cleanly."""
+    repo_root = Path(__file__).resolve().parents[3]
+    _reset_deliverable_ledger_cache()
+    rows = load_deliverable_ledger(repo_root)
+    assert rows  # sanity: the ledger is not empty
+    validate_deliverable_ledger_rows(rows)  # must not raise
+
+
+def test_every_census_predecessor_has_a_superseded_row():
+    """Every one of the census's 24 predecessor canonical ids has a
+    status: superseded row whose superseded_by names its successor's
+    canonical id."""
+    repo_root = Path(__file__).resolve().parents[3]
+    _reset_deliverable_ledger_cache()
+    rows = load_deliverable_ledger(repo_root)
+    rows_by_id = {r["deliverable_id"]: r for r in rows}
+
+    pairs = _census_predecessor_successor_pairs()
+    assert len(pairs) == 24
+
+    for pred_canonical, succ_canonical in pairs:
+        row = rows_by_id.get(pred_canonical)
+        assert row is not None, f"no ledger row for predecessor {pred_canonical!r}"
+        assert row["status"] == "superseded"
+        assert row["superseded_by"] == succ_canonical
+
+
+def test_deliverable_id_unique_across_ledger_block():
+    """deliverable_id is unique across the whole landed ledger."""
+    repo_root = Path(__file__).resolve().parents[3]
+    _reset_deliverable_ledger_cache()
+    rows = load_deliverable_ledger(repo_root)
+    ids = [r["deliverable_id"] for r in rows]
+    assert len(ids) == len(set(ids))

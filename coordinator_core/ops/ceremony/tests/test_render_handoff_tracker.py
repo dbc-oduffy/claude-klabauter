@@ -34,6 +34,12 @@ import pytest
 from coordinator_core.ops.ceremony import render_handoff_tracker as rht
 from coordinator_core.state_root import StateRootError
 
+# Real-git spawn is load-bearing: (a)'s per-repo write path resolves the
+# sibling-repo state root against a real repo tree, so a mocked filesystem
+# would not exercise the resolver's actual boundary walk. Per-test repo
+# fixtures for isolation.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # (a) per-repo render + write-path resolution

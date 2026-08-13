@@ -27,6 +27,17 @@ from pathlib import Path
 
 import pytest
 
+# Declared, not excused: `test_cli_subcommand_smoke` and
+# `test_retired_snippet_sync_sweep_verb_is_still_accepted` spawn a real
+# `sys.executable` child running update-docs-probes.py because the property
+# under test is the CLI's real argparse-wiring/exit-code contract at the
+# process boundary (cwd-guard fall-through, the retired-verb no-op shim's
+# stderr message) -- no in-process call observes that. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).parent.parent
 
 

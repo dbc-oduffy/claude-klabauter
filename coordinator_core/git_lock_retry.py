@@ -14,9 +14,12 @@ sibling session's concurrent commit crashed the ceremony mid-transaction —
 artifact written to disk, commit never made, later directives never run.
 Observed live 2026-08-07 (`baton-assemble apply handoff`, five peer sessions
 within 17 seconds). This module lifts the existing, correctly-designed
-predicate and backoff schedule out of `detached_render_commit.py` into a
-LEAF module every commit seam consumes, so the policy is get-right-once
-rather than hand-copied and independently drift-prone.
+predicate out of `detached_render_commit.py` into a LEAF module every
+commit seam consumes, so the policy is get-right-once rather than
+hand-copied and independently drift-prone. The default backoff schedule
+itself is NOT lifted from `detached_render_commit.py` -- see
+`DEFAULT_BACKOFF_SCHEDULE_S`'s own comment for why and its measured
+source.
 
 This module has no git opinion of its own: `run_with_lock_retry` takes a
 ZERO-ARG CALLABLE that performs one git invocation and returns a
@@ -70,15 +73,39 @@ LOCK_CONTENTION_SIGNATURES = (
     "Another git process seems to be running",
 )
 
-#: Default bounded retry policy: 1 initial attempt + 3 retries (4 total),
-#: fixed backoff schedule (seconds, slept BEFORE attempts 2/3/4) tuned for
-#: the sub-second lock-hold window a single-path `git add` + `git commit`
-#: normally clears in. Never spins indefinitely -- the schedule is
-#: fixed-length, not open-ended. Lifted verbatim from
-#: `ops/ceremony/detached_render_commit.py::_MAX_ATTEMPTS` /
-#: `_BACKOFF_SCHEDULE_S`.
-DEFAULT_MAX_ATTEMPTS = 4
-DEFAULT_BACKOFF_SCHEDULE_S = (0.1, 0.3, 0.7)
+#: Default bounded retry policy: 1 initial attempt + 7 retries (8 total),
+#: exponential backoff (seconds, slept BEFORE attempts 2..8) starting at
+#: 0.1s and doubling to a 1.0s cap: (0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0).
+#: Never spins indefinitely -- the schedule is fixed-length, not open-ended.
+#:
+#: NOT the 4-attempt/1.1s figure this module originally lifted verbatim
+#: from `ops/ceremony/detached_render_commit.py` -- that figure was
+#: unmeasured. This repo's own evidence contradicts it:
+#: `ops/fleet/_common.py::_update_index_with_retry` documents a fixed
+#: 3x0.05s (150ms) index-resync retry budget being "reliably exhausted by a
+#: lock held for as little as ~0.2-0.3s" because this tree's commit path
+#: execs `prepare-commit-msg`/`post-commit` hooks that themselves shell
+#: out -- which is why fleet moved to 8 attempts / exponential / 1.0s cap
+#: (`_INDEX_RETRY_MAX_ATTEMPTS` / `_INDEX_RETRY_INITIAL_SLEEP_S` /
+#: `_INDEX_RETRY_BACKOFF_CAP_S`). Three same-date bug-backlog records
+#: (`state/bug-backlog/2026-08-13-index-resync-failed-archive-and-commit-c-
+#: e4ef4012149f.yaml` and siblings) show even THAT 8-attempt exponential
+#: budget being exhausted by `index.lock` contention on this tree, i.e.
+#: fleet's number is a floor, not a ceiling -- but this module has no
+#: further measurement to derive past it, so it aligns with fleet's
+#: existing precedent rather than inventing a third unsourced number.
+#:
+#: Worst-case wall-clock for the default schedule: 0.1+0.2+0.4+0.8+1.0+1.0
+#: +1.0 = 4.5s of sleeping across up to 8 git invocations, before this
+#: caller's own git-exec time. Against `docs/wiki/machine-load-norm.md`
+#: (spawn-per-call engine, end-to-end invocation budget, 50-70 concurrent
+#: LLM sessions as this machine's average): 4.5s is a real cost a seam
+#: pays on EVERY genuine lock collision, not a hung timeout -- callers with
+#: a tighter budget than this pass their own `max_attempts` /
+#: `backoff_schedule_s` rather than forking the default (see module
+#: negative-spec: both stay caller-overridable parameters).
+DEFAULT_MAX_ATTEMPTS = 8
+DEFAULT_BACKOFF_SCHEDULE_S = (0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0)
 
 
 def is_lock_contention(stderr: str) -> bool:

@@ -56,6 +56,12 @@ from coordinator_core.ipc import dispatch_message, _REGISTRY, _SCOPE_TOUCH_PATHS
 from coordinator_core.session import core, scope, liveness
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 
+# Declared, not excused: this file's `_scope_touch_paths` self-report contract is
+# threaded through `safe_commit_offer.compute_offer`, which reads real git status/diff
+# state to decide what an op touched -- no mock reproduces that resolution. Each test
+# spawns its own repo via `_make_repo`.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

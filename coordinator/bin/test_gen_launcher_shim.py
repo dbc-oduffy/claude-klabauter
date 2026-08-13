@@ -43,7 +43,16 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import pytest
+
 from coordinator_core.win_portability import no_console_creationflags
+
+# Real-process spawn is load-bearing: the whoami-bootstrap tests exec the
+# EMITTED bootstrap body as a real `sys.executable` subprocess (per module
+# docstring, C9) to prove it never bare-imports coordinator_whoami into its
+# own process -- an in-process mock cannot exhibit that distinction.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _MODULE_PATH = Path(__file__).with_name("gen-launcher-shim.py")
 _spec = importlib.util.spec_from_file_location("gen_launcher_shim", _MODULE_PATH)

@@ -87,6 +87,12 @@ assert "handoff.author_fork" in _REGISTRY, (
     "coordinator_core.ops.handoff_author_fork @register_op did not fire"
 )
 
+# origin_handoff/origin_session resolution reads real commits and a real
+# working tree — the op's disambiguation and provenance-stamping logic reads
+# actual git state (claimed_by matching, HEAD-relative artifact placement),
+# not a value a mock could substitute without losing the assertion's meaning.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

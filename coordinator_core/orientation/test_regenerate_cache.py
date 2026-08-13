@@ -18,6 +18,17 @@ import pytest
 
 from coordinator_core.orientation import regenerate_cache as mod
 
+# Declared, not excused: `_init_git_repo` spawns real git to give
+# `emit_recent_commits` genuine `git log` output to render (including a real
+# merge history for the ## Recent commits section), and the CLI-trampoline
+# tests at the bottom of this file spawn the real
+# coordinator/bin/regenerate-orientation-cache script as a subprocess (it is
+# not a `.py`-suffixed, cleanly importable module) to exercise its actual
+# --invoker/--pinboard-only argv contract. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"

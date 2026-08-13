@@ -30,6 +30,12 @@ from pathlib import Path
 
 import pytest
 
+# Real git repo is load-bearing: compute_chunk_table pipes through
+# cartography.tree.list_tracked_files, which shells `git ls-files` -- the
+# tracked-vs-untracked distinction under test (build/vendor/test-artifact
+# exclusion) has no filesystem-only stand-in.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Import guard — MUST precede any test so @register_op fires first.
 # ---------------------------------------------------------------------------

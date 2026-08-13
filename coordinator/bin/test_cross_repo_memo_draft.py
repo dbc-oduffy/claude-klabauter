@@ -46,6 +46,14 @@ import sys
 import tempfile
 import textwrap
 
+import pytest
+
+# Real-git spawn is load-bearing: draft/send dispatch through
+# cc_invoke.route_mutation onto real claude-klabauter ops against a real isolated
+# git-tracked outbox/registry, per module docstring -- no direct-write
+# fallback exists to mock. Per-test fixtures for isolation.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Test infrastructure (mirrors test_cross_repo_memo.py fixtures)
 # ---------------------------------------------------------------------------

@@ -73,10 +73,20 @@ _LOCKING_AVAILABLE = _FCNTL_AVAILABLE or _MSVCRT_AVAILABLE
 _PROJECT_ROOT = str(Path(__file__).parent.parent.parent.resolve())
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-pytestmark = pytest.mark.skipif(
-    not _LOCKING_AVAILABLE,
-    reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
-)
+# Declared, not excused: this file spawns real git because several tests exercise
+# `resolve_observed_set`'s actual conflict-marker parsing (`<<<<<<<`/`=======`/`>>>>>>>`)
+# against a real merge conflict git itself produces -- no mock reproduces git's own
+# conflict-marker byte layout. Each test builds its own repo via `_make_git_repo`, and
+# the AC7 revert path mutates real refs/working-tree state, so the fixture is not
+# hoisted to module scope.
+pytestmark = [
+    pytest.mark.skipif(
+        not _LOCKING_AVAILABLE,
+        reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
+    ),
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 # ---------------------------------------------------------------------------
 # Import under test

@@ -294,6 +294,35 @@ class TestVendoredCorpusShapeAcrossLastCommittedTransition:
     """
 
     def test_no_shape_change_under_unmoved_version(self):
+        """The two correction forms this leg must tell apart, since a
+        transition failing `shape_moved_under_unmoved_version` is not
+        automatically live debt:
+
+          - VERSION-MOVED: not reachable from THIS leg at all (it only ever
+            examines the single most-recent committed transition, whose
+            `after` side is HEAD's own version by construction) -- the
+            version-move correction form is a full-history concept, handled
+            by `TestFullHistoryShapeBumpSweep`.
+          - SHAPE-REVERTED: the transition under examination (`before` ->
+            `head_sha`) fails the comparator, but a commit further back than
+            `before` already carried the exact shape HEAD carries today. The
+            motivating case is a same-day re-vendor-then-revert pair on
+            `handoff.schema.json` (`1825e7771` -> `4e0d47e88` widened shape
+            under unmoved 7.1.0; `4e0d47e88` -> `e6af1c6cf` backed it out
+            byte-for-byte). This leg's single-hop pairing lands on the SECOND
+            half of that pair (`4e0d47e88` -> `e6af1c6cf`), whose own
+            `before` (`4e0d47e88`) still carries the bad shape -- so a naive
+            "does `before` match HEAD" check would still redden here even
+            though HEAD's shape is provably fine (`1825e7771`, two commits
+            back, matches it exactly). The walk below keeps searching PAST
+            `before`, through the remaining touching commits, for any state
+            that already carries HEAD's shape; finding one proves the
+            version's meaning at HEAD is the SAME meaning it has always had,
+            not a novel corruption this leg should redden on. This is why
+            "reverted" cannot be tested as a single before/after hash
+            equality -- it is a reachability question over the whole
+            touching-commit list, not a one-hop comparison.
+        """
         paths = vendored_schema_paths()
         assert paths, "no vendored schemas found -- the coverage set must not be vacuous"
 
@@ -307,6 +336,7 @@ class TestVendoredCorpusShapeAcrossLastCommittedTransition:
             )
 
         violations: list[str] = []
+        reverted: list[str] = []
         unpaired: list[str] = []
         compared = 0
         for path in paths:
@@ -318,10 +348,11 @@ class TestVendoredCorpusShapeAcrossLastCommittedTransition:
             head_sha = shas[0]
             after = cat_file_batch(REPO_ROOT, head_sha, [rel]).get(rel)
             before = before_sha = None
-            for candidate in shas[1:]:
+            before_index = None
+            for idx, candidate in enumerate(shas[1:], start=1):
                 resolved = cat_file_batch(REPO_ROOT, candidate, [rel]).get(rel)
                 if resolved is not None:
-                    before_sha, before = candidate, resolved
+                    before_sha, before, before_index = candidate, resolved, idx
                     break
             # Guard on `before_sha` (not on `before`) so the pair's
             # both-or-neither invariant is explicit to a reader and to a type
@@ -337,13 +368,42 @@ class TestVendoredCorpusShapeAcrossLastCommittedTransition:
             message = shape_moved_under_unmoved_version(
                 f"{rel} ({before_sha[:9]} -> {head_sha[:9]})", before, after
             )
-            if message:
+            if not message:
+                continue
+            after_hash = _shape_and_version(after)[0]
+            # Batched (one `cat-file --batch` feed for every remaining
+            # touching commit of THIS schema), not a spawn per candidate --
+            # the module docstring's spawn-ratchet constraint applies to this
+            # lookahead exactly as it does to the primary pairing above.
+            older_specs = [f"{sha}:{rel}" for sha in shas[before_index + 1 :]]
+            older_blobs = cat_file_batch_objects(REPO_ROOT, older_specs) if older_specs else {}
+            matched_ancestor = next(
+                (
+                    sha
+                    for sha in shas[before_index + 1 :]
+                    if (blob := older_blobs.get(f"{sha}:{rel}")) is not None
+                    and _shape_and_version(blob)[0] == after_hash
+                ),
+                None,
+            )
+            if matched_ancestor is not None:
+                reverted.append(
+                    f"{rel}: {before_sha[:9]} -> {head_sha[:9]} reverted since "
+                    f"(shape at HEAD matches earlier commit {matched_ancestor[:9]})"
+                )
+            else:
                 violations.append(message)
 
         assert compared > 0, (
             "no vendored schema had a resolvable commit pair -- the post-commit "
             f"leg would have passed vacuously. Unpaired: {unpaired}"
         )
+        if reverted:
+            print(
+                f"\n[informational] {len(reverted)} shape-moved/version-unmoved "
+                "transition(s) already reverted -- history, not debt:\n  "
+                + "\n  ".join(reverted)
+            )
         assert not violations, (
             f"{len(violations)} vendored schema(s) changed validation shape under an "
             f"unmoved x-schema-version in their most recent committed transition "
@@ -406,17 +466,40 @@ class TestFullHistoryShapeBumpSweep:
 
     Two classes, and they are NOT the same finding:
 
-      - Class A, CORRECTED SINCE: shape moved under an unmoved version at N,
-        but `x-schema-version` did move at some later commit before HEAD. Real
-        history, since made consistent. Reported informationally, NEVER
-        failed. A permanent red over history nobody can change trains readers
-        to ignore the gate, which is worse than not having the gate.
-      - Class B, LIVE: shape moved under an unmoved version at N, and the
-        version STILL has not moved by HEAD. The debt is live and no other leg
-        can see it. RED.
+      - Class A, CORRECTED-BY-VERSION-MOVE: shape moved under an unmoved
+        version at N, but `x-schema-version` did move at some later commit
+        before HEAD. Real history, since made consistent. Reported
+        informationally, NEVER failed. A permanent red over history nobody
+        can change trains readers to ignore the gate, which is worse than not
+        having the gate.
+      - Class C, CORRECTED-BY-SHAPE-REVERSION: shape moved under an unmoved
+        version at N, the version STILL has not moved by HEAD, but the shape
+        HEAD carries today already existed at some state at or before this
+        transition's `before` side -- i.e. the change was walked back rather
+        than bumped past. Also reported informationally, NEVER failed, for
+        the same "permanent red trains readers to ignore it" reason as Class
+        A: a consumer reading this version TODAY gets the same shape that
+        version has always meant, so there is no live inconsistency, even
+        though the version string itself never moved. The motivating case is
+        `handoff.schema.json` at 7.1.0: `1825e7771 -> 4e0d47e88` widened
+        shape (a re-vendor that imported example-doctrine-repo's unbumped shape move), and
+        `4e0d47e88 -> e6af1c6cf` backed it out byte-for-byte. BOTH
+        transitions in that pair are Class C, not just the first -- the
+        second transition's own `before` (`4e0d47e88`) still carries the bad
+        shape, so discharging it requires looking PAST `before`, to
+        `1825e7771`, which is why this checks the whole prefix of states up
+        to and including `before` rather than a single hash equality. A
+        reader tempted to "simplify" this to `before_hash == head_hash` will
+        silently re-redden the second half of every revert pair.
+      - Class B, LIVE: shape moved under an unmoved version at N, and neither
+        correction form above applies. The debt is live and no other leg can
+        see it. RED.
 
-    The discriminator is mechanical: compare the version at the transition's
-    later side against the version at HEAD. Different -> A. Same -> B.
+    The discriminator: compare the version at the transition's later side
+    against the version at HEAD (different -> A); if same, search the
+    schema's own state prefix up to and including this transition's `before`
+    for any state whose shape hash equals HEAD's shape hash (found -> C,
+    otherwise -> B).
     """
 
     def test_no_live_uncorrected_shape_debt(self):
@@ -429,10 +512,13 @@ class TestFullHistoryShapeBumpSweep:
 
         class_a: list[str] = []
         class_b: list[str] = []
+        class_c: list[str] = []
         transitions_examined = 0
         for rel, states in sorted(history.items()):
-            head_version = _shape_and_version(states[-1][1])[1]
-            for (before_sha, before), (after_sha, after) in zip(states, states[1:]):
+            head_hash, head_version = _shape_and_version(states[-1][1])
+            for idx in range(len(states) - 1):
+                before_sha, before = states[idx]
+                after_sha, after = states[idx + 1]
                 transitions_examined += 1
                 message = shape_moved_under_unmoved_version(
                     f"{rel} ({before_sha[:9]} -> {after_sha[:9]})", before, after
@@ -445,6 +531,21 @@ class TestFullHistoryShapeBumpSweep:
                         f"{rel}: {before_sha[:9]} -> {after_sha[:9]} moved shape under "
                         f"{transition_version!r}; corrected since (version at HEAD is "
                         f"{head_version!r})"
+                    )
+                    continue
+                reverted_at = next(
+                    (
+                        sha
+                        for sha, blob in states[: idx + 1]
+                        if _shape_and_version(blob)[0] == head_hash
+                    ),
+                    None,
+                )
+                if reverted_at is not None:
+                    class_c.append(
+                        f"{rel}: {before_sha[:9]} -> {after_sha[:9]} moved shape under "
+                        f"{transition_version!r}; reverted since (shape at HEAD matches "
+                        f"earlier state {reverted_at[:9]})"
                     )
                 else:
                     class_b.append(
@@ -462,6 +563,12 @@ class TestFullHistoryShapeBumpSweep:
                 f"\n[informational] {len(class_a)} shape-moved/version-unmoved "
                 "transition(s) already corrected by a later bump -- history, not debt:\n  "
                 + "\n  ".join(class_a)
+            )
+        if class_c:
+            print(
+                f"\n[informational] {len(class_c)} shape-moved/version-unmoved "
+                "transition(s) already corrected by a later shape reversion -- history, "
+                "not debt:\n  " + "\n  ".join(class_c)
             )
         assert not class_b, (
             f"{len(class_b)} LIVE shape-change-under-unmoved-version debt(s) across "

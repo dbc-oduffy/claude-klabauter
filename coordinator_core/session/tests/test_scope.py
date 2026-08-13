@@ -50,6 +50,18 @@ import pytest
 
 from coordinator_core.session import core, scope
 
+# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
+# real git (init/config/add/commit) because the production code under test --
+# `scope`'s `ls-files`/status seams and `core.git_root()` -- reads real git
+# state (working tree entries, index status) that no mock stands in for.
+# `tmp_path` is function-scoped and several tests write session/claim state
+# under the SAME session ids across the file, so the repo fixture stays
+# per-test rather than hoisted to module scope. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -40,6 +40,12 @@ from pathlib import Path
 
 import pytest
 
+# Real local git repos are load-bearing: run() is asserted end-to-end against
+# a real fake-clone repo, including that a real run writes vendored bytes AND
+# the pin registry together and a failed verification rolls BOTH back --
+# properties a mocked git object model can't reproduce.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Load the script module via importlib (dash in filename).
 # Registered in sys.modules before exec so @dataclass can resolve __module__.

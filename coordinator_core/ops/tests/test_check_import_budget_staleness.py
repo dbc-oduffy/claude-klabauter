@@ -32,7 +32,13 @@ import pytest
 from coordinator_core.ops import check_import_budget_staleness as cibs
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.cadence
+# Real-git spawn is load-bearing: STALE arm builds a throwaway repo and drives
+# `git log`/`git commit` to prove the staleness predicate reads actual commit
+# history, not a mock. Per-test isolation via tmp_path fixtures, not hoisted.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _run_git(repo: Path, *args: str) -> None:

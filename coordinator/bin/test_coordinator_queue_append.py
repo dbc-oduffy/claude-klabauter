@@ -38,7 +38,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+import pytest
+
 from coordinator_core.win_portability import no_console_creationflags
+
+# Real-process spawn is load-bearing: every test drives the CLI end-to-end
+# as a real subprocess (`_run_cli`) to prove its actual exit codes and
+# stderr text -- no in-process mock stands in for the CLI's own argv
+# parsing and file-write behaviour.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 # Repo root — this checkout's own coordinator_core is the byte-identical parity

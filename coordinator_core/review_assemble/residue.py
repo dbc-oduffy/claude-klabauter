@@ -99,9 +99,10 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
 )
-from coordinator_core.frontmatter.primitives import (
-    read_fm_field_unquoted,
-    split_frontmatter,
+from coordinator_core.contract.residue_segments import (
+    SegmentLoadError,
+    load_segments,
+    select_segments,
 )
 from coordinator_core.pickup_assemble import resolve_repo_root
 from coordinator_core.resolve_coordinator_clone import (
@@ -120,11 +121,6 @@ SEGMENT_SURFACES: tuple[str, ...] = ("plan", "diff", "shared")
 #: concrete surface, never to the segment-authoring category).
 EXPLICIT_SURFACES: tuple[str, ...] = ("plan", "diff")
 
-#: The two legal values of a segment's `class:` frontmatter field. Preserved
-#: verbatim in emitted segments so a budget-limited consumer can degrade a
-#: `droppable` segment before ever touching a `protected` one.
-SEGMENT_CLASSES: tuple[str, ...] = ("protected", "droppable")
-
 #: Windows console-window suppression, matching every other subprocess
 #: call site this package touches (`baton_assemble/__init__.py`,
 #: `baton_assemble/apply.py`) — this repo ships to a Windows-primary
@@ -133,12 +129,13 @@ SEGMENT_CLASSES: tuple[str, ...] = ("protected", "droppable")
 _NO_CONSOLE = no_console_creationflags()
 
 
-class ResidueAssembleError(RuntimeError):
-    """Raised for any fail-loud condition this module owns directly — an
-    unreadable/missing residue directory, a segment with malformed or
-    missing frontmatter, or a segment set that resolves to zero applicable
-    segments. Never caught-and-continued past; a caller sees this as a
-    process failure, not a recoverable runtime condition."""
+#: The review-side name for the shared segment-loader's failure type — an
+#: alias, not a subclass, so every existing `except ResidueAssembleError`
+#: call site keeps catching fail-louds raised by the shared loader
+#: (`coordinator_core.contract.residue_segments`) as well as the ones this
+#: module raises directly (e.g. zero applicable segments after filtering).
+#: One exception hierarchy, not two.
+ResidueAssembleError = SegmentLoadError
 
 
 class ResidueUsageError(RuntimeError):
@@ -150,10 +147,15 @@ class ResidueUsageError(RuntimeError):
     state is even touched."""
 
 
+#: The one true residue directory, relative to the content root — the
+#: `segment_dir` parameter this module passes to the shared loader.
+_RESIDUE_SEGMENT_DIR = "skills/review/residue"
+
+
 def _residue_dir(content_root: Path) -> Path:
     """Resolve the one true residue directory relative to *content_root*:
     ``<content-root>/skills/review/residue``."""
-    return content_root / "skills" / "review" / "residue"
+    return content_root / _RESIDUE_SEGMENT_DIR
 
 
 def _diff_is_nonempty(repo_root: Path) -> bool:
@@ -237,104 +239,6 @@ def _resolve_surface(
     return None, _ambiguous_surface_judgment_point(artifact_arg)
 
 
-def _parse_segment(path: Path, content_root: Path) -> dict[str, Any]:
-    """Parse one residue segment file's frontmatter + body.
-
-    Raises `ResidueAssembleError` on missing/unparseable frontmatter, a
-    missing required key, or an out-of-enum `surface`/`class` value — a
-    segment's frontmatter is its registration, so a malformed one is a
-    fail-loud authoring bug, never silently skipped.
-
-    `source_path` is emitted RELATIVE to *content_root* (e.g.
-    `skills/review/residue/plan-triage-and-exit.md`), never absolute — an
-    absolute operator filesystem path in an emitted envelope leaks the
-    operator's home directory, is not portable across machines (breaking
-    fixture-based testing of the emission), and was the single largest
-    redundant component of the payload.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ResidueAssembleError(f"{path}: could not read ({exc})") from exc
-
-    split = split_frontmatter(text)
-    if split is None:
-        raise ResidueAssembleError(f"{path}: no parseable frontmatter")
-
-    fm = split.fm_text
-    segment_id = read_fm_field_unquoted(fm, "segment_id")
-    surface = read_fm_field_unquoted(fm, "surface")
-    segment_class = read_fm_field_unquoted(fm, "class")
-    order_raw = read_fm_field_unquoted(fm, "order")
-
-    missing = [
-        key
-        for key, value in (
-            ("segment_id", segment_id),
-            ("surface", surface),
-            ("class", segment_class),
-            ("order", order_raw),
-        )
-        if value is None
-    ]
-    if missing:
-        raise ResidueAssembleError(
-            f"{path}: missing required frontmatter field(s): {missing}"
-        )
-
-    if surface not in SEGMENT_SURFACES:
-        raise ResidueAssembleError(
-            f"{path}: surface={surface!r} not one of {SEGMENT_SURFACES}"
-        )
-    if segment_class not in SEGMENT_CLASSES:
-        raise ResidueAssembleError(
-            f"{path}: class={segment_class!r} not one of {SEGMENT_CLASSES}"
-        )
-    try:
-        order = int(order_raw)
-    except ValueError as exc:
-        raise ResidueAssembleError(
-            f"{path}: order={order_raw!r} is not an integer"
-        ) from exc
-
-    return {
-        "segment_id": segment_id,
-        "surface": surface,
-        "class": segment_class,
-        "order": order,
-        "content": split.body_with_leading_newline.lstrip("\n"),
-        "source_path": path.relative_to(content_root).as_posix(),
-    }
-
-
-def _list_segment_files(residue_dir: Path) -> list[Path]:
-    """The directory listing IS the manifest — every non-hidden regular
-    file directly under *residue_dir*, sorted by filename for a stable
-    parse order (final ordering is still `order:`-driven, this only makes
-    parse-time errors reproducible)."""
-    if not residue_dir.is_dir():
-        raise ResidueAssembleError(
-            f"review-assemble residue: residue directory not found: {residue_dir}\n"
-            "  Run: coordinator:install OR verify the content root resolves to a "
-            "checkout that carries skills/review/residue/."
-        )
-    return sorted(
-        p for p in residue_dir.iterdir() if p.is_file() and not p.name.startswith(".")
-    )
-
-
-def _load_segments(residue_dir: Path, content_root: Path) -> list[dict[str, Any]]:
-    """Parse every segment file under *residue_dir*. Raises
-    `ResidueAssembleError` if the directory holds zero segment files —
-    an empty residue set is never silently treated as "nothing to say"."""
-    files = _list_segment_files(residue_dir)
-    if not files:
-        raise ResidueAssembleError(
-            f"review-assemble residue: {residue_dir} contains no segment files"
-        )
-    return [_parse_segment(path, content_root) for path in files]
-
-
 def _select_segments(
     segments: list[dict[str, Any]], surface: Optional[str]
 ) -> list[dict[str, Any]]:
@@ -342,13 +246,11 @@ def _select_segments(
     segment applies to every surface, including an unresolved one), sorted
     ascending by declared `order`. `surface=None` (unresolved) selects only
     the `shared` segments, per the module docstring's UNRESOLVED-surface
-    rule."""
-    applicable = [
-        segment
-        for segment in segments
-        if segment["surface"] == "shared" or segment["surface"] == surface
-    ]
-    return sorted(applicable, key=lambda segment: segment["order"])
+    rule. Thin wrapper over the shared loader's `select_segments`, supplying
+    review's own `surface` filter key and `{surface, "shared"}` /
+    `{"shared"}` active-value set."""
+    active_values = {"shared"} if surface is None else {surface, "shared"}
+    return select_segments(segments, filter_key="surface", active_values=active_values)
 
 
 def brief(
@@ -393,7 +295,12 @@ def brief(
 
     content_root = Path(resolve_content_root())
     residue_dir = _residue_dir(content_root)
-    segments = _load_segments(residue_dir, content_root)
+    segments = load_segments(
+        content_root,
+        _RESIDUE_SEGMENT_DIR,
+        filter_key="surface",
+        legal_values=SEGMENT_SURFACES,
+    )
 
     surface, judgment_point = _resolve_surface(
         artifact_arg, root, explicit_surface=explicit_surface

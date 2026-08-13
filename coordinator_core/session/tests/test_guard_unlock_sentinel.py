@@ -134,7 +134,15 @@ class TestConsumeOneShotSemantics:
 class TestAnnotateDenyDoesNotNameACodename:
     """AC6/register: the rendered deny text names no private-repo codename —
     the example-doctrine-repo-source pointer branch is gone (§ EM ruling, branch B) and the
-    settings-root pointer is unconditional and codename-free."""
+    settings-root pointer is unconditional and codename-free.
+
+    UPDATED 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-
+    handing-agents-the-keys.md AC-2, item 9 in `annotate_deny`'s
+    docstring): `annotate_deny` no longer appends anything at all -- B8
+    (`message_register._rules`, leg (d)) fires on ANY doc/wiki pointer into
+    the override-key/unlock surface, so even the bare pointer sentence this
+    class used to assert PRESENT is gone. These tests now assert the
+    envelope is returned byte-identical instead."""
 
     def _fire(self, **kwargs):
         out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
@@ -152,7 +160,8 @@ class TestAnnotateDenyDoesNotNameACodename:
 
     def test_doe_checkout_present_no_longer_changes_the_pointer(self, tmp_path, monkeypatch):
         """The example-doctrine-repo-checkout-present branch is gone: presence of a example-doctrine-repo
-        checkout on disk must not change the rendered pointer text."""
+        checkout on disk must not change the rendered text (now unchanged
+        either way, per item 9)."""
         import coordinator_core.doe_root_pointer as doe_root_pointer_mod
 
         doe_root = tmp_path / "example-doctrine-repo"
@@ -167,15 +176,20 @@ class TestAnnotateDenyDoesNotNameACodename:
         reason_without_checkout = out_without_checkout["hookSpecificOutput"]["permissionDecisionReason"]
 
         assert reason_with_checkout == reason_without_checkout
-        assert gus._SETTINGS_ROOT_WIKI_POINTER in reason_with_checkout
+        assert reason_with_checkout == "denied: reason"
 
 
 class TestAnnotateDenyDoesNotInlineTheUnlockRecipe:
     """AC-3/Task 1 revert (2026-08-13, C3): the 2026-08-12 regression
     re-inlined the sentinel filename shape, drop location, and per-firing
     session id/guard name into the rendered text. This class asserts the
-    reverted (pre-regression) shape: only the wiki/doc pointers render, none
-    of the recipe pieces do."""
+    reverted (pre-regression) shape: none of the recipe pieces render.
+
+    UPDATED 2026-08-13 (C4d, item 9): `test_doc_display_and_wiki_pointer_
+    are_rendered` used to assert those pointers PRESENT -- B8 (leg (d))
+    fires on that pointer sentence itself, so `annotate_deny` no longer
+    renders anything at all; that test now asserts the envelope is
+    returned byte-identical instead."""
 
     def _reason(self, **kwargs):
         out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
@@ -191,10 +205,8 @@ class TestAnnotateDenyDoesNotInlineTheUnlockRecipe:
     def test_guard_name_is_not_rendered(self):
         assert GUARD not in self._reason()
 
-    def test_doc_display_and_wiki_pointer_are_rendered(self):
-        reason = self._reason()
-        assert "doc-display-text" in reason
-        assert gus._SETTINGS_ROOT_WIKI_POINTER in reason
+    def test_reason_returned_unchanged(self):
+        assert self._reason() == "denied: reason"
 
     def test_assembled_sentinel_path_literal_is_not_rendered(self, tmp_path, monkeypatch):
         monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
@@ -223,12 +235,20 @@ class TestAnnotateDenyAgentIdSuppression:
         reason = self._reason(agent_id="some-agent-id")
         assert reason == "denied: reason"
 
-    def test_absent_agent_id_emits_the_block_for_a_resolved_em(self):
-        # A well-formed envelope (session_id present, agent_id absent) with
-        # no backpointer state resolves as a positively-resolved EM
-        # audience under `resolves_em_audience` -- emits.
+    def test_absent_agent_id_resolved_em_still_renders_nothing(self):
+        """Inverted 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-
+        stop-handing-agents-the-keys.md AC-2, item 9 in annotate_deny's
+        docstring): a well-formed envelope (session_id present, agent_id
+        absent) resolves as a positively-resolved EM audience under
+        `resolves_em_audience` -- this used to be the condition that made
+        the block EMIT. `annotate_deny` no longer has any render step left
+        to gate (B8's leg (d) fires on even the bare doc/wiki pointer this
+        block used to carry), so a resolved EM audience now gets the reason
+        back byte-identical too, same as every other case."""
         reason = self._reason(agent_id="")
-        assert "human-only affordance" in reason
+        assert reason == "denied: reason"
+        assert "human-only affordance" not in reason
+        assert "doctrine violation" not in reason
 
     def test_malformed_agent_id_degrades_to_terse(self, monkeypatch):
         """AC-3 inversion: a present-but-unresolvable agent_id used to emit

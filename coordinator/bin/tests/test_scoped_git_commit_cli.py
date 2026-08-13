@@ -32,6 +32,17 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: as the module docstring states, every case here
+# runs the real `scoped-git-commit` CLI as a subprocess against a scratch
+# git repo -- the property under test IS the real CLI's scope-enforcement
+# and agree-case/private-index commit mechanism, which no mock stands in
+# for. Fixture repos are built per-test (mutation-heavy: divergent-index,
+# ownership-claim scenarios), not hoisted to module scope. The spawn
+# ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _CLI = pathlib.Path(__file__).resolve().parents[1] / "scoped-git-commit"
 
 #: Deterministic test session identity (C4c ownership gate — see

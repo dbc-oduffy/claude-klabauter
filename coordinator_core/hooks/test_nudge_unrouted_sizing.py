@@ -27,6 +27,12 @@ import pytest
 from coordinator_core.hooks import nudge_unrouted_sizing as m
 from coordinator_core.session.scope import format_touch_event
 
+# Real git spawn is load-bearing: the nudge reads real touched-file/dirty
+# state via git to decide whether the narrated route was ever entered; the
+# repo fixture seeds per-test commit history that must not leak across
+# tests, so it stays per-test rather than module-scoped.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Fixture content — the real 2026-07-31 incident sizing-object
 # (state/sizings/2026-07-31-quick-wrap-a-lightweight-end-of-work-cer.yaml, example-doctrine-repo repo),

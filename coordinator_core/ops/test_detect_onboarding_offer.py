@@ -15,6 +15,15 @@ import pytest
 
 from coordinator_core.ops.detect_onboarding_offer import detect_onboarding_offer, main
 
+# Declared, not excused: this file spawns real git because the bash-oracle parity
+# contract (test-detect-onboarding-offer.sh) it ports depends on real repo state
+# (baseline commit presence) that `detect_onboarding_offer` reads via git plumbing --
+# no mock stands in for that. Each test builds its own tmp_path repo via
+# `_init_git_repo`, so there is no shared state to hoist to module scope. The spawn
+# ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _init_git_repo(path):
     subprocess.run(["git", "init", "--quiet"], cwd=str(path), check=True)

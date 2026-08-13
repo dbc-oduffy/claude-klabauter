@@ -23,6 +23,12 @@ import yaml
 
 from coordinator_core.ops.normalize_claimed_frontmatter import main, normalize_one
 
+# main()'s CLI-level walkDir/git-tracked-file gating (cases 6+) reads real
+# `git ls-files` output to decide which paths qualify for rewrite — the
+# behavior being pinned IS the git-tracked-vs-untracked distinction, which a
+# mock cannot supply without assuming the answer under test.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _write_fixture(dir_: Path, name: str, marker: str) -> Path:
     content = (

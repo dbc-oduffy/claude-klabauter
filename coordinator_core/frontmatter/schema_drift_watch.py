@@ -204,11 +204,18 @@ def scan_vendored_schema_drift(
         doe_repo_path (str | None): the clone root actually used.
         checked (int): number of vendored schemas compared.
         matched (list[str]): filenames confirmed byte-identical to example-doctrine-repo HEAD.
-        drifted (list[dict]): {schema, detail, direction, local_version, doe_version,
-            local_bump_class, doe_bump_class, doe_bump_note} per diverged schema.
+        drifted (list[dict]): {schema, detail, direction, divergence_kind,
+            local_version, doe_version, local_bump_class, doe_bump_class,
+            doe_bump_note} per diverged schema.
             direction is one of schema_validate.DIRECTION_WE_AHEAD /
             DIRECTION_WE_BEHIND / DIRECTION_BOTH (or None if an older advisory
             build didn't emit it) — see schema_validate._infer_drift_direction.
+            divergence_kind is "shape" / "prose-only" / None, orthogonal to
+            direction — whether the delta touches validation shape or is
+            confined to prose (schema_validate.check_schema_drift_advisory's
+            `divergence_kind` doc has the full contract) — passed through
+            verbatim, never recomputed here (see this module's "SHAPE TO AVOID"
+            note). Additive key (2026-08-13 parity-tail exchange).
             local_version/doe_version are the two sides' top-level
             `x-schema-version` values (str | None each, via
             schema_validate._read_schema_version) — passed through verbatim from
@@ -324,6 +331,7 @@ def _scan(
                 "schema": name,
                 "detail": detail,
                 "direction": result.get("direction"),
+                "divergence_kind": result.get("divergence_kind"),
                 "local_version": result.get("local_version"),
                 "doe_version": result.get("doe_version"),
                 "local_bump_class": result.get("local_bump_class"),

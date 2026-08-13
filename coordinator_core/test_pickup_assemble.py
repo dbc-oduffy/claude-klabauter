@@ -25,6 +25,13 @@ import coordinator_core.pickup_assemble as pa
 import coordinator_core.pickup_assemble.apply as apply_mod
 import coordinator_core.review_assemble.exec_auth_stamp as exec_auth_stamp
 
+# Real-git spawn is load-bearing: pickup_assemble's branch classifiers (handoff/
+# memo/spinoff/archived-baton) and its archive-fallback multi-hit rule read
+# ACTUAL git-tracked repo state (SHAs, tree layout) — no mock stands in for
+# that. Fixtures spin up sibling repos per-test, so the git-repo fixture is
+# not hoisted to module scope (mutation-heavy: writes/commits per test).
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _isolated_git_env(anchor: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
     """Builds the subprocess env every git-invoking helper in this file

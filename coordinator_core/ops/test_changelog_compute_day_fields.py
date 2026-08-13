@@ -42,6 +42,17 @@ from coordinator_core.ops.changelog_ops import (
     parse_review_record,
 )
 
+# Declared, not excused: this file spawns a real git process because
+# `_collect_commits`/`_commit_range` under test read real commit-window
+# history (date-window and commit-span paths, self-commit exclusion) that no
+# mock stands in for. Tests each build their own commit sequence via
+# `_commit`, so `_init_repo` is not hoisted to module scope -- per-test
+# isolation across distinct commit-history scenarios. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"

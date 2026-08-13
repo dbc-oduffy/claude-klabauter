@@ -93,6 +93,12 @@ assert _DISCHARGE_OP_NAME in _REGISTRY, (
     "coordinator_core.ops.handoff_discharge_criteria @register_op did not fire"
 )
 
+# HEAD-before/after and porcelain-status checks (lines ~2510-2530) confirm the
+# op writes nothing on every refusal path against a REAL working tree — a
+# mocked git would only prove the mock stayed uncalled, not that no bytes
+# landed on disk.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _AUTHOR_SESSION = "9220b333-be7f-4707-b5f2-9ebedf3e28ce"
 
 

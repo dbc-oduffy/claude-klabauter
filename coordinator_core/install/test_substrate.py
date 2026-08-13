@@ -57,6 +57,14 @@ from coordinator_core.install.substrate import (
     _write_bin_manifest,
 )
 
+# Real cmd.exe/subprocess spawns are load-bearing: the .cmd-forwarder tests
+# assert on batch-level quoting/parsing behaviour (`if not ""=="" if exist
+# ""`) that only cmd.exe's own parser can confirm -- a text-only assertion on
+# the generated body cannot prove the quoting survives paths with spaces.
+# Windows-only (skipif not win32); per-test isolation via tmp_path is already
+# module-scope-safe since each test renders its own forwarder pair.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # --- _resolve_baked_python_bin -----------------------------------------------
 #

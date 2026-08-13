@@ -36,6 +36,12 @@ from coordinator_core.ops.review_brightline_gate import (
 )
 from coordinator_core.session import claims
 
+# Declared, not excused: per this file's module docstring, the module under test
+# itself shells out to `git` -- the parity assertions match a bash oracle byte-for-byte
+# on real `range=... VERDICT=...` output, which mocking git would falsify. Each test
+# spawns/mutates its own repo per test (distinct commit graphs per scenario).
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(

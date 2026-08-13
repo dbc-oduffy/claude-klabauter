@@ -35,6 +35,16 @@ from coordinator_core.ops.fleet._common import Move, archive_and_commit, rm_and_
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 
+# Real-git spawn is load-bearing: `release_committed_claims` reads real
+# post-commit divergence/porcelain state that a mocked git cannot fake. The
+# `repo` fixture stays per-test (not hoisted to module scope) because each
+# test mutates it (seeds distinct tracked files, commits per-route) and
+# per-test isolation prevents cross-test claim/commit-state bleed. The spawn
+# ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(args, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)

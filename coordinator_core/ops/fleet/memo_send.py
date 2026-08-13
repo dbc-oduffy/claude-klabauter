@@ -1638,6 +1638,25 @@ async def _commit_delivered_memo(
     """
     env = _make_git_env()
 
+    async def _unstage_delivered_memo() -> None:
+        """Undo `git add` of memo_relpath (AC3) so a failed delivery leaves
+        the receiver's index exactly as it found it. Best-effort and never
+        raises, mirroring this function's own never-raise contract — an
+        unstage failure must not turn an already-reported commit failure
+        into a crash. `git reset -- <path>` is a safe no-op when the path
+        was never staged (e.g. the `git add` step itself failed).
+        """
+        try:
+            reset_proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(receiver_repo_path), "reset", "--", memo_relpath,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            await reset_proc.communicate()
+        except OSError:
+            pass
+
     try:
         head_check = await asyncio.create_subprocess_exec(
             "git", "-C", str(receiver_repo_path), "symbolic-ref", "-q", "HEAD",
@@ -1708,6 +1727,7 @@ async def _commit_delivered_memo(
             commit_proc = await asyncio.create_subprocess_exec(
                 "git", "-C", str(receiver_repo_path),
                 "-c", f"core.hooksPath={empty_hooks_dir}",
+                "-c", "commit.gpgsign=false",  # GAP-6: neutralise repo/global signing config for this TTY-less invocation
                 "commit", "-m", subject, "--", memo_relpath,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -1719,9 +1739,21 @@ async def _commit_delivered_memo(
                 commit_out.decode(errors="replace")
                 + commit_err.decode(errors="replace")
             ).lower()
-            if "nothing to commit" in combined or "nothing added to commit" in combined:
+            if (
+                "nothing to commit" in combined
+                or "nothing added to commit" in combined
+                or "no changes added to commit" in combined
+            ):
                 # Idempotent no-op — the memo path is already committed as-is.
+                # All three phrasings are git's "nothing staged/changed"
+                # family: "nothing to commit" (clean tree), "nothing added to
+                # commit" (untracked only), and "no changes added to commit"
+                # (tracked-but-unstaged, emitted when the tree has OTHER dirty
+                # files — routine under concurrent-EM git). Missing the third
+                # let an already-committed memo read as an uncommitted-
+                # delivery failure.
                 return CommitOutcome(committed=True, branch=branch_name, reason=None)
+            await _unstage_delivered_memo()
             commit_reason = (
                 commit_err.decode(errors="replace")
                 or commit_out.decode(errors="replace")
@@ -1737,6 +1769,10 @@ async def _commit_delivered_memo(
                 reason=f"git commit failed: {commit_reason}",
             )
     except OSError as exc:
+        # add and commit are both inside this try — an exception could land
+        # either before or after `git add` staged the path, so unstage
+        # unconditionally (AC3); see _unstage_delivered_memo's no-op note.
+        await _unstage_delivered_memo()
         reason = f"could not run git add/commit: {exc}"
         _LOG.warning(
             "memo_send: could not commit delivered memo in receiver repo %s (%s) "
@@ -1759,55 +1795,72 @@ async def _commit_delivered_memo(
 # both sufficient and immune to git's surrounding phrasing changing.
 _INDEX_LOCK_SIGNATURE = "index.lock"
 
-# Fixed delay before the single retry. Deliberately short — this op is on an
-# invocation budget (CLAUDE.md § Build & Test); anything that could block a
-# send for more than ~1s is out of bounds. This is long enough to outlast a
-# transient concurrent-session lock hold without meaningfully lengthening
-# the send.
-_INDEX_LOCK_RETRY_DELAY_SECONDS = 0.2
+# Delay between attempts, and the attempt cap (AC4). This machine's documented
+# norm is 50-70 concurrently active LLMs (docs/wiki/machine-load-norm.md), and
+# that doc explicitly calls out index.lock contention as a fleet-wide constant
+# under that load, with hold times running to multiple seconds — the retired
+# 200ms/single-attempt shape was sized against an idle box the doc says bounds
+# nothing. 5 attempts (1 initial + 4 retries) spaced 0.5s apart bounds total
+# added wait at ~2.0s: enough attempts to outlast a multi-second hold without
+# an unbounded loop, and well inside the 30s DISPATCH_TIMEOUT_SECS runaway
+# guard (coordinator_core/ipc.py) so this never itself becomes the hang.
+_INDEX_LOCK_RETRY_DELAY_SECONDS = 0.5
+_INDEX_LOCK_MAX_ATTEMPTS = 5
 
 
 async def _commit_delivered_memo_with_retry(
     receiver_repo_path: Path, memo_relpath: str, sender: str, title: str,
 ) -> tuple[CommitOutcome, bool]:
-    """Wrap `_commit_delivered_memo`, retrying EXACTLY ONCE when the failure
-    reason carries the `.git/index.lock` contention signature.
+    """Wrap `_commit_delivered_memo`, retrying up to `_INDEX_LOCK_MAX_ATTEMPTS`
+    times (bounded total wait) when the failure reason carries the
+    `.git/index.lock` contention signature.
 
-    Rationale (C2 plan body): a shared receiver tree with several concurrent
-    live sessions is this fleet's NORMAL operating condition, not an edge
-    case — a transient lock collision previously became a permanent silent
-    orphan (the defect C1 made observable; this closes it for the one
-    transient cause worth retrying).
+    Rationale (C1, docs/plans/2026-08-13-memo-send-delivery-commit-verify-
+    hole.md, AC4): a shared receiver tree with several concurrent live
+    sessions is this fleet's NORMAL operating condition, not an edge case —
+    a transient lock collision previously became a permanent silent orphan
+    (the defect this plan makes observable and non-destructive). The prior
+    single 200ms attempt was sized against an idle box; see
+    `_INDEX_LOCK_RETRY_DELAY_SECONDS`'s comment for the multi-second-hold
+    rationale behind the current bound.
 
     HARD CONSTRAINTS (do not relax without a plan amendment):
-      - Exactly one retry. No loop, no unbounded backoff, no configurable count.
+      - Bounded total wait via a fixed attempt cap and fixed delay — no
+        unbounded loop, no exponential backoff, no configurable count.
       - Matched on the OBSERVED REASON STRING only, case-insensitively, on the
         `index.lock` signature — a non-index.lock failure (a real conflict,
-        a hook rejection, a permissions error) is never retried; retrying an
-        unrelated failure just doubles the latency before the identical
-        outcome.
+        a hook rejection, a permissions error, including the gpgsign arm
+        AC5 handles directly) is never retried; retrying an unrelated
+        failure just adds latency before the identical outcome.
       - The never-raise contract still binds: `_commit_delivered_memo` itself
         never raises, and this wrapper adds no new raise path.
 
     Returns:
-        (final_outcome, retried) — `retried` is True iff the retry attempt
-        actually fired (i.e. the first attempt failed with an index.lock
-        reason), regardless of whether the retry itself succeeded.
+        (final_outcome, retried) — `retried` is True iff at least one retry
+        attempt actually fired (i.e. some attempt before the last failed with
+        an index.lock reason), regardless of whether the final attempt
+        succeeded.
     """
     outcome = await _commit_delivered_memo(receiver_repo_path, memo_relpath, sender, title)
-    if outcome.committed or not outcome.reason:
-        return outcome, False
-    if _INDEX_LOCK_SIGNATURE not in outcome.reason.lower():
-        return outcome, False
+    retried = False
+    attempt = 1
+    while (
+        not outcome.committed
+        and outcome.reason
+        and _INDEX_LOCK_SIGNATURE in outcome.reason.lower()
+        and attempt < _INDEX_LOCK_MAX_ATTEMPTS
+    ):
+        attempt += 1
+        retried = True
+        _LOG.info(
+            "memo_send: delivered-memo commit hit index.lock contention in receiver "
+            "repo %s — retrying (attempt %d/%d) after a short delay.",
+            receiver_repo_path, attempt, _INDEX_LOCK_MAX_ATTEMPTS,
+        )
+        await asyncio.sleep(_INDEX_LOCK_RETRY_DELAY_SECONDS)
+        outcome = await _commit_delivered_memo(receiver_repo_path, memo_relpath, sender, title)
 
-    _LOG.info(
-        "memo_send: delivered-memo commit hit index.lock contention in receiver "
-        "repo %s — retrying once after a short delay.",
-        receiver_repo_path,
-    )
-    await asyncio.sleep(_INDEX_LOCK_RETRY_DELAY_SECONDS)
-    retry_outcome = await _commit_delivered_memo(receiver_repo_path, memo_relpath, sender, title)
-    return retry_outcome, True
+    return outcome, retried
 
 
 # ---------------------------------------------------------------------------
@@ -2019,6 +2072,8 @@ def _append_sent_ledger(
     delivered_path: Path,
     receiver_repo_path: Path,
     in_reply_to: Optional[str],
+    delivery_commit_reason: Optional[str] = None,
+    delivery_commit_retried: Optional[bool] = None,
 ) -> Optional[str]:
     """Append-only local evidence that a send happened: one JSONL line per
     delivered receiver, in `<sender_worktree>/state/memo-outbox/sent-ledger.jsonl`.
@@ -2102,6 +2157,17 @@ def _append_sent_ledger(
       - Does NOT gate on `in_reply_to` being present — omitted sends emit
         `"in_reply_to": null`, never a missing key, so every line has the
         same schema regardless of which fields the memo itself supplied.
+
+    AC8 (docs/plans/2026-08-13-memo-send-delivery-commit-verify-hole.md):
+    `delivery_commit_reason`/`delivery_commit_retried` add two OPTIONAL keys
+    (`delivery_commit_reason`, `retried`) to the written row, defaulting to
+    `None` when the caller has no commit outcome to report (e.g. the
+    fan-out/test call paths that never pass them). ~1719 existing rows on
+    disk predate this pair and simply lack the keys — any reader MUST treat
+    their absence as `None`/unknown, never as a parse error or a required
+    field. This function does not itself read the ledger back, so it makes
+    no claim about existing readers; that tolerance is a reader-side
+    contract this docstring only records for future ledger consumers.
     """
     ledger_path = _sender_sent_ledger_path(sender_worktree)
     line = {
@@ -2113,6 +2179,8 @@ def _append_sent_ledger(
         "kind": kind,
         "delivered_to": _portable_delivered_to_form(receiver_repo_path, delivered_path),
         "in_reply_to": in_reply_to,
+        "delivery_commit_reason": delivery_commit_reason,
+        "retried": delivery_commit_retried,
     }
     appended_line = json.dumps(line, ensure_ascii=False) + "\n"
 
@@ -3090,6 +3158,8 @@ async def _memo_send(
             delivered_path=target_path,
             receiver_repo_path=receiver_repo_path,
             in_reply_to=in_reply_to,
+            delivery_commit_reason=delivery_commit.get("reason"),
+            delivery_commit_retried=delivery_commit.get("retried"),
         )
         ledger_appended = ledger_text is not None
         if ledger_appended:

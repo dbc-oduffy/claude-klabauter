@@ -30,6 +30,13 @@ import subprocess
 
 import pytest
 
+# Real git spawns throughout: the module under test wraps `git cat-file -e`
+# exit-code collapsing and `GIT_DIR` env-poisoning, both of which are git's
+# own process/env behaviour — no mock reproduces `GIT_DIR` inheritance or
+# real object-database exit codes. Each test builds its own receiver/sender
+# repo, so isolation is not hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core.git_scope import (
     PROBE_NO,
     PROBE_UNKNOWN,

@@ -62,6 +62,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
+# Real git history is load-bearing: the deleted-at-HEAD assertion (h) needs
+# an actual add-then-delete commit sequence -- a static-tree fixture (current
+# `git ls-files` state only, no history) would pass that assertion vacuously,
+# per this file's own module docstring note (g).
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Import guard — MUST precede any test so @register_op fires first.
 # ---------------------------------------------------------------------------

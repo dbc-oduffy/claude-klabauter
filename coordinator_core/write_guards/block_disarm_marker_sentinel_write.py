@@ -89,15 +89,13 @@ leg (dispatch M18-leg2 follow-up, 2026-07-30) -- closes the gap
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _sentinel_write_guard import extract_target_path, sentinel_write_denial  # noqa: E402
-from coordinator_core.bash_guards._blanket_disarm import MARKER_BASENAME  # noqa: E402
+from coordinator_core.write_guards._sentinel_write_guard import (
+    extract_target_path,
+    sentinel_write_denial,
+)
+from coordinator_core.bash_guards._blanket_disarm import MARKER_BASENAME
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]

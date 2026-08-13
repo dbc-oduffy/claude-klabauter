@@ -24,9 +24,21 @@ import asyncio
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops import research_dir_restructure as mod
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core as session_core
+
+# Declared, not excused: this file's `_mk_git_worktree`-based tests build a REAL git
+# repo because `safe_commit_offer.compute_offer` genuinely shells out to `git diff`/
+# `git ls-files` to compute the dirty-tree side of a session's scope -- no mock
+# stands in for that real diff/ls-files behaviour. Only the tests exercising that
+# offer path use it, each via its own tmp_path repo, so there is no shared state to
+# hoist. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.session import scope as session_scope
 
 TOPIC = "warp-core-ejection"

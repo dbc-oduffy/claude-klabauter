@@ -881,6 +881,16 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
     `--review-scope-kind` is spelled to match `wsc-tail.py`'s own parser, NOT
     shortened to the `review` dict's `scope_kind` key.
 
+    `reviewer_evidence` is forwarded on BOTH branches — as
+    `--review-reviewer-evidence` on the scalar branch, as a slice key on the
+    list branch. It is optional here and outside the all-or-nothing five, but
+    `review_trail_write._verify_reviewer_evidence` requires it for every
+    reviewer except `wsc-auto-adjudication`; that gate is advisory today and
+    designed to become enforcing, so a value accepted in `decisions["review"]`
+    and dropped in this argv silently defeats the correlation the gate exists
+    to establish. Spec backlink: cross-repo/inbox/2026-08-13-example-doctrine-repo-em-wsc-
+    tail-ipc-timeout-and-reviewer-evidence-drop.md § 2.
+
     Applies that same "silent drop is worse than a loud rejection" principle
     one layer up, at the `decisions` dict itself: an unrecognized flat
     `review_*` key on `decisions` (a caller's plausible-looking but wrong
@@ -921,6 +931,8 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
             payload = {k: str(entry[k]) for k in _REVIEW_REQUIRED_FIELDS}
             if entry.get("scope_kind"):
                 payload["scope_kind"] = str(entry["scope_kind"])
+            if entry.get("reviewer_evidence"):
+                payload["reviewer_evidence"] = str(entry["reviewer_evidence"])
             args += ["--review-slice", json.dumps(payload, sort_keys=True)]
     elif _review_fields_present(review):
         args += [
@@ -932,6 +944,8 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
         ]
         if review.get("scope_kind"):
             args += ["--review-scope-kind", str(review["scope_kind"])]
+        if review.get("reviewer_evidence"):
+            args += ["--review-reviewer-evidence", str(review["reviewer_evidence"])]
     return _directive("d-close-tail-args", "wsc-close", args)
 
 

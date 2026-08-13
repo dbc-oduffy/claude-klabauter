@@ -39,6 +39,18 @@ from coordinator_core.ops.changelog_ops import (
     upsert_reviewed,
 )
 
+# Declared, not excused: this file spawns a real git process because `main()`
+# resolves the repo root via real `git rev-parse`, and `_plans_touched` reads
+# frontmatter at specific historical commits (point-in-time git log/show
+# plumbing) that no mock stands in for. Several tests build commit spans
+# (`test_plans_touched_status_is_point_in_time_not_compose_time`,
+# `..._point_in_time_on_commit_span_path`) on top of a fresh `_init_repo`, so
+# the fixture is not hoisted to module scope -- per-test commit history would
+# collide across tests. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"

@@ -91,6 +91,20 @@ from coordinator_core.ops.distill_disposal_manifest import evaluate_candidate_re
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
 
+# Declared, not excused: the `git_repo` fixture and `_commit_dated` spawn real git
+# because the properties under test are real git object resolution --
+# `resolve_realized_by`/`_git_objects_exist` dispatch through `git cat-file` against
+# real full/short SHAs (the scientific-notation-coercion hazard needs a real
+# resolvable object, not a mock), and `check_distill_fate`'s absent-fate branch reads
+# real `git log`-derived commit dates to compare against DISTILL_FATE_STAMPING_CUTOVER.
+# `git_repo` stays function-scoped (default fixture scope) because
+# `test_distill_fate_absent_real_file_no_git_history_blocks_retain` and its siblings
+# add distinct uncommitted/differently-dated files per test that must not leak between
+# tests sharing a repo. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

@@ -12,6 +12,14 @@ import pytest
 
 from coordinator_core.git import repo_root
 
+# Real git is load-bearing for two tests in this file that shell `git
+# rev-parse` directly (not via repo_root): pinning that real git never emits
+# empty stdout on success except --show-prefix -- a property of the actual
+# binary's I/O contract that a mocked subprocess.run cannot assert. Other
+# tests in this file mock subprocess.run for the failure/memoization paths,
+# which do not need real git.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 @pytest.fixture(autouse=True)
 def _clear_memo():

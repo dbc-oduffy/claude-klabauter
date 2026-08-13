@@ -8,8 +8,21 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
 from coordinator_core.install.write_surface import StaticClause
 from coordinator_core.ops import configure_git as cg
+
+# Declared, not excused: this file spawns a real git process because the
+# hardening under test writes real git config (`gc.autoDetach`,
+# `core.checkStat`) and asserts idempotence against a real repeat run --
+# no mock stands in for real git-config read/write. Each test inits its own
+# throwaway repo, so `_init_repo` is not hoisted to module scope -- per-test
+# isolation (idempotent-rerun assertions need a known prior-state repo). The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(cwd, *args):

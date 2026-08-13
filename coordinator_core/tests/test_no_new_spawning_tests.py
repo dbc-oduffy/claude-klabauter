@@ -612,18 +612,11 @@ def _all_reports() -> list[FileSpawnReport]:
 _BASELINE: frozenset[str] = frozenset(
     {
         'bin/tests/test_commit_anchors_failopen.py',
-        'bin/tests/test_claude_klabauter_revendor.py',
-        'bin/tests/test_claude_klabauter_revendor_schema.py',
         'bin/tests/test_shell_init_guard.py',
-        'coordinator/bin/lib/test_emit_lesson_summaries.py',
         'coordinator/bin/lib/test_git_hook_install.py',
-        'coordinator/bin/test_coordinator_queue_append.py',
         'coordinator/bin/test_coordinator_tasks_mirror.py',
         'coordinator/bin/test_cross_repo_memo_c6.py',
-        'coordinator/bin/test_cross_repo_memo_draft.py',
-        'coordinator/bin/test_cross_repo_memo_roundtrip.py',
         'coordinator/bin/test_emit_goal_from_artifact.py',
-        'coordinator/bin/test_gen_launcher_shim.py',
         'coordinator/bin/test_generate_tested_platforms.py',
         'coordinator/bin/test_lint_frontmatter.py',
         'coordinator/bin/test_migrate_bug_backlog.py',
@@ -634,11 +627,7 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator/bin/test_sweep_argv_shared.py',
         'coordinator/bin/test_sweep_shipped_handoffs.py',
         'coordinator/bin/test_sync_cockpit_contract.py',
-        'coordinator/bin/tests/file-attribution/test_query_file_attribution.py',
         'coordinator/bin/tests/test_assert_cwd.py',
-        'coordinator/bin/tests/test_bug_sweep_probes.py',
-        'coordinator/bin/tests/test_cartography_cli.py',
-        'coordinator/bin/tests/test_cc_invoke_py.py',
         'coordinator/bin/tests/test_check_install_divergence.py',
         'coordinator/bin/tests/test_check_machine_path_leak.py',
         'coordinator/bin/tests/test_check_multi_event_hook_hardcoded_event.py',
@@ -646,29 +635,20 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator/bin/tests/test_claude_machine_local.py',
         'coordinator/bin/tests/test_cmd_rem_line_metacharacters.py',
         'coordinator/bin/tests/test_coordinator_doc_new_roadmap_baton_self_validation.py',
-        'coordinator/bin/tests/test_coordinator_doc_new_sizing_object_gate.py',
         'coordinator/bin/tests/test_coordinator_lesson_add_meta_routing.py',
-        'coordinator/bin/tests/test_handoff_deliverable_carry.py',
         'coordinator/bin/tests/test_handoff_has_live_children.py',
         'coordinator/bin/tests/test_learn_lessons_age_sweep.py',
         'coordinator/bin/tests/test_machine_local_ladder_parity.py',
         'coordinator/bin/tests/test_merge_release_notes_derive.py',
         'coordinator/bin/tests/test_no_bin_docstring_command_substitution.py',
         'coordinator/bin/tests/test_no_bin_polyglot_invariant.py',
-        'coordinator/bin/tests/test_parallel_review_gate_decision.py',
         'coordinator/bin/tests/test_parallel_review_orthogonality_guard.py',
-        'coordinator/bin/tests/test_percolate_gate.py',
-        'coordinator/bin/tests/test_plan_tasks_spine_and_harvest.py',
         'coordinator/bin/tests/test_publish_batch_delta_honest_reporting.py',
         'coordinator/bin/tests/test_reap_integrated_review_findings_native.py',
         'coordinator/bin/tests/test_record_platform_outcome.py',
         'coordinator/bin/tests/test_repo_census.py',
-        'coordinator/bin/tests/test_repo_setup_args_and_register.py',
-        'coordinator/bin/tests/test_scoped_git_commit_cli.py',
         'coordinator/bin/tests/test_shebang_removal_ordering_ratchet.py',
-        'coordinator/bin/tests/test_spinoff_deliverable_and_commit.py',
         'coordinator/bin/tests/test_testpaths_location_guard.py',
-        'coordinator/bin/tests/test_update_docs_probes.py',
         'coordinator/bin/tests/test_validate_fast_and_packageability.py',
         'coordinator/bin/tests/test_workweek_complete_drift_guards.py',
         'coordinator/bin/tests/test_wsc_coverage_gate_runner.py',
@@ -699,19 +679,14 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator/tests/test_check_no_monolith_completion_append.py',
         'coordinator/tests/test_check_plugin_drift_copy_install.py',
         'coordinator/tests/test_check_registry_codename_leak_keepset.py',
-        'coordinator/tests/test_check_version_consistency.py',
         'coordinator/tests/test_check_wsc_inline_budget.py',
         'coordinator/tests/test_chunk6_onboarding_setup_doctor.py',
         'coordinator/tests/test_classify_dispatch_shape.py',
-        'coordinator/tests/test_claude_doe.py',
         'coordinator/tests/test_complete_entry_rollup.py',
         'coordinator/tests/test_conformance_chain_preinstall_gate.py',
         'coordinator/tests/test_coordinator_auto_push.py',
-        'coordinator/tests/test_coordinator_ceremony_hook.py',
-        'coordinator/tests/test_coordinator_complete_entry.py',
         'coordinator/tests/test_coordinator_data_root.py',
         'coordinator/tests/test_coordinator_doc_new_handoff_archived_twin_guard.py',
-        'coordinator/tests/test_coordinator_ensure_post_commit_hook.py',
         'coordinator/tests/test_coordinator_initiative_cli.py',
         'coordinator/tests/test_coordinator_initiative_list_unattached.py',
         'coordinator/tests/test_coordinator_reap_stale_locks.py',
@@ -722,7 +697,6 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator/tests/test_coordinator_session_self_claim.py',
         'coordinator/tests/test_coordinator_setup_state.py',
         'coordinator/tests/test_coordinator_uninstall_trampoline.py',
-        'coordinator/tests/test_coordinator_write_review_trail_facade.py',
         'coordinator/tests/test_count_distill_backlog.py',
         'coordinator/tests/test_cruft_sweep_collapse.py',
         'coordinator/tests/test_cruft_sweep_concurrency.py',
@@ -779,7 +753,6 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator/tests/test_percolate_resolve_target.py',
         'coordinator/tests/test_percolate_transform.py',
         'coordinator/tests/test_posture_default_preservation.py',
-        'coordinator/tests/test_prepare_commit_msg_session_id.py',
         'coordinator/tests/test_probe_onboarding_currency.py',
         'coordinator/tests/test_prune_resolved_queue_entries.py',
         'coordinator/tests/test_publish_guard_before_mutate.py',
@@ -805,11 +778,9 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator/tests/test_repo_setup_phase3j_integration.py',
         'coordinator/tests/test_repomap_wrapper_resolution.py',
         'coordinator/tests/test_resolve_coordinator_clone.py',
-        'coordinator/tests/test_resolve_coordinator_clone_source_mode.py',
         'coordinator/tests/test_resolve_repo_path.py',
         'coordinator/tests/test_resolve_session_id.py',
         'coordinator/tests/test_review_brightline_gate_session_filter.py',
-        'coordinator/tests/test_review_brightline_two_oracle.py',
         'coordinator/tests/test_review_findings_scaffold.py',
         'coordinator/tests/test_round_trip_t3.py',
         'coordinator/tests/test_run_plan_tasks_spine_suites.py',
@@ -876,51 +847,31 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/baton_assemble/tests/test_deliverable_collision_warn.py',
         'coordinator_core/baton_assemble/tests/test_j_continuation_vs_fork_excise.py',
         'coordinator_core/benchmarks/tests/test_harness.py',
-        'coordinator_core/cartography/tests/test_chunk_table.py',
-        'coordinator_core/cartography/tests/test_churn.py',
         'coordinator_core/cartography/tests/test_file_index.py',
         'coordinator_core/cartography/tests/test_tree.py',
         'coordinator_core/contract/memo_conformance/test_doe_round_trip_conformance.py',
         'coordinator_core/dispatch/tests/test_provision.py',
-        'coordinator_core/distill/tests/test_delete_guard.py',
         'coordinator_core/distill/tests/test_log_append.py',
         'coordinator_core/distill/tests/test_ripe_filter.py',
-        'coordinator_core/execute_plan_assemble/tests/test_close_out_and_stamp.py',
         'coordinator_core/frontmatter/tests/test_handoff_lineage_corpus_dangling_refs.py',
-        'coordinator_core/frontmatter/tests/test_parity_handoff_ops.py',
-        'coordinator_core/frontmatter/tests/test_parity_memo_ops.py',
         'coordinator_core/frontmatter/tests/test_plan_sizing_object_field.py',
         'coordinator_core/frontmatter/tests/test_schema_drift_watch.py',
         'coordinator_core/frontmatter/tests/test_schema_validate.py',
-        'coordinator_core/git/test_commit_trailers.py',
-        'coordinator_core/git/test_repo_root.py',
-        'coordinator_core/hooks/test_auto_push.py',
-        'coordinator_core/hooks/test_nudge_harness_directive_dispatch.py',
-        'coordinator_core/hooks/test_nudge_unrouted_sizing.py',
-        'coordinator_core/hooks/tests/test_c4_ownership_inherited_at_dispatch_tripwires.py',
-        'coordinator_core/hooks/tests/test_lazy_hooks_channel.py',
         'coordinator_core/hooks/tests/test_track_touched_files_normalize.py',
         'coordinator_core/install/test_clone_sibling_repo.py',
         'coordinator_core/install/test_first_run.py',
         'coordinator_core/install/test_resolve_claude_klabauter.py',
         'coordinator_core/install/test_resolve_claude_klabauter_exec_cli.py',
-        'coordinator_core/install/test_substrate.py',
         'coordinator_core/install/test_substrate_resolution_journal.py',
-        'coordinator_core/install/test_wrap_hook_command_guarded.py',
         'coordinator_core/install/test_wrapper_onto_path.py',
         'coordinator_core/install/tests/test_observed_set_fold_install_surface.py',
         'coordinator_core/install/tests/test_scaffold_structure.py',
         'coordinator_core/ops/ceremony/tests/test_commit_exec_bit.py',
-        'coordinator_core/ops/ceremony/tests/test_commit_gates.py',
         'coordinator_core/ops/ceremony/tests/test_commit_gates_known_scope.py',
-        'coordinator_core/ops/ceremony/tests/test_commit_scoped.py',
         'coordinator_core/ops/ceremony/tests/test_commit_scoped_trailer_replay.py',
         'coordinator_core/ops/ceremony/tests/test_detached_render_commit.py',
-        'coordinator_core/ops/ceremony/tests/test_git_native.py',
         'coordinator_core/ops/ceremony/tests/test_post_commit_tail.py',
         'coordinator_core/ops/ceremony/tests/test_receipt_emit.py',
-        'coordinator_core/ops/ceremony/tests/test_render_handoff_tracker.py',
-        'coordinator_core/ops/ceremony/tests/test_renderers_handoff_lineage.py',
         'coordinator_core/ops/ceremony/tests/test_snapshot_diff_and_head.py',
         'coordinator_core/ops/ceremony/tests/test_update_docs_scan.py',
         'coordinator_core/ops/ceremony/tests/test_wsc_tail_chain_ancestry_waiver_bookkeeping.py',
@@ -935,7 +886,6 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/ops/emit/tests/test_emit_default_path.py',
         'coordinator_core/ops/emit/tests/test_emit_graceful_absent.py',
         'coordinator_core/ops/emit/tests/test_emit_parity.py',
-        'coordinator_core/ops/emit/tests/test_enrich.py',
         'coordinator_core/ops/emit/tests/test_file_attribution_section.py',
         'coordinator_core/ops/emit/tests/test_lessons_provenance_ref.py',
         'coordinator_core/ops/emit/tests/test_lma_cache.py',
@@ -943,18 +893,11 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/ops/emit/tests/test_per_repo_emission_integration.py',
         'coordinator_core/ops/emit/tests/test_routine_signals_native_ports.py',
         'coordinator_core/ops/fleet/tests/test_memo_check_addressee.py',
-        'coordinator_core/ops/fleet/tests/test_memo_send.py',
         'coordinator_core/ops/fleet/tests/test_setup_error_stderr_channel.py',
-        'coordinator_core/ops/memo/tests/test_memo_transition_commit_ownership.py',
-        'coordinator_core/ops/memo/tests/test_memo_transition_distill_fate.py',
-        'coordinator_core/ops/memo/tests/test_memo_transition_unit.py',
-        'coordinator_core/ops/session/tests/test_boot_sweep.py',
         'coordinator_core/ops/session/tests/test_end_to_end_wrap_all_four_classes.py',
         'coordinator_core/ops/session/tests/test_guard_settings_integrity.py',
         'coordinator_core/ops/session/tests/test_guard_settings_integrity_restore_rungs.py',
         'coordinator_core/ops/session/tests/test_in_process_writer_claim_path.py',
-        'coordinator_core/ops/session/tests/test_safe_commit_offer.py',
-        'coordinator_core/ops/session/tests/test_scope_report.py',
         'coordinator_core/ops/session/tests/test_stranded_baton_drain.py',
         'coordinator_core/ops/session/tests/test_sweep_consumed_handoffs.py',
         'coordinator_core/ops/test_agent_worktree_sweep.py',
@@ -962,43 +905,26 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/ops/test_assert_no_dangling_plan_backlinks.py',
         'coordinator_core/ops/test_backfill_initiative_fk.py',
         'coordinator_core/ops/test_blocked.py',
-        'coordinator_core/ops/test_bootstrap_orchestrate.py',
-        'coordinator_core/ops/test_bootstrap_repo.py',
         'coordinator_core/ops/test_central_run_due.py',
-        'coordinator_core/ops/test_changelog_compute_day_fields.py',
-        'coordinator_core/ops/test_changelog_ops.py',
-        'coordinator_core/ops/test_check_atlas_watch_drift.py',
         'coordinator_core/ops/test_check_auto_memory_drained.py',
         'coordinator_core/ops/test_check_auto_reconcile.py',
         'coordinator_core/ops/test_check_harvest_debt.py',
-        'coordinator_core/ops/test_check_posix_exec_assumptions.py',
-        'coordinator_core/ops/test_check_version_consistency.py',
         'coordinator_core/ops/test_check_windows_ssh_binary.py',
         'coordinator_core/ops/test_completion_ops.py',
-        'coordinator_core/ops/test_configure_git.py',
-        'coordinator_core/ops/test_coordinator_complete_entry.py',
         'coordinator_core/ops/test_coordinator_postsync_marker_resync_check.py',
         'coordinator_core/ops/test_coordinator_precommit_settings_tracking_check.py',
         'coordinator_core/ops/test_detect_changed_dependency_manifests.py',
-        'coordinator_core/ops/test_detect_onboarding_offer.py',
-        'coordinator_core/ops/test_detect_project_runtime.py',
         'coordinator_core/ops/test_detect_staged_rollback.py',
         'coordinator_core/ops/test_dirty_tree_gate.py',
-        'coordinator_core/ops/test_discover_working_repos.py',
         'coordinator_core/ops/test_dispatch_shape_classify.py',
-        'coordinator_core/ops/test_doc_content_verify.py',
         'coordinator_core/ops/test_doc_staleness.py',
-        'coordinator_core/ops/test_draft_plan_aging.py',
         'coordinator_core/ops/test_ensure_doe_clone.py',
         'coordinator_core/ops/test_fan_out_integrator.py',
         'coordinator_core/ops/test_find_polluter.py',
         'coordinator_core/ops/test_fold_execution_record.py',
         'coordinator_core/ops/test_generate_exec_summary.py',
-        'coordinator_core/ops/test_install_claude_klabauter_precommit_hook.py',
-        'coordinator_core/ops/test_install_meta_repo_precommit_hook.py',
         'coordinator_core/ops/test_install_meta_repo_precommit_hook_install_all.py',
         'coordinator_core/ops/test_install_post_sync_hooks.py',
-        'coordinator_core/ops/test_install_publish_repo_precommit_hook.py',
         'coordinator_core/ops/test_merge_branch_into_workstream.py',
         'coordinator_core/ops/test_merge_quiet_activity_gate.py',
         'coordinator_core/ops/test_migrate_branch_canonical_case.py',
@@ -1008,34 +934,23 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/ops/test_new_project_scaffold.py',
         'coordinator_core/ops/test_normalize_claimed_frontmatter.py',
         'coordinator_core/ops/test_orphan_branch_sweep.py',
-        'coordinator_core/ops/test_parse_resolves_trailer.py',
         'coordinator_core/ops/test_percolate_check_inverse_drift.py',
-        'coordinator_core/ops/test_reap_stale_locks.py',
-        'coordinator_core/ops/test_refresh_roadmap_callout.py',
         'coordinator_core/ops/test_renormalize_index.py',
         'coordinator_core/ops/test_repo_bootstrap.py',
-        'coordinator_core/ops/test_research_archive_workdir.py',
-        'coordinator_core/ops/test_research_dir_restructure.py',
         'coordinator_core/ops/test_resolve_baton_path.py',
-        'coordinator_core/ops/test_resolve_swept_baton.py',
         'coordinator_core/ops/test_review_freeze_diff.py',
-        'coordinator_core/ops/test_review_trail_write.py',
         'coordinator_core/ops/test_run_pre_ci_hooks.py',
         'coordinator_core/ops/test_run_semgrep_scan.py',
         'coordinator_core/ops/test_run_shellcheck_sweep.py',
         'coordinator_core/ops/test_scan_unresolved_ubt_records.py',
         'coordinator_core/ops/test_schema_drift_gate.py',
         'coordinator_core/ops/test_session_hierarchy_query.py',
-        'coordinator_core/ops/test_setup_chain_walker.py',
         'coordinator_core/ops/test_verify_arch_audit_atlas_refresh.py',
         'coordinator_core/ops/test_verify_fix_files_changed.py',
         'coordinator_core/ops/test_verify_orientation_cache_sync.py',
         'coordinator_core/ops/test_verify_scout_inventory_completeness.py',
         'coordinator_core/ops/test_whoami_run_tests.py',
-        'coordinator_core/ops/test_workday_complete_backfill_scan.py',
-        'coordinator_core/ops/test_workday_complete_step2_5_dirty_tree.py',
         'coordinator_core/ops/test_workday_start_cross_repo_memo_outbox_surface.py',
-        'coordinator_core/ops/test_workday_start_cross_repo_memo_surface.py',
         'coordinator_core/ops/test_workday_surface_stale_stash_entries.py',
         'coordinator_core/ops/test_workweek_complete_reverse_drift_gate.py',
         'coordinator_core/ops/test_write_identity_file.py',
@@ -1043,16 +958,12 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/ops/tests/test_artifact_emit_scope_touch.py',
         'coordinator_core/ops/tests/test_assert_plan_sizing_citation.py',
         'coordinator_core/ops/tests/test_audience_mismatch_scan.py',
-        'coordinator_core/ops/tests/test_cartography_chunk_table.py',
         'coordinator_core/ops/tests/test_cascade_backstop_sweep.py',
         'coordinator_core/ops/tests/test_cascade_baton_rows.py',
         'coordinator_core/ops/tests/test_cascade_retract.py',
-        'coordinator_core/ops/tests/test_changelog_parity.py',
         'coordinator_core/ops/tests/test_completion_ops_claim_state.py',
         'coordinator_core/ops/tests/test_completion_ops_concurrency.py',
         'coordinator_core/ops/tests/test_completion_ops_reconcile.py',
-        'coordinator_core/ops/tests/test_completion_parity.py',
-        'coordinator_core/ops/tests/test_coverage_gate_mint_chain_waivers.py',
         'coordinator_core/ops/tests/test_crossrepo_closure_status.py',
         'coordinator_core/ops/tests/test_cutover_advance.py',
         'coordinator_core/ops/tests/test_cutover_gate_schema_resolution.py',
@@ -1067,139 +978,83 @@ _BASELINE: frozenset[str] = frozenset(
         'coordinator_core/ops/tests/test_engine_drift.py',
         'coordinator_core/ops/tests/test_goal_kr_status.py',
         'coordinator_core/ops/tests/test_goals_match.py',
-        'coordinator_core/ops/tests/test_handoff_author_fork.py',
         'coordinator_core/ops/tests/test_handoff_author_fork_claim_state.py',
-        'coordinator_core/ops/tests/test_handoff_correct_body.py',
-        'coordinator_core/ops/tests/test_handoff_lineage_ancestry.py',
         'coordinator_core/ops/tests/test_handoff_match.py',
-        'coordinator_core/ops/tests/test_handoff_repair_archived_shipped_in.py',
         'coordinator_core/ops/tests/test_initiatives_serve.py',
         'coordinator_core/ops/tests/test_ipc_get_op_handler_lazy_resolution.py',
         'coordinator_core/ops/tests/test_lazy_ops_channel.py',
         'coordinator_core/ops/tests/test_memo_fate_backfill.py',
         'coordinator_core/ops/tests/test_memo_triage.py',
-        'coordinator_core/ops/tests/test_normalize_claimed_frontmatter.py',
-        'coordinator_core/ops/tests/test_op_registration.py',
         'coordinator_core/ops/tests/test_ownership_index.py',
         'coordinator_core/ops/tests/test_plan_match.py',
-        'coordinator_core/ops/tests/test_plan_status_transition.py',
-        'coordinator_core/ops/tests/test_plan_status_transition_commit_ownership.py',
         'coordinator_core/ops/tests/test_plan_tasks_grouping_digest.py',
-        'coordinator_core/ops/tests/test_plan_tasks_mutate.py',
         'coordinator_core/ops/tests/test_priority_drain.py',
         'coordinator_core/ops/tests/test_priority_set.py',
         'coordinator_core/ops/tests/test_queue_age_ping.py',
         'coordinator_core/ops/tests/test_queue_append_concurrency.py',
-        'coordinator_core/ops/tests/test_queue_close.py',
         'coordinator_core/ops/tests/test_queue_cluster.py',
-        'coordinator_core/ops/tests/test_queue_family.py',
-        'coordinator_core/ops/tests/test_queue_parity.py',
-        'coordinator_core/ops/tests/test_queue_scaffold_baton.py',
-        'coordinator_core/ops/tests/test_records_query.py',
         'coordinator_core/ops/tests/test_registry_map_sync.py',
         'coordinator_core/ops/tests/test_review_brightline_gate_claim_state.py',
         'coordinator_core/ops/tests/test_review_trail_readjudication_report.py',
         'coordinator_core/ops/tests/test_review_trail_write.py',
         'coordinator_core/ops/tests/test_roadmap_serve.py',
         'coordinator_core/ops/tests/test_strang10_invoke_smoke.py',
-        'coordinator_core/orientation/test_regenerate_cache.py',
-        'coordinator_core/percolate/tests/test_engine.py',
-        'coordinator_core/percolate/tests/test_rewrite.py',
-        'coordinator_core/percolate/tests/test_runtime_root.py',
         'coordinator_core/pickup_assemble/tests/test_claim_state_reads.py',
         'coordinator_core/plugin_health/tests/test_drift.py',
         'coordinator_core/reconcile/tests/test_ac27_differential_oracle.py',
-        'coordinator_core/reconcile/tests/test_commit_reality.py',
         'coordinator_core/reconcile/tests/test_commitments_recheck.py',
         'coordinator_core/review_assemble/test_exec_auth_stamp.py',
         'coordinator_core/review_assemble/test_residue.py',
-        'coordinator_core/roadmap/tests/test_audit.py',
-        'coordinator_core/session/tests/test_claims.py',
-        'coordinator_core/session/tests/test_claude_md_grant.py',
-        'coordinator_core/session/tests/test_cli_transport.py',
-        'coordinator_core/session/tests/test_core.py',
-        'coordinator_core/session/tests/test_grant.py',
-        'coordinator_core/session/tests/test_js_bridge_cli.py',
-        'coordinator_core/session/tests/test_liveness.py',
-        'coordinator_core/session/tests/test_scope.py',
-        'coordinator_core/session/tests/test_shape.py',
         'coordinator_core/session/tests/test_stale_claims.py',
         'coordinator_core/session/tests/test_stale_claims_claim_state.py',
-        'coordinator_core/session/tests/test_tier_u_gate.py',
-        'coordinator_core/session/tests/test_worktree_safety.py',
         'coordinator_core/session_ledger/test_aggregate_chain_loe.py',
-        'coordinator_core/subagent_sandbox/tests/test_engine.py',
-        'coordinator_core/subagent_sandbox/tests/test_provision_report.py',
         'coordinator_core/subagent_sandbox/tests/test_provision_report_touch_claim.py',
         'coordinator_core/test_archive_stamp.py',
         'coordinator_core/test_backlog_grind_assemble.py',
-        'coordinator_core/test_baton_assemble.py',
         'coordinator_core/test_ceremony_common_tail.py',
-        'coordinator_core/test_cockpit_contract_freshness.py',
         'coordinator_core/test_diff_scoped_tests.py',
         'coordinator_core/test_lazy_reexports.py',
         'coordinator_core/test_machine_resolver.py',
-        'coordinator_core/test_pickup_apply.py',
-        'coordinator_core/test_pickup_assemble.py',
         'coordinator_core/test_pickup_assemble_reply_closure.py',
         'coordinator_core/test_pickup_assemble_stamp_check.py',
         'coordinator_core/test_resolve_validation_cmd.py',
         'coordinator_core/testing/test_full_runner.py',
         'coordinator_core/testing/test_suite_mutex.py',
         'coordinator_core/tests/test_bash_guards_avoid_hooks_package.py',
-        'coordinator_core/tests/test_commit_anchors.py',
         'coordinator_core/tests/test_coverage_reviewed_set.py',
         'coordinator_core/tests/test_cross_repo_probe_git_scoping.py',
-        'coordinator_core/tests/test_dag_git_path_ever_tracked_cache.py',
         'coordinator_core/tests/test_dag_handoff_id_index.py',
-        'coordinator_core/tests/test_dag_resolve_target_tier3_dedup.py',
         'coordinator_core/tests/test_decision_object_envelope.py',
-        'coordinator_core/tests/test_detect_existing_claude_home.py',
-        'coordinator_core/tests/test_draft_plan_aging.py',
         'coordinator_core/tests/test_engine_version.py',
         'coordinator_core/tests/test_git_ancestry.py',
-        'coordinator_core/tests/test_git_scope.py',
         'coordinator_core/tests/test_gitattributes_eol_coverage.py',
         'coordinator_core/tests/test_handoff_gate_aging.py',
-        'coordinator_core/tests/test_hooks_bookkeeping.py',
         'coordinator_core/tests/test_hot_path_hook_import_budget.py',
         'coordinator_core/tests/test_install_chain_driven_leaf_seed_sweep.py',
         'coordinator_core/tests/test_install_publish_repo_precommit_hook.py',
-        'coordinator_core/tests/test_invoke_main.py',
-        'coordinator_core/tests/test_ipc_scope_touch_self_report.py',
-        'coordinator_core/tests/test_locked_write.py',
         'coordinator_core/tests/test_claude_klabauter_doctor_probe_selectors.py',
         'coordinator_core/tests/test_no_optional_locks_read_sites.py',
         'coordinator_core/tests/test_normalize_snippet.py',
         'coordinator_core/tests/test_package_installable.py',
-        'coordinator_core/tests/test_pickup_assemble_git_readmodel_parity.py',
         'coordinator_core/tests/test_pickup_assemble_import_perf.py',
         'coordinator_core/tests/test_pickup_assemble_scoped_commit.py',
-        'coordinator_core/tests/test_review_brightline_gate.py',
         'coordinator_core/tests/test_scope_soak_enable.py',
         'coordinator_core/tests/test_scope_warning_resolve.py',
         'coordinator_core/tests/test_session_attribution.py',
-        'coordinator_core/tests/test_sibling_fact.py',
         'coordinator_core/tests/test_strategic_emit.py',
         'coordinator_core/tests/test_strategic_generate.py',
-        'coordinator_core/tests/test_tracker_projection.py',
-        'coordinator_core/tests/test_tracker_store.py',
         'coordinator_core/tests/test_verify_orientation_cache_sync.py',
         'coordinator_core/workday_complete/test_brief_goal_close_day.py',
-        'coordinator_core/workstream_complete/test_apply.py',
         'coordinator_core/workstream_complete/test_chain_partition_verdict_store_claim_path.py',
-        'coordinator_core/workstream_complete/test_workstream_complete.py',
         'coordinator_core/workstream_complete/test_workstream_complete_contract.py',
         'coordinator_core/write_guards/tests/test_ac6_keep_hard_sweep.py',
-        'coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py',
         'coordinator_core/write_guards/tests/test_casefold_bypass_lint.py',
         'coordinator_core/write_guards/tests/test_guard_concrete_path_citations.py',
-        'coordinator_core/write_guards/tests/test_guard_doctrine_surface_edits.py',
         'coordinator_core/write_guards/tests/test_repo_root_shared_resolver.py',
     }
 )
 
-_BASELINE_COUNT = 585
+_BASELINE_COUNT = 440
 
 
 _ALTERNATIVE_MSG_RULE1 = (
@@ -1289,11 +1144,125 @@ def test_rule3_baseline_entries_are_not_stale() -> None:
     )
 
 
-def test_baseline_count_matches_header() -> None:
-    """Sanity anchor: the frozen baseline's size, asserted here rather than
-    only in a comment, so a hand-edit to _BASELINE that silently drifts
-    from its own documented count fails loudly."""
+def _parse_baseline_literal(source: str) -> list[str]:
+    """Return the `_BASELINE` frozenset literal's elements IN SOURCE ORDER,
+    duplicates preserved, by parsing `source` as Python.
+
+    Why an AST parse of the source and not `len(_BASELINE)`: the runtime
+    object cannot answer the question this exists to ask. `frozenset`
+    de-duplicates on construction, so a literal carrying the same path twice
+    yields a set one smaller than the text -- the one way the literal and the
+    loaded object can disagree without anything failing. A regex over the text
+    cannot answer it either: the literal is single-quoted, and a double-quoted
+    scan returns zero entries while looking like a successful measurement.
+    That is the shape that produced a phantom "618 declared vs 610 parseable"
+    discrepancy during the 2026-08-13 measurement -- an artifact of the
+    counting method, not drift in the data (the literal held 618 genuinely
+    distinct entries at `4f616dc4f^`).
+
+    Spec backlink: state/handoffs/2026-08-13-spawn-ratchet-tier-marker-gap.md
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AnnAssign):
+            continue
+        if not isinstance(node.target, ast.Name) or node.target.id != "_BASELINE":
+            continue
+        call = node.value
+        if not isinstance(call, ast.Call) or not call.args:
+            break
+        literal = call.args[0]
+        if not isinstance(literal, ast.Set):
+            break
+        return [e.value for e in literal.elts if isinstance(e, ast.Constant)]
+    raise AssertionError(
+        "could not locate a `_BASELINE: frozenset[str] = frozenset({...})` "
+        "literal in the supplied source -- the baseline's declaration shape "
+        "changed and this self-check no longer reads it"
+    )
+
+
+def _baseline_self_check(source: str, declared: int) -> list[str]:
+    """Return the self-check's complaints about `source` against `declared`,
+    empty when the literal and the declared count agree. Split out from the
+    test so a crafted desync can be run through the SAME code path the real
+    baseline is checked by -- a desync test that re-implements the check
+    proves only that the re-implementation works."""
+    elements = _parse_baseline_literal(source)
+    problems: list[str] = []
+    duplicates = sorted({e for e in elements if elements.count(e) > 1})
+    if duplicates:
+        problems.append(
+            f"{len(duplicates)} duplicate entry(ies) in the _BASELINE literal -- "
+            f"frozenset silently collapses these, so the baseline is smaller than "
+            f"it reads: {', '.join(duplicates)}"
+        )
+    if len(elements) != declared:
+        problems.append(
+            f"the _BASELINE literal holds {len(elements)} entry(ies) but the "
+            f"declared count is {declared} -- update the declared count in the "
+            f"same edit that changes the literal"
+        )
+    return problems
+
+
+def test_baseline_count_is_self_checking_against_its_own_literal() -> None:
+    """Sanity anchor: the declared count, the source literal, and the loaded
+    frozenset must all agree, and the literal must carry no duplicate entry.
+
+    `_BASELINE_COUNT` is deliberately NOT derived as `len(_BASELINE)` -- that
+    assertion would be tautological and would catch nothing. It is pinned
+    instead against the SOURCE literal, which is the artifact a hand-edit
+    actually touches. Three-way agreement is what makes a silent divergence
+    impossible: a dropped line moves the literal and the set together but not
+    the declared count, and a duplicated line moves the literal without moving
+    the set."""
+    problems = _baseline_self_check(
+        Path(__file__).read_text(encoding="utf-8"), _BASELINE_COUNT
+    )
+    assert not problems, "SPAWN-RATCHET self-check:\n" + "\n".join(
+        f"  {p}" for p in problems
+    )
     assert len(_BASELINE) == _BASELINE_COUNT
+
+
+def test_baseline_self_check_fails_loud_on_a_deliberate_desync() -> None:
+    """Proves the self-check above is load-bearing rather than merely present.
+    Both divergence shapes are run through `_baseline_self_check` itself: a
+    literal repeating an entry (invisible to `len(_BASELINE)`, since frozenset
+    collapses it) and a literal whose size disagrees with the declared count."""
+    duplicated = (
+        "_BASELINE: frozenset[str] = frozenset(\n"
+        "    {\n"
+        "        'a/test_one.py',\n"
+        "        'b/test_two.py',\n"
+        "        'a/test_one.py',\n"
+        "    }\n"
+        ")\n"
+    )
+    problems = _baseline_self_check(duplicated, declared=3)
+    assert any("duplicate" in p for p in problems), (
+        "a literal repeating an entry must be caught -- frozenset collapses it, "
+        "so nothing else in this guard can see it"
+    )
+
+    miscounted = (
+        "_BASELINE: frozenset[str] = frozenset(\n"
+        "    {\n"
+        "        'a/test_one.py',\n"
+        "        'b/test_two.py',\n"
+        "    }\n"
+        ")\n"
+    )
+    assert not _baseline_self_check(miscounted, declared=2), (
+        "a literal agreeing with its declared count must produce no complaint"
+    )
+    assert any(
+        "declared count" in p for p in _baseline_self_check(miscounted, declared=3)
+    ), "a declared count above the literal's true size must be caught"
+
+    with pytest.raises(AssertionError, match="declaration shape changed"):
+        _parse_baseline_literal("_OTHER = frozenset({'x'})\n")
 
 
 def test_known_string_corpus_files_produce_zero_hits() -> None:

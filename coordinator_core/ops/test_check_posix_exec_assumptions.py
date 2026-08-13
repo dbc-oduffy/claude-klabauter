@@ -52,6 +52,18 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     scan,
 )
 
+# Declared, not excused: this file spawns a real git process because the
+# detectors under test read real git-index state -- mode bits (100755 vs
+# 100644), symlink blobs, and case-collision entries -- that cannot be
+# produced by a mock filesystem, only by a real `git add`/index write. Each
+# test seeds its own repo with a specific violating (or non-violating)
+# fixture via `_init_repo`, so the fixture is not hoisted to module scope --
+# per-test isolation across dozens of distinct violation-class scenarios.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

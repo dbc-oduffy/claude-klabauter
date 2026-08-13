@@ -28,10 +28,17 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 import coordinator_core.ops.memo_transition as _memo_mod
 from coordinator_core.ops.memo_transition import _action, _claim, _release, _resolve
+
+# Real git spawn is load-bearing: this file asserts the actual `git commit`
+# lands, scoped to only the memo path (never a bare/broad pathspec) — the
+# assertion IS git's own commit/status output, not a mock of it. Per-test
+# tmp repos stay per-test: each case's dirty/committed state must not leak.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 # ---------------------------------------------------------------------------

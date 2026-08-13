@@ -31,6 +31,13 @@ import pytest
 
 from coordinator_core.ceremony_common.apply_halt import UnrecognizedDirective
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure
+
+# Real git spawn is load-bearing: the no-commit-row guard's commit-coverage
+# oracle (close_out_and_stamp._determine_shipped, reused not reimplemented)
+# reads real git commit history to decide coverage — no mock stands in for
+# git's own log here. Per-test repos stay per-test: each case's commit
+# history must not leak across tests.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.workstream_complete import apply as ws_apply
 from coordinator_core.workstream_complete import directives_session_hygiene
 

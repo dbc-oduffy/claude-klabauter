@@ -39,6 +39,13 @@ from pathlib import Path
 
 import pytest
 
+# Declared, not excused: a subset of this file's tests (the defect-A heartbeat
+# self-heal path) spawn real git via `_git_init` because the property under test is
+# the hook's own session-hub RESOLUTION against a real committed repo, which no mock
+# stands in for. `_git_init` is called per-test, not hoisted, because those tests also
+# mutate the fixture's `.git/coordinator-sessions/` tree under test.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers

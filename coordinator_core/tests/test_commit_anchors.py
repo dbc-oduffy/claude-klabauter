@@ -26,6 +26,13 @@ import pytest
 
 from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 
+# Declared, not excused: the "commit.anchors" op reads Plan/Plan-Id/Deliverable-Id
+# trailers off real STAGED DIFF content and asserts it performs no git writes
+# (COMPUTE_ONLY) -- both properties are of git's own staging/commit behaviour, not
+# reproducible against a mock. Tests build/mutate their own repo per-test via
+# `_init_repo`, so the fixture is not hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -48,6 +48,12 @@ from .fixtures.real_git import (
     real_git_repo,
 )
 
+# Real-git spawn is load-bearing: the docstring says it plainly -- index/
+# worktree divergence and a real compare-and-swap race on update-ref cannot
+# be exhibited by a mocked git. Per-test repo fixtures since several tests
+# mutate the shared index and history.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(

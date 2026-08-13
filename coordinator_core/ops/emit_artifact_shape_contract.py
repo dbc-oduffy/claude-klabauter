@@ -172,6 +172,24 @@ preserved there as the historical record; this port carries only the CURRENT pin
     commit (pattern + regen + pin refresh + handoff.schema.json 5.0.0 -> 6.0.0 +
     plan.schema.json 1.6.0 -> 2.0.0) closes the window. Cross-repo edits were declined in both
     directions per DR-127 — no standing commit grant exists either way.
+  6.1.0  (2026-08-13) `peer-set-entry` enters the bundle: example-doctrine-repo registered
+    `coordinator/schemas/peer-set-entry.schema.json` at dead2ed6b (per-repo peer-set entry,
+    code-comparison C2) and this emitter has never emitted it. `schema_count` 62 -> 63,
+    `$defs` +1, zero removed. MINOR per the bump rule below — the delta is entirely additive.
+    Classified rather than counted, and verified independently on both sides: 15 `$defs` change
+    shape, with zero enum narrows, zero required-additions and zero property removals across the
+    whole bundle. The one change that scans as a removal is not one —
+    `sizing-object.scout_evidence.items.type: string` becomes `items.anyOf: [string, object]`,
+    a widen.
+    SEQUENCING — same shape as 6.0.0 above, one severity down: the constant moves before the
+    body it describes. Example-doctrine-repo's `test_artifact_shape_contract_freshness.py` regenerates in-memory
+    through THIS module against THEIR live schemas, so with the constant at 6.0.0 their only
+    doors were a red freshness gate or a changed body stamped 6.0.0 — two bodies under one
+    stamp, which the bump rule forbids. No consumer is exposed in the window: the stamped
+    artifact lives in example-doctrine-repo's tree, so until they regenerate no committed bundle anywhere carries
+    6.1.0. They regenerate, commit the bundle, and own the DECISIONS.md row on their side; claude-klabauter
+    owns only this constant. Cross-repo edits stay declined in both directions per DR-127.
+    Requested in cross-repo/inbox/2026-08-13-example-doctrine-repo-em-contract-not-pinned-bump-6-1-0-owed-first.md.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -232,7 +250,7 @@ from coordinator_core.session.declared_writes import declare_write
 # Constants
 # ---------------------------------------------------------------------------
 
-CONTRACT_VERSION = "6.0.0"
+CONTRACT_VERSION = "6.1.0"
 
 # Env var read by main() to locate the example-doctrine-repo coordinator/ root (schemas/ input,
 # artifact-shape-contract/ default output). Set by the example-doctrine-repo-side polyglot trampoline,

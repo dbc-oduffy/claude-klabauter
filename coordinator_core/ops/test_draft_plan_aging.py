@@ -37,6 +37,17 @@ from coordinator_core.ops.draft_plan_aging import (
     resolve_plan_owner,
 )
 
+# Declared, not excused: this file spawns a real git process because
+# `_git_commit_epoch` under test reads a plan file's real last-commit
+# timestamp via `git log`, driving the staleness-age predicate -- no mock
+# stands in for real commit history/timestamps. Tests build distinct commit
+# histories per scenario (dangling baton refs, orphan detection, carry-
+# observability-fix landed-on dates), so `_init_repo` is not hoisted to
+# module scope -- per-test isolation. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 @pytest.fixture(autouse=True)
 def _reset_equivalence_memo():

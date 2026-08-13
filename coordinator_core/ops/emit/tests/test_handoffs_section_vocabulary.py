@@ -32,6 +32,17 @@ from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections import handoffs as handoffs_section
 from coordinator_core.ops.emit.sections import handoff_columns
 
+# The tail of this file (`test_compute_handoff_columns_resolves_shipped_in_
+# via_git` and its sibling) resolves `shipped_in` via a real `git log`
+# lookup against a throwaway repo -- the production behaviour under test is
+# that real git resolution, not a mocked stand-in for it. Most tests above
+# it mock `_query_records` only, not git, but the module-level marker covers
+# the file uniformly per Rule 2(b).
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _make_ctx(tmp_path: Path, repo_name: str = "test-org/test-repo") -> EmitContext:
     central = tmp_path / "state"

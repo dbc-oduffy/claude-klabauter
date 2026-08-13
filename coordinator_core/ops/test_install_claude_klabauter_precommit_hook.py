@@ -30,6 +30,16 @@ from coordinator_core.ops.install_claude_klabauter_precommit_hook import (
 )
 import coordinator_core.ops.install_claude_klabauter_precommit_hook as _mod
 
+# Declared, not excused: this file behaviorally executes the generated hook body
+# via real `sh` against stub gate scripts, and validates it with `sh -n`, to prove
+# the exit-code-clamping contract (never anything but 0/1) that no textual/mocked
+# check could demonstrate -- the property under test is the hook script's real
+# subprocess exit-code behaviour. Every test builds its own throwaway tmp_path
+# repo via `_git_init`, so there is no shared state to hoist. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
+# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git_init(path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(path)], check=True)

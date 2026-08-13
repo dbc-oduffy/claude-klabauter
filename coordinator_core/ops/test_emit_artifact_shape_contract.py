@@ -388,10 +388,10 @@ class TestRealTreeParity:
         # fresh from the emitter, so asserting against the constant that produced it
         # is a tautology that catches nothing. The literal is the pin: a version bump
         # must be an explicit two-place edit, never a silent side effect. Bumped to
-        # 6.0.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
-        # comment, 2026-08-05 dlv- id pattern narrow) — this is the second of the two
-        # places, previously left stale.
-        assert bundle["version"] == "6.0.0"
+        # 6.1.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
+        # comment, 2026-08-13 peer-set-entry additive minor) — this is the second of the
+        # two places.
+        assert bundle["version"] == "6.1.0"
 
     def test_no_external_ref_values_anywhere_in_bundle(self, bundle):
         # Regression for cross-repo/inbox/2026-08-03-example-doctrine-repo-em-artifact-contract-

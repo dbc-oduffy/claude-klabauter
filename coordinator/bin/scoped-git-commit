@@ -264,69 +264,18 @@ def _preflight_reap_stale_lock(worktree_root: str) -> None:
     root, so the engine's own sanctioned commit wrapper had no self-heal of
     its own (state/bug-backlog/2026-08-12-scoped-git-commit-is-not-a-raw-
     git-invoc-f4fff3a626fa.yaml, P1). A guard that pattern-matches command
-    text can never cover every wrapper; the wrapper has to self-heal. This
-    function is that self-heal, calling the SAME reaper
-    (`coordinator_core.ops.reap_stale_locks`) in-process rather than
-    reimplementing any part of its age/stability gate.
+    text can never cover every wrapper; the wrapper has to self-heal.
 
-    Cheap by construction: the overwhelming common case is "no lock at
-    all", and that case costs exactly one `os.path.exists` stat, no
-    subprocess. The reaper (and its own `git rev-parse` resolution,
-    age/stability re-sample, and exit-code ladder) is only invoked once a
-    lock file is actually present at the cheap-checked candidate path.
-
-    Negative-spec:
-      - Never treats a reaper failure as a commit failure. ANY exception —
-        import failure, subprocess failure, permission error, whatever —
-        is swallowed here; the wrapper proceeds exactly as if this function
-        had never been called. Fail-open is the whole point: a reaper
-        defect must never block a commit that would otherwise succeed.
-      - Never second-guesses or bypasses the reaper's own age/stability
-        gate. `reap_stale_locks.main()`'s exit code 2 (a FRESH index.lock —
-        a live commit may genuinely be in progress) is NOT reaped, and is
-        treated identically to exit 0 here: proceed to the normal git call
-        either way, and let git itself report if it is genuinely blocked.
-        That gate is the only thing standing between this and corrupting a
-        peer's in-flight commit on a shared tree.
-      - Never reimplements `do_reap`/`stale_and_stable`'s lock-selection or
-        removal logic here — the whole-repo sweep in
-        `reap_stale_locks.main()` is called as-is, so `index.lock`,
-        `next-index-*.lock`, and `objects/maintenance.lock` share one
-        reaper implementation regardless of caller.
-      - Never assumes `<worktree_root>/.git` is a directory. In a linked
-        `git worktree` or a submodule it is a FILE (a `gitdir: <path>`
-        pointer to the real git dir elsewhere), so
-        `<worktree_root>/.git/index.lock` can never exist there and a
-        directory-only gate silently never fires — the same narrowing class
-        `guard_reap_stale_git_lock.py` was independently fixed for. This
-        function does NOT parse that pointer file itself (that is
-        git-dir-discovery reimplementation, reserved to the reaper); it
-        pays one `os.stat` to tell directory from file, and for the file
-        case delegates entirely to `reap_stale_locks.main()`, which already
-        resolves the real git dir correctly via `--absolute-git-dir` /
-        `--git-common-dir`.
+    Thin trampoline over the shared leaf policy,
+    `coordinator_core.lock_preflight.preflight_reap_stale_lock` — see that
+    module's docstring for the full contract, negative-spec, and why BOTH
+    this CLI and `ops/ceremony/commit_pipeline.py::run_commit_pipeline` call
+    it (deliberately, not duplicatively).
     """
-    try:
-        git_entry = os.path.join(worktree_root, ".git")
-        try:
-            is_dir = os.path.isdir(git_entry)
-        except OSError:
-            return
-        if is_dir:
-            lock_path = os.path.join(git_entry, "index.lock")
-            if not os.path.exists(lock_path):
-                return
-        elif not os.path.exists(git_entry):
-            return
-        # else: `.git` is a file (linked worktree / submodule) -- the real
-        # git dir cannot be resolved cheaply, so the sweep is called
-        # unconditionally to let it resolve it correctly.
-        ensure_engine_on_path(os.path.abspath(__file__))
-        from coordinator_core.ops import reap_stale_locks
+    ensure_engine_on_path(os.path.abspath(__file__))
+    from coordinator_core.lock_preflight import preflight_reap_stale_lock
 
-        reap_stale_locks.main([])
-    except Exception:
-        return
+    preflight_reap_stale_lock(worktree_root)
 
 
 def _worktree_root(explicit: str | None) -> str:

@@ -44,6 +44,11 @@ assert _OP_NAME in _REGISTRY, (
     "coordinator_core.ops.cartography_chunk_table @register_op did not fire"
 )
 
+# build_chunk_table_artifact walks the git-tracked file set of the `git_repo`
+# fixture — the byte-identity and sort-determinism assertions depend on real
+# git-tracked-file discovery order, which a mock cannot reproduce faithfully.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 @pytest.fixture()
 def git_repo(tmp_path: Path) -> Path:

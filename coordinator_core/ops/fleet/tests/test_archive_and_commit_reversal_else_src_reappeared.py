@@ -37,7 +37,18 @@ import logging
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
+
+# Real-git spawn is load-bearing: the elif narrowing being pinned depends on
+# index/worktree divergence (a destination `git mv` refuses upfront vs. a
+# src pathspec it refuses before touching disk) that a mocked git has no
+# index to diverge from. Single test, single repo -- no module-scope hoist
+# needed. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:

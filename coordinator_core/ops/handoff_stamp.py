@@ -138,7 +138,10 @@ _LOG = logging.getLogger(__name__)
 # (ops.normalize_claimed_frontmatter) still bypasses this handler's RMW path
 # entirely (it has no live file to lock through `_handler`, only marker text
 # to translate) but no longer keeps its own copy of the value grammar — it
-# imports `_SHA_HEX_RE`/`_NO_COMMIT_TOKEN_RE` from `archive_stamp` and writes
+# imports `_SHA_HEX_RE`/`_NO_COMMIT_TOKEN_RE` from `shipped_in_tokens` (the
+# leaf module those two regexes were moved to, out of `archive_stamp`, to
+# break an import cycle -- state/debt-backlog/DSR-2026-08-13-archive-stamp-
+# import-order-drops-an-op-from-the-registry.yaml) and writes
 # `shipped_in_kind` in lockstep, same as this handler does.
 _SHIPPED_IN_KIND_ENUM = frozenset(
     {"ship-commit", "successor", "scope-derived", "no-commit"}

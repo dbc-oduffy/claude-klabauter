@@ -36,6 +36,12 @@ import pytest
 
 from coordinator_core.ops.plan_status_transition import _PROG, main
 
+# Pins that `_stamp_implemented` commits its own terminal status flip — the
+# entire point of the suite is asserting a REAL commit lands (HEAD SHA moves,
+# porcelain status clears), which a mocked git cannot demonstrate since the
+# assertion IS the real commit-ownership side effect.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _GIT_ENV_KEYS = {
     "GIT_AUTHOR_NAME": "test",
     "GIT_AUTHOR_EMAIL": "t@t",

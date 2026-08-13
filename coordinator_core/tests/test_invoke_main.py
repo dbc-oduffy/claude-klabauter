@@ -65,8 +65,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.invoke.__main__ import _exit_code_for_response
 from coordinator_core.ipc import STRUCTURAL_PIN_ERROR
+
+# Declared, not excused: main() calls os._exit, so it cannot be tested in-process --
+# every test spawns a real `sys.executable -m coordinator_core.invoke` child and
+# asserts on returncode/stdout/stderr, which is the entrypoint's own process-exit
+# contract, not mockable. Each test spawns its own child (no shared fixture) because
+# the property under test IS that fresh-process boundary.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
 # Project root — needed for PYTHONPATH injection so subprocess can import

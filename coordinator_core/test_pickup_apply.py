@@ -30,6 +30,13 @@ import pytest
 
 import coordinator_core.pickup_assemble.apply as pa_apply
 
+# Real-git spawn is load-bearing: AC10's scoped-commit test proves the
+# explicit pathspec survives a dirty shared index with real sibling-session
+# files staged, which requires an actual git index/worktree — no mock stands
+# in for that. Fixtures spin up per-test repos (mutation-heavy: commits/
+# staged-index state per test), so not hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _ENV_KEYS_TO_ISOLATE = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 
 

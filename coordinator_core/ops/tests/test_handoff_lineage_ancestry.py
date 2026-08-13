@@ -36,6 +36,13 @@ from typing import Optional
 
 import pytest
 
+# `_make_git_repo` spawns real git because the ancestry op resolves the
+# common_dir (.git path) of a real repo to locate `state/handoffs/*.md` —
+# no mock stands in for git's own repo-root/common-dir discovery. Each test
+# builds its own repo/handoff fixtures, so isolation cannot be hoisted to
+# module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Import guard — fires ALL @register_op(...) side-effects, including
 # "handoff.lineage_ancestry".  MUST precede all test functions.

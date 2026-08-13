@@ -41,6 +41,12 @@ from coordinator_core.subagent_sandbox.provision_report import _PLAN_DERIVABLE_L
 from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
 
+# Real git repo is load-bearing: resolve_git_root() is asserted against a
+# real `git init`'d tree per this file's own module docstring so it behaves
+# exactly as it does against a production checkout -- mirrors
+# test_engine.py's git_repo fixture convention.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 REPORT_SIDECAR_TYPE = "coordinator:code-reviewer"
 INELIGIBLE_TYPE = "coordinator:executor"
 

@@ -155,9 +155,8 @@ _TRIVIAL_JUSTIFICATION_HINT = """
 """
 
 _TRIVIAL_PUNT_HINT = """
-[hook] COORDINATOR_QUEUE_PUNT was also set but its value was trivial --
-[hook] that var is operator-only anyway (pre-launch only); add the
-[hook] `justification:` line above instead of relying on it.
+[hook] The operator-only env fallback was also set but its value was
+[hook] trivial -- add the `justification:` line above instead.
 """
 
 _REASON_TEMPLATE = """No reason given for this {queue_label} entry ({file_path_norm}). Example:

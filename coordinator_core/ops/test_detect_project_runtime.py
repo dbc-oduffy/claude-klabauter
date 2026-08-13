@@ -11,7 +11,18 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.detect_project_runtime import main, render, scan
+
+# Declared, not excused: `scan()`'s git-marker detection is part of the golden-oracle
+# parity contract this file ports (detect-project-runtime.sh) -- a real repo is
+# needed to prove the ".git present" marker case, which no mock stands in for. Each
+# call site builds its own tmp_path fixture, so there is no shared state to hoist.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _touch(p: Path) -> None:

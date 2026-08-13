@@ -22,8 +22,20 @@ import textwrap
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops import check_atlas_watch_drift
 from coordinator_core.ops.check_atlas_watch_drift import run
+
+# Declared, not excused: this file spawns real git because the ported bash-oracle
+# contract (test_atlas_watch_drift.py, example-doctrine-repo) depends on real commit/mtime
+# state in `docs/architecture/systems/` that `check_atlas_watch_drift.run()` reads
+# via git plumbing -- no mock stands in for that. Each test builds its own fresh
+# tmp_path repo via `_init_repo`, so mutation-heavy staleness scenarios need
+# per-test isolation, not a module-scope hoist. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 # ---------------------------------------------------------------------------

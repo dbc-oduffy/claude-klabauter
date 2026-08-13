@@ -158,6 +158,22 @@ class CorpusRow:
     setup: Optional[Callable[[Path, pytest.MonkeyPatch], Dict[str, str]]] = field(
         default=None
     )
+    #: AUDIENCE AXIS (chunk C6, docs/plans/2026-08-13-guard-messages-stop-
+    #: handing-agents-the-keys.md): `None` (every existing row, unchanged --
+    #: backward-compatible default so no existing `CorpusRow(...)` call site
+    #: needs editing) means "as-authored" -- whatever identity `row.setup`
+    #: itself supplies (absent for most rows, which is EM-audience by
+    #: `session.identity.resolves_em_audience`'s own "well-formed envelope,
+    #: both legs empty -> True" contract; `_EXECUTOR_IDENTITY`/
+    #: `_REVIEWER_IDENTITY` for the handful of identity-gated rows, which is
+    #: subagent-audience). `fire_row_for_audience` below FORCES a row's
+    #: identity to one of the two explicit values regardless of this field
+    #: or the row's own `setup`, for a row that needs both audiences proven
+    #: independent of its authored identity -- see that function's own
+    #: docstring for why this is a firing-time override, not a second field
+    #: consulted by `fire_row` itself (which stays audience-agnostic,
+    #: unchanged).
+    audience: Optional[str] = None
 
 
 def _from_factory(setup_name: str) -> Callable[[Path, pytest.MonkeyPatch], Dict[str, str]]:
@@ -365,6 +381,63 @@ def _bump_outside_repo_write_fire_setup(
         _CMD_OVERRIDE_KEY: f"cp {src} {dest}",
         _CWD_OVERRIDE_KEY: str(anchor),
     }
+
+
+#: AUDIENCE AXIS (chunk C6) -- the two explicit audience values
+#: `fire_row_for_audience` forces. `SUBAGENT_AUDIENCE` reuses this module's
+#: own `_EXECUTOR_IDENTITY` (already the shared literal `test_cd_prefix_
+#: bypass.py`'s own fixtures use, per that dict's own docstring) rather than
+#: minting a third identity payload shape. `EM_AUDIENCE` is the EMPTY
+#: identity dict -- no `agent_id` key at all -- which is exactly the
+#: "well-formed envelope, both legs empty" shape `session.identity.
+#: resolves_em_audience` resolves `True` for (a fresh per-cell `session_id`
+#: with no backpointer file on disk resolves `subagent_type` to empty too),
+#: matching every existing row that does not opt into an explicit identity
+#: today.
+SUBAGENT_AUDIENCE = "subagent"
+EM_AUDIENCE = "em"
+
+
+def fire_row_for_audience(row: CorpusRow, audience: str) -> GuardCapture:
+    """Fire `row` exactly as `fire_row` would, EXCEPT the identity fields
+    (`agent_id`/`agent_type`) in the final payload are forced to
+    `SUBAGENT_AUDIENCE`'s or `EM_AUDIENCE`'s shape, overriding whatever
+    `row.setup` itself supplied -- the audience-axis proof (AC-1/AC-5) needs
+    the SAME underlying cell fired under BOTH audiences, independent of
+    which identity (if any) the row happened to author for its own
+    triggering purpose. `row.audience` itself is not consulted here (see
+    that field's own docstring on `CorpusRow`) -- this is a firing-time
+    override, always explicit at the call site."""
+    if audience not in (SUBAGENT_AUDIENCE, EM_AUDIENCE):
+        raise ValueError(f"unknown audience {audience!r}; expected {SUBAGENT_AUDIENCE!r} or {EM_AUDIENCE!r}")
+    session_id = "guard-message-corpus-audience-%s-%s" % (audience, uuid.uuid4().hex)
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-audience-") as scratch:
+        scratch_dir = Path(scratch)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("CLAUDE_CODE_SESSION_ID", session_id)
+            extra: Dict[str, Any] = dict(row.setup(scratch_dir, mp)) if row.setup else {}
+            cmd = extra.pop(_CMD_OVERRIDE_KEY, row.input)
+            cwd = extra.pop(_CWD_OVERRIDE_KEY, str(scratch_dir))
+            payload: Dict[str, Any] = {
+                "tool_name": "Bash",
+                "tool_input": {"command": cmd},
+                "session_id": session_id,
+                "cwd": cwd,
+            }
+            payload.update(extra)
+            if audience == SUBAGENT_AUDIENCE:
+                payload.update(_EXECUTOR_IDENTITY)
+            else:
+                payload.pop("agent_id", None)
+                payload.pop("agent_type", None)
+            return capture_one_guard(
+                row.guard,
+                cmd,
+                session_id,
+                cwd,
+                payload,
+                host_is_windows=row.host_is_windows,
+            )
 
 
 def fire_row(row: CorpusRow) -> GuardCapture:

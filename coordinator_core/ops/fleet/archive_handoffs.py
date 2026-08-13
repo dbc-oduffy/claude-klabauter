@@ -1366,11 +1366,18 @@ async def _handle_act_handoffs(
             try:
                 pre_stamp_bytes = handoff_path.read_bytes()
             except OSError as exc:
-                _LOG.warning(
-                    "fleet.archive_completed_handoffs: could not snapshot %s "
-                    "before heir stamp — proceeding without a restore point: %s",
-                    handoff_path, exc,
-                )
+                # Negative spec: never stamp without a restore point. A
+                # dest-conflict skip below has no way to revert a stamp it
+                # cannot undo, which is the wedge this path exists to close.
+                failed.append({
+                    "id": cid,
+                    "reason": (
+                        f"could not snapshot {handoff_path} before heir "
+                        f"stamp — refusing to stamp without a restore "
+                        f"point: {exc}"
+                    ),
+                })
+                continue
             _stamp_heir_shipped(handoff_path)
 
         dst = _archive_dest(worktree, handoff_path)

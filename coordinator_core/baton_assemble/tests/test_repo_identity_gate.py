@@ -24,6 +24,15 @@ from coordinator_core.baton_assemble import apply as ba_apply
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _write_artifact
 
+# `ba.brief`/`ba_apply.apply` (called below with `repo_root=None`) reach
+# `resolve_repo_root`, which shells out to real git to resolve the checkout
+# root against the real `.git` marker this file's fixtures construct -- the
+# MISMATCH/UNRESOLVED gate verdicts under test depend on that real
+# resolution, no mock stands in for it. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):

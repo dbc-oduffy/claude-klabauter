@@ -14,6 +14,15 @@ import pytest
 
 from coordinator_core.ops import reap_stale_locks as rsl
 
+# Declared, not excused: this file spawns real git because `reap_stale_locks`'s own
+# port-parity contract (against reap-stale-locks.bats/test-coordinator-reap-stale-
+# locks.sh) requires real repo/lock-file mtime state that no mock stands in for. The
+# `repo` fixture builds a fresh tmp_path repo per test via `_init_repo`, so mutation
+# (lock seeding, aging) needs per-test isolation, not a module-scope hoist. The spawn
+# ratchet's `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)

@@ -1815,6 +1815,23 @@ def _commit_delivered_memo(
     """
     memo_relpath = os.path.relpath(receiver_side_path, receiver_path)
 
+    def _unstage_delivered_memo() -> None:
+        """Undo `git add` of memo_relpath (AC3) so a failed delivery leaves
+        the receiver's index exactly as it found it. Best-effort and never
+        raises, mirroring this function's own never-raise contract — an
+        unstage failure must not turn an already-reported commit failure
+        into a crash. `git reset -- <path>` is a safe no-op when the path
+        was never staged (e.g. the `git add` step itself failed).
+        """
+        try:
+            subprocess.run(
+                ["git", "-C", receiver_path, "reset", "--", memo_relpath],
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            pass
+
     try:
         head_check = subprocess.run(
             ["git", "-C", receiver_path, "symbolic-ref", "-q", "HEAD"],
@@ -1912,6 +1929,7 @@ def _commit_delivered_memo(
                 # under concurrent-EM git). Missing the third let an already-
                 # committed memo read as an uncommitted-delivery failure.
                 return (branch_name, just_created)
+            _unstage_delivered_memo()
             print(
                 f"cross-repo-memo: WARNING — 'git commit' of delivered memo failed in "
                 f"receiver repo ({(commit_result.stderr or commit_result.stdout).strip()}); "
@@ -1920,6 +1938,10 @@ def _commit_delivered_memo(
             )
             return None
     except OSError as exc:
+        # add and commit are both inside this try — an exception could land
+        # either before or after `git add` staged the path, so unstage
+        # unconditionally (AC3); see _unstage_delivered_memo's no-op note.
+        _unstage_delivered_memo()
         print(
             f"cross-repo-memo: WARNING — could not commit delivered memo in receiver "
             f"repo ({exc}); file was written but left uncommitted.",
@@ -1989,16 +2011,21 @@ def _verify_delivery_landed(receiver_path: str, receiver_side_path: str) -> bool
         return False
 
     memo_relpath = os.path.relpath(receiver_side_path, receiver_path)
-    tracked = subprocess.run(
-        ["git", "-C", receiver_path, "ls-files", "--error-unmatch", "--", memo_relpath],
+    # AC1: read HEAD, not the index — `git ls-files --error-unmatch` passes
+    # for a path that was `git add`ed and then failed to commit (it's still
+    # in the index), which is exactly the false-positive state this oracle
+    # exists to catch. `cat-file -e HEAD:<path>` only succeeds when the path
+    # is actually present in the committed tree.
+    at_head = subprocess.run(
+        ["git", "-C", receiver_path, "cat-file", "-e", f"HEAD:{memo_relpath}"],
         capture_output=True,
         text=True,
     )
-    if tracked.returncode != 0:
+    if at_head.returncode != 0:
         print(
-            f"Delivered (uncommitted): {receiver_side_path} is on disk but is not "
-            f"tracked in {receiver_path} — it will be lost if the receiver cleans "
-            f"their tree. Commit it there or re-send.",
+            f"cross-repo-memo: WARNING — engine reported delivery but {memo_relpath} "
+            f"is not committed at HEAD in {receiver_path}. Re-send with "
+            f"--supersedes {memo_relpath}.",
             file=sys.stderr,
         )
         return False
@@ -2013,8 +2040,13 @@ def _verify_delivery_landed(receiver_path: str, receiver_side_path: str) -> bool
         capture_output=True,
         text=True,
     )
-    sha = described.stdout.strip() if described.returncode == 0 else "?"
-    branch_name = branch.stdout.strip() if branch.returncode == 0 else "?"
+    # AC2: the "verified" line must never carry a blank SHA. `git log -1
+    # --format=%h` for a path that IS at HEAD always exits 0, but keying the
+    # fallback on returncode alone misses the case where stdout is empty for
+    # some other reason (e.g. a shallow clone) — key on empty stdout too.
+    described_sha = described.stdout.strip()
+    sha = described_sha if described.returncode == 0 and described_sha else "?"
+    branch_name = branch.stdout.strip() if branch.returncode == 0 and branch.stdout.strip() else "?"
     print(f"Delivery verified: on disk and committed as {sha} on '{branch_name}'.")
     return True
 
@@ -3325,14 +3357,6 @@ def _send_via_engine(
             file=sys.stderr,
         )
 
-    # COMMITTED ACTION: receiver write succeeded, and claude-klabauter's memo.send op
-    # has already stamped outbox_path (if any) `status: sent` in place
-    # (_stamp_sender_outbox_sent). Archive the stamped draft (if any) to
-    # state/memo-outbox/sent/ regardless of what follows — `_cmd_send`-only
-    # cleanup; the flag-only send arm passes outbox_path=None and skips this.
-    if outbox_path is not None:
-        _archive_sent_outbox_draft(outbox_path, sender_root)
-
     # The claude-klabauter memo.send op commits the delivered memo into the receiver repo
     # itself, all hooks neutralized via `-c core.hooksPath=<empty-tmpdir>`
     # (DR-211 D2 criterion 3 retired; DR-214 mechanism — see claude-klabauter
@@ -3352,6 +3376,16 @@ def _send_via_engine(
     abs_receiver = os.path.abspath(receiver_side_path)
     print(f"Receiver-side: {abs_receiver}")
     landed = _verify_delivery_landed(receiver_path, abs_receiver)
+
+    # AC7 (docs/plans/2026-08-13-memo-send-delivery-commit-verify-hole.md):
+    # archive the stamped draft (if any) only AFTER verification, so a
+    # failed/uncommitted delivery leaves the draft in place for `send
+    # <topic>` to retry — archiving before verification ran previously left
+    # a failed delivery with no draft to retry. `_cmd_send`-only cleanup;
+    # the flag-only send arm passes outbox_path=None and skips this.
+    if landed and outbox_path is not None:
+        _archive_sent_outbox_draft(outbox_path, sender_root)
+
     print(f"Hand the PM this path for relay: {abs_receiver}")
     print("Reminder: Hand the PM the receiver path — PM-relay is still the primary channel.")
     # Review: code-reviewer (Finding 3) — pass the already-materialized
@@ -4603,6 +4637,26 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
             "--scoped-to-seam", metavar="SEAM", default=None,
             help="[legacy form] scoped_to.seam — the boundary/interface this "
                  "decision applies at.",
+        )
+        parser.add_argument(
+            "--supersedes", metavar="PATH", default=None,
+            help="[legacy form] Path to a prior memo this one supersedes "
+                 "(exercises supersession chain). Written as `supersedes:` "
+                 "in frontmatter.",
+        )
+        parser.add_argument(
+            "--self-receipt", action="store_true", default=False,
+            help="[legacy form] Dispatcher IS the receiver (central-EM acting "
+                 "in trio repo on its own behalf). Writes the terminal "
+                 "status=actioned with action_taken_at=<now>. Requires "
+                 "--decision.",
+        )
+        parser.add_argument(
+            "--decision",
+            choices=["accepted", "declined", "partial", "superseded"],
+            default=None,
+            help="[legacy form] Decision outcome. Required when --self-receipt "
+                 "is set.",
         )
 
     # draft subparser — argument schema (handler is _cmd_draft)

@@ -18,6 +18,15 @@ from pathlib import Path
 
 import pytest
 
+# Every test here builds real anchor/foreign git repos and drives real
+# `git commit`/`git status` invocations through `dispatch.evaluate_payload_json`
+# to prove the cross-repo hard-deny gate reads actual repo boundaries -- no
+# mock stands in for `git -C <path>` argv parsing and real on-disk repo
+# identity. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.session import guard_unlock_sentinel as gus

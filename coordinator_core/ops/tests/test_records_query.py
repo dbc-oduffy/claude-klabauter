@@ -77,6 +77,11 @@ assert len(_REGISTRY) > 0, (
     "all @register_op decorators must have fired at module import time"
 )
 
+# Query grammar tests seed real commits (lines ~107-119) so the op's --where
+# clauses run against actual repo/HEAD state, not a stubbed reader — the
+# suite's own purpose is byte-parity with the real records-query surface.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _OP_NAME = "records.query"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

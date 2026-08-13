@@ -16,8 +16,21 @@ import subprocess
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock
 
+import pytest
+
 import coordinator_core.ops.workday_start_cross_repo_memo_surface as surface_mod
 from coordinator_core.ops.workday_start_cross_repo_memo_surface import main
+
+# Declared, not excused: `test_main_performs_no_archival_in_a_real_git_worktree`
+# spawns a real git process because it deliberately regression-tests the
+# git-root-resolved path (as opposed to the env-override fixture the rest of
+# this file uses) against a REAL worktree, per its own docstring -- a prior
+# defect only reproduced there. No mock stands in for real git-root
+# resolution. This is the file's only spawn site, so it is left as its own
+# self-isolated test rather than hoisted. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _write_memo(dirpath, fname, frontmatter):

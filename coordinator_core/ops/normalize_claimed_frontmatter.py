@@ -24,7 +24,7 @@ For each record whose body contains `<!-- consumed: YYYY-MM-DD [notes] -->`:
   - inserts `shipped_in:` (+ lockstep `shipped_in_kind:`) if absent and marker
     carries CONFORMING notes (a bare hex SHA -> `shipped_in_kind: ship-commit`,
     or the sanctioned substantively-shipped-no-commit:<YYYY-MM-DD> token ->
-    `shipped_in_kind: no-commit` -- see `coordinator_core.archive_stamp`'s
+    `shipped_in_kind: no-commit` -- see `coordinator_core.shipped_in_tokens`'s
     `_SHA_HEX_RE` / `_NO_COMMIT_TOKEN_RE` below, the single choke point this
     module's own bespoke value-grammar copy was retired in favor of, DR-096).
     Non-conforming notes (prose, annotated SHAs) are refused, not written; the
@@ -124,7 +124,7 @@ from coordinator_core.frontmatter.primitives import (
     replace_fm_field,
     split_frontmatter,
 )
-from coordinator_core.archive_stamp import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
+from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -140,7 +140,7 @@ _PROG = "normalize-claimed-frontmatter"
 
 # shipped_in shape guard: DR-096 (example-doctrine-repo 2026-07-26 ruling) retires this
 # module's own bespoke copy of the value grammar in favor of the single choke
-# point's -- `coordinator_core.archive_stamp._SHA_HEX_RE` /
+# point's -- `coordinator_core.shipped_in_tokens._SHA_HEX_RE` /
 # `_NO_COMMIT_TOKEN_RE` (the same shape `stamp_shipped_in` validates a `sha`
 # override against). Accepts a bare hex SHA (7-64 chars) OR the sanctioned
 # substantively-shipped-no-commit:<YYYY-MM-DD> token. Whole-value match via

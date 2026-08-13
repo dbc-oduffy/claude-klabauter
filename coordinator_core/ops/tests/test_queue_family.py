@@ -20,6 +20,13 @@ from pathlib import Path
 
 import pytest
 
+# `_init_repo`/`_seed` spawn real git because `load_family_records` resolves
+# real worktree/common-dir layout (see `test_load_family_records_with_git_
+# common_dir_finds_records`) — no mock stands in for git's own common-dir
+# discovery. Each test seeds and commits its own repo, so the fixture is not
+# hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core.ops.queue_family import (
     FAMILY_FIELDS,
     FAMILY_TO_RECORD_TYPE,

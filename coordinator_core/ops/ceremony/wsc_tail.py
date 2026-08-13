@@ -1582,7 +1582,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             *[f"future-dated:{p}" for p in stamp_outcome.skipped_future_dated],
             *[f"live-children:{p}" for p in stamp_outcome.skipped_live_children],
             *[f"indeterminate:{p}" for p in stamp_outcome.skipped_indeterminate],
-            *[f"already-shipped:{p}" for p in stamp_outcome.skipped_already_shipped],
+            *[f"already-terminal:{p}" for p in stamp_outcome.skipped_already_terminal],
         ],
         "failed": [f"{e.get('path', '')}: {e.get('error', '')}" for e in stamp_outcome.errors],
     }

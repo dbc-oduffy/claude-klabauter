@@ -22,6 +22,16 @@ import pytest
 import coordinator_core.ops.install_publish_repo_precommit_hook as _mod
 from coordinator_core.ops.install_publish_repo_precommit_hook import main
 
+# Declared, not excused: this file behaviorally executes the emitted pre-commit
+# hook via real `sh`/`git` (per the D2 fix's own contract) to prove the hook's
+# LOUD-fail-on-missing-interpreter behaviour, which no mock of git/sh could
+# demonstrate -- the property under test is the hook script's real exit-code
+# contract when run as a subprocess. Each test builds its own tmp_path oss-repo
+# via `_make_oss_repo`, so there is no shared state to hoist. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
+# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git_init(path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(path)], check=True)

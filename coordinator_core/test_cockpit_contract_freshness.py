@@ -35,6 +35,12 @@ import pytest
 import coordinator_core.workday_complete.brief as workday_brief
 import coordinator_core.workday_complete.cockpit_contract_freshness as ccf
 
+# Real-git spawn is load-bearing: only the NETWORK-facing seams (ls-remote et
+# al.) are monkeypatched per the module docstring above — the ancestry-walk
+# and annotated-tag-peeling tests build and read ACTUAL local git repos/tags
+# (_is_ancestor, _peel_to_commit real behaviour) that no mock stands in for.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _FAKE_ROOT = Path("/fake/doe-root")
 
 

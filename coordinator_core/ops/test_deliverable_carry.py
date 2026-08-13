@@ -303,6 +303,72 @@ def test_equivalence_map_absent_row_still_raises(tmp_path):
         )
 
 
+# ---------------------------------------------------------------------------
+# Dropped-join guard, plan-input axis (2026-08-13): a plan handed in as
+# `predecessor` (not `plan_file`) never armed the refusal before this change
+# -- `baton-assemble brief handoff <plan-path>` minted a fresh id under a
+# plan that dropped its join, silently. `predecessor_is_plan_input` is the
+# caller-asserted flag that arms the second door of the same refusal.
+# ---------------------------------------------------------------------------
+
+
+def test_predecessor_is_plan_input_no_id_anywhere_raises(tmp_path):
+    """Flag set, no rung produces an id -> DroppedDeliverableJoinError, message
+    names the predecessor path and the plan-input axis."""
+    predecessor = tmp_path / "plan.md"
+    _write_frontmatter(predecessor, plan_id="pln-example-abc123")  # no deliverable_id
+
+    with pytest.raises(DroppedDeliverableJoinError) as excinfo:
+        resolve_deliverable_and_initiative(
+            read_frontmatter_field,
+            mint,
+            None,
+            str(predecessor),
+            predecessor_is_plan_input=True,
+        )
+
+    message = str(excinfo.value)
+    assert str(predecessor) in message
+    assert "plan input" in message
+
+
+def test_predecessor_is_plan_input_with_id_still_carries(tmp_path):
+    """Flag set, predecessor DOES carry a deliverable_id -> still carries it,
+    no raise."""
+    predecessor = tmp_path / "plan.md"
+    _write_frontmatter(
+        predecessor,
+        plan_id="pln-example-abc123",
+        deliverable_id="dlv-plan-input-carried-xyz789",
+        initiative="init-plan-input",
+    )
+
+    dlvr_id, initiative_id = resolve_deliverable_and_initiative(
+        read_frontmatter_field,
+        mint,
+        None,
+        str(predecessor),
+        predecessor_is_plan_input=True,
+    )
+
+    assert dlvr_id == "dlv-plan-input-carried-xyz789"
+    assert initiative_id == "init-plan-input"
+
+
+def test_predecessor_is_plan_input_flag_unset_mints_from_slug_unchanged(tmp_path):
+    """Flag omitted (default) on the exact same no-id plan-shaped predecessor
+    -> today's mint-from-slug, byte-identical, no raise."""
+    today = datetime.date.today().strftime("%Y%m%d")
+    predecessor = tmp_path / "plan.md"
+    _write_frontmatter(predecessor, plan_id="pln-example-abc123")  # no deliverable_id
+
+    dlvr_id, _initiative_id = resolve_deliverable_and_initiative(
+        read_frontmatter_field, mint, None, str(predecessor)
+    )
+
+    assert dlvr_id.startswith(f"dlv-{today}-handoff-")
+
+
 def test_ac6_unreadable_additional_predecessor_leg_degrades_silently(tmp_path):
     """AC6: an additional-predecessor path that is not a readable file
     degrades silently to no contribution (matching the plan/predecessor

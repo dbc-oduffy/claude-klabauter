@@ -27,6 +27,13 @@ from coordinator_core.ops.draft_plan_aging import (
     scan,
 )
 
+# Declared, not excused: `_has_recent_real_work_commit` reads real git log/commit
+# timestamps to decide plan staleness -- the property under test is that real-commit
+# recency signal, which no mock reproduces. Tests build/mutate their own repo per test
+# (distinct commit histories per aging scenario), so the fixture is not hoisted to
+# module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _TODAY = date(2026, 7, 16)
 
 

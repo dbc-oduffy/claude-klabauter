@@ -37,6 +37,17 @@ from coordinator_core.ops.review_trail_write import (
     write_review_trail_entry,
 )
 
+# Declared, not excused: this file spawns a real git process because
+# `_reject_empty_sha_range` under test only engages against a real
+# `git rev-parse --is-inside-work-tree` repo -- the empty-sha_range/noop
+# distinction is a real-repo contract no mock stands in for. The 4 tests
+# that use it each init their own throwaway one-commit repo, so
+# `_init_git_repo_with_one_commit` is not hoisted to module scope --
+# per-test isolation. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _init_git_repo_with_one_commit(worktree: Path) -> str:
     """Create a minimal real git repo at ``worktree`` with one commit;

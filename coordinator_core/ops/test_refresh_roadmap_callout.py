@@ -23,6 +23,18 @@ from coordinator_core.ops.refresh_roadmap_callout import (
     main,
 )
 
+# Declared, not excused: the `test_self_commit_*` tests spawn a real git
+# process because `main(..., self_commit=True)` under test performs a real
+# `git add`/`git commit` (opt-in detached-render self-commit disposition)
+# and the tests assert against real `git log`/`git show` output -- no mock
+# stands in for the commit-or-not decision. Each test seeds/commits its own
+# repo, so `_init_git_repo` is not hoisted to module scope -- per-test
+# isolation (each test's assertions depend on a fresh, known commit log).
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _make_stub_index(root: Path, roadmap_id: str, body: str) -> Path:
     roadmap_dir = root / "state" / "roadmap" / roadmap_id

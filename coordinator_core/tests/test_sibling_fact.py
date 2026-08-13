@@ -37,6 +37,12 @@ import pytest
 from coordinator_core import sibling_fact
 from coordinator_core.sibling_fact import resolve_leg
 
+# Declared, not excused: the `commit_ancestor` leg (f) resolves real merge-base
+# ancestry, including the "git not on PATH"/unreachable-SHA indeterminate cases, which
+# no mock reproduces. Tests build/mutate their own repo per test (distinct commit
+# histories per scenario, including AC7's fabricated-vs-real-history fixture).
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Git repo helper (mirrors coordinator_core/tests/test_git_ancestry.py convention)

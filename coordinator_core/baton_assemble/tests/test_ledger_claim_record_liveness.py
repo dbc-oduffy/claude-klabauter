@@ -47,10 +47,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import coordinator_core.baton_assemble.apply as ba_apply
 import coordinator_core.session.liveness as session_liveness
 from coordinator_core.ops.fleet._common import handoff_claim_dir
 from coordinator_core.test_baton_assemble import _git, _init_repo, _write_artifact
+
+# `_init_repo`/`_git` (imported above) spawn real git to build the fixture
+# repo `_dispatch_handoff_supersede_predecessor` reads -- this file pins a
+# real call-ORDER property (DR-242 gate vs. liveness-free ledger read)
+# against production code operating over real `.git/` claim-ledger state, no
+# mock stands in for it. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _PRED_REL = "state/handoffs/predecessor.md"
 

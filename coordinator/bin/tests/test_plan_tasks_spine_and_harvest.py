@@ -75,6 +75,19 @@ import subprocess
 import sys
 import tempfile
 
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+# Declared, not excused: the harvest CLI tests below spawn a real python3
+# subprocess to exercise `coordinator-harvest-deferrals`'s actual exit-code/
+# stdout contract end to end (idempotency counts, dedup notes) -- no
+# in-process call observes that subprocess-boundary behaviour. Each test
+# also `git init`s its own `mkdtemp` fixture dir per test (see the module
+# docstring: exercises the git-root fallback leg), not hoisted to module
+# scope, since every test isolates its own harvest state under
+# QUEUE_APPEND_OUTPUT_ROOT/LESSON_PROMOTE_OUTBOX_ROOT rooted at that dir.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+
 try:
     import yaml as _yaml  # PyYAML — available on most coordinator installs
     _YAML_AVAILABLE = True

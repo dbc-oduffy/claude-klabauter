@@ -95,12 +95,20 @@ def test_em_message_names_memo_channel(tmp_path):
     assert "cross-repo-memo" in text
 
 
-def test_em_message_contains_exact_clear_line(tmp_path):
+def test_em_message_never_contains_the_clear_line(tmp_path):
+    """Inverted 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-
+    handing-agents-the-keys.md AC-2): the EM channel used to carry this
+    line verbatim -- a fully-parameterized, ready-to-paste `touch
+    allow-xrepo-write-<session-id>` recipe is exactly what AC-1/AC-2
+    forbid for either audience, EM included. This test used to assert the
+    line PRESENT; it now asserts it ABSENT, the same property
+    `test_subagent_message_never_contains_the_clear_line` already pinned
+    for the subagent channel."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
-    expected_line = marker.clear_line(gitdir, _SESSION_ID)
+    forbidden_line = marker.clear_line(gitdir, _SESSION_ID)
     text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
-    assert expected_line in text
+    assert forbidden_line not in text
 
 
 def test_subagent_message_names_target_repo(tmp_path):
@@ -458,37 +466,42 @@ def test_every_variant_fits_the_message_prose_cap_bytes(tmp_path, label, text_fn
 # ---------------------------------------------------------------------------
 
 
-def test_em_clear_line_is_executable_verbatim(tmp_path):
+def test_em_message_carries_no_executable_clear_recipe(tmp_path):
+    """Inverted 2026-08-13 (C4d): this test used to prove the EM channel's
+    `touch` line executes verbatim to clear the bump -- that pasteable
+    recipe is gone from the EM channel entirely now (AC-2), so the
+    property to pin is its absence, not its executability."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
     text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
-    touch_path = _clear_command(text)[len("touch "):]
-
-    assert not marker.marker_present(gitdir, _SESSION_ID)
-    subprocess.run(["touch", touch_path], check=True)
-    assert marker.marker_present(gitdir, _SESSION_ID)
+    assert "touch " not in text
+    assert marker.MARKER_PREFIX not in text
 
 
-def test_publish_em_clear_line_is_executable_verbatim(tmp_path):
+def test_publish_em_message_carries_no_executable_clear_recipe(tmp_path):
+    """Inverted 2026-08-13 (C4d) -- same property as
+    `test_em_message_carries_no_executable_clear_recipe`, for the PUBLISH
+    class EM template."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
     text = message.render_publish_em_message(_TARGET_REPO, _MIRROR_OWNER, gitdir, _SESSION_ID)
-    touch_path = _clear_command(text)[len("touch "):]
-
-    assert not marker.marker_present(gitdir, _SESSION_ID)
-    subprocess.run(["touch", touch_path], check=True)
-    assert marker.marker_present(gitdir, _SESSION_ID)
+    assert "touch " not in text
+    assert marker.MARKER_PREFIX not in text
 
 
-def test_clear_line_matches_a_machine_where_none_has_ever_existed(tmp_path):
-    """AC15's own framing: a machine with no prior marker file at all."""
+def test_clear_line_never_rendered_even_on_a_machine_where_none_has_ever_existed(tmp_path):
+    """Inverted 2026-08-13 (C4d): AC15's original framing (a machine with
+    no prior marker file at all) used to prove the clear line rendered
+    correctly in that state; the clear line is gone from the EM channel
+    entirely now, so the property is that it never renders, regardless of
+    on-disk marker state."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
     assert list(gitdir.iterdir()) == [
         e for e in gitdir.iterdir() if not e.name.startswith(marker.MARKER_PREFIX)
     ]
     text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
-    assert marker.clear_line(gitdir, _SESSION_ID) in text
+    assert marker.clear_line(gitdir, _SESSION_ID) not in text
 
 
 # ---------------------------------------------------------------------------
@@ -762,30 +775,33 @@ def test_render_bump_message_default_raw_target_is_backward_compatible(tmp_path)
 
 
 def test_default_surface_renders_byte_identical_bash_copy(tmp_path):
-    """`surface` defaults to `SURFACE_BASH` -- every pre-existing caller
-    (both Bash guards, which pass no `surface` keyword) keeps rendering the
-    exact pre-chunk-3 phrase, unchanged."""
+    """`surface` defaults to `SURFACE_BASH` -- both pre-chunk-3 phrases this
+    test used to assert are gone from the EM channel entirely (2026-08-13,
+    C4d, AC-2: the clear-offer phrase only ever appeared alongside the now-
+    removed `touch` recipe -- neither surface's wording renders here any
+    more)."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
     text = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
-    assert "clear this target" in text
+    assert "clear this target" not in text
     assert "session-wide" not in text
 
 
-def test_surface_tool_states_the_session_wide_breadth_truthfully(tmp_path):
-    """The tool surface's marker lives at the SESSION's own gitdir (see
-    `_write_bump_marker.py`'s "MARKER LOCATION" and `bump_out_of_repo_tool_
-    write.check`'s `marker_gitdir = own_gitdir if own_gitdir is not None
-    else target_gitdir`), so its clear-line offer must say plainly that
-    clearing stands the whole boundary down for the session, not just this
-    target."""
+def test_surface_no_longer_changes_em_rendering(tmp_path):
+    """Inverted 2026-08-13 (C4d): the tool surface's session-wide clear
+    offer this test used to assert is gone along with the whole clear
+    recipe (AC-2) -- `surface` is accepted for call-site parity only
+    (module docstring) and no longer changes the EM template's rendered
+    text at all."""
     root = _init_repo(tmp_path)
     gitdir = marker.resolve_gitdir(str(root))
-    text = message.render_em_message(
+    text_tool = message.render_em_message(
         _TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID, surface=message.SURFACE_TOOL
     )
-    assert "session-wide" in text
-    assert "clear this target" not in text
+    text_bash = message.render_em_message(_TARGET_REPO, _SESSION_REPO, gitdir, _SESSION_ID)
+    assert text_tool == text_bash
+    assert "session-wide" not in text_tool
+    assert "clear this target" not in text_tool
 
 
 @pytest.mark.parametrize(

@@ -72,6 +72,12 @@ import pytest
 import coordinator_core.ops  # noqa: F401 — ops/__init__.py triggers all op registrations
 import coordinator_core.ops.session.boot_sweep  # noqa: F401 — fires @register_op("session.boot_sweep")
 
+# Real git spawn is load-bearing: boot_sweep reads real HEAD/status/log state
+# to decide archival, and the repo fixture seeds real commits per test (each
+# test needs an isolated HEAD history, so the fixture cannot be hoisted to
+# module scope without cross-test state leakage).
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.fleet.reap_unintegrated_findings import (
     _AGE_THRESHOLD_DAYS,

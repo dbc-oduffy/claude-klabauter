@@ -33,6 +33,16 @@ from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 
+# `commit_own_artifact` lands a real commit and this suite reads the claim
+# back through `claim_index.lookup()` against a real repo -- the same
+# surface the commit gate reads -- so no mock stands in for the real
+# commit->release property under test. Per-test `repo` fixture because each
+# test commits into it.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(args, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)

@@ -17,6 +17,12 @@ import pytest
 
 from coordinator_core.hooks import nudge_harness_directive_dispatch as m
 
+# Real git spawn is load-bearing: the nudge's dispatch-detection reads real
+# git state to decide whether a directive was actually acted on; the repo
+# fixture seeds per-test commit history that must stay isolated across
+# tests, so it is not hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _transcript(tmp_path, *assistant_texts):
     """Write a minimal transcript jsonl whose assistant turns are `assistant_texts`."""

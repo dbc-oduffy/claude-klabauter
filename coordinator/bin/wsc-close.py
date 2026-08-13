@@ -98,6 +98,7 @@ def _build_tail_args(
     review_diff_loc: str | None,
     review_scope_kind: str | None = None,
     review_slices: "list[dict] | None" = None,
+    review_reviewer_evidence: str | None = None,
 ) -> list[str]:
     """Pure assembly — no I/O — so the unit test can exercise every branch
     without argv/stdout plumbing. Returns the ordered list of extra argv
@@ -135,7 +136,7 @@ def _build_tail_args(
         review_diff_loc,
     )
     supplied = [v for v in review_values if v]
-    if review_slices and (supplied or review_scope_kind):
+    if review_slices and (supplied or review_scope_kind or review_reviewer_evidence):
         raise ValueError(
             "review_slices and a discrete review_* value were both supplied — ambiguous "
             "(mirrors wsc-tail.py's own --review-slice / --review-* mutual exclusion)"
@@ -145,6 +146,8 @@ def _build_tail_args(
             payload = {k: entry[k] for k in _REVIEW_SLICE_REQUIRED_FIELDS}
             if entry.get("scope_kind"):
                 payload["scope_kind"] = entry["scope_kind"]
+            if entry.get("reviewer_evidence"):
+                payload["reviewer_evidence"] = entry["reviewer_evidence"]
             args.extend(["--review-slice", json.dumps(payload, sort_keys=True)])
         return args
     if supplied and len(supplied) != len(review_values):
@@ -168,6 +171,15 @@ def _build_tail_args(
         # absence must never trip the partial-supply ValueError.
         if review_scope_kind:
             args.extend(["--review-scope-kind", review_scope_kind])
+        # Optional seventh flag, same all-or-nothing exemption as
+        # `--review-scope-kind`: op-side `review_trail_write.
+        # _verify_reviewer_evidence` requires it for every reviewer except
+        # `wsc-auto-adjudication`, so dropping it here severs the correlation
+        # that gate exists to establish while the caller still reads as having
+        # supplied it. Spec: cross-repo/inbox/2026-08-13-example-doctrine-repo-em-wsc-tail-
+        # ipc-timeout-and-reviewer-evidence-drop.md § 2.
+        if review_reviewer_evidence:
+            args.extend(["--review-reviewer-evidence", review_reviewer_evidence])
 
     return args
 
@@ -213,6 +225,7 @@ def _cmd_tail_args(args: argparse.Namespace) -> int:
             review_diff_loc=args.review_diff_loc,
             review_scope_kind=args.review_scope_kind,
             review_slices=review_slices,
+            review_reviewer_evidence=args.review_reviewer_evidence,
         )
     except ValueError as exc:
         print(f"wsc-close.py tail-args: {exc}", file=sys.stderr)
@@ -293,6 +306,14 @@ def _build_parser() -> argparse.ArgumentParser:
     tail_args_p.add_argument("--review-verdict", dest="review_verdict", default=None)
     tail_args_p.add_argument("--review-diff-loc", dest="review_diff_loc", default=None)
     tail_args_p.add_argument("--review-scope-kind", dest="review_scope_kind", default=None)
+    tail_args_p.add_argument(
+        "--review-reviewer-evidence",
+        dest="review_reviewer_evidence",
+        default=None,
+        help="Evidence correlating --review-reviewer with an actual review (sidecar path "
+        "or dispatch id). Optional here, required op-side for every reviewer except "
+        "wsc-auto-adjudication; passed through to wsc-tail.py verbatim.",
+    )
     tail_args_p.add_argument(
         "--review-slice",
         dest="review_slices",

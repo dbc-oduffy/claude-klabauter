@@ -30,6 +30,16 @@ from coordinator_core.ops.bootstrap_repo import (
     main,
 )
 
+# Declared, not excused: this file spawns a real git process because
+# `_validate_target_root_is_git_repo` under test validates a real target
+# root against real git state (baseline commit, HEAD sha resolution) that no
+# mock stands in for. Tests each init/commit their own throwaway repo, so
+# `_init_git`/`_baseline_commit` are not hoisted to module scope -- per-test
+# isolation. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _init_git(root: str) -> None:
     subprocess.run(["git", "-C", root, "init", "--quiet"], check=True, timeout=30)

@@ -34,6 +34,17 @@ from coordinator_core.ops.workday_complete_step2_5_dirty_tree import main as por
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 
+# Declared, not excused: this file spawns a real git process because the port
+# under test classifies and auto-commits real dirty-tree state (renames,
+# untracked/tracked gitignore transitions, review-trail auto-commit, peer
+# claim/session disposition against real commits) that no mock stands in
+# for. Each test mutates its own repo (commits, renames, rm --cached), so
+# `_make_repo` is not hoisted to module scope -- per-test isolation. The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _make_repo(tmp_path, name="repo"):
     repo = tmp_path / name

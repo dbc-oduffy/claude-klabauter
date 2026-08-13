@@ -102,6 +102,13 @@ from pathlib import Path
 
 import pytest
 
+# Real subprocesses are load-bearing: (d)/(e) above need a genuinely separate
+# process with a controlled, inherited environment to prove no os.environ
+# leak and that import-time failure isolation actually holds -- properties
+# of a real interpreter's sys.modules/import machinery that an in-process
+# mock cannot stand in for.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _LAZY_OPS_ENV_KEY = "COORDINATOR_CORE_LAZY_OPS"

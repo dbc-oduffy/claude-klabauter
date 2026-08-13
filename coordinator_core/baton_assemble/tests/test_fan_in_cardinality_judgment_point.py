@@ -18,6 +18,14 @@ import pytest
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _init_repo, _write_artifact
 
+# `_init_repo` (imported above) spawns real git to build the repo `ba.brief()`
+# reads -- `brief()`'s lineage/claim resolution walks real `.git/` state
+# (coordinator-sessions handoff-claims, commit history), which no mock stands
+# in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
+# and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):

@@ -27,6 +27,12 @@ from coordinator_core.ops.detect_existing_claude_home import (
     resolve_target,
 )
 
+# Declared, not excused: the T4/T4b/T7 cases spawn real `git init` because
+# `classify`'s "git-tracked" signal reads real git-tree membership (including the
+# subdir-of-ancestor-repo detection), which no mock stands in for. Each test spawns
+# its own repo under a fresh `tmp_path`.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _assert(tmp_path: Path, exp_state: str, exp_track: str) -> None:
     state, track, _reason = classify(str(tmp_path))

@@ -2073,6 +2073,94 @@ def _resolve_pass_common_dir(cwd: str) -> Optional[Path]:
     return Path(hub).parent
 
 
+def _preflight_reap_stale_lock(worktree_root: str) -> None:
+    """Best-effort orphaned-`.git/index.lock` self-heal, run ONCE per commit
+    ceremony at `run_commit_pipeline()`'s own entry -- before staging, gates,
+    or commit ever run.
+
+    state/bug-backlog/2026-08-12-scoped-git-commit-is-not-a-raw-git-invoc-
+    f4fff3a626fa.yaml (P1): the CLI wrapper `coordinator/bin/scoped-git-
+    commit` already carries this exact pre-flight (`_preflight_reap_stale_
+    lock`, verbatim shape) for callers that invoke it directly -- but
+    `ops/session/safe_commit_offer.py::_commit_group` resolves the op
+    IN-PROCESS and never goes through that CLI at all, so it reached this
+    pipeline with no self-heal of its own. `guard_reap_stale_git_lock`'s
+    PreToolUse guard only recognizes a bare `git` in command position, so it
+    can never cover an op-form caller either -- the pipeline has to
+    self-heal for the same reason the CLI does.
+
+    Belt-and-braces, INTENTIONALLY: the CLI keeps its own copy of this
+    pre-flight rather than delegating here, because it serves callers that
+    never reach this op-level pipeline at all (a direct subprocess
+    invocation of the CLI outside any op route). The reaper itself
+    (`coordinator_core.ops.reap_stale_locks`) is idempotent -- a lock already
+    reaped by the CLI's own pre-flight costs this call nothing but the cheap
+    `os.path.exists` check below finding no lock. Do NOT "de-duplicate" the
+    two call sites; they serve disjoint caller populations.
+
+    Ceremony-level, NOT per-`git` subprocess -- called exactly once, here,
+    for the whole stage -> gate -> commit -> [push] critical section this
+    function runs. This is a distinct mechanism from the per-invocation
+    retry a peer chunk (C1, `git_native.py`) owns for individual `git`
+    calls inside that same section; the two must never be conflated -- this
+    function never retries, and the per-invocation retry never reaps a
+    lock.
+
+    Cheap by construction: the overwhelming common case is "no lock at
+    all", and that case costs exactly one `os.path.exists`/`os.path.isdir`
+    stat, no subprocess. The reaper (and its own `git rev-parse`
+    resolution, age/stability re-sample, and exit-code ladder) is only
+    invoked once a lock file is actually present at the cheap-checked
+    candidate path.
+
+    Negative-spec:
+      - Never treats a reaper failure as a commit failure. ANY exception --
+        import failure, subprocess failure, permission error, whatever --
+        is swallowed here; the pipeline proceeds exactly as if this
+        function had never been called. Fail-open is the whole point: a
+        reaper defect must never block a commit that would otherwise
+        succeed.
+      - Never second-guesses or bypasses the reaper's own age/stability
+        gate. `reap_stale_locks.main()`'s exit code 2 (a FRESH
+        `index.lock` -- a live commit may genuinely be in progress) is NOT
+        reaped, and is treated identically to exit 0 here: the pipeline
+        proceeds to its normal git calls either way, and git itself
+        reports if it is genuinely blocked. That gate is the only thing
+        standing between this and corrupting a peer's in-flight commit on
+        a shared tree.
+      - Never reimplements `do_reap`/`stale_and_stable`'s lock-selection or
+        removal logic here -- the whole-repo sweep in
+        `reap_stale_locks.main()` is called as-is, so `index.lock`,
+        `next-index-*.lock`, and `objects/maintenance.lock` share one
+        reaper implementation regardless of caller.
+      - Never assumes `<worktree_root>/.git` is a directory. In a linked
+        `git worktree` or a submodule it is a FILE (a `gitdir: <path>`
+        pointer to the real git dir elsewhere), so
+        `<worktree_root>/.git/index.lock` can never exist there and a
+        directory-only gate would silently never fire. This function does
+        NOT parse that pointer file itself (that is git-dir-discovery
+        reimplementation, reserved to the reaper); it pays one `os.stat` to
+        tell directory from file, and for the file case delegates entirely
+        to `reap_stale_locks.main()`, which already resolves the real git
+        dir correctly via `--absolute-git-dir` / `--git-common-dir`.
+
+    Thin trampoline over the shared leaf policy,
+    `coordinator_core.lock_preflight.preflight_reap_stale_lock` — see that
+    module's docstring for the full contract, negative-spec, and why BOTH
+    this pipeline and `coordinator/bin/scoped-git-commit` call it
+    (deliberately, not duplicatively).
+
+    Contract pinned by `coordinator/bin/tests/test_scoped_git_commit_lock_
+    reap.py` and `coordinator_core/tests/test_lock_preflight.py` (same four
+    cases): (1) a stale, stable lock is reaped; (2) a fresh lock is left
+    alone (exit 2 is "do not reap", not a failure); (3) a reaper exception
+    never propagates; (4) no lock present costs no subprocess at all.
+    """
+    from coordinator_core.lock_preflight import preflight_reap_stale_lock
+
+    preflight_reap_stale_lock(worktree_root)
+
+
 def run_commit_pipeline(
     worktree_root: Union[str, Path],
     *,
@@ -2224,6 +2312,7 @@ def run_commit_pipeline(
     """
     root = Path(worktree_root)
     diagnostics: List[str] = []
+    _preflight_reap_stale_lock(str(root))
     common_dir = _resolve_pass_common_dir(str(root))
 
     # Pre-stage directory-pathspec guard (session fb5fa766, 2026-07-31

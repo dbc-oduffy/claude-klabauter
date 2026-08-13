@@ -51,8 +51,20 @@ import asyncio
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.fleet._common import Move, archive_and_commit
 from coordinator_core.ops.fleet.tests.archive_git_free_seam import make_recording_mover
+
+# Real-git spawn is load-bearing: this file proves the real archive_and_commit
+# envelope shape against a real repo (clean move + disk/HEAD drift refusal),
+# not against a mock -- no monkeypatch stands in for the production entry
+# point ~380 stub-driven tests are built on. Single test, single repo; no
+# module-scope hoist needed since both cases share the one function. The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:

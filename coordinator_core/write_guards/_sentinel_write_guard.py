@@ -76,6 +76,97 @@ def extract_target_path(tool_input: dict) -> str:
     return ""
 
 
+def reconstruct_after(tool_name: str, tool_input: dict, before: str) -> "str | None":
+    """The after-state a Write/Edit/MultiEdit call would leave on disk, given
+    the file's current `before` content. `None` means the shape could not be
+    reconstructed confidently -- a guard that cannot compute its own input
+    has no basis to deny, so callers treat `None` as fail-open.
+
+    Consolidated home for an idiom six example-doctrine-repo guards (`guard-oss-
+    payload-locality.py`, `guard-prompt-surface-citations.py`,
+    `guard-doctrine-changelog-prose.py`, `guard-test-tree-git-fixture-
+    spawn.py`, `nudge-plan-test-surface-tier.py`,
+    `guard-python-syntax-on-write.py`) each hand-copied a local
+    `_reconstruct_after` for, per DR-047 (claude-klabauter owns guard logic, example-doctrine-repo owns
+    plumbing). Diffed byte-for-byte against all six before writing this: they
+    are semantically identical today -- differing only in docstrings, a
+    stale review comment on two of them (`guard-prompt-surface-citations.py`
+    and `guard-doctrine-changelog-prose.py` carry a "Review: coordinator:
+    code-reviewer -- F1" comment marking a PAST fix to their `replace_all`
+    handling, already applied, not a live divergence), and one refactor
+    (`guard-python-syntax-on-write.py` folds the `Edit` case into the
+    `MultiEdit` loop as a one-item edit list; same result). No copy diverges
+    in its actual `replace_all` output today -- the divergence risk named in
+    the consolidation brief is the RISK of six independently-maintained
+    copies drifting, not an already-realized bug; this module removes that
+    risk by giving all six one body to import instead of six to keep in
+    sync.
+
+    Contract, matching every copy above:
+
+    - ``Write``: ``tool_input["content"]`` taken verbatim as the after-state.
+      Not a string -> `None`.
+    - ``Edit``: replay ``old_string`` -> ``new_string`` against `before`,
+      honouring ``replace_all`` (every occurrence when true, only the first
+      when false/absent). An empty ``old_string`` is treated as "replace the
+      whole file" (`new_string` becomes the entire after-state) -- this
+      matches the real Edit tool's own use of an empty `old_string` to seed
+      content into an empty file, and every one of the six copies encodes
+      it identically.
+    - ``MultiEdit``: replay each edit in ``edits`` order against the
+      running text, each honouring its own ``replace_all``, same rules as
+      ``Edit`` per entry.
+    - **The one rule worth calling out explicitly, because it is the exact
+      spot a hand-copy could regress toward the wrong default:** an
+      ``old_string`` ABSENT from the text at the point it is applied is
+      UNRECONSTRUCTABLE, not a no-op-and-continue. This function returns
+      `None` immediately -- it does NOT skip that edit and keep replaying
+      the rest, and it does NOT return `before` unchanged. A caller that
+      cannot compute the after-state has no basis to reason about it, let
+      alone deny or allow based on it.
+    - Any tool_name other than ``Write``/``Edit``/``MultiEdit``, or a
+      malformed payload shape (non-dict ``tool_input``/``edit`` entry,
+      non-list ``edits``, non-string ``old_string``/``new_string``/
+      ``content``) -> `None`.
+    """
+    if tool_name == "Write":
+        content = tool_input.get("content") if isinstance(tool_input, dict) else None
+        return content if isinstance(content, str) else None
+
+    if tool_name == "Edit":
+        if not isinstance(tool_input, dict):
+            return None
+        edits = [tool_input]
+    elif tool_name == "MultiEdit":
+        if not isinstance(tool_input, dict):
+            return None
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list):
+            return None
+    else:
+        return None
+
+    text = before
+    for edit in edits:
+        if not isinstance(edit, dict):
+            return None
+        old_s = edit.get("old_string")
+        new_s = edit.get("new_string")
+        if not isinstance(old_s, str) or not isinstance(new_s, str):
+            return None
+        if old_s == "":
+            text = new_s
+            continue
+        if old_s not in text:
+            return None
+        text = (
+            text.replace(old_s, new_s)
+            if edit.get("replace_all")
+            else text.replace(old_s, new_s, 1)
+        )
+    return text
+
+
 def is_sentinel_write(target_path: str, sentinel_name: str) -> bool:
     """True if `target_path` resolves to `sentinel_name`, case-folded.
 

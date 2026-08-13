@@ -25,8 +25,30 @@ Spec backlinks:
 Negative-spec:
   - Does NOT archive handoffs by deployment_state alone — requires BOTH deployment_state:shipped
     AND a git-reachable shipped_in SHA (SHA-gate closes the orphan-record / bogus-SHA gap).
-  - Does NOT use resolve_live_session_ids — shipped handoffs have no live session claim
-    predicate (unlike consumed handoffs handled by fleet.archive_completed_handoffs).
+  - DOES gate on a live claim-dir holder (2026-08-13, aligned with
+    fleet.archive_completed_handoffs's Check 4 primary key) — a shipped handoff whose
+    claim dir is still live-held is RETAINED, never archived, regardless of the SHA-gate
+    outcome. This closes the disagreement where fleet.archive_completed_handoffs's own
+    Branch B live-claim refusal was inert because this op archived the same file anyway
+    on the same boot sweep (session.boot_sweep runs both sweeps in one process). See
+    _is_shipped_terminal's Check 3 below for the exact predicate — it reuses
+    _common.handoff_claim_dir + coordinator_core.liveness.cs_claim_holder_live, the SAME
+    claim-dir key archive_handoffs.py's Check 4 and session.reap use, and fails
+    closed-to-keep on any liveness-probe exception. Does NOT also OR-combine a
+    consumed_by/resolve_live_session_ids fallback — shipped handoffs carry no
+    consumed_by session claim (that field belongs to the claimed/consumed vocabulary
+    archive_handoffs.py's Branch A handles); the claim-dir key is this op's sole
+    liveness signal.
+  - Check 3's gate has exactly ONE opt-out: `holder_initiated=True`
+    (`_is_shipped_terminal` / `_handle_act`), reserved for
+    `handoff_ship_archive.py`'s single-handoff composite, which archives a
+    handoff the CALLING session itself holds — `cs_claim_holder_live` has no
+    self-vs-peer discrimination, so without this opt-out Check 3 would read that
+    self-claim as live and skip archival on the ordinary ship path (2026-08-13
+    regression, caught before landing). The standalone op and
+    session.boot_sweep's batch sweep — both background, never the holder — MUST
+    keep the default False. See `_is_shipped_terminal`'s `holder_initiated`
+    docstring for the full rationale.
   - Does NOT use params.repo_root as the worktree source — derives worktree via
     main_worktree_root(common_dir) (D3 check only).  In claude-klabauter's standard layout
     _STATE_REPO == main worktree root == common_dir.parent, so
@@ -48,6 +70,8 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
+from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.liveness import cs_claim_holder_live
 from coordinator_core.ops.fleet._common import (
     Move,
     _make_git_env,
@@ -60,6 +84,7 @@ from coordinator_core.ops.fleet._common import (
     check_repo_root,
     collect_live_handoff_paths,
     handoff_archive_dest,
+    handoff_claim_dir,
     main_worktree_root,
     rel_id,
     validate_params,
@@ -127,15 +152,48 @@ async def _sha_reachable(worktree_root: Path, sha: str) -> bool:
 async def _is_shipped_terminal(
     handoff_path: Path,
     worktree_root: Path,
+    common_dir: Optional[Path] = None,
+    *,
+    holder_initiated: bool = False,
 ) -> Tuple[bool, str]:
     """Return (is_terminal, note_or_reason) for a single handoff.
 
     A handoff is terminal iff:
       1. deployment_state == "shipped" (frontmatter)
       2. shipped_in is present and git-reachable (git cat-file -e)
+      3. No live claim-dir holder (2026-08-13 — see module docstring negative-spec) —
+         SKIPPED entirely when holder_initiated=True (see that parameter below).
 
     Returns (True, note) when terminal — note is the human-readable wire 'note' field.
     Returns (False, reason) when not terminal — reason describes the skip cause.
+
+    common_dir: the SESSION-REGISTRY git common dir, used to derive the claim dir
+    for Check 3 (mirrors fleet.archive_completed_handoffs._is_terminal's identical
+    `common_dir` parameter and its own docstring on why it must be the GIT_ROOT
+    repo's common dir, never derived from handoff_path's own repo or worktree/.git).
+    Optional and defaults to `git_common_dir(worktree_root)` (the direct inverse of
+    `main_worktree_root`) so existing positional two-arg callers keep working —
+    every caller inside this module now passes it explicitly. Unused when
+    holder_initiated=True (Check 3 never runs, so common_dir is never resolved).
+
+    holder_initiated: keyword-only, default False. `cs_claim_holder_live` is a
+    liveness check on the claim's HOLDER with no self-vs-peer discrimination
+    (see its docstring, coordinator_core/liveness.py) — it returns True for a
+    session's OWN live claim exactly as it would for a peer's. Check 3 exists
+    to stop a BACKGROUND sweep (which is never the holder) from archiving a
+    handoff out from under whoever currently holds it. `handoff.ship_and_archive`
+    (coordinator_core/ops/handoff_ship_archive.py) is the opposite shape: an
+    explicit, HOLDER-initiated archive request — that session ships and archives
+    its OWN claimed handoff in the same call, so Check 3 would otherwise fire on
+    the ordinary case (self-claim reads live) and silently skip every archive on
+    that path (2026-08-13 regression, caught before landing). holder_initiated=True
+    is this op's ONE sanctioned self-claim opt-out — it disarms Check 3
+    unconditionally, not a self-vs-peer distinction (this module does not attempt
+    to identify who holds the claim, only whether to ask). Every OTHER caller
+    (the standalone fleet.archive_shipped_handoffs op and session.boot_sweep's
+    batch sweep, both background and never the holder) MUST keep the default
+    False — mirrors restage_src's identical single-caller-opt-in shape and
+    rationale immediately below on _handle_act.
 
     git cat-file -e is awaited via asyncio.create_subprocess_exec per DR-211 D4;
     this coroutine must be called from an async context.  It is awaited in BOTH the
@@ -154,6 +212,33 @@ async def _is_shipped_terminal(
     sha_ok = await _sha_reachable(worktree_root, str(shipped_in))
     if not sha_ok:
         return False, f"shipped_in SHA {shipped_in!r} not reachable (git cat-file -e)"
+
+    # Check 3: no live claim-dir holder (mirrors fleet.archive_completed_handoffs'
+    # Check 4 PRIMARY key — see that module's _is_terminal docstring for the full
+    # rationale). No consumed_by/resolve_live_session_ids OR-combine here: a shipped
+    # handoff carries no consumed_by session claim, so the claim-dir key is this
+    # op's sole liveness signal — see module docstring negative-spec. Skipped
+    # entirely for a holder-initiated archive — see holder_initiated's own
+    # docstring paragraph above for why.
+    if not holder_initiated:
+        resolved_common_dir = (
+            common_dir if common_dir is not None else git_common_dir(worktree_root)
+        )
+        claim_dir = handoff_claim_dir(resolved_common_dir, handoff_path)
+        if claim_dir.is_dir():
+            try:
+                holder_live = await asyncio.to_thread(cs_claim_holder_live, str(claim_dir))
+            except Exception as exc:
+                # Fail-closed-to-keep (mirrors archive_handoffs.py's identical
+                # degrade-on-exception discipline) — an unreadable claim dir must
+                # RETAIN the candidate, never assume-terminal.
+                _LOG.warning(
+                    "archive_shipped_handoffs: cs_claim_holder_live raised for %s — "
+                    "retaining (fail-closed-to-keep): %s", claim_dir, exc,
+                )
+                holder_live = True
+            if holder_live:
+                return False, "live claim (claim-dir holder live)"
 
     note = f"shipped; shipped_in={shipped_in!r} reachable"
     return True, note
@@ -198,6 +283,7 @@ async def _scan_shipped(
     worktree_root: Path,
     *,
     scan_errors: Optional[List[str]] = None,
+    common_dir: Optional[Path] = None,
 ) -> List[Tuple[Path, str]]:
     """Scan state/handoffs/ for shipped candidates; return [(path, note), ...].
 
@@ -229,6 +315,12 @@ async def _scan_shipped(
     standalone fleet.archive_shipped_handoffs dry_run preview path (which does
     not pass it) still degrades safe silently; session.boot_sweep passes it to
     surface a structured warning in its own result envelope.
+
+    common_dir: forwarded to _is_shipped_terminal's Check 3 (live claim-dir
+    holder). Keyword-only with a default (git_common_dir(worktree_root) via
+    _is_shipped_terminal's own fallback) so this stays signature-compatible
+    for any caller that has not yet been updated to pass it; every caller
+    inside this module now passes it explicitly.
     """
     results: List[Tuple[Path, str]] = []
     try:
@@ -243,7 +335,9 @@ async def _scan_shipped(
             scan_errors.append(f"{live_dir}: {exc}")
         return results
     for handoff_path in live_paths:
-        is_terminal, note_or_reason = await _is_shipped_terminal(handoff_path, worktree_root)
+        is_terminal, note_or_reason = await _is_shipped_terminal(
+            handoff_path, worktree_root, common_dir
+        )
         if is_terminal:
             results.append((handoff_path, note_or_reason))
     return results
@@ -255,6 +349,8 @@ async def _handle_act(
     candidate_ids: List[str],
     *,
     restage_src: bool = False,
+    common_dir: Optional[Path] = None,
+    holder_initiated: bool = False,
 ) -> dict:
     """Act path for fleet.archive_shipped_handoffs — per-family internal.
 
@@ -280,6 +376,20 @@ async def _handle_act(
     is NOT collision-free in the general case — see archive_and_commit's
     ACCEPTED RISK note on restage_src's own absorption window; it is safe here
     only because it is scoped to the one caller that owns src's fresh write.
+
+    common_dir: forwarded to _is_shipped_terminal's Check 3 (live claim-dir
+    holder) at the D2(iv) act-time re-verify. Keyword-only with a default
+    (see _is_shipped_terminal's own fallback) for signature compatibility;
+    every caller inside this module now passes it explicitly.
+
+    holder_initiated: keyword-only, default False — forwarded verbatim to
+    _is_shipped_terminal's D2(iv) re-verify call (see that parameter's own
+    docstring for the full rationale). Same single-caller-opt-in shape as
+    restage_src immediately above: ONLY handoff_ship_archive.py's
+    single-handoff composite (archiving a handoff its OWN session holds)
+    passes True; the standalone fleet.archive_shipped_handoffs handler and
+    session.boot_sweep's batch call (both background, never the holder) MUST
+    keep the default False.
 
     Returns wire act envelope (build_act_result shape).
 
@@ -326,7 +436,9 @@ async def _handle_act(
 
         # D2(iv) act-time terminality re-verify: re-check at T3 to close the
         # race between dry_run:true preview and dry_run:false act.
-        is_terminal, note_or_reason = await _is_shipped_terminal(handoff_path, worktree_root)
+        is_terminal, note_or_reason = await _is_shipped_terminal(
+            handoff_path, worktree_root, common_dir, holder_initiated=holder_initiated
+        )
         if not is_terminal:
             skipped.append({"id": cid, "reason": f"terminality-drift: {note_or_reason}"})
             continue
@@ -413,7 +525,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # --- dry_run:true — PREVIEW path ---
     if dry_run:
         candidates = []
-        for handoff_path, note in await _scan_shipped(worktree):
+        for handoff_path, note in await _scan_shipped(worktree, common_dir=common_dir):
             rel_path = rel_id(handoff_path, worktree)
             meta = _read_meta(str(handoff_path)) or {}
             candidates.append({
@@ -427,4 +539,4 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return build_dry_run_result(mode, candidates)
 
     # --- dry_run:false — ACT path ---
-    return await _handle_act(mode, worktree, candidate_ids)
+    return await _handle_act(mode, worktree, candidate_ids, common_dir=common_dir)

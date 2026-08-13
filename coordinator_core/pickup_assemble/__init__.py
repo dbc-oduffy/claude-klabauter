@@ -87,11 +87,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple, Optional, Union
 
-from coordinator_core.archive_stamp import (
+from coordinator_core.artifact_basename import md_fallback_candidates
+from coordinator_core.shipped_in_tokens import (
     _NO_COMMIT_TOKEN_RE as _SHIPPED_NO_COMMIT_RE,
     _SHA_HEX_RE as _SHIPPED_SHA_RE,
 )
-from coordinator_core.artifact_basename import md_fallback_candidates
 from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import (
@@ -2926,12 +2926,14 @@ def compute_premise_checks(repo_root: Path, premises: list[dict[str, Any]]) -> l
 #: Function 5 — a `shipped_in:` value is trusted only when it is a resolvable
 #: git SHA or the sanctioned `substantively-shipped-no-commit:<date>` token.
 #: `_SHIPPED_SHA_RE`/`_SHIPPED_NO_COMMIT_RE` are re-exported imports of
-#: `coordinator_core.archive_stamp`'s `_SHA_HEX_RE`/`_NO_COMMIT_TOKEN_RE` —
-#: this module previously carried its own drifting copy of the grammar (a
+#: `coordinator_core.shipped_in_tokens`'s `_SHA_HEX_RE`/`_NO_COMMIT_TOKEN_RE`
+#: — this module previously carried its own drifting copy of the grammar (a
 #: looser `\S+`-suffixed no-commit token, no upper hex-length bound, no
-#: uppercase-hex acceptance); DR-096 makes `archive_stamp` the single choke
-#: point for this shape, so the copy is gone and this is an import, not a
-#: redefinition.
+#: uppercase-hex acceptance); DR-096 makes `shipped_in_tokens` the single
+#: choke point for this shape (moved out of `archive_stamp` per
+#: state/debt-backlog/DSR-2026-08-13-archive-stamp-import-order-drops-an-op-
+#: from-the-registry.yaml to break an import cycle), so the copy is gone and
+#: this is an import, not a redefinition.
 
 
 def compute_stealth_skip_flags(pending_items: list[dict[str, Any]]) -> list[dict[str, Any]]:

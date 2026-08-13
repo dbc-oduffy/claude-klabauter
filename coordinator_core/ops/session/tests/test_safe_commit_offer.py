@@ -50,6 +50,12 @@ from coordinator_core.ipc import dispatch_message
 from coordinator_core.session import core, scope
 from coordinator_core.ops.session import safe_commit_offer
 
+# Real git spawn is load-bearing: compute_offer's dirty-set math and
+# `_dirty_files_under` read actual `git status`/diff output, and
+# auto_commit_session lands real commits under test — no mock stands in for
+# git's own path-classification and index state here.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _make_repo(tmp_path):
     # Review: staff-eng F12 — check=True on every fixture-setup git call

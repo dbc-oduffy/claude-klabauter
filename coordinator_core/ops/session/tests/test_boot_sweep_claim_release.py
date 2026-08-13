@@ -39,6 +39,17 @@ from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 
+# Real-git spawn is load-bearing: claim release is read back through
+# `claim_index.lookup()` against real post-commit repo state (including a
+# two-repo split with separate STATE/GIT_ROOT commits) -- no mock stands in
+# for that. The `repo` fixture (and the per-test _init_git_repo calls in the
+# two-repo tests) stay per-test, not module-scope, because each test seeds
+# and commits distinct paths/repos that would bleed claim state across
+# tests if shared. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(args, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)

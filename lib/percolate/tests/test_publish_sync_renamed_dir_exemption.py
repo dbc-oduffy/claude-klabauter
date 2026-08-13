@@ -35,6 +35,15 @@ from pathlib import Path
 
 import pytest
 
+# TestProcessTargetLedgerExemption's dry_run=False leg needs a real
+# committed git work tree: `process_target`'s non-dry-run path materializes
+# every contributing root from its committed ref before syncing, a
+# production behaviour no mock stands in for. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # `publish_sync.py` does `from .ignore import ...` -- a package-relative import that
 # only resolves when the module is loaded AS PART OF its `percolate` package, not via a
 # bare `spec_from_file_location` (which `coordinator/tests/test_percolate_driver_sync.py`

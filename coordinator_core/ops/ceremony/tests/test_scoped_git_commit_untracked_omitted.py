@@ -32,7 +32,17 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.ceremony import scoped_git_commit
+
+# The untracked-omission report is computed from real `git status
+# --porcelain` output (tracked vs. untracked vs. gitignored) -- exactly the
+# distinction under test -- so no mock stands in for a real repo here.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args, cwd) -> None:

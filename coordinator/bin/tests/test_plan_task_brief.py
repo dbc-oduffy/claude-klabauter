@@ -16,6 +16,16 @@ import sys
 import unittest
 from pathlib import Path
 
+import pytest
+
+# Every test invokes plan-task-brief.py as a REAL subprocess (see module
+# docstring) to exercise its actual exit-code contract (0/1/2) and
+# stdout/stderr split -- an in-process call would not observe those
+# subprocess-boundary behaviours. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _SCRIPT = _BIN_DIR / "plan-task-brief.py"
 

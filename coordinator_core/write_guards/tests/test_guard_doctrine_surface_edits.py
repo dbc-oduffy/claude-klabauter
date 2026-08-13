@@ -32,22 +32,26 @@ import pytest
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 
-_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+# Real git is load-bearing for two tests below (test_sentinel_is_gitignored_
+# in_this_repo, test_sentinel_is_not_tracked_in_this_repo): they assert on
+# THIS repo's actual .gitignore/tracked-file state via `git check-ignore` /
+# `git ls-files`, which a mocked git object model cannot reproduce. The
+# scratch_repo fixture above no longer spawns git -- see its own docstring.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _SENTINEL_NAME = guard._SENTINEL_NAME
 
 
 @pytest.fixture
 def scratch_repo(tmp_path):
-    """A scratch git repo (real `git init`), isolated from any real
-    checkout. `_sentinel_state` only ever consults `os.path.join(repo_root,
-    _SENTINEL_NAME)`, so a real git repo isn't strictly required for this
-    module -- but a scratch root is used regardless of git-ness, matching
-    the sibling example-doctrine-repo fixture's isolation posture and staying safe to reuse
-    if a future test here wants `_git_root()` in the loop too.
+    """A scratch root, isolated from any real checkout. `_sentinel_state`
+    only ever consults `os.path.join(repo_root, _SENTINEL_NAME)`, so no real
+    git repo is spawned here -- every test in this file that needs
+    `_git_root()` in the loop (below) monkeypatches it directly rather than
+    relying on this fixture being a real repo.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True, **_NO_CONSOLE)
     return repo
 
 

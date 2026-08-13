@@ -37,6 +37,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Real-git spawn is load-bearing for section (g) below: `reset_paths` is
+# asserted against a real index/worktree so the "unstage-only, never a bare
+# reset" hazard is proven against git's actual porcelain output, not a
+# mocked call shape. Per-test repo fixtures since reset mutates the index.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core.ops.ceremony import git_native
 
 

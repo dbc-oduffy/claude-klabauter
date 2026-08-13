@@ -24,6 +24,18 @@ from pathlib import Path
 
 import pytest
 
+# Declared, not excused: `test_detect_stack_cli_exits_2_on_non_directory`
+# spawns a real `python3` subprocess to exercise the probe CLI's real
+# exit-code contract at the process boundary, and the `verify-diff` tests
+# spawn real `git` (via `_init_repo`) because the property under test is
+# real git-diff comparison against actual tracked/committed files -- no
+# mock stands in for either. `_init_repo` is invoked per-test, not hoisted
+# to module scope, since each verify-diff scenario needs its own distinct
+# commit/diff state. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).parent.parent
 
 

@@ -25,6 +25,52 @@ Negative spec: this module does not change, wrap, or reimplement
 untouched, and every existing caller of either is unaffected. It does not
 classify prose bytes, exempt spans, or bands into a corpus (C2/C3); it only
 captures.
+
+===========================================================================
+AC-6 (chunk C6, docs/plans/2026-08-13-guard-messages-stop-handing-agents-
+the-keys.md) -- annotate_deny routed INTO this seam
+===========================================================================
+Before this chunk, this module invoked only `GuardEntry.fn()` -- never
+`guard_unlock_sentinel.annotate_deny`, the ONE seam (see that function's own
+docstring) both `evaluate_payload_json` and `write_guards.engine.evaluate`
+route every genuine hard-deny envelope through before returning it. That
+made `annotate_deny`'s own rendered text architecturally invisible to the
+register lint (`message_register`, driven off this module's `capture_one_
+guard`/`capture_all_guards` via `guard_message_corpus.py`): B1-B7 have never
+seen the unlock block for any guard, on any input, ever -- the component
+that most needs the register (it renders the ONE remaining place the wiki/
+doc pointer legitimately appears, per AC-2) was the one it could not reach.
+
+`_maybe_annotate_deny` below mirrors `dispatch.py`'s own gating -- ONLY the
+text-composition half, never the one-shot SENTINEL-CONSUME half:
+
+  - Mirrored (read-only, side-effect-free): `_is_hard_deny_envelope`
+    (`permissionDecision == "deny"`) and `_sentinel_eligible`
+    (`entry.fail_closed or entry.name in dispatch._SENTINEL_ELIGIBLE_
+    ADVISORY_GUARDS`) -- the exact two predicates `dispatch.py`'s own loop
+    gates on before it would even consider appending the unlock block.
+  - Deliberately NOT mirrored: `dispatch._consume_unlock` (unlinks a real
+    on-disk sentinel file keyed to `(session_id, guard_name)`). This seam's
+    callers (`guard_message_corpus.py`'s ~150+ corpus cells) mint a FRESH
+    random `session_id` per fire (module docstring's own per-cell isolation
+    note), so a real match is already all-but-impossible -- but calling
+    `_consume_unlock` here would still be a live filesystem side effect this
+    read-only capture seam must never have, and firing THROUGH the unlock-
+    granted branch (which SKIPS the deny and lets the chain continue,
+    consuming a sentinel that might exist for a concurrent real session) is
+    categorically the wrong behavior for a text-capture harness. This seam
+    therefore always renders the deny-plus-annotation text a genuinely
+    UNGRANTED firing would produce -- the one shape every real subagent-
+    audience/EM-audience deny in production actually takes, and the one
+    `message_register` needs to see.
+
+`agent_id` threads through from the fired `payload` (mirroring `dispatch.
+py`'s own `payload.get("agent_id") or ""` read) so a row that sets
+`_EXECUTOR_IDENTITY`/`_REVIEWER_IDENTITY` (subagent-audience) renders the
+terse (suppressed) form, and a row with no identity (EM-audience, the
+default for every row not explicitly identity-gated) renders the unlock
+block -- exactly the audience split `annotate_deny` itself implements, now
+finally reachable from this seam.
 """
 
 from __future__ import annotations
@@ -33,9 +79,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.bash_guards._helpers import (
+    _resolve_override_keys_doc_display as _override_keys_doc_display,
+)
 from coordinator_core.bash_guards._platform_verdict import (
     resolve_host_is_windows as _resolve_host_is_windows_public,
 )
+from coordinator_core.session.guard_unlock_sentinel import annotate_deny as _annotate_unlock
 
 
 @dataclass(frozen=True)
@@ -50,6 +100,43 @@ class GuardCapture:
     name: str
     band: dispatch.GuardBand
     envelope: Optional[Dict[str, Any]]
+
+
+def _is_hard_deny_envelope(out: Optional[Dict[str, Any]]) -> bool:
+    """Mirrors `dispatch.py`'s own inline predicate (same name, same
+    isinstance discipline -- see AC-6 module-docstring section above):
+    gated on the ENVELOPE's own `permissionDecision == "deny"`, never on
+    `fail_closed` alone."""
+    if not isinstance(out, dict):
+        return False
+    hso = out.get("hookSpecificOutput")
+    return isinstance(hso, dict) and hso.get("permissionDecision") == "deny"
+
+
+def _maybe_annotate_deny(
+    entry_name: str,
+    fail_closed: bool,
+    envelope: Optional[Dict[str, Any]],
+    session_id: str,
+    agent_id: str,
+) -> Optional[Dict[str, Any]]:
+    """AC-6: append `guard_unlock_sentinel.annotate_deny`'s unlock-block
+    text to a genuine hard-deny envelope, mirroring `dispatch.py`'s own
+    `_is_hard_deny_envelope and _sentinel_eligible` gate -- see this
+    module's docstring, "AC-6" section, for exactly what is and is not
+    mirrored (never `_consume_unlock`)."""
+    if not _is_hard_deny_envelope(envelope):
+        return envelope
+    sentinel_eligible = fail_closed or entry_name in dispatch._SENTINEL_ELIGIBLE_ADVISORY_GUARDS
+    if not sentinel_eligible:
+        return envelope
+    return _annotate_unlock(
+        envelope,
+        session_id,
+        entry_name,
+        _override_keys_doc_display(),
+        agent_id=agent_id,
+    )
 
 
 def capture_all_guards(
@@ -82,7 +169,16 @@ def capture_all_guards(
         policy_file=policy_file,
         host_is_windows=effective_host_is_windows,
     )
-    return [GuardCapture(name=entry.name, band=entry.band, envelope=entry.fn()) for entry in chain]
+    session_id = str(payload.get("session_id") or "")
+    agent_id = str(payload.get("agent_id") or "")
+    captures: List[GuardCapture] = []
+    for entry in chain:
+        envelope = entry.fn()
+        envelope = _maybe_annotate_deny(
+            entry.name, entry.fail_closed, envelope, session_id, agent_id
+        )
+        captures.append(GuardCapture(name=entry.name, band=entry.band, envelope=envelope))
+    return captures
 
 
 def capture_one_guard(

@@ -67,6 +67,13 @@ from unittest.mock import patch
 
 import pytest
 
+# Real `git init`/`check-ignore` because two cases specifically pin real-git
+# behaviour no mock stands in for: `review-coverage-gate.py`'s own
+# `git rev-parse --show-toplevel` CLI wiring, and this repo's actual
+# on-disk `.gitignore` pattern matching for the waiver directory. Each such
+# test builds its own repo, so isolation is not hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Import guard — MUST precede any test so @register_op fires first.
 # ---------------------------------------------------------------------------

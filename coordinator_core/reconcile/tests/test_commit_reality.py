@@ -51,6 +51,18 @@ _EXPLICIT_SHIP_CLAIM_SCOPE_OVERLAP_MARKER = (
     "explicit shipped_in SHA verified reachable and touches own scope"
 )
 
+# Declared, not excused: this file's `_git` helper and `repo` fixture spawn real git
+# because the property under test IS real git-history matching -- reachability
+# (`git rev-parse`/merge-base-style checks in `_evaluate_explicit_ship_claim`),
+# Session-Id trailer provenance attribution off real commit messages, and real
+# scope-overlap against actual committed paths, none of which a mock can stand in
+# for without reimplementing the git plumbing being tested. `repo` stays
+# function-scoped (default) since many tests build distinct, test-specific commit
+# histories that must not leak between tests sharing a repo. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
+# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _DEFAULT_POLICY = {
     "three_signal": {},
     "mechanical_commit_denylist": [

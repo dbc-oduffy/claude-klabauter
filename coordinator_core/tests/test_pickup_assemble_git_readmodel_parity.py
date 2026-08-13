@@ -45,6 +45,13 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from coordinator_core import pickup_assemble as pa  # noqa: E402
 
+# Declared, not excused: the point of this file IS the parity comparison between
+# `pickup_assemble._run_git`'s in-process read-model and the real `git` CLI it
+# replaced -- a mock of either side would make the parity assertion vacuous. Fixtures
+# are already module-scoped (`claude_klabauter_root`) since every test only READS this repo's
+# own git state.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _NO_CONSOLE = {"creationflags": __import__("subprocess").__dict__.get("CREATE_NO_WINDOW", 0)}
 
 

@@ -47,6 +47,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Real local git repos are load-bearing: the script under test pins on real
+# 40-char SHAs read via `git rev-parse HEAD` and detects consumer-visible
+# deltas by diffing real commits -- a mocked git object model can't produce
+# a genuine SHA the pin-write/byte-identity assertions depend on.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Import the revendor script module via importlib (dash in filename).
 # conftest.py already inserted the project root onto sys.path.

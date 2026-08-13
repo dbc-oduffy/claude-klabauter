@@ -31,6 +31,20 @@ from coordinator_core.ops.install_meta_repo_precommit_hook import (
 )
 import coordinator_core.ops.install_meta_repo_precommit_hook as _mod
 
+# Declared, not excused: this file spawns real `git` and `sh` processes
+# because the tests are deliberately BEHAVIORAL -- they execute the emitted
+# pre-commit hook via a real shell against a real `$HOME/.claude` git repo,
+# per the module docstring's own rationale (the two prior fail-open defects
+# both silently passed a substring-only grep test; only executing the
+# actual hook text catches "gates present but dead after a stray `exit 0`").
+# No mock stands in for that. Each test builds its own fake HOME/meta repo
+# via `_make_meta_repo`, so it is not hoisted to module scope -- per-test
+# isolation (HOME env + hook execution side effects would collide). The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git_init(path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(path)], check=True)

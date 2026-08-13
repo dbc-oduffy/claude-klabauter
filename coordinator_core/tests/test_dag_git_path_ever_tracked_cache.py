@@ -40,6 +40,13 @@ import pytest
 
 from coordinator_core import dag
 
+# Declared, not excused: `dag._git_path_ever_tracked`'s contract is defined in terms
+# of actual `git log --all -- <path>` behaviour (best-effort False on any failure), not
+# a mockable interface -- this file pins the memoization cache's spawn-suppression win
+# against that real behaviour. Each test builds its own repo via `_init_repo` because
+# tests add distinct per-path commit history that would collide if a repo were shared.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Fixture: clear dag's git-history-ever-tracked cache and reset its generation

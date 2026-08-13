@@ -97,7 +97,10 @@ def _is_identical_duplicate(src: Path, dst: Path) -> bool:
     try:
         return dst.is_file() and src.read_bytes() == dst.read_bytes()
     except OSError:
-        print(f"skip: _is_identical_duplicate: return dst.is_file() and src.read_bytes() == dst.read_bytes() failed: {sys.exc_info()[1]}", file=sys.stderr)
+        _LOG.warning(
+            "_is_identical_duplicate: comparing %s to %s failed: %s",
+            src, dst, sys.exc_info()[1],
+        )
         return False
 
 # ---------------------------------------------------------------------------
@@ -1517,8 +1520,7 @@ async def archive_and_commit(
                 {
                     "id": a["id"],
                     "reason": (
-                        f"commit-failed: {err_msg}; "
-                        f"reversal-skipped-src-reappeared: dst orphaned"
+                        f"commit-failed: {err_msg}; reversal-skipped-src-reappeared: dst orphaned"
                         if a["id"] in orphaned_reversal_ids
                         else f"commit-failed: {err_msg}"
                     ),

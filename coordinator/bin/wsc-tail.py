@@ -475,12 +475,16 @@ def _build_review_trail(args: argparse.Namespace) -> dict | None:
 
 
 #: The subset of `_review_trail_fields`' keys a `--review-slice` JSON object
-#: may carry -- deliberately narrower than the discrete-flag surface (no
-#: `workstream`/`reviewer_evidence`): parity with `directives_commit_tail.
-#: build_close_tail_args_directive`'s own single-dict `--review-*` branch,
-#: which has never emitted those two either. Widen both surfaces together if
-#: that ever changes, not just this one.
-_REVIEW_SLICE_ALLOWED_KEYS = (*_REVIEW_TRAIL_REQUIRED_FIELDS, "scope_kind")
+#: may carry -- still narrower than the discrete-flag surface (no
+#: `workstream`): parity with `directives_commit_tail.build_close_tail_args_
+#: directive`'s own single-dict `--review-*` branch, which does not emit it
+#: either. Widen both surfaces together if that ever changes, not just this
+#: one. `reviewer_evidence` joined this set with that branch's
+#: `--review-reviewer-evidence` (2026-08-13): the op-side gate
+#: (`review_trail_write._verify_reviewer_evidence`) checks a correlation only
+#: this argv can deliver, so a narrower slice surface drops the value one
+#: layer above the check.
+_REVIEW_SLICE_ALLOWED_KEYS = (*_REVIEW_TRAIL_REQUIRED_FIELDS, "scope_kind", "reviewer_evidence")
 
 
 def _parse_review_slices(args: argparse.Namespace) -> "tuple[list[dict], list[str]]":

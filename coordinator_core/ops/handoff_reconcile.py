@@ -1206,15 +1206,25 @@ async def _ancestor_liveness_blocked(
     """C6 PER-ANCESTOR LIVENESS GATE (R3, load-bearing).
 
     `handoff.ship_and_archive` routes to `fleet/archive_shipped_handoffs.py`'s
-    `_is_shipped_terminal`, confirmed carrying NO reverse_membership (Check 3) or
-    live-claim (Check 4) gate at all — those checks live only in
-    `fleet/archive_handoffs.py`'s `_is_terminal` and are NOT in the call path this
-    chain-walk uses to archive an ancestor. So the scope-subsumption gate above is
-    NOT sufficient on its own: this reuses the SAME `reverse_membership`,
-    `cs_claim_holder_live`, and `handoff_claim_dir` helpers archive_handoffs.py's
-    Checks 3/4 use (mirrors archive_handoffs.py:307-358's exact usage pattern),
-    applied explicitly here since ship_and_archive's own call path supplies none of
-    it.
+    `_is_shipped_terminal`, confirmed carrying NO reverse_membership (Check 3) gate
+    at all — that check lives only in `fleet/archive_handoffs.py`'s `_is_terminal`
+    and is NOT in the call path this chain-walk uses to archive an ancestor. So the
+    scope-subsumption gate above is NOT sufficient on its own: this reuses the SAME
+    `reverse_membership`, `cs_claim_holder_live`, and `handoff_claim_dir` helpers
+    archive_handoffs.py's Checks 3/4 use (mirrors archive_handoffs.py:307-358's
+    exact usage pattern), applied explicitly here since ship_and_archive's own call
+    path supplies no reverse_membership gate.
+
+    (2026-08-13 update: `_is_shipped_terminal` GAINED its own live-claim-dir Check 3
+    — see that function's docstring. That does NOT make this gate's live-claim half
+    redundant, and the reverse reading is the dangerous one: `handoff.ship_and_archive`
+    passes `holder_initiated=True`, which skips that new Check 3 unconditionally, so
+    the ancestor-archival path this chain-walk uses still reaches archival with NO
+    live-claim gate of its own. This gate remains the only live-claim check on that
+    path — and it is the one that matters most here, because the session driving a
+    chain-walk holds the SUCCESSOR's claim, not necessarily the ancestor's: the claim
+    `holder_initiated` waves through may well be a peer's. Load-bearing for all three
+    of live-claim, reverse_membership, and the open-child scan below.)
 
     Review: code-reviewer (F2, P2) — `reverse_membership`'s `_TERMINAL_STATUSES`
     exclusion (archival.py) has no reference to `deployment_state`, so a

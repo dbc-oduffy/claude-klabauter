@@ -71,6 +71,7 @@ from pathlib import Path
 import psutil
 import pytest
 
+from coordinator_core.git import divergence
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony import scoped_git_commit
 from coordinator_core.session import claim_index
@@ -205,24 +206,49 @@ def _set_dirty_tree_size(repo: Path, n: int, max_filler: int) -> None:
 
 
 def _count_gate_git_calls(repo: Path, paths: list[str], caller_sid: str) -> int:
-    """Count `git_native._git` invocations made by ONE
-    `_check_claim_conflicts` call. `git_native._git` is this whole module's
-    sole native-git choke point (its own docstring: "the single choke point
-    every native git call ... routes through"), so wrapping it counts every
-    spawn the gate leg makes, however many call sites fire, without itself
-    spawning anything extra."""
+    """Count native-git invocations made by ONE `_check_claim_conflicts`
+    call, summed across BOTH of the gate's native-git seams.
+
+    Chunk C1 (`ad3457b18`) made `git_native._git` NOT the sole choke point
+    any more: `_check_claim_conflicts` now also spawns through
+    `coordinator_core/git/divergence.py`'s private `_run_git` (which calls
+    `subprocess.run` directly and never routes through `git_native._git`),
+    to answer the "is this a peer's staged-but-not-yet-committed hunk"
+    question. See docs/research/spike-verdicts/2026-08-13-private-index-
+    form-cannot-sweep-a-peers-worktree.md -- that spike measured
+    `diverging_paths()` (the function `_run_git` backs) at ~18ms, flat in
+    `len(paths)` and indifferent to tree busyness, so the cost itself is
+    fine; what was missing was counting it at all. Wrapping only one seam
+    would silently undercount, and would stay green through a regression
+    that made `diverging_paths()` walk the whole tree instead of the
+    caller's own pathspec.
+
+    The monkeypatch of `divergence._run_git` below works for the same
+    reason the pre-existing `git_native._git` wrapper does: `diverging_
+    paths()` resolves `_run_git` through the module's global namespace at
+    call time (a plain unqualified name), so reassigning the module
+    attribute here is sufficient -- no direct reference inside
+    `diverging_paths()` needs to change.
+    """
     calls = {"n": 0}
-    orig = git_native._git
+    orig_git_native = git_native._git
+    orig_divergence_run_git = divergence._run_git
 
-    def _wrapper(*a, **kw):
+    def _git_native_wrapper(*a, **kw):
         calls["n"] += 1
-        return orig(*a, **kw)
+        return orig_git_native(*a, **kw)
 
-    git_native._git = _wrapper
+    def _divergence_run_git_wrapper(*a, **kw):
+        calls["n"] += 1
+        return orig_divergence_run_git(*a, **kw)
+
+    git_native._git = _git_native_wrapper
+    divergence._run_git = _divergence_run_git_wrapper
     try:
         scoped_git_commit._check_claim_conflicts(str(repo), paths, caller_sid)
     finally:
-        git_native._git = orig
+        git_native._git = orig_git_native
+        divergence._run_git = orig_divergence_run_git
     return calls["n"]
 
 
@@ -291,15 +317,18 @@ def test_gate_reads_are_pathspec_scoped_not_tree_scoped(tmp_path_factory):
         "the fixture failed to trigger C5's lazy call at all, which would "
         "make this test vacuous the same way the assertion it replaces was"
     )
-    # Upper bound: at most 2 calls for a 1-path pathspec (the status probe,
-    # plus C5's worst case -- one phantom-candidate diff follow-up when the
-    # dirty state is a tracked, unstaged modification). Bounded by
-    # len(paths), never by N.
-    assert call_count <= 2 * len(["fixed.txt"]), (
-        "gate made %d git call(s) for a 1-path pathspec -- expected <= 2 "
-        "(status + at most one phantom-candidate diff); a higher count "
-        "would mean the gate's cost is no longer bounded by pathspec size"
-        % call_count
+    # Upper bound: at most 4 calls for a 1-path pathspec -- C5's status
+    # probe, C5's worst-case phantom-candidate diff follow-up (tracked,
+    # unstaged modification), plus C1's two divergence probes (`diff
+    # --cached --name-only` and `diff --name-only`, both pathspec-scoped
+    # via `divergence.diverging_paths()` -> `divergence._run_git`). Bounded
+    # by len(paths), never by N.
+    bound = 4 * len(["fixed.txt"])
+    assert call_count <= bound, (
+        "gate made %d git call(s) for a 1-path pathspec -- expected <= %d "
+        "(4 * len(paths): status + phantom-candidate diff + two divergence "
+        "probes); a higher count would mean the gate's cost is no longer "
+        "bounded by pathspec size" % (call_count, bound)
     )
 
 

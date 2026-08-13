@@ -29,6 +29,15 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
+# Real-git spawn is load-bearing: several fixtures here build an actual repo
+# and drive `build_git_history_cache` / `_GitHistoryCacheProvider` against it
+# to assert lineage joins against real commit history, not a mocked log --
+# no mock stands in for the ancestry-walk behaviour under test. Per-test
+# repo fixtures (not hoisted) since several tests mutate history.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core import dag as dag_module
 from coordinator_core.dag import EDGE_KIND_META, build_git_history_cache
 from coordinator_core.ops.ceremony import renderers as renderers_module

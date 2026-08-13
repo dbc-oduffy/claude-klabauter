@@ -49,6 +49,12 @@ from coordinator_core.session import claims as session_claims
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session import shape as session_shape
 
+# Real-git spawn is load-bearing: the CLI smoke tests round-trip a real
+# subprocess against baton_assemble's own trampoline, and apply_base runner
+# tests exercise brief()/apply()'s wiring against ACTUAL claim/plan-sidecar
+# on-disk state — no mock stands in for either.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _FAKE_OPERATOR_CONFIG = {
     "settings_home": "/fake/settings-home",
     "claude_klabauter_bin": "/fake/settings-home/bin",

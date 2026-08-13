@@ -48,6 +48,15 @@ from coordinator_core.write_guards import validate_frontmatter_schema_deny as gu
 
 _doe_root, _doe_present = doe_root_and_present()
 
+# Real-git spawn is load-bearing: `_init_repo` builds a real git repo whose
+# lineage-reachability the deny guard's unconditional hard-reject reads
+# directly -- a mocked git would not prove the reachability check fires
+# against real commit ancestry. Per-test isolation via tmp_path fixtures,
+# not hoisted. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
+# residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 @pytest.fixture(autouse=True)
 def _pin_doe_root(monkeypatch):

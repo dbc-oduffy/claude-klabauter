@@ -246,6 +246,27 @@ def test_rule5_sibling_repo_unaffected_when_mirror_registered_elsewhere(stub_pee
     assert sr.coordinator_state_root() == _state(_SIBLING)
 
 
+def test_rule5_sibling_repo_fail_loud_mirror_trailing_separator_real_realpath(
+    stub_peers, tmp_path
+):
+    # Review: coordinatorcode-reviewer-e4a7d6a8 P3 -- the existing mirror-guard
+    # tests both stub `published_engine_mirror_path` with bare monkeypatch
+    # values, so realpath()'s actual normalization is never exercised by the
+    # committed suite. Use a real tmp_path directory and a trailing separator
+    # on the registry-value side to exercise realpath() for real.
+    mirror = tmp_path / "claude-klabauter"
+    mirror.mkdir()
+    mirror_with_trailing_sep = str(mirror) + os.sep
+    stub_peers.setattr(sr, "_resolve_git_root", lambda: str(mirror))
+    stub_peers.setattr(sr, "is_meta_repo", lambda _g: False)
+    stub_peers.setattr(
+        sr, "published_engine_mirror_path", lambda: mirror_with_trailing_sep
+    )
+    with pytest.raises(sr.StateRootError) as exc:
+        sr.coordinator_state_root()
+    assert str(mirror) in str(exc.value)
+
+
 def test_rule5_fail_loud_on_unresolvable_git_root(stub_peers):
     def _boom():
         raise sr.StateRootError("not a git repo")

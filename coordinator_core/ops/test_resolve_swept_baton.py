@@ -15,6 +15,15 @@ import pytest
 
 from coordinator_core.ops.resolve_swept_baton import _resolve_swept_baton_in_archive
 
+# Declared, not excused: this file spawns real git because the AC7 archiving-commit
+# resolution the module implements genuinely runs `git log` against a real repo --
+# no mock stands in for git's own log/blame plumbing. Each test builds its own
+# tmp_path repo via the `repo` fixture, so mutation (commit history) needs per-test
+# isolation, not a module-scope hoist. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _init_repo(path):
     path.mkdir(parents=True, exist_ok=True)

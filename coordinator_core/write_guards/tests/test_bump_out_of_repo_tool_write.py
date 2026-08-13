@@ -35,6 +35,13 @@ from coordinator_core.bash_guards import bump_outside_repo_write as bash_guard
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.write_guards import bump_out_of_repo_tool_write as guard
 
+# Real git repos are load-bearing: the AC2 in-vs-out-of-repo verdict this
+# guard exists for is computed against real repo-root resolution
+# (_write_bump_applicability), which a mocked git object model cannot
+# reproduce -- these tests need genuine repo boundaries to prove a path
+# outside the session's repo is actually detected as such.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(root: str, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)

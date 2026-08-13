@@ -100,6 +100,7 @@ from coordinator_core.frontmatter.baton_class import (
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+from coordinator_core.frontmatter.schema_shape import semantic_shape_hash
 from coordinator_core.git_scope import foreign_repo_unusable_reason, scoped_git_env
 
 logger = logging.getLogger(__name__)
@@ -4670,6 +4671,18 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
                 or indeterminate; there is nothing to be ahead/behind ON).
                 Additive key (2026-07-23, directionality wiring) — the schema/
                 diverged/determinate/detail contract above is unchanged.
+            divergence_kind (str | None): "shape" or "prose-only", orthogonal to
+                `direction` — whether the delta touches validation SHAPE
+                (schema_shape.semantic_shape_hash differs between the two parsed
+                sides) or is confined to prose (description/$comment/x-bump-note;
+                hashes match). None whenever diverged is False, OR when diverged
+                is True but either side failed to parse as JSON (the
+                text-containment fallback path has no parsed structure to hash —
+                never guessed). Additive key (2026-08-13 parity-tail exchange:
+                10 of 12 then-drifted schemas carried DIRECTION_BOTH's "reconcile
+                by hand" prose despite byte-identical validation shape) — the
+                schema/diverged/determinate/direction/detail contract above is
+                unchanged.
             local_version (str | None): the vendored schema's top-level
                 `x-schema-version` value, via `_read_schema_version`. None when
                 the vendored file could not be read/parsed, or lacks the key, or
@@ -4750,6 +4763,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
             'diverged': False,
             'determinate': False,
             'direction': None,
+            'divergence_kind': None,
             'local_version': None,
             'doe_version': None,
             'local_bump_class': None,
@@ -4779,6 +4793,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
             'diverged': False,
             'determinate': False,
             'direction': None,
+            'divergence_kind': None,
             'local_version': None,
             'doe_version': None,
             'local_bump_class': None,
@@ -4793,6 +4808,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
             'diverged': False,
             'determinate': False,
             'direction': None,
+            'divergence_kind': None,
             'local_version': None,
             'doe_version': None,
             'local_bump_class': None,
@@ -4816,6 +4832,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
             'diverged': False,
             'determinate': False,
             'direction': None,
+            'divergence_kind': None,
             'local_version': None,
             'doe_version': doe_version,
             'local_bump_class': None,
@@ -4862,6 +4879,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
                 'diverged': False,
                 'determinate': True,
                 'direction': None,
+                'divergence_kind': None,
                 'local_version': local_version,
                 'doe_version': doe_version,
                 'local_bump_class': local_bump_class,
@@ -4876,11 +4894,43 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
             DIRECTION_WE_BEHIND: 'example-doctrine-repo HEAD is ahead of our pin — re-vendor now',
             DIRECTION_BOTH: 'both sides changed independently — reconcile by hand, a blind re-vendor would drop our side',
         }[direction]
+
+        # divergence_kind: orthogonal axis to `direction` — does the delta touch
+        # VALIDATION SHAPE or only PROSE? Computed via schema_shape.semantic_shape_hash,
+        # the repo's one canonical shape hash (see that module's docstring) — never a
+        # second hash implementation. None when either side fails to parse as JSON:
+        # there is no parsed structure to hash, and the text-containment fallback this
+        # function already used for `diverged` has no shape opinion to report.
+        # Spec backlink: 2026-08-13 parity-tail exchange (example-doctrine-repo-EM flagged that "reconcile
+        # by hand" on a punctuation-only diff trains readers to stop reading it).
+        divergence_kind: str | None
+        try:
+            local_parsed = json.loads(local_content)
+            doe_parsed = json.loads(doe_content)
+        except (json.JSONDecodeError, ValueError):
+            divergence_kind = None
+        else:
+            divergence_kind = (
+                'prose-only'
+                if semantic_shape_hash(local_parsed) == semantic_shape_hash(doe_parsed)
+                else 'shape'
+            )
+
+        if divergence_kind == 'prose-only':
+            kind_prose = (
+                'prose-only — validation shape is identical, the delta is confined to '
+                'description/$comment/x-bump-note text. A blind re-vendor still drops '
+                'claude-klabauter\'s prose (regressed once, commit 1825e7771) — reconcile by hand'
+            )
+        else:
+            kind_prose = direction_prose
+
         return {
             'schema': schema_filename,
             'diverged': True,
             'determinate': True,
             'direction': direction,
+            'divergence_kind': divergence_kind,
             'local_version': local_version,
             'doe_version': doe_version,
             'local_bump_class': local_bump_class,
@@ -4888,7 +4938,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
             'doe_bump_note': doe_bump_note,
             'detail': (
                 f'Vendored schema "{schema_filename}" diverges from example-doctrine-repo HEAD '
-                f'({doe_repo_path}:{doe_schema_ref}) — {direction_prose}.'
+                f'({doe_repo_path}:{doe_schema_ref}) — {kind_prose}.'
             ),
         }
 
@@ -4897,6 +4947,7 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
         'diverged': False,
         'determinate': True,
         'direction': None,
+        'divergence_kind': None,
         'local_version': local_version,
         'doe_version': doe_version,
         'local_bump_class': local_bump_class,

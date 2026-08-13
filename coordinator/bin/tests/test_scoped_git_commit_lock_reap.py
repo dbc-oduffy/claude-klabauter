@@ -29,6 +29,17 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Every case here needs a real `.git/index.lock` on disk (including a real
+# `git worktree add`-produced linked worktree, whose `.git` is a file
+# pointer to the real git dir elsewhere) -- no mock stands in for the
+# reaper's own filesystem-state read. `scratch_repo` stays function-scoped:
+# TestLinkedWorktreeGitDirIsAFile mutates it (adds a worktree), so a
+# module-scoped fixture would leak that mutation into sibling tests. The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _CLI = pathlib.Path(__file__).resolve().parents[1] / "scoped-git-commit"
 
 

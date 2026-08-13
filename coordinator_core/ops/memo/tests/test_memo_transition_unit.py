@@ -30,6 +30,13 @@ import yaml
 import coordinator_core.ops.memo_transition as _memo_mod
 from coordinator_core.frontmatter.schema_validate import validate_memo_cross_fields
 from coordinator_core.locked_write import LockTimeout
+
+# Real git spawn is load-bearing: the containment gate (_containment_check)
+# resolves real git-repo boundaries to classify ../-traversal and cross-repo
+# paths — no mock stands in for git's own repo-root resolution. Per-test
+# tmp repos stay per-test: containment cases mutate repo layout differently
+# across tests.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 from coordinator_core.ops.memo_transition import (
     _action,

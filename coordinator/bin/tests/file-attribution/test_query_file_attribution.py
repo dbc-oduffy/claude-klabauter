@@ -38,7 +38,18 @@ import sys
 import tempfile
 import unittest
 
+import pytest
+
 from coordinator_core.win_portability import no_console_creationflags
+
+# Declared, not excused: every test invokes query-file-attribution.py as a REAL
+# subprocess (this file's own module docstring negative-spec forbids importing it
+# directly -- its importlib load path is cwd-sensitive) to exercise the actual CLI
+# argv/exit-code contract (0/1/2) and stdout JSON/table rendering, which an
+# in-process call cannot observe. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
 # Paths

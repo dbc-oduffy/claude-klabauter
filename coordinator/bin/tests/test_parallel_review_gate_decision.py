@@ -39,7 +39,21 @@ import subprocess
 import sys
 import unittest
 
+import pytest
+
 from coordinator_core.win_portability import no_console_creationflags
+
+# Declared, not excused: the resolver-branch/gate/rule5-inputs CLI tests
+# below (T10-T12) spawn a real `sys.executable` child running
+# parallel-review-gate-decision.py because the property under test is the
+# CLI's real argv-parsing/8-key-envelope/exit-code contract at the process
+# boundary -- an in-process call cannot observe that. `test_gate_cli_envelope`
+# additionally runs against this repo's own real git history
+# (`--range HEAD~1..HEAD`), exercising the gate's actual range-resolution
+# path. The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue
+# and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_SCRIPT_DIR)

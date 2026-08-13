@@ -50,6 +50,15 @@ import sys
 import tempfile
 import textwrap
 
+import pytest
+
+# Real-git spawn is load-bearing: the collision-detection tests assert real
+# `git init`/commit state and O_EXCL semantics against an isolated repo --
+# no mock stands in for real filesystem/git-index collision behaviour. Real
+# memo dispatch sites also shell real subprocess CLI invocations end-to-end
+# (see module docstring). Per-test fixtures for isolation.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Test infrastructure — conventions copied from test_cross_repo_memo.py
 # ---------------------------------------------------------------------------

@@ -22,6 +22,17 @@ from pathlib import Path
 
 import pytest
 
+# Declared, not excused: the `inverse-drift` tests below spawn real `git`
+# processes because the property under test is real commit-log/rev-parse
+# plumbing (marker-mode anchor resolution, stale-marker fallback) that no
+# mock stands in for. `_init_dest_repo` is invoked per-test, not hoisted to
+# module scope, because each test layers its own distinct commit history on
+# top (mutation-heavy), so a shared repo would leak state across tests. The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 

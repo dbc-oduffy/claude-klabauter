@@ -26,7 +26,18 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.win_portability import no_console_creationflags
+
+# Every fixture builds a REAL git repo (per module docstring) so `git status
+# --porcelain` -- the production probe `_handler`/`verify_target_clean`
+# depend on -- exercises the genuine code path, including the
+# `test_git_status_probe_failure_is_no_signal` case whose entire point is a
+# real git-command failure. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _run(coro):

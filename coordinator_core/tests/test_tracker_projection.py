@@ -85,6 +85,14 @@ from coordinator_core.tracker_store import shard_path
 _PROJECT_ROOT = str(Path(__file__).parent.parent.parent.resolve())
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Declared, not excused: `append_event`'s `locked_rmw` resolves its lock directory via
+# real `git rev-parse --git-common-dir`, so a bare non-git tmp_path fails before this
+# file's own fold logic runs -- a real repo is load-bearing setup, not a choice. AC6
+# additionally spawns a real subprocess holder to model the ccos-4 cross-process
+# lost-update shape, which no mock reproduces. Fixtures are per-test because AC5/AC6
+# each build distinct event histories that would collide if shared.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _make_git_repo(root: Path) -> Path:
     """Init a minimal git repository under *root* — ``append_event``'s

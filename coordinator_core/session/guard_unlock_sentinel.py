@@ -255,19 +255,13 @@ def annotate_deny(
     by the reader, which made leading-but-imperative read as agent-directed
     sanction instead of an operator affordance.
 
-    Within the appended block the opening sentence still states the
-    human-only framing FIRST, ahead of the wiki pointer and the two
-    identifiers — that ordering is unchanged, only the sentence's wording
-    moved (item 4, 2026-08-11: no more disclaimer register). The block is
-    also de-imperativized: no bare verb ("create ... FIRST"), no
-    success-sequencing register ("chaining it onto the denied command
-    re-denies"), and (item 3, 2026-08-11) no resolved sentinel path at all.
-    It restates the operator-actionable FACT (this unlock exists, and is a
-    human-only affordance) descriptively, and is made explicitly
-    self-limiting — naming that this sentinel is created from a terminal
-    OUTSIDE this session, and that an agent inside the session creating it
-    is a doctrine violation (matching this module's own Negative-spec:
-    "Do NOT write this sentinel from agent-reachable code").
+    SUPERSEDED BY ITEM 9 BELOW: the appended block used to open with a
+    sentence stating the human-only framing FIRST, ahead of the wiki
+    pointer and doc_display reference, de-imperativized (no bare verb, no
+    success-sequencing register, no resolved sentinel path). Item 9
+    (2026-08-13, C4d) removes that framing sentence entirely — the block is
+    now the two doc/wiki pointers alone, nothing else — kept here as the
+    historical record of what item 9 replaces.
 
     The exact `sentinel_path(session_id, guard_name)` literal — the resolved
     absolute path, including the platform temp directory — is deliberately
@@ -411,11 +405,39 @@ def annotate_deny(
        through `resolves_em_audience(payload, git_root)` instead of
        defaulting to emit.
 
+    9. (2026-08-13, C4d, docs/plans/2026-08-13-guard-messages-stop-handing-
+       agents-the-keys.md AC-2) The appended block comes out entirely --
+       `annotate_deny` now always returns `out` unchanged. Items 3/4/7
+       above progressively stripped the RECIPE (sentinel path, filename
+       shape, drop location, identifiers) while keeping the FACT that an
+       unlock exists, framed as human-only and its use a doctrine
+       violation; this dispatch tried narrowing the block to a bare
+       doc/wiki-pointer sentence next ("See <wiki-pointer> and <doc_
+       display> for guard-override conventions.") and measured it against
+       `message_register._rules.run_rule("B8", ...)` -- B8's own leg (d)
+       ("a doc/wiki pointer to the override-key registry or unlock wiki")
+       fired on that sentence too: B8 treats ANY pointer into the
+       override-key/unlock doc surface as a gate-referent, not only a
+       resolved path or an explanatory sentence around it. There is no
+       narrower rendered form left between "the old disclosure paragraph"
+       and "nothing" that B8 grades clean, so this item lands on "nothing":
+       the function's return value is now `out`, unmodified, on every call.
+       The `agent_id`/`resolves_em_audience`/`session_id` resolution logic
+       from items 5/8 is kept (harmless, and cheap insurance if a future
+       chunk reintroduces a narrower render gated on the same audience
+       decision) but its result no longer branches into any render step.
+
     Never raises. A malformed envelope is returned unchanged: this function
     only ever runs on a deny that has already been decided, and an
     augmentation that crashed would turn that settled deny into an engine
     crash.
     """
+    # Item 9 (2026-08-13, C4d): every code path below returns `out`
+    # unchanged now -- kept intact (rather than short-circuited at the top)
+    # so the audience-resolution logic stays live and cheap-to-reinstate if
+    # a future chunk finds a render narrow enough to grade B8-clean; today
+    # none does (see item 9's own docstring paragraph), so no branch below
+    # ever mutates `out`.
     if not session_id:
         return out
     try:
@@ -424,39 +446,13 @@ def annotate_deny(
             resolves_em_audience,
         )
 
-        # Fast positive-subagent leg (item 5, unchanged): a genuine positive
-        # resolution suppresses immediately without consulting the newer
-        # predicate.
         if resolve_subagent_identity(agent_id, session_id):
             return out
 
-        # EM-audience decision (item 8, AC-3): degrade to terse on anything
-        # that is not a positively-resolved EM audience — absent/malformed
-        # agent_id, an unresolvable envelope, or any exception below all
-        # land here as False, never as a fallthrough to emit.
         payload = {"session_id": session_id, "agent_id": agent_id}
         if not resolves_em_audience(payload, git_root):
             return out
     except Exception:
-        # Item 8: any exception during identity resolution now degrades to
-        # terse (returns `out` unchanged), never falls through to render.
         return out
-    try:
-        hso = out.get("hookSpecificOutput")
-        if not isinstance(hso, dict):
-            return out
-        reason = hso.get("permissionDecisionReason")
-        if not isinstance(reason, str):
-            return out
-        line = (
-            "An in-session unlock exists for this guard, but it is a "
-            "human-only affordance: it is granted by a human operator from "
-            "a terminal outside this session, it cannot be granted by this "
-            "agent, and creating it from inside the session is a doctrine "
-            "violation, not a shortcut. %s and %s document the convention."
-            % (_SETTINGS_ROOT_WIKI_POINTER, doc_display)
-        )
-        hso["permissionDecisionReason"] = "%s\n\n%s" % (reason, line)
-    except Exception:
-        return out
+    del doc_display  # unused now that no render step names it (item 9)
     return out

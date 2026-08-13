@@ -57,6 +57,16 @@ from coordinator_core.ops.ceremony import scoped_git_commit as sgc
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _CLI_REPO_PATH = "coordinator/bin/session-claim-cli"
 
+# `_committed_cli_source` reads `session-claim-cli` as it stands at HEAD via
+# `git show` -- the module docstring names why this must be the committed
+# blob, not the worktree file: a live peer session's uncommitted edit must
+# not silently change what this test cross-checks the shipped remedy text
+# against. No mock stands in for that distinction.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 #: Backtick-quoted invocations beginning with the CLI's own name -- this is
 #: how both remedy constants mark up the commands they tell an operator to
 #: run (see their block comment); anything named WITHOUT this markup (e.g.

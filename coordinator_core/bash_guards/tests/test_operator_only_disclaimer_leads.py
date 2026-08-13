@@ -132,10 +132,14 @@ from coordinator_core.session import guard_unlock_sentinel as gus
 #: reintroduces framing text ahead of the pointer.
 _OVERRIDE_NOTE_LEAD = "See "
 
-#: `annotate_deny`'s unlock-block leading clause (2026-08-11 reshape) --
-#: verbatim prefix match, the human-only-affordance statement that replaced
-#: the old shared disclaimer.
-_UNLOCK_BLOCK_LEAD = "An in-session unlock exists for this guard, but it is a human-only affordance:"
+#: `annotate_deny`'s unlock-block leading clause. UPDATED 2026-08-13 (C4d,
+#: docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md
+#: AC-2, item 9 in `annotate_deny`'s docstring): the human-only-affordance
+#: disclosure sentence this constant used to pin is gone entirely -- the
+#: block is now the bare doc/wiki pointer sentence, "See <wiki-pointer> and
+#: <doc_display> for guard-override conventions." -- so the leading clause
+#: this file's "leads, not trails" invariant checks is now just "See ".
+_UNLOCK_BLOCK_LEAD = "See "
 
 #: The retired shared disclaimer -- pinned here as an ABSENCE check, not a
 #: presence check, in both test classes below: a future edit reintroducing
@@ -194,8 +198,19 @@ class TestOperatorOverrideNoteDisclaimer:
 
 class TestAnnotateDenyDisclaimer:
     """`session.guard_unlock_sentinel.annotate_deny` -- the in-session,
-    one-shot sentinel-unlock block appended AFTER a firing hard-deny
-    envelope's own reason (2026-08-11 flip -- see module docstring)."""
+    one-shot sentinel-unlock block that USED TO be appended AFTER a firing
+    hard-deny envelope's own reason (2026-08-11 flip -- see module
+    docstring).
+
+    UPDATED 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-
+    handing-agents-the-keys.md AC-2, item 9 in `annotate_deny`'s docstring):
+    the block is gone entirely -- `message_register._rules.run_rule("B8")`
+    fires on even the narrowed bare doc/wiki-pointer sentence this dispatch
+    tried first (leg (d): any pointer into the override-key/unlock doc
+    surface is itself a gate-referent), so `annotate_deny` now always
+    returns `out` unchanged. Every "leads"/"trails" assertion in this class
+    is inverted accordingly: there is no longer a second half to order
+    against the guard's own reason."""
 
     def _fire(self, tmp_path, monkeypatch):
         import tempfile
@@ -214,10 +229,10 @@ class TestAnnotateDenyDisclaimer:
             doc_display="claude-klabauter docs/reference/guard-override-keys.md",
         )
 
-    def test_unlock_statement_present(self, tmp_path, monkeypatch):
+    def test_unlock_statement_no_longer_present(self, tmp_path, monkeypatch):
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert _UNLOCK_BLOCK_LEAD in reason
+        assert _UNLOCK_BLOCK_LEAD not in reason
 
     def test_reason_leads_the_whole_payload(self, tmp_path, monkeypatch):
         """The guard's own reason must be the FIRST thing an agent meets --
@@ -231,28 +246,21 @@ class TestAnnotateDenyDisclaimer:
             "operator-unlock block -- got: %r" % reason
         )
 
-    def test_unlock_statement_leads_the_appended_block_not_the_whole_payload(self, tmp_path, monkeypatch):
+    def test_no_second_block_is_appended(self, tmp_path, monkeypatch):
+        """Inverted 2026-08-13 (C4d): the envelope is now returned
+        byte-identical to what it went in as -- no `\\n\\n`-separated
+        second half exists to order against the guard's own reason any
+        more."""
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert reason.index("BLOCKED: some guard fired.") < reason.index(_UNLOCK_BLOCK_LEAD), (
-            "the guard's own reason must precede the operator-unlock block "
-            "-- got: %r" % reason
-        )
-        # Within the appended block, the human-only statement still leads
-        # the bypass-naming sentence -- that half of the old invariant is
-        # unchanged, only the block's position in the whole payload (and its
-        # wording, per the THIRD incident) moved.
-        block = reason.split("\n\n", 1)[1]
-        assert block.startswith(_UNLOCK_BLOCK_LEAD)
+        assert reason == "BLOCKED: some guard fired."
 
-    def test_original_reason_still_present_after_the_unlock_block(self, tmp_path, monkeypatch):
-        """The unlock block augments, it does not replace -- the guard's own
-        reason must still be reachable (now ahead of it, see module
-        docstring's 2026-08-11 flip)."""
+    def test_original_reason_still_present_unchanged(self, tmp_path, monkeypatch):
+        """The reason must still be reachable, now byte-identical (item 9)
+        rather than merely ahead of an appended block."""
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "BLOCKED: some guard fired." in reason
-        assert reason.index("BLOCKED: some guard fired.") < reason.index(_UNLOCK_BLOCK_LEAD)
+        assert reason == "BLOCKED: some guard fired."
 
     def test_retired_disclaimer_register_does_not_reappear(self, tmp_path, monkeypatch):
         out = self._fire(tmp_path, monkeypatch)
@@ -266,24 +274,24 @@ class TestAnnotateDenyDisclaimer:
         """Regression for the 2026-08-11 incident itself: the fused
         imperative-plus-sequencing form ("create <path> FIRST, as its own
         command -- chaining it onto the denied command re-denies") must not
-        reappear, and the block must instead read as self-limiting --
-        naming that the sentinel is created by a human from OUTSIDE this
-        session, and that an agent creating it is a doctrine violation. A
-        test that passes on both the old and new text catches nothing, so
-        this asserts on the specific old phrasing being ABSENT and the new
-        self-limiting phrasing being PRESENT, not merely on the leading
-        statement's presence (already covered above)."""
+        reappear.
+
+        Inverted 2026-08-13 (C4d, item 9 in `annotate_deny`'s docstring):
+        this test used to also assert the block's self-limiting framing
+        ("outside this session" / "doctrine violation") was PRESENT -- that
+        framing is gone entirely now (AC-2: an EM message may carry the
+        wiki pointer and nothing else, and even that was found to trip
+        B8), so those two phrases are now asserted ABSENT instead."""
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        after_lead = reason.split(_UNLOCK_BLOCK_LEAD, 1)[1].lstrip()
-        assert not after_lead.startswith("create "), (
-            "the block must not open with a bare imperative verb "
-            "immediately after the leading statement -- got: %r" % reason
+        assert "create " not in reason.split("BLOCKED: some guard fired.", 1)[-1], (
+            "the (now-nonexistent) block must not open with a bare "
+            "imperative verb -- got: %r" % reason
         )
         assert "FIRST, as its own command" not in reason
         assert "chaining it onto the denied command re-denies" not in reason
-        assert "outside this session" in reason
-        assert "doctrine violation" in reason
+        assert "outside this session" not in reason
+        assert "doctrine violation" not in reason
 
     def test_no_resolved_sentinel_path_or_recipe(self, tmp_path, monkeypatch):
         """PM ruling, 2026-08-11 (this dispatch): "a guard's block message
@@ -405,10 +413,15 @@ class TestAnnotateDenyAgentIdSuppression:
             "identical, with no unlock block appended -- got: %r" % reason
         )
 
-    def test_absent_agent_id_still_emits_the_block(self, tmp_path, monkeypatch):
+    def test_absent_agent_id_resolved_em_still_renders_nothing(self, tmp_path, monkeypatch):
+        """Inverted 2026-08-13 (C4d, item 9): a resolved-EM audience used
+        to be the condition that made the block emit; there is no longer
+        any block to emit (B8 fires on it, see class docstring), so a
+        resolved EM now gets the reason back unchanged too."""
         out = self._fire(tmp_path, monkeypatch, agent_id="")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert _UNLOCK_BLOCK_LEAD in reason
+        assert _UNLOCK_BLOCK_LEAD not in reason
+        assert reason == "BLOCKED: some guard fired."
 
     def test_malformed_agent_id_degrades_to_terse(self, tmp_path, monkeypatch):
         """AC-3 inversion (2026-08-13, C3): a malformed/unrecognised

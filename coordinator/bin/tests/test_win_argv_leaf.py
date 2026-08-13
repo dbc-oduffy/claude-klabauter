@@ -19,6 +19,15 @@ from pathlib import Path
 
 import pytest
 
+# test_win_argv_import_graph_stays_leaf_clean needs a genuinely CLEAN
+# subprocess interpreter to inspect sys.modules after importing win_argv --
+# the leaf-clean claim (no coordinator_core/psutil pulled in transitively)
+# cannot be checked in-process, since this test harness's own process
+# already has both loaded. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _LIB_DIR = Path(__file__).parent.parent / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))

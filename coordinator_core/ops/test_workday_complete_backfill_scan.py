@@ -31,6 +31,15 @@ import pytest
 
 from coordinator_core.ops.workday_complete_backfill_scan import main
 
+# Declared, not excused: this file's `main()` calls genuinely shell out to
+# `git log --after/--before` (see `_window_args` below) to build per-day commit
+# windows -- the property under test IS git's own date-window resolution and
+# local-timezone interpretation, which no mock stands in for. The module port's
+# own oracle-parity contract requires this. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # `_window_args` passes bare (offset-less) date-times to `git log --after/--before`,
 # which git's date parser interprets in the INVOKING PROCESS's local system timezone
 # (documented git behavior) — a faithfully-reproduced oracle seam, not a bug (see the

@@ -33,6 +33,12 @@ import yaml
 
 from coordinator_core.subagent_sandbox import engine
 
+# Real git repo is load-bearing: resolve_git_root() is asserted against a
+# real `git init`'d tree per this file's own module docstring so it behaves
+# exactly as it does against a production checkout -- no subprocess mock
+# stands in for git's own root-discovery behaviour.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 CONFINED_TYPE = "coordinator:code-reviewer"
 REPORT_SIDECAR_TYPE = "coordinator:executor"

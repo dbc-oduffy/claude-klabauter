@@ -58,6 +58,13 @@ from pathlib import Path
 
 import pytest
 
+# `queue_repo` spawns real git because queue.close's commit + fleet.archive_
+# queue_entry pipeline (stamp commit, then archive-move commit, idempotency
+# via locked_rmw's byte-identical-skip) is only provable against a real
+# object database. Each test mutates the repo (stamps, archives, resumes
+# stranded commits), so isolation cannot be hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---- Import guards: fire @register_op side-effects. ----
 import coordinator_core.ops  # noqa: F401 -- populates _REGISTRY for the eagerly-wired ops
 import coordinator_core.ops.queue_close  # noqa: F401

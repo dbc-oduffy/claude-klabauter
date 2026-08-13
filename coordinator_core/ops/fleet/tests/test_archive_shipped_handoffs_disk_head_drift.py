@@ -47,7 +47,18 @@ import asyncio
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.fleet.archive_shipped_handoffs import _handle_act, _is_shipped_terminal
+
+# Real-git spawn is load-bearing: same argument as
+# test_archive_and_commit_disk_head_drift.py's own docstring -- the disk/HEAD
+# drift the composite path must refuse is an index/worktree divergence no
+# mocked git has an index to exhibit. Single test, single repo -- no
+# module-scope hoist needed. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:

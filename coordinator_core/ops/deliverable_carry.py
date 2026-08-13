@@ -25,6 +25,19 @@ Cascade (mirrors the bash oracle verbatim — see the original SKILL.md block):
                       only; continuation handoffs inherit the predecessor's
                       initiative FK when the plan doesn't carry one)
 
+Dropped-join refusal, two arms (DR-207 DD#1 AC4; widened for the plan-input
+axis 2026-08-13): mint-from-slug is refused, loud, whenever a plan is in
+play and no rung of the cascade produced a `deliverable_id` — this is the
+carry-not-remint rule's own fail-loud complement. Arm one fires when the
+plan arrives as `plan_file` (the session's CLAIMED plan, via
+`resolve_claimed_plan_path`). Arm two fires when the plan arrives instead
+as `predecessor` — the plan-input axis, `predecessor_is_plan_input=True` —
+because a plan handed directly as the artifact under `baton-assemble brief
+handoff <plan-path>` never touches `plan_file` at all. Same defect, same
+exception type, opposite entry door; see `resolve_deliverable_and_
+initiative`'s own docstring for why the caller (not this function) asserts
+the plan-input fact.
+
 Spec backlink: coordinator/skills/handoff/SKILL.md § Deliverable-spine threading
                (D1 carry-not-remint) — example-doctrine-repo, C3d
                docs/plans/2026-08-01-deliverable-id-carry-onto-executing-handoff.md
@@ -224,6 +237,7 @@ def resolve_deliverable_and_initiative(
     *,
     additional_predecessors: list[str] | None = None,
     equivalence_map: dict[str, str] | None = None,
+    predecessor_is_plan_input: bool = False,
 ) -> tuple[str, str]:
     """Run the carry-or-mint cascade. Returns (deliverable_id, initiative_id).
 
@@ -274,6 +288,18 @@ def resolve_deliverable_and_initiative(
     `{}` (every id canonicalizes to itself), i.e. today's raw-comparison behaviour —
     no fallback of this function's own is layered on top of `load_equivalence_map`'s
     existing missing-artifact degrade.
+
+    `predecessor_is_plan_input` (keyword-only, defaults `False` — every existing
+    call site is unaffected): the CALLER's assertion that `predecessor` is itself
+    a plan input (the plan->execute trigger's own plan, arriving on the
+    predecessor axis rather than as `plan_file`) — this function never reads
+    `predecessor`'s frontmatter or path to decide that for itself, mirroring
+    `resolve_session_state_parent_deliverable_id`'s own division of labour above.
+    When set and no rung of the cascade produces a `deliverable_id`, this raises
+    `DroppedDeliverableJoinError` exactly as the `plan_active` arm below does — a
+    plan dropped its join whether it arrived as `plan_file` or as `predecessor`,
+    and the refusal must not depend on which door it came through. See the
+    module docstring's "Dropped-join refusal, two arms" block.
     """
     plan_active = bool(plan_file and os.path.isfile(plan_file))
     predecessor_active = bool(predecessor and os.path.isfile(predecessor))
@@ -333,6 +359,14 @@ def resolve_deliverable_and_initiative(
             "unreadable file, or literal `null` — all indistinguishable at this layer), "
             "and the predecessor handoff fallback also yielded nothing — refusing to "
             "silently mint-from-slug under an active plan"
+        )
+
+    if not dlvr_id and predecessor_is_plan_input:
+        raise DroppedDeliverableJoinError(
+            f"predecessor {predecessor!r} arrived on the predecessor axis as a plan "
+            "input and names no deliverable_id (absent field, unreadable file, or "
+            "literal `null` — all indistinguishable at this layer) — refusing to "
+            f"silently mint-from-slug; add deliverable_id to {predecessor!r}"
         )
 
     if dlvr_id:

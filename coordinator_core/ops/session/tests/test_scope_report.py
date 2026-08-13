@@ -57,6 +57,11 @@ from coordinator_core.ops.session.scope_report import (
 )
 from coordinator_core.session import core, scope
 
+# Real git spawn is load-bearing: assert_paths_in_session_scope and
+# session.scope_report both delegate to compute_offer, which reads real
+# `git status`/diff output to compute the dirty set no mock stands in for.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _OP_NAME = "session.scope_report"
 _session_registered_ops = [k for k in _REGISTRY if k.startswith("session.")]
 assert len(_session_registered_ops) >= 1, (

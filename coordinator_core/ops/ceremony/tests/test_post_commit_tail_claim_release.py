@@ -32,6 +32,15 @@ from coordinator_core.ops.ceremony.post_commit_tail import (
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 
+# `_commit_and_push_origin_stub_close` lands a real commit and this suite
+# reads real touched.txt claim-release events back through `session_scope`
+# -- no mock stands in for the real commit->release ordering under test.
+# Per-test `repo` fixture because the test commits into it.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(args, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)

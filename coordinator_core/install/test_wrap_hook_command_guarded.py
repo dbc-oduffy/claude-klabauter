@@ -37,10 +37,19 @@ from coordinator_core.install._shared import (
 from coordinator_core.install.gen_settings_hooks import generate
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt",
-    reason="POSIX `sh -c` execution tests — PowerShell shape is asserted structurally, not executed, on Windows (see test_guarded_powershell_shape_only below).",
-)
+# Real `sh -c` execution is load-bearing per this file's own module
+# docstring: every guard's exit code is verified by observation, not
+# string-shape assertion -- the exit-127-vs-2 sentinel collision this suite
+# exists to catch can only be proven by a real shell exit code. Already
+# POSIX-only (skipif below), so no Windows spawn-cost concern.
+pytestmark = [
+    pytest.mark.skipif(
+        os.name == "nt",
+        reason="POSIX `sh -c` execution tests — PowerShell shape is asserted structurally, not executed, on Windows (see test_guarded_powershell_shape_only below).",
+    ),
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _run(command: str, env: dict) -> subprocess.CompletedProcess:

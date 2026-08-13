@@ -1676,6 +1676,87 @@ def _scan_deliverable_collision(
     return None
 
 
+def _predecessor_is_plan_input(fm: str, artifact_path: str, root: Path) -> bool:
+    """Is ``artifact_path`` the plan->execute trigger's own PLAN, arriving on
+    the predecessor axis rather than as a real handoff record?
+
+    Predicate: ``artifact_path`` does not carry its own `handoff_id` or
+    `kind` (i.e. is not itself a handoff record -- `_fm_field(fm, "handoff_
+    id")` / `_fm_field(fm, "kind")`, the SAME discriminator `resolve_lineage`
+    computes as `is_own_handoff_record` for its own, differently-scoped,
+    purposes), AND `fm` carries a `plan_id`, AND `artifact_path` resolves to
+    a path under `docs/plans/` relative to `root` (the secondary confirmatory
+    check -- a `plan_id`-shaped field alone, off a path that does not live
+    under `docs/plans/`, is not enough).
+
+    The single definition `resolve_lineage` consults at BOTH the pre-cascade
+    call site (arming `resolve_deliverable_and_initiative`'s
+    `predecessor_is_plan_input` refusal, DR-207 DD#1 AC4-widening) and the
+    post-cascade `discovery == "plan-input"` relabel -- a second copy here is
+    exactly the drift AC4 exists to prevent: the guard could then disagree
+    with the label about what a plan input IS.
+
+    ``fm`` and ``artifact_path`` must be the SAME values `resolve_lineage`
+    already holds (frontmatter already read, `artifact_path` already
+    normalized/resolved) -- this function does no path resolution of its
+    own beyond the `docs/plans/` containment check, mirroring every other
+    predicate in this module's caller-resolves/this-reads discipline.
+
+    Null-reader split, INTENTIONAL (2026-08-13 review, finding 1): this
+    predicate's `plan_id` presence check goes through `_fm_field`
+    (`read_fm_field_unquoted`), which does NOT fold a literal YAML
+    `plan_id: null` to `None` -- it returns the two-character string
+    `"null"`. That is a DIFFERENT null-handling contract from the sibling
+    reader `read_frontmatter_field` used for the `deliverable_id` rungs in
+    the same cascade, which DOES fold literal `null` to `""`. Do NOT
+    "fix" this by normalizing `plan_id: null` to absent/`None` -- the two
+    failure modes are asymmetric: treating `plan_id: null` as PRESENT
+    (this function's current behaviour) over-arms the guard, costing a
+    loud refusal the caller can fix in one edit; treating it as ABSENT
+    would under-arm the guard for a plan-shaped artifact whose author
+    wrote `plan_id: null` instead of omitting the field, reopening the
+    exact silent-mint hole this predicate exists to close. More-inclusive
+    is the deliberately-chosen safe direction here.
+
+    Negative-spec:
+        - Do NOT swap `_fm_field` for `read_frontmatter_field` (or
+          otherwise fold literal `null` to absent) on the `plan_id`
+          check above -- see the null-reader-split paragraph.
+    """
+    if _fm_field(fm, "handoff_id") or _fm_field(fm, "kind"):
+        return False
+    if _fm_field(fm, "plan_id") is None:
+        return False
+    _plan_candidate = Path(artifact_path) if artifact_path else None
+    if _plan_candidate is not None:
+        if not _plan_candidate.is_absolute():
+            _plan_candidate = root / _plan_candidate
+        try:
+            _plan_rel_parts = _plan_candidate.resolve().relative_to(root.resolve()).parts
+        except (OSError, ValueError):
+            # Resolved containment failed -- may be a genuinely
+            # out-of-root path, OR a `docs/plans/*.md` entry that is
+            # itself a SYMLINK resolving outside `root` (2026-08-13
+            # review, finding 2). `.resolve()` follows symlinks, so the
+            # resolved-path check alone silently falls through to "not a
+            # plan input" for that shape -- the same silent-mint failure
+            # mode this predicate exists to close, reopened for a
+            # symlinked plan file. Fall back to the UN-resolved path's
+            # own containment before concluding "not a plan input";
+            # resolved containment stays the primary test.
+            try:
+                _plan_rel_parts = _plan_candidate.relative_to(root).parts
+            except ValueError:
+                _plan_rel_parts = ()
+    else:
+        _plan_rel_parts = ()
+    return (
+        len(_plan_rel_parts) >= 2
+        and _plan_rel_parts[0] == "docs"
+        and _plan_rel_parts[1] == "plans"
+    )
+
+
 def resolve_lineage(
     kind: str,
     artifact_path: str,
@@ -1848,13 +1929,25 @@ def resolve_lineage(
         _predecessor_file = (
             str(_artifact_frontmatter_abs_path) if _artifact_frontmatter_abs_path else None
         )
+        # Dropped-join guard, plan-input axis (2026-08-13): computed HERE,
+        # BEFORE the cascade call, from `fm`/`artifact_path` this function
+        # already holds -- the SAME predicate the `is_plan_input` relabel
+        # below re-derives from the identical inputs, via the one shared
+        # helper (`_predecessor_is_plan_input`), never a second copy. A plan
+        # handed in as `_predecessor_file` (the plan->execute trigger's own
+        # plan, never touching `_plan_file`) must arm the same refusal a
+        # claimed plan already arms -- see `resolve_deliverable_and_
+        # initiative`'s module docstring, "Dropped-join refusal, two arms".
+        _predecessor_plan_input = _predecessor_is_plan_input(fm, artifact_path, root)
         _tracked_read, _discovery_tier = _tracking_read_frontmatter_field(
             _plan_file, _predecessor_file
         )
         # `DroppedDeliverableJoinError` (raised when an active claimed plan
         # names no deliverable_id and the predecessor fallback also yields
-        # nothing) is NOT caught here -- it must propagate to the caller
-        # rather than be swallowed into a silent mint-from-slug (AC4).
+        # nothing, OR when `_predecessor_file` is itself a plan input that
+        # names no deliverable_id) is NOT caught here -- it must propagate to
+        # the caller rather than be swallowed into a silent mint-from-slug
+        # (AC4).
         deliverable_id, initiative = resolve_deliverable_and_initiative(
             _tracked_read,
             _mint_deliverable_id,
@@ -1862,6 +1955,7 @@ def resolve_lineage(
             _predecessor_file,
             additional_predecessors=resolved_additional_predecessors,
             equivalence_map=load_equivalence_map(root),
+            predecessor_is_plan_input=_predecessor_plan_input,
         )
         discovery = _discovery_tier[0] if _discovery_tier else "mint"
     else:
@@ -2030,20 +2124,13 @@ def resolve_lineage(
         # it merely because `artifact_path` was supplied non-empty.
         # `predecessor_handoff` itself is still CARRIED on `lineage` for
         # lineage-carry purposes; it is simply not a termination target.
-        is_plan_input = not is_own_handoff_record and _fm_field(fm, "plan_id") is not None
-        if is_plan_input:
-            _plan_candidate = Path(artifact_path) if artifact_path else None
-            if _plan_candidate is not None:
-                if not _plan_candidate.is_absolute():
-                    _plan_candidate = root / _plan_candidate
-                try:
-                    _plan_rel_parts = _plan_candidate.resolve().relative_to(root.resolve()).parts
-                except (OSError, ValueError):
-                    _plan_rel_parts = ()
-            else:
-                _plan_rel_parts = ()
-            if not (len(_plan_rel_parts) >= 2 and _plan_rel_parts[0] == "docs" and _plan_rel_parts[1] == "plans"):
-                is_plan_input = False
+        # Re-derived via the single shared helper -- see the pre-cascade
+        # call site above (and `_predecessor_is_plan_input`'s own
+        # docstring) for the "one definition, two call sites" contract;
+        # re-derived here, from the identical `fm`/`artifact_path`, only
+        # because `is_own_handoff_record` (computed above, for OTHER
+        # purposes this block needs) was not yet available earlier.
+        is_plan_input = _predecessor_is_plan_input(fm, artifact_path, root)
 
         # C4 (2026-08-03, deliverable-id-carry-plan-handoff-agree plan, AC7):
         # `_tracking_read_frontmatter_field` above tags a hit against

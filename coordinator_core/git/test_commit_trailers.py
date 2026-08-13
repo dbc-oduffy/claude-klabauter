@@ -28,6 +28,13 @@ from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.session.claimed_plan import list_held_plan_claims
 from coordinator_core.win_portability import no_console_creationflags
 
+# Real git is load-bearing: compute_missing_trailer_args resolves via
+# `git rev-parse --git-dir` (coordinator_core.git.repo_root), and the tier-3
+# fallback under test reads plan frontmatter through a real
+# `.git/coordinator-sessions/<sid>/session-shape.json` on disk -- neither is
+# reproducible against a mocked git-dir seam.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _SID = "12121212-1212-4121-8121-121212121212"
 
 

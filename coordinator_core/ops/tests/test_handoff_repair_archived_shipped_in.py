@@ -42,6 +42,13 @@ from pathlib import Path
 
 import pytest
 
+# `_make_git_repo` spawns real `git init`/`config` because the handler under
+# test performs real archived-handoff commits (repair, unset, no-op checks)
+# that only a genuine object database can validate byte-identically; each
+# test builds and mutates its own repo, so isolation cannot be hoisted to
+# module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 import coordinator_core.ops.handoff_stamp  # noqa: F401 — module under test
 
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter

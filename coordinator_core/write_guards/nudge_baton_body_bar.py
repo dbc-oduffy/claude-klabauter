@@ -130,12 +130,11 @@ only, write already landed.{override_sentence}
 """
 
 _TRIVIAL_HINT = """
-[hook] COORDINATOR_BATON_BODY_PUNT was set but the value was trivial ("1",
-[hook] "ok", "yes", under 12 chars, or degenerate filler like "aaaaaaaaaaaa"
-[hook] / "abababababab" / an all-digit string with no letters at all). A
-[hook] human operator, before launch, would need to re-set it with an
-[hook] actual reason, e.g.:
-[hook]   COORDINATOR_BATON_BODY_PUNT="pure data table, context lives in the linked plan"
+[hook] The operator-only env fallback was set but its value was trivial
+[hook] ("1", "ok", "yes", under 12 chars, or degenerate filler like
+[hook] "aaaaaaaaaaaa" / "abababababab" / an all-digit string with no
+[hook] letters at all) -- add authored prose to the body instead: goal,
+[hook] decisions made, next step.
 """
 
 

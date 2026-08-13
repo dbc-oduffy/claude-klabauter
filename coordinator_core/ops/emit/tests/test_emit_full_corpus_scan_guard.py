@@ -95,6 +95,14 @@ import pytest
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.envelope import emit
 
+# The oracle this guard asserts on IS the count of real `subprocess.run`
+# spawns `envelope.emit()` issues -- a mock would make the metric under test
+# vacuous (see module docstring "Oracle chosen and why it generalises").
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 #: Distinct synthetic handoff records in the corpus. Must be large enough
 #: that a single per-record subprocess spawn is unmistakable against the
 #: measured O(1) baseline (12) — at N=200, one spawn/record alone adds +200,

@@ -78,6 +78,12 @@ from coordinator_core.ops.queue_promote import (  # noqa: E402
     promote_lesson,
 )
 
+# Byte-parity assertions compare op output against the legacy bash oracles'
+# real output for the same real repo/session inputs — the env-pin (F8) and
+# caller_worktree (F13) checks specifically assert against real git/session
+# state, which a mocked git would only prove the mock's own return value for.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Oracle / schema-cli path resolution (reads ~/.claude/.doe-root sentinel)
 # ---------------------------------------------------------------------------

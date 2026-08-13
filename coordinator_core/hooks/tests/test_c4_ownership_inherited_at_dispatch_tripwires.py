@@ -64,6 +64,13 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.session.scope_report import assert_paths_in_session_scope
 from coordinator_core.session import scope as touch_scope
 
+# Real git is load-bearing for the AC6 behavioural tripwire: it dispatches
+# real payloads at track_touched_files._handler against a real repo's
+# `git_common_dir`, asserting claims land under the actual
+# `.git/coordinator-sessions/<sid>/touched.txt` path -- a mocked common_dir
+# would not exercise the real session-dir bootstrap this pin covers.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLAIMS_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claims.py"
 _TRACK_TOUCHED_FILES_PATH = _REPO_ROOT / "coordinator_core" / "hooks" / "track_touched_files.py"

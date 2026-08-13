@@ -58,9 +58,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
 import yaml
 
 from coordinator_core.win_portability import no_console_creationflags
+
+# Declared, not excused: every case runs `coordinator-doc-new` as a real CLI
+# subprocess against a real `_tmp_git_repo` fixture -- the property under
+# test is the CLI's actual write-time behaviour (frontmatter emitted to
+# disk, exit codes on unresolvable/omitted/conflicting sizing citations),
+# which no in-process mock stands in for. `_tmp_git_repo` is invoked
+# per-test (not hoisted to module scope) because several tests mutate the
+# yielded repo (writing a plan under docs/plans/, exercising the reverse-edge
+# `--sizing-object` FK write), so a shared repo would leak mutation across
+# tests -- the same failure mode test_verify_shipped.py's docstring names.
+# The spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _CLI_PATH = _BIN_DIR / "coordinator-doc-new"

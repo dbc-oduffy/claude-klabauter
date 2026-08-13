@@ -20,6 +20,16 @@ import pytest
 
 from coordinator_core.ops.emit import enrich
 
+# Declared, not excused: this file spawns real git because the property under test
+# IS git's own `git log --name-only`/`-1 --format=%cI` history-walk semantics --
+# merge-commit tree-simplification equivalence (TestMergeCommitEquivalence) and
+# `core.quotepath` non-ASCII filename handling (TestNonAsciiFilenameEquivalence) are
+# real git behaviours no mock can stand in for; the whole file's purpose is proving
+# the batched walk agrees with the git-native oracle. The spawn ratchet's `_BASELINE`
+# is shrink-only pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _run_git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)

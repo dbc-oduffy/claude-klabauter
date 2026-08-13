@@ -85,6 +85,13 @@ assert _OP_NAME in _REGISTRY, (
     "coordinator_core.ops.plan_tasks_mutate @register_op did not fire"
 )
 
+# The CLI-seam end-to-end coverage (AC8) genuinely spawns
+# `python -m coordinator_core.invoke` as a real subprocess to prove the wire
+# path, not just the in-process handler; the path-containment fixture also
+# needs a real git repo since plan_tasks_mutate resolves paths against actual
+# repo state.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Helpers

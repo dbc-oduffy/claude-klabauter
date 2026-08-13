@@ -37,6 +37,17 @@ import pytest
 
 from coordinator_core.session import core
 
+# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
+# real git (init/config/add/commit) because the production code under test --
+# `core.git_root()`, session-hub resolution via `git rev-parse
+# --git-common-dir`, and HEAD/branch resolution -- reads real git state that
+# no mock stands in for. `tmp_path` is function-scoped and tests reuse the
+# same session ids across the file, so the repo fixture stays per-test rather
+# than hoisted to module scope. The spawn ratchet's `_BASELINE` is
+# shrink-only pre-existing residue and is explicitly not the route for this
+# file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 try:
     import psutil
 except ImportError:  # guarded per-test via pytest.mark.skipif(find_spec is None)

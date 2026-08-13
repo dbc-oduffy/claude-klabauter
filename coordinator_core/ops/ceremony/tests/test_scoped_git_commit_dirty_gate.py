@@ -198,6 +198,133 @@ def test_refuses_when_claimant_live_and_path_dirty(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# C2 (docs/plans/2026-08-13-commit-gate-stops-refusing-your-own-staged-hunk.md):
+# divergence, not dirtiness, is the discriminator -- AC1 (positive) and AC2
+# (negative). See the spike verdict this plan proved rather than read:
+# docs/research/spike-verdicts/2026-08-13-private-index-form-cannot-sweep-a-
+# peers-worktree.md.
+# ---------------------------------------------------------------------------
+
+
+def test_proceeds_when_claimant_live_and_path_diverged_committing_staged_bytes_only(
+    tmp_path,
+):
+    """AC1: a live peer claims the path, and the caller's own hunk is
+    STAGED into the index while the worktree carries an additional,
+    unstaged line on top -- a diverged path. The commit must SUCCEED, and
+    it must commit the staged (index) bytes only: the committed blob holds
+    the caller's staged line and NOT the worktree-only line, while that
+    worktree-only line survives on disk and is still reported dirty by
+    `git status --porcelain` afterward. Asserting only "it committed" would
+    also pass if the peer's worktree line had been swept into the commit --
+    the exact failure this plan exists to prevent -- so all three
+    assertions are load-bearing, not redundant.
+
+    This is also the LOAD-BEARING guard against a future pass "simplifying"
+    C1's divergence check back into a plain dirtiness check: a dirty, NOT
+    diverged path is refused by both the old dirtiness-keyed logic and the
+    new divergence-keyed logic, so the negative test below passes under
+    either and cannot by itself detect that regression. Only this positive
+    test's blob/on-disk/porcelain assertions distinguish the two -- a
+    revert to dirtiness-keying would refuse this diverged-but-staged case
+    too, failing this test."""
+    repo = _init_repo(tmp_path)
+    _seed_and_commit_file(repo, "contested.txt", "line-A-base\n")
+
+    # Stage the caller's own hunk into the index.
+    _dirty_file(repo, "contested.txt", "line-A-base\nOURS-staged-line\n")
+    _git(["add", "contested.txt"], repo)
+    # Then diverge the worktree further with an additional, unstaged line --
+    # the shape a live peer's own in-progress work actually has.
+    _dirty_file(
+        repo,
+        "contested.txt",
+        "line-A-base\nOURS-staged-line\nPEER-uncommitted-line\n",
+    )
+
+    _write_touched(repo, "sess-peer", [_touch_line("T", "contested.txt")])
+    _write_meta(repo, "sess-peer", live=True)
+    _write_meta(repo, "sess-caller", live=True)
+
+    result = _call({
+        "worktree_root": str(repo),
+        "paths": ["contested.txt"],
+        "message": "commit our own staged hunk over a diverged, peer-claimed path",
+        "session_id": "sess-caller",
+    })
+
+    assert result["committed"] is True
+    assert "error" not in result
+
+    committed_blob = subprocess.run(
+        ["git", "show", "HEAD:contested.txt"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    assert "OURS-staged-line" in committed_blob
+    assert "PEER-uncommitted-line" not in committed_blob
+
+    on_disk = (repo / "contested.txt").read_text(encoding="utf-8")
+    assert "PEER-uncommitted-line" in on_disk
+
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain", "--", "contested.txt"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    assert porcelain.strip() != "", (
+        "the peer's worktree-only line must still be reported dirty after "
+        "the commit -- it was neither committed nor removed"
+    )
+
+
+def test_refuses_when_claimant_live_and_path_dirty_but_not_diverged_regression_guard(
+    tmp_path,
+):
+    """AC2, and the LOAD-BEARING negative-spec guard for this plan: a live
+    peer claims the path, and the path is dirty with a plain UNSTAGED
+    modification only -- nothing is staged, so the path is dirty but NOT
+    diverged. This must still REFUSE, with the rejection naming the path,
+    exactly as `test_refuses_when_claimant_live_and_path_dirty` above.
+
+    This is the test that guards against the gate being over-widened into
+    allowing dirty paths generally: the spike verdict's negative arm proved
+    a dirty, non-diverged path takes git's own `--only` agree-branch and
+    SWEEPS unstaged worktree content into the commit
+    (docs/research/spike-verdicts/2026-08-13-private-index-form-cannot-
+    sweep-a-peers-worktree.md). A dirty-but-not-diverged path is refused by
+    both the old dirtiness-keyed logic and the new divergence-keyed logic,
+    so this test alone cannot detect a "simplify back to a plain dirtiness
+    check" regression -- that regression is instead caught by the
+    diverged-path positive test above, since only the new logic lets a
+    diverged path through. If THIS test goes green while the gate has been
+    over-widened to allow dirty paths generally, it is silently committing
+    a live peer's uncommitted work -- the exact harm this plan exists to
+    prevent -- so keep this refusal in place even if it looks redundant
+    with the diverged-path positive test above.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_and_commit_file(repo, "contested.txt", "v1\n")
+    # Plain unstaged edit -- nothing staged, so NOT diverged.
+    _dirty_file(repo, "contested.txt", "v2\n")
+
+    _write_touched(repo, "sess-peer", [_touch_line("T", "contested.txt")])
+    _write_meta(repo, "sess-peer", live=True)
+    _write_meta(repo, "sess-caller", live=True)
+
+    result = _call({
+        "worktree_root": str(repo),
+        "paths": ["contested.txt"],
+        "message": "steal a live peer's dirty-but-not-diverged file",
+        "session_id": "sess-caller",
+    })
+
+    assert result["committed"] is False
+    assert "contested.txt" in result["error"]
+    assert "sess-peer" in result["error"]
+
+
+# ---------------------------------------------------------------------------
 # Unanswerable-path: fails closed PER PATH, sibling proceeds
 # ---------------------------------------------------------------------------
 

@@ -54,6 +54,12 @@ from coordinator_core.ops.completion_ops import (
     reconcile_completion_commits,
 )
 
+# reconcile_completion_commits' byte-parity assertions are pinned against real
+# commit SHAs produced by a real repo, matching the shape the legacy bash
+# oracle itself reads — a mocked git would validate invented SHAs, not the
+# oracle's real input contract.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Oracle / example-doctrine-repo-root path resolution
 # ---------------------------------------------------------------------------

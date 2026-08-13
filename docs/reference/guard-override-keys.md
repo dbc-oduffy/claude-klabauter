@@ -386,9 +386,10 @@ above, self-documented in `detect_staged_rollback.py`'s own module docstring and
 than by drift: `_cf_spinoff_roadmap_requires_graph` is a cross-field rule
 that hard-denies, so under SC-DR-016 its override key had to be *public* —
 minting it without a row here would have failed the very condition that
-cleared the deny to ship. The rule imports `operator_override_note` on its
-deny leg only (a function-local import), so the audited-SSOT property holds
-without putting the guard helper on the hot-path import graph.
+cleared the deny to ship. As of `b1e1119f9` (ruling D5,
+`tasks/guard-messages-keys/DECISIONS.md`) the rule's deny leg no longer calls
+`operator_override_note` at all — the key is public and registered in this
+table, but its name is not surfaced in the deny text itself.
 
 ## Override keys, by guard
 
@@ -601,3 +602,34 @@ Spec backlink: `docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-key
 § C9 (this table is C9's precondition of C6/AC-5 — C6 widens
 `message_register._override_keys._FAMILY_RE` to match the hyphenated shape
 and enumerates FROM this table, not from a hand-kept list).
+
+## Dotfile state-marker sentinels — a third artifact shape
+
+Distinct from both tables above: not an `os.environ` key, and not a
+hyphenated `COORDINATOR-OVERRIDE-*`/`.COORDINATOR-OVERRIDE-*` bypass token
+read off a dispatch prompt or matched by `_FAMILY_RE`. These are lowercase,
+hyphen-separated **dotfile sentinels on disk** whose mere presence (not
+content, for the two that don't parse one) flips machine- or repo-wide
+guard/hook behavior. `coordinator_core.message_register._marker_filenames.
+real_marker_filenames()` scans for exactly this shape (a module-level
+`SENTINEL`/`MARKER` constant whose value matches the dotfile/hyphenated-
+marker pattern) and `doc_registered_gap()` reported these three present in
+code but absent from this doc (chunk C6, live finding) — closed here rather
+than left invisible to registry-derived enumeration, the same B8/AC-5
+property the hyphenated table above exists for. They get their own table,
+not a row in the hyphenated table above, because that table's own heading
+scopes it to the uppercase `COORDINATOR-OVERRIDE-*` family specifically
+(`_FAMILY_RE`-adjacent); these three fall outside that family's shape
+entirely, not merely outside its case-folding.
+
+Per `XREPO_MARKER_IS_ORDINARY_FILE`: every marker below is an ordinary file,
+bare `touch`-able, with no identity gating and no expiry mechanism (except
+where its own guard's docstring, linked below, documents an expiry the
+marker's *content* — not this table — enforces). This table adds them to the
+registry; it does not harden any of the three mechanisms.
+
+| Marker | Owning guard/module | What it does |
+|---|---|---|
+| `.coordinator-bash-guards-disarmed` | `coordinator_core/bash_guards/_blanket_disarm.py` (`MARKER_BASENAME`); creation protected by `coordinator_core/bash_guards/block_disarm_marker_sentinel_creation.py` | The blanket-disarm marker itself — see § "Human-only affordances" route 2 above for its full `Scope:`/`Bands:` content contract. Machine-scoped (resolved under the settings home, not a repo root), and this is the one basename in this table already described narratively elsewhere in this doc; it is rostered here by literal basename so registry-derived enumeration finds it. |
+| `.coordinator-dev-repo` | `coordinator_core/bash_guards/block_dev_repo_sentinel_removal.py` (Bash-leg, advisory since the 2026-08-06 guard-class census) and `coordinator_core/write_guards/block_dev_repo_sentinel_write.py` (Write/Edit leg); consumed by `coordinator_core/claude_md_budget.py` (`DEV_REPO_SENTINEL`) and `coordinator_core/resolve_coordinator_clone.py`; written at install time by `coordinator_core/install/maximalist.py` | Repo-root discriminant: its mere presence tells the dev doctrine repo apart from an OSS install. Not a bypass token — removing or relocating it silently breaks that discriminant fleet-wide, which is why the two guards above exist. |
+| `.coordinator-hooks-disabled` | `coordinator_core/ops/session/guard_settings_integrity.py` (`_KILL_SWITCH_MARKER_NAME`, owns the marker's own `Since:`/`Expires:`/`Reason:` content format); consumed by `coordinator_core/write_guards/guard_settings_json_write.py` (`_HOOKS_DISABLED_MARKER`) and detected by `coordinator_core/ops/doctor.py` | A machine-wide kill-switch: its presence (armed, per its own parsed content) suppresses hook-delivered guard enforcement outright — the widest-blast-radius marker in this table, which is why `guard_settings_integrity.py` parses and validates its content rather than treating bare presence as sufficient. |

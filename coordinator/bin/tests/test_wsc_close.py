@@ -233,6 +233,120 @@ def test_tail_args_parser_accepts_every_flag_the_directive_builder_emits():
     assert tail_args.review_scope_kind == "diff"
 
 
+def test_reviewer_evidence_survives_all_three_argv_hops():
+    """Regression (example-doctrine-repo memo 2026-08-13 § 2): the value was supplied in
+    `decisions["review"]`, accepted by `wsc-tail.py`'s parser, and forwarded by
+    the op — but neither intermediate argv layer carried it, so the op-side
+    delegate-reviewer gate never saw the correlation it checks. Pins all three
+    hops, the same way the `--review-scope-kind` regression above does."""
+    from coordinator_core.workstream_complete import directives_commit_tail
+
+    evidence = "state/subagent-share/sid/coordinatorcode-reviewer-abc123.md"
+    directive = directives_commit_tail.build_close_tail_args_directive(
+        {
+            "review": {
+                "sha_range": "abc..def",
+                "reviewer": "code-reviewer",
+                "scope": "chain",
+                "verdict": "ok",
+                "diff_loc": "120",
+                "reviewer_evidence": evidence,
+            }
+        }
+    )
+    emitted_argv = directive["args"]
+    assert "--review-reviewer-evidence" in emitted_argv
+
+    parsed = _wsc_close._build_parser().parse_args(emitted_argv)
+    assert parsed.review_reviewer_evidence == evidence
+
+    spliced = _wsc_close._build_tail_args(
+        deleted_paths=None,
+        kept_entries=None,
+        review_sha_range=parsed.review_sha_range,
+        review_reviewer=parsed.review_reviewer,
+        review_scope=parsed.review_scope,
+        review_verdict=parsed.review_verdict,
+        review_diff_loc=parsed.review_diff_loc,
+        review_scope_kind=parsed.review_scope_kind,
+        review_reviewer_evidence=parsed.review_reviewer_evidence,
+    )
+    tail_args = _load_wsc_tail_module()._build_arg_parser().parse_args(
+        ["--subject", "s", *spliced]
+    )
+    assert tail_args.review_reviewer_evidence == evidence
+
+
+def test_reviewer_evidence_absent_does_not_trip_partial_supply():
+    """Optional, outside the all-or-nothing five — same exemption
+    `--review-scope-kind` has."""
+    out = _wsc_close._build_tail_args(
+        deleted_paths=None,
+        kept_entries=None,
+        review_sha_range="abc..def",
+        review_reviewer="code-reviewer",
+        review_scope="diff",
+        review_verdict="APPROVE",
+        review_diff_loc="120",
+    )
+    assert "--review-reviewer-evidence" not in out
+
+
+def test_reviewer_evidence_mixed_with_slices_is_refused():
+    with pytest.raises(ValueError):
+        _wsc_close._build_tail_args(
+            deleted_paths=None,
+            kept_entries=None,
+            review_sha_range=None,
+            review_reviewer=None,
+            review_scope=None,
+            review_verdict=None,
+            review_diff_loc=None,
+            review_slices=[
+                {
+                    "sha_range": "a1..a2",
+                    "reviewer": "code-reviewer",
+                    "scope": "chain",
+                    "verdict": "ok",
+                    "diff_loc": "10",
+                }
+            ],
+            review_reviewer_evidence="state/subagent-share/sid/a.md",
+        )
+
+
+def test_slice_reviewer_evidence_survives_to_the_wsc_tail_parser():
+    import json as _json
+
+    evidence = "state/subagent-share/sid/a.md"
+    spliced = _wsc_close._build_tail_args(
+        deleted_paths=None,
+        kept_entries=None,
+        review_sha_range=None,
+        review_reviewer=None,
+        review_scope=None,
+        review_verdict=None,
+        review_diff_loc=None,
+        review_slices=[
+            {
+                "sha_range": "a1..a2",
+                "reviewer": "code-reviewer",
+                "scope": "chain",
+                "verdict": "ok",
+                "diff_loc": "10",
+                "reviewer_evidence": evidence,
+            }
+        ],
+    )
+    assert _json.loads(spliced[1])["reviewer_evidence"] == evidence
+
+    wsc_tail = _load_wsc_tail_module()
+    tail_args = wsc_tail._build_arg_parser().parse_args(["--subject", "s", *spliced])
+    slices, errors = wsc_tail._parse_review_slices(tail_args)
+    assert errors == []
+    assert slices[0]["reviewer_evidence"] == evidence
+
+
 def test_partial_review_fields_raises_with_missing_named():
     with pytest.raises(ValueError) as exc_info:
         _wsc_close._build_tail_args(

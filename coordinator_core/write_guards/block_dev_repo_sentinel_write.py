@@ -78,14 +78,12 @@ actually gates `rm`/`mv`/`git rm`/`git mv`.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _sentinel_write_guard import extract_target_path, sentinel_write_advisory  # noqa: E402
+from coordinator_core.write_guards._sentinel_write_guard import (
+    extract_target_path,
+    sentinel_write_advisory,
+)
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 

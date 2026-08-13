@@ -18,6 +18,14 @@ reuse pattern as session.boot_sweep):
   2. handoff.transition ship verb (_ship) — deployment_state → shipped (idempotent).
   3. fleet.archive_shipped_handoffs act path (_handle_act) — re-verifies terminality
      (deployment_state:shipped + git-reachable shipped_in) and git-mv+commits.
+     Passes holder_initiated=True (2026-08-13): this call site archives a handoff
+     the CALLING session itself holds — Check 3's live-claim-dir gate
+     (_is_shipped_terminal, added same date) would otherwise read that self-claim
+     as live and skip every archive on this path, since cs_claim_holder_live has
+     no self-vs-peer discrimination. See _is_shipped_terminal's holder_initiated
+     docstring paragraph for the full rationale; this is the ONE caller that opts
+     in — the standalone fleet op and session.boot_sweep's batch sweep (both
+     background, never the holder) must never pass it.
 
 On the archived outcome (archived: True), the ship stamp is NOT committed separately:
 this module's own call into _handle_act (imported as _archive_shipped_act) passes
@@ -248,7 +256,17 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # this call — see _handle_act's restage_src param docstring and
     # archive_and_commit's "op-authored pre-move content" note for why this is
     # the sole opt-in site, not a default for the shared internal.
-    act = await _archive_shipped_act(_MODE, worktree, [rel_id], restage_src=True)
+    #
+    # holder_initiated=True: this call site archives a handoff the CALLING
+    # session itself holds — see this module's own docstring composition step 3
+    # and _is_shipped_terminal's holder_initiated docstring for the full
+    # rationale. common_dir is deliberately NOT passed here: holder_initiated=True
+    # makes _is_shipped_terminal skip Check 3 unconditionally, so common_dir would
+    # never be read for this call — passing it would be a dead, misleading
+    # argument.
+    act = await _archive_shipped_act(
+        _MODE, worktree, [rel_id], restage_src=True, holder_initiated=True
+    )
 
     acted = act.get("acted", [])
     skipped = act.get("skipped", [])

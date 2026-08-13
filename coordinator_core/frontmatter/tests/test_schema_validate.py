@@ -3027,10 +3027,51 @@ class TestSchemaVersionGate:
 # ---------------------------------------------------------------------------
 
 class TestDriftCheck:
+    @pytest.mark.pending_fix
     def test_handoff_schema_matches_doe_head_after_dr084_revendor(self):
         """Vendored handoff.schema.json is byte-parity with example-doctrine-repo HEAD again, and both
         sides carry last_gate_recheck + the if/then construct as upstream-owned example-doctrine-repo
         constructs.
+
+        PENDING_FIX (2026-08-13): deliberately red, for TWO reasons that must BOTH
+        clear before the mark comes off. Sibling schemas handoff-archived and plan
+        were re-vendored clean at this pass; this file was deliberately not.
+
+        1. `properties.additional_predecessors.description`. Claude-klabauter carries a local
+           correction there (the "ENGINE-DERIVED, not PM-directed" amendment, roadmap
+           stub sedge-02) that example-doctrine-repo's copy still describes as "Optional; requires
+           explicit PM direction." — a sentence the engine's own `baton_assemble`
+           behavior (writes this field at successor-scaffold time) already
+           contradicts.
+
+        2. Example-doctrine-repo's `711ea128f` REMOVED `hand-authored` from
+           `x-producer-typed-command.mapping` — a validation-shape change — while
+           leaving `x-schema-version` at 7.1.0. Vendoring that lands shape debt here
+           under an unmoved version, which is exactly what
+           `test_vendored_schema_shape_bump_parity` exists to refuse; a re-vendor was
+           attempted at `4e0d47e88` and reverted for that reason. We cannot bump our
+           copy to clear it either — example-doctrine-repo's own
+           `test_vendored_schema_matches_doe_source` asserts version equality HARD,
+           so a local bump makes their gate red instead of ours. The version move is
+           theirs to make.
+
+        The two went to example-doctrine-repo-em in SEPARATE memos, not one. (1) rode
+        `2026-08-13-claude-klabauter-em-adopt-additional-predecessors-engine-derived-correction.md`,
+        sent 13:58 — which also stated we had ADOPTED the mapping removal, true when
+        written and falsified two minutes later by the `e6af1c6cf` backout. (2) and
+        the retraction of that line rode
+        `2026-08-13-claude-klabauter-em-handoff-schema-version-move-is-yours-and-a-retraction.md`.
+        Reason it matters to whoever clears this mark: only the second memo carries
+        the version-move ask, and only example-doctrine-repo can discharge it — their
+        `test_vendored_schema_matches_doe_source[handoff.schema.json]` is red against
+        our HEAD right now, printing a "re-vendor" remedy our own shape gate refuses,
+        so the two gates are pointed at each other until the version moves.
+
+        Remove this mark only once example-doctrine-repo's copy carries claude-klabauter's
+        `additional_predecessors.description` text AND has moved `x-schema-version`
+        off 7.1.0 for the mapping removal — do not remove it to chase green on either
+        half alone, and do not remove it for any other divergence this test might
+        start catching.
 
         Formerly `test_handoff_schema_diverges_from_doe_head_intentionally`: C1's
         schema-hardening sub-step (docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md
@@ -3326,7 +3367,11 @@ _QUEUE_SCHEMA_PINS = {
     #   example-doctrine-repo vendored claude-klabauter's 1.2.0 scope_kind enum at 6baac04a3; the ahead-
     #   pin's own remedy path says remove it and restore an ordinary byte-pin
     #   at the new shared SHA
-    'review-trail': "840491558109540f7416e6f09c78148f336873ec",
+    # Pin moved 2026-08-13 to 6466d871410baa349c1836286d5a8a1f1b5b5bcb (example-doctrine-repo
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
+    #   example-doctrine-repo 1.3.0 adds optional execution_basis; parity gate red per memo
+    #   2026-08-13-example-doctrine-repo-em-bump-class-deliberately-absent.md
+    'review-trail': "6466d871410baa349c1836286d5a8a1f1b5b5bcb",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
     # vendoring of a not-yet-tracked name is done by hand, not by the

@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
+from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
 
 #: Timeout (seconds) `commit_scoped()` gives each `diverging_paths()` `git
@@ -203,8 +204,8 @@ def _git(
     run_kwargs: Dict[str, Any] = {}
     if capture:
         run_kwargs["capture_output"] = True
-    try:
-        result = subprocess.run(
+    def _invoke() -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(
             full_args,
             cwd=str(cwd),
             text=True,
@@ -214,6 +215,28 @@ def _git(
             **run_kwargs,
             **stdin_kwargs,
         )
+
+    try:
+        # Retry boundary: wraps ONLY this single `subprocess.run` invocation
+        # (a zero-arg closure over it), never `commit_scoped()` or any
+        # multi-step caller -- per `run_with_lock_retry`'s own negative-spec.
+        # Every seam that routes through `_git()` (scoped_git_commit,
+        # commit_pipeline, consumed_handoff_stamp, post_commit_tail,
+        # wsc_tail) inherits lock-contention retry here, at this one choke
+        # point, rather than composing it individually.
+        #
+        # `capture=False` bypasses the retry wrapper deliberately: with no
+        # `capture_output`, `.stderr` on the CompletedProcess is `None` (per
+        # this function's own `check=True`+`capture=False` docstring
+        # contract, verified by `test_git_capture_false_check_true_raises_
+        # with_none_output_not_synthesized_string`), and `is_lock_
+        # contention()`'s substring test crashes on a `None` `.stderr`. No
+        # production caller passes `capture=False` today (only `capture=
+        # True`, the default, routes through the five inheriting seams), so
+        # this narrows the retry boundary rather than widening
+        # `run_with_lock_retry`/`is_lock_contention` (out of this chunk's
+        # scope -- C3 owns `git_lock_retry.py`) to tolerate `None`.
+        result = _invoke() if not capture else run_with_lock_retry(_invoke)
     except subprocess.TimeoutExpired as exc:
         return GitResult(
             returncode=-1,

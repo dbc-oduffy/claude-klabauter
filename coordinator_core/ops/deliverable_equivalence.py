@@ -89,6 +89,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -590,6 +591,75 @@ def validate_deliverable_ledger_rows(rows: List[Dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Review: coordinatorcode-reviewer c2f6a1ea — F1: YAML 1.1's null-literal set
+# includes `Null`/`NULL` alongside lowercase `null`, not just `null`/`~`/empty.
+# A hand-authored `deliverable_id: Null  # ...` line would otherwise normalize
+# to the literal string "Null" and become a ledger primary key — the exact
+# failure class this helper exists to close.
+_YAML_NULL_LITERALS = frozenset({"null", "Null", "NULL", "~", ""})
+
+
+def _normalize_extracted_deliverable_id(raw: Optional[str]) -> Optional[str]:
+    """Normalize `backfill_deliverable_spine.extract_fm_field`'s rest-of-line output
+    for a `deliverable_id` field into a clean id or `None`.
+
+    Purpose: `extract_fm_field` is a rest-of-line parser (deliberately, per the
+    parser-choice note above this section) — it has no notion of a trailing inline
+    YAML comment or of quoting, so a line like
+    ``deliverable_id: "dlv-x"  # some comment`` yields the comment and quotes as
+    part of the "id" verbatim. Every read site in this section that consumes
+    `extract_fm_field`'s output for `deliverable_id` MUST route through this one
+    helper — applying it to only one side (seed vs. dual-read) would recreate the
+    exact value-divergence class this module's parser-choice note exists to close.
+
+    Steps, in order: strip a trailing ` #...` inline comment (a `#` inside a
+    balanced pair of quotes is NOT treated as a comment start); strip one layer of
+    surrounding matching single/double quotes; strip surrounding whitespace; treat
+    a YAML null literal (`null`, `Null`, `NULL`, `~`, or empty) as absent,
+    returning `None` so the caller's existing `if not raw_id: continue`-shaped
+    skip-guard fires exactly as it does for a truly missing field. A well-formed
+    bare id passes through unchanged.
+
+    Spec backlink: docs/plans/2026-08-13-archive-side-corpus-remediation.md § C2
+    """
+    if raw is None:
+        return None
+
+    value = raw.strip()
+
+    if value and value[0] in ("'", '"'):
+        quote = value[0]
+        close = value.find(quote, 1)
+        if close != -1:
+            value = value[1:close]
+        else:
+            # Review: coordinatorcode-reviewer f292d223 — F7: an unterminated
+            # quote (`"dlv-x` with no closing quote) previously fell straight
+            # through to `value[1:]` with no comment stripping, leaving a
+            # trailing inline comment un-stripped. Deliberate now: treat the
+            # remainder past the opening quote the same way the unquoted branch
+            # does, stripping a ` #...` inline comment if present.
+            value = value[1:]
+            comment_match = re.search(r"\s#", value)
+            if comment_match is not None:
+                value = value[: comment_match.start()]
+    else:
+        # Unquoted value: an inline YAML comment is only ever introduced by
+        # whitespace immediately followed by '#' (YAML convention) — a bare '#'
+        # with no preceding whitespace is part of the value itself, so this
+        # never corrupts an unquoted value that legitimately contains '#'.
+        comment_match = re.search(r"\s#", value)
+        if comment_match is not None:
+            value = value[: comment_match.start()]
+
+    value = value.strip()
+
+    if value in _YAML_NULL_LITERALS:
+        return None
+
+    return value
+
+
 def _is_immutable_path_local(path: str) -> bool:
     """Local reimplementation of `backfill_deliverable_spine.is_immutable_path`'s
     archive predicate — deliberately NOT imported from that module.
@@ -690,7 +760,7 @@ def seed_deliverable_ledger_rows(worktree_root: Path) -> List[Dict[str, Any]]:
         _ = classify_artifact(path)
         _ = _is_immutable_path_local(path)
 
-        raw_id = extract_fm_field(path, "deliverable_id")
+        raw_id = _normalize_extracted_deliverable_id(extract_fm_field(path, "deliverable_id"))
         if not raw_id:
             continue
 
@@ -924,7 +994,12 @@ def dual_read_deliverable_id(
             extract_fm_field as read_frontmatter_field,
         )
 
-    raw_fm_id = read_frontmatter_field(artifact_path, "deliverable_id") or None
+    # Review: coordinatorcode-reviewer c2f6a1ea — F2: the `or None` is redundant;
+    # _normalize_extracted_deliverable_id already maps "" to None via
+    # _YAML_NULL_LITERALS and accepts None directly.
+    raw_fm_id = _normalize_extracted_deliverable_id(
+        read_frontmatter_field(artifact_path, "deliverable_id")
+    )
     fm_canonical = canonicalize(raw_fm_id, equivalence_map) if raw_fm_id else None
 
     if not _ledger_artifact_readable(worktree_root):

@@ -42,6 +42,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+# Real spawn (python3, not git) is load-bearing: the pipe-hold regression
+# tests spawn a real, isolated `python3 -c` subprocess so os.fork() and stdio
+# redirection run for real at the OS level, proving the fix no monkeypatch
+# could — see module docstring.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core.hooks import auto_push  # noqa: E402
 
 

@@ -59,6 +59,12 @@ _DELIVERABLE_ID = "dlv-designated-holder-repo-for-unowned-track-90eeae"
 
 _THIS_FILE = Path(__file__).resolve()
 
+# Real-git spawn is load-bearing: AC4 compares this repo's actual on-disk
+# tracker_store.py bytes against the blob at the plan's own add-commit,
+# resolved via git rather than a hand-picked sha -- a mock git history would
+# defeat the "not a prose claim" point of this guard.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _run_git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

@@ -20,6 +20,19 @@ import os
 import subprocess
 import sys
 
+import pytest
+
+# Declared, not excused: the commit-scope CLI tests below spawn real
+# `git`/CLI-subprocess processes because the property under test is the
+# real end-to-end CLI contract (exit codes, real `git add`/`commit` on a
+# scratch repo) -- no mock stands in for that. `_init_repo` is called
+# per-test, not hoisted to module scope, since each test drives its own
+# commit/scope scenario against a fresh repo. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not
+# the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CLI = os.path.normpath(os.path.join(_HERE, "..", "spinoff-deliverable-and-commit.py"))
 _LIB_DIR = os.path.normpath(os.path.join(_HERE, "..", "lib"))

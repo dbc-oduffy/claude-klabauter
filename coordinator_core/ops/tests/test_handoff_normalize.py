@@ -69,6 +69,16 @@ from coordinator_core.ops.handoff_normalize import (
 )
 from coordinator_core.session import core
 
+# Real-git spawn is load-bearing: the batch-sweep regression test drives
+# `handoff.normalize` against a real `git init` fixture (mirroring
+# test_handoff_normalize_carry_scope.py's pattern) to prove the two-door
+# minted_by hazard cannot recur against real repo state, not a mock. Per-test
+# isolation via tmp_path fixtures, not hoisted. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _write_plan(worktree_root: Path, slug: str, deliverable_id: str) -> Path:
     plan_path = worktree_root / "docs" / "plans" / f"{slug}.md"

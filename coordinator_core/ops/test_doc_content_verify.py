@@ -33,6 +33,17 @@ from coordinator_core.ops.doc_content_verify import (
     verify_doc,
     verify_doc_on_disk,
 )
+
+# Declared, not excused: the AC13 historical-replay group (TestAC13HistoricalReplay)
+# spawns real `git show`/`git ls-tree`/`git cat-file` against the actual example-doctrine-repo
+# checkout to prove the citation-verifier against real repo history, not a fixture --
+# no mock stands in for "did this path genuinely exist at commit b644d5a9". The
+# `_doe_repo_available` probe is cached (lru_cache), not per-test, since it fires at
+# collection-adjacent time; the replay itself is read-only plumbing, never checkout/
+# reset, so no per-test isolation is needed beyond that cache. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route for
+# this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
 

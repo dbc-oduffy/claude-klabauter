@@ -108,14 +108,32 @@ O(1) per matched claimant -- no new entrypoint was needed). For each path in
 the caller's own pathspec: a claimant other than the calling session, who is
 live, AND whose path is currently DIRTY (C5, `_paths_dirty_status()` --
 see that function's own docstring), refuses THAT path, named individually
-(AC4) -- never a whole-pathspec refusal. Cost is a function of `len(paths)`
-plus 0-2 liveness checks, plus (C5) at most one pathspec-scoped `git status
---porcelain` call -- lazily invoked, only once a live other-session claimant
-is actually found on some path, never eagerly -- and, only for tracked
-paths reported unstaged, one further batched `git diff --name-only` call
-resolving EOL-phantom candidates (see `_paths_dirty_status()`). Still a
-function of `len(paths)`, never of how busy the tree is -- the negative
-spec below is what this gate now satisfies, not what it still owes.
+(AC4) -- never a whole-pathspec refusal.
+
+C1 (docs/plans/2026-08-13-commit-gate-stops-refusing-your-own-staged-hunk.md)
+narrows the C5 conjunct once more: a path that is dirty AND claimed by a
+live peer refuses only when it is also DIVERGED (index content differs from
+worktree content, `coordinator_core.git.divergence.diverging_paths()`).
+Divergence, not dirtiness, is the discriminator, because `commit_scoped()`'s
+agree branch is git's own documented `--only` mode and always commits the
+WORKTREE version of an agreeing path -- a dirty-but-not-diverged path
+genuinely sweeps the peer's unstaged worktree lines into the commit, so the
+refusal there is doing real work and stays; a diverged path takes the
+private-index branch instead, which commits index bytes and structurally
+cannot sweep anything, so refusing it protects nothing. See
+`docs/research/spike-verdicts/2026-08-13-private-index-form-cannot-sweep-a-
+peers-worktree.md` for the proof of both arms.
+
+Cost is a function of `len(paths)` plus 0-2 liveness checks, plus (C5) at
+most one pathspec-scoped `git status --porcelain` call -- lazily invoked,
+only once a live other-session claimant is actually found on some path,
+never eagerly -- and, only for tracked paths reported unstaged, one further
+batched `git diff --name-only` call resolving EOL-phantom candidates (see
+`_paths_dirty_status()`), plus (C1) up to two further `git diff` calls from
+`diverging_paths()`, lazily invoked on the same terms -- only once a live
+claimant's path has also been found dirty, never eagerly. Still a function
+of `len(paths)`, never of how busy the tree is -- the negative spec below is
+what this gate now satisfies, not what it still owes.
 
 Caller-identity requirement (AC10a): `session_core.session_dir()` never
 verifies a `session_id` ever named a real session. A caller whose resolved
@@ -154,9 +172,10 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from coordinator_core._settings_home import normalize_native_path
+from coordinator_core.git import divergence as git_divergence
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.commit_pipeline import (
@@ -551,20 +570,38 @@ def _check_claim_conflicts(
     stale claim still existing; before C5 the mere existence of that claim
     refused it forever.
 
-    Known, unclosable residual: this reads dirtiness once, before staging;
-    a live peer can dirty the path again between this read and the commit
-    landing, and the subsequent `git add` absorbs it before this check
-    would see it a second time. Not closable without a lock (see
+    C1 narrows the CONJUNCTION once more, to "a live peer claims the path
+    AND the path is currently dirty AND NOT DIVERGED" -- divergence, not
+    dirtiness, is the discriminator, because `commit_scoped()`'s agree
+    branch is git's own documented `--only` mode and always commits the
+    WORKTREE version of an agreeing path: a dirty-but-not-diverged path
+    genuinely sweeps a peer's unstaged worktree lines into the commit (the
+    refusal there is doing real work and stays), while a diverged path
+    takes the private-index branch instead, which commits index bytes and
+    structurally cannot sweep anything (the refusal there protects nothing,
+    and must not fire). See `coordinator_core.git.divergence.diverging_
+    paths()` and `docs/research/spike-verdicts/2026-08-13-private-index-
+    form-cannot-sweep-a-peers-worktree.md` for the proof of both arms.
+
+    Known, unclosable residual: this reads dirtiness (and divergence) once,
+    before staging; a live peer can dirty the path again between this read
+    and the commit landing, and the subsequent `git add` absorbs it before
+    this check would see it a second time. Not closable without a lock (see
     `_paths_dirty_status()`'s own docstring) -- accepted, not tested for.
 
     UNANSWERABLE-PATH POLICY -- fail closed PER PATH, never per pathspec. A
     path `claim_index.lookup()` could not resolve (aborted/unresolvable
     rebuild), OR whose dirtiness this function's own porcelain call could
-    not resolve, is refused with a message naming the remedy; a sibling
-    path either call COULD resolve proceeds normally. Whole-pathspec
-    fail-closed would make commit success a function of the WHOLE tree's
-    index health rather than the caller's own pathspec -- exactly the
-    O(dirty tree) coupling this plan's binding negative spec forbids.
+    not resolve, OR (C1) whose divergence `diverging_paths(fail_loud=True)`
+    could not resolve, is refused with a message naming the remedy; a
+    sibling path every call COULD resolve proceeds normally. An
+    indeterminate divergence answer degrades to this same fail-closed
+    policy -- NEVER to "not diverged, therefore refuse" (harmless but
+    wrong) and NEVER to "diverged, therefore allow" (the one direction that
+    can lose a peer's work). Whole-pathspec fail-closed would make commit
+    success a function of the WHOLE tree's index health rather than the
+    caller's own pathspec -- exactly the O(dirty tree) coupling this plan's
+    binding negative spec forbids.
 
     C10 -- CALLER-ONLY POSITIVE UNDER AN INCOMPLETE WALK is ALSO
     unanswerable, narrowly. `claim_index.lookup()` returns a positive
@@ -609,6 +646,23 @@ def _check_claim_conflicts(
     # inside the `if live_others:` branch).
     dirty_status: Optional[Dict[str, str]] = None
 
+    # C1: only computed when at least one path has ALSO reached the
+    # DIRTY verdict above -- a pathspec with no live-claimant-and-dirty
+    # path never pays this extra spawn. `diverged_paths is None` is the
+    # not-yet-computed sentinel (mirrors `dirty_status` above); once
+    # `diverging_paths()` is called, EITHER `diverged_paths` holds the
+    # resolved set (possibly empty) OR `divergence_unanswerable` is True --
+    # never both unresolved.
+    # `divergence_unanswerable` is sticky for the whole call: once the
+    # first `diverging_paths()` failure sets it, every later dirty+claimed
+    # path in this same pathspec is also marked unanswerable, with no
+    # per-path retry. Under the documented 50-70-concurrent-session load
+    # norm, one transient `git diff` failure therefore widens a
+    # single-path refusal to every dirty+claimed path in the call. This is
+    # deliberate fail-closed behaviour, not a missing retry.
+    diverged_paths: Optional[Set[str]] = None
+    divergence_unanswerable = False
+
     for path in paths:
         claimants = claimants_by_path.get(path, [])
         if claim_index.UNANSWERABLE in claimants:
@@ -639,7 +693,30 @@ def _check_claim_conflicts(
         if verdict == _DIRTY_STATUS_UNANSWERABLE:
             unanswerable.append(path)
         elif verdict == _DIRTY_STATUS_DIRTY:
-            conflicted.append((path, live_others))
+            # C1: dirty AND claimed by a live peer is no longer sufficient
+            # on its own -- refuse only if this path is also DIVERGED (see
+            # this function's own docstring for why). Computed at most once
+            # per call, lazily, only now that a live-claimant-and-dirty
+            # path has actually been found.
+            if diverged_paths is None and not divergence_unanswerable:
+                try:
+                    diverged_paths = set(
+                        git_divergence.diverging_paths(
+                            paths, cwd=worktree_root, fail_loud=True
+                        )
+                    )
+                except git_divergence.DivergenceCheckFailed:
+                    divergence_unanswerable = True
+            if divergence_unanswerable:
+                unanswerable.append(path)
+            elif path in diverged_paths:
+                # Diverged: `commit_scoped()` will take the private-index
+                # branch, which commits index bytes and structurally cannot
+                # sweep the peer's worktree lines -- this refusal would do
+                # no work, so it does not fire.
+                pass
+            else:
+                conflicted.append((path, live_others))
         # _DIRTY_STATUS_CLEAN: a live peer claims it, but nothing is
         # currently uncommitted under it (the rescue-commit case, A7) --
         # proceeds.

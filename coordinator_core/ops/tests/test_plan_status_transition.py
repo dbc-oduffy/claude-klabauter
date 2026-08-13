@@ -16,6 +16,12 @@ import pytest
 from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops.plan_status_transition import main
 
+# Golden-oracle cases pin `main`'s real HEAD-commit and porcelain-status reads
+# against an actual git repo — the CLI's stdout/exit-code contract was captured
+# by hand-running the node CLI against real git state, so a mocked git would
+# validate the fixture harness, not the port's fidelity to it.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _GIT_ENV_KEYS = {
     "GIT_AUTHOR_NAME": "test",
     "GIT_AUTHOR_EMAIL": "t@t",

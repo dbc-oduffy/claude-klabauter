@@ -26,6 +26,12 @@ import pytest
 
 from coordinator_core.ceremony_common import apply_halt
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
+
+# Real git spawn is load-bearing: terminal-status coverage tests read the
+# example-doctrine-repo repo's real HEAD `plan.schema.json` via `git show` to pin the
+# schema enum against the actual on-disk oracle, and the no-commit-row guard
+# builds real per-test commit history — no mock stands in for either.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.testing.doe_root import resolve_doe_root
 import coordinator_core.workstream_complete as wsc
@@ -4007,6 +4013,58 @@ def test_build_close_tail_args_directive_list_review_emits_one_slice_per_qualify
     assert payloads[1]["sha_range"] == "b1..b2"
     assert payloads[1]["scope_kind"] == "diff"
     assert "scope_kind" not in payloads[0]
+
+
+def test_build_close_tail_args_directive_forwards_reviewer_evidence_scalar():
+    """Regression (example-doctrine-repo memo 2026-08-13 § 2): `reviewer_evidence` was
+    accepted in `decisions["review"]`, never emitted here, and the op-side gate
+    (`review_trail_write._verify_reviewer_evidence`) then warned that the field
+    was missing — the correlation it checks was severed one layer above it."""
+    decisions = {
+        "review": {
+            "sha_range": "abc123..def456",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 42,
+            "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
+        },
+    }
+    args = _dc_tail.build_close_tail_args_directive(decisions)["args"]
+    assert args[-2:] == [
+        "--review-reviewer-evidence",
+        "state/subagent-share/sid/reviewer.md",
+    ]
+
+
+def test_build_close_tail_args_directive_forwards_reviewer_evidence_per_slice():
+    import json as _json
+
+    decisions = {
+        "review": [
+            {
+                "sha_range": "a1..a2",
+                "reviewer": "code-reviewer",
+                "scope": "chain",
+                "verdict": "ok",
+                "diff_loc": 10,
+                "reviewer_evidence": "state/subagent-share/sid/a.md",
+            },
+            {
+                "sha_range": "b1..b2",
+                "reviewer": "staff-eng",
+                "scope": "session",
+                "verdict": "warn",
+                "diff_loc": 20,
+            },
+        ],
+    }
+    args = _dc_tail.build_close_tail_args_directive(decisions)["args"]
+    payloads = [
+        _json.loads(args[i + 1]) for i, tok in enumerate(args) if tok == "--review-slice"
+    ]
+    assert payloads[0]["reviewer_evidence"] == "state/subagent-share/sid/a.md"
+    assert "reviewer_evidence" not in payloads[1]
 
 
 # ---------------------------------------------------------------------------

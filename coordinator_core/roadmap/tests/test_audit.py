@@ -31,6 +31,16 @@ from coordinator_core.roadmap.audit import (
     validate_run_id,
 )
 
+# Declared, not excused: `test_resolve_repo_root_git_dir_returns_toplevel` and
+# `test_resolve_data_root_derives_from_cwd_repo_root` spawn a real `git init` because
+# the property under test is `resolve_repo_root`'s real `git rev-parse --show-toplevel`
+# resolution against an actual repo (including a nested-cwd case) -- the exact
+# P1 silent-cwd-fallback bug this file's own docstring names required a genuine git
+# repo to catch, not a mock returning a canned toplevel. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
+# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Fixture helpers
 # ---------------------------------------------------------------------------

@@ -24,6 +24,18 @@ import pytest
 from coordinator_core.session import js_bridge_cli
 from coordinator_core.session import scope
 
+# Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
+# real git (init/config/add/commit) because `core.git_root()` and session-hub
+# resolution read real git state no mock stands in for; the live-pid test
+# also spawns real `ps` to get a genuine `lstart=` value the create-time
+# epoch check can compare against. `tmp_path` is function-scoped and tests
+# write session state under reused session ids, so the repo fixture stays
+# per-test rather than hoisted to module scope. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the
+# route for this file -- coordinator_core/tests/test_no_new_spawning_tests.py
+# Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _make_repo(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path)

@@ -26,6 +26,13 @@ from pathlib import Path
 
 import pytest
 
+# `_init_repo`/`_commit_file` spawn real git because `resolve_target`'s
+# tier-3 dedup pass drives real `ever_tracked`/`_git_path_ever_tracked`
+# object-database lookups — the dedup count and cache-hit assertions require
+# a genuine git history, not a mocked one. Each test builds its own repo, so
+# isolation is not hoisted to module scope.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 from coordinator_core import dag
 
 

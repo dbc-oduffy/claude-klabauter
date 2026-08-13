@@ -28,6 +28,17 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
+# Declared, not excused: `TestResolveTargetRoot`'s two cases spawn a real
+# `git init` because the property under test is `resolve-target-root`'s
+# real worktree-validation logic (it must resolve/accept a genuine git
+# worktree) -- a plain non-git temp dir would not exercise that check. The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _MODULE_PATH = _BIN_DIR / "repo-setup-args-and-register.py"
 

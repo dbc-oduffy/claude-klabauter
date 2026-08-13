@@ -53,10 +53,19 @@ except ImportError:
 _LOCKING_AVAILABLE = _FCNTL_AVAILABLE or _MSVCRT_AVAILABLE
 _PROJECT_ROOT = str(Path(__file__).parent.parent.parent.resolve())
 
-pytestmark = pytest.mark.skipif(
-    not _LOCKING_AVAILABLE,
-    reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
-)
+# Declared, not excused: this file's AUTHORITATIVE cross-process lost-update proof
+# (d) and crash-safety proof (g) require real OS-level process/lock contention
+# (subprocess holders, real `fcntl`/`msvcrt` locks, a killed holder process) -- no
+# mock reproduces genuine cross-process races. `_make_git_repo` also spawns real git
+# so `git_common_dir()` resolves against a real repo layout.
+pytestmark = [
+    pytest.mark.skipif(
+        not _LOCKING_AVAILABLE,
+        reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
+    ),
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 # Symlink creation on Windows needs elevation/developer-mode; gate those tests.
 _skip_no_symlink = pytest.mark.skipif(

@@ -28,6 +28,11 @@ import pytest
 from coordinator_core.frontmatter.schema_validate import validate_memo_cross_fields
 from coordinator_core.ops.memo_transition import _action
 
+# Real git spawn is load-bearing: this file re-derives parity against the JS
+# oracle's stamp-at-source fields, which are written into a real committed
+# memo; no mock stands in for git's own commit/read-back here.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git_init(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)

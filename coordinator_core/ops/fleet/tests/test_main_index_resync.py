@@ -35,12 +35,25 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional
 
+import pytest
+
 from coordinator_core.ops.ceremony.tests.fixtures.real_git import real_git_repo
 from coordinator_core.ops.fleet._common import (
     Move,
     _resync_main_index_for_moves,
     _resync_main_index_for_reaps,
 )
+
+# Real-git spawn is load-bearing, but confined to ONE test (see Part 2's
+# own docstring): the one assumption a fake `run_git` structurally cannot
+# validate is whether `git restore --staged` on a HEAD-absent path removes
+# the index entry rather than erroring -- that needs a real object
+# database/index. Every other test above fakes the `run_git` seam and
+# spawns nothing; the module-level marker is required because Rule 2 fires
+# per-FILE, not per-test. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 class _FakeRunGit:

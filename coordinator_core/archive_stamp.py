@@ -170,34 +170,24 @@ from coordinator_core.reconcile.commit_reality import (
 )
 from coordinator_core.reconcile.policy_loader import load_policy
 from coordinator_core.session.shape import session_shape_set
+from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
 from coordinator_core.win_portability import no_console_creationflags
 
 # Windows console-flash suppression (DR-054) — routes through the canonical
 # primitive.
 _NO_CONSOLE = no_console_creationflags()
 
-# shipped_in value grammar (DR-096, 2026-07-26 ruling) — this module owns
-# BOTH shapes a `shipped_in` value may ever take: a resolvable git SHA, or
-# the sanctioned substantively-shipped-no-commit:<date> stealth-skip token.
-# `ops.normalize_claimed_frontmatter` writes the field via its own direct
-# frontmatter-text mutation (not `stamp_shipped_in`/`_handler` — it has no
-# live file to RMW-lock, only marker text to translate) but imports
-# `_SHA_HEX_RE`/`_NO_COMMIT_TOKEN_RE` from HERE rather than keeping its own
-# copy, so this module's regexes remain the single source of the shape
-# grammar even for that non-choke-point writer. `_SHIPPED_IN_KIND_ENUM` is
-# imported from
+# shipped_in value grammar (DR-096, 2026-07-26 ruling) — the shape a
+# `shipped_in` value may ever take (a resolvable git SHA, or the sanctioned
+# substantively-shipped-no-commit:<date> stealth-skip token) is owned by the
+# leaf module `coordinator_core.shipped_in_tokens` (import above), not
+# defined here — see that module's docstring for why (breaking the
+# archive_stamp <-> pickup_assemble <-> session_ledger import cycle,
+# state/debt-backlog/DSR-2026-08-13-archive-stamp-import-order-drops-an-op-
+# from-the-registry.yaml). `_SHIPPED_IN_KIND_ENUM` is imported from
 # `coordinator_core.ops.handoff_stamp` rather than redefined here — a second,
 # independently-driftable frozenset copy of the SAME enum is exactly the
 # fork-not-share pattern this whole workstream exists to close.
-#
-# Hex range widened to 7-64 (was 7-40) to match the ratified schema pattern
-# (`coordinator/artifact-shape-contract/artifact-shape-contract.schema.json`,
-# example-doctrine-repo DR-096 prior wave) — a SHA-256 repo's abbreviated-or-full commit
-# id can run past 40 hex chars; the prior 7-40 ceiling was this module's own
-# guess, not a ratified constraint, and this pass is the one that makes this
-# module textually agree with the schema it is supposed to satisfy.
-_SHA_HEX_RE = re.compile(r"[0-9a-fA-F]{7,64}")
-_NO_COMMIT_TOKEN_RE = re.compile(r"substantively-shipped-no-commit:\d{4}-\d{2}-\d{2}")
 
 # kind buckets that require an explicit caller-supplied `sha=` override — a
 # specific already-known commit (ship-commit/successor) or the no-commit
@@ -1995,6 +1985,50 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
 # coordinator_core.ops.plan_status_transition port (no subprocess/node hop).
 # ---------------------------------------------------------------------------
 
+_AC_ROW_RE = re.compile(
+    r"^\s*\|\s*(AC\d+)\s*\|.*\|\s*([A-Za-z][\w-]*)\s*\|\s*$"
+)
+
+
+def _count_open_acs(plan_path: str) -> Optional[int]:
+    """Conservatively counts `open` rows in a plan's Acceptance-Criteria
+    table. Spec: state/audits/2026-08-13-implemented-plans-keep-ac-tables-at-
+    open.md — the census that found 17/40 `implemented` plans still carrying
+    an all- or partly-`open` AC table with nothing in the close ceremony
+    ever touching those cells.
+
+    Returns None (never a count) when the table is absent or its shape
+    can't be confidently read — a false count trains readers to ignore the
+    message, which costs more than staying silent. Only lines matching
+    `| ACn | ... | <status> |` on one physical line are counted; the
+    criterion-prose column is matched non-greedily-agnostic (`.*` before
+    the final `|`) so embedded pipe characters inside backticks in that
+    column cannot manufacture a phantom row or misread the status field.
+
+    Negative-spec: does NOT normalise the observed status vocabulary
+    (`open`, `met`, `shipped`, `closed`, `deferred`, ...) — only `open`
+    counts as un-dispositioned, everything else is treated as dispositioned
+    verbatim, per the audit's own instruction not to invent a closed
+    vocabulary.
+    """
+    try:
+        text = Path(plan_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    open_count = 0
+    saw_row = False
+    for line in text.splitlines():
+        match = _AC_ROW_RE.match(line)
+        if not match:
+            continue
+        saw_row = True
+        if match.group(2) == "open":
+            open_count += 1
+
+    return open_count if saw_row else None
+
+
 def cs_stamp_plan_implemented(plan_path: str) -> int:
     """Flips a plan's frontmatter status: to implemented via the native
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
@@ -2002,8 +2036,25 @@ def cs_stamp_plan_implemented(plan_path: str) -> int:
     module's docstring for the full status-transition matrix). Calls it
     directly in-process; no subprocess, no node dependency, no example-doctrine-repo-root
     resolution. Returns the port's own exit code verbatim.
+
+    Offer, not a block (spec: state/audits/2026-08-13-implemented-plans-
+    keep-ac-tables-at-open.md): after a successful stamp, if the plan
+    carries an Acceptance-Criteria table with any row still `open`, prints
+    a one-line notice to stderr naming the count and the plan path. The
+    stamp itself, and this function's return value, are unaffected either
+    way — silence on no table or an unparseable one, never a false count.
     """
-    return plan_status_transition.main(["stamp-implemented", "--plan", plan_path])
+    rc = plan_status_transition.main(["stamp-implemented", "--plan", plan_path])
+    if rc == 0:
+        open_count = _count_open_acs(plan_path)
+        if open_count:
+            plural = "s" if open_count != 1 else ""
+            print(
+                f"stamp-plan-implemented: {open_count} AC row{plural} still "
+                f"open in {plan_path}",
+                file=sys.stderr,
+            )
+    return rc
 
 
 # ---------------------------------------------------------------------------

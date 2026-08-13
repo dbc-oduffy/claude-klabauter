@@ -22,6 +22,18 @@ import pytest
 from coordinator_core.ops import setup_chain_walker as scw
 from coordinator_core.testing.doe_root import resolve_doe_root
 
+# Declared, not excused: the override-pair (exit 93) and trampoline-
+# transport-failure tests spawn a real `sys.executable` process because the
+# property under test is real `os.environ` isolation across a process
+# boundary -- deliberately "in-subprocess so os.environ isolation is real,
+# not monkeypatched" (see comment above `_make_repo_root`). No mock stands
+# in for that. This is the only spawn shape in the file (isolated to those
+# two call sites), so it is left as-is rather than hoisted. The spawn
+# ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 

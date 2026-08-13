@@ -57,6 +57,17 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: `TestLazyOpsEnvironmentLeak` spawns real `sys.executable`
+# child (and grandchild) processes because the property under test is os.environ
+# leakage/isolation ACROSS a real process boundary -- an in-process call shares the
+# parent's os.environ by construction and cannot observe what a genuinely separate
+# interpreter inherits. `TestDiagnosticsProbesEndToEnd` (see the module docstring's
+# DECLARED SPAWN COUNT) separately spawns the real engine for the same
+# no-mock-stands-in reason. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Path setup — locate cc_invoke.py relative to this test file
 # test file: coordinator/bin/tests/test_cc_invoke_py.py

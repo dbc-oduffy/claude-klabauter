@@ -178,6 +178,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ipc import get_op_handler
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.ceremony import git_native
@@ -377,9 +378,10 @@ def redrive_consumed_set(
 # ---------------------------------------------------------------------------
 
 
-def _already_shipped_and_archived(relpath: str, fm: dict[str, Any]) -> bool:
-    """True when a consumed-handoff candidate was already shipped AND swept
-    to ``archive/handoffs/`` before this ceremony's stamp pass ran.
+def _already_terminal_and_archived(relpath: str, fm: dict[str, Any]) -> bool:
+    """True when a consumed-handoff candidate had already reached a TERMINAL
+    ``deployment_state`` AND been swept to ``archive/handoffs/`` before this
+    ceremony's stamp pass ran.
 
     `handoff.stamp`'s own containment guard deliberately refuses any path
     outside ``state/handoffs/`` — mutating an archived handoff is out of
@@ -393,6 +395,25 @@ def _already_shipped_and_archived(relpath: str, fm: dict[str, Any]) -> bool:
     is nothing to do, so this is a no-op, not a failure. Calling the stamp
     verb anyway would only reproduce its containment refusal for no reason.
 
+    The same race is NOT confined to the shipped terminus. A baton flipped to
+    any other terminal state — `closed`/`abandoned`/`continued`, e.g. via
+    `handoff-reconcile-close-terminal` on a displaced roadmap stub — becomes
+    archive-eligible the moment it goes terminal, so the sweep (fired
+    detached from this very tail, `archive_sweeps:detached_fire`) can move it
+    before the stamp step runs. A non-shipped terminal state is precisely the
+    case where `shipped_in: <sha>` MUST NOT be written — the work was not
+    delivered — so the correct outcome there is the same no-op skip, never a
+    containment failure that reports a soft-fail for correct on-disk state.
+    Reported as a real defect by example-doctrine-repo-em (2026-08-13,
+    `cross-repo/inbox/2026-08-13-example-doctrine-repo-em-wsc-tail-consumed-stamp-refuses-archived-baton.md`).
+
+    Deliberately narrow on the shipped branch: an archived handoff claiming
+    `deployment_state: shipped` with NO `shipped_in` is not a completed
+    stamp, so it still falls through to the loud containment refusal rather
+    than being silently absorbed here. A non-terminal archived handoff (no
+    `deployment_state`, `in_flight`, `awaiting_gate`) likewise still fails
+    loud — that shape is an archival anomaly, not a benign race.
+
     ``relpath`` is a wire-id string (`wire_paths.rel_id` — always
     forward-slash, see that module's docstring), so this is a plain string
     prefix check, not a filesystem path comparison — correct on Windows and
@@ -400,7 +421,12 @@ def _already_shipped_and_archived(relpath: str, fm: dict[str, Any]) -> bool:
     """
     if not relpath.startswith("archive/handoffs/"):
         return False
-    return fm.get("deployment_state") == "shipped" and bool(fm.get("shipped_in"))
+    state = fm.get("deployment_state")
+    if state not in HANDOFF_TERMINAL_DEPLOYMENT:
+        return False
+    if state == "shipped":
+        return bool(fm.get("shipped_in"))
+    return True
 
 
 async def _live_children_guard(
@@ -681,12 +707,13 @@ class StampOutcome:
     skipped_future_dated: list[str] = field(default_factory=list)
     skipped_live_children: list[str] = field(default_factory=list)
     skipped_indeterminate: list[str] = field(default_factory=list)
-    #: Already shipped AND archived before this pass ran (see
-    #: `_already_shipped_and_archived`) — a genuine no-op, never promoted to
-    #: `failed` the way `skipped_future_dated`/`skipped_live_children`/
-    #: `skipped_indeterminate` are on a stamp-nothing chain-terminal close
-    #: (those name an actionable remediation; this one names nothing left to do).
-    skipped_already_shipped: list[str] = field(default_factory=list)
+    #: Already in a terminal `deployment_state` AND archived before this pass
+    #: ran (see `_already_terminal_and_archived`) — a genuine no-op, never
+    #: promoted to `failed` the way `skipped_future_dated`/
+    #: `skipped_live_children`/`skipped_indeterminate` are on a stamp-nothing
+    #: chain-terminal close (those name an actionable remediation; this one
+    #: names nothing left to do).
+    skipped_already_terminal: list[str] = field(default_factory=list)
     errors: list[dict[str, str]] = field(default_factory=list)
     empty_consumed_set: bool = False  # R2 loud-report flag (AC7)
     follow_up_committed_sha: Optional[str] = None
@@ -775,7 +802,7 @@ async def post_commit_stamp_and_ship(
     outcome_stamped: list[str] = []
     outcome_live: list[str] = []
     outcome_indeterminate: list[str] = []
-    outcome_already_shipped: list[str] = []
+    outcome_already_terminal: list[str] = []
     outcome_errors: list[dict[str, str]] = []
 
     for relpath in accepted_paths:
@@ -791,15 +818,17 @@ async def post_commit_stamp_and_ship(
                 outcome_indeterminate.append(relpath)
             continue
 
-        # Already-terminal no-op guard: a predecessor stamped `shipped_in`/
-        # `deployment_state: shipped` directly (e.g. via `archive-stamp-cli
-        # ship-handoff`) and was THEN swept to archive/handoffs/ before this
-        # pass ran. `handoff.stamp` refuses any archive/handoffs/ path by
-        # design (see `_already_shipped_and_archived`'s docstring) — recognize
-        # the no-op here, before calling the verb, rather than routing around
-        # its containment guard or reporting its refusal as a failure.
-        if _already_shipped_and_archived(relpath, fm_by_path.get(relpath, {})):
-            outcome_already_shipped.append(relpath)
+        # Already-terminal no-op guard: a predecessor reached a terminal
+        # `deployment_state` — stamped `shipped_in`/`shipped` directly via
+        # `archive-stamp-cli ship-handoff`, or flipped `closed`/`abandoned`/
+        # `continued` via `handoff-reconcile-close-terminal` — and was THEN
+        # swept to archive/handoffs/ before this pass ran. `handoff.stamp`
+        # refuses any archive/handoffs/ path by design (see
+        # `_already_terminal_and_archived`'s docstring) — recognize the no-op
+        # here, before calling the verb, rather than routing around its
+        # containment guard or reporting its refusal as a failure.
+        if _already_terminal_and_archived(relpath, fm_by_path.get(relpath, {})):
+            outcome_already_terminal.append(relpath)
             continue
 
         # R4(b)+(c), stamp-BEFORE-ship (see module docstring "DEVIATION" /
@@ -857,7 +886,7 @@ async def post_commit_stamp_and_ship(
             skipped_future_dated=rejected_paths,
             skipped_live_children=outcome_live,
             skipped_indeterminate=outcome_indeterminate,
-            skipped_already_shipped=outcome_already_shipped,
+            skipped_already_terminal=outcome_already_terminal,
             errors=outcome_errors,
         )
 
@@ -870,7 +899,7 @@ async def post_commit_stamp_and_ship(
         skipped_future_dated=rejected_paths,
         skipped_live_children=outcome_live,
         skipped_indeterminate=outcome_indeterminate,
-        skipped_already_shipped=outcome_already_shipped,
+        skipped_already_terminal=outcome_already_terminal,
         errors=outcome_errors,
         follow_up_committed_sha=follow_up_sha,
         follow_up_pushed=pushed,
@@ -979,7 +1008,7 @@ def _commit_and_push_follow_up(
     # and-the-gate-that-cannot-clear.md): eligible -- same worktree,
     # `stamped_paths` is already repo-relative (from `redrive_consumed_set`
     # -> `find_all_consumed_handoffs`, wire-id relpaths -- see
-    # `_already_shipped_and_archived`'s docstring for the same "always
+    # `_already_terminal_and_archived`'s docstring for the same "always
     # forward-slash" convention), and `session_id` is `post_commit_stamp_
     # and_ship`'s own required caller-supplied param: the SAME id
     # `redrive_consumed_set(worktree_root, session_id)` above just used to

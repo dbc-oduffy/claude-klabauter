@@ -80,6 +80,12 @@ import pytest
 from coordinator_core.testing.doe_root import resolve_doe_root
 from coordinator_core.testing.golden import assert_matches_golden, is_capturing, load_golden
 
+# Real-git spawn is load-bearing: fixtures build a real git repo
+# (`_init_git_repo`) so ops under test resolve real git state, matching the
+# JS oracle's own real-git behaviour -- this parity suite's purpose. Per-test
+# repos for isolation.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # JS CLI path (example-doctrine-repo sibling repo) — only ever consulted during an explicit
 # CAPTURE_GOLDENS=1 recapture (see `_require_oracle`/`_js_memo`).  Not resolved (and
@@ -1372,29 +1378,54 @@ class TestValidationRejectionParity:
         assert str(len(_OVERCAP_SUMMARY)) in stderr, "warning must name the original length"
         assert "truncat" in stderr, "warning must say what happened"
 
-    def test_reject_invalid_kind(self, tmp_path):
-        """Claim on memo with kind=ack → both reject (kind_enum rule).
+    def test_claim_tolerates_invalid_kind_js_still_rejects(self, tmp_path):
+        """Claim on memo with kind=ack → JS golden still rejects; Python now tolerates.
 
-        'ack' is NOT a valid kind — valid set is: ask|consult|fyi|proposal.
-        Rule fires post-mutation in validateMemoFrontmatter.
+        'ack' is NOT a valid kind — valid set is: ask|consult|fyi|proposal. This is a
+        SANCTIONED divergence, not a parity hole. Commit `c84f230d6` ("memo transitions
+        tolerate an off-enum kind; write guards can see a cross-repo target") added
+        `_demote_kind_enum_finding` in `coordinator_core/ops/memo_transition.py`, which
+        filters a `field == 'kind'` cross-field finding out of the post-mutation error
+        list on the RECEIVER path and warns to stderr instead. The AUTHORING-side gate
+        (`_memo_cf_kind_enum` in `schema_validate.py`, both write guards, example-doctrine-repo's
+        direct-file-path import of `validate_frontmatter_obj`) is untouched and stays a
+        hard reject — an unenumerated `kind` must never be author-set, only tolerated
+        once it has already landed, so an already-landed memo with an off-enum `kind`
+        isn't stranded at claim/action/release/resolve. The on-disk `kind:` value is
+        never rewritten — never the receiver's to correct, only its to tolerate.
+
+        Do not "restore parity" here by reverting `_demote_kind_enum_finding` — that
+        was the deliberate point of `c84f230d6`.
         """
         js_file, py_file = self._setup_repos(tmp_path)
         _write_memo(js_file, _INVALID_KIND_MEMO)
         _write_memo(py_file, _INVALID_KIND_MEMO)
-        py_original = py_file.read_text(encoding="utf-8")
 
         js_rc = _capture_or_load_rejection_case(
             "reject_invalid_kind", "claim", js_file, _INVALID_KIND_MEMO,
             session_id=_PINNED_SESSION, at=_PINNED_AT,
         )
+        assert js_rc != 0, (
+            f"JS (golden, authoring-side enum) must still reject for invalid kind=ack "
+            f"(got rc={js_rc})"
+        )
+
         py_result = _run(_memo_handler(
             {"verb": "claim", "memo": str(py_file), "session_id": _PINNED_SESSION, "at": _PINNED_AT},
             _CTX,
         ))
 
-        self._assert_rejection_parity(
-            py_file, js_rc, py_result, py_original,
-            label="invalid kind=ack",
+        assert py_result["exit_code"] == 0, (
+            f"Python must TOLERATE (not reject) an off-enum kind on the receiver path "
+            f"(c84f230d6); got {py_result!r}"
+        )
+        assert py_result["applied"] is True
+
+        py_split = split_frontmatter(py_file.read_text(encoding="utf-8"))
+        kind_after = read_fm_field_unquoted(py_split.fm_text, "kind")
+        assert kind_after == "ack", (
+            "receiver tolerance must never rewrite the memo's declared kind: value "
+            f"on disk; got {kind_after!r}"
         )
 
     def test_reject_central_only_missing_to(self, tmp_path):

@@ -55,6 +55,12 @@ from coordinator_core.ops.ceremony.commit_gates import (
     parse_step267_blocks,
 )
 
+# Real-git spawn is load-bearing: dirty_tree_gate classifies real porcelain
+# output (staged/EOL-phantom/rename-destination-only), which a mocked git
+# cannot faithfully reproduce. Per-test repo fixtures since these tests
+# mutate the index and HEAD.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _EM_DASH = " — "
 
 

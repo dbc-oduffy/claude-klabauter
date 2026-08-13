@@ -46,6 +46,11 @@ Coverage:
   (r) row6_peer_write_between_stamp_and_ship_aborts_not_lost — Row 6: a peer
       write landing between the stamp and ship locks aborts the ship (CAS
       mismatch) rather than being silently lost or overwritten
+  (s) post_commit_non_shipped_terminal_and_archived_is_noop — 2026-08-13
+      example-doctrine-repo-em memo: a baton flipped to ANY terminal deployment_state
+      and swept before the stamp step is a no-op, not a containment failure;
+      the two companion tests keep that widening narrow (non-terminal
+      archived, and `shipped` with no `shipped_in`, both still fail loud)
 
 Spec backlink:
   coordinator_core/ops/ceremony/consumed_handoff_stamp.py
@@ -585,7 +590,7 @@ def test_post_commit_already_shipped_and_archived_is_noop(repo):
     shipped` directly (e.g. `archive-stamp-cli ship-handoff`), then swept to
     archive/handoffs/ by an async sweep, BEFORE this ceremony's stamp pass
     ran. `handoff.stamp` refuses any archive/handoffs/ path by design (see
-    `_already_shipped_and_archived`'s docstring) -- the stamp this ceremony
+    `_already_terminal_and_archived`'s docstring) -- the stamp this ceremony
     wants to apply is already on disk, so this must resolve as a no-op skip,
     never as `failed`."""
     sid = "sess-already-shipped-1"
@@ -608,7 +613,7 @@ def test_post_commit_already_shipped_and_archived_is_noop(repo):
     )
     assert outcome.stamped == []
     assert outcome.errors == []
-    assert outcome.skipped_already_shipped == [
+    assert outcome.skipped_already_terminal == [
         "archive/handoffs/2026-07/2026-07-26_082943_pred.md"
     ]
 
@@ -617,13 +622,52 @@ def test_post_commit_already_shipped_and_archived_is_noop(repo):
     assert "shipped_in: 5a5563c7" in on_disk
 
 
-def test_post_commit_archived_but_not_yet_shipped_still_fails_containment(repo):
-    """The already-shipped-and-archived no-op guard is narrow: an archived
-    handoff that was NOT already shipped (no `deployment_state: shipped` +
-    `shipped_in` pair on disk) still reaches `handoff.stamp` and hits its
-    containment guard for real -- surfaced as `errors`, never silently
-    swallowed alongside the genuine no-op case. Guards against widening the
-    skip into a general archive/handoffs/ bypass."""
+@pytest.mark.parametrize("terminal_state", ["closed", "abandoned", "continued"])
+def test_post_commit_non_shipped_terminal_and_archived_is_noop(repo, terminal_state):
+    """The archived no-op guard covers EVERY terminal `deployment_state`, not
+    just `shipped` (example-doctrine-repo-em, 2026-08-13, cross-repo/inbox/2026-08-13-doe-
+    claude-em-wsc-tail-consumed-stamp-refuses-archived-baton.md).
+
+    A baton flipped terminal before the close ceremony -- e.g. a displaced
+    roadmap stub closed via `handoff-reconcile-close-terminal` -- becomes
+    archive-eligible immediately, so the detached sweep can move it to
+    archive/handoffs/ before the tail's stamp step runs. `shipped_in` MUST NOT
+    be written for a non-shipped terminus (the work was not delivered), so the
+    only correct outcome is a no-op skip, never the containment refusal that
+    was surfacing as a tail soft-fail (exit 2) on correct on-disk state."""
+    sid = f"sess-archived-{terminal_state}-1"
+    repo.seed_handoff(
+        "2026-07-26_082943_pred.md",
+        claimed_by=sid,
+        deployment_state=terminal_state,
+        archived_subdir="2026-07",
+    )
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
+        )
+    )
+    assert outcome.stamped == []
+    assert outcome.errors == []
+    assert outcome.skipped_already_terminal == [
+        "archive/handoffs/2026-07/2026-07-26_082943_pred.md"
+    ]
+
+    # Never stamped: a non-shipped terminus records no delivery sha.
+    on_disk = repo.read_handoff("archive/handoffs/2026-07/2026-07-26_082943_pred.md")
+    assert "shipped_in:" not in on_disk
+    assert f"deployment_state: {terminal_state}" in on_disk
+
+
+def test_post_commit_archived_but_not_terminal_still_fails_containment(repo):
+    """The archived no-op guard stays narrow: an archived handoff still in a
+    NON-terminal state reaches `handoff.stamp` and hits its containment guard
+    for real -- surfaced as `errors`, never silently swallowed alongside the
+    genuine no-op case. That shape is an archival anomaly (a live baton should
+    not be in archive/handoffs/ at all), not the benign terminal-then-swept
+    race. Guards against widening the skip into a general archive/handoffs/
+    bypass."""
     sid = "sess-archived-unshipped-1"
     repo.seed_handoff(
         "2026-07-26_082943_pred.md",
@@ -637,7 +681,32 @@ def test_post_commit_archived_but_not_yet_shipped_still_fails_containment(repo):
         )
     )
     assert outcome.stamped == []
-    assert outcome.skipped_already_shipped == []
+    assert outcome.skipped_already_terminal == []
+    assert len(outcome.errors) == 1
+    assert "escapes state/handoffs" in outcome.errors[0]["error"]
+
+
+def test_post_commit_archived_shipped_without_sha_still_fails_containment(repo):
+    """`shipped` is the one terminal state the guard still qualifies on
+    `shipped_in`: an archived handoff claiming `deployment_state: shipped`
+    with no sha recorded has NOT had this ceremony's stamp applied, so it is
+    not a no-op -- it stays a loud containment error rather than quietly
+    losing the shipped_in record the close was supposed to write."""
+    sid = "sess-archived-shipped-nosha-1"
+    repo.seed_handoff(
+        "2026-07-26_082943_pred.md",
+        claimed_by=sid,
+        deployment_state="shipped",
+        archived_subdir="2026-07",
+    )
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root, repo.common_dir, sid, "deadbeef", chain_terminal=True
+        )
+    )
+    assert outcome.stamped == []
+    assert outcome.skipped_already_terminal == []
     assert len(outcome.errors) == 1
     assert "escapes state/handoffs" in outcome.errors[0]["error"]
 

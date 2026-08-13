@@ -5,8 +5,10 @@ warn-first soak, cleared under SC-DR-016 (example-doctrine-repo
 `coordinator/docs/wiki/scoped-safety-commits.md`) because its oracle is
 self-contained. That clearance is CONDITIONAL: SC-DR-014's criterion (3) is
 defined in terms of an override path, so the record requires a public override
-env var registered in the guard-override-keys table, minted in the same change.
-A deny with no hatch does not qualify under SC-DR-016 at all.
+env var, registered in the guard-override-keys reference table in the same
+change that mints it. That pairing is the record's entire stated condition —
+`test_registered_in_the_guard_override_keys_table` below is what discharges
+it. A deny with no hatch does not qualify under SC-DR-016 at all.
 
 These tests therefore assert three things a future edit could each break
 independently — the deny still fires unaided (the hatch did not accidentally
@@ -14,6 +16,21 @@ become the default), the hatch actually suppresses it (it is a real escape
 route, not a variable read and discarded), and the key is spelled exactly as
 SC-DR-016 names it (a renamed key silently un-registers the guard from the
 reference table an operator reads at decision time).
+
+This file previously also asserted that the deny text itself had to NAME the
+override key, reasoning that a hatch an operator cannot find from the deny
+text discharges SC-DR-016 "on paper only." That was this file's own local
+inference, not text in SC-DR-016 itself, and it is now retired: commit
+`b1e1119f9` (ruling D5, `tasks/guard-messages-keys/DECISIONS.md`, peer
+workstream "Guard messages stop handing agents the keys to their own cage")
+deliberately dropped the `operator_override_note(...)` pointer from this
+rule's deny leg so agents cannot self-unlock from the deny text. The hatch
+itself is untouched and still fully enforced — by
+`test_override_suppresses_the_deny`,
+`test_key_is_spelled_exactly_as_scdr016_specifies`, and
+`test_registered_in_the_guard_override_keys_table` — only the in-message
+pointer is gone. See `docs/reference/guard-override-keys.md`, the
+`schema_validate.py` consumer paragraph.
 
 Negative-spec: none of these assert that an AGENT can take this route. The
 override is a pre-launch operator knob — the deciding guard process is spawned
@@ -54,21 +71,23 @@ def test_deny_fires_without_the_override(monkeypatch):
         assert field in err['field']
 
 
-def test_deny_text_names_the_override_with_its_reachability_constraint(monkeypatch):
-    """The hatch has to be DISCOVERABLE at the moment the deny fires.
+def test_deny_hint_is_usable_but_silent_on_the_override(monkeypatch):
+    """Ruling D5 (`b1e1119f9`) retired the deny-text pointer on purpose.
 
-    An override an operator cannot find from the deny text discharges
-    SC-DR-016's condition on paper only. The pointer renders through
-    `operator_override_note`, so the pre-launch-only constraint travels with it
-    rather than being re-typed (and drifting) here.
+    The hint still has to guide an operator to the fix — the missing-fields
+    sentence and the SKILL.md pointer stay — but it must NOT name the override
+    env var. That inversion is what stops a future edit from re-adding the
+    pointer (via `operator_override_note` or otherwise) without reading D5.
+    The hatch itself is unaffected — see `test_override_suppresses_the_deny`.
     """
     monkeypatch.delenv(_ROADMAP_GRAPH_OVERRIDE_ENV_VAR, raising=False)
 
     err = _cf_spinoff_roadmap_requires_graph(_INCOMPLETE_BATON)
 
     assert err is not None
-    assert _ROADMAP_GRAPH_OVERRIDE_ENV_VAR in err['hint']
-    assert 'pre-launch only' in err['hint']
+    assert 'roadmap_id' in err['hint']
+    assert 'SKILL.md' in err['hint']
+    assert _ROADMAP_GRAPH_OVERRIDE_ENV_VAR not in err['hint']
 
 
 def test_override_suppresses_the_deny(monkeypatch):

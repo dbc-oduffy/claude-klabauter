@@ -23,6 +23,16 @@ import pytest
 from coordinator_core.ops import coordinator_complete_entry as m
 from coordinator_core.testing.doe_root import resolve_doe_root
 
+# Declared, not excused: this file spawns real git because the module under test
+# writes real commit-completion state (frontmatter, idempotency guard) that its own
+# oracle-parity contract requires re-deriving against actual git plumbing (log,
+# trailers), not a mock. Each test builds its own throwaway repo via `_make_repo`,
+# so mutation (frontmatter writes, idempotency reruns) needs per-test isolation --
+# not hoisted to module scope. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _git(args, cwd):
     result = subprocess.run(["git"] + list(args), cwd=str(cwd), capture_output=True, text=True)

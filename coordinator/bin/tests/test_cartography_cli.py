@@ -32,6 +32,19 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declared, not excused: the end-to-end tests below (see the "end-to-end
+# (real subprocess spawn of coordinator_core.invoke)" section) spawn a real
+# `git`-backed repo and a real `coordinator_core.invoke` engine subprocess
+# because the property under test is the cartography CLI's real spawn
+# contract (argv building, real op dispatch through the engine, real
+# file-index/tree results against actual git-tracked files), which no mock
+# stands in for. `_init_repo` is invoked per-test, not hoisted to module
+# scope, since each end-to-end test seeds different tracked files. The
+# spawn ratchet's `_BASELINE` is shrink-only pre-existing residue and is
+# explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 _BIN_DIR = Path(__file__).parent.parent
 _REPO_ROOT = _BIN_DIR.parent.parent
 

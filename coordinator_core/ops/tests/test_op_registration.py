@@ -107,6 +107,12 @@ _BUDGET_MANIFEST_OPS = _ALL_OPS + tuple(
     sorted(set(_CARTOGRAPHY_OPS_REGISTERED) - set(_CARTOGRAPHY_OPS))
 )
 
+# (e)/(f)/(g) dispatch_message smoke tests exercise the scope-"none"/
+# "common_dir" repo_root resolution path end-to-end against a real git repo —
+# that resolution logic reads actual repo state (cwd-relative discovery,
+# tracked-file enumeration), which a mock would bypass rather than prove.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)

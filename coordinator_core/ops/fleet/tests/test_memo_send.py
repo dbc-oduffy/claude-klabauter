@@ -78,6 +78,19 @@ from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._common import _make_git_env, main_worktree_root
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS, SUMMARY_PLACEHOLDER
 
+# Declared, not excused: this file's `_git` helper spawns real git to build sender
+# and receiver repos because the properties under test are real git plumbing --
+# `git check-ignore` (memo_send's containment check needs a real git repo to
+# answer against) and real commit history for scoped_to.sha resolvability
+# (F14 gate: rev-parse/cat-file against actual commit objects, incl. the
+# blob-vs-commit mismatch case). Each test builds its own sender/receiver repo via
+# tmp_path-scoped fixtures rather than a shared module-scope repo, since several
+# tests mutate the receiver's inbox and assert on its post-send disk state --
+# reusing a repo across tests would leak writes between them. The spawn ratchet's
+# `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route
+# for this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 # ---------------------------------------------------------------------------
 # Async runner
@@ -135,6 +148,36 @@ def _make_receiver_git_repo(tmp_path: Path, name: str = "receiver-repo") -> Path
     _git(root, "add", "-A")
     _git(root, "commit", "-m", "init receiver")
     return root
+
+
+async def _fake_sleep(*args, **kwargs):
+    """No-op replacement for `asyncio.sleep` — used to skip the real
+    inter-attempt delay in index.lock retry tests that exhaust the bounded
+    attempt cap (several sleeps back-to-back would otherwise slow the suite)."""
+    return None
+
+
+def _load_cli_delivery_module():
+    """Import the extensionless `coordinator/bin/cross-repo-memo` script as a
+    module, for direct unit calls into `_verify_delivery_landed` /
+    `_commit_delivered_memo` (the CLI copy C1 also fixed for AC1/AC2/AC3).
+
+    Loader pattern copied verbatim from
+    `coordinator/bin/test_cross_repo_memo_draft.py::_load_dispatcher_module` —
+    the script has no `.py` extension and is not directly importable, but
+    `SourceFileLoader` loads it by path. Loaded under a name other than
+    `__main__` so the CLI's `if __name__ == "__main__"` guard never fires.
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+
+    repo_root = Path(__file__).resolve().parents[4]
+    script_path = repo_root / "coordinator" / "bin" / "cross-repo-memo"
+    loader = SourceFileLoader("cross_repo_memo_c2", str(script_path))
+    spec = importlib.util.spec_from_loader("cross_repo_memo_c2", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
 
 
 # ---------------------------------------------------------------------------
@@ -1363,6 +1406,133 @@ class TestDeliveredMemoCommit:
         assert outcome.branch  # non-empty — resolved to the repo's actual branch
         assert outcome.reason is None
 
+    def test_commit_delivered_memo_unstages_on_real_commit_failure(
+        self, tmp_path, monkeypatch
+    ):
+        """AC3 (module copy) — the load-bearing test: `git add` really stages
+        the memo path, the subsequent `git commit` really fails, and the
+        failure arm must unstage what it staged. Asserts BOTH: the returned
+        outcome reports NOT committed, and the receiver's index is byte-for-
+        byte clean afterwards (`git status --porcelain` on the memo path is
+        empty) — the exact staged-but-uncommitted state that produced the
+        false "verified" line in the sibling CLI copy (plan problem
+        statement) is not left behind here.
+
+        The commit step alone is faked (via a `create_subprocess_exec`
+        interceptor matched on the `commit` subcommand) so `git add` still
+        really runs — this is a real-fixture test of the unstage arm, not a
+        mock of the whole function.
+        """
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        memo_relpath = "cross-repo/inbox/unstage-test.md"
+        memo_path = receiver_repo / memo_relpath
+        memo_path.write_text("dummy content\n", encoding="utf-8")
+
+        real_create_subprocess_exec = asyncio.create_subprocess_exec
+
+        async def _intercepting_create_subprocess_exec(*args, **kwargs):
+            if "commit" in args:
+                class _FakeFailedCommitProc:
+                    returncode = 1
+
+                    async def communicate(self):
+                        return b"", b"fatal: forced test commit failure\n"
+
+                return _FakeFailedCommitProc()
+            return await real_create_subprocess_exec(*args, **kwargs)
+
+        monkeypatch.setattr(
+            memo_send_module.asyncio,
+            "create_subprocess_exec",
+            _intercepting_create_subprocess_exec,
+        )
+
+        outcome = _run(
+            _commit_delivered_memo(
+                receiver_repo, memo_relpath, "some-sender", "Some Title",
+            )
+        )
+
+        assert outcome.committed is False
+        assert outcome.reason and "forced test commit failure" in outcome.reason
+
+        status = _git(receiver_repo, "status", "--porcelain", "--", memo_relpath)
+        status_text = status.stdout.decode(errors="replace")
+        assert status_text.strip().startswith("??"), (
+            f"the memo path must not be left staged after a failed commit "
+            f"(AC3 unstage arm) — expected untracked ('??'), got status: {status_text!r}"
+        )
+        assert memo_path.exists(), "the file itself must still be present"
+
+    def test_no_op_guard_recognizes_nothing_to_commit(self, tmp_path, monkeypatch):
+        """AC6 — the first of the three no-op phrasings: 'nothing to commit'."""
+        self._assert_no_op_phrase_recognized(
+            tmp_path, monkeypatch, b"nothing to commit, working tree clean\n"
+        )
+
+    def test_no_op_guard_recognizes_nothing_added_to_commit(self, tmp_path, monkeypatch):
+        """AC6 — the second of the three no-op phrasings: 'nothing added to
+        commit' (untracked-only tree)."""
+        self._assert_no_op_phrase_recognized(
+            tmp_path, monkeypatch,
+            b'nothing added to commit but untracked files present (use "git add" to track)\n',
+        )
+
+    def test_no_op_guard_recognizes_no_changes_added_to_commit(
+        self, tmp_path, monkeypatch
+    ):
+        """AC6 — the third of the three no-op phrasings: 'no changes added to
+        commit' (tracked-but-unstaged elsewhere — the phrase C1 added; its
+        absence previously let an already-committed memo read as an
+        uncommitted-delivery failure)."""
+        self._assert_no_op_phrase_recognized(
+            tmp_path, monkeypatch,
+            b'no changes added to commit (use "git add" and/or "git commit -a")\n',
+        )
+
+    def _assert_no_op_phrase_recognized(
+        self, tmp_path, monkeypatch, commit_stdout_or_stderr: bytes
+    ):
+        """Shared body for the three AC6 phrase tests: the `commit`
+        subcommand is faked to fail with the given git phrasing (`git add`
+        still really runs), and the outcome must be treated as a successful
+        no-op — never a reported failure."""
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        memo_relpath = "cross-repo/inbox/no-op-phrase-test.md"
+        memo_path = receiver_repo / memo_relpath
+        memo_path.write_text("dummy content\n", encoding="utf-8")
+
+        real_create_subprocess_exec = asyncio.create_subprocess_exec
+
+        async def _intercepting_create_subprocess_exec(*args, **kwargs):
+            if "commit" in args:
+                class _FakeNoOpCommitProc:
+                    returncode = 1
+
+                    async def communicate(self):
+                        return commit_stdout_or_stderr, b""
+
+                return _FakeNoOpCommitProc()
+            return await real_create_subprocess_exec(*args, **kwargs)
+
+        monkeypatch.setattr(
+            memo_send_module.asyncio,
+            "create_subprocess_exec",
+            _intercepting_create_subprocess_exec,
+        )
+
+        outcome = _run(
+            _commit_delivered_memo(
+                receiver_repo, memo_relpath, "some-sender", "Some Title",
+            )
+        )
+
+        assert outcome.committed is True, (
+            f"phrase {commit_stdout_or_stderr!r} must be recognized as a "
+            f"no-op success, got committed={outcome.committed} reason={outcome.reason!r}"
+        )
+        assert outcome.reason is None
+
     def test_commit_delivered_memo_never_raises_on_non_repo(self, tmp_path):
         """Pointing at a directory that is not a git repo must not raise."""
         non_repo = tmp_path / "not-a-git-repo"
@@ -1526,9 +1696,17 @@ class TestDeliveredMemoCommit:
             f"retry must fire EXACTLY once (2 total calls), got {call_count}"
         )
 
-    def test_index_lock_failure_persists_after_one_retry(self, tmp_path, monkeypatch):
-        """AC5 — a second consecutive index.lock failure surfaces normally
-        (retried: true, committed: false) rather than retrying again."""
+    def test_index_lock_failure_persists_after_max_attempts(self, tmp_path, monkeypatch):
+        """AC4 — a persistent index.lock failure surfaces normally
+        (retried: true, committed: false) after exhausting the bounded
+        attempt cap, rather than retrying forever.
+
+        Updated (C2, this plan) from the retired exactly-one-retry contract
+        the name previously asserted — AC4 deliberately replaced the single
+        200ms attempt with `_INDEX_LOCK_MAX_ATTEMPTS` bounded attempts. This
+        test now pins the CURRENT contract: `_commit_delivered_memo` is
+        called exactly `_INDEX_LOCK_MAX_ATTEMPTS` times total, not 2.
+        """
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -1546,6 +1724,9 @@ class TestDeliveredMemoCommit:
             )
 
         monkeypatch.setattr(memo_send_mod, "_commit_delivered_memo", _fake_commit)
+        # Avoid burning the real inter-attempt delay across (max_attempts - 1)
+        # sleeps in this test.
+        monkeypatch.setattr(memo_send_mod.asyncio, "sleep", _fake_sleep)
 
         result = _run(_memo_send(_base_params(dry_run=False, topic="index-lock-persist-test")))
 
@@ -1553,8 +1734,9 @@ class TestDeliveredMemoCommit:
         delivery_commit = result["acted"][0]["delivery_commit"]
         assert delivery_commit["committed"] is False
         assert delivery_commit["retried"] is True
-        assert call_count == 2, (
-            f"exactly one retry — no loop, no second retry, got {call_count} calls"
+        assert call_count == memo_send_mod._INDEX_LOCK_MAX_ATTEMPTS, (
+            f"exactly _INDEX_LOCK_MAX_ATTEMPTS total attempts, no unbounded "
+            f"loop — expected {memo_send_mod._INDEX_LOCK_MAX_ATTEMPTS}, got {call_count}"
         )
 
     def test_non_index_lock_failure_is_not_retried(self, tmp_path, monkeypatch):
@@ -1605,6 +1787,238 @@ class TestDeliveredMemoCommit:
         status = _git(receiver_repo, "status", "--porcelain")
         assert status.stdout.decode(errors="replace").strip() == "", (
             "dry_run must leave the receiver repo's working tree untouched"
+        )
+
+
+# ===========================================================================
+# 2b. CLI copy (`coordinator/bin/cross-repo-memo`) delivery-verify hole (AC1,
+#     AC2, AC3) — docs/plans/2026-08-13-memo-send-delivery-commit-verify-hole.md
+# ===========================================================================
+
+class TestCliDeliveryVerifyHole:
+    """Direct unit tests against the CLI's OWN `_verify_delivery_landed` /
+    `_commit_delivered_memo` — the copy that actually shipped the false
+    "Delivery verified" bug (the engine/module copy above never had it: its
+    `delivery_commit.committed` is set directly from the real commit
+    outcome, not from a separate index-based tracking check).
+
+    The CLI's `_commit_delivered_memo` does NOT set `core.hooksPath` (only
+    the module copy neutralizes hooks), so a `pre-commit` hook here is a
+    reliable, cross-platform way to force a REAL `git commit` failure after
+    a REAL `git add` — no monkeypatching of subprocess needed for the
+    load-bearing test.
+    """
+
+    def test_staged_but_uncommitted_reports_not_delivered_and_unstages(
+        self, tmp_path
+    ):
+        """THE LOAD-BEARING TEST. A fixture receiver repo where the memo
+        path is `git add`ed and the commit then FAILS (via a failing
+        `pre-commit` hook). Asserts:
+          1. `_verify_delivery_landed` reports NOT delivered (False) — the
+             exact false-positive state (staged, not at HEAD) that used to
+             print "Delivery verified" via the `ls-files --error-unmatch`
+             tracking check (AC1).
+          2. The receiver's index is clean afterwards — the unstage arm
+             fired (AC3).
+
+        A test that does not construct the staged-but-uncommitted state does
+        not cover this plan.
+        """
+        cli = _load_cli_delivery_module()
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+
+        hooks_dir = receiver_repo / ".git" / "hooks"
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        hook_path = hooks_dir / "pre-commit"
+        hook_path.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook_path.chmod(0o755)
+
+        memo_relpath = "cross-repo/inbox/staged-uncommitted-test.md"
+        memo_path = receiver_repo / memo_relpath
+        memo_path.write_text("dummy content\n", encoding="utf-8")
+
+        commit_outcome = cli._commit_delivered_memo(
+            str(receiver_repo), str(memo_path), "some-sender", "Some Title",
+        )
+        assert commit_outcome is None, (
+            "a hook-failed commit must report the never-raise "
+            "None-outcome (file written but left uncommitted)"
+        )
+
+        # The memo path is on disk but NOT at HEAD — the pre-AC1 oracle
+        # (`git ls-files --error-unmatch`) would have passed here anyway
+        # (the file is still in the index at this point) *if* the unstage
+        # had not fired, and would have passed regardless because it only
+        # tests tracking, not HEAD. Assert the verify oracle catches this.
+        assert memo_path.exists()
+        landed = cli._verify_delivery_landed(str(receiver_repo), str(memo_path))
+        assert landed is False, (
+            "AC1 — a staged-but-never-committed path must report NOT delivered"
+        )
+
+        status = _git(receiver_repo, "status", "--porcelain", "--", memo_relpath)
+        status_text = status.stdout.decode(errors="replace")
+        assert status_text.strip().startswith("??"), (
+            f"AC3 — the memo path must not be left staged after the failed "
+            f"commit, expected untracked ('??'), got status: {status_text!r}"
+        )
+
+    def test_verified_line_never_carries_blank_sha(self, tmp_path, monkeypatch, capsys):
+        """AC2 — the "Delivery verified" line can never print an empty SHA.
+        The old bug was a fallback keyed on returncode while `git log -1`
+        can exit 0 with empty stdout; assert the fallback keys on empty
+        stdout too, by forcing exactly that (rc=0, empty stdout) for the
+        `git log -1 --format=%h` call on an ACTUALLY-committed path (so the
+        HEAD check, AC1, passes and execution reaches the SHA line), then
+        asserting both the return value and the printed line itself carry
+        the `?` placeholder, never a blank/missing SHA token.
+        """
+        cli = _load_cli_delivery_module()
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+
+        memo_relpath = "cross-repo/inbox/blank-sha-print-test.md"
+        memo_path = receiver_repo / memo_relpath
+        memo_path.write_text("dummy content\n", encoding="utf-8")
+        _git(receiver_repo, "add", "--", memo_relpath)
+        _git(receiver_repo, "commit", "-m", "committed for blank-sha print test")
+
+        real_subprocess_run = cli.subprocess.run
+
+        def _intercepting_run(args, **kwargs):
+            if "log" in args and "-1" in args and "--format=%h" in args:
+                return subprocess.CompletedProcess(
+                    args=args, returncode=0, stdout="", stderr="",
+                )
+            return real_subprocess_run(args, **kwargs)
+
+        monkeypatch.setattr(cli.subprocess, "run", _intercepting_run)
+
+        landed = cli._verify_delivery_landed(str(receiver_repo), str(memo_path))
+        assert landed is True, "a genuinely-committed path must still verify as delivered"
+        captured = capsys.readouterr()
+
+        assert "Delivery verified" in captured.out
+        verified_lines = [
+            line for line in captured.out.splitlines() if "Delivery verified" in line
+        ]
+        assert verified_lines, "expected a 'Delivery verified' line in stdout"
+        for line in verified_lines:
+            assert "committed as  on" not in line, (
+                f"AC2 — a blank SHA must never appear in the verified line: {line!r}"
+            )
+            assert "committed as ? on" in line, (
+                f"AC2 — an empty-stdout git log must fall back to the '?' "
+                f"placeholder, not a blank: {line!r}"
+            )
+
+    def test_send_via_engine_skips_archive_when_verification_fails(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC7 — `_send_via_engine` must not archive the sender-side outbox
+        draft when `_verify_delivery_landed` reports the delivery did NOT
+        land. Archiving before verification (the pre-fix ordering) left a
+        failed delivery with no draft for `send <topic>` to retry."""
+        cli = _load_cli_delivery_module()
+
+        outbox_path = str(tmp_path / "state" / "memo-outbox" / "ac7-topic.md")
+        os.makedirs(os.path.dirname(outbox_path), exist_ok=True)
+        with open(outbox_path, "w", encoding="utf-8") as fh:
+            fh.write("status: draft\n")
+
+        fake_result = {
+            "exit_code": 0,
+            "acted": [{
+                "id": "/tmp/fake-receiver/cross-repo/inbox/ac7.md",
+                "delivery_commit": {"committed": True, "reason": None, "retried": False},
+            }],
+        }
+        monkeypatch.setattr(
+            cli.cc_invoke, "route_mutation",
+            lambda *a, **k: fake_result,
+        )
+
+        archive_calls = []
+        monkeypatch.setattr(
+            cli, "_archive_sent_outbox_draft",
+            lambda *a, **k: archive_calls.append(a),
+        )
+        monkeypatch.setattr(cli, "_verify_delivery_landed", lambda *a, **k: False)
+        monkeypatch.setattr(cli, "_print_premise_check_advisory", lambda *a, **k: None)
+
+        exit_code = cli._send_via_engine(
+            topic="ac7-topic",
+            to="example-retrieval-repo-em",
+            title="AC7 test",
+            body="body",
+            kind="fyi",
+            summary=None,
+            supersedes=None,
+            sender="some-sender",
+            sender_root=str(tmp_path),
+            receiver_path="/tmp/fake-receiver",
+            outbox_path=outbox_path,
+        )
+
+        assert exit_code == 2, "an unlanded delivery is degraded (exit 2), not a hard failure"
+        assert archive_calls == [], (
+            "AC7 — the outbox draft must NOT be archived when verification "
+            "reports the delivery did not land"
+        )
+        assert os.path.isfile(outbox_path), "AC7 — the draft must remain in place for a retry"
+
+    def test_send_via_engine_archives_after_verification_succeeds(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC7 — the counterpart: a successfully-verified delivery still
+        archives the outbox draft, and only after verification ran."""
+        cli = _load_cli_delivery_module()
+
+        outbox_path = str(tmp_path / "state" / "memo-outbox" / "ac7-topic-ok.md")
+        os.makedirs(os.path.dirname(outbox_path), exist_ok=True)
+        with open(outbox_path, "w", encoding="utf-8") as fh:
+            fh.write("status: draft\n")
+
+        fake_result = {
+            "exit_code": 0,
+            "acted": [{
+                "id": "/tmp/fake-receiver/cross-repo/inbox/ac7-ok.md",
+                "delivery_commit": {"committed": True, "reason": None, "retried": False},
+            }],
+        }
+        monkeypatch.setattr(
+            cli.cc_invoke, "route_mutation",
+            lambda *a, **k: fake_result,
+        )
+
+        call_order = []
+        monkeypatch.setattr(
+            cli, "_verify_delivery_landed",
+            lambda *a, **k: call_order.append("verify") or True,
+        )
+        monkeypatch.setattr(
+            cli, "_archive_sent_outbox_draft",
+            lambda *a, **k: call_order.append("archive"),
+        )
+        monkeypatch.setattr(cli, "_print_premise_check_advisory", lambda *a, **k: None)
+
+        exit_code = cli._send_via_engine(
+            topic="ac7-topic-ok",
+            to="example-retrieval-repo-em",
+            title="AC7 test",
+            body="body",
+            kind="fyi",
+            summary=None,
+            supersedes=None,
+            sender="some-sender",
+            sender_root=str(tmp_path),
+            receiver_path="/tmp/fake-receiver",
+            outbox_path=outbox_path,
+        )
+
+        assert exit_code == 0, exit_code
+        assert call_order == ["verify", "archive"], (
+            f"AC7 — archive must run strictly after verification, got {call_order!r}"
         )
 
 
@@ -4459,6 +4873,74 @@ class TestSentMemoLedger:
         ))
         assert result["exit_code"] == 0, result
         assert result["acted"], result
+
+    def test_ledger_line_carries_delivery_commit_reason_and_retried(
+        self, tmp_path, monkeypatch,
+    ):
+        """AC8 (2026-08-13 delivery-commit-verify-hole plan): a fresh ledger
+        row carries `delivery_commit_reason`/`retried` sourced from this
+        send's own `delivery_commit` envelope."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="ac8-commit-fields", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        delivery_commit = result["acted"][0]["delivery_commit"]
+
+        lines = _read_ledger_lines(sender_repo)
+        assert len(lines) == 1
+        assert "delivery_commit_reason" in lines[0]
+        assert "retried" in lines[0]
+        assert lines[0]["delivery_commit_reason"] == delivery_commit.get("reason")
+        assert lines[0]["retried"] == delivery_commit.get("retried")
+
+    def test_append_sent_ledger_tolerates_rows_predating_ac8_fields(
+        self, tmp_path,
+    ):
+        """AC8: ~1719 pre-existing ledger rows on disk lack
+        `delivery_commit_reason`/`retried` entirely. A reader must parse a
+        mixed-shape ledger (legacy rows with the keys absent, new rows with
+        them present) without raising and without treating the legacy rows
+        as malformed."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        ledger_path = _sender_sent_ledger_path(sender_repo)
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_row = {
+            "sent_at": "2026-01-01T00:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "legacy-topic",
+            "kind": "fyi",
+            "delivered_to": "cross-repo/inbox/legacy.md",
+            "in_reply_to": None,
+        }
+        ledger_path.write_text(json.dumps(legacy_row) + "\n", encoding="utf-8")
+
+        appended_text = _append_sent_ledger(
+            sender_repo,
+            topic="new-topic",
+            to="example-retrieval-repo-em",
+            kind="fyi",
+            delivered_path=Path("cross-repo/inbox/new.md"),
+            receiver_repo_path=sender_repo,
+            in_reply_to=None,
+            delivery_commit_reason="ok",
+            delivery_commit_retried=False,
+        )
+        assert appended_text is not None
+
+        lines = _read_ledger_lines(sender_repo)
+        assert len(lines) == 2
+        # Legacy row parses fine with the new keys simply absent.
+        assert "delivery_commit_reason" not in lines[0]
+        assert "retried" not in lines[0]
+        # New row carries both.
+        assert lines[1]["delivery_commit_reason"] == "ok"
+        assert lines[1]["retried"] is False
 
 
 # ===========================================================================

@@ -54,6 +54,15 @@ except _DoeUnresolvable:
 
 _KEY_RE = re.compile(r"^[0-9a-f]{16}$")
 
+# Declared, not excused: every test invokes emit-lesson-summaries.py as a REAL
+# subprocess (via `_run_emitter`/direct subprocess.run calls) to exercise its
+# actual CLI argv contract and stdout JSON output end-to-end -- an in-process
+# call would not observe the subprocess-boundary behaviour this emitter's own
+# CLI callers depend on. The spawn ratchet's `_BASELINE` is shrink-only
+# pre-existing residue and is explicitly not the route for this file --
+# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 
 def _no_console_kw() -> dict:
     """Splat-ready Windows console-suppression kwarg for spawning the emitter

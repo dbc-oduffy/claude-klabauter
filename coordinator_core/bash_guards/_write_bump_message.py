@@ -276,14 +276,25 @@ def render_em_message(
     """The FOREIGN-class, EM-class deny copy. Self-attributed, opens on the
     bare word "instead" to hold the whole remainder in one
     `_alternative_liveness` cue window (see module docstring, "BUDGET").
-    `surface` selects the truthful clear-scope phrase (module docstring,
-    `SURFACE_BASH`/`SURFACE_TOOL`)."""
-    line = clear_line(gitdir, session_id)
-    phrase = _clear_offer_phrase(surface)
+
+    NO PASTEABLE CLEAR RECIPE ON THIS CHANNEL (2026-08-13, C4d,
+    docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md
+    AC-2). This used to append `clear_line()`'s `touch
+    allow-xrepo-write-<session-id>` command, fully parameterized and ready
+    to paste, right in the same breath as "check with your PM" -- a
+    pasteable bypass recipe is exactly what AC-1/AC-2 forbid for EITHER
+    audience, EM included; the EM-vs-subagent split earlier in this
+    module's history was about ROUTING (PM vs dispatching-EM), never about
+    which audience may see the recipe. The genuine alternative -- check
+    with your PM, then cross-repo-memo as the sanctioned channel -- is
+    unchanged and is the entire message now. `gitdir`/`session_id`/
+    `surface` are accepted for call-site parity with `render_bump_message`'s
+    single dispatch signature and the sibling subagent-class renderer --
+    none is rendered here."""
+    del gitdir, session_id, surface
     return (
         "Coordinator guard — instead: check with your PM before writing into "
-        f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`); once assented, {phrase}:\n"
-        f"  {line}\n"
+        f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`). "
         "Still unsure? cross-repo-memo is the sanctioned channel."
     )
 
@@ -327,17 +338,22 @@ def render_publish_em_message(
     mirror, its registered owner (context, never gating), and the durable
     source-side alternative via a doctrine citation. Contains no
     "repos you don't own", no ownership-violation vocabulary, and no
-    PM-checking / cross-repo-memo pointer (AC3, AC15). `surface` selects the
-    truthful clear-scope phrase (module docstring, `SURFACE_BASH`/
-    `SURFACE_TOOL`)."""
-    line = clear_line(gitdir, session_id)
-    phrase = _clear_offer_phrase(surface)
+    PM-checking / cross-repo-memo pointer (AC3, AC15).
+
+    NO PASTEABLE CLEAR RECIPE ON THIS CHANNEL (2026-08-13, C4d,
+    docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md
+    AC-2) -- same fix as `render_em_message`: the `clear_line()` `touch`
+    command is gone from the EM channel entirely; the durable source-side
+    doctrine citation is this template's whole alternative now, not a
+    fallback-if-you-still-mean-to-write-here escape hatch. `gitdir`/
+    `session_id`/`surface` are accepted for call-site parity with
+    `render_bump_message`'s single dispatch signature and the sibling
+    publish-subagent renderer -- none is rendered here."""
+    del gitdir, session_id, surface
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
-        f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`. "
-        f"{phrase[0].upper()}{phrase[1:]} if you still mean to write here:\n"
-        f"  {line}"
+        f"`{_PUBLISH_DOCTRINE_CITATION}` § `{_PUBLISH_DOCTRINE_SECTION}`."
     )
 
 

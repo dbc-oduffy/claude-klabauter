@@ -69,6 +69,12 @@ from coordinator_core.ops.changelog_ops import (  # noqa: E402
     _today_utc,
 )
 
+# The byte-parity assertions (append_day/backfill_gaps window-commit content)
+# read commits from a REAL repo so the emitted bytes reflect actual git log
+# output, matching what the example-doctrine-repo oracle CLIs themselves read — a mocked git
+# would validate against invented commit data, not the oracle's real input.
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+
 # ---------------------------------------------------------------------------
 # Oracle path resolution (reads ~/.claude/.doe-root sentinel)
 # ---------------------------------------------------------------------------
