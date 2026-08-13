@@ -347,6 +347,16 @@ def deletion_block_gate(
     the three assertions and the skip-gate-when-empty / scoped-to-gate_paths
     rules.
 
+    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
+    that-rejects-it.md): protects against a commit message whose Step-2.67
+    Deleted/Kept claims diverge from staged reality -- git itself has no
+    notion of commit-MESSAGE-vs-diff consistency, only diff content. Every
+    call recomputes this from current git state; nothing is cached or held
+    across calls. Outlet: fix the message body or re-stage to match the
+    claims, then re-invoke -- a fresh sub-second gate call, no human wait
+    (the CLI's own remedy text at the bottom of this module states the same
+    retry path).
+
     Params:
         msg_text   -- the composed commit message (from `commit_message.
                        compose_message`).
@@ -605,6 +615,19 @@ def dirty_tree_gate(
     classification rules (staged / EOL-phantom / known-concurrent-owner /
     unattributable) and the auto-stash refusal negative-spec.
 
+    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
+    that-rejects-it.md): protects against committing over a dirty path this
+    session cannot attribute to itself OR to a known concurrent claim holder
+    -- git's own status has no concept of session ownership, only tracked/
+    untracked/staged. Every call re-reads `git status --porcelain` and the
+    live handoff scope fresh; no lock or lease is held between calls. Outlet:
+    the SAME session/EM disposes the path itself -- stage it, claim it via a
+    handoff `scope:` entry, or narrow `gate_paths` to exclude it -- and
+    re-invokes; a fresh sub-second gate call, no human wait. The negative-
+    spec's "human/EM judgment call" already names the EM as a sufficient
+    in-band decider -- disposition never requires waiting on a human
+    specifically, only refuses to auto-guess on the caller's behalf.
+
     Params:
         worktree_root -- the git worktree root; also where `state/handoffs/`
                           is resolved for the known-concurrent-owner scan.
@@ -774,6 +797,16 @@ def carry_gate(
     Any refusal appends `_CARRY_GATE_RESTAGE_HINT` once (AC6) -- the
     pipeline leaves a refused path unstaged; the operator must re-stage
     after fixing the entries above.
+
+    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
+    that-rejects-it.md): protects against a staged handoff whose
+    `carried_items` claim state the entries themselves don't actually
+    satisfy -- git stages file bytes, it has no notion of this field's
+    semantics. Every call re-reads and re-evaluates the staged file fresh;
+    nothing persists between calls. Outlet: the EM authoring the handoff
+    fixes the flagged entries per the diagnostic (`_CARRY_GATE_RESTAGE_HINT`
+    above), re-stages, and re-invokes -- a fresh sub-second gate call, no
+    human wait.
     """
     root = Path(worktree_root)
     handoff_paths = [p for p in gate_paths if _HANDOFF_PATH_RE.match(p)]
@@ -971,6 +1004,16 @@ def op_scope_coverage_gate(
         wrong for some other rebind order -- refusing is consistent with every other
         "predicate could not be evaluated" case above. See `_extract_dict_str_keys`'s own
         docstring and `_MultipleModuleBindingsError`.
+
+    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
+    that-rejects-it.md): protects against an op silently defaulting to
+    `"none"` scope for lack of an `_OP_KEY_SCOPE` entry -- git has no notion
+    of this cross-table registration invariant, only file content. Every
+    call re-reads both source files and re-parses their dict literals fresh;
+    nothing persists between calls. Outlet: the EM authoring the op
+    registration adds the missing entries per `_OP_SCOPE_GATE_REMEDY`
+    (printed in the diagnostics above), re-stages, and re-invokes -- a fresh
+    sub-second gate call, no human wait.
     """
     gate_scope: Set[str] = set(gate_paths)
     if _REGISTRY_MAP_RELPATH not in gate_scope:

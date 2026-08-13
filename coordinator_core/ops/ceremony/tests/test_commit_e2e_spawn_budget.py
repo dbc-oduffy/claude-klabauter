@@ -89,18 +89,6 @@ def _sessions_dir(repo: Path) -> Path:
     return repo / ".git" / "coordinator-sessions"
 
 
-def _write_touched(repo: Path, sid: str, lines: list[str]) -> None:
-    sdir = _sessions_dir(repo) / sid
-    sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "touched.txt").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
-    )
-
-
-def _touch_line(verb: str, path: str) -> str:
-    return "%s 2026-08-08T10:00:00.000000Z %s" % (verb, path)
-
-
 def _write_meta_live(repo: Path, sid: str, *, live: bool) -> None:
     sdir = _sessions_dir(repo) / sid
     sdir.mkdir(parents=True, exist_ok=True)
@@ -169,45 +157,6 @@ def test_green_path_spawn_count_matches_budget(tmp_path_factory):
         "budget-manifest.json's ceremony.scoped_git_commit.spawn_count_"
         "budget.green_path (and its _rationale) together with this test "
         "if the change is intentional" % (n, budgeted)
-    )
-
-
-def test_refusal_path_spawn_count_matches_budget(tmp_path_factory):
-    """A10, refusal path: an UNANSWERABLE path (caller identity does not
-    verify while a live OTHER claimant exists -- AC10a) refuses before any
-    staging spawn -- the manifest's `spawn_count_budget.
-    refusal_path_unanswerable` git subprocesses, end to end."""
-    tmp_path = tmp_path_factory.mktemp("e2e-spawn-refusal")
-    repo = _init_repo(tmp_path)
-    (repo / "a.txt").write_text("v1\n", encoding="utf-8")
-    _git(["add", "-A"], repo)
-    _git(["commit", "-q", "-m", "seed"], repo)
-    (repo / "a.txt").write_text("v2\n", encoding="utf-8")
-    # No session dir for "sess-caller" at all -> `_caller_identity_verified`
-    # is False; a live OTHER claimant exists -> AC10a's unanswerable-path
-    # fail-closed policy fires.
-    _write_touched(repo, "sess-peer", [_touch_line("T", "a.txt")])
-    _write_meta_live(repo, "sess-peer", live=True)
-
-    def _run():
-        return scoped_git_commit._handler(
-            {
-                "worktree_root": str(repo),
-                "paths": ["a.txt"],
-                "message": "test commit",
-            }
-        )
-
-    n, result = _count_op_git_calls(_run)
-    assert result["committed"] is False
-    assert "could not be verified" in result["error"]
-
-    budgeted = _manifest_spawn_budget()["refusal_path_unanswerable"]
-    assert n == budgeted, (
-        "refusal-path e2e spawn count is %d, manifest budgets %d -- update "
-        "budget-manifest.json's ceremony.scoped_git_commit.spawn_count_"
-        "budget.refusal_path_unanswerable (and its _rationale) together "
-        "with this test if the change is intentional" % (n, budgeted)
     )
 
 

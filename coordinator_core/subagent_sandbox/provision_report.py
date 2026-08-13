@@ -157,8 +157,7 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
     straight off the stdin payload's ``session_id`` field (raw, not the
     path-sanitized segment used for the directory leaf) -- see
     ``_provision``'s call site. Falls back to the literal ``null`` when
-    absent, matching the existing ``dispatch_feed: null`` placeholder
-    convention; in practice this is never absent when reached via
+    absent -- in practice this is never absent when reached via
     ``_provision`` since ``session_id`` is required for eligibility."""
     return (
         "---\n"
@@ -169,7 +168,16 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
         "divergence:\n"
         "  diverged: false\n"
         "commits: []\n"
-        "dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter\n"
+        "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter\n"
+        "  label: null\n"
+        "  agent_type: null\n"
+        "  model: null\n"
+        "  effort: null\n"
+        "  schema_ref: null\n"
+        "  brief_ref: null\n"
+        "  gate_kind: none\n"
+        "  write_files: []\n"
+        "  est_min: null\n"
         "---\n\n"
     )
 

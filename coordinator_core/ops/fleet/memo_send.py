@@ -1565,6 +1565,17 @@ async def _commit_delivered_memo(
 ) -> CommitOutcome:
     """Stage+commit ONLY the just-delivered memo file in the RECEIVER repo.
 
+    NOT A DUPLICATE of `coordinator/bin/cross-repo-memo::_commit_delivered_memo`
+    — negative spec, do not "dedupe" the two. That copy serves the
+    `--self-receipt` arm only, which is single-repo by construction, so it
+    deliberately keeps the receiver's hooks running and retains branch
+    creation; both are wrong HERE, where the receiver is a foreign tree (see
+    the Mechanism and Branch-creation-REMOVED paragraphs below for the
+    rulings). Collapsing the two would break one contract or the other. The
+    scoped single-path add/commit, the never-raise contract, the AC3
+    unstage-on-failure, and the three-phrasing idempotent-no-op guard ARE held
+    in common and should be kept in step across both sites.
+
     Claim-release ineligible (C3, docs/plans/2026-08-11-claim-release-and-
     the-gate-that-cannot-clear.md): this commit lands in the RECEIVER's
     repo, a foreign worktree relative to this session. `release_committed_

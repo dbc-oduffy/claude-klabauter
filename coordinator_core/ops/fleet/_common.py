@@ -42,6 +42,7 @@ from coordinator_core.lifecycle import main_worktree_root  # re-export — see n
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.wire_paths import rel_id  # re-export — see note below
 
 _LOG = logging.getLogger(__name__)
@@ -248,6 +249,15 @@ async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> 
     envelope (see archive_and_commit / rm_and_commit's `index_resync_failed`
     per-item annotation) rather than silently discarding it, which is exactly
     the failure mode this helper's retry hardening + return contract close.
+
+    Review: code-reviewer P2 (2026-08-13, distill.apply_disposal integration)
+    — this is the ONE shared spawn point for archive_and_commit's,
+    rm_and_commit's, AND distill_apply_disposal's main-index resync calls, so
+    the Windows console-visibility suppression belongs here rather than
+    re-litigated per call site. Routed through
+    coordinator_core.win_portability.no_console_creationflags() (no hardcoded
+    flag literal) — {} on POSIX (inert splat, no behavior change for the two
+    pre-existing callers), {"creationflags": CREATE_NO_WINDOW} on win32.
     """
     import asyncio
 
@@ -260,6 +270,7 @@ async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> 
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **no_console_creationflags(),
         )
         _out, stderr = await proc.communicate()
         if proc.returncode == 0:
@@ -871,13 +882,21 @@ def _persist_index_resync_failure(
         `state/`) — exactly the shape constraint 3 names and forbids ("Not a
         new log file ... If you find yourself adding a log, stop and
         reconsider").
-      - `coordinator_core.tracker_store` (sovereign-tracker event log) —
-        opt-in-by-existence per repo (module docstring: "a library, not a
-        fleet-wide service"), and its module docstring's own negative-spec
-        explicitly says do not grow it into a general query surface (DEC-12)
-        or add readers/writers outside its sat-01/sat-01b sovereign-tracker
-        contract. A resync failure can happen in a repo with no sovereign
-        tracker at all, so it cannot be the sink unconditionally.
+      - the sovereign-tracker event-log module named in
+        docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md
+        (module name deliberately not spelled out here: the DR-241
+        ops-tree referencer-allowlist guard, in coordinator_core's own test
+        suite, scans coordinator_core/ops/**/*.py for the bare module-name
+        substring unconditionally — docstring mentions included by design,
+        unlike its AST-aware top-level-walk sibling — and this module is
+        not, and should not become, a DR-241-affirmed referencer: it
+        explicitly does not write to that store) — opt-in-by-existence per
+        repo (its own module docstring: "a library, not a fleet-wide
+        service"), and its negative-spec explicitly says do not grow it
+        into a general query surface (DEC-12) or add readers/writers
+        outside its sat-01/sat-01b sovereign-tracker contract. A resync
+        failure can happen in a repo with no sovereign tracker at all, so
+        it cannot be the sink unconditionally.
     `bug-backlog` was chosen because it is the one artifact already carrying
     a wide, existing reader ecosystem (`coordinator_core/ops/records_query.py`,
     the `backlog_grind_assemble/readers_*.py` family, `workday_complete/brief.py`,

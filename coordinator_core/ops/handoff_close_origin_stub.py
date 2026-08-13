@@ -393,6 +393,82 @@ def _baton_walk_pair(
 # ---------------------------------------------------------------------------
 
 
+#: Close-basis vocabulary emitted on every `closed[]` entry (delivery-proof
+#: threading, see `_is_complete_delivery_proof`/`_try_close`) — auditable
+#: alongside `join_source`, in the spirit of 595a8b3cf977's guard-decline
+#: reason split: a reader must be able to tell "this closed because a
+#: complete delivery proof was supplied" apart from "this closed because the
+#: live-children guard read safe-to-close" without re-deriving it.
+CLOSE_BASIS_DELIVERY_PROOF = "delivery-proof"
+CLOSE_BASIS_GUARD = "guard"
+
+
+def _is_complete_delivery_proof(proof: Optional[dict]) -> bool:
+    """True iff `proof` is a COMPLETE delivery proof, per the exact
+    conditions this op's caller (`close_out_and_stamp.close_out_and_stamp`)
+    established for its own `status_target == "implemented"` stamping
+    decision:
+
+      - ``deliverable_id`` is a non-empty string (the plan carries one).
+      - ``join_provenance == "joined"`` — the `Deliverable-Id` trailer join
+        ran and reported success on the SAME `_determine_shipped` verdict
+        that gated this run's `implemented` stamp. NOT itself proof the join
+        ever inspected a commit: `_determine_shipped` also emits
+        `JOIN_PROVENANCE_JOINED` from its own `if not chunk_ids:` early
+        return, with `missing == []`, WITHOUT calling
+        `_committed_chunk_shas` at all — "there was nothing to check", not
+        "the join succeeded". `commit_required_chunk_count` (below) is what
+        rules that branch out; `join_provenance` alone does not.
+      - ``missing_chunk_ids == []`` — every commit-required chunk id has
+        covering evidence under the same oracle that gated this run's
+        `implemented` stamp (empty, not merely absent/falsy — an absent key
+        on `proof` is NOT the same claim as an explicitly-empty list, and is
+        treated as incomplete). This is NOT a claim that every chunk id was
+        individually committed AND trailered: `missing` is computed against
+        a `committed` set unioned from Session-Id-scoped fallback,
+        `disposition_ref` evidence, and sibling-repo scans, so one
+        trailered commit can satisfy `matched_commit_count > 0` (hence
+        `"joined"`) while other chunk ids are covered by non-trailer
+        evidence.
+      - ``status == "implemented"`` — the plan was stamped `status:
+        implemented` this run (`close_out_and_stamp`'s own
+        `status_target == "implemented"` gate).
+      - ``commit_required_chunk_count`` is an int > 0 — the plan's spine
+        actually had at least one commit-required row for the join to have
+        run against (Finding 0, staff-eng review 2026-08-13: without this,
+        a plan with zero commit-required spine rows manufactures a
+        "complete" proof via the degenerate `_determine_shipped` branch
+        above and closes a stub on zero delivery evidence). A missing,
+        `None`, or non-int count is treated as NOT complete — fail safe to
+        the guard, same as any other absent/wrong-typed field.
+
+    An indeterminate/partial proof (any field absent, wrong-typed, or not
+    exactly matching the above) is NOT a proof — falls back to the
+    live-children guard with today's exact semantics, same as an absent
+    `proof` altogether.
+    """
+    if not isinstance(proof, dict):
+        return False
+    deliverable_id = proof.get("deliverable_id")
+    if not isinstance(deliverable_id, str) or not deliverable_id.strip():
+        return False
+    if proof.get("join_provenance") != "joined":
+        return False
+    missing_chunk_ids = proof.get("missing_chunk_ids")
+    if missing_chunk_ids != []:
+        return False
+    if proof.get("status") != "implemented":
+        return False
+    commit_required_chunk_count = proof.get("commit_required_chunk_count")
+    if (
+        not isinstance(commit_required_chunk_count, int)
+        or isinstance(commit_required_chunk_count, bool)
+        or commit_required_chunk_count <= 0
+    ):
+        return False
+    return True
+
+
 def _read_deliverable_id(meta: dict) -> Optional[str]:
     """Return the non-empty ``deliverable_id`` scalar from parsed frontmatter, or None.
 
@@ -598,14 +674,32 @@ async def _try_close(
     join_source: str,
     sha: str,
     guard_exclude: List[str],
+    delivery_proof: Optional[dict] = None,
 ) -> Tuple[Optional[dict], Optional[dict]]:
     """Attempt to stamp-close one matched origin stub.
 
     Returns (closed_entry, skipped_entry) — exactly one is non-None.
 
     Composition order mirrors coordinator-handoff-archive.sh --stamp-only:
-    live-children guard (unconditional) -> optional shipped_in stamp ->
+    live-children guard (unconditional, UNLESS a complete, stub-specific
+    delivery proof is supplied — see below) -> optional shipped_in stamp ->
     ship verb (deployment_state: shipped, no git mv).
+
+    `delivery_proof` (optional; PM ruling — see module docstring "Delivery-
+    proof close" section): when `_is_complete_delivery_proof(delivery_proof)`
+    is True AND the proof's own `deliverable_id` equals THIS STUB's own
+    `deliverable_id` (`_read_deliverable_id` on the stub's frontmatter — a
+    proof for deliverable A must never close a stub carrying deliverable B),
+    the live-children guard is skipped entirely and the close proceeds on the
+    proof alone. This is safe precisely because the close performed here is
+    IN PLACE (`deployment_state -> shipped`, no `git mv`) — it cannot strand
+    a dependent the way an archival move could; archival remains separately
+    gated on liveness in `archive_handoffs.py`, untouched by this leg.
+    `closed_entry["close_basis"]` records which path fired
+    (`CLOSE_BASIS_DELIVERY_PROOF` vs `CLOSE_BASIS_GUARD`) so the reply stays
+    auditable, mirroring 595a8b3cf977's guard-decline reason split.
+    An absent/incomplete/mismatched proof falls back to the guard with
+    today's exact semantics — unchanged.
 
     Latent-bug fix (discovered authoring this op, not present in the port
     proposal): the guard is now called with the conclusion-shaped
@@ -645,33 +739,87 @@ async def _try_close(
     """
     rel = rel_id(stub_path, worktree)
 
-    # candidate MUST be absolute: handoff_children._handoff_has_live_children
-    # resolves "candidate" via contained_path(Path(candidate), ...), which
-    # calls .resolve() against the PROCESS cwd for a relative string — not
-    # the worktree. stub_path (from handoffs_dir.glob()) is already absolute.
-    # This guard answers a conclusion-shaped question ("may this origin stub
-    # be closed?") -- the close it gates is `deployment_state -> shipped` IN
-    # PLACE, no `git mv`, so `CONCLUSION_EDGE_KINDS` (not the archival-shaped
-    # default) is the right predicate — see this function's own docstring
-    # above for the schema-argument specific to this call site (why a fork
-    # child is structurally incapable of being this stub's continuation).
-    guard_params: dict = {
-        "candidate": str(stub_path),
-        "edge_kinds": CONCLUSION_EDGE_KINDS,
-    }
-    if guard_exclude:
-        guard_params["exclude"] = guard_exclude
-    guard_res = await _live_children_guard(guard_params, repo_root)
-    if guard_res.get("exit_code") != 1:
-        # exit_code 0 = has live children; exit_code 2 = indeterminate/fail-closed.
-        # Both are DO-NOT-stamp outcomes — mirrors the bash's tri-state guard
-        # contract: only guard exit 1 (safe-to-archive) proceeds; retention is
-        # never an error.
-        return None, {
-            "roadmap_id": roadmap_id,
-            "stub_id": stub_id,
-            "reason": "guard-declined",
+    # Delivery-proof close (PM ruling; see this function's own docstring):
+    # a COMPLETE proof, stub-specific via `deliverable_id` equality, closes
+    # on that evidence and skips the live-children guard entirely. Safe
+    # because this close is IN PLACE (deployment_state -> shipped, no
+    # `git mv`) — it cannot strand a dependent the way an archival move
+    # could; archival remains separately gated on liveness in
+    # `archive_handoffs.py`, untouched here.
+    close_basis = CLOSE_BASIS_GUARD
+    proof_applies = False
+    if _is_complete_delivery_proof(delivery_proof):
+        stub_deliverable_id = _read_deliverable_id(_read_meta(str(stub_path)))
+        # Review: staff-eng Finding 3 -- `_is_complete_delivery_proof`
+        # strips before testing emptiness, so normalize both sides of this
+        # comparison too: `_read_deliverable_id` already returns a stripped
+        # value, but `delivery_proof["deliverable_id"]` is compared here
+        # RAW. A genuinely matching proof with padded whitespace would
+        # otherwise silently fall back to the guard with no diagnostic.
+        proof_deliverable_id = delivery_proof.get("deliverable_id")
+        proof_deliverable_id_s = (
+            proof_deliverable_id.strip()
+            if isinstance(proof_deliverable_id, str)
+            else proof_deliverable_id
+        )
+        if (
+            stub_deliverable_id is not None
+            and stub_deliverable_id == proof_deliverable_id_s
+        ):
+            proof_applies = True
+            close_basis = CLOSE_BASIS_DELIVERY_PROOF
+
+    if not proof_applies:
+        # candidate MUST be absolute: handoff_children._handoff_has_live_children
+        # resolves "candidate" via contained_path(Path(candidate), ...), which
+        # calls .resolve() against the PROCESS cwd for a relative string — not
+        # the worktree. stub_path (from handoffs_dir.glob()) is already absolute.
+        # This guard answers a conclusion-shaped question ("may this origin stub
+        # be closed?") -- the close it gates is `deployment_state -> shipped` IN
+        # PLACE, no `git mv`, so `CONCLUSION_EDGE_KINDS` (not the archival-shaped
+        # default) is the right predicate — see this function's own docstring
+        # above for the schema-argument specific to this call site (why a fork
+        # child is structurally incapable of being this stub's continuation).
+        guard_params: dict = {
+            "candidate": str(stub_path),
+            "edge_kinds": CONCLUSION_EDGE_KINDS,
         }
+        if guard_exclude:
+            guard_params["exclude"] = guard_exclude
+        guard_res = await _live_children_guard(guard_params, repo_root)
+        if guard_res.get("exit_code") != 1:
+            # exit_code 0 = has live children; exit_code 2 = indeterminate/fail-closed.
+            # Both are DO-NOT-stamp outcomes — mirrors the bash's tri-state guard
+            # contract: only guard exit 1 (safe-to-archive) proceeds; retention is
+            # never an error. The two states demand OPPOSITE operator responses
+            # (wait for the live children to resolve vs. investigate why the scan
+            # could not complete), so the skip payload discriminates them via
+            # `reason` and surfaces the guard's own `children`/`error` fields
+            # instead of collapsing both into one opaque token — see
+            # `handoff_children._handoff_has_live_children`'s docstring for the
+            # authoritative tri-state contract this reads.
+            return None, {
+                "roadmap_id": roadmap_id,
+                "stub_id": stub_id,
+                "reason": (
+                    "guard-declined-live-children"
+                    if guard_res.get("exit_code") == 0
+                    else "guard-declined-indeterminate"
+                ),
+                # Review: code-reviewer — `guard_res.get("children", [])` is read
+                # identically on both the exit_code 0 and exit_code 2 branches;
+                # this is correct today only because `_fail_closed_error_reply`
+                # (handoff_children.py) always sets `children: []` explicitly on
+                # exit_code 2 — a contract-enforced coupling, not one structurally
+                # enforced at this call site. A future guard change that starts
+                # returning partial `children` on an indeterminate reply would
+                # silently populate `blocking_children` on a
+                # `guard-declined-indeterminate` entry.
+                "blocking_children": [
+                    rel_id(Path(c), worktree) for c in guard_res.get("children", [])
+                ],
+                "guard_error": guard_res.get("error"),
+            }
 
     if sha:
         # kind="ship-commit" (DR-096, example-doctrine-repo 2026-07-26/27 ruling): `sha`
@@ -704,6 +852,7 @@ async def _try_close(
             "roadmap_id": roadmap_id,
             "stub_id": stub_id,
             "join_source": join_source,
+            "close_basis": close_basis,
         },
         None,
     )
@@ -732,6 +881,49 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      absent (idempotent). Absent -> shipped_in stamp is
                      skipped (graceful partial, mirrors
                      handoff.ship_and_archive's negative-spec).
+        delivery_proof (dict, optional) — a completed delivery proof for the
+                     CLOSING plan, letting a positive, complete delivery
+                     proof close the origin stub directly instead of relying
+                     on the live-children guard (PM ruling: bookkeeping must
+                     not stay gated behind a skill invocation that may never
+                     arrive). A proof is COMPLETE (see
+                     `_is_complete_delivery_proof`) iff ALL of:
+                       - `deliverable_id` is a non-empty string.
+                       - `join_provenance == "joined"` — the `Deliverable-Id`
+                         trailer join reported success on the same
+                         `_determine_shipped` verdict that gated this run's
+                         `implemented` stamp. NOT by itself proof a commit
+                         was ever inspected — see `_is_complete_delivery_
+                         proof`'s own docstring for the degenerate
+                         zero-commit-required branch this alone does not
+                         rule out.
+                       - `missing_chunk_ids == []` — every commit-required
+                         chunk id has covering evidence under the same
+                         oracle that gated this run's `implemented` stamp
+                         (not a claim that every chunk id was individually
+                         committed AND trailered — see `_is_complete_
+                         delivery_proof`'s own docstring).
+                       - `status == "implemented"` — the plan was stamped
+                         `status: implemented` this run.
+                       - `commit_required_chunk_count` is an int > 0 — the
+                         plan's spine actually had at least one
+                         commit-required row for the join to have run
+                         against (Finding 0, staff-eng review 2026-08-13).
+                     A complete proof closes a matched stub ONLY when the
+                     proof's own `deliverable_id` equals THAT STUB's own
+                     `deliverable_id` (`_read_deliverable_id` on the stub's
+                     frontmatter) — stub-specific, never global: a proof for
+                     deliverable A must never close a stub carrying
+                     deliverable B. When it applies, the live-children guard
+                     (`_try_close`) is skipped entirely for that stub — safe
+                     because this close is IN PLACE (no `git mv`), so it
+                     cannot strand a dependent; archival liveness gating is
+                     untouched. Absent or incomplete (per any condition
+                     above) -> current behaviour exactly, unchanged (falls
+                     back to the live-children guard). Each `closed[]` entry
+                     carries `close_basis` (`"delivery-proof"`|`"guard"`)
+                     recording which path fired, for both the delivery-proof
+                     and guard-fallback close of that same stub.
 
     At least one of plan_path/handoff_path is required — usage-error contract
     mirrors the bash's exit 2 (here: exit_code=1 structured error). A
@@ -768,10 +960,18 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
           "exit_code": 0,
           "closed": [{"stub_path", "roadmap_id", "stub_id",
                       "join_source": "direct"|"baton_walk"|"deliverable_id"|
-                                      "closes_stubs"}],
+                                      "closes_stubs",
+                      # "close_basis" (delivery-proof threading, see
+                      # `delivery_proof` param docs above): "delivery-proof"
+                      # when a complete, stub-specific proof closed this
+                      # stub without consulting the live-children guard at
+                      # all; "guard" when the live-children guard itself
+                      # read safe-to-close (today's exact pre-existing path).
+                      "close_basis": "delivery-proof"|"guard"}],
           "skipped": [{"roadmap_id", "stub_id",
                        "reason": "no-match"|"no-match-filtered-deployment-state"|
-                                 "ambiguous"|"guard-declined"|"mutation-failed",
+                                 "ambiguous"|"guard-declined-live-children"|
+                                 "guard-declined-indeterminate"|"mutation-failed",
                        # "excluded" is present ONLY on "no-match-filtered-
                        # deployment-state" (M1, Leg B) — the stub(s) that
                        # matched kind+pair but were excluded by the
@@ -782,7 +982,17 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                        # — distinguishes "holder live" from "liveness could
                        # not be determined" instead of collapsing both into
                        # the bare deployment_state.
-                       "excluded": [{"stub_path", "deployment_state", "exclusion_reason"}]}],
+                       "excluded": [{"stub_path", "deployment_state", "exclusion_reason"}],
+                       # "blocking_children"/"guard_error" are present ONLY on
+                       # "guard-declined-live-children"/"guard-declined-
+                       # indeterminate" — the live-children guard's own
+                       # `children` (worktree-relative here, absolute on the
+                       # guard's own reply) and `error` fields, surfaced so an
+                       # operator can tell "wait for these to resolve" apart
+                       # from "the scan itself failed, investigate" instead of
+                       # both reading as an opaque "guard-declined".
+                       "blocking_children": [str],
+                       "guard_error": Optional[str]}],
           "pairs_resolved": int,
           "message": str,
         }
@@ -803,6 +1013,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # to compose the bash's Session-Id-trailer sibling-session-correction walk).
     _session_id_unused = (params.get("session_id") or "").strip()  # noqa: F841
     sha = (params.get("sha") or "").strip()
+    delivery_proof = params.get("delivery_proof")
+    if not isinstance(delivery_proof, dict):
+        delivery_proof = None
 
     if not plan_path and not handoff_path:
         return _err(
@@ -1041,6 +1254,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             join_source,
             sha,
             guard_exclude,
+            delivery_proof,
         )
         if closed_entry is not None:
             closed.append(closed_entry)

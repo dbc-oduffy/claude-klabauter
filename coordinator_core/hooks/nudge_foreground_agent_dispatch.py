@@ -194,17 +194,13 @@ _BG_CAPABLE_SESSIONS: set[str] = set()
 # advisory`'s reference pattern (commit d385e2ed3).
 _DENY_MSG_TEMPLATE = (
     "FOREGROUND AGENT DISPATCH BLOCKED — retry with `run_in_background: true`. "
-    "Coordinator default is backgrounded dispatch: foreground blocks the EM until "
-    "the subagent returns, wasting cycles that could process other waves, reconcile "
-    "plans, or handle PM messages in parallel. "
     "Doctrine: coordinator/snippets/em-operating-doctrine.md § How to Dispatch."
 )
 
 
 _REROUTE_NOTICE = (
-    "FOREGROUND AGENT DISPATCH AUTO-REROUTED TO BACKGROUND — rewritten with "
-    "`run_in_background: true`; result is a task notification, not inline. "
-    "Locks the EM till backgrounded. "
+    "FOREGROUND AGENT DISPATCH AUTO-REROUTED TO BACKGROUND. Result arrives as "
+    "a task notification, not inline. "
     "Doctrine: coordinator/snippets/em-operating-doctrine.md § How to Dispatch."
 )
 

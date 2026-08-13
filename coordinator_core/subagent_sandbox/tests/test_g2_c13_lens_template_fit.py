@@ -139,7 +139,8 @@ def test_g2_lens_template_wrapper_is_body_independent(
     assert "lead_session_id: sess-g2-c13-fit" in text
     assert "divergence:\n  diverged: false" in text
     assert "commits: []" in text
-    assert "dispatch_feed: null" in text
+    assert "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter" in text
+    assert "  gate_kind: none" in text
 
     # Universal exit interview -- every template inherits it verbatim.
     assert "## Exit interview" in text

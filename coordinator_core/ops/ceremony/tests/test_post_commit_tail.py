@@ -261,6 +261,128 @@ def test_run_origin_close_surfaces_message_when_no_error_key(monkeypatch, tmp_pa
     assert not any("unknown error" in f for f in failed), failed
 
 
+def test_run_skip_rendering_distinguishes_live_children_from_indeterminate(
+    monkeypatch, tmp_path
+):
+    """`_render_skip_entry` must surface `blocking_children`/`guard_error`
+    into the rendered skip string, capped at `_MAX_RENDERED_BLOCKING_CHILDREN`
+    with a `(+N more)` suffix — and a skip entry carrying neither new field
+    (`no-match`) must render exactly as the bare `roadmap:stub:reason` prefix,
+    unchanged."""
+
+    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
+        return _make_stamp_outcome()
+
+    async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
+        return {
+            "exit_code": 0,
+            "closed": [],
+            "skipped": [
+                {
+                    "roadmap_id": "r1",
+                    "stub_id": "s1",
+                    "reason": "guard-declined-live-children",
+                    "blocking_children": [
+                        "state/handoffs/a.md",
+                        "state/handoffs/b.md",
+                        "state/handoffs/c.md",
+                        "state/handoffs/d.md",
+                    ],
+                    "guard_error": None,
+                },
+                {
+                    "roadmap_id": "r2",
+                    "stub_id": "s2",
+                    "reason": "guard-declined-indeterminate",
+                    "blocking_children": [],
+                    "guard_error": "unscannable subtree: boom",
+                },
+                {
+                    "roadmap_id": "r3",
+                    "stub_id": "s3",
+                    "reason": "no-match",
+                },
+            ],
+            "pairs_resolved": 3,
+            "message": "closed 0 origin stub(s); skipped 3 of 3 resolved pair(s)",
+        }
+
+    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
+
+    outcome = _run(
+        m.run(
+            tmp_path,
+            tmp_path,
+            "sid-1",
+            "deadbeef",
+            chain_terminal=True,
+            governing_plan_slug="my-plan",
+            initial_consumed=[("state/handoffs/x.md", {})],
+            close_origin_stub_handler=_fake_close_origin_stub,
+        )
+    )
+
+    skipped = outcome.origin_stub_result["skipped"]
+    assert len(skipped) == 3
+
+    live_children_line = skipped[0]
+    assert live_children_line.startswith("r1:s1:guard-declined-live-children")
+    assert "blocking: state/handoffs/a.md, state/handoffs/b.md, state/handoffs/c.md" in live_children_line
+    assert "(+1 more)" in live_children_line
+    assert "guard_error" not in live_children_line
+
+    indeterminate_line = skipped[1]
+    assert indeterminate_line == "r2:s2:guard-declined-indeterminate guard_error: unscannable subtree: boom"
+
+    no_match_line = skipped[2]
+    assert no_match_line == "r3:s3:no-match"
+
+
+def test_render_skip_entry_exact_boundary_suppresses_suffix_at_cap():
+    """Review: code-reviewer — exact-boundary case (exactly
+    `_MAX_RENDERED_BLOCKING_CHILDREN` == 3 children, cap not exceeded): the
+    `if remaining > 0` guard in `_render_skip_entry` must suppress the
+    `(+N more)` suffix entirely, not just at `remaining == 1`."""
+    entry = {
+        "roadmap_id": "r1",
+        "stub_id": "s1",
+        "reason": "guard-declined-live-children",
+        "blocking_children": [
+            "state/handoffs/a.md",
+            "state/handoffs/b.md",
+            "state/handoffs/c.md",
+        ],
+        "guard_error": None,
+    }
+    line = m._render_skip_entry(entry)
+    assert line == (
+        "r1:s1:guard-declined-live-children "
+        "blocking: state/handoffs/a.md, state/handoffs/b.md, state/handoffs/c.md"
+    )
+    assert "more)" not in line
+
+
+def test_render_skip_entry_large_fan_out_remaining_is_len_minus_cap():
+    """Review: code-reviewer — large fan-out (10 children) confirms
+    `remaining` is `len(children) - _MAX_RENDERED_BLOCKING_CHILDREN`, not
+    off-by-one."""
+    children = [f"state/handoffs/{i}.md" for i in range(10)]
+    entry = {
+        "roadmap_id": "r1",
+        "stub_id": "s1",
+        "reason": "guard-declined-live-children",
+        "blocking_children": children,
+        "guard_error": None,
+    }
+    line = m._render_skip_entry(entry)
+    assert "(+7 more)" in line
+    shown = ", ".join(children[: m._MAX_RENDERED_BLOCKING_CHILDREN])
+    assert (
+        line
+        == f"r1:s1:guard-declined-live-children blocking: {shown} (+7 more)"
+    )
+
+
 def test_run_multi_baton_two_distinct_origin_stubs_close_in_one_follow_up_commit(
     monkeypatch, tmp_path
 ):
@@ -835,3 +957,86 @@ def test_handler_reports_exit_code_2_on_cascade_failure(monkeypatch, tmp_path):
     assert any(
         "simulated cascade crash" in f for f in result["deliverable_cascade"]["failed"]
     )
+
+
+# ---------------------------------------------------------------------------
+# (l) delivery_proof threading -- close_out_and_stamp's own delivery proof
+# forwarded verbatim through run()/_run_origin_stub_close into every
+# close_origin_stub_handler call. See `_run_origin_stub_close`'s own
+# "delivery_proof" docstring section.
+# ---------------------------------------------------------------------------
+
+
+def test_run_forwards_delivery_proof_into_close_origin_stub_handler_calls(
+    monkeypatch, tmp_path
+):
+    seen_params: list[dict] = []
+
+    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
+        return _make_stamp_outcome()
+
+    async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
+        seen_params.append(params)
+        return {"exit_code": 0, "closed": [], "skipped": []}
+
+    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
+
+    proof = {
+        "deliverable_id": "dlv-alpha",
+        "join_provenance": "joined",
+        "missing_chunk_ids": [],
+        "status": "implemented",
+    }
+
+    _run(
+        m.run(
+            tmp_path,
+            tmp_path,
+            "sid-1",
+            "deadbeef",
+            chain_terminal=False,
+            governing_plan_slug="my-plan",
+            initial_consumed=[],
+            close_origin_stub_handler=_fake_close_origin_stub,
+            push_mode="deferred",
+            delivery_proof=proof,
+        )
+    )
+
+    assert len(seen_params) == 1
+    assert seen_params[0]["delivery_proof"] == proof
+
+
+def test_run_omits_delivery_proof_key_when_none(monkeypatch, tmp_path):
+    """`delivery_proof=None` (every `wsc_tail`-invoked call site) must not
+    add a `"delivery_proof"` key to the handler's params at all -- absence,
+    not an explicit `None` value, preserves `handoff.close_origin_stub`'s
+    own `params.get("delivery_proof")` default-None read exactly as it was
+    before this threading existed."""
+    seen_params: list[dict] = []
+
+    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
+        return _make_stamp_outcome()
+
+    async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
+        seen_params.append(params)
+        return {"exit_code": 0, "closed": [], "skipped": []}
+
+    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
+
+    _run(
+        m.run(
+            tmp_path,
+            tmp_path,
+            "sid-1",
+            "deadbeef",
+            chain_terminal=False,
+            governing_plan_slug="my-plan",
+            initial_consumed=[],
+            close_origin_stub_handler=_fake_close_origin_stub,
+            push_mode="deferred",
+        )
+    )
+
+    assert len(seen_params) == 1
+    assert "delivery_proof" not in seen_params[0]

@@ -1,8 +1,28 @@
 """
 coordinator_core.ops.session.guard_roster_ops — eager listing seam for the
-advisory hook op-registry population: the ops example-doctrine-repo's
-`postuse-advisory-dispatch.py` carrier resolves into
-`coordinator_core.hooks`.
+*historically-ported* advisory hook op population in `coordinator_core.hooks`:
+the six ops brought over from the `~/.claude` advisory/nudge command hooks.
+
+NEGATIVE SPEC — this is NOT carrier membership. It does not enumerate what
+Example-doctrine-repo's `postuse-advisory-dispatch.py` delivers, and must never be read
+as though it does. Verified against example-doctrine-repo's live `hooks.json` on 2026-08-13
+(memo 2026-08-13-example-doctrine-repo-em-advisory-carrier-boundary-diverges-and-script-tail-answer.md):
+that carrier issues exactly two `dispatch_message()` calls —
+`hooks.postuse_advisory_dispatch` and `hooks.track_touched_files` (the latter
+bookkeeping, not advisory) — so exactly one of the six names below is
+carrier-delivered. Of the rest, `suggest_sonnet_research` and
+`nudge_named_agent_report_delivery` have their own separate live
+registrations; `nudge_foreground_agent_dispatch`'s example-doctrine-repo script is fully
+deregistered and its logic now runs as a pure-Python port with no claude-klabauter call
+at all; `nudge_em_code_dispatch` has zero registrations under any name;
+`nudge_unauthorized_handoff`'s logic is reached by direct function import
+(`nudge_unauthorized_handoff.advisory_text(...)`), bypassing the RPC op key
+named here. A consumer that wants carrier membership reads
+`x-effective-delivery`'s own `carriers['postuse-advisory-dispatch.py']` op
+list — generated from `hooks.json`, so self-correcting on the next
+registration edit — never this tuple.
+
+→ docs/decisions/DR-297-the-ported-advisory-grouping-is-not-carrier-membership.md
 
 Purpose: `coordinator_core.ipc::_REGISTRY` only reflects whatever has been
 imported so far in this process — under `COORDINATOR_CORE_LAZY_OPS=1` a
@@ -29,12 +49,11 @@ grouping is the only boundary claude-klabauter's tree draws between "advisory" a
 the package's other two populations — bookkeeping ops that write
 `.git/coordinator-sessions/`, and the zero-tool-use/arrival-check detection
 ops — there is no data structure encoding it anywhere in this tree, only
-that docstring. `_ADVISORY_HOOK_OP_NAMES` below mirrors it as data rather
-than re-deriving it structurally. Flagging the assumption here rather than
-silently: if example-doctrine-repo's actual carrier wiring for `postuse-advisory-dispatch.py`
-ever diverges from this six-op grouping, this constant is the one place to
-correct it, and claude-klabauter's tree alone cannot prove or disprove that wiring —
-only example-doctrine-repo's side can.
+that docstring. `_PORTED_ADVISORY_HOOK_OP_NAMES` below mirrors it as data
+rather than re-deriving it structurally — and that grouping is *originating*,
+not current: three of the six were given their own independent example-doctrine-repo
+registrations after the port, and one has none at all, which is precisely the
+divergence the NEGATIVE SPEC above records.
 
 Deliberately does NOT use `coordinator_core.authz.classification.OP_CLASSIFICATION`
 as the boundary — that table's COMPUTE_ONLY/MUTATING axis is orthogonal to
@@ -50,7 +69,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
-_ADVISORY_HOOK_OP_NAMES: Tuple[str, ...] = (
+_PORTED_ADVISORY_HOOK_OP_NAMES: Tuple[str, ...] = (
     "hooks.nudge_foreground_agent_dispatch",
     "hooks.suggest_sonnet_research",
     "hooks.nudge_em_code_dispatch",
@@ -65,7 +84,7 @@ class AdvisoryRosterUnavailable(RuntimeError):
     completed or verified.
 
     Never swallowed into a short list — a caller must be able to tell
-    "there are no advisory ops" (impossible here; `_ADVISORY_HOOK_OP_NAMES`
+    "there are no advisory ops" (impossible here; `_PORTED_ADVISORY_HOOK_OP_NAMES`
     is non-empty by construction) from "eager resolution failed", per this
     module's own purpose: a silently-truncated roster reproduces exactly
     the `stale`-worse-than-`absent` failure the listing seam exists to
@@ -92,8 +111,8 @@ class AdvisoryOpEntry:
     qualname: str
 
 
-def list_advisory_ops() -> Tuple[AdvisoryOpEntry, ...]:
-    """Eagerly resolve and return every op named in `_ADVISORY_HOOK_OP_NAMES`.
+def list_ported_advisory_ops() -> Tuple[AdvisoryOpEntry, ...]:
+    """Eagerly resolve and return every op named in `_PORTED_ADVISORY_HOOK_OP_NAMES`.
 
     No payload argument. Forces `coordinator_core.hooks._eager_import_all()`
     up front — the same full-load routine
@@ -105,7 +124,7 @@ def list_advisory_ops() -> Tuple[AdvisoryOpEntry, ...]:
     existing resolution path verbatim.
 
     Raises `AdvisoryRosterUnavailable` if the eager import itself raises,
-    or if any name in `_ADVISORY_HOOK_OP_NAMES` is still unregistered
+    or if any name in `_PORTED_ADVISORY_HOOK_OP_NAMES` is still unregistered
     afterward. Never returns a truncated tuple.
     """
     from coordinator_core.hooks import _eager_import_all, get_poisoned_modules
@@ -121,7 +140,7 @@ def list_advisory_ops() -> Tuple[AdvisoryOpEntry, ...]:
 
     entries = []
     missing = []
-    for name in _ADVISORY_HOOK_OP_NAMES:
+    for name in _PORTED_ADVISORY_HOOK_OP_NAMES:
         handler = get_op_handler(name)
         if handler is None:
             missing.append(name)

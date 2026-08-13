@@ -542,10 +542,16 @@ class TestDirectionalDenyGrowthOnly:
         assert "permissionDecision" not in hso
         assert "additionalContext" in hso
 
-    def test_advisory_names_a_concrete_alternative(self, monkeypatch, tmp_path):
-        """Axis-A (obligation): any emission that asks the agent to
-        reconsider must name a concrete alternative -- this advisory names
-        the same grant CLI the deny leg names."""
+    def test_advisory_no_longer_names_the_grant_cli_invocation(self, monkeypatch, tmp_path):
+        """C4(c), docs/plans/2026-08-13-guard-messages-stop-handing-agents-
+        the-keys.md (AC-1/AC-2): this leg fires only when ``agent_id`` is
+        present -- i.e. only for a dispatched subagent, the exact audience
+        forbidden from seeing an unlock statement in any shape. The
+        resolved ``PYTHONPATH=... python3 -m
+        coordinator_core.session.claude_md_grant grant pm`` invocation used
+        to render here unconditionally (the same "shown the button, told
+        not to press it" shape the deny leg's C4(b) reshape already closed)
+        -- this is that same closure landing on the advisory leg."""
         target = tmp_path / "CLAUDE.md"
         target.write_text("a much longer original body")
         payload = {
@@ -556,16 +562,20 @@ class TestDirectionalDenyGrowthOnly:
         }
         result = guard.check(payload)
         reason = result["hookSpecificOutput"]["additionalContext"]
-        assert "coordinator_core.session.claude_md_grant grant pm" in reason
+        assert "coordinator_core.session.claude_md_grant grant pm" not in reason
+        assert "PYTHONPATH" not in reason
 
-    def test_advisory_attributes_the_grant_command_to_the_em_not_the_reader(
+    def test_advisory_still_attributes_the_grant_step_to_the_em_not_the_reader(
         self, monkeypatch, tmp_path
     ):
         """AC6/AC7 companion case on the advisory leg (the C18c reshape):
         the advisory does not block, but that does not exempt it from the
-        same attribution standard AC6 sets for the deny leg -- the rendered
-        grant command is attributed to the EM, not framed as something the
-        reading subagent should itself run.
+        same attribution standard AC6 sets for the deny leg -- the grant
+        step is attributed to the EM, not framed as something the reading
+        subagent should itself run. No command is rendered any more (see
+        the sibling test above); the attribution is now carried by
+        directing the agent to report it as a dependency, not by naming a
+        runnable line.
         """
         target = tmp_path / "CLAUDE.md"
         target.write_text("a much longer original body")
@@ -577,9 +587,9 @@ class TestDirectionalDenyGrowthOnly:
         }
         result = guard.check(payload)
         reason = result["hookSpecificOutput"]["additionalContext"]
-        assert "the EM runs" in reason
+        assert "the EM" in reason
         assert "not this agent's" in reason
-        assert "coordinator_core.session.claude_md_grant grant pm" in reason
+        assert "coordinator_core.session.claude_md_grant grant pm" not in reason
 
     def test_new_file_creation_is_always_growth_and_denied(self, monkeypatch, tmp_path):
         """A CLAUDE.md-class file that does not yet exist has a 0-byte

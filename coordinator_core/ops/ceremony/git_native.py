@@ -8,8 +8,8 @@ of the ~13 call sites the OLD `wsc_commit.py` scattered them across with none of
 these flags present (the portability gap this chunk closes).
 
 Flags carried by every invocation (AC3):
-    creationflags=CREATE_NO_WINDOW — the `commit_anchors.py` idiom (Windows-only;
-        no-ops elsewhere via `getattr(subprocess, "CREATE_NO_WINDOW", 0)`). Suppresses
+    creationflags=CREATE_NO_WINDOW — sourced from `coordinator_core.win_portability.
+        no_console_creationflags()` (Windows-only; no-ops elsewhere). Suppresses
         the focus-stealing console popup a bare `subprocess.run` spawns per-invocation
         on Windows under a headless parent process.
     stdin=subprocess.DEVNULL — NOT carried by `commit_anchors.py` today. Load-bearing

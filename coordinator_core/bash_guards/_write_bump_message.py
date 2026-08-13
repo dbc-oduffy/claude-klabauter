@@ -221,9 +221,12 @@ def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str
     `resolve_effective_types`, now reads as subagent-class, matching the
     fail-open inversion AC-3 names for this predicate alongside
     `annotate_deny` and the dispatch seam; EM-class is the strictly
-    narrower, positively-resolved case. Never raises: any exception is
-    caught and degrades to subagent-class, same "degrade to terse, never
-    to emitting" direction as `session.identity.resolves_em_audience`.
+    narrower, positively-resolved case. Never raises: any exception
+    (malformed `payload`, resolver failure inside `resolve_effective_types`,
+    or a filesystem error inside its `_canonical_agent_id` /
+    `_read_backpointer_subagent_type` legs) is caught and degrades to
+    subagent-class, same "degrade to terse, never to emitting" direction as
+    `session.identity.resolves_em_audience`.
     """
     try:
         agent_id, _agent_type, subagent_type = resolve_effective_types(payload or {}, git_root)

@@ -276,7 +276,15 @@ class TestDenyReasonRoutes:
         assert "archive-stamp-cli ship-handoff" in reason
         assert "deployment_state: shipped" in reason
         assert "shipped_in" in reason
-        assert "recovery" in reason.lower()
+        # No unlock-exists statement (2026-08-13 guard-messages-stop-handing
+        # -agents-the-keys AC-1/AC-2): the deny used to name the ship-handoff
+        # override as "recovery"-only and point at
+        # docs/wiki/pretooluse-write-guards.md unconditionally, for every
+        # audience including a dispatched subagent -- itself a banned
+        # unlock-exists-statement/doc-pointer shape. Removed; the route
+        # (ship-handoff) stays named, only the override mention is gone.
+        assert "recovery" not in reason.lower()
+        assert "pretooluse-write-guards.md" not in reason
 
     def test_continuation_deny_names_correction_route(self, tmp_path, monkeypatch):
         # C4/AC7: the continuation deny additively names handoff.correct_body
@@ -524,6 +532,53 @@ class TestNonHolderRemedyContent:
 
 
 # ---------------------------------------------------------------------------
+# 2d. No unlock-exists statement, any branch, any audience (2026-08-13
+# guard-messages-stop-handing-agents-the-keys, AC-1/AC-2). Every named route
+# below (ship-handoff, correct_body, propagate, link_stubs) is a legitimate
+# op any audience may invoke -- not this guard's own escape hatch -- so
+# naming them is not a leak. What must never appear, for a dispatched
+# subagent OR an unresolved/EM audience (this guard's deny text is
+# audience-invariant, per `guard_settings_json_write`'s established
+# pattern): the "recovery"-only override framing and its
+# docs/wiki/pretooluse-write-guards.md pointer that used to sit on the
+# ship-handoff mention in both the holder and non-holder branches.
+# ---------------------------------------------------------------------------
+
+
+class TestNoUnlockExistsStatement:
+    @pytest.fixture(autouse=True)
+    def _clear_session_env(self, monkeypatch):
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    def _subagent_payload(self, repo_root: Path) -> dict:
+        payload = _payload(repo_root, "state/handoffs/2026-07-20_120000_abc.md")
+        payload["agent_id"] = "coordinatorexecutor-5a61a636"
+        return payload
+
+    def test_non_holder_deny_carries_no_mechanism_for_subagent(self, tmp_path, monkeypatch):
+        repo_root, _ = _make_repo(tmp_path)
+        monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "a-different-session")
+        result = guard.check(self._subagent_payload(repo_root))
+        assert result is not None
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "recovery" not in reason.lower()
+        assert "pretooluse-write-guards.md" not in reason
+
+    def test_holder_advisory_carries_no_mechanism_for_subagent(self, tmp_path, monkeypatch):
+        repo_root, _ = _make_repo(tmp_path)
+        monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "some-prior-session")
+        result = guard.check(self._subagent_payload(repo_root))
+        assert result is not None
+        reason = result["hookSpecificOutput"]["additionalContext"]
+        assert "recovery" not in reason.lower()
+        assert "pretooluse-write-guards.md" not in reason
+
+
+# ---------------------------------------------------------------------------
 # 3. Close-intent discrimination (``_is_close_intent``).
 #
 # With the scaffold write gone, this predicate's only observable effect is
@@ -702,6 +757,20 @@ _DOCS_WIKI_CITATION_RE = re.compile(r"docs/wiki/[A-Za-z0-9_\-./]+\.md")
 
 class TestDocsWikiCitationsLive:
     def test_docs_wiki_citations_resolve_on_disk(self, tmp_path, monkeypatch):
+        """Any docs/wiki/*.md citation still present in the deny text must
+        resolve on disk -- but the deny text is no longer GUARANTEED to
+        carry one. 2026-08-13 (guard-messages-stop-handing-agents-the-keys,
+        AC-1/AC-2): the ship-handoff mention's `docs/wiki/pretooluse-write-
+        guards.md` pointer was itself the unlock-exists-statement/doc-
+        pointer leak this guard's row was flagged for -- it named the
+        "recovery"-only override and pointed at the doc describing it,
+        unconditionally, for every audience including a dispatched
+        subagent. Removed outright rather than gated, since this deny is
+        audience-invariant (no payload-borne EM/subagent split threaded
+        through these two branches). The prior `assert cited` (any docs/wiki
+        citation must exist) pinned the very leak being fixed here; this
+        test now only pins liveness for whatever citations remain, if any.
+        """
         repo_root, _ = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
 
@@ -712,7 +781,6 @@ class TestDocsWikiCitationsLive:
             _DOCS_WIKI_CITATION_RE.findall(continuation_reason)
             + _DOCS_WIKI_CITATION_RE.findall(close_reason)
         )
-        assert cited, "expected at least one docs/wiki/ citation in the deny text"
 
         claude_klabauter_root = Path(__file__).resolve().parents[3]
         for rel in cited:

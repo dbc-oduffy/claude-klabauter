@@ -1,10 +1,15 @@
-"""Tests for `coordinator_core.ops.session.guard_roster_ops.list_advisory_ops`
--- the eager, exhaustive listing seam over the six advisory hook ops
-`postuse-advisory-dispatch.py` resolves into.
+"""Tests for `coordinator_core.ops.session.guard_roster_ops.list_ported_advisory_ops`
+-- the eager, exhaustive listing seam over the six advisory hook ops ported
+from the `~/.claude` advisory/nudge command hooks.
+
+Negative spec: this set is NOT `postuse-advisory-dispatch.py`'s carrier
+membership (only one of the six is carrier-delivered -- see the module
+docstring and DR-297). Nothing here asserts carrier delivery, and no test
+added later should.
 
 Purpose: `coordinator_core.ipc::_REGISTRY` only reflects whatever has been
 imported so far in this process; under `COORDINATOR_CORE_LAZY_OPS=1` a
-naive read of it is silently PARTIAL. This file pins that `list_advisory_ops`
+naive read of it is silently PARTIAL. This file pins that `list_ported_advisory_ops`
 stays exhaustive under that env var (the whole reason the module exists),
 and that a resolution failure raises `AdvisoryRosterUnavailable` rather than
 degrading to a short list.
@@ -24,14 +29,14 @@ import coordinator_core.ops.session.guard_roster_ops as guard_roster_ops
 from coordinator_core.ops.session.guard_roster_ops import (
     AdvisoryOpEntry,
     AdvisoryRosterUnavailable,
-    _ADVISORY_HOOK_OP_NAMES,
-    list_advisory_ops,
+    _PORTED_ADVISORY_HOOK_OP_NAMES,
+    list_ported_advisory_ops,
 )
 
-# `test_list_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter`
+# `test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter`
 # spawns a real `sys.executable -c` fresh interpreter because
 # `COORDINATOR_CORE_LAZY_OPS=1`'s exhaustiveness property -- that
-# `list_advisory_ops` still resolves all six ops when `_REGISTRY` starts
+# `list_ported_advisory_ops` still resolves all six ops when `_REGISTRY` starts
 # empty -- only exists in a process with no prior op imports, which no
 # same-process mock can reproduce. The spawn ratchet's `_BASELINE` is
 # shrink-only pre-existing residue and is explicitly not the route for this
@@ -39,22 +44,22 @@ from coordinator_core.ops.session.guard_roster_ops import (
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def test_list_advisory_ops_takes_no_arguments():
-    sig = inspect.signature(list_advisory_ops)
+def test_list_ported_advisory_ops_takes_no_arguments():
+    sig = inspect.signature(list_ported_advisory_ops)
     assert list(sig.parameters) == [], (
-        "list_advisory_ops() must take no arguments -- found parameters: %r"
+        "list_ported_advisory_ops() must take no arguments -- found parameters: %r"
         % list(sig.parameters)
     )
 
 
-def test_list_advisory_ops_returns_all_six_ops_as_plain_data():
-    entries = list_advisory_ops()
+def test_list_ported_advisory_ops_returns_all_six_ops_as_plain_data():
+    entries = list_ported_advisory_ops()
     assert isinstance(entries, tuple)
 
     ids = [entry.id for entry in entries]
-    assert set(ids) == set(_ADVISORY_HOOK_OP_NAMES), (
-        "list_advisory_ops() did not return exactly the six named advisory "
-        "ops -- expected %r, got %r" % (sorted(_ADVISORY_HOOK_OP_NAMES), sorted(ids))
+    assert set(ids) == set(_PORTED_ADVISORY_HOOK_OP_NAMES), (
+        "list_ported_advisory_ops() did not return exactly the six named advisory "
+        "ops -- expected %r, got %r" % (sorted(_PORTED_ADVISORY_HOOK_OP_NAMES), sorted(ids))
     )
     assert len(ids) == len(set(ids)), "duplicate op id in result: %r" % ids
 
@@ -71,16 +76,16 @@ def test_list_advisory_ops_returns_all_six_ops_as_plain_data():
     json.dumps(plain)
 
 
-def test_list_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter():
+def test_list_ported_advisory_ops_is_exhaustive_under_lazy_ops_in_a_fresh_interpreter():
     """The same result set with `COORDINATOR_CORE_LAZY_OPS=1` in a FRESH
     interpreter -- this is the whole reason the module exists, since a naive
     `_REGISTRY` read would be partial there."""
     probe = (
         "from coordinator_core.ops.session.guard_roster_ops import ("
-        "list_advisory_ops, _ADVISORY_HOOK_OP_NAMES)\n"
-        "entries = list_advisory_ops()\n"
+        "list_ported_advisory_ops, _PORTED_ADVISORY_HOOK_OP_NAMES)\n"
+        "entries = list_ported_advisory_ops()\n"
         "ids = sorted(e.id for e in entries)\n"
-        "expected = sorted(_ADVISORY_HOOK_OP_NAMES)\n"
+        "expected = sorted(_PORTED_ADVISORY_HOOK_OP_NAMES)\n"
         "assert ids == expected, (ids, expected)\n"
         "print('OK')\n"
     )
@@ -110,7 +115,7 @@ def test_unresolvable_advisory_op_raises_rather_than_truncating(monkeypatch):
     from coordinator_core import ipc as _ipc
 
     real_get_op_handler = _ipc.get_op_handler
-    missing_name = _ADVISORY_HOOK_OP_NAMES[0]
+    missing_name = _PORTED_ADVISORY_HOOK_OP_NAMES[0]
 
     def _fake_get_op_handler(name):
         if name == missing_name:
@@ -120,12 +125,12 @@ def test_unresolvable_advisory_op_raises_rather_than_truncating(monkeypatch):
     monkeypatch.setattr(_ipc, "get_op_handler", _fake_get_op_handler)
 
     try:
-        list_advisory_ops()
+        list_ported_advisory_ops()
     except AdvisoryRosterUnavailable as exc:
         assert missing_name in str(exc)
     else:
         raise AssertionError(
-            "list_advisory_ops() did not raise AdvisoryRosterUnavailable "
+            "list_ported_advisory_ops() did not raise AdvisoryRosterUnavailable "
             "when %r was made unresolvable -- it must never degrade to a "
             "short list" % missing_name
         )
@@ -144,11 +149,11 @@ def test_eager_import_failure_raises_advisory_roster_unavailable(monkeypatch):
     )
 
     try:
-        list_advisory_ops()
+        list_ported_advisory_ops()
     except AdvisoryRosterUnavailable as exc:
         assert "eager import" in str(exc)
     else:
         raise AssertionError(
-            "list_advisory_ops() did not raise AdvisoryRosterUnavailable "
+            "list_ported_advisory_ops() did not raise AdvisoryRosterUnavailable "
             "when eager import itself raised"
         )

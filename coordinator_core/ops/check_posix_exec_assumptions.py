@@ -853,6 +853,36 @@ _REASON_WIN_SYNTAX_AS_FIXTURE = (
     "this module's AST approach was built to judge on structure instead."
 )
 
+_REASON_MSYS_TRANSLATE_WINDOWS_GUARDED = (
+    "translate_msys_path()'s whole body is gated by a bare `if not "
+    "_host_is_windows(): return path` early return with no `else:` -- "
+    "exactly the KNOWN, NAMED gap in `_is_windows_guarded()` this module's "
+    "own failure message and docstring describe (a bare early-return guard "
+    "clause is not yet recognized as branch-guarding the sibling "
+    "statements that follow it). The flagged `.replace(\"/\", \"\\\\\")` "
+    "only executes once that guard has already confirmed the host IS "
+    "Windows, building a well-formed native `X:\\...` path from an "
+    "MSYS-spelled one for a subsequent native `ntpath.join` -- the correct "
+    "construct for that platform, not a POSIX assumption. Adding an "
+    "`else:` purely to satisfy the detector is exactly what the gate's own "
+    "failure message forbids."
+)
+
+_REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY = (
+    "`os.access(script_path, os.X_OK)` in `_run_one_entrypoint` only runs "
+    "when `interpreter is None`, and `_resolve_entrypoint_gate_interpreter` "
+    "(the sole producer of that value, called once per `run_entrypoint_gate` "
+    "sweep) returns `None` if-and-only-if `os.name != \"nt\"` -- see that "
+    "function's own docstring and its `if os.name != \"nt\": return None` "
+    "body. The guard is real, just expressed across two functions rather "
+    "than as a local branch `_is_windows_guarded()` can see (the same "
+    "documented detection gap as a bare early-return, one level removed) -- "
+    "this call never executes on Windows, where `os.access(..., os.X_OK)` "
+    "would otherwise lie (returns True for any readable file). Restructuring "
+    "the call site to satisfy the detector would not change what actually "
+    "runs; the invariant already holds."
+)
+
 #: Fleet repo keys these exemptions are granted FOR. Values are the
 #: `repos.<key>` machine-local registry vocabulary (== `repo_key_for_root`
 #: of that repo's canonical clone directory), named here so a typo in a
@@ -936,6 +966,44 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/write_guards/tests/test__case_fold_path.py": _REASON_CANON_STRING,
             "coordinator_core/ops/probe_onboarding_currency.py": _REASON_CANON_STRING,
             "coordinator_core/test_resolve_validation_cmd.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator/bin/tests/test_coordinator_registry.py": _REASON_WIN_SYNTAX_AS_FIXTURE,
+            "coordinator/tests/test_git_hook_install_foreign_hook_preservation.py": _REASON_CANON_STRING,
+            "coordinator_core/bash_guards/_write_bump_sink_shapes.py": _REASON_MSYS_TRANSLATE_WINDOWS_GUARDED,
+            "coordinator_core/bash_guards/tests/test_bump_foreign_repo_write.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_bump_foreign_repo_write_c7_findings.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_bump_outside_repo_write.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_bx16_apostrophe_quote_safety.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_bx16_grep_dialect_fidelity.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_bx16_multiprobe_and_headtail_rewrite.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_dispatch_hard_deny_envelope_gate.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_no_handwritten_override_clauses.py": _REASON_CANON_STRING,
+            "coordinator_core/bash_guards/tests/test_write_bump_marker.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/bash_guards/tests/test_write_bump_surface_parity.py": _REASON_SHELL_EMBED_FORWARD_SLASH,
+            "coordinator_core/cartography/atlas_record.py": _REASON_CANON_STRING,
+            "coordinator_core/cartography/chunk_table.py": _REASON_CANON_STRING,
+            "coordinator_core/dag.py": _REASON_CANON_STRING,
+            "coordinator_core/git/commit_trailers.py": _REASON_CANON_STRING,
+            "coordinator_core/install/test_resolve_claude_klabauter.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/_relative_link.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/ceremony/chunk_commits.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/ceremony/scoped_git_commit.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/review_trail_write.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/session/guard_settings_integrity.py": _REASON_CANON_STRING,
+            "coordinator_core/ops/test_coordinator_doe_root.py": _REASON_WIN_SYNTAX_AS_FIXTURE,
+            "coordinator_core/ops/tests/test_deliverable_equivalence.py": _REASON_CANON_STRING,
+            "coordinator_core/percolate/engine.py": _REASON_CANON_STRING,
+            "coordinator_core/session/claimed_plan.py": _REASON_CANON_STRING,
+            "coordinator_core/session/path_dialect.py": _REASON_CANON_STRING,
+            "coordinator_core/tests/test_async_handler_discipline.py": _REASON_CANON_STRING,
+            "coordinator_core/workstream_complete/__init__.py": _REASON_CANON_STRING,
+            "coordinator_core/write_guards/block_subagent_grant_record_write.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/block_subagent_guard_grant_write.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/nudge_handoff_ac_shape.py": _REASON_CANON_STRING,
+            "coordinator_core/write_guards/nudge_outbox_draft_frontmatter_shape.py": _REASON_CANON_STRING,
+            "coordinator_core/write_guards/nudge_private_git_fact_resolver.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/nudge_shell_shaped_spawn.py": _REASON_TOOL_INPUT_PATH,
+            "coordinator_core/write_guards/tests/test_ac5_flip_runtime_probes.py": _REASON_CANON_STRING,
+            "coordinator_core/write_guards/tests/test_bump_out_of_repo_tool_write.py": _REASON_CANON_STRING,
         },
         REPO_EXAMPLE_DOCTRINE_REPO: {
             # Compares a COMMAND-LINE ARGUMENT against a path-shaped substring to decide whether
@@ -959,6 +1027,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator_core/bash_guards/tests/test_write_bump_session_start.py": _REASON_CHMOD_DIR_GAP,
             "coordinator_core/bash_guards/tests/test_write_bump_marker.py": _REASON_CHMOD_DIR_GAP,
             "coordinator_core/tests/test_verify_templates_bin_sync.py": _REASON_CHMOD_MODE_PRESERVATION,
+            "coordinator_core/percolate/engine.py": _REASON_ENTRYPOINT_INTERPRETER_NONE_IS_POSIX_ONLY,
         },
     },
     "unresolved_cross_path": {},
@@ -1794,14 +1863,16 @@ def check_against_baseline(
 
     lines: List[str] = []
     ok = True
-    total_debt = 0
+    total_current = 0
+    total_baseline = 0
     total_new = 0
 
     for cls in CLASSES:
         cur = set(current[cls])
         base = set(baseline.get(cls, []))
         new = sorted(cur - base)
-        total_debt += len(cur)
+        total_current += len(cur)
+        total_baseline += len(base)
         if new:
             ok = False
             total_new += len(new)
@@ -1813,11 +1884,42 @@ def check_against_baseline(
                 lines.append(f"  - {p}")
             lines.append(_fix_hint(cls))
 
+    # Two distinct counts, printed distinctly on purpose: `total_current` is
+    # THIS scan of the live tree; `total_baseline` is the frozen baseline
+    # file's own entry count. They diverge whenever the baseline carries
+    # stale entries for paths no longer present (deleted/renamed/fixed --
+    # see `check_no_stale_baseline_entries`) and/or the live tree carries
+    # NEW violations not yet in the baseline (the `ok is False` case above).
+    # A prior version of this line printed only `total_current` labelled
+    # "baseline-frozen", which a reader could mistake for the baseline
+    # file's own count -- it never was one, and the two numbers can differ
+    # by hundreds with no explanation in the output. Never collapse these
+    # back into one bare number.
     debt_line = (
-        f"POSIX-exec-assumption debt: {total_debt} pre-existing violation(s) "
-        f"across {len(CLASSES)} blocking classes (baseline-frozen; shrinks as "
-        "they are fixed, never grows)."
+        f"POSIX-exec-assumption debt: current scan {total_current} "
+        f"violation(s), frozen baseline {total_baseline} entry(ies), "
+        f"across {len(CLASSES)} blocking classes."
     )
+    if total_current != total_baseline:
+        total_stale = total_baseline - (total_current - total_new)
+        parts = []
+        if total_new:
+            parts.append(f"{total_new} NEW violation(s) not yet in the baseline")
+        if total_stale > 0:
+            parts.append(
+                f"{total_stale} stale baseline entry(ies) for path(s) the "
+                "current scan no longer produces (see "
+                "check_no_stale_baseline_entries -- prune them; the "
+                "baseline is shrink-only)"
+            )
+        if parts:
+            debt_line += " Difference explained by: " + "; ".join(parts) + "."
+        else:
+            debt_line += (
+                f" Difference of {total_current - total_baseline} unexplained "
+                "by NEW violations or stale entries -- investigate before "
+                "trusting either number."
+            )
     if ok:
         lines.append(f"OK: no new POSIX-exec-assumption violations. {debt_line}")
     else:
@@ -2040,6 +2142,68 @@ def check_no_stale_exempt_prefixes(root) -> Tuple[bool, str]:
     return False, "\n".join(lines)
 
 
+def check_no_stale_baseline_entries(
+    root, baseline_path, precomputed: "Dict[str, List[str]] | None" = None
+) -> Tuple[bool, str]:
+    """RED iff the baseline names a path, for a given blocking class, that
+    the current scan does not produce for that class -- a dead grandfather
+    slot. Deleted, renamed, or fixed files never leave the baseline on
+    their own (the ratchet only ever compares NEW-vs-baseline in
+    `check_against_baseline`, never prunes in the other direction), so a
+    stale entry silently stays a live pass for whatever gets re-added at
+    that exact path with that exact violation shape later -- the entry
+    excuses nothing real, yet keeps the gate green regardless.
+
+    Mirrors `check_no_stale_exempt_prefixes`'s discipline: a carve-out (or,
+    here, a grandfathered debt slot) that outlives what it covered stops
+    being what it claims to be and becomes standing permission for whatever
+    lands at that path next.
+
+    `precomputed`, if given, is an already-computed `scan()` result -- lets
+    `main()` share one full-repo scan across all top-level checks (see
+    `check_against_baseline`'s docstring).
+    """
+    current = precomputed if precomputed is not None else scan(root)
+    baseline = load_baseline(baseline_path)
+
+    stale: Dict[str, List[str]] = {}
+    for cls in CLASSES:
+        cur = set(current[cls])
+        base = set(baseline.get(cls, []))
+        missing = sorted(base - cur)
+        if missing:
+            stale[cls] = missing
+
+    if not stale:
+        return True, (
+            "OK: every baseline entry across all blocking classes still "
+            "matches a current violation -- no stale grandfather slots."
+        )
+
+    total_stale = sum(len(paths) for paths in stale.values())
+    lines = [
+        f"STALE BASELINE ENTRIES: {total_stale} entry(ies) across "
+        f"{len(stale)} blocking class(es) name a path the current scan no "
+        "longer produces for that class:"
+    ]
+    for cls in CLASSES:
+        if cls not in stale:
+            continue
+        paths = stale[cls]
+        lines.append(f"  {cls}: {len(paths)} stale entry(ies):")
+        for p in paths:
+            lines.append(f"    - {p}")
+    lines.append(
+        "  The file was deleted, renamed, or the violation was fixed, and "
+        "the baseline entry was never pruned -- it is now a dead "
+        "grandfather slot: re-adding this exact path with this exact "
+        "violation shape would pass silently. Prune the entry from "
+        "state/posix-exec-baseline.json; the baseline is shrink-only, "
+        "never widen it back."
+    )
+    return False, "\n".join(lines)
+
+
 def _default_root() -> str:
     proc = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -2127,7 +2291,18 @@ def main(argv: List[str]) -> int:
 
     prefixes_ok, prefixes_msg = check_no_stale_exempt_prefixes(root)
 
-    overall_ok = ok and grown_ok and tier_a_ok and implicit_encoding_ok and prefixes_ok
+    stale_baseline_ok, stale_baseline_msg = check_no_stale_baseline_entries(
+        root, baseline_path, precomputed=current_scan
+    )
+
+    overall_ok = (
+        ok
+        and grown_ok
+        and tier_a_ok
+        and implicit_encoding_ok
+        and prefixes_ok
+        and stale_baseline_ok
+    )
 
     if args.json:
         # `scan` is the ALL_CLASSES-keyed current result, included wholesale
@@ -2150,6 +2325,10 @@ def main(argv: List[str]) -> int:
                             "ok": prefixes_ok,
                             "message": prefixes_msg,
                         },
+                        "stale_baseline_entries": {
+                            "ok": stale_baseline_ok,
+                            "message": stale_baseline_msg,
+                        },
                     },
                     "scan": current_scan,
                 },
@@ -2162,6 +2341,7 @@ def main(argv: List[str]) -> int:
         print(tier_a_msg)
         print(implicit_encoding_msg)
         print(prefixes_msg)
+        print(stale_baseline_msg)
 
     return 0 if overall_ok else 1
 

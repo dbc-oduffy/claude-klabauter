@@ -694,6 +694,8 @@ class _FakeGit:
             return SimpleNamespace(returncode=1, stdout="", stderr="")
         if args[0] == "commit":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "reset":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if args == ["rev-parse", "HEAD"]:
             return SimpleNamespace(returncode=0, stdout=f"fakesha{len(self.log)}\n", stderr="")
         raise AssertionError(f"_FakeGit: unexpected git invocation {args!r}")
@@ -767,6 +769,28 @@ class TestGranularityMidLoopBranchFlipHalts:
         # items' commits actually landed, never a 3rd committed-then-failed.
         assert fake_git.commit_calls == 2
 
+    def test_per_item_mid_loop_branch_flip_leaves_no_residue_staged(self, tmp_path, monkeypatch):
+        # Failing before this fix: `_dispatch_commit_per_item` pre-stages
+        # ALL 3 items' paths in one combined `add` ahead of the loop, then
+        # halts on item 3's branch recheck -- item 3's path was staged by
+        # the pre-pass but never committed nor unstaged, a residue window
+        # on the shared index (docs/reference/shared-index-residue.md,
+        # "Arm C"). Passing after: the abnormal-exit cleanup issues an
+        # explicit `git reset -- <item 3's paths>` before the
+        # `BranchMismatch` propagates.
+        fake_git = _FakeGit(branch_sequence=["work/x", "work/x", "work/DIFFERENT"])
+        monkeypatch.setattr(bga_apply, "_run_git", fake_git)
+        handler = bga_apply._CLI_DISPATCH["commit-per-item"]
+
+        with pytest.raises(bga_apply.BranchMismatch):
+            handler(_commit_directive_args("per-item"), tmp_path)
+
+        add_calls = [call for call in fake_git.log if call and call[0] == "add"]
+        reset_calls = [call for call in fake_git.log if call and call[0] == "reset"]
+        assert add_calls == [("add", "--", "state/bug-backlog/a.yaml",
+                               "state/bug-backlog/b.yaml", "state/bug-backlog/c.yaml")]
+        assert reset_calls == [("reset", "--", "state/bug-backlog/c.yaml")]
+
     def test_per_wave_mid_loop_branch_flip_is_a_non_issue_by_construction(self, tmp_path, monkeypatch):
         # Per-wave rechecks the branch exactly once, before the single
         # combined commit -- there is no "mid-loop" for a flip to occur
@@ -780,6 +804,135 @@ class TestGranularityMidLoopBranchFlipHalts:
             handler(_commit_directive_args("per-wave"), tmp_path)
 
         assert fake_git.commit_calls == 0
+
+
+class _RaisingCheckoutFakeGit(_FakeGit):
+    """Same shape as `_FakeGit`, but `git checkout -- <paths>` for one
+    named path fails (nonzero rc) -- lets a test drive
+    `_non_pass_checkout` into raising mid-loop, the P1 residue-window gap
+    review found: `_non_pass_checkout` sat OUTSIDE the loop's try/except,
+    so a raise there skipped `_unstage_paths` entirely for every later
+    still-staged verified item."""
+
+    def __init__(self, branch_sequence: list[str], failing_checkout_path: str):
+        super().__init__(branch_sequence)
+        self._failing_checkout_path = failing_checkout_path
+
+    def __call__(self, args: list[str], cwd: Path):
+        if args and args[0] == "checkout" and self._failing_checkout_path in args:
+            self.log.append(tuple(args))
+            return SimpleNamespace(returncode=1, stdout="", stderr="fatal: checkout failed")
+        return super().__call__(args, cwd)
+
+
+class TestNonPassCheckoutRaiseAlsoUnstagesResidue:
+    def test_non_pass_checkout_failure_mid_loop_still_unstages_later_items(
+        self, tmp_path, monkeypatch
+    ):
+        # Before the P1 fix: `_non_pass_checkout` sat outside the loop's
+        # try/except, so a raise there (here: `git checkout --` returning
+        # nonzero for the non-PASS item) skipped `_unstage_paths` for item
+        # 2's paths entirely -- reopening the exact Arm C residue window
+        # the C5 collapse was supposed to close, on the one branch nobody
+        # tested. After the fix: both loop branches share one try/except,
+        # so this raise unstages item 2's paths just like a `BranchMismatch`
+        # in the verified-commit branch already does.
+        fake_git = _RaisingCheckoutFakeGit(
+            branch_sequence=["work/x"], failing_checkout_path="state/bug-backlog/b.yaml"
+        )
+        monkeypatch.setattr(bga_apply, "_run_git", fake_git)
+        handler = bga_apply._CLI_DISPATCH["commit-per-item"]
+        payload = {
+            "items": [
+                {"paths": ["state/bug-backlog/a.yaml"], "message": "close a", "verified": True},
+                {"paths": ["state/bug-backlog/b.yaml"], "message": "close b", "verified": False},
+                {"paths": ["state/bug-backlog/c.yaml"], "message": "close c", "verified": True},
+            ],
+            "branch": "work/x",
+            "expected_branch": "work/x",
+        }
+
+        with pytest.raises(RuntimeError, match="checkout"):
+            handler([json.dumps(payload)], tmp_path)
+
+        add_calls = [call for call in fake_git.log if call and call[0] == "add"]
+        reset_calls = [call for call in fake_git.log if call and call[0] == "reset"]
+        assert add_calls == [
+            ("add", "--", "state/bug-backlog/a.yaml", "state/bug-backlog/c.yaml")
+        ]
+        # item a already committed before item b's checkout raised -- only
+        # item c's (still-staged, never-reached) paths need reversing.
+        assert reset_calls == [("reset", "--", "state/bug-backlog/c.yaml")]
+
+
+class _PartialAddFailureFakeGit(_FakeGit):
+    """`git add` itself fails (nonzero rc) -- drives the P2 pre-loop
+    `_stage_paths` guard: a combined `add` can partially stage successfully
+    -resolved paths and still return nonzero for one bad path among N."""
+
+    def __call__(self, args: list[str], cwd: Path):
+        if args and args[0] == "add":
+            self.log.append(tuple(args))
+            return SimpleNamespace(returncode=1, stdout="", stderr="fatal: bad path")
+        return super().__call__(args, cwd)
+
+
+class TestPreLoopStageFailureAlsoUnstages:
+    def test_combined_add_failure_unstages_the_attempted_paths(self, tmp_path, monkeypatch):
+        # Before the P2 fix: the pre-loop `_stage_paths` call was unguarded
+        # -- a partial-stage-then-fail `add` left every verified item's
+        # paths potentially residual with zero cleanup, and the collapse
+        # from N `add` calls to 1 widened this failure's blast radius from
+        # one item to the whole batch. After: the failure is caught and
+        # `_unstage_or_chain` attempts to reverse the same combined
+        # pathspec before re-raising.
+        fake_git = _PartialAddFailureFakeGit(branch_sequence=["work/x"])
+        monkeypatch.setattr(bga_apply, "_run_git", fake_git)
+        handler = bga_apply._CLI_DISPATCH["commit-per-item"]
+
+        with pytest.raises(RuntimeError, match="git add"):
+            handler(_commit_directive_args("per-item"), tmp_path)
+
+        reset_calls = [call for call in fake_git.log if call and call[0] == "reset"]
+        assert reset_calls == [
+            ("reset", "--", "state/bug-backlog/a.yaml", "state/bug-backlog/b.yaml",
+             "state/bug-backlog/c.yaml")
+        ]
+        assert fake_git.commit_calls == 0
+
+
+class _RaisingResetFakeGit(_FakeGit):
+    """`git reset` (the cleanup call) itself fails -- drives the P2
+    exception-masking fix: a second failure inside `_unstage_paths` must
+    chain onto, never replace, the original in-flight exception."""
+
+    def __call__(self, args: list[str], cwd: Path):
+        if args and args[0] == "reset":
+            self.log.append(tuple(args))
+            return SimpleNamespace(returncode=1, stdout="", stderr="fatal: index.lock")
+        return super().__call__(args, cwd)
+
+
+class TestCleanupFailureChainsRatherThanMasksOriginal:
+    def test_reset_failure_during_cleanup_does_not_mask_branch_mismatch(
+        self, tmp_path, monkeypatch
+    ):
+        # Before the P2 fix: `_unstage_paths` raising inside the bare
+        # `except Exception:` replaced the original `BranchMismatch` with a
+        # generic `RuntimeError` from the failed `git reset` -- masking
+        # exactly the exception a caller doing `except BranchMismatch`
+        # depends on seeing. After: the original exception still propagates
+        # (same type, same message), with the cleanup failure chained as
+        # `__cause__` for diagnosis rather than substituted in its place.
+        fake_git = _RaisingResetFakeGit(branch_sequence=["work/x", "work/x", "work/DIFFERENT"])
+        monkeypatch.setattr(bga_apply, "_run_git", fake_git)
+        handler = bga_apply._CLI_DISPATCH["commit-per-item"]
+
+        with pytest.raises(bga_apply.BranchMismatch) as excinfo:
+            handler(_commit_directive_args("per-item"), tmp_path)
+
+        assert excinfo.value.__cause__ is not None
+        assert "git reset" in str(excinfo.value.__cause__)
 
 
 # ---------------------------------------------------------------------------

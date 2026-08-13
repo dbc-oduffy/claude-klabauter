@@ -93,6 +93,7 @@ Port of: bootstrap-repo.sh (example-doctrine-repo a1a568d2, 2026-07-22).
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -105,6 +106,7 @@ from coordinator_core.install.scaffold_structure import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
+from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 
@@ -114,6 +116,23 @@ _GIT_TIMEOUT_SECS = 30
 _DIVERGENCE_TIMEOUT_SECS = 120
 _COMMIT_TIMEOUT_SECS = 300  # a pre-commit hook may run linters/tests; generous but bounded
 _MACHINE_LOCAL_TIMEOUT_SECS = 15
+
+#: Safety margin under Windows `CreateProcess`'s ~32767-char command-line
+#: ceiling (AC-7; Review: code-reviewer P2 -- a flat path-count bound like
+#: the prior `_STAGE_BATCH_SIZE = 500` is wrong because path length varies
+#: wildly across a real scaffold: this tree's own paths run from ~55 chars
+#: (`state/subagent-share/<uuid>/coordinator<role>-<hash>.md`) to 80+
+#: (`state/bug-backlog/<date>-<slug>-<hash>.yaml`-shaped names), so a
+#: count-based bound can pack far more bytes onto the command line than a
+#: shorter-path scaffold would, silently approaching the ceiling on a
+#: deep/large scaffold -- the worst time to discover it. Batches are now
+#: built by cumulative argv bytes instead (`_batch_paths_by_byte_budget`).
+#: NOT sized flush to 32767: this margin (~4700 bytes) is headroom for
+#: quoting/escaping overhead `CreateProcess` may add per-arg beyond a raw
+#: UTF-8 byte count, for `git`'s own resolved absolute path length varying
+#: by install location, and for `_argv_bytes` being a best-effort
+#: approximation of the composed command line, not an exact accounting.
+_STAGE_BATCH_MAX_ARGV_BYTES = 28000
 
 
 _HELP_TEXT = """
@@ -278,18 +297,114 @@ def _git(
     timeout: int = _GIT_TIMEOUT_SECS,
     capture: bool = True,
 ) -> subprocess.CompletedProcess:
+    """Run one `git <args>` subprocess.
+
+    RETRY (AC-8): composed LOCALLY here via
+    `coordinator_core.git_lock_retry.run_with_lock_retry`, wrapping ONLY
+    this single `subprocess.run` invocation, never a calling pipeline stage
+    -- per that module's own negative-spec against wrapping a multi-step
+    caller (AC-4's boundary). `git_native._git` (C1's own retry layer, the
+    module the other four commit-seam callers inherit through) was
+    considered and rejected as the route here, for two concrete reasons
+    checked at source rather than assumed:
+
+      1. This op runs against an ARBITRARY caller-supplied `--root`, not
+         necessarily this daemon's own worktree, and Stage 1 (the git-init
+         offer) runs BEFORE that target is even confirmed to be a git repo
+         at all -- `git_native._git` has no such pre-repo-existence case in
+         its own callers (all five inherit through an already-established
+         ceremony worktree).
+      2. `git_native.py` pulls in the commit-ceremony subsystem at import
+         time (`coordinator_core.git.divergence`,
+         `coordinator_core.git.commit_trailers`) purely to support
+         `commit_scoped()`'s divergence-aware mechanism selection -- an
+         entirely different concern from this standalone install-path
+         primitive, and its `cwd=`-keyword / `GitResult`-return shape
+         differs from this module's `root=`-keyword / raw
+         `CompletedProcess` shape at every one of this file's ~10 call
+         sites, so repointing would mean rewriting the whole module rather
+         than a drop-in swap.
+
+    `run_with_lock_retry` needs neither: a bare zero-arg callable closing
+    over the exact `subprocess.run` this function already makes.
+
+    `capture=False` (used only for the interactive `git init` call) SKIPS
+    retry deliberately, mirroring `git_native._git`'s own precedent: with no
+    `capture_output`, `.stderr` is `None` on the returned
+    `CompletedProcess`, and `run_with_lock_retry`'s `is_lock_contention()`
+    substring test crashes on a `None` `.stderr`.
+    """
     cmd = ["git"]
     if root is not None:
         cmd += ["-C", root]
     cmd += args
-    return subprocess.run(
-        cmd,
-        capture_output=capture,
-        text=True,
-        timeout=timeout,
-        stdin=subprocess.DEVNULL,
-        **_CREATIONFLAGS,
-    )
+
+    def _invoke() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            cmd,
+            capture_output=capture,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            **_CREATIONFLAGS,
+        )
+
+    return run_with_lock_retry(_invoke) if capture else _invoke()
+
+
+def _argv_bytes(args: List[str]) -> int:
+    """Approximate the composed command-line byte length for `args`: each
+    arg's UTF-8 encoding (non-ASCII paths encode wider than their character
+    count) plus one byte for the separator/quoting overhead between args --
+    mirroring how a platform's process-creation call concatenates argv into
+    one command-line string, which is what the Windows ~32767-char ceiling
+    actually bounds."""
+    return sum(len(a.encode("utf-8")) + 1 for a in args)
+
+
+def _batch_paths_by_byte_budget(
+    paths: List[str],
+    root: str,
+    max_bytes: int = _STAGE_BATCH_MAX_ARGV_BYTES,
+) -> List[List[str]]:
+    """Split `paths` into `git add -- <batch>` batches bounded by cumulative
+    argv bytes (AC-7; see `_STAGE_BATCH_MAX_ARGV_BYTES`'s own comment for why
+    this replaced a flat path-count bound). Measures the FULL composed argv
+    that will actually go on the command line -- `git`, `-C <root>`, `add`,
+    `--`, and each path -- not just the path strings.
+
+    A single path that alone exceeds `max_bytes` is still placed in its own
+    one-path batch rather than dropped: a `git add` that fails or times out
+    on one oversized path is a diagnosable, recoverable failure; silently
+    skipping a file from the scaffold is worse.
+    """
+    base = _argv_bytes(["git", "-C", root, "add", "--"])
+    batches: List[List[str]] = []
+    current: List[str] = []
+    current_bytes = base
+    for path in paths:
+        path_bytes = len(path.encode("utf-8")) + 1
+        if current and current_bytes + path_bytes > max_bytes:
+            batches.append(current)
+            current = []
+            current_bytes = base
+        current.append(path)
+        current_bytes += path_bytes
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _extract_failed_path_from_git_stderr(stderr: Optional[str]) -> Optional[str]:
+    """Best-effort extraction of the single path git's own stderr names as
+    the cause of a failed `add` (e.g. `fatal: pathspec '<path>' did not
+    match any files`, `error: open("<path>"): ...`). Returns None when no
+    quoted path is found -- callers must fall back to an honest
+    whole-batch-scoped message rather than assuming which file failed."""
+    if not stderr:
+        return None
+    match = re.search(r"'([^']+)'", stderr) or re.search(r'"([^"]+)"', stderr)
+    return match.group(1) if match else None
 
 
 def _prompt(text: str, default_yes: bool) -> bool:
@@ -605,31 +720,46 @@ def main(argv: List[str]) -> int:
     untracked = _git_lines(["ls-files", "--others", "--exclude-standard"], root_path)
     modified = _git_lines(["diff", "--name-only"], root_path)
 
-    for f in untracked:
+    # COUNT (AC-7): every untracked/modified path is staged for the SAME
+    # single "chore(coordinator): bootstrap" commit below, so a per-file
+    # `git add` loop (N+1 `.git/index.lock` acquisitions for N files) is
+    # behaviour-preserving to collapse into one `add` per batch. Batched
+    # (never a single unbounded pathspec) to stay clear of a platform
+    # argument-length ceiling on a very large scaffold -- see
+    # `_batch_paths_by_byte_budget` / `_STAGE_BATCH_MAX_ARGV_BYTES`.
+    stage_targets = untracked + modified
+    for batch in _batch_paths_by_byte_budget(stage_targets, root_path):
         try:
-            proc = _git(["add", "--", f], root=root_path)
+            proc = _git(["add", "--", *batch], root=root_path)
             if proc.returncode != 0:
-                _print(
-                    f"bootstrap-repo: WARNING — failed to stage untracked file: {f}",
-                    file=sys.stderr,
+                # Scope-honest (Review: code-reviewer P3): a nonzero rc means
+                # AT LEAST ONE of `batch` failed to stage, not necessarily
+                # all of them -- git continues staging valid pathspecs and
+                # only errors on the bad one. This warning is advisory only;
+                # `staged_files` below re-derives what's actually staged from
+                # `git diff --cached` before the commit, so this message
+                # never affects correctness, only operator diagnosis.
+                failed_path = _extract_failed_path_from_git_stderr(
+                    getattr(proc, "stderr", None)
                 )
+                if failed_path:
+                    _print(
+                        "bootstrap-repo: WARNING — failed to stage one or more "
+                        f"of {len(batch)} scaffold files in this batch; git "
+                        f"reported the failing path as {failed_path!r}",
+                        file=sys.stderr,
+                    )
+                else:
+                    _print(
+                        "bootstrap-repo: WARNING — failed to stage one or more "
+                        f"of {len(batch)} scaffold files in this batch "
+                        "(git did not name a specific path in its output)",
+                        file=sys.stderr,
+                    )
         except subprocess.TimeoutExpired:
             _print(
-                f"bootstrap-repo: WARNING — timed out staging untracked file: {f}",
-                file=sys.stderr,
-            )
-
-    for f in modified:
-        try:
-            proc = _git(["add", "--", f], root=root_path)
-            if proc.returncode != 0:
-                _print(
-                    f"bootstrap-repo: WARNING — failed to stage modified file: {f}",
-                    file=sys.stderr,
-                )
-        except subprocess.TimeoutExpired:
-            _print(
-                f"bootstrap-repo: WARNING — timed out staging modified file: {f}",
+                "bootstrap-repo: WARNING — timed out staging scaffold files "
+                f"(batch of {len(batch)} paths)",
                 file=sys.stderr,
             )
 

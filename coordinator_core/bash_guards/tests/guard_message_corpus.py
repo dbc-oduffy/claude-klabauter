@@ -814,6 +814,33 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
     ),
+    # AC10 coverage-gap closer (C7, docs/plans/2026-08-13-em-exercisable-
+    # in-band-grant-route.md): `block-subagent-guard-grant` (chunk C3) is a
+    # genuinely fireable CONFINEMENT_DENY guard with no corpus row until
+    # this dispatch -- unlike its modelled sibling
+    # `block-subagent-grant-acquisition` (still a named
+    # `REGISTER_COVERAGE_EXEMPTIONS` gap, not touched here), this guard
+    # wants a real fire+control pair, not an exemption. Custom setup (not
+    # `_from_factory*`) because this guard is not one of
+    # `CONFINEMENT_GUARDS`'s 16 `_setup_<name>` factories.
+    CorpusRow(
+        "block-subagent-guard-grant",
+        "block-subagent-guard-grant-fire",
+        'python3 -m coordinator_core.session.em_guard_grant grant "test reason"',
+        True,
+        _DENY,
+        False,
+        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
+    CorpusRow(
+        "block-subagent-guard-grant",
+        "block-subagent-guard-grant-control",
+        "python3 -m coordinator_core.session.em_guard_grant read",
+        False,
+        _DENY,
+        False,
+        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
+    ),
 ]
 
 #: Sanity invariant this module itself relies on -- every one of
@@ -1919,6 +1946,29 @@ def _wg_subagent_archive_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -
     }
 
 
+def _wg_subagent_guard_grant_write_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """AC10 coverage-gap closer (C7, docs/plans/2026-08-13-em-exercisable-
+    in-band-grant-route.md): fires leg (2) (the DR-260 unlock sentinel) of
+    `block_subagent_guard_grant_write` -- no git-repo fixture required,
+    unlike leg (1) (the durable grant record), matching the lighter-path
+    precedent `block_subagent_grant_record_write`'s own corpus row (just
+    above) is registered control-only for."""
+    import tempfile as _tempfile
+
+    from coordinator_core.session.guard_unlock_sentinel import _SENTINEL_PREFIX
+
+    sentinel_path = str(
+        Path(_tempfile.gettempdir()) / f"{_SENTINEL_PREFIX}deadbeef0123.some-guard"
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": sentinel_path, "content": "1"},
+        "agent_id": "deadbeef0123",
+    }
+
+
 def _wg_subagent_plan_body_write_fire(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, Any]:
@@ -2270,6 +2320,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
             "sweep, per AC-8."
         ),
     ),
+    WriteGuardRow(
+        "block_subagent_guard_grant_write",
+        "fire",
+        True,
+        _wg_subagent_guard_grant_write_fire,
+    ),
+    WriteGuardRow("block_subagent_guard_grant_write", "control", False, _wg_benign),
     WriteGuardRow(
         "block_subagent_plan_body_write", "fire", True, _wg_subagent_plan_body_write_fire
     ),
@@ -2711,6 +2768,21 @@ def _fire_nudge_foreground_agent_dispatch_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_hook_nudge_foreground_agent_dispatch._handler(payload, repo_root=None))
 
 
+# Review: code-reviewer — the fire-reroute fixture above always forwards a `prompt`,
+# so it only ever exercises the reroute leg (_REROUTE_NOTICE). This fixture forwards
+# no forwardable `prompt` (D8's "absent/empty/missing prompt" trio) on an otherwise
+# identical present-and-false payload, taking the deny fallback branch instead, so
+# the corpus's banned-vocabulary sweep also scans _DENY_MSG_TEMPLATE at least once.
+def _fire_nudge_foreground_agent_dispatch_deny() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "run_in_background": "false",
+        "session_id": "sess-c12-nfad-deny",
+        "tool_input": {},
+    }
+    return _to_envelope_or_none(_hook_nudge_foreground_agent_dispatch._handler(payload, repo_root=None))
+
+
 # --- (8) nudge_named_agent_report_delivery -- real firing row: a named Agent
 # dispatch with no SendMessage-to-main delivery instruction advises (AC9 fix).
 def _fire_nudge_named_agent_report_delivery() -> Optional[Dict[str, Any]]:
@@ -3015,6 +3087,12 @@ HOOK_ROWS: List[HookRow] = [
         "control-already-background",
         False,
         _fire_nudge_foreground_agent_dispatch_control,
+    ),
+    HookRow(
+        "nudge_foreground_agent_dispatch",
+        "fire-deny-no-prompt",
+        True,
+        _fire_nudge_foreground_agent_dispatch_deny,
     ),
     HookRow(
         "nudge_named_agent_report_delivery",

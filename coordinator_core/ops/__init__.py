@@ -157,6 +157,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),
     ("coordinator_core.ops.goals_match", 'registers "goal.match_candidates"'),
     ("coordinator_core.ops.plan_match", 'registers "plan.match_candidates"'),
+    ("coordinator_core.ops.plan_capture_persist", 'registers "plan.persist_capture"'),
     ("coordinator_core.ops.handoff_match", 'registers "handoff.match_candidates"'),
     ("coordinator_core.ops.initiatives_serve", 'registers "initiative.serve_set"'),
     ("coordinator_core.ops.roadmap_serve", 'registers "roadmap.serve"'),
@@ -288,6 +289,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.archive_paper_trail", 'registers "fleet.archive_paper_trail"'),
     ("coordinator_core.ops.fleet.archive_queue_entry", 'registers "fleet.archive_queue_entry"'),
     ("coordinator_core.ops.fleet.migrate_handoff_vocabulary", 'registers "fleet.migrate_handoff_vocabulary"'),
+    ("coordinator_core.ops.fleet.archive_sizings", 'registers "fleet.archive_terminal_sizings"'),
     (
         "coordinator_core.ops.orphan_branch_sweep",
         'registers "git_branch.compute_descendant_tip", "git_branch.detect_unpushed_commits", '
@@ -296,6 +298,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.bootstrap_repo", 'registers "repo_setup.validate_target_root"'),
     ("coordinator_core.ops.ensure_python3_exe_shim", 'registers "install.detect_python3_appx_stub"'),
     ("coordinator_core.ops.draft_plan_aging", 'registers "plan.list_stale_executing", "plan.list_orphaned"'),
+    ("coordinator_core.ops.plan_suggest_completion_steps", 'registers "plan.suggest_completion_steps"'),
     ("coordinator_core.ops.ceremony.scoped_git_commit", 'registers "ceremony.scoped_git_commit"'),
     ("coordinator_core.ops.ceremony.chunk_commits", 'registers "ceremony.chunk_commits"'),
     ("coordinator_core.ops.self_persist_findings", 'registers "findings.self_persist_fallback"'),

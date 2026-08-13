@@ -345,9 +345,9 @@ def check_registration_quad(
 # buys back the gate's legibility, it does not do the work.
 # ---------------------------------------------------------------------------
 _KNOWN_INCOMPLETE_REGISTRATIONS: Mapping[str, tuple[str, ...]] = {
-    "install.detect_cmd_autorun_coverage": ("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
-    "install.strip_cmd_autorun_guard": ("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
-    "install.write_cmd_autorun_guard": ("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
+    "install.detect_cmd_autorun_coverage": ("OP_CLASSIFICATION", "OP_MODULE_MAP"),
+    "install.strip_cmd_autorun_guard": ("OP_CLASSIFICATION", "OP_MODULE_MAP"),
+    "install.write_cmd_autorun_guard": ("OP_CLASSIFICATION", "OP_MODULE_MAP"),
     "distill.curate_clusters": ("OP_MODULE_MAP",),
     "memo.fate_backfill": ("OP_MODULE_MAP",),
     "updatedocs.gates": ("OP_MODULE_MAP",),

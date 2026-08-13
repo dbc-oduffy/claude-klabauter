@@ -135,6 +135,29 @@ class TestResolveTargetIdIndex:
 
         assert without_index == with_none_index == str(target.absolute())
 
+    def test_lazy_index_eligible_but_empty_converges_with_plain_empty_dict(self, tmp_path):
+        """Review: code-reviewer (slice 1, P3) — `_LazyHandoffIdIndex.__bool__`
+        is always True, unlike a genuinely empty dict (falsy). Pin that this
+        divergence is harmless: an id-shaped ref against an eligible-but-
+        empty corpus resolves identically whether id_index is the lazy
+        stand-in (built on first `in` lookup, ends up empty) or a plain
+        already-built empty dict."""
+        root = _init_repo(tmp_path)
+        handoff_dir = str(root / "state" / "handoffs")
+        # No handoff_id anywhere in the corpus -- the lazy index, once built
+        # on first lookup, will be an empty dict, exactly like id_index={}.
+        _write_handoff(root, "state/handoffs/no-id.md", ["title: no id here"])
+
+        lazy_index = dag._LazyHandoffIdIndex(str(root))
+        result_lazy = dag.resolve_target(
+            "hnd-not-present", handoff_dir, str(root), id_index=lazy_index
+        )
+        result_plain = dag.resolve_target(
+            "hnd-not-present", handoff_dir, str(root), id_index={}
+        )
+
+        assert result_lazy == result_plain is None
+
     def test_md_suffixed_ref_never_consults_id_index_even_on_a_matching_key(self, tmp_path):
         """A ref ending in '.md' is never treated as handoff_id-shaped, even
         if it happens to also be a key in id_index — guards against an

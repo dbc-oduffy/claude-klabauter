@@ -2326,51 +2326,6 @@ def _release_from_touched_file(
         # released than requested, never more; safe direction.
 
 
-#: The Layer-2 recency boundary :func:`_peer_claim_holder_is_stale` reuses,
-#: bound directly to ``liveness._THIRTY_MIN`` rather than a second literal
-#: ``30 * 60`` — the plan's anti-scope binds on this: "reuse the EXISTING
-#: recency boundary ... do not introduce a second threshold. Two thresholds
-#: is how the next reader gets a divergence to reconcile." This is the ONLY
-#: symbol this module reads off :mod:`coordinator_core.session.liveness`
-#: for B1 — no verdict function (``is_session_live``, ``session_live``,
-#: ``live_session_ids``) is imported or called anywhere in the staleness
-#: path below.
-_PEER_CLAIM_STALE_AFTER_SECONDS = liveness._THIRTY_MIN
-
-
-def _peer_claim_holder_is_stale(peer_session_dir: str, when: datetime) -> bool:
-    """True iff *peer_session_dir* (an OTHER session's directory under
-    ``coordinator-sessions/``) has gone stale beyond
-    :data:`_PEER_CLAIM_STALE_AFTER_SECONDS` — the ONLY staleness signal
-    :func:`release_committed_claims`'s B1 peer-release step consults.
-
-    A pure ``os.path.getmtime`` read against that session's OWN
-    ``touched.txt`` — mirroring the SAME mtime backstop
-    ``coordinator_core.bash_guards.dispatch_checks._rm_peer_claim_of``
-    already applies to a session unseen by canonical liveness. Deliberately
-    does NOT call into :mod:`coordinator_core.session.liveness` beyond the
-    bare :data:`_PEER_CLAIM_STALE_AFTER_SECONDS` constant: this decides
-    only whether a CLAIM RELEASES, never a liveness verdict, and must never
-    be read as (or substituted for) ``session_live``,
-    ``live_session_verdicts``, or ``live_session_ids`` — all three stay
-    byte-for-byte unchanged by this plan (PM ruling,
-    docs/plans/2026-08-11-kill-on-staleness-and-a-way-past-the-gate.md).
-
-    Returns ``False`` (never stale) when ``touched.txt`` is missing or
-    unreadable. There is no claim record to release either way in that
-    case — :func:`_release_from_touched_file`'s own ``os.path.isfile``
-    guard would no-op regardless — so this just avoids a caller
-    mis-reading "no record" as "stale record" if it ever branches on the
-    bool alone rather than always routing through that guard.
-    """
-    touched_path = os.path.join(peer_session_dir, "touched.txt")
-    try:
-        mtime = os.path.getmtime(touched_path)
-    except OSError:
-        return False
-    return (when.timestamp() - mtime) > _PEER_CLAIM_STALE_AFTER_SECONDS
-
-
 def release_committed_claims(
     sid: str, paths: List[str], cwd: Optional[str] = None
 ) -> None:
@@ -2380,42 +2335,32 @@ def release_committed_claims(
     claim-release counterpart to :func:`touch`, called post-commit once a
     pathspec has actually landed.
 
-    NOT structurally incapable of releasing a PEER's claim, as of B1
-    (docs/plans/2026-08-11-kill-on-staleness-and-a-way-past-the-gate.md):
-    this function now ALSO scans the sessions directory for an OTHER
-    session whose OWN claim record has gone stale
-    (:func:`_peer_claim_holder_is_stale`, keyed on
-    :data:`_PEER_CLAIM_STALE_AFTER_SECONDS`) and, for such a peer only,
-    releases its claim on the SAME ``clean`` set computed below — plus every
-    ``.agents/<aid>/touched.txt`` back-pointed at THAT stale peer, by the
-    identical back-pointer rule already applied to ``sid``'s own fan-out.
-    This is the fix for "a claim taken by a session that has gone quiet is
-    never released": the release path — already the wired-in call site for
-    every route that lands a commit — is where a stale peer's claim on
-    exactly the paths a commit just cleaned now gets reaped, alongside the
-    caller's own.
+    Structurally incapable of releasing a PEER's claim: this function
+    never accepts a peer session id and never iterates the sessions
+    directory looking for anyone else's records — only THIS ``sid``'s own
+    ``touched.txt`` and agent dirs whose ``em-session-id.txt``
+    back-pointer resolves to THIS ``sid`` (i.e. genuinely this session's
+    own dispatched-agent fan-out — the same self/other boundary
+    :func:`compute_scope` Step 3b already draws, and self-exclusion is
+    already how that step treats ``em_sid == sid``). Per the governing
+    lesson (2026-07-31, a liveness-keyed rescue reattributing a live
+    session's work), the release set is decided from AUTHORSHIP alone,
+    never from a peer's liveness or claim state — there is no peer-facing
+    branch in this function at all.
 
-    This still decides ONLY whether a claim releases, never a liveness
-    verdict: staleness here is a bare mtime check against
-    :data:`_PEER_CLAIM_STALE_AFTER_SECONDS` (the SAME value
-    ``coordinator_core.session.liveness._THIRTY_MIN`` already uses,
-    imported as a constant), and nothing in this path imports or calls
-    ``liveness.is_session_live``, ``liveness.session_live``, or
-    ``liveness.live_session_ids`` — all three are unchanged by this plan
-    (PM ruling). A peer within the recency window is untouched regardless
-    of whether it is provably alive, exactly as a peer beyond it is
-    released regardless of whether it is provably dead: this is staleness,
-    not a liveness verdict, and the distinction is load-bearing, not
-    semantic. Per the governing lesson (2026-07-31, a dirty tree is not
-    evidence you are alone in it), this can never reach a peer's IN-PROGRESS
-    work either way — only a CLEAN path can ever be in the ``clean`` set
-    below, so a live-but-idle peer's dirty, mid-edit file is excluded from
-    this release path by construction, before staleness is ever consulted.
-
-    Known, accepted side effect: releasing a stale peer's claim appends to
-    THAT peer's ``touched.txt``, which bumps its mtime — the same effect
-    self-release already has on ``sid``'s own file (see the AC10 no-churn
-    paragraph below for why a no-op call is different from this).
+    C5 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-that-
+    rejects-it.md): B1's stale-peer release step
+    (``_peer_claim_holder_is_stale`` / ``_PEER_CLAIM_STALE_AFTER_SECONDS``)
+    is DELETED, not merely unused. It existed only to keep a stale peer's
+    claim from perpetually blocking the sink-side ownership gate
+    (``ceremony.scoped_git_commit._check_claim_conflicts``) that plan C1
+    removed outright. With that gate gone, no consumer needs proactive
+    peer-claim staleness reaping on every commit: the one remaining
+    dead-claim release path (``session/claims.py::_clear_path_claim_if_dead``,
+    routed through ``release_artifact``/``clear_claim_if_dead`` class
+    ``"artifact"``) is on-demand and liveness-gated (``liveness.session_live``),
+    not mtime-staleness-gated, and does not depend on this function ever
+    having reaped anything automatically.
 
     The release set for EACH such file is exactly ``paths ∩
     clean-in-worktree ∩ currently-T-claimed-in-that-file``. A path
@@ -2546,47 +2491,6 @@ def release_committed_claims(
     if not base:
         return
 
-    # B1 (docs/plans/2026-08-11-kill-on-staleness-and-a-way-past-the-gate.md):
-    # a PEER session whose OWN claim record has gone stale
-    # (`_peer_claim_holder_is_stale`) gets its claim on the SAME `clean`
-    # set released here too — never wider than `clean`, so a live-but-idle
-    # peer's dirty, mid-edit path is excluded by construction regardless of
-    # staleness (see this function's own docstring). `stale_peer_sids` is
-    # threaded into the agent-dir loop below so a stale peer's OWN
-    # dispatched-agent fan-out is reaped alongside its session-level claim
-    # — an agent has no liveness/staleness identity of its own, so it is
-    # judged by its BACK-POINTED owner's staleness, mirroring how
-    # `compute_scope` Step 3b attributes an agent's claim to its
-    # back-pointed em-session-id rather than the agent id.
-    stale_peer_sids: Set[str] = set()
-    try:
-        peer_entries = sorted(os.scandir(base), key=lambda e: e.name)
-    except OSError:
-        peer_entries = []
-    for peer_entry in peer_entries:
-        peer_sid = peer_entry.name
-        # Review: code-reviewer P2 (2026-08-11) — reuse the module's own
-        # canonical reserved-directory denylist (already imported as
-        # `liveness`, already used elsewhere in this file) rather than a
-        # second, hand-maintained two-item tuple that can silently drift
-        # from it. Bare-constant read only, never a liveness-verdict call.
-        if peer_sid == sid or peer_sid in liveness._NON_SESSION_DIR_NAMES:
-            continue  # self (already released above) or a reserved dir
-        try:
-            if not peer_entry.is_dir():
-                continue
-        except OSError:
-            continue
-        if not _peer_claim_holder_is_stale(peer_entry.path, when):
-            continue  # within the recency window — untouched, live or not
-        stale_peer_sids.add(peer_sid)
-        _release_from_touched_file(
-            os.path.join(peer_entry.path, "touched.txt"),
-            clean,
-            when,
-            lambda raw_path: normalize_touch_path(raw_path, cwd, root=cwd),
-        )
-
     agents_base = os.path.join(base, ".agents")
     if not os.path.isdir(agents_base):
         return
@@ -2614,10 +2518,8 @@ def release_committed_claims(
         except OSError:
             continue
         em_sid = (first_lines[0] if first_lines else "").strip()
-        if em_sid != sid and em_sid not in stale_peer_sids:
-            # Not this session's own fan-out, and not a stale peer's either
-            # — a live peer's dispatched-agent claim is never released.
-            continue
+        if em_sid != sid:
+            continue  # not this session's own fan-out — never release it
         _release_from_touched_file(
             str(agent_dir / "touched.txt"),
             clean,

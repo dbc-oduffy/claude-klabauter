@@ -1645,15 +1645,85 @@ def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> N
         )
 
 
-def cs_claim_handoff(handoff_path: str) -> int:
+#: Cap on the `goal` value written by `_record_session_goal_best_effort` —
+#: mirrors the field's own diagnostic (not authoritative-record) purpose;
+#: no caller needs an unbounded-length title/summary in a one-line field.
+_SESSION_GOAL_MAX_CHARS = 200
+
+
+def _record_session_goal_best_effort(handoff_path: str, worktree: Path, sid: str) -> None:
+    """C2 write-moment sibling of `_record_pickup_best_effort`: best-effort,
+    non-fatal write of the claiming session's `goal` (meta.json), sourced
+    from the just-claimed handoff's own `title` (falling back to `summary`).
+
+    Writer-seam rationale (state/handoffs/2026-08-13-session-goal-field-has-
+    no-writer.md): `holder_evidence.holder_evidence` — the sole consumer of
+    meta.json's `goal` — is only ever reached via `compute_claim_grant` /
+    `compute_competing_claim`, whose holder is by construction a session
+    that claimed a handoff, i.e. one that went through pickup. A
+    session-init or plan-adoption writer would add seams with no
+    contention case behind them, so pickup (here, alongside
+    `_record_pickup_best_effort`, both called from `cs_claim_handoff`'s
+    tail) is the sole writer.
+
+    Mirrors `_record_pickup_best_effort`'s contract exactly: wrapped in a
+    bare `try/except Exception`, prints a WARNING to stderr, NEVER raises
+    into the caller — `goal` is a diagnostic, never a gate (Anti-scope).
+    Reads `title`/`summary` via the already-native
+    `read_frontmatter_field` (no subprocess, no corpus read) and writes via
+    `coordinator_core.session.core.update_meta_field` — no new meta.json
+    field, no structured goal object.
+    """
+    try:
+        from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+        from coordinator_core.session import core as _session_core
+
+        title = read_frontmatter_field(handoff_path, "title")
+        value_source = title if title else read_frontmatter_field(handoff_path, "summary")
+        if not value_source:
+            # Neither title nor summary is available — write nothing rather
+            # than a placeholder (Anti-scope: empty stays empty until real).
+            return
+
+        value = f"pickup: {value_source}"[:_SESSION_GOAL_MAX_CHARS]
+
+        sdir = _session_core.session_dir(sid, str(worktree))
+        if not sdir:
+            return
+        if not _session_core.update_meta_field(sdir, "goal", value):
+            print(
+                "cs_claim_handoff: WARNING — session goal write did not complete "
+                "(update_meta_field returned False); goal not recorded (non-fatal)",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001 — best-effort, must never abort the caller
+        print(
+            f"cs_claim_handoff: WARNING — session goal write did not complete "
+            f"({exc}); goal not recorded (non-fatal)",
+            file=sys.stderr,
+        )
+
+
+def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int | dict":
     """Pickup-time claim transition: status:open->claimed, deployment_state->
     in_flight, +claimed_at/claimed_by. Fails loud on unresolvable session id (an
-    empty claimed_by would corrupt the claim gate)."""
+    empty claimed_by would corrupt the claim gate).
+
+    ``return_result`` (additive kwarg, C2/2026-08-13): when True, returns the
+    full ``handoff.transition`` claim op response dict — landed
+    (``exit_code: 0, applied: True``), no-op (``exit_code: 0, applied: False``,
+    with a ``message``), or rejection (``exit_code: 1`` plus an ``error``
+    string, e.g. a `_HANDOFF_CROSS_FIELD_RULES` validation failure) — instead
+    of the bare exit code. Mirrors ``cs_claim_memo_stamp``'s own
+    ``return_result`` shape verbatim (same additive kwarg, same unaffected
+    default — every existing positional caller keeps its exact int-return
+    contract). Default False."""
     hpath = Path(handoff_path)
     worktree, repo_root = _resolve_repo_root_for(hpath)
     if worktree is None or repo_root is None:
         print(f"cs_claim_handoff: could not resolve git worktree for {handoff_path}", file=sys.stderr)
-        return 1
+        result = {"exit_code": 1, "applied": False, "error": f"could not resolve git worktree for {handoff_path}"}
+        return result if return_result else result["exit_code"]
 
     sid = resolve_current_session_id(worktree_root=worktree)
     if not sid:
@@ -1663,7 +1733,8 @@ def cs_claim_handoff(handoff_path: str) -> int:
             "or CLAUDE_CODE_SESSION_ID in the environment",
             file=sys.stderr,
         )
-        return 1
+        result = {"exit_code": 1, "applied": False, "error": "could not resolve a session id"}
+        return result if return_result else result["exit_code"]
 
     ts = _now_iso()
     result = _call_handoff_transition(
@@ -1672,10 +1743,11 @@ def cs_claim_handoff(handoff_path: str) -> int:
     rc = int(result.get("exit_code", 1))
     if rc != 0:
         print(f"cs_claim_handoff: {result.get('error', 'unknown error')}", file=sys.stderr)
-        return rc
+        return result if return_result else rc
 
     _record_pickup_best_effort(handoff_path, worktree, sid)
-    return 0
+    _record_session_goal_best_effort(handoff_path, worktree, sid)
+    return result if return_result else 0
 
 
 # Deprecated alias — retained so external importers of the pre-rename name

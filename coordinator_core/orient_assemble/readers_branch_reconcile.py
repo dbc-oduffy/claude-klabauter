@@ -176,7 +176,11 @@ def _read_auto_reconcile() -> ReaderResult:
         return ReaderResult()
     result = response.get("result") or {}
     surfaced = result.get("surfaced") or []
-    if not surfaced:
+    reconciled = result.get("reconciled") or []
+    failed_reconciles = [
+        entry for entry in reconciled if entry.get("exit_code", 0) != 0
+    ]
+    if not surfaced and not failed_reconciles:
         return ReaderResult()
 
     judgment_points: list[dict[str, Any]] = []
@@ -213,7 +217,31 @@ def _read_auto_reconcile() -> ReaderResult:
         item_label="surfaced auto-reconcile handoffs",
         list_command="check-auto-reconcile",
     )
-    return ReaderResult(judgment_points=judgment_points)
+
+    desync_points: list[dict[str, Any]] = []
+    for idx, entry in enumerate(failed_reconciles):
+        message = truncate_external_text(entry.get("message") or "no message")
+        desync_points.append(
+            build_judgment_point(
+                None,
+                id=f"j-desync-repair-failed-{idx + 1}",
+                question="Ledger/frontmatter desync repair failed — review manually?",
+                dispositions=[
+                    build_disposition("pm_reviews_manually"),
+                    build_disposition("leave_for_now"),
+                ],
+                evidence=f"exit_code={entry.get('exit_code')} | {message}",
+                reason="recommendation-forbidden",
+            )
+        )
+    desync_points = cap_judgment_points(
+        desync_points,
+        cap=_AUTO_RECONCILE_JUDGMENT_POINT_CAP,
+        overflow_id="j-overflow-desync-repair-failed",
+        item_label="failed desync repairs",
+        list_command="check-auto-reconcile",
+    )
+    return ReaderResult(judgment_points=judgment_points + desync_points)
 
 
 def collect(cadence: str) -> ReaderResult:

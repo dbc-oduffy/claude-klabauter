@@ -538,5 +538,65 @@ def test_lookup_dot_dot_normalizing_input_resolves_claimed(tmp_path):
     assert result == {"a/x/../b/./c.py": ["sess-a"]}
 
 
+# ---------------------------------------------------------------------------
+# C1d — edit_ts widening (state/audits/2026-08-13-edit-recency-spike.md)
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_edit_ts_carries_last_t_timestamp_for_claimant(tmp_path):
+    base = str(tmp_path)
+    _session_touched(
+        base, "sess-a", [_touch_line("T", "foo.py", when="2026-08-13T10:00:00.000000Z")]
+    )
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    from datetime import datetime, timezone
+
+    assert result.edit_ts["foo.py"] == {
+        "sess-a": datetime(2026, 8, 13, 10, 0, 0, tzinfo=timezone.utc)
+    }
+
+
+def test_lookup_edit_ts_absent_for_unclaimed_path(tmp_path):
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+
+    result = claim_index.lookup(["never/touched.py"], sessions_dir=base)
+
+    assert result.edit_ts.get("never/touched.py") is None
+
+
+def test_lookup_edit_ts_removed_on_release(tmp_path):
+    base = str(tmp_path)
+    _session_touched(
+        base,
+        "sess-a",
+        [
+            _touch_line("T", "foo.py", when="2026-08-13T10:00:00.000000Z"),
+            _touch_line("R", "foo.py", when="2026-08-13T10:00:05.000000Z"),
+        ],
+    )
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result["foo.py"] == []
+    assert result.edit_ts.get("foo.py") is None
+
+
+def test_lookup_edit_ts_ignores_unparseable_timestamp(tmp_path):
+    base = str(tmp_path)
+    # A legacy bare-path line has no timestamp at all and is skipped by this
+    # module's reader entirely (no legacy-compat obligation, per
+    # _last_verb_per_path's own docstring) -- so it contributes no claim and
+    # no edit_ts entry, distinct from a malformed-but-3-token line.
+    _session_touched(base, "sess-a", ["foo.py"])
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result["foo.py"] == []
+    assert result.edit_ts.get("foo.py") is None
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

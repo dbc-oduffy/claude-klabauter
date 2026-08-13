@@ -3350,7 +3350,12 @@ _QUEUE_SCHEMA_PINS = {
     'improvement-queue': "9b5a08fd2e0cebe22a8133a630304b1c253deabe",
     'lesson-entry': _C1_LANDING_SHA,
     'lessons-outbox': _C1_LANDING_SHA,
-    'review-findings': "3203e9c1b9e7b8549ab419b731151fe30ec2e3ab",
+    # Pin moved 2026-08-13 to a88486a268af18ebc2b751339ec6f56d1ce1cb88 (example-doctrine-repo
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   re-vendor: example-doctrine-repo bumped x-schema-version and changed shape
+    #   (2.0.0->2.1.0, 1.0.0->1.1.0), adding optional reviewed_range array;
+    #   confirmed divergence_kind=shape via schema_drift_watch
+    'review-findings': "a88486a268af18ebc2b751339ec6f56d1ce1cb88",
     # Moved off _C1_LANDING_SHA 2026-07-27: example-doctrine-repo landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -5290,11 +5295,12 @@ class TestDescribeBehavioralCases:
     with no applies_to must yield None (not a KeyError, not an absent key)."""
 
     def test_zero_optional_fields_is_empty_list_not_missing_key(self):
-        # review-findings.schema.json declares every property in `required` —
-        # zero optional fields.
+        # review-findings.schema.json v2.1.0 added the optional `reviewed_range`
+        # array (2026-08-13 re-vendor); every other declared property is
+        # still `required`.
         result = describe('review-findings')
         assert 'optional' in result
-        assert result['optional'] == []
+        assert result['optional'] == ['reviewed_range']
 
     def test_no_applies_to_returns_none_not_missing_key(self):
         # percolate-store.schema.json declares no applies_to glob.
@@ -6144,3 +6150,37 @@ class TestCfAwaitingGateNotPickupReady:
         fm = _valid_handoff(deployment_state='ready_to_fire', pickup_ready=True)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'pickup_ready' for e in errors)
+
+
+class TestReconcileDispositionFields:
+    """`reconcile_disposition` / `reconcile_disposition_reason` are read by
+    coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1
+    'severed-observer' assertion) via `_DISPOSITION_FIELD` /
+    `_DISPOSITION_REASON_FIELD` -- declared here as optional string
+    properties on both the live and archived handoff schemas so a
+    dispositioned handoff, or one carrying neither field, validates cleanly.
+    """
+
+    def test_both_fields_present_valid_on_live_handoff(self):
+        fm = _valid_handoff(
+            reconcile_disposition='surfaced-and-actioned',
+            reconcile_disposition_reason='Reconciled manually against the successor baton.',
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert errors == []
+
+    def test_both_fields_absent_valid_on_live_handoff(self):
+        errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
+        assert errors == []
+
+    def test_both_fields_present_valid_on_archived_handoff(self):
+        fm = _valid_archived_handoff(
+            reconcile_disposition='surfaced-and-actioned',
+            reconcile_disposition_reason='Reconciled manually against the successor baton.',
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_ARCHIVED_SCHEMA)
+        assert errors == []
+
+    def test_both_fields_absent_valid_on_archived_handoff(self):
+        errors = validate_frontmatter(_valid_archived_handoff(), _HANDOFF_ARCHIVED_SCHEMA)
+        assert errors == []

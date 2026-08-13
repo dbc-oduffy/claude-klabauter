@@ -2102,6 +2102,102 @@ class TestArchiveScanIsMemoizedAndDegradesOnUnreadableSubdir:
         assert out_value == f"state/handoffs/{today}-unreadable-archive.md"
 
 
+class TestArchiveProbeIsNarrowedToNeededBasenames:
+    """2026-08-13 break-class fix (hot-path-over-acquisition sweep, residual
+    #3): the prior fix built ONE full basename index of all three archive
+    subtrees (`rglob("*")` per subdir) to answer a disambiguation ladder
+    that only ever asks about 1-3 KNOWN basenames -- a ~1,681:1
+    read:need ratio at the real corpus size. This pins the narrowing: the
+    archive probe must search for the SPECIFIC basename(s) the ladder
+    needs, never a wildcard that enumerates the whole subtree."""
+
+    def test_never_globs_the_whole_archive_subtree(self, tmp_path, monkeypatch):
+        for subdir in ("cross-repo/archive", "archive/handoffs", "archive/completed"):
+            (tmp_path / subdir).mkdir(parents=True)
+        (tmp_path / "archive" / "handoffs" / "2026-01-01-never-collides.md").write_text("x")
+
+        real_rglob = Path.rglob
+
+        def asserting_rglob(self, pattern):
+            assert pattern != "*", (
+                "archive probe must search a specific basename, not a "
+                "wildcard that walks the whole subtree"
+            )
+            return real_rglob(self, pattern)
+
+        monkeypatch.setattr(Path, "rglob", asserting_rglob)
+
+        out_value = ba._compute_fresh_output_path(
+            str(tmp_path / "state" / "handoffs" / "2026-01-01-never-collides.md"),
+            tmp_path,
+        )
+        # The candidate collides (present under archive/handoffs), so the
+        # ladder disambiguates -- proving the collision is still detected
+        # via the narrowed, non-wildcard probe.
+        assert out_value != "state/handoffs/2026-01-01-never-collides.md"
+
+    def test_targeted_probe_touches_far_fewer_paths_than_a_full_index(self, tmp_path, monkeypatch):
+        # A large decoy corpus the narrowed probe must never fully visit.
+        decoy_dir = tmp_path / "archive" / "handoffs" / "2020-01"
+        decoy_dir.mkdir(parents=True)
+        for i in range(500):
+            (decoy_dir / f"2020-01-{i:03d}-decoy.md").write_text("x")
+        (tmp_path / "cross-repo" / "archive").mkdir(parents=True)
+        (tmp_path / "archive" / "completed").mkdir(parents=True)
+
+        visited = {"n": 0}
+        real_rglob = Path.rglob
+
+        def counting_rglob(self, pattern):
+            result = list(real_rglob(self, pattern))
+            visited["n"] += len(result)
+            return iter(result)
+
+        monkeypatch.setattr(Path, "rglob", counting_rglob)
+
+        out_value = ba._compute_fresh_output_path(
+            str(tmp_path / "state" / "handoffs" / "2026-01-01-not-a-decoy.md"),
+            tmp_path,
+        )
+        assert out_value.endswith("-not-a-decoy.md")
+        # A full-index build would have visited all 500 decoys; the
+        # targeted probe visits none, since none of them match the one
+        # basename being asked about.
+        assert visited["n"] == 0, visited["n"]
+
+    def test_unit_glob_metacharacter_does_not_spuriously_match(self, tmp_path):
+        """A candidate basename containing glob metacharacters must NOT be
+        treated as a glob PATTERN (the regression this same sweep fixed at
+        `ops/fleet/memo_send.py` and `ops/ceremony/branch_resolution.py`):
+        `rglob()` interprets its argument as a pattern, so a basename like
+        `2026-07-2[0-9]-foo.md` could spuriously match an unrelated
+        archived file and wrongly report a collision. Matching must stay
+        literal, mirroring
+        `test_memo_send.py::TestInReplyToExistenceGate.
+        test_unit_glob_metacharacter_does_not_spuriously_match`."""
+        (tmp_path / "cross-repo" / "archive").mkdir(parents=True)
+        (tmp_path / "archive" / "completed").mkdir(parents=True)
+        handoffs = tmp_path / "archive" / "handoffs" / "2026-07"
+        handoffs.mkdir(parents=True)
+        # A real archived file that a glob PATTERN interpretation of the
+        # bracket-bearing candidate below would spuriously match.
+        (handoffs / "2026-07-25-foo.md").write_text("x")
+
+        candidate_path = (
+            tmp_path / "state" / "handoffs" / "2026-07-2[0-9]-foo.md"
+        )
+        out_value = ba._compute_fresh_output_path(str(candidate_path), tmp_path)
+        # No collision under LITERAL matching (no file named exactly
+        # `<today>-2026-07-2[0-9]-foo.md` exists anywhere) -- the plain,
+        # un-disambiguated candidate is returned, proving the bracket
+        # expression was never treated as a glob pattern (a pattern
+        # interpretation would have spuriously matched the archived
+        # `2026-07-25-foo.md` above and forced the HHMMSS-disambiguated
+        # branch instead).
+        assert out_value.endswith("-2026-07-2[0-9]-foo.md")
+        assert "_" not in Path(out_value).name
+
+
 class TestBareSlugArtifactPathNormalization:
     """Regression for the reproduced live break: `baton-assemble apply
     spinoff windows-host-validation-review-assemble-seam` scaffolded an
@@ -4210,6 +4306,50 @@ class TestSupersedeReconcilesClaimFromDurableLedger:
 
         assert calls == []
         assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
+        assert predecessor.read_text(encoding="utf-8") == before
+
+    def test_ledger_claim_restamp_validation_rejection_is_distinguished(
+        self, tmp_path, monkeypatch
+    ):
+        """C4 (2026-08-13) -- a predecessor WAS claimed (the durable ledger
+        holds the record) but the frontmatter re-stamp is refused by schema
+        validation. This is NOT the never-claimed case: the degrade reason
+        must name the validation rejection and carry the op's own `error`
+        text, never the generic `predecessor-not-claimed-or-shipped` (that
+        reason is reserved for a genuinely absent ledger record -- see the
+        sibling test above and `test_legacy_pid_only_claim_dir_is_not_
+        evidence` below, both of which still pin the unchanged value). The
+        run itself is unaffected: no raise, still degraded, `exit_code`
+        still whatever `apply()`'s own success posture yields for a
+        degraded-but-not-partial directive."""
+        repo = tmp_path / "repo"
+        predecessor = self._seed_repo(repo, _UNCLAIMED_PREDECESSOR_FM)
+        _seed_ledger_handoff_claim(
+            repo, "predecessor.md", session_id="sid-real-holder", claimed_at="2026-08-07T10:46:34Z"
+        )
+        before = predecessor.read_text(encoding="utf-8")
+
+        calls: list = []
+
+        def _fake_invoke(op_name, params, repo_root):
+            calls.append(op_name)
+            return {
+                "exit_code": 1,
+                "error": "summary exceeds the frontmatter cap",
+            }
+
+        monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
+
+        result = ba_apply._dispatch_handoff_supersede_predecessor(
+            [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
+        )
+
+        assert calls == ["handoff.transition"]
+        assert (
+            result["degraded"]["reason"]
+            == "predecessor-claim-restamp-validation-rejected"
+        )
+        assert result["degraded"]["error"] == "summary exceeds the frontmatter cap"
         assert predecessor.read_text(encoding="utf-8") == before
 
     def test_legacy_pid_only_claim_dir_is_not_evidence(self, tmp_path, monkeypatch):
@@ -7452,3 +7592,613 @@ class TestSuccessorSideFanInDownEdge:
         # Every leg's up-edge is stamped too -- N=3 keeps the up/down parity.
         d6s = [d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"]
         assert len(d6s) == len(additional_flags) + 1
+
+
+# ---------------------------------------------------------------------------
+# C1/C3 -- a closed predecessor is terminal and is EXEMPT from supersede.
+# Spec backlink: docs/plans/2026-08-13-closed-baton-is-terminal-d6-declines-
+# per-predecessor.md, chunk C1 (`_build_directives` re-keyed twin of the
+# roadmap-baton decline, on `deployment_state` instead of `kind`, moved
+# PER-PREDECESSOR inside the `all_predecessors` loop rather than hoisted
+# outside it). Mirrors `TestC3RoadmapBatonPredecessorDeclinesD6`'s and
+# `TestSelfResolutionFromClaimLedger`'s fixture shapes.
+# ---------------------------------------------------------------------------
+
+
+class TestClosedPredecessorDeclinesD6PerPredecessor:
+    """A predecessor whose own frontmatter carries `deployment_state: closed`
+    + `closed_reason: <reason>` is terminal -- superseding it would flip
+    `deployment_state` to `continued` and strand `closed_reason` against the
+    bidirectional schema rule (`_cf_closed_reason_required`). Unlike the
+    roadmap-baton gate (primary-only, hoisted outside the loop), this decline
+    is keyed PER-PREDECESSOR inside the loop: a closed predecessor's own
+    d6/d6-N is skipped, every other predecessor's directive still arms, and
+    the mint completes."""
+
+    def _seed_handoff_claim(
+        self,
+        repo_root: Path,
+        session_id: str,
+        basename: str,
+        claimed_at: str | None = None,
+    ) -> None:
+        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir.mkdir(parents=True, exist_ok=True)
+        (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
+        if claimed_at is not None:
+            (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+
+    def _two_predecessor_fan_in(self, tmp_path: Path, monkeypatch):
+        """Predecessor 1 open, predecessor 2 closed with
+        `closed_reason: displaced` -- the filed bug's exact regression
+        shape (fan-in whose predecessor set includes a deliberately-closed
+        baton)."""
+        _init_repo(tmp_path)
+        predecessor_1 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-10-open-predecessor.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-open-1a2b60"],
+        )
+        predecessor_2 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-11-closed-predecessor.md",
+            [
+                "deliverable_id: DEL-2",
+                "handoff_id: hnd-closed-1a2b61",
+                "deployment_state: closed",
+                "closed_reason: displaced",
+            ],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-closed-fan-in", predecessor_1.name, claimed_at="2026-08-10T09:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-closed-fan-in", predecessor_2.name, claimed_at="2026-08-10T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-closed-fan-in")
+        return predecessor_1, predecessor_2
+
+    def test_d6_arms_for_open_predecessor_and_declines_for_closed_one(self, tmp_path, monkeypatch):
+        predecessor_1, predecessor_2 = self._two_predecessor_fan_in(tmp_path, monkeypatch)
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == predecessor_1.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [
+            predecessor_2.relative_to(tmp_path).as_posix()
+        ]
+
+        d6s = {
+            d["id"]: d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert "d6" in d6s, "AC1/AC3: open predecessor 1 must still arm d6"
+        assert "d6-2" not in d6s, "AC1/AC3: closed predecessor 2 must NOT arm d6-2"
+
+    def test_d6_declines_when_the_primary_predecessor_itself_is_closed(self, tmp_path, monkeypatch):
+        """Review coverage gap (2026-08-13): AC3's own language is 'keyed
+        per-predecessor' -- the existing fixtures only exercise an
+        ADDITIONAL (predecessor 2) closure. Cover the mirror case: the
+        PRIMARY predecessor (index 0, id 'd6') is closed and the additional
+        predecessor is open. `d6` must be skipped, `d6-2` must still arm for
+        the open sibling, and the mint completes (does not abort)."""
+        _init_repo(tmp_path)
+        predecessor_1 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-10-closed-primary.md",
+            [
+                "deliverable_id: DEL-1",
+                "handoff_id: hnd-closed-primary-1a2b66",
+                "deployment_state: closed",
+                "closed_reason: cancelled",
+            ],
+        )
+        predecessor_2 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-11-open-additional.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-open-additional-1a2b67"],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-closed-primary", predecessor_1.name, claimed_at="2026-08-10T09:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-closed-primary", predecessor_2.name, claimed_at="2026-08-10T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-closed-primary")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == predecessor_1.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [
+            predecessor_2.relative_to(tmp_path).as_posix()
+        ]
+
+        d6s = {
+            d["id"]: d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert "d6" not in d6s, "AC1/AC3: closed PRIMARY predecessor must NOT arm d6"
+        assert "d6-2" in d6s, "AC1/AC3: open additional predecessor 2 must still arm d6-2"
+
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-closed-predecessor-decline" in jp_ids, (
+            "AC2: the primary's own decline point (id 'd6-closed-predecessor-"
+            f"decline') must be surfaced -- got jp ids {jp_ids!r}"
+        )
+
+    def test_brief_carries_closed_predecessor_decline_point_naming_reason(self, tmp_path, monkeypatch):
+        _predecessor_1, predecessor_2 = self._two_predecessor_fan_in(tmp_path, monkeypatch)
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        jp = next(
+            (
+                jp
+                for jp in decision["judgment_points"]
+                if jp["id"] == "d6-2-closed-predecessor-decline"
+            ),
+            None,
+        )
+        assert jp is not None, (
+            "AC2: expected a 'd6-2-closed-predecessor-decline' judgment "
+            "point naming predecessor 2's own d6 id -- got ids "
+            f"{[j['id'] for j in decision['judgment_points']]!r}"
+        )
+        jp_text = " ".join(str(jp.get(field, "")) for field in ("question", "reason", "evidence"))
+        assert predecessor_2.relative_to(tmp_path).as_posix() in jp_text
+        assert "displaced" in jp_text
+
+        values = {d["value"] for d in jp["dispositions"]}
+        assert values == {"leave-closed", "force-supersede"}
+
+    def test_force_supersede_rearms_only_that_predecessors_d6_id(self, tmp_path, monkeypatch):
+        """Review coverage gap (2026-08-13): the two-predecessor fixture
+        (open primary + one closed additional) cannot observe isolation --
+        the open primary's d6 arms regardless because it was never gated,
+        so a defect that resolved `force-supersede` globally across every
+        `*-closed-predecessor-decline` id would pass identically. Add a
+        SECOND closed additional predecessor, name only the first in
+        force-supersede, and assert the second's own edge stays declined
+        and its own decline point still surfaces."""
+        _predecessor_1, _predecessor_2 = self._two_predecessor_fan_in(tmp_path, monkeypatch)
+        predecessor_3 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-11-closed-predecessor-2.md",
+            [
+                "deliverable_id: DEL-3",
+                "handoff_id: hnd-closed2-1a2b78",
+                "deployment_state: closed",
+                "closed_reason: displaced",
+            ],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-closed-fan-in", predecessor_3.name, claimed_at="2026-08-10T11:00:00Z"
+        )
+        decision = ba.brief(
+            "handoff",
+            "",
+            decisions={
+                "d6-2-closed-predecessor-decline": {"disposition": "force-supersede"},
+            },
+            repo_root=tmp_path,
+        ).decision_object
+
+        d6_ids = {
+            d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert d6_ids == {"d6", "d6-2"}, (
+            "AC2: force-supersede must re-arm ONLY the named predecessor's "
+            f"d6 id -- 'd6-3' (the other, un-named closed predecessor) must "
+            f"stay declined -- got {d6_ids!r}"
+        )
+
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-3-closed-predecessor-decline" in jp_ids, (
+            "the other closed predecessor's own decline point must still "
+            f"be surfaced (undecided) -- got jp ids {jp_ids!r}"
+        )
+
+    def test_roadmap_baton_primary_with_closed_additional_surfaces_both_declines(
+        self, tmp_path, monkeypatch
+    ):
+        """2026-08-13 re-scope (the roadmap-baton-supersede-gate-reads-only-
+        the-primary-predecessor bug fix): `_build_directives`'s per-
+        predecessor loop is now UNCONDITIONAL -- it is no longer hoisted
+        behind the primary's own roadmap-baton kind, so a closed ADDITIONAL
+        predecessor's own decline is evaluated independently of what the
+        primary is. `brief()` now surfaces BOTH declines here: the primary's
+        own 'd6-roadmap-baton-decline' (unrelated reason -- it is a
+        roadmap-baton) and the additional predecessor's own
+        'd6-2-closed-predecessor-decline' (unrelated reason -- it is
+        closed). Neither predecessor's own d6/d6-N arms, but for two
+        independent reasons, not because one gate blanket-declined the
+        whole fan-in (that blanket behaviour was Leak 2, now fixed)."""
+        _init_repo(tmp_path)
+        predecessor_1 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-10-roadmap-baton-primary.md",
+            [
+                "deliverable_id: DEL-1",
+                "handoff_id: hnd-baton-primary-1a2b64",
+                "kind: roadmap-baton",
+                'predecessor: "none"',
+            ],
+        )
+        predecessor_2 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-11-closed-additional.md",
+            [
+                "deliverable_id: DEL-2",
+                "handoff_id: hnd-closed-additional-1a2b65",
+                "deployment_state: closed",
+                "closed_reason: displaced",
+            ],
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-baton-primary-closed-additional",
+            predecessor_1.name,
+            claimed_at="2026-08-10T09:00:00Z",
+        )
+        self._seed_handoff_claim(
+            tmp_path,
+            "sid-baton-primary-closed-additional",
+            predecessor_2.name,
+            claimed_at="2026-08-10T10:00:00Z",
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-baton-primary-closed-additional")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["additional_predecessors"] == [
+            predecessor_2.relative_to(tmp_path).as_posix()
+        ], "fixture must exercise a genuine fan-in for this scenario to be meaningful"
+
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-2-closed-predecessor-decline" in jp_ids, (
+            "the per-predecessor loop is now unconditional -- the closed "
+            "additional predecessor's own decline must surface regardless "
+            f"of the primary's kind; got jp ids {jp_ids!r}"
+        )
+        assert "d6-roadmap-baton-decline" in jp_ids, (
+            "the primary's own roadmap-baton decline point is unrelated "
+            "and must still fire"
+        )
+
+        d6_ids = {
+            d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert d6_ids == set(), (
+            "no d6 directive arms while the primary roadmap-baton is "
+            f"undecided -- got {d6_ids!r}"
+        )
+
+    def test_all_open_fan_in_brief_is_unchanged(self, tmp_path, monkeypatch):
+        """No-regression guard on the common path: an all-open fan-in never
+        surfaces a closed-predecessor decline point and both d6/d6-2 arm,
+        exactly as before this change."""
+        _init_repo(tmp_path)
+        predecessor_1 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-10-open-a.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-open-a-1a2b62"],
+        )
+        predecessor_2 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-11-open-b.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-open-b-1a2b63"],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-all-open", predecessor_1.name, claimed_at="2026-08-10T09:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-all-open", predecessor_2.name, claimed_at="2026-08-10T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-all-open")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        d6_ids = {
+            d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert d6_ids == {"d6", "d6-2"}
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert not any(jp_id.endswith("-closed-predecessor-decline") for jp_id in jp_ids)
+
+    def test_predecessor_both_roadmap_baton_and_closed_surfaces_only_roadmap_baton_decline(
+        self, tmp_path, monkeypatch
+    ):
+        """Review coordinatorcode-reviewer-e58adcaa Finding P2: a SINGLE
+        predecessor that is simultaneously `kind: roadmap-baton` AND
+        `deployment_state: closed` must NOT surface both decline points
+        unconditionally -- `_build_directives`'s per-predecessor loop checks
+        roadmap-baton first and `continue`s past the closed check while that
+        decline is undecided, so a closed-decline point offered before the
+        roadmap-baton decline is resolved is inert (no directive-consulting
+        code path can reach it yet). Only the roadmap-baton decline point
+        may surface up front; force-superseding it is what makes the closed
+        check -- and its own decline point -- reachable."""
+        _init_repo(tmp_path)
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-10-baton-and-closed.md",
+            [
+                "deliverable_id: DEL-1",
+                "handoff_id: hnd-baton-and-closed-1a2b68",
+                "kind: roadmap-baton",
+                "deployment_state: closed",
+                "closed_reason: displaced",
+                'predecessor: "none"',
+            ],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-baton-and-closed", predecessor.name, claimed_at="2026-08-10T09:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-baton-and-closed")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-roadmap-baton-decline" in jp_ids, (
+            f"the roadmap-baton decline must surface up front -- got {jp_ids!r}"
+        )
+        assert "d6-closed-predecessor-decline" not in jp_ids, (
+            "the closed-decline point is inert while the roadmap-baton "
+            f"decline is undecided -- must not be offered yet, got {jp_ids!r}"
+        )
+        d6_ids = {
+            d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert d6_ids == set(), f"undecided roadmap-baton predecessor must not arm d6 -- got {d6_ids!r}"
+
+        # Force-superseding the roadmap-baton decline re-arms the edge only
+        # far enough to make the closed check reachable -- the closed check
+        # then declines it on its own terms (no closed-decline force-
+        # supersede has been given), so d6 still does not arm, but NOW the
+        # closed-decline point becomes reachable and is surfaced.
+        rearmed = ba.brief(
+            "handoff",
+            "",
+            decisions={"d6-roadmap-baton-decline": {"disposition": "force-supersede"}},
+            repo_root=tmp_path,
+        ).decision_object
+        rearmed_jp_ids = {jp["id"] for jp in rearmed["judgment_points"]}
+        assert "d6-closed-predecessor-decline" in rearmed_jp_ids, (
+            "once the roadmap-baton decline is force-superseded, the closed "
+            f"check -- and its own decline point -- becomes reachable, got {rearmed_jp_ids!r}"
+        )
+        rearmed_d6_ids = {
+            d["id"] for d in rearmed["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert rearmed_d6_ids == set(), (
+            "the closed check still declines to arm d6 absent its own "
+            f"force-supersede -- got {rearmed_d6_ids!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: "the roadmap-baton supersede gate reads only the primary
+# predecessor, so a fan-in leaks both ways"
+# (state/bug-backlog/2026-08-13-the-roadmap-baton-supersede-gate-reads-o-
+# 8a52f62d5380.yaml). `_build_directives`'s roadmap-baton d6 gate was
+# computed ONCE off `lineage["predecessor"]` (the primary alone) and applied
+# to the WHOLE `all_predecessors` loop -- Leak 1: an ordinary primary +
+# roadmap-baton additional armed d6-N against the baton (DR-126 C-1 routed
+# around, op refuses, mint aborts). Leak 2: a roadmap-baton primary declined
+# d6 for EVERY predecessor, silently stranding open siblings. The fix moves
+# the kind check INSIDE the loop, per-predecessor, mirroring
+# `TestClosedPredecessorDeclinesD6PerPredecessor`'s fixture shape exactly.
+# ---------------------------------------------------------------------------
+
+
+class TestRoadmapBatonDeclinesD6PerPredecessor:
+    """Per-predecessor roadmap-baton decline -- the re-scope that closes
+    both fan-in leaks described above. A roadmap-baton predecessor's own
+    d6/d6-N is skipped; every sibling edge in the same fan-in still arms
+    normally, regardless of whether the roadmap-baton is the primary or an
+    additional predecessor."""
+
+    def _seed_handoff_claim(
+        self,
+        repo_root: Path,
+        session_id: str,
+        basename: str,
+        claimed_at: str | None = None,
+    ) -> None:
+        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir.mkdir(parents=True, exist_ok=True)
+        (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
+        if claimed_at is not None:
+            (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+
+    def test_leak_1_ordinary_primary_roadmap_baton_additional_only_declines_the_baton_edge(
+        self, tmp_path, monkeypatch
+    ):
+        """Leak 1 regression: primary is an ordinary session-handoff,
+        additional predecessor is a roadmap-baton. Pre-fix, the primary-only
+        kind check passed (primary is not a baton) and armed d6-2 against
+        the roadmap baton, routing around DR-126 C-1 on the brief side --
+        the op's own choke point then refused and the mint aborted. Post-fix:
+        d6 arms for the ordinary primary, d6-2 does NOT arm for the roadmap
+        baton, and a 'd6-2-roadmap-baton-decline' judgment point is
+        surfaced instead -- the mint completes."""
+        _init_repo(tmp_path)
+        predecessor_1 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-ordinary-primary.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-ordinary-primary-1a2b70"],
+        )
+        predecessor_2 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-roadmap-baton-additional.md",
+            [
+                "deliverable_id: DEL-2",
+                "handoff_id: hnd-baton-additional-1a2b71",
+                "kind: roadmap-baton",
+                'predecessor: "none"',
+            ],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-leak1", predecessor_1.name, claimed_at="2026-08-13T09:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-leak1", predecessor_2.name, claimed_at="2026-08-13T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-leak1")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == predecessor_1.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [
+            predecessor_2.relative_to(tmp_path).as_posix()
+        ]
+
+        d6_ids = {
+            d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert d6_ids == {"d6"}, (
+            "Leak 1: d6 must arm for the ordinary primary and d6-2 must NOT "
+            f"arm for the roadmap-baton additional -- got {d6_ids!r}"
+        )
+
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-2-roadmap-baton-decline" in jp_ids, (
+            "Leak 1: the roadmap-baton additional predecessor's own decline "
+            f"point must be surfaced -- got jp ids {jp_ids!r}"
+        )
+        assert "d6-roadmap-baton-decline" not in jp_ids, (
+            "the ordinary primary is not a roadmap-baton -- no decline "
+            f"point should be surfaced for it -- got jp ids {jp_ids!r}"
+        )
+
+    def test_leak_2_roadmap_baton_primary_still_arms_the_ordinary_additional(
+        self, tmp_path, monkeypatch
+    ):
+        """Leak 2 regression: primary IS a roadmap-baton, additional
+        predecessor is an ordinary open session-handoff. Pre-fix, the
+        `pass` branch declined to arm d6 for EVERY predecessor, silently
+        stranding the ordinary sibling non-terminal forever. Post-fix: d6
+        is skipped for the baton primary (with its own decline point
+        surfaced), but d6-2 STILL ARMS for the ordinary sibling."""
+        _init_repo(tmp_path)
+        predecessor_1 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-roadmap-baton-primary.md",
+            [
+                "deliverable_id: DEL-1",
+                "handoff_id: hnd-baton-primary-1a2b72",
+                "kind: roadmap-baton",
+                'predecessor: "none"',
+            ],
+        )
+        predecessor_2 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-ordinary-additional.md",
+            ["deliverable_id: DEL-2", "handoff_id: hnd-ordinary-additional-1a2b73"],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-leak2", predecessor_1.name, claimed_at="2026-08-13T09:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-leak2", predecessor_2.name, claimed_at="2026-08-13T10:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-leak2")
+
+        decision = ba.brief("handoff", "", repo_root=tmp_path).decision_object
+        lineage = decision["artifact"]["lineage"]
+        assert lineage["predecessor"] == predecessor_1.relative_to(tmp_path).as_posix()
+        assert lineage["additional_predecessors"] == [
+            predecessor_2.relative_to(tmp_path).as_posix()
+        ]
+
+        d6_ids = {
+            d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert d6_ids == {"d6-2"}, (
+            "Leak 2: d6 must NOT arm for the roadmap-baton primary but d6-2 "
+            f"must still arm for the ordinary sibling -- got {d6_ids!r}"
+        )
+
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-roadmap-baton-decline" in jp_ids, (
+            "the roadmap-baton primary's own decline point must be "
+            f"surfaced -- got jp ids {jp_ids!r}"
+        )
+        assert "d6-2-roadmap-baton-decline" not in jp_ids, (
+            "the ordinary additional predecessor is not a roadmap-baton -- "
+            f"no decline point should be surfaced for it -- got jp ids {jp_ids!r}"
+        )
+
+    def test_force_supersede_rearms_only_the_named_roadmap_baton_edge(self, tmp_path, monkeypatch):
+        """Per-predecessor `force-supersede` must resolve ONLY the edge
+        whose id it names, never every d6 in the fan-in.
+
+        Review coverage gap (2026-08-13): a single-roadmap-baton fixture
+        cannot observe isolation -- the ordinary primary's d6 arms
+        regardless because it was never gated at all, so a defect that
+        resolved `force-supersede` globally across every
+        `*-roadmap-baton-decline` id would pass identically. Use TWO
+        roadmap-baton predecessors, name only one, and assert the other's
+        own edge stays declined and its own decline point still surfaces."""
+        _init_repo(tmp_path)
+        predecessor_1 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-ordinary-primary-fs.md",
+            ["deliverable_id: DEL-1", "handoff_id: hnd-ordinary-primary-fs-1a2b74"],
+        )
+        predecessor_2 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-roadmap-baton-additional-fs.md",
+            [
+                "deliverable_id: DEL-2",
+                "handoff_id: hnd-baton-additional-fs-1a2b75",
+                "kind: roadmap-baton",
+                'predecessor: "none"',
+            ],
+        )
+        predecessor_3 = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-roadmap-baton-additional2-fs.md",
+            [
+                "deliverable_id: DEL-3",
+                "handoff_id: hnd-baton-additional2-fs-1a2b77",
+                "kind: roadmap-baton",
+                'predecessor: "none"',
+            ],
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-fs", predecessor_1.name, claimed_at="2026-08-13T09:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-fs", predecessor_2.name, claimed_at="2026-08-13T10:00:00Z"
+        )
+        self._seed_handoff_claim(
+            tmp_path, "sid-fs", predecessor_3.name, claimed_at="2026-08-13T11:00:00Z"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-fs")
+
+        decision = ba.brief(
+            "handoff",
+            "",
+            decisions={"d6-2-roadmap-baton-decline": {"disposition": "force-supersede"}},
+            repo_root=tmp_path,
+        ).decision_object
+
+        d6_ids = {
+            d["id"] for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"
+        }
+        assert d6_ids == {"d6", "d6-2"}, (
+            "force-supersede named only 'd6-2-roadmap-baton-decline' -- it "
+            f"must arm that edge and the already-ordinary primary, but NOT "
+            f"'d6-3' (the other, un-named roadmap-baton edge) -- got {d6_ids!r}"
+        )
+
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-3-roadmap-baton-decline" in jp_ids, (
+            "the other roadmap-baton predecessor's own decline point must "
+            f"still be surfaced (undecided) -- got jp ids {jp_ids!r}"
+        )
+
+    def test_single_predecessor_roadmap_baton_brief_is_byte_identical(self, tmp_path):
+        """Bare-id preservation: a single-predecessor roadmap-baton brief
+        (no fan-in at all) must still surface the bare
+        'd6-roadmap-baton-decline' id, unchanged from before this fix --
+        mirrors `TestC3RoadmapBatonPredecessorDeclinesD6`'s own fixture."""
+        artifact = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-13-solo-roadmap-baton-predecessor.md",
+            [
+                "deliverable_id: DEL-SOLO-BATON",
+                "handoff_id: hnd-solo-baton-1a2b76",
+                "kind: roadmap-baton",
+                'predecessor: "none"',
+            ],
+        )
+        decision = ba.brief("handoff", str(artifact), repo_root=tmp_path).decision_object
+        clis = {d["cli"] for d in decision["directives"]}
+        assert "handoff.supersede_predecessor" not in clis
+
+        jp_ids = {jp["id"] for jp in decision["judgment_points"]}
+        assert "d6-roadmap-baton-decline" in jp_ids, (
+            "the bare 'd6-roadmap-baton-decline' id must be preserved for a "
+            f"single-predecessor (primary-only) brief -- got jp ids {jp_ids!r}"
+        )
+        assert not any(
+            jp_id.endswith("-roadmap-baton-decline") and jp_id != "d6-roadmap-baton-decline"
+            for jp_id in jp_ids
+        ), f"a single-predecessor brief must not surface any numbered variant -- got {jp_ids!r}"

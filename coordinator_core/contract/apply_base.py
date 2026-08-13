@@ -60,6 +60,20 @@ Negative-spec:
       site once that consumer has landed here — feed the divergence back
       into this module's own parameters (DR-092; see C6/C8's
       authorization to widen, not bolt on).
+    - Do NOT reintroduce a per-item `add`/`commit` loop into
+      `scoped_commit` — it takes exactly ONE `artifact_rel_path` and stays
+      O(1) at 2 `.git/index.lock` acquisitions per call BY CONSTRUCTION
+      (one `add`, one `commit`, both `run_with_lock_retry`-wrapped),
+      never scaling with a caller-side item count (AC-7,
+      archive/specs/2026-08/2026-08-13-commit-seams-inherit-lock-reap-and-retry.md
+      chunk C5 — the burst-source table's `contract/apply_base.py` row is
+      already O(1) and has no further reduction available; a caller
+      needing to commit N items loops OUTSIDE this function, calling it
+      once per artifact, and is the one responsible for its own
+      acquisition-count discipline at that call site — see
+      `backlog_grind_assemble/apply.py::_dispatch_commit_per_item`'s own
+      `_stage_paths` pre-pass for that pattern). Pinned by
+      `coordinator_core/contract/tests/test_apply_base_lock_acquisition_pin.py`.
     - Do NOT build a general transaction manager, two-phase commit, or
       journal here — `compensators` (2026-07-29, `baton_assemble`'s
       orphaned-scaffold finding) is a single, narrow reaction to

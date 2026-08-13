@@ -208,6 +208,11 @@ class TestComputeReplyClosurePredicate:
         )
         assert closure["verdict"] == "evidenced"
         assert closure["candidates"] == ["cross-repo/inbox/answers.md"]
+        # Candidates are relative to the SENDER's tree; the rendered citation
+        # has to say so, or the reader searches its own cross-repo/ in vain.
+        assert closure["sender_root"] == str(sender_root)
+        _jps, narration, _next_move = pa._render_reply_closure(closure, inbound_basename, "Base.", "Next.")
+        assert f"{sender_root}/cross-repo/inbox/answers.md" in narration
 
     def test_reply_present_in_sharded_archive_subdir_is_evidenced(self, tmp_path, monkeypatch):
         """`cross-repo/archive/YYYY-MM/...` sharding — must be walked

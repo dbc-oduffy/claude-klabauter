@@ -1373,9 +1373,9 @@ class TestComputeIndexAgreesWithActTimeResolver:
         compute_time_index = _index_by_id(collected)
         compute_time_blocker = compute_time_index.get(blocker_handoff_id)
 
-        assert act_time_state == "shipped"
+        assert act_time_state.deployment_state == "shipped"
         assert compute_time_blocker is not None
-        assert compute_time_blocker["deployment_state"] == act_time_state
+        assert compute_time_blocker["deployment_state"] == act_time_state.deployment_state
         assert compute_time_blocker["handoff_id"] == blocker_handoff_id
 
 

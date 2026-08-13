@@ -52,6 +52,7 @@ from coordinator_core.bash_guards._helpers import (
 )
 from coordinator_core.guard_advisory_counter import (
     record_advisory_fire as _record_advisory_fire,
+    record_deny_fire as _record_deny_fire,
 )
 
 _PKG_NAME = __name__.rsplit(".", 1)[0]  # "coordinator_core.write_guards"
@@ -223,7 +224,15 @@ def evaluate(
         if out is not None:
             session_id = payload.get("session_id") or ""
             if session_id and _consume_unlock(session_id, g.name):
+                try:
+                    _record_deny_fire(g.name, session_id, True, payload.get("cwd"))
+                except Exception:
+                    pass
                 continue
+            try:
+                _record_deny_fire(g.name, session_id, False, payload.get("cwd"))
+            except Exception:
+                pass
             agent_id = payload.get("agent_id") or ""
             return _annotate_unlock(
                 out,

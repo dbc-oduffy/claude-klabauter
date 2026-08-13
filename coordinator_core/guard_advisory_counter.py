@@ -38,6 +38,28 @@ own `try/except Exception: pass`, placed AFTER the guard's own return value
 is already decided, so a failed write can only ever fail to produce a
 record; it never turns an advisory into a deny and never reaches the
 caller.
+
+DENY-PATH COUNTER (`docs/plans/2026-08-13-em-exercisable-in-band-grant-
+route.md` chunk C6): `record_advisory_fire`'s 5,569 recorded fires say
+nothing about which HARD-denies actually obstruct people, since both call
+sites above sit on the advisory path only. `record_deny_fire` mirrors it
+for the deny path, at the two engine call sites where a hard-deny envelope
+(`permissionDecision == "deny"`) is actually about to be returned or
+cleared: `bash_guards/dispatch.py::evaluate_payload_json` (the in-session-
+unlock seam around `_consume_unlock`) and `write_guards/engine.py::evaluate`
+(its own hard-deny-phase loop, same seam). Same append-only per-session
+file, a sibling filename (`deny-fire-counts.jsonl`) so the two record
+streams never interleave, same no-op-on-unresolvable-session-id and
+raise-on-write-failure contract as `record_advisory_fire` above — callers
+wrap the call in their own `try/except Exception: pass`, placed AFTER the
+guard's own return/continue decision is already final.
+
+KEEP IT COUNT-AND-LOG, NEVER AN ENFORCEMENT INPUT. Per `docs/wiki/guard-
+messaging.md`: "A guard's advisory/audit trail ... must never be read back
+to silently convert a subsequent deny into an allow." Neither this module
+nor either call site reads `deny-fire-counts.jsonl` back — it is written,
+never consulted, by any code in this repo. Widening that would need a
+fresh PM ruling, same as `record_advisory_fire`'s own record-shape freeze.
 """
 
 from __future__ import annotations
@@ -50,6 +72,7 @@ from typing import Optional
 from coordinator_core.subagent_sandbox import resolve_git_root
 
 _COUNTS_FILENAME = "advisory-fire-counts.jsonl"
+_DENY_COUNTS_FILENAME = "deny-fire-counts.jsonl"
 
 
 def record_advisory_fire(guard_name: str, session_id: str, cwd: Optional[str] = None) -> None:
@@ -75,5 +98,48 @@ def record_advisory_fire(guard_name: str, session_id: str, cwd: Optional[str] = 
     path = Path(git_root) / "state" / "subagent-share" / session_id / _COUNTS_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"guard": guard_name, "at": datetime.now(timezone.utc).isoformat()}
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def record_deny_fire(
+    guard_name: str, session_id: str, cleared: bool, cwd: Optional[str] = None
+) -> None:
+    """Append one `{"guard", "session", "at", "cleared"}` record for a hard-deny firing.
+
+    The deny-path mirror of `record_advisory_fire` above (see module
+    docstring's DENY-PATH COUNTER paragraph) — written to a sibling
+    per-session file, `deny-fire-counts.jsonl`, so the two streams never
+    interleave. `cleared` distinguishes an in-session-unlock-cleared firing
+    (the deny never reached the caller) from an uncleared one (the deny
+    envelope was actually returned) — AC-8's "distinguishing cleared from
+    uncleared".
+
+    Same no-op-on-unresolvable-session-id posture as `record_advisory_fire`
+    (empty/unresolvable `session_id`, or an unresolvable git root, both
+    degrade to a silent no-op rather than inventing a fallback shared
+    path — the same concurrency hazard that design avoids).
+
+    May raise on an actual write failure (unwritable directory, disk full);
+    callers are responsible for the swallow-and-continue, exactly as they
+    already are for `record_advisory_fire` (see module docstring).
+
+    COUNT-AND-LOG ONLY: this function only ever appends. Nothing in this
+    module, or either call site, reads `deny-fire-counts.jsonl` back — see
+    module docstring's KEEP IT COUNT-AND-LOG paragraph.
+    """
+    if not session_id:
+        return
+    git_root = resolve_git_root(cwd)
+    if not git_root:
+        return
+    path = Path(git_root) / "state" / "subagent-share" / session_id / _DENY_COUNTS_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "guard": guard_name,
+        "session": session_id,
+        "at": datetime.now(timezone.utc).isoformat(),
+        "cleared": bool(cleared),
+    }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")

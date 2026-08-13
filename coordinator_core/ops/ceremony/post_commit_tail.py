@@ -364,6 +364,40 @@ def _commit_and_push_origin_stub_close(
     return follow_up_sha, None, push_status, None
 
 
+#: Cap on the number of `blocking_children` paths rendered inline into a
+#: skip-entry string — a wide fan-out (many live children) must not produce
+#: an unreadable one-line ceremony entry.
+_MAX_RENDERED_BLOCKING_CHILDREN = 3
+
+
+def _render_skip_entry(s: dict) -> str:
+    """Render one `handoff.close_origin_stub` skip entry as a
+    `roadmap:stub:reason` ceremony line, extended with the guard's own
+    `blocking_children`/`guard_error` fields when present, so the two
+    guard-decline states (live children vs. indeterminate/fail-closed) —
+    which demand opposite operator responses — survive past this string
+    join instead of both reading as the bare `roadmap:stub:reason` prefix.
+
+    Keeps the existing `roadmap:stub:reason` prefix shape intact (downstream
+    readers/tests key on it); an entry with neither new field (e.g.
+    `no-match`/`ambiguous`/`mutation-failed`) renders exactly as before.
+    """
+    prefix = f"{s.get('roadmap_id')}:{s.get('stub_id')}:{s.get('reason')}"
+    children = s.get("blocking_children") or []
+    guard_error = s.get("guard_error")
+    if not children and not guard_error:
+        return prefix
+    bits = [prefix]
+    if children:
+        shown = ", ".join(children[:_MAX_RENDERED_BLOCKING_CHILDREN])
+        remaining = len(children) - _MAX_RENDERED_BLOCKING_CHILDREN
+        more = f" (+{remaining} more)" if remaining > 0 else ""
+        bits.append(f"blocking: {shown}{more}")
+    if guard_error:
+        bits.append(f"guard_error: {guard_error}")
+    return " ".join(bits)
+
+
 async def _run_origin_stub_close(
     worktree_root: Path,
     common_dir: Path,
@@ -374,6 +408,7 @@ async def _run_origin_stub_close(
     *,
     push_mode: str = PUSH_MODE_SYNC,
     sid: Optional[str] = None,
+    delivery_proof: Optional[dict] = None,
 ) -> dict:
     """Close the origin spinoff/spinoff-roadmap stub this session shipped
     (step 5d), composing the standalone `handoff.close_origin_stub` op via
@@ -425,6 +460,18 @@ async def _run_origin_stub_close(
     docstring) means this call is what lets the closed stub carry a
     `shipped_in` reference at all, closing a gap the bash could not.
 
+    `delivery_proof` (optional; threaded verbatim from
+    `close_out_and_stamp._reach_post_commit_tail_stub_close`, the ONLY caller
+    with a delivery proof to give — see that function's own docstring) is
+    forwarded unchanged into EVERY `close_origin_stub_handler` call this
+    step makes (one per `initial_consumed` entry, same as `plan_path`/`sha`)
+    -- `handoff.close_origin_stub`'s own `delivery_proof` param docs the
+    completeness/stub-match conditions that decide whether it actually
+    closes anything; this function never inspects or validates it itself,
+    same "compose, don't reimplement" posture as the rest of this step.
+    `None` (the `wsc_tail`-invoked call sites, which have no delivery proof
+    of their own) preserves today's guard-only behaviour exactly.
+
     Returns a tail_ops-shaped `{acted, skipped, failed}` dict (never
     `failed_critical` -- see `wsc_tail.py`'s own step-6 exit-code rationale).
     """
@@ -447,10 +494,14 @@ async def _run_origin_stub_close(
             continue
 
         try:
-            result = await close_origin_stub_handler(
-                {"plan_path": plan_path, "handoff_path": handoff_path, "sha": committed_sha},
-                common_dir,
-            )
+            call_params: dict = {
+                "plan_path": plan_path,
+                "handoff_path": handoff_path,
+                "sha": committed_sha,
+            }
+            if delivery_proof is not None:
+                call_params["delivery_proof"] = delivery_proof
+            result = await close_origin_stub_handler(call_params, common_dir)
         except Exception as exc:  # noqa: BLE001 -- soft-fail, never raise past this tail step
             _LOG.warning("post_commit_tail: handoff.close_origin_stub raised %s: %s", type(exc).__name__, exc)
             failed.append(f"{OP_CLOSE_ORIGIN_STUB}: {exc}")
@@ -472,8 +523,7 @@ async def _run_origin_stub_close(
             # must not appear twice in the unioned follow-up commit.
             closed_by_stub[c["stub_path"]] = c
         skipped.extend(
-            f"{s.get('roadmap_id')}:{s.get('stub_id')}:{s.get('reason')}"
-            for s in (result.get("skipped") or [])
+            _render_skip_entry(s) for s in (result.get("skipped") or [])
         )
 
     if not closed_by_stub:
@@ -639,6 +689,7 @@ async def run(
     push_mode: str = PUSH_MODE_SYNC,
     timing: Optional[Any] = None,
     cascade_handler: Optional[Callable[[dict, Path], Awaitable[dict]]] = None,
+    delivery_proof: Optional[dict] = None,
 ) -> PostCommitTailOutcome:
     """Compose steps 5c (post-commit consumed-handoff stamp+ship), 5d
     (origin-stub close), and C6b's second trigger (deliverable cascade) into
@@ -647,7 +698,11 @@ async def run(
     must not wrap this in a ceremony-wide lock.
 
     `close_origin_stub_handler` is caller-injected (see module docstring
-    "Origin-stub-close handler injection"). `cascade_handler` is OPTIONAL --
+    "Origin-stub-close handler injection"). `delivery_proof` is OPTIONAL --
+    forwarded verbatim into `_run_origin_stub_close` (see its own docstring);
+    `None` (every `wsc_tail`-invoked call site, which has no proof of its
+    own) preserves today's guard-only behaviour exactly. `cascade_handler`
+    is OPTIONAL --
     when omitted, it is resolved here via `get_op_handler(OP_DELIVERABLE_CASCADE)`
     (never re-implemented), so existing callers (`wsc_tail.py`) that predate
     C6b need no call-site change. `timing`, when supplied, records the SAME
@@ -684,6 +739,7 @@ async def run(
             close_origin_stub_handler,
             push_mode=push_mode,
             sid=sid,
+            delivery_proof=delivery_proof,
         )
 
     resolved_cascade_handler = cascade_handler

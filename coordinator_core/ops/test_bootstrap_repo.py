@@ -615,3 +615,160 @@ def test_validate_target_root_op_handler_returns_contract_shape(tmp_path):
 def test_validate_target_root_op_handler_requires_target_root_param():
     with pytest.raises(ValueError):
         _validate_target_root_op({})
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 — commit staging: acquisition count + lock-retry (AC-7 / AC-8,
+# docs/plans/2026-08-13-commit-seams-inherit-lock-reap-and-retry.md C6)
+# ---------------------------------------------------------------------------
+
+
+def _multi_entry_coordinator_root(tmp_path, n: int, name: str = "fake-coordinator-multi") -> str:
+    """Same shape as `_make_coordinator_root`, but the manifest scaffolds
+    `n` distinct files -- every entry maps to a distinct destination so
+    Stage 5's staging set genuinely has `n` untracked files, not one."""
+    entries = "\n".join(
+        textwrap.dedent(
+            f"""\
+            - path: state/scaffolded-{i}.md
+              creation: eager
+              schema: null
+              gitkeep: false
+              readme: null
+              template: templates/orientation_cache.md
+            """
+        )
+        for i in range(n)
+    )
+    manifest_body = "scaffold:\n" + textwrap.indent(entries, "  ")
+    return _make_coordinator_root(tmp_path, manifest_body=manifest_body, name=name)
+
+
+def test_stage_five_batches_add_into_one_call_not_per_file(tmp_path, monkeypatch):
+    """AC-7 — counted demonstration: N scaffolded files staged for the single
+    bootstrap commit must cost ONE `git add` subprocess call, not N+1."""
+    target = tmp_path / "target"
+    target.mkdir()
+    _init_git(str(target))
+    _baseline_commit(str(target))
+
+    monkeypatch.setenv("COORDINATOR_ROOT", _multi_entry_coordinator_root(tmp_path, 5))
+
+    import coordinator_core.ops.bootstrap_repo as bootstrap_repo
+
+    real_run = bootstrap_repo.subprocess.run
+    add_calls: list[list[str]] = []
+
+    def _counting_run(cmd, *args, **kwargs):
+        if len(cmd) >= 2 and cmd[0] == "git" and "add" in cmd:
+            add_calls.append(list(cmd))
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(bootstrap_repo.subprocess, "run", _counting_run)
+
+    rc = main(["--root", str(target), "--non-interactive"])
+    assert rc == 0
+    assert len(add_calls) == 1, (
+        f"expected ONE batched `git add`, got {len(add_calls)}: {add_calls}"
+    )
+    for i in range(5):
+        assert f"scaffolded-{i}.md" in " ".join(add_calls[0])
+        assert (target / "state" / f"scaffolded-{i}.md").is_file()
+
+
+def test_batch_paths_by_byte_budget_splits_on_bytes_not_count():
+    """Byte-budget regression (AC-7; Review: code-reviewer P2). Uses
+    realistically long paths (80+ chars, matching this repo's own
+    `state/bug-backlog/<date>-<slug>-<hash>.yaml`-shaped scaffold output) --
+    a short-synthetic-name test would pass under both the old flat count of
+    500 and the new byte budget and prove nothing about which bound is
+    actually driving the split.
+
+    400 such paths sum to well under the old `_STAGE_BATCH_SIZE = 500`
+    count (so the old code would have emitted ONE oversized `git add`), but
+    comfortably exceeds `_STAGE_BATCH_MAX_ARGV_BYTES` -- proving the new
+    code splits on cumulative bytes before it would ever split on count.
+    """
+    from coordinator_core.ops.bootstrap_repo import (
+        _STAGE_BATCH_MAX_ARGV_BYTES,
+        _argv_bytes,
+        _batch_paths_by_byte_budget,
+    )
+
+    root = "/home/example-user/some/target/repo"
+    long_paths = [
+        f"state/bug-backlog/2026-08-13-index-resync-failed-archive-and-commit-{i:04d}-e4ef4012149f.yaml"
+        for i in range(400)
+    ]
+
+    batches = _batch_paths_by_byte_budget(long_paths, root)
+
+    # Byte budget forces a split well before the old flat count of 500 would.
+    assert len(batches) > 1
+    assert sum(len(b) for b in batches) == 400
+    # No round-trip data loss across the split.
+    assert [p for batch in batches for p in batch] == long_paths
+
+    base = _argv_bytes(["git", "-C", root, "add", "--"])
+    for batch in batches:
+        composed = base + sum(len(p.encode("utf-8")) + 1 for p in batch)
+        assert composed <= _STAGE_BATCH_MAX_ARGV_BYTES
+
+
+def test_batch_paths_by_byte_budget_never_drops_an_oversized_single_path():
+    """A single path that alone exceeds the byte budget must still be
+    attempted in its own one-path batch, never silently dropped."""
+    from coordinator_core.ops.bootstrap_repo import (
+        _STAGE_BATCH_MAX_ARGV_BYTES,
+        _batch_paths_by_byte_budget,
+    )
+
+    root = "/home/example-user/some/target/repo"
+    huge_path = "state/" + ("x" * (_STAGE_BATCH_MAX_ARGV_BYTES + 500)) + ".md"
+    paths = ["state/short.md", huge_path, "state/also-short.md"]
+
+    batches = _batch_paths_by_byte_budget(paths, root)
+
+    all_paths = [p for batch in batches for p in batch]
+    assert all_paths == paths
+    assert any(batch == [huge_path] for batch in batches)
+
+
+def test_stage_five_add_retries_through_lock_contention(tmp_path, monkeypatch):
+    """AC-8 — retry composed locally in `bootstrap_repo._git` (see its own
+    docstring for the rejected `git_native` route): a transient
+    `.git/index.lock` collision on the staging `add` is retried and the
+    bootstrap commit still lands, rather than aborting on the first
+    collision."""
+    target = tmp_path / "target"
+    target.mkdir()
+    _init_git(str(target))
+    _baseline_commit(str(target))
+
+    import coordinator_core.ops.bootstrap_repo as bootstrap_repo
+
+    real_run = bootstrap_repo.subprocess.run
+    attempts = {"add": 0}
+
+    def _flaky_run(cmd, *args, **kwargs):
+        if len(cmd) >= 2 and cmd[0] == "git" and "add" in cmd:
+            attempts["add"] += 1
+            if attempts["add"] < 3:
+                return subprocess.CompletedProcess(
+                    cmd,
+                    returncode=128,
+                    stdout="",
+                    stderr=(
+                        f"fatal: Unable to create '{target}/.git/index.lock': "
+                        "File exists."
+                    ),
+                )
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(bootstrap_repo.subprocess, "run", _flaky_run)
+
+    rc = main(["--root", str(target), "--non-interactive"])
+    assert rc == 0
+    assert attempts["add"] == 3, "expected exactly 2 lock-contention retries before success"
+    assert _commit_subject(str(target)) == "chore(coordinator): bootstrap"
+    assert (target / "state" / "orientation_cache.md").is_file()

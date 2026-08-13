@@ -58,9 +58,27 @@ Negative-spec:
       makes the join collision-free by construction. Do not use a hash
       either — this path is typed by hand by a human operator, and
       readability is load-bearing for that.
-    - Do NOT write this sentinel from agent-reachable code. It exists to be
-      typed by a human operator; this module only resolves and consumes the
-      path, it never creates one.
+    - This module itself still NEVER creates a sentinel — it only resolves
+      and consumes the path (that part of the old rule stands unchanged).
+      What is retired, by PM ruling 2026-08-13
+      (docs/plans/2026-08-13-em-exercisable-in-band-grant-route.md), is the
+      former absolute claim that NO agent-reachable code may ever write this
+      sentinel: ``coordinator_core.session.em_guard_grant`` is now a
+      sanctioned EM-side writer, but only for the two guard names in its own
+      ``_GRANTABLE_GUARDS`` allowlist (``bump-foreign-repo-write``,
+      ``bump-outside-repo-write``) — not a general carve-out for this
+      module or for agent-reachable code at large. That write path is
+      gated upstream by two guards, not by anything in this module:
+      ``bash_guards/block_subagent_guard_grant.py`` blocks the Bash
+      acquisition channel, and ``write_guards/block_subagent_guard_grant_write.py``
+      blocks the Write-tool channel against BOTH grant artifacts — the
+      durable record AND this sentinel path itself, the latter being the
+      load-bearing leg, since this sentinel is what actually clears a
+      guard. Both restrict the write to the EM actor, never a dispatched
+      subagent. For
+      every guard name outside that two-item tier, and for every actor other
+      than the gated EM-side writer, hand-typing by a human operator remains
+      the only route to this sentinel.
     - Do NOT re-inline the sentinel's filename shape, its drop location, or
       the per-firing ``session_id``/``guard_name`` values into
       ``annotate_deny``'s rendered text. This was tried once (2026-08-12)
@@ -427,32 +445,29 @@ def annotate_deny(
        chunk reintroduces a narrower render gated on the same audience
        decision) but its result no longer branches into any render step.
 
+    10. (2026-08-13, staff-eng review, B8 leg (c)/AC-6) Item 9 above kept
+        ~20 lines of identity resolution live-but-unbranching as "cheap
+        insurance if a future chunk reintroduces a narrower render." Two
+        costs review-integrator agreed outweigh that insurance: (1) it ran
+        a backpointer-capable resolver on every deny path for zero effect;
+        (2) it made AC-6 ("annotate_deny is reachable by the register
+        lint") vacuous — the lint reached a render that was unconditionally
+        empty, the exact "NO GATE GOES VACUOUS" trap C7 names. The body is
+        now the honest DECIDABLE BRANCH: `return out`, unmodified, always.
+        The ~6 lines of resolution logic are trivially reconstructible from
+        `resolves_em_audience`/`resolve_subagent_identity` if a future
+        render appears; AC-6 is withdrawn in the plan text (see this
+        plan's AC table) rather than kept pointed at a seam that no longer
+        renders.
+
     Never raises. A malformed envelope is returned unchanged: this function
     only ever runs on a deny that has already been decided, and an
     augmentation that crashed would turn that settled deny into an engine
     crash.
     """
-    # Item 9 (2026-08-13, C4d): every code path below returns `out`
-    # unchanged now -- kept intact (rather than short-circuited at the top)
-    # so the audience-resolution logic stays live and cheap-to-reinstate if
-    # a future chunk finds a render narrow enough to grade B8-clean; today
-    # none does (see item 9's own docstring paragraph), so no branch below
-    # ever mutates `out`.
-    if not session_id:
-        return out
-    try:
-        from coordinator_core.session.identity import (
-            resolve_subagent_identity,
-            resolves_em_audience,
-        )
-
-        if resolve_subagent_identity(agent_id, session_id):
-            return out
-
-        payload = {"session_id": session_id, "agent_id": agent_id}
-        if not resolves_em_audience(payload, git_root):
-            return out
-    except Exception:
-        return out
-    del doc_display  # unused now that no render step names it (item 9)
+    # Item 10 (2026-08-13, staff-eng review): every call returns `out`
+    # unmodified -- no render step exists for any audience (item 9), so the
+    # identity-resolution logic items 5/8/9 kept as "cheap insurance" has
+    # been removed rather than run for zero effect on every deny.
+    del session_id, guard_name, doc_display, agent_id, git_root
     return out

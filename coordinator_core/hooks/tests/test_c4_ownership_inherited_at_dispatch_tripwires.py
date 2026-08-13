@@ -541,15 +541,30 @@ class TestAC5AllowOrphansDoesNotWiden:
 
 _CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.py"
 
-#: (repo-relative POSIX path, enclosing def qualname). Verified 2026-08-08
-#: against this repo's HEAD via `grep -rn "claim_index" --include='*.py' .`:
-#: the only actual `claim_index.lookup(...)` invocation outside
-#: `claim_index.py` itself and outside any tests/ path.
+#: (repo-relative POSIX path, enclosing def qualname). Re-verified 2026-08-13
+#: against this repo's HEAD via `grep -rn "claim_index\.lookup(" --include=
+#: '*.py' coordinator_core/`, after two changes landed by
+#: docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-that-
+#: rejects-it.md: chunk C1 DELETED `_check_claim_conflicts` (the enforcing
+#: sink-side gate this pin used to name -- path-touch claims are now
+#: advisory swimlane guidance, not an enforcement primitive, PM ruling) and
+#: chunk C1d ADDED `_warn_recent_edits` (a WARN-only, never-gating read of
+#: `.edit_ts`) in its place. The two actual `claim_index.lookup(...)`
+#: invocations outside `claim_index.py` itself and outside any tests/ path
+#: are therefore `_warn_recent_edits` and `claims._clear_path_claim_if_dead`
+#: (the dead-holder release path for the PATH-TOUCH claim plane, landed per
+#: cross-repo/archive/2026-08-11-example-doctrine-repo-em-dead-claim-on-a-non-plan-
+#: artifact-has-no-clear-path.md) -- the decision record this pin's own
+#: docstring asks for before widening.
 _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
     {
         (
             "coordinator_core/ops/ceremony/scoped_git_commit.py",
-            "_check_claim_conflicts",
+            "_warn_recent_edits",
+        ),
+        (
+            "coordinator_core/session/claims.py",
+            "_clear_path_claim_if_dead._claimants",
         ),
     }
 )

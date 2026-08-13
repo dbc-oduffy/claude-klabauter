@@ -243,7 +243,7 @@ import asyncio
 import datetime
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import yaml
 
@@ -2460,22 +2460,49 @@ def _insert_fm_array_field(fm: str, key: str, items: list, after_key: str) -> st
 # ---------------------------------------------------------------------------
 
 
-#: Sentinel returned by _resolve_blocker_deployment_state when more than one
-#: handoff resolves the same blocker_id (stub_id/handoff_id uniqueness
-#: invariant violated) — deliberately NOT a real deployment_state value, so
-#: the `!= "shipped"` check in _gate_cascade_clear fails loud on it exactly
-#: like any other non-shipped/unresolvable state (Slice-B review Finding 4).
+#: Sentinel returned by _resolve_blocker_deployment_state (as the deployment_state
+#: field) when more than one handoff resolves the same blocker_id (stub_id/
+#: handoff_id uniqueness invariant violated) — deliberately NOT a real
+#: deployment_state value, so `_blocker_clears_gate` falls through to its
+#: catch-all non-clearing branch exactly like any other unresolvable state
+#: (Slice-B review Finding 4).
 _AMBIGUOUS_BLOCKER_SENTINEL = "<ambiguous-duplicate-id>"
 
+#: Cap on the number of `continued_into` hops `_blocker_clears_gate` will
+#: follow before failing loud — a chain this long is itself a data problem,
+#: not a legitimate succession record.
+_MAX_CONTINUED_CHAIN_DEPTH = 16
 
-def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> Optional[str]:
-    """Independently re-resolve a blocker id's LIVE deployment_state at mutation time.
+
+class _BlockerState(NamedTuple):
+    """A blocker handoff's LIVE terminal-relevant fields, as of one disk re-scan.
+
+    `deployment_state` is `None` when no handoff resolves the id at all, or
+    `_AMBIGUOUS_BLOCKER_SENTINEL` when more than one distinct handoff does.
+    """
+
+    deployment_state: Optional[str]
+    closed_reason: Optional[str]
+    continued_into: Optional[str]
+
+
+_UNRESOLVED_BLOCKER_STATE = _BlockerState(None, None, None)
+
+
+def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> _BlockerState:
+    """Independently re-resolve a blocker id's LIVE terminal-relevant fields at mutation time.
 
     Act-time re-verification (the Staff Engineer F0): scans state/handoffs/ (live) first, then
-    archive/handoffs/ (shipped/abandoned blockers are commonly archived), for a
-    handoff whose stub_id or handoff_id matches blocker_id. Returns the matched
-    handoff's deployment_state, or None if no handoff resolves the id at all
-    (unresolvable id — treated as a stale/invalid claim by the caller).
+    archive/handoffs/ (shipped/abandoned/closed/continued blockers are commonly
+    archived), for a handoff whose stub_id or handoff_id matches blocker_id.
+    Returns a `_BlockerState` carrying deployment_state, closed_reason, and
+    continued_into together — DR-084 widened the set of terminal deployment_states
+    a blocker may hold (shipped/closed/continued/abandoned), and clearing a
+    `closed` or `continued` blocker needs those extra fields to decide, so this
+    single disk re-scan collects them all rather than adding a second scan per
+    blocker. `_UNRESOLVED_BLOCKER_STATE` (all fields None) is returned when no
+    handoff resolves the id at all (unresolvable id — treated as a stale/invalid
+    claim by the caller).
 
     Per-root discrimination: state/handoffs/ is scanned non-recursively — it has
     a sibling state/handoffs/.archive/ holding stale local copies that must NOT
@@ -2484,7 +2511,8 @@ def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> Option
     handoffs/ is month-nested (archive/handoffs/YYYY-MM/<file>, per
     handoff_archive_dest) and IS scanned recursively — otherwise every
     shipped-and-archived blocker resolves to None and the caller
-    (_gate_cascade_clear) wedges forever believing the blocker never shipped.
+    (_gate_cascade_clear, via _blocker_clears_gate) wedges forever believing the
+    blocker never shipped.
 
     Never trusts a caller-supplied verdict — this function re-reads disk fresh
     on every call, closing the shared-worktree carry-forward-laundering race
@@ -2494,15 +2522,16 @@ def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> Option
     is documented elsewhere as globally-unique, but this function has no way
     to enforce that invariant on its own. Collects ALL matches instead of
     returning on the first hit; if more than one DISTINCT handoff resolves the
-    same blocker_id, the claim is ambiguous/unresolvable — returns
-    `_AMBIGUOUS_BLOCKER_SENTINEL` (never "shipped") so the caller's act-time
-    re-verification fails loud rather than silently trusting glob-sort order.
+    same blocker_id, the claim is ambiguous/unresolvable — returns a
+    `_BlockerState` whose deployment_state is `_AMBIGUOUS_BLOCKER_SENTINEL`
+    (never a real terminal value) so the caller's act-time re-verification
+    fails loud rather than silently trusting glob-sort order.
     """
     search_roots = [
         (worktree / "state" / "handoffs", False),
         (worktree / "archive" / "handoffs", True),
     ]
-    matches: List[Optional[str]] = []
+    matches: List[_BlockerState] = []
     for root, recursive in search_roots:
         if not root.is_dir():
             continue
@@ -2521,12 +2550,91 @@ def _resolve_blocker_deployment_state(blocker_id: str, worktree: Path) -> Option
             except Exception:  # noqa: BLE001
                 continue
             if blocker_id in (fm_dict.get("stub_id"), fm_dict.get("handoff_id")):
-                matches.append(fm_dict.get("deployment_state"))
+                matches.append(
+                    _BlockerState(
+                        deployment_state=fm_dict.get("deployment_state"),
+                        closed_reason=fm_dict.get("closed_reason"),
+                        continued_into=fm_dict.get("continued_into"),
+                    )
+                )
     if not matches:
-        return None
+        return _UNRESOLVED_BLOCKER_STATE
     if len(matches) > 1:
-        return _AMBIGUOUS_BLOCKER_SENTINEL
+        return _BlockerState(_AMBIGUOUS_BLOCKER_SENTINEL, None, None)
     return matches[0]
+
+
+def _blocker_clears_gate(blocker_id: str, worktree: Path) -> Tuple[bool, str]:
+    """Decide whether blocker_id's LIVE state clears a gate edge, right now.
+
+    Act-time counterpart of `reconcile.gate_eval`'s ratified rule (1)/(2) CLEAR
+    predicate, and deliberately identical to it: "terminal" and "the blocked-on
+    work landed" are different predicates, so of DR-084's terminal set
+    (lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT = shipped/abandoned/
+    continued/closed) only `shipped` is evidence of a discharge.
+
+      shipped     — clears.
+      continued   — terminal-but-not-discharge, but it carries a continued_into
+                    pointer to where the work actually went: chase it and apply
+                    this same predicate at the terminus, mirroring gate_eval's
+                    `_chase_continuation` (C5). Followed iteratively with a
+                    visited-set cycle guard and a depth cap; a caller-supplied
+                    chain is never trusted, every hop re-reads disk.
+      closed      — does NOT clear. A closed blocker was deliberately stopped,
+      abandoned     never shipped; whether its dependent's premise survives that
+                    is EM judgment, not a silent gate-freed verdict. The
+                    adjudication path is the `gate-recheck` verb with
+                    `cleared: true`, which is human-driven by construction.
+      anything else/
+      None/ambiguous — does NOT clear (unchanged pre-existing behaviour).
+
+    Before this predicate existed the caller compared against the literal
+    `"shipped"` alone, which refused a `continued` blocker whose chain had in
+    fact shipped — an act-time refusal of exactly the edge gate_eval's
+    compute-time pass proposes as clearable.
+
+    Returns (clears, detail); on a non-clearing verdict `detail` names the live
+    state (or chain-hop failure) that stopped the clear, for the caller's
+    refusal message.
+    """
+    visited: set = set()
+    current_id = blocker_id
+    for _ in range(_MAX_CONTINUED_CHAIN_DEPTH):
+        if current_id in visited:
+            return False, f"continued_into cycle detected at {current_id!r}"
+        visited.add(current_id)
+
+        state = _resolve_blocker_deployment_state(current_id, worktree)
+        ds = state.deployment_state
+
+        if ds == "shipped":
+            return True, "shipped"
+
+        if ds == "continued":
+            successor = (state.continued_into or "").strip()
+            if not successor:
+                return False, (
+                    f"{current_id!r} is continued with no continued_into "
+                    "successor recorded"
+                )
+            current_id = successor
+            continue
+
+        if ds == "closed":
+            return False, (
+                f"{current_id!r} is closed (closed_reason: "
+                f"{state.closed_reason!r})"
+            )
+
+        if ds == "abandoned":
+            return False, f"{current_id!r} is abandoned"
+
+        return False, f"{current_id!r} live deployment_state: {ds!r}"
+
+    return False, (
+        f"continued_into chain from {blocker_id!r} exceeded "
+        f"{_MAX_CONTINUED_CHAIN_DEPTH} hops without resolving"
+    )
 
 
 def _gate_cascade_clear(
@@ -2552,12 +2660,15 @@ def _gate_cascade_clear(
     prose write.
 
     Act-time re-verification (the Staff Engineer F0): each blocker_id is independently
-    re-resolved against LIVE disk state via _resolve_blocker_deployment_state
-    before any edge is removed. A caller-supplied shipped claim (e.g. from C3's
-    enumeration-time gate_eval verdict) is NEVER trusted as write-authoritative —
-    if any id's current deployment_state is not 'shipped' (stale claim, id
-    regressed to abandoned, or unresolvable), the whole call fails loud with no
-    write (partial-cascade writes are never applied piecemeal).
+    re-resolved against LIVE disk state via _blocker_clears_gate (backed by
+    _resolve_blocker_deployment_state) before any edge is removed. A
+    caller-supplied shipped claim (e.g. from C3's enumeration-time gate_eval
+    verdict) is NEVER trusted as write-authoritative — if any id's live state
+    does not clear the gate (shipped clears; continued clears only when its
+    continued_into chain reaches shipped; closed, abandoned, and
+    unresolvable/ambiguous ids never clear — gate_eval's rule (1)/(2), restated
+    at _blocker_clears_gate), the whole call fails loud with no write
+    (partial-cascade writes are never applied piecemeal).
 
     Routes the read-modify-write through locked_rmw for cross-process
     serialisation. Domain-abort paths raise MutateAbort from inside the mutate
@@ -2625,12 +2736,14 @@ def _gate_cascade_clear(
         # enumeration-time gate_eval output) as write-authoritative. Guards the
         # shared-worktree carry-forward-laundering race.
         for blocker_id in blocker_ids:
-            live_state = _resolve_blocker_deployment_state(blocker_id, worktree)
-            if live_state != "shipped":
+            clears, detail = _blocker_clears_gate(blocker_id, worktree)
+            if not clears:
                 raise MutateAbort(
-                    f"gate-cascade-clear: blocker {blocker_id!r} is not currently "
-                    f"shipped (live deployment_state: {live_state!r}) — refusing to "
-                    "clear a stale or unresolvable blocker claim; no write performed"
+                    f"gate-cascade-clear: blocker {blocker_id!r} does not clear "
+                    f"the gate ({detail}) — only a shipped blocker, or a "
+                    "continued one whose chain reaches shipped, clears an edge; "
+                    "no write performed. Adjudicate the dependent instead: "
+                    "gate-recheck with cleared: true."
                 )
 
         new_blocked_by = [bid for bid in current_blocked_by if bid not in blocker_ids]

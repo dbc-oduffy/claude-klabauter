@@ -481,11 +481,24 @@ _ARG_TOKEN_RE = re.compile(r"\{([A-Za-z0-9_-]+)\.(entry_path|landed|argv)\}")
 #: rejects that embedded case).
 _ARGV_TOKEN_RE = re.compile(r"^\{([A-Za-z0-9_-]+)\.argv\}$")
 
-#: Fail-loud backstop: ANY `{...}` still present in an arg after
-#: `_ARG_TOKEN_RE` substitution is a bug — either a token this module
-#: doesn't (yet) recognize, or a genuine unresolved placeholder. Never
-#: passed through to a live dispatch (see `_resolve_arg_tokens`).
-_RESIDUAL_TOKEN_RE = re.compile(r"\{[^{}]+\}")
+#: Fail-loud backstop: a NAME-shaped `{...}` still present in an arg
+#: after `_ARG_TOKEN_RE` substitution is a bug — either a token this
+#: module doesn't (yet) recognize (e.g. `{d-foo.unknown_field}`), or a
+#: genuine unresolved placeholder. Never passed through to a live
+#: dispatch (see `_resolve_arg_tokens`). Deliberately shaped to mirror
+#: the identifier grammar `_ARG_TOKEN_RE` actually implements
+#: (`{name}` or `{name.field}`) rather than "any brace-delimited span":
+#: a serialized JSON payload (e.g. `directives_commit_tail.
+#: build_close_tail_args_directive`'s `--review-slice <json>`) is
+#: brace-delimited but contains quotes, colons, and spaces, so it can
+#: never match this pattern — that is the point, it was never a token
+#: candidate to begin with. The one deliberate residual: a braced span
+#: that is neither identifier-shaped nor JSON-shaped now passes through
+#: unflagged. Accepted because this module's grammar could never have
+#: produced such a span as an unresolved token — anything it emits is
+#: either `_ARG_TOKEN_RE`-shaped (and thus caught here if unresolved)
+#: or literal data from a producer's stdout.
+_RESIDUAL_TOKEN_RE = re.compile(r"\{[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\}")
 
 
 def _resolve_arg_tokens(

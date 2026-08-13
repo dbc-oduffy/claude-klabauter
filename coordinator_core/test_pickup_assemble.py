@@ -1833,6 +1833,105 @@ class TestComputePremiseChecks:
 
         assert results[0]["witness"] == "empty-surface"
 
+    def test_path_premise_miss_prunes_non_artifact_subtrees(self, tmp_path, monkeypatch):
+        """2026-08-13 hot-path-over-acquisition fix: the miss arm must never
+        descend into `.git`/`__pycache__`/`build`/`scratch`/`scratchpad`/
+        `*.egg-info` — pin the narrowing itself, not just its outcome, by
+        asserting os.walk is never called with one of those dirnames
+        present in the yielded dirnames after pruning. (`dist` was removed
+        from the prune set — see `test_path_premise_witness_under_dist_is_
+        found_not_pruned` below.)"""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        # A same-named file sitting ONLY inside a pruned subtree must not be
+        # found — proves the walk never descends there, not just that the
+        # final result happens to omit it via some other filter.
+        pruned_dir = repo / "build" / "nested"
+        pruned_dir.mkdir(parents=True)
+        (pruned_dir / "decoy.md").write_text("x\n", encoding="utf-8")
+
+        seen_dirnames_lists = []
+        real_walk = os.walk
+
+        def spy_walk(top, *args, **kwargs):
+            for dirpath, dirnames, filenames in real_walk(top, *args, **kwargs):
+                # Store the SAME list object the caller mutates in place via
+                # `dirnames[:] = ...` — checked after the walk completes, so
+                # this reflects the post-prune state the caller left behind.
+                seen_dirnames_lists.append((dirpath, dirnames))
+                yield dirpath, dirnames, filenames
+
+        monkeypatch.setattr(pa.os, "walk", spy_walk)
+
+        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "decoy.md"}])
+
+        assert results[0]["witness"] == "absent"
+        assert results[0].get("found_elsewhere", []) == []
+        for dirpath, dirnames in seen_dirnames_lists:
+            assert "build" not in dirnames
+            assert ".git" not in dirnames
+
+    def test_path_premise_found_elsewhere_survives_pruning(self, tmp_path):
+        """Preserved-contract half of the pruning fix: a real witness sitting
+        in a legitimate (non-pruned) location, including source under
+        `coordinator_core/`, is still found — the narrowing must not turn a
+        genuine hit into a miss."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "coordinator_core").mkdir()
+        (repo / "coordinator_core" / "witness.md").write_text("x\n", encoding="utf-8")
+        # A decoy of the SAME basename inside a pruned subtree coexists —
+        # the real hit must still surface even with a pruned-subtree decoy
+        # present alongside it.
+        pruned_dir = repo / "__pycache__"
+        pruned_dir.mkdir()
+        (pruned_dir / "witness.md").write_text("x\n", encoding="utf-8")
+
+        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "state/witness.md"}])
+
+        assert results[0]["witness"] == "found-elsewhere"
+        assert results[0]["found_elsewhere"] == ["coordinator_core/witness.md"]
+
+    @pytest.mark.parametrize(
+        "pruned_name", sorted(pa._PREMISE_WALK_PRUNE_DIRNAMES - {".git"})
+    )
+    def test_path_premise_witness_under_each_pruned_name_is_absent(self, tmp_path, pruned_name):
+        """Every name actually in `_PREMISE_WALK_PRUNE_DIRNAMES` prunes as
+        claimed — a real witness sitting ONLY under that name is reported
+        absent, not found-elsewhere. Parameterized so a future addition to
+        the set is exercised automatically. `.git` is excluded from the
+        parametrization since `_init_repo` already creates it as a real
+        git directory; it's covered by the dedicated pruning test above."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        pruned_dir = repo / pruned_name
+        pruned_dir.mkdir()
+        (pruned_dir / "witness.md").write_text("x\n", encoding="utf-8")
+
+        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "witness.md"}])
+
+        assert results[0]["witness"] == "absent"
+
+    def test_path_premise_witness_under_dist_is_found_not_pruned(self, tmp_path):
+        """Regression pin for the 2026-08-13 false-negative: `dist` was
+        removed from `_PREMISE_WALK_PRUNE_DIRNAMES` after being found to
+        hold 33 tracked files in this repo — a path premise citing a
+        tracked file under `dist/` must resolve `found-elsewhere`, not
+        `absent`. Also asserts `dist` is no longer a member of the prune
+        set, so this test fails loudly if a future edit re-adds it without
+        re-verifying `git ls-files dist` is empty."""
+        assert "dist" not in pa._PREMISE_WALK_PRUNE_DIRNAMES
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        dist_dir = repo / "dist"
+        dist_dir.mkdir()
+        (dist_dir / "witness.md").write_text("x\n", encoding="utf-8")
+
+        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "state/witness.md"}])
+
+        assert results[0]["witness"] == "found-elsewhere"
+        assert results[0]["found_elsewhere"] == ["dist/witness.md"]
+
 
 # ---------------------------------------------------------------------------
 # Function 5 — compute_stealth_skip_flags
@@ -5502,13 +5601,14 @@ class TestMultiArtifactBrief:
         _seed_handoff(repo, "h1.md")
         _seed_memo(repo, "m1.md")
 
-        bin_path = r"X:\claude-klabauter\coordinator\bin\pickup-assemble"
+        bin_path = Path(__file__).resolve().parents[1] / "coordinator" / "bin" / "pickup-assemble"
         raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
         proc = subprocess.run(
-            [sys.executable, bin_path, "brief", raw],
+            [sys.executable, str(bin_path), "brief", raw],
             cwd=str(repo),
             capture_output=True,
             text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         payload = json.loads(proc.stdout)
 

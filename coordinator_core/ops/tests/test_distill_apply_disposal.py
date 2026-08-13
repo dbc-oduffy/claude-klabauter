@@ -1019,3 +1019,171 @@ def test_denorm_compute_apply_plan_alone_writes_nothing(tmp_path: Path):
     assert parent.read_text(encoding="utf-8") == pre_parent_text
     assert child.read_text(encoding="utf-8") == pre_child_text
     assert _git("status", "--porcelain", cwd=tmp_path) == ""
+
+
+# ---------------------------------------------------------------------------
+# Main-index resync: acquisition count + lock-retry (AC-7 / AC-8,
+# docs/plans/2026-08-13-commit-seams-inherit-lock-reap-and-retry.md C6)
+#
+# Every OTHER git call `apply_disposal_manifest`/`_delete_tracked_and_
+# append_log` makes (read-tree, rm, add-for-denorm, add-for-log, commit)
+# runs against a PRIVATE `GIT_INDEX_FILE`, so none of them ever takes the
+# shared `.git/index.lock` -- the main-index resync below is the ONLY step
+# in this whole module that ever touches it, and the two tests here pin
+# both halves of C6's fix at that single site.
+# ---------------------------------------------------------------------------
+
+
+@_requires_rg
+def test_main_index_resync_collapses_to_one_call_not_per_path(tmp_path: Path, monkeypatch):
+    """AC-7 — counted demonstration: the main-index resync after a
+    multi-survivor tracked delete must cost ONE `git update-index`
+    subprocess call, not one per reaped/denorm/log path."""
+    shas = _init_repo_with_commits(tmp_path)
+    for name in ("second", "third"):
+        candidate = tmp_path / "archive" / "handoffs" / f"{name}.md"
+        candidate.write_text(
+            "---\nshipped_in: 68b27420\nstatus: consumed\ndeployment_state: shipped\n"
+            "realized_by: inline\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _git("add", "--", f"archive/handoffs/{name}.md", cwd=tmp_path)
+    _git("commit", "-q", "-m", "add two more candidates", cwd=tmp_path)
+
+    manifest = _manifest(
+        [
+            _eligible_row("archive/handoffs/eligible.md"),
+            _eligible_row("archive/handoffs/second.md"),
+            _eligible_row("archive/handoffs/third.md"),
+        ]
+    )
+    stamped = _stamped(manifest)
+
+    real_exec = asyncio.create_subprocess_exec
+    update_index_calls: list[tuple] = []
+
+    async def _counting_exec(*args, **kwargs):
+        if "update-index" in args:
+            update_index_calls.append(args)
+        return await real_exec(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _counting_exec)
+
+    result = _run(
+        apply_disposal_manifest(tmp_path, stamped, harvest_committed_sha=shas["harvest"])
+    )
+
+    assert sorted(result.deleted_tracked) == sorted(
+        [
+            "archive/handoffs/eligible.md",
+            "archive/handoffs/second.md",
+            "archive/handoffs/third.md",
+        ]
+    )
+    assert result.failed == []
+    assert len(update_index_calls) == 1, (
+        f"expected ONE batched `git update-index`, got {len(update_index_calls)}: "
+        f"{update_index_calls}"
+    )
+    for name in ("eligible.md", "second.md", "third.md"):
+        assert any(name in str(arg) for arg in update_index_calls[0])
+
+
+@_requires_rg
+def test_main_index_resync_retries_through_lock_contention(tmp_path: Path, monkeypatch):
+    """AC-8 — retry composed locally via
+    `coordinator_core.ops.fleet._common._update_index_with_retry` (see this
+    module's in-code note, above the resync call site, for the rejected
+    `git_native` route): a transient `.git/index.lock` collision on the
+    main-index resync is retried and actually SUCCEEDS, rather than
+    burning its only attempt and leaving the main index stale."""
+    shas = _init_repo_with_commits(tmp_path)
+    manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
+    stamped = _stamped(manifest)
+
+    real_exec = asyncio.create_subprocess_exec
+    attempts = {"update-index": 0}
+
+    class _FakeLockedProc:
+        returncode = 128
+
+        async def communicate(self):
+            return b"", b"fatal: Unable to create '.../.git/index.lock': File exists."
+
+    async def _flaky_exec(*args, **kwargs):
+        if "update-index" in args:
+            attempts["update-index"] += 1
+            if attempts["update-index"] < 3:
+                return _FakeLockedProc()
+        return await real_exec(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _flaky_exec)
+
+    result = _run(
+        apply_disposal_manifest(tmp_path, stamped, harvest_committed_sha=shas["harvest"])
+    )
+
+    assert result.deleted_tracked == ["archive/handoffs/eligible.md"]
+    assert result.failed == []
+    assert attempts["update-index"] == 3, (
+        "expected exactly 2 lock-contention retries before success"
+    )
+    # Main index actually converged -- a clean status proves the resync
+    # eventually SUCCEEDED, not merely that its non-fatal failure was
+    # swallowed.
+    assert _git("status", "--porcelain", cwd=tmp_path) == ""
+
+
+@_requires_rg
+def test_main_index_resync_persistent_failure_log_is_honest_about_scope(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """Review: code-reviewer P2 (2026-08-13) — on a persistent (retry-
+    exhausted) resync failure, the error log must NOT claim every batched
+    path is confirmed affected (git update-index applies positionally and
+    can partially succeed before failing on a later path). The message must
+    (a) frame the path list as the attempted batch, not a confirmed-dirty
+    list, and (b) surface git's own stderr."""
+    import logging
+
+    shas = _init_repo_with_commits(tmp_path)
+    manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
+    stamped = _stamped(manifest)
+
+    real_exec = asyncio.create_subprocess_exec
+
+    class _FakeLockedProc:
+        returncode = 128
+
+        async def communicate(self):
+            return (
+                b"",
+                b"fatal: Unable to create '.../.git/index.lock': File exists.",
+            )
+
+    async def _always_locked_exec(*args, **kwargs):
+        if "update-index" in args:
+            return _FakeLockedProc()
+        return await real_exec(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _always_locked_exec)
+
+    with caplog.at_level(logging.ERROR, logger="coordinator_core.ops.distill_apply_disposal"):
+        result = _run(
+            apply_disposal_manifest(tmp_path, stamped, harvest_committed_sha=shas["harvest"])
+        )
+
+    # The tracked delete + commit itself is unaffected -- the resync failure
+    # is non-fatal by design (mirrors rm_and_commit's posture).
+    assert result.deleted_tracked == ["archive/handoffs/eligible.md"]
+
+    resync_records = [
+        r for r in caplog.records if "main-index resync FAILED" in r.getMessage()
+    ]
+    assert len(resync_records) == 1
+    message = resync_records[0].getMessage()
+    # Honest framing: the path list is the attempted batch, not confirmed-dirty.
+    assert "not all necessarily affected" in message
+    assert "positionally" in message
+    # git's own stderr is surfaced, not swallowed.
+    assert "index.lock" in message

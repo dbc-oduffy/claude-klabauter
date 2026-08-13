@@ -4266,6 +4266,22 @@ def test_resolve_in_reply_to_target_glob_metachars_do_not_spuriously_match(git_r
     assert _resolve_in_reply_to_target(git_repo.root, "*.md") == "unresolvable"
 
 
+def test_resolve_in_reply_to_target_directory_traversal_value_cannot_escape_archive_dir(git_repo):
+    """Review: code-reviewer (slice 2, nit) — mirrors
+    test_memo_send.py::TestInReplyToExistenceGate::test_unit_directory_traversal_value_cannot_escape_archive_dir.
+    _resolve_in_reply_to_target shares `_normalize_in_reply_to` with
+    memo_send's gate but had no traversal regression test of its own at this
+    call site. A value carrying directory separators must be normalized to
+    its bare basename before being joined onto inbox/archive dirs — never
+    allowed to escape them. A secret file living OUTSIDE the worktree must
+    not be found via a traversal in_reply_to."""
+    secret = git_repo.root.parent / "secret.md"
+    secret.write_text("classified", encoding="utf-8")
+    assert _resolve_in_reply_to_target(
+        git_repo.root, "../../../../../../../secret.md",
+    ) == "unresolvable"
+
+
 def test_resolve_in_reply_to_target_closed_one_level_shard(git_repo):
     """A one-level-sharded archive layout (cross-repo/archive/<shard>/<name>) —
     not today's real flat layout, but the defensive fallback this narrowing

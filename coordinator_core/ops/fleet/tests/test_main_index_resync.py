@@ -42,6 +42,7 @@ from coordinator_core.ops.fleet._common import (
     Move,
     _resync_main_index_for_moves,
     _resync_main_index_for_reaps,
+    _update_index_with_retry,
 )
 
 # Real-git spawn is load-bearing, but confined to ONE test (see Part 2's
@@ -276,6 +277,59 @@ def test_reaps_resync_skips_candidates_not_in_reaped_by_id():
     )
 
     assert fake.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Part 1b — _update_index_with_retry: Windows console-suppression kwarg
+# ---------------------------------------------------------------------------
+#
+# Review: code-reviewer P2 (2026-08-13, distill.apply_disposal integration) —
+# _update_index_with_retry is the ONE shared spawn point behind
+# archive_and_commit's, rm_and_commit's, AND distill_apply_disposal's
+# main-index resync; the fix belongs here, not per call site. Spawn-free:
+# monkeypatches asyncio.create_subprocess_exec itself to capture kwargs, no
+# real subprocess.
+
+
+def test_update_index_with_retry_passes_no_console_creationflags(monkeypatch):
+    """The subprocess spawn inside _update_index_with_retry must splat
+    win_portability.no_console_creationflags(). On real POSIX that mapping is
+    {} (inert splat, so a naive assertion would pass trivially with or
+    without the fix) — so this test forces the win32 branch via
+    win_portability's own documented monkeypatch seam (`_is_windows`) to make
+    the assertion load-bearing: it fails on the pre-fix code (no kwarg
+    splatted at all) even though it runs on a POSIX CI host.
+    """
+    import coordinator_core.win_portability as win_portability_mod
+
+    monkeypatch.setattr(win_portability_mod, "_is_windows", lambda: True)
+
+    captured_kwargs: dict = {}
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", _fake_create_subprocess_exec
+    )
+
+    err = _run(
+        _update_index_with_retry(
+            ["git", "update-index", "--remove", "--", "x.md"],
+            cwd=Path("/repo"),
+            env={},
+        )
+    )
+
+    assert err is None
+    assert "creationflags" in captured_kwargs
 
 
 # ---------------------------------------------------------------------------

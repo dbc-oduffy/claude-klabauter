@@ -20,6 +20,7 @@ Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, c
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -1351,6 +1352,77 @@ def test_resolve_arg_tokens_unrecognized_token_shape_fails_loud() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Residual backstop is NAME-shaped, not BRACE-shaped (2026-08-13
+# example-doctrine-repo-em-wsc-review-list-collides-with-token-syntax) —
+# `directives_commit_tail.build_close_tail_args_directive` serializes a
+# per-slice review entry with `json.dumps(payload, sort_keys=True)` into
+# `--review-slice <json>`. That flat JSON object is brace-delimited but
+# contains quotes, colons, and spaces — never a token candidate — and must
+# pass `_resolve_arg_tokens` unchanged rather than tripping the fail-loud
+# backstop meant for a genuinely unresolved/unrecognized `{name}` token.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_arg_tokens_serialized_json_review_slice_passes_through_unchanged() -> None:
+    payload = {
+        "diff_loc": 42,
+        "reviewer": "coordinator:code-reviewer",
+        "reviewer_evidence": "state/subagent-share/abc/review.md",
+        "scope": ["coordinator_core/workstream_complete/apply.py"],
+        "sha_range": "abc123..def456",
+        "verdict": "approve",
+    }
+    serialized = json.dumps(payload, sort_keys=True)
+    resolved, error = ws_apply._resolve_arg_tokens(
+        ["--review-slice", serialized], {}
+    )
+    assert error is None
+    assert resolved == ["--review-slice", serialized]
+
+
+def test_resolve_arg_tokens_serialized_json_review_slice_passes_through_via_argv_expansion() -> None:
+    payload = {
+        "diff_loc": 7,
+        "reviewer": "coordinator:code-reviewer",
+        "reviewer_evidence": "state/subagent-share/xyz/review.md",
+        "scope": ["coordinator_core/workstream_complete/apply.py"],
+        "sha_range": "111111..222222",
+        "verdict": "approve",
+    }
+    serialized = json.dumps(payload, sort_keys=True)
+    stdout_by_id = {"d-close-tail-args": f"--review-slice\n{serialized}\n"}
+    resolved, error = ws_apply._resolve_arg_tokens(
+        ["{d-close-tail-args.argv}"], stdout_by_id
+    )
+    assert error is None
+    assert resolved == ["--review-slice", serialized]
+
+
+def test_resolve_arg_tokens_nested_json_review_slice_also_passes_through_unchanged() -> None:
+    """A nested payload was inferred to slip through the OLD brace-shaped
+    regex where a flat one failed, making the bug look payload-dependent.
+    It did not: `{[^{}]+}` requires only that the MATCHED span hold no
+    braces, so it matched the inner object of a nested payload just as
+    readily. Both shapes failed before and both pass now — pinned here so
+    neither regresses on the assumption that one of them was ever safe."""
+    payload = {
+        "diff_loc": 3,
+        "reviewer": "coordinator:code-reviewer",
+        "reviewer_evidence": "state/subagent-share/nested/review.md",
+        "scope": ["coordinator_core/workstream_complete/apply.py"],
+        "sha_range": "333333..444444",
+        "verdict": "approve",
+        "meta": {"nested_key": "nested_value", "count": 2},
+    }
+    serialized = json.dumps(payload, sort_keys=True)
+    resolved, error = ws_apply._resolve_arg_tokens(
+        ["--review-slice", serialized], {}
+    )
+    assert error is None
+    assert resolved == ["--review-slice", serialized]
+
+
+# ---------------------------------------------------------------------------
 # `.landed` token — the ordering-only field (no value threaded) that
 # `directives_commit_tail.build_emit_cadence_directive`/`build_release_
 # plan_claim_directive` use to express a genuine producer dependency on
@@ -1738,7 +1810,12 @@ def test_brief_never_emits_a_directive_with_an_unresolved_token_at_dispatch_time
     `ws_apply._ARG_TOKEN_RE` itself (not a hand-rolled duplicate) so this
     assertion always tracks whatever token fields `_resolve_arg_tokens`
     actually recognizes (`.entry_path`, `.landed`, and any future
-    addition) rather than silently going stale against a copy."""
+    addition) rather than silently going stale against a copy.
+
+    Scoped by `_RESIDUAL_TOKEN_RE`'s name shape: an arg carrying a
+    serialized JSON payload (`--review-slice`) is brace-delimited but not
+    token-shaped, and is deliberately NOT flagged here — see that
+    regex's own comment block."""
     from coordinator_core.workstream_complete import brief as real_brief
 
     try:

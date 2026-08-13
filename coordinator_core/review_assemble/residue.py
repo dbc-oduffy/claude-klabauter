@@ -74,7 +74,9 @@ Negative-spec:
     resolution step; no fallback probing of alternate locations.
   - Does NOT do per-domain routing beyond `plan`/`diff`/`shared` — this is
     a single flat assembler, not a god-assembler dispatching to other
-    skills' concerns (DR-092).
+    skills' concerns (example-doctrine-repo `docs/decisions/DR-092-canonical-resolution-
+    engine.md`; NOT the retired prime-v1 DR-092, which numbers a different
+    decision in `example-doctrine-repo/archive/prime-v1-decisions/`).
   - Does NOT emit a well-formed envelope carrying zero residue. An empty
     residue directory, an unreadable content root
     (`ResolveCoordinatorCloneError`), or a segment set that resolves to

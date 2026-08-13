@@ -103,6 +103,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
+from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
@@ -354,7 +355,6 @@ def build_violation_payload_advisory(
         hint = f"; required shape: {e['hint']}" if e.get("hint") else ""
         parts.append(f"{field}: {e.get('error')}{hint}")
     message = f"{schema_name}: {'; '.join(parts)}"
-    from coordinator_core.bash_guards._helpers import operator_override_note
 
     override_note = operator_override_note(
         "COORDINATOR_SCHEMA_STRICT", payload=payload, git_root=git_root

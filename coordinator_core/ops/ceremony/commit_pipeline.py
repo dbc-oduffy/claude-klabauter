@@ -343,6 +343,15 @@ def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) ->
     return empty -- an all-advisory blob is preserved verbatim, since an
     empty reason is what the incident produced), then keep the TAIL under
     *limit*, marking the cut so a reader knows output preceded it.
+
+    AC3/AC11 (C3b): this function adds NO block of its own. A `pre-commit`
+    hook refusal is the hook's own verdict, reached before `git commit`
+    ever returns to this pipeline -- this function only reformats stderr/
+    stdout git already produced so the verdict is legible instead of
+    hidden behind advisory noise (the incident above). Nothing here holds,
+    retries, or waits; the outlet for a genuine hook BLOCK is whatever the
+    hook itself grants (fix the flagged condition and re-commit), unowned
+    by this module and out of this audit's scope.
     """
     stripped = text.strip()
     if not stripped:
@@ -775,6 +784,16 @@ def explicit_stage(
             else set()
         )
     except DivergenceCheckFailed as exc:
+        # AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-
+        # doctrine-that-rejects-it.md, C3b): what this protects THAT GIT
+        # DOES NOT -- `git add` has no concept of "was this path already
+        # deliberately diverged/staged by someone else"; it happily
+        # overwrites deliberately-staged content, reproducing incident
+        # 506748a0 (see the comment above this `try`). Outlet, no human: a
+        # bounded `_DIVERGENCE_CHECK_TIMEOUT_SECS` (5.0s) subprocess call,
+        # never a hold -- on timeout/indeterminacy the caller gets an
+        # immediate single-request reject naming the cause and re-issues
+        # the same call; there is nothing to wait out.
         return StageOutcome(
             exit_code=-1,
             skipped=skipped,
@@ -2156,6 +2175,23 @@ def _preflight_reap_stale_lock(worktree_root: str) -> None:
     cases): (1) a stale, stable lock is reaped; (2) a fresh lock is left
     alone (exit 2 is "do not reap", not a failure); (3) a reaper exception
     never propagates; (4) no lock present costs no subprocess at all.
+
+    AC3/AC5 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
+    that-rejects-it.md, C3b): the reference model the plan's duration test
+    is measured against -- REMOVED FROM AUDIT SCOPE, behaviour unchanged.
+    What it protects that git does not: `git commit`/`git add` do not
+    self-heal a genuinely orphaned `index.lock` (a lock left behind by a
+    killed process) -- left alone, every subsequent git call on that
+    worktree fails until something removes the file. Why it passes the
+    duration test: the age/stability gate inside `reap_stale_locks` is the
+    only thing distinguishing "orphaned" from "a peer's commit genuinely
+    in progress right now", so a FRESH lock is never reaped (exit 2, left
+    alone, this function returns immediately) -- the only work done here
+    is milliseconds of stat/reaper-predicate cost, no wait, no retry loop,
+    invisible in normal operation. Its outlet needs no human either way: a
+    stale lock is reaped inline before the caller's own commit proceeds; a
+    fresh lock is left for git's own subprocess to report as blocked, same
+    as if this pre-flight did not exist.
     """
     from coordinator_core.lock_preflight import preflight_reap_stale_lock
 
@@ -2338,6 +2374,16 @@ def run_commit_pipeline(
     # `stage_paths` batch (not just the caller-flagged subset) so a
     # mixed batch -- one real file plus one directory -- refuses as a
     # whole and stages neither.
+    # AC3/AC11 (C3b): what this protects THAT GIT DOES NOT -- `git add
+    # <dir>/` has no concept of "residue that survives a later refusal";
+    # it stages everything under the directory unconditionally, and only
+    # `commit_scoped()` downstream refuses the directory pathspec itself,
+    # by which point the staged residue is already there with nothing
+    # left to clean it up (the incident this guard closes, above).
+    # Outlet, no human: the returned diagnostics name the offending
+    # pathspec directly -- the caller re-issues the SAME call with
+    # explicit file paths instead of the directory, a single-request
+    # reject, never a hold.
     dir_paths = git_native.directory_pathspecs(root, stage_paths)
     if dir_paths:
         pre_stage_diagnostics = [

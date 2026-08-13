@@ -868,7 +868,9 @@ _FOREIGN_SESSION_UNDETERMINED_NOTE = (
     "branch. Determine which case applies before proceeding. If (i) "
     "applies, do not narrow sha_range to shed chain coverage — partition "
     "the chain and write one per-slice record over this session's own "
-    "commits in each slice instead; narrowing is the case-(ii) remedy only."
+    "commits in each slice instead; narrowing is the case-(ii) remedy only. "
+    "Per-slice records are a list-shaped `decisions[\"review\"]`, one entry "
+    "per slice."
 )
 
 
@@ -1960,7 +1962,11 @@ _MAX_UNIQUE_SUFFIX_ATTEMPTS = 10_000
 def _reserve_unique_trail_path(trail_dir: Path, base_filename: str, record_bytes: bytes) -> Path:
     """Atomically claim a not-yet-existing path for *base_filename* under *trail_dir*
     and write *record_bytes* into it in full — never overwriting an existing file
-    (2026-07-27 fix for the DR-216 D2(i) last-write-wins clobber defect).
+    (2026-07-27 fix for the DR-216 D2(i) last-write-wins clobber defect). A record
+    whose bytes exactly match one already on disk for this session is a REPLAY, not a
+    collision — see "Replay convergence" below — and converging onto its existing
+    path (rather than uniquifying past it) is what makes a re-run of a failed
+    ``workstream_complete`` apply pass idempotent.
 
     On the first attempt, tries ``base_filename`` verbatim — this keeps the common
     (no-collision) case's filename byte-identical to the pre-fix format, so every
@@ -1970,6 +1976,36 @@ def _reserve_unique_trail_path(trail_dir: Path, base_filename: str, record_bytes
     session_id segment, which ``_shared._validate_review_trail_file``'s
     ``_TIME_SEG_RE`` regex already tolerates (it only anchors on the leading digit run
     for the reviewed_at timestamp; anything after the first ``-`` is opaque to it).
+
+    Replay convergence (fix for the workstream_complete PARTIAL_MUTATION duplicate-
+    record defect): before reserving anything, this scans existing records for one
+    whose bytes are EXACTLY equal to *record_bytes*. A byte-identical record is not a
+    collision to uniquify around — it is the SAME write happening again, because an
+    apply pass that failed on a LATER directive got re-run and this trail-write
+    directive fired a second (or third, or Nth) time. ``reviewed_at`` lives only in
+    the filename, never in the record body, so a slow retry across a second boundary
+    produces a byte-identical record under a DIFFERENT filename — a same-second
+    collision alone would miss that case, which is why this is a content scan, not a
+    filename check. Converging on the existing path makes a re-run of a failed apply
+    pass idempotent: the trail directive's second firing writes nothing new and
+    returns the same path it already wrote. This is safe because the serialized
+    record bytes already ARE the identity key — a real re-review after fixes
+    necessarily changes ``verdict`` or ``sha_range`` (and thus the bytes), so it is
+    never swallowed by this check; only a call that would have produced literally the
+    same record converges. The residual: two independent reviews in the same session
+    that happen to produce byte-identical records (same sha_range, reviewer, scope,
+    verdict, diff_loc, workstream, ...) now collapse to one record. That is intended,
+    not a bug — byte-identical means the same verdict over the same range by the same
+    reviewer, so nothing is lost by recording it once.
+
+    The scan is bounded to THIS session, not a full-directory scan: *base_filename*
+    has the shape ``{ts}-{session_id_short}.json``, so the session_id_short segment is
+    extracted from it and only ``*-{session_id_short}*.json`` under *trail_dir* is
+    globbed. A replay is always same-session (the directive re-runs inside the same
+    apply-pass retry), so this is correct as well as cheap: measured, a session holds
+    at most ~40 trail records even when the directory holds thousands, so this is a
+    bounded ~40-entry glob-and-compare, never an unbounded scan of the whole
+    directory.
 
     Uses ``os.open`` with ``O_CREAT | O_EXCL | O_WRONLY``, not ``os.replace``: ``O_EXCL``
     fails closed with ``FileExistsError`` when the target already exists, so a race
@@ -1992,6 +2028,21 @@ def _reserve_unique_trail_path(trail_dir: Path, base_filename: str, record_bytes
     """
     assert base_filename.endswith(".json")
     stem = base_filename[: -len(".json")]
+
+    # Replay convergence pre-check — see docstring. Bounded to this session's
+    # records only (never a full-directory scan): base_filename is
+    # "{ts}-{session_id_short}.json", and ts itself is dash-delimited
+    # ("YYYY-MM-DD-HHMMSS[ns]"), so rpartition on the LAST "-" (not the
+    # first) to recover the session_id_short suffix and glob only that
+    # session's files.
+    _, _, session_id_short = stem.rpartition("-")
+    if session_id_short:
+        for existing in trail_dir.glob(f"*-{session_id_short}*.json"):
+            try:
+                if existing.read_bytes() == record_bytes:
+                    return existing
+            except OSError:
+                continue
 
     candidate = trail_dir / base_filename
     attempt = 1

@@ -371,6 +371,167 @@ def test_write_review_trail_entry_same_timestamp_does_not_overwrite(tmp_path: Pa
     assert parsed2["verdict"] == "blocked"
 
 
+# ---------------------------------------------------------------------------
+# _reserve_unique_trail_path — replay convergence (fix for the
+# workstream_complete PARTIAL_MUTATION duplicate-record defect: a re-run of a
+# failed apply pass re-fires already-succeeded d-write-trail-* directives,
+# and reviewed_at lives ONLY in the filename, never the record body, so a
+# same-content replay across a second boundary previously wrote a fresh
+# byte-identical file instead of converging).
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo_with_two_commits_trailered(worktree: Path, session_id: str) -> tuple:
+    """Two commits, each carrying a ``Session-Id: <session_id>`` trailer, so
+    ``_guard_foreign_session_range`` (which requires attribution) doesn't
+    refuse the range, and so ``{sha1}^..{sha2}`` covers exactly one commit
+    (a ``{sha}..{sha}`` range is rejected by ``_reject_empty_sha_range`` as
+    covering zero commits — must use the parent-anchored ``^..`` form)."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    kwargs = dict(cwd=str(worktree), capture_output=True, text=True, **no_console_creationflags())
+    subprocess.run(["git", "init", "-q"], **kwargs, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], **kwargs, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], **kwargs, check=True)
+    # Root commit — not itself used as an endpoint: `{first_sha}^..` needs a
+    # PARENT to resolve, and a root commit has none.
+    (worktree / "f.txt").write_text("root", encoding="utf-8")
+    subprocess.run(["git", "add", "f.txt"], **kwargs, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "root"], **kwargs, check=True)
+    (worktree / "f.txt").write_text("one", encoding="utf-8")
+    subprocess.run(["git", "add", "f.txt"], **kwargs, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"first\n\nSession-Id: {session_id}"], **kwargs, check=True
+    )
+    first_sha = subprocess.run(["git", "rev-parse", "HEAD"], **kwargs, check=True).stdout.strip()
+    (worktree / "f.txt").write_text("two", encoding="utf-8")
+    subprocess.run(["git", "add", "f.txt"], **kwargs, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"second\n\nSession-Id: {session_id}"], **kwargs, check=True
+    )
+    second_sha = subprocess.run(["git", "rev-parse", "HEAD"], **kwargs, check=True).stdout.strip()
+    return first_sha, second_sha
+
+
+def test_replay_four_identical_calls_produce_one_record(tmp_path: Path) -> None:
+    """Four identical write_review_trail_entry(...) calls converge on exactly
+    one record — the same-second fast-retry path, where the pre-fix
+    DR-216 uniquify branch actively minted -2/-3/-4 duplicates."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    session_id = "sess1234abcd"
+    first_sha, second_sha = _init_git_repo_with_two_commits_trailered(worktree, session_id)
+    sha_range = f"{first_sha}^..{second_sha}"
+
+    kwargs = dict(
+        sha_range=sha_range,
+        reviewer="code-reviewer",
+        scope="chain",
+        verdict="ok",
+        diff_loc=10,
+        session_id=session_id,
+        caller_worktree=worktree,
+        workstream="",
+        _timestamp="2026-08-13-120000",
+    )
+    results = [write_review_trail_entry(**kwargs) for _ in range(4)]
+
+    out_paths = {r["out_path"] for r in results}
+    assert len(out_paths) == 1, f"expected one record, got: {out_paths}"
+    trail_dir = worktree / "state" / "review-trail"
+    assert len(list(trail_dir.glob("*.json"))) == 1
+
+
+def test_replay_across_second_boundary_still_one_record(tmp_path: Path) -> None:
+    """Same as above but with a >1s gap between two calls — the slow-retry
+    path, where the filename itself differs (reviewed_at is filename-only)
+    so a pure filename-level check would miss the duplicate entirely."""
+    import time
+
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    session_id = "sess1234abcd"
+    first_sha, second_sha = _init_git_repo_with_two_commits_trailered(worktree, session_id)
+    sha_range = f"{first_sha}^..{second_sha}"
+
+    common_kwargs = dict(
+        sha_range=sha_range,
+        reviewer="code-reviewer",
+        scope="chain",
+        verdict="ok",
+        diff_loc=10,
+        session_id=session_id,
+        caller_worktree=worktree,
+        workstream="",
+    )
+    result1 = write_review_trail_entry(**common_kwargs, _timestamp="2026-08-13-120000")
+    time.sleep(1.1)
+    result2 = write_review_trail_entry(**common_kwargs, _timestamp="2026-08-13-120001")
+
+    assert result1["out_path"] == result2["out_path"], (
+        "byte-identical record across a second boundary must converge onto "
+        "the first write's path, not mint a second file"
+    )
+    trail_dir = worktree / "state" / "review-trail"
+    assert len(list(trail_dir.glob("*.json"))) == 1
+
+
+def test_replay_differing_verdict_produces_two_records(tmp_path: Path) -> None:
+    """A genuine re-review (different verdict) must NOT be swallowed by the
+    replay convergence check — its bytes differ, so it writes normally."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    session_id = "sess1234abcd"
+    first_sha, second_sha = _init_git_repo_with_two_commits_trailered(worktree, session_id)
+    sha_range = f"{first_sha}^..{second_sha}"
+
+    common_kwargs = dict(
+        sha_range=sha_range,
+        reviewer="code-reviewer",
+        scope="chain",
+        diff_loc=10,
+        session_id=session_id,
+        caller_worktree=worktree,
+        workstream="",
+        _timestamp="2026-08-13-120000",
+    )
+    result1 = write_review_trail_entry(verdict="ok", **common_kwargs)
+    result2 = write_review_trail_entry(verdict="blocked", **common_kwargs)
+
+    assert result1["out_path"] != result2["out_path"]
+    trail_dir = worktree / "state" / "review-trail"
+    assert len(list(trail_dir.glob("*.json"))) == 2
+
+
+def test_dr216_uniquify_still_intact_for_distinct_content(tmp_path: Path) -> None:
+    """DR-216 regression guard: two records with the same timestamp+session
+    but genuinely different content still land as {stem}.json and
+    {stem}-2.json — the replay pre-check must not interfere with the
+    existing uniquify path when content actually differs."""
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    session_id = "sess1234abcd"
+    first_sha, second_sha = _init_git_repo_with_two_commits_trailered(worktree, session_id)
+    sha_range = f"{first_sha}^..{second_sha}"
+
+    common_kwargs = dict(
+        sha_range=sha_range,
+        reviewer="code-reviewer",
+        scope="chain",
+        session_id=session_id,
+        caller_worktree=worktree,
+        workstream="",
+        _timestamp="2026-08-13-120000",
+    )
+    result1 = write_review_trail_entry(verdict="ok", diff_loc=1, **common_kwargs)
+    result2 = write_review_trail_entry(verdict="blocked", diff_loc=2, **common_kwargs)
+
+    assert Path(result1["out_path"]).name == "2026-08-13-120000-sess1234.json"
+    assert Path(result2["out_path"]).name == "2026-08-13-120000-sess1234-2.json"
+
+
 def test_write_review_trail_entry_requires_resolvable_session_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

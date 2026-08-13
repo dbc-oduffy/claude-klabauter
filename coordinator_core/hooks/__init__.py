@@ -46,7 +46,7 @@ hooks-specific channel nobody would arm:
     anyone to arm.
 
 Default MUST remain eager (neither channel armed): importing this package eagerly
-registers all 15 hooks.* ops exactly as before this chunk, so the op-registry drift
+registers all 16 hooks.* ops exactly as before this chunk, so the op-registry drift
 guards this docstring names above continue to see the FULL registered set at import
 time in every consumer that does not opt into lazy mode — this is the same
 default-preserving guarantee coordinator_core.ops makes for the analogous op-registry
@@ -161,6 +161,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.subagent_zero_tool_use_surface",  # registers "hooks.subagent_zero_tool_use_surface"
     "coordinator_core.hooks.subagent_zero_tool_use_resolve",  # registers "hooks.subagent_zero_tool_use_resolve"
     "coordinator_core.hooks.subagent_arrival_check",  # registers "hooks.subagent_arrival_check"
+    "coordinator_core.hooks.subagent_fabrication_check",  # registers "hooks.subagent_fabrication_check"
 ]
 
 
@@ -268,7 +269,7 @@ def _lazy_ops_requested() -> bool:
 
 
 # Default behavior (neither channel armed) — UNCHANGED from before this chunk:
-# importing this package eagerly registers all 15 hooks.* ops, keeping the
+# importing this package eagerly registers all 16 hooks.* ops, keeping the
 # op-registry drift guards (authz OP_CLASSIFICATION coverage, ipc
 # _OP_KEY_SCOPE coverage, OP_MODULE_MAP parity) honest against the full set.
 if not _lazy_ops_requested():

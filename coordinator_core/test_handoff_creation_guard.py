@@ -108,6 +108,32 @@ class TestFindArchivedTwinByHandoffId:
         )
         assert find_archived_twin_by_handoff_id("hnd-body-only-999", tmp_path) is None
 
+    def test_malformed_no_closing_fence_still_resolves(self, tmp_path):
+        """Review: code-reviewer (slice 1, P2) — the malformed-fence fallback
+        (no closing '---' found before EOF) falls through to returning
+        whatever was read so far, matching the pre-narrowing full-file read.
+        Pin that a handoff_id living in an unterminated frontmatter block
+        still resolves, exactly as it did before this narrowing."""
+        archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-malformed.md"
+        archived.parent.mkdir(parents=True, exist_ok=True)
+        archived.write_text(
+            "\n".join(
+                [
+                    "---",
+                    'title: "Malformed"',
+                    "handoff_id: hnd-malformed-1",
+                    "status: closed",
+                    # No closing '---' fence anywhere in the file.
+                    "",
+                    "# Body runs right in without a second fence",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        found = find_archived_twin_by_handoff_id("hnd-malformed-1", tmp_path)
+        assert found == archived
+
     def test_large_corpus_narrowing_reads_only_frontmatter(self, tmp_path):
         """Pins the narrowing itself: a large body must not be read to find a match
         that lives in the frontmatter block near the top of the file."""

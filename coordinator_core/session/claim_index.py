@@ -134,6 +134,22 @@ from "invoke the op" to "enumerate peer session dirs and impersonate the
 specific holder," which is real, but it is not closed by this module or by
 C2, and is not tested as a pass/fail criterion.
 
+RECENCY-OF-EDIT WARN — TIMESTAMP CARRIED, NOT NEW I/O (C1d,
+``state/audits/2026-08-13-edit-recency-spike.md``). ``_last_verb_per_path``
+now carries ``(verb, timestamp)`` instead of a bare verb, ``rebuild()``
+threads it into ``_IndexState.edit_ts`` (path -> {claimant_sid:
+last_T_timestamp}), and ``lookup()`` re-keys it onto ``_LookupResult.
+edit_ts`` for its caller — the timestamp was already being parsed off every
+``touched.txt`` line and discarded one line before it reached a consumer;
+carrying it adds zero I/O (same files, same walk, same parse), so the
+37.9ms rebuild budget is unaffected. The stamp is the FIRST edit of a
+claimant's current claim run, not its latest (``scope.touch()`` dedups by
+returning early once a path's last event is already ``T``) — DR-296 (PM
+ruling) is to read it AS-IS: no repair, no re-stamp-in-place, no second
+field. See ``coordinator_core/ops/ceremony/scoped_git_commit.py``'s
+``_warn_recent_edits`` for the sole consumer, which logs a WARN and never
+gates on what it reads here.
+
 NO GIT SUBPROCESS SPAWNS. Every read in this module is a plain file read —
 that is the entire performance premise. The only exception is resolving the
 sessions-dir path itself when a caller does not supply one explicitly (via
@@ -146,7 +162,8 @@ from __future__ import annotations
 import dataclasses
 import os
 import time
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.session import core
 from coordinator_core.session.path_dialect import canonicalize_relative_path
@@ -243,10 +260,21 @@ class _LookupResult(dict):
     including C10) observes no behavior change — it is an additional
     attribute, never a change to ``complete`` or to the ``claimants``
     membership contract (``UNANSWERABLE in claimants`` is untouched).
+
+    ``edit_ts`` (C1d) maps each requested path (caller's ORIGINAL string,
+    same keying as the ``claimants`` mapping itself) -> ``{claimant_sid:
+    last_T_timestamp}`` for that path's currently-claiming sessions —
+    a straight passthrough of ``_IndexState.edit_ts`` re-keyed onto the
+    caller's original path strings, added so ``scoped_git_commit.py``'s
+    recency-of-EDIT warn (AC1d) can read timestamps off the SAME rebuild
+    this call already performed, without a second ``rebuild()`` pass. A
+    consumer that never reads it (every consumer before C1d) observes no
+    behavior change.
     """
 
     complete: bool = True
     abort_cause: Optional[str] = None
+    edit_ts: Dict[str, Dict[str, datetime]] = None  # type: ignore[assignment]
 
 
 @dataclasses.dataclass
@@ -268,11 +296,23 @@ class _IndexState:
     followed by the cap also expiring in the walk that follows), the FIRST
     cause encountered in walk order wins — this module never overwrites an
     already-set ``abort_cause``.
+
+    ``edit_ts`` (C1d) maps path -> ``{claimant_sid: last_T_timestamp}`` for
+    every claimant CURRENTLY holding a ``T`` claim on that path (mirrors
+    ``claims`` but carries the timestamp of each claimant's last-recorded
+    edit event instead of just membership). That stamp is the FIRST edit of
+    the claimant's current claim run, not its latest — DR-296 (PM ruling,
+    see ``lookup()``'s docstring) reads it AS-IS regardless; a session
+    editing one path for two hours carries a two-hour-old stamp here, by
+    design. A claimant with no parseable timestamp on its last ``T`` event
+    (legacy/malformed line) is absent from this mapping even though it is
+    still present in ``claims``.
     """
 
     claims: Dict[str, List[str]]
     complete: bool
     abort_cause: Optional[str] = None
+    edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
 
 
 def _read_lines_discard_torn_tail(path: str) -> tuple:
@@ -319,10 +359,21 @@ def _read_lines_discard_torn_tail(path: str) -> tuple:
     return [line for line in raw.split("\n") if line != ""], True
 
 
-def _last_verb_per_path(lines: List[str]) -> Dict[str, str]:
+def _last_verb_per_path(lines: List[str]) -> Dict[str, Tuple[str, Optional[datetime]]]:
     """Scan one claimant's raw ``touched.txt`` lines and keep, per path, the
-    verb of its LAST event in file order (append-only log -> file order IS
-    chronological order; no cross-file timestamp comparison is needed).
+    ``(verb, timestamp)`` of its LAST event in file order (append-only log
+    -> file order IS chronological order; no cross-file timestamp
+    comparison is needed).
+
+    WIDENED (C1d, ``state/audits/2026-08-13-edit-recency-spike.md`` finding
+    3) from a bare ``verb`` to ``(verb, timestamp)`` — the timestamp was
+    already being parsed off every line and thrown away one line before it
+    reached a caller. Carrying it costs zero additional I/O (same files,
+    same walk, same parse) and is what lets ``rebuild()`` /``lookup()``
+    answer the AC1d recency-of-EDIT question without a second read pass.
+    ``timestamp`` is ``None`` when the line's timestamp field does not
+    parse via ``datetime.fromisoformat`` (unknown time — never treated as
+    "recent" by a caller of this data).
 
     A line that does not match ``'<T|R> <timestamp> <path>'`` (via
     ``str.split(None, 2)``, so a path containing a space is never split)
@@ -330,16 +381,20 @@ def _last_verb_per_path(lines: List[str]) -> Dict[str, str]:
     legacy bare-path-line compatibility obligation, unlike
     ``coordinator_core.session.scope.parse_touch_event``.
     """
-    last_verb: Dict[str, str] = {}
+    last: Dict[str, Tuple[str, Optional[datetime]]] = {}
     for line in lines:
         parts = line.split(None, 2)
         if len(parts) != 3:
             continue
-        verb, _ts, path = parts
+        verb, ts_str, path = parts
         if verb not in ("T", "R"):
             continue
-        last_verb[_normalize_key(path)] = verb
-    return last_verb
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except ValueError:
+            ts = None
+        last[_normalize_key(path)] = (verb, ts)
+    return last
 
 
 def _agent_owner_sid(agent_dir_path: str) -> tuple:
@@ -458,6 +513,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
 
     deadline = time.monotonic() + REBUILD_WALL_CLOCK_CAP_SECS
     claims: Dict[str, set] = {}
+    edit_ts: Dict[str, Dict[str, datetime]] = {}
     touched_pairs, complete = _enumerate_touched_files(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
 
@@ -474,17 +530,28 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                 abort_cause = ABORT_CAUSE_IO_ERROR
             continue
         last_verb = _last_verb_per_path(content_lines)
-        for path, verb in last_verb.items():
+        for path, (verb, ts) in last_verb.items():
             if verb == "T":
                 claims.setdefault(path, set()).add(claimant_sid)
+                if ts is not None:
+                    edit_ts.setdefault(path, {})[claimant_sid] = ts
             else:  # "R" — a release only ever removes the claimant from the
                 # aggregate bucket. A same-file re-claim after a release
                 # can't reach this branch: this per-file scan already
                 # collapsed to one verb per path (see _last_verb_per_path).
                 claims.get(path, set()).discard(claimant_sid)
+                edit_ts.get(path, {}).pop(claimant_sid, None)
 
     result_claims = {path: sorted(sids) for path, sids in claims.items() if sids}
-    return _IndexState(claims=result_claims, complete=complete, abort_cause=abort_cause)
+    result_edit_ts = {
+        path: dict(sids_ts) for path, sids_ts in edit_ts.items() if sids_ts
+    }
+    return _IndexState(
+        claims=result_claims,
+        complete=complete,
+        abort_cause=abort_cause,
+        edit_ts=result_edit_ts,
+    )
 
 
 def lookup(
@@ -515,9 +582,10 @@ def lookup(
     what authorizes a write. The RETURNED dict is keyed on each entry's
     ORIGINAL, caller-supplied string (not the normalized form), so a caller
     that built ``paths`` from its own pathspec and looks results back up by
-    that same original string (e.g. ``_check_claim_conflicts`` in
-    ``coordinator_core/ops/ceremony/scoped_git_commit.py``) still finds its
-    key. Two distinct original strings that normalize to the same key both
+    that same original string (e.g. ``_warn_recent_edits`` in
+    ``coordinator_core/ops/ceremony/scoped_git_commit.py``, C1d's
+    recency-of-EDIT warn) still finds its key. Two distinct original
+    strings that normalize to the same key both
     receive that key's claimant list.
 
     Returns a ``_LookupResult`` — a ``dict`` subclass that also carries a
@@ -530,11 +598,13 @@ def lookup(
         result = _LookupResult((path, [UNANSWERABLE]) for path in paths)
         result.complete = False
         result.abort_cause = ABORT_CAUSE_EMPTY_BASE
+        result.edit_ts = {}
         return result
 
     state = rebuild(sessions_dir=base)
 
     result = _LookupResult()
+    result_edit_ts: Dict[str, Dict[str, datetime]] = {}
     for path in paths:
         normalized = _normalize_key(path)
         claimants = state.claims.get(normalized)
@@ -544,7 +614,11 @@ def lookup(
             result[path] = [UNANSWERABLE]
         else:
             result[path] = []
+        path_edit_ts = state.edit_ts.get(normalized)
+        if path_edit_ts:
+            result_edit_ts[path] = dict(path_edit_ts)
     result.complete = state.complete
     result.abort_cause = state.abort_cause
+    result.edit_ts = result_edit_ts
 
     return result

@@ -149,7 +149,11 @@ from coordinator_core.ops.distill_stamp_disposal import (
     load_disposal_manifest,
     manifest_path_for_run,
 )
-from coordinator_core.ops.fleet._common import _make_git_env, main_worktree_root
+from coordinator_core.ops.fleet._common import (
+    _make_git_env,
+    _update_index_with_retry,
+    main_worktree_root,
+)
 from coordinator_core.ops.fleet._findings_reap import _is_tracked
 from coordinator_core.ops.fleet.migrate_handoff_vocabulary import (
     _HEIR_EDGE_KINDS,
@@ -1046,7 +1050,7 @@ async def _delete_tracked_and_append_log(
         # Non-fatal index resync (mirrors rm_and_commit's own posture).
         # MUST run before the claim-release call below: the commit just
         # above landed via the isolated private index (idx_path), so the
-        # MAIN .git/index is still stale relative to HEAD until this loop
+        # MAIN .git/index is still stale relative to HEAD until this call
         # brings it in line — `release_committed_claims` reads `git status
         # --porcelain` against the main index, and a stale main index
         # reports every reaped path as dirty (`AD <path>`, added-in-index/
@@ -1054,33 +1058,86 @@ async def _delete_tracked_and_append_log(
         # and silently no-op'ing the release (latent-bug fix, C3c: caught
         # by this route's own claim-release test — see
         # test_distill_apply_disposal_claim_release.py).
+        #
+        # CORRECTED BURST-SOURCE ACCOUNTING (docs/plans/2026-08-13-commit-
+        # seams-inherit-lock-reap-and-retry.md C6): the plan's table listed
+        # this module as "two `add`s + one `commit`" (3 acquisitions/call).
+        # That is not what this function does. Every `read-tree`/`rm`/`add`
+        # (denorm+log)/`commit` call above runs with `base_env` --
+        # `_make_git_env(idx_path=idx_path)`, i.e. `GIT_INDEX_FILE`
+        # redirected to a private temp index -- so NONE of them ever takes
+        # the shared `.git/index.lock`, the same private-index escape hatch
+        # `scoped_git_commit`'s agree branch already gets credit for in the
+        # plan's Problem section. This resync block, which runs WITHOUT
+        # `idx_path` (against the REAL `.git/index`), is the ONLY step in
+        # this whole function that ever touches the shared lock -- and it
+        # was previously one `git update-index` subprocess PER reaped /
+        # staged_denorm / log path (an O(N) burst the table never counted).
+        #
+        # COUNT (AC-7): collapsed to ONE `update-index` invocation covering
+        # the whole batch -- `git update-index` applies whichever of
+        # `--remove`/`--add` most recently preceded a filename to each
+        # subsequent filename argument, so a single process call can stage
+        # both halves. `--` is deliberately NOT used here (unlike the
+        # single-path calls it replaces): a trailing `--` ends option
+        # parsing outright, which would make a second `--add`/`--remove`
+        # flag impossible to express in the same invocation; every path
+        # here is a worktree-relative repo path, never a caller-controlled
+        # arbitrary string, so the usual "a dash-prefixed path could be
+        # misread as a flag" hazard does not apply.
+        #
+        # RETRY (AC-8): composed locally via
+        # `coordinator_core.ops.fleet._common._update_index_with_retry` --
+        # the SAME exponential-backoff helper `archive_and_commit`/
+        # `rm_and_commit` already use for their own main-index resync
+        # (imported here, not reimplemented; already in this module's
+        # neighbourhood via the existing `_make_git_env`/`main_worktree_root`
+        # import from the same `_common` module). `git_native` (C1's retry
+        # layer) was rejected as the route: it is a SYNCHRONOUS
+        # `subprocess.run` wrapper, and this whole module is async-only by
+        # its own module-docstring negative-spec ("does NOT use blocking
+        # `subprocess.run` for any git call — every git subprocess is
+        # `asyncio.create_subprocess_exec` + await, D4") -- repointing at it
+        # would mean either blocking this coroutine's event-loop turn or
+        # wrapping it in its own `asyncio.to_thread` shim, whereas
+        # `_update_index_with_retry` is already async and already retried on
+        # the fleet-derived schedule `git_lock_retry.DEFAULT_BACKOFF_
+        # SCHEDULE_S` itself cites as precedent.
         main_env = _make_git_env()
-        for p in reaped:
-            rc, _out, err = await _run_git(
-                "update-index", "--remove", "--", str(p), cwd=worktree_root, env=main_env
-            )
-            if rc != 0:
-                _LOG.error(
-                    "distill.apply_disposal: main-index resync remove failed for %s: %s",
-                    p, err.decode(errors="replace").strip(),
-                )
-        for p in staged_denorm:
-            rc, _out, err = await _run_git(
-                "update-index", "--add", "--", str(p), cwd=worktree_root, env=main_env
-            )
-            if rc != 0:
-                _LOG.error(
-                    "distill.apply_disposal: main-index resync add failed for denorm %s: %s",
-                    p, err.decode(errors="replace").strip(),
-                )
+        resync_argv: list[str] = ["git", "update-index"]
+        if reaped:
+            resync_argv += ["--remove"] + [str(p) for p in reaped]
+        resync_add_paths: list[Path] = list(staged_denorm)
         if log_touched:
-            rc, _out, err = await _run_git(
-                "update-index", "--add", "--", str(log_path), cwd=worktree_root, env=main_env
+            resync_add_paths.append(log_path)
+        if resync_add_paths:
+            resync_argv += ["--add"] + [str(p) for p in resync_add_paths]
+
+        if len(resync_argv) > 2:
+            resync_err = await _update_index_with_retry(
+                resync_argv, cwd=worktree_root, env=main_env
             )
-            if rc != 0:
+            if resync_err is not None:
+                # Review: code-reviewer P2 (2026-08-13) — `git update-index`
+                # applies its argv positionally and can partially succeed
+                # before failing on a later path, so the batch below is NOT
+                # a confirmed-affected list — it is everything that WAS IN
+                # the failing call, some of which may already be correctly
+                # staged. Naming a single culprit would require re-running
+                # per-path (which would undo the acquisition win this batch
+                # collapse exists for — see the COUNT/RETRY comment above),
+                # so this message says exactly what it knows: the batch that
+                # was in flight, and git's own stderr (resync_err, which
+                # names the offending path when git supplies one) — never
+                # "these paths are dirty."
                 _LOG.error(
-                    "distill.apply_disposal: main-index resync add failed for log: %s",
-                    err.decode(errors="replace").strip(),
+                    "distill.apply_disposal: main-index resync FAILED after "
+                    "retry — batch attempted (not all necessarily affected; "
+                    "git update-index applies positionally and may have "
+                    "partially succeeded before failing) was %s. git's own "
+                    "error (may name the specific offending path): %s",
+                    [rel_id(p, worktree_root) for p in reaped + resync_add_paths],
+                    resync_err,
                 )
 
         # Commit succeeded — tracked-parent denorm entries finally land too.

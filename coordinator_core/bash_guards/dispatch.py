@@ -239,6 +239,7 @@ from coordinator_core.bash_guards._helpers import (
 )
 from coordinator_core.guard_advisory_counter import (
     record_advisory_fire as _record_advisory_fire,
+    record_deny_fire as _record_deny_fire,
 )
 from coordinator_core.bash_guards._command_tokenizer import (
     ResolvedCommand as _ResolvedCommand,
@@ -306,6 +307,10 @@ from coordinator_core.bash_guards.block_subagent_stash_creation import (
 from coordinator_core.bash_guards.block_subagent_grant_acquisition import (
     check as _check_subagent_grant_acquisition,
     MATCHERS as _matchers_subagent_grant_acquisition,
+)
+from coordinator_core.bash_guards.block_subagent_guard_grant import (
+    check as _check_subagent_guard_grant,
+    MATCHERS as _matchers_subagent_guard_grant,
 )
 from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
     check as _check_block_noncanonical_branch_creation,
@@ -1252,7 +1257,16 @@ def evaluate_payload_json(
                     "continues." % (name, session_id),
                     file=sys.stderr,
                 )
+                try:
+                    _record_deny_fire(name, session_id, True, cwd)
+                except Exception:
+                    pass
                 continue
+            if _is_hard_deny_envelope and not _suppressed:
+                try:
+                    _record_deny_fire(name, session_id, False, cwd)
+                except Exception:
+                    pass
             if _is_hard_deny_envelope and _sentinel_eligible and not _suppressed:
                 # C4 (docs/plans/2026-08-03-in-session-operator-unlock-for-
                 # the-hard-.md): the grant check just above failed (no
@@ -1570,6 +1584,15 @@ def _build_guard_chain(
         # same `offer-git-c` short-circuit ordering requirement as every
         # entry in this CONFINEMENT_DENY run.
         GuardEntry("block-subagent-grant-acquisition", lambda: _check_subagent_grant_acquisition(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_grant_acquisition)),
+        # block-subagent-guard-grant -- Bash-channel leg of the EM
+        # guard-grant route (plan 2026-08-13-em-exercisable-in-band-grant-
+        # route.md, C3), load-bearing per PM ruling 1 (see that module's own
+        # docstring). Hard-deny, identity-gated to subagents only, same
+        # posture as block-subagent-grant-acquisition immediately above.
+        # Registered directly adjacent to it -- same `offer-git-c`
+        # short-circuit ordering requirement as every entry in this
+        # CONFINEMENT_DENY run.
+        GuardEntry("block-subagent-guard-grant", lambda: _check_subagent_guard_grant(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_guard_grant)),
         # Advisory (never a deny) sibling of `destructive-git-revert` above
         # (Review: staff-eng, Finding 0). Registered here -- after EVERY
         # CONFINEMENT_DENY hard-deny guard, and ahead of `offer-git-c`'s

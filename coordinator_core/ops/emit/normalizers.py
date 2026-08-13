@@ -141,8 +141,16 @@ _SECTION_DERIVED_NULL_KEYS = frozenset({"deliverable_status", "shipped_sha"})
 # except `spike-result` has an `x-baton-class` entry, and a live `emit-cadence` run.
 # Contrast `body` below — do NOT read this entry as licence to drop an additive field whose
 # comparison IS the load-bearing assertion.
+# `producer` (HandoffSummary, cockpit contract 3.12.0 producer axis) is the same shape as
+# `baton_class` one paragraph up and is dropped for the same reason: it postdates the golden
+# capture, the retired bash oracle never emitted it, and the golden carries NO key at all.
+#
+# Its no-coverage-lost argument is NOT `baton_class`'s, though, and must not be read as such —
+# `producer` is not a derivative of any already-dropped field. It costs no coverage here because
+# its assertions live in a dedicated home: `coordinator_core/contract/cockpit_schema/tests/test_producer_axis_
+# entity.py`. Drop it from the frozen-golden diff, never from that.
 _SECTION_DROP_KEYS = frozenset(
-    {"content_hash", "kind", "baton_class", "_goal_ids", "archived", "decision_note"}
+    {"content_hash", "kind", "baton_class", "producer", "_goal_ids", "archived", "decision_note"}
 )
 
 # Attribution slug — normalized per contract (REPO_NAME) to tolerate remote/machine variance.

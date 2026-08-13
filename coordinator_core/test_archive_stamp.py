@@ -1741,6 +1741,57 @@ class TestHandoffTransitionWrappers:
         assert "deployment_state: in_flight" in text
         assert "claimed_by: sess-abc" in text
 
+    def test_claim_return_result_landed_vs_no_op_vs_rejection(self, tmp_path, monkeypatch):
+        """C2/AC-4/AC-7: return_result=True distinguishes landed
+        (exit_code 0, applied True), no-op (exit_code 0, applied False, with a
+        message), and rejection (exit_code 1, error carrying the validator's
+        own text) — and a rejection from a rule OTHER than the summary cap
+        produces its own message, unchanged, not special-cased."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-return-result")
+
+        # landed
+        hp_landed = _seed_handoff(repo, "rr-landed.md", "open", "ready_to_fire")
+        result = arstamp.cs_claim_handoff(str(hp_landed), return_result=True)
+        assert isinstance(result, dict)
+        assert result["exit_code"] == 0
+        assert result.get("applied") is True
+
+        # no-op (already claimed — idempotent re-claim)
+        result2 = arstamp.cs_claim_handoff(str(hp_landed), return_result=True)
+        assert result2["exit_code"] == 0
+        assert result2.get("applied") is False
+
+        # rejection — from a rule OTHER than the summary cap (simulated via
+        # the underlying op handler, not pattern-matched on message content)
+        hp_reject = _seed_handoff(repo, "rr-reject.md", "open", "ready_to_fire")
+
+        async def _fake_transition(params, repo_root=None):
+            return {
+                "exit_code": 1,
+                "error": "handoff frontmatter validation failed: some other "
+                "cross-field rule was violated (not the summary cap)",
+            }
+
+        monkeypatch.setattr(
+            "coordinator_core.ops.handoff_transition._handler", _fake_transition
+        )
+        result3 = arstamp.cs_claim_handoff(str(hp_reject), return_result=True)
+        assert result3["exit_code"] == 1
+        assert (
+            result3["error"]
+            == "handoff frontmatter validation failed: some other "
+            "cross-field rule was violated (not the summary cap)"
+        )
+
+        # bare-int default is unaffected
+        monkeypatch.undo()
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-return-result-2")
+        hp_default = _seed_handoff(repo, "rr-default.md", "open", "ready_to_fire")
+        rc = arstamp.cs_claim_handoff(str(hp_default))
+        assert rc == 0
+
     def test_claim_threads_deliverable_id_into_session_shape(self, tmp_path, monkeypatch):
         """C2 write-moment: a claimed handoff carrying deliverable_id frontmatter
         gets it recorded into session-shape.json's pickup object (single cheap
@@ -1805,6 +1856,124 @@ class TestHandoffTransitionWrappers:
         text = hp.read_text(encoding="utf-8")
         assert "status: claimed" in text
         assert "deployment_state: in_flight" in text
+
+    def test_claim_populates_session_goal_from_handoff_title(self, tmp_path, monkeypatch):
+        """2026-08-13 session-goal-field-has-no-writer: claiming a handoff
+        writes the claiming session's meta.json `goal`, sourced from the
+        handoff's own title, carrying the `pickup: ` provenance prefix."""
+        from coordinator_core.session import core as session_core
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "goal1.md", "open", "ready_to_fire")
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-goal-1")
+        session_core.init("sess-goal-1", cwd=str(repo))
+
+        rc = arstamp.cs_claim_handoff(str(hp))
+        assert rc == 0
+
+        meta_path = repo / ".git" / "coordinator-sessions" / "sess-goal-1" / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert meta["goal"] == "pickup: Test Handoff goal1.md"
+
+    def test_claim_populates_session_goal_from_summary_when_title_absent(self, tmp_path, monkeypatch):
+        """Title absent/empty falls back to `summary`."""
+        from coordinator_core.session import core as session_core
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path = repo / "state" / "handoffs" / "goal2.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fm = (
+            'title: ""\n'
+            "created: 2026-01-01\n"
+            "branch: work/test/2026-01-01\n"
+            "status: open\n"
+            'predecessor: "none"\n'
+            "deployment_state: ready_to_fire\n"
+            'summary: "Fallback summary text"\n'
+        )
+        path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+        _git(repo, "add", str(path.relative_to(repo)))
+        _git(repo, "commit", "-m", "add goal2")
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-goal-2")
+        session_core.init("sess-goal-2", cwd=str(repo))
+
+        rc = arstamp.cs_claim_handoff(str(path))
+        assert rc == 0
+
+        meta_path = repo / ".git" / "coordinator-sessions" / "sess-goal-2" / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert meta["goal"] == "pickup: Fallback summary text"
+
+    def test_init_writes_no_goal_placeholder(self, tmp_path, monkeypatch):
+        """AC4: session init leaves `goal` empty — nothing derives a slug or
+        placeholder at boot."""
+        from coordinator_core.session import core as session_core
+
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        ok = session_core.init("sess-init-only", cwd=str(repo))
+        assert ok is True
+
+        meta_path = repo / ".git" / "coordinator-sessions" / "sess-init-only" / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert meta.get("goal", "") == ""
+
+    def test_claim_stays_nonfatal_when_session_goal_write_fails(self, tmp_path, monkeypatch):
+        """AC5: the goal writer failing must not fail the claim."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "goal3.md", "open", "ready_to_fire")
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-goal-nonfatal")
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated update_meta_field failure")
+
+        monkeypatch.setattr(
+            "coordinator_core.session.core.update_meta_field", _boom
+        )
+
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 0
+        assert "session goal write did not complete" in buf.getvalue()
+        text = hp.read_text(encoding="utf-8")
+        assert "status: claimed" in text
+
+    def test_claim_warns_when_update_meta_field_returns_false(self, tmp_path, monkeypatch):
+        """update_meta_field returning False (no exception — the realistic
+        failure mode when meta.json is absent/unreadable/not-an-object) must
+        still surface a WARNING, not vanish silently; the claim stays
+        non-fatal regardless."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "goal4.md", "open", "ready_to_fire")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-goal-false")
+
+        monkeypatch.setattr(
+            "coordinator_core.session.core.update_meta_field",
+            lambda *args, **kwargs: False,
+        )
+
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = arstamp.cs_claim_handoff(str(hp))
+
+        assert rc == 0
+        assert "session goal write did not complete" in buf.getvalue()
 
     def test_consume_unconsume_deprecated_aliases_still_work(self, tmp_path, monkeypatch):
         """DR-084 verb rename (consume->claim, unconsume->unclaim): the OLD
@@ -3158,6 +3327,16 @@ class TestDiskReadHelpersDegradeOnUnicodeDecodeError:
         assert arstamp._reread_supersede_frontmatter(p) == (None, None)
 
 
+# Negative spec -- `spawns_process` is CLASS-scoped here, never a module-level
+# `pytestmark`. A module-level marker was tried and reverted (2026-08-13): it
+# was written as `pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]`,
+# and `cadence` is the fast-tier exclusion marker, so it silently dropped all
+# ~148 tests in this file out of the fast tier to satisfy the spawn ratchet.
+# Class scoping marks the only class that actually spawns, keeps the rest of
+# this file in the fast tier, and keeps this file's entry in the ratchet's
+# `_BASELINE` valid (the pre-existing unmarked spawn sites still register).
+# See state/debt-backlog/DSR-2026-08-13-archive-stamp-import-order-drops-an-op-
+# from-the-registry.yaml.
 @pytest.mark.spawns_process
 class TestArchiveStampFirstImportOrderDoesNotDropOps:
     """Regression: state/debt-backlog/DSR-2026-08-13-archive-stamp-import-order-

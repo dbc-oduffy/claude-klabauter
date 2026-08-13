@@ -14,6 +14,7 @@ from coordinator_core.meta_repo_identity import (
     MetaRepoResolutionError,
     is_meta_repo,
 )
+from coordinator_core.testing import symlink_capability
 
 
 # --- explicit git_root, CLAUDE_HOME set (test-sandbox shape) --------------
@@ -41,6 +42,7 @@ def test_false_when_git_root_is_a_sibling_repo(tmp_path, monkeypatch):
     assert is_meta_repo(str(fake_sibling)) is False
 
 
+@symlink_capability.requires_symlink_capability
 def test_canonicalizes_symlinked_git_root(tmp_path, monkeypatch):
     fake_home = tmp_path / "home"
     fake_meta = fake_home / ".claude"

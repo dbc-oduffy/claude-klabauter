@@ -108,6 +108,31 @@ blocking dependent in the MESSAGE — `exclude` no longer affects the
 decision at all, since a dependent-free roadmap baton is refused exactly
 the same as one with dependents.
 
+**closed-baton-is-terminal gate (2026-08-13, plan
+closed-baton-is-terminal-d6-declines-per-predecessor, chunk C2):** a third
+sibling gate in the same `if mode == "supersede":` block as the DR-242 gate
+and the roadmap-baton `blocked_by` gate above, before `do_stamp` is computed
+and before the status flip. Refuses whenever the target's on-disk
+`deployment_state` is already `closed` (as stamped by
+`archive-stamp-cli close-handoff --reason <cancelled|displaced|stale>`,
+which pairs `deployment_state: closed` with `closed_reason`): a closed baton
+is terminal and is EXEMPT from supersede, full stop, keyed on
+`deployment_state` alone (not `kind`). Superseding one would overwrite a
+documented, deliberate closure with a succession edge saying something
+different, and would strand `closed_reason` against the schema's own
+bidirectional `_cf_closed_reason_required` cross-field rule, failing this
+op's post-mutation validation. This is defense-in-depth for the manual
+`handoff-archive-transition supersede` CLI route only — the primary fix is
+brief-side (`d6` declines to emit the directive for a closed predecessor
+before this op is ever called on the common `/handoff` path). The refusal is
+a plain `_err` return (`superseded: False`, no mutation attempted), never a
+`retained: True` — same rationale as § roadmap-baton blocked_by gate's own
+Layering note. Negative-spec: this gate does NOT loosen
+`_cf_closed_reason_required` or the `closed_reason` <=> `deployment_state:
+closed` coupling it enforces — both stay byte-unchanged and load-bearing
+across the rest of the corpus; this gate exists BECAUSE that coupling is
+real, not to route around it.
+
 Reuse (no reimplementation of tested internals):
   - coordinator_core.archive_stamp.stamp_shipped_in / _run_git — imported
     function-local at each call site, not at module top-level: archive_stamp
@@ -441,8 +466,22 @@ def _current_deployment_state(handoff_abs: Path) -> Optional[str]:
     block (see module docstring § Terminal-state precondition) — reads
     AFTER any do_stamp/do_supersede mutation earlier in the same call, so a
     stamp_shipped/supersede call sees its own fresh write.
+
+    Review: code-reviewer (P3) — normalized (stripped + case-folded) at this
+    single accessor rather than at each of its three raw `==`/membership
+    call sites (the replay-convergence check, the closed-baton gate, and the
+    terminal-state-precondition membership test against
+    `_TERMINAL_DEPLOYMENT_STATES`), so all three benefit uniformly instead of
+    normalizing only one and leaving the other two's raw compares as a worse,
+    newly-introduced inconsistency. Safe here because every literal compared
+    against (`"closed"`, `"continued"`, and every member of
+    `_TERMINAL_DEPLOYMENT_STATES`) is already lowercase/stripped, so
+    normalizing the read value cannot change behavior on a well-formed
+    record — only on a stray case/whitespace variant, which is exactly the
+    class this closes.
     """
-    return _current_fm_field(handoff_abs, "deployment_state")
+    val = _current_fm_field(handoff_abs, "deployment_state")
+    return val.strip().lower() if val is not None else None
 
 
 def _current_kind(handoff_abs: Path) -> Optional[str]:
@@ -1089,6 +1128,51 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 )
                 out["mode"] = mode
                 return out
+
+        # ------------------------------------------------------------------
+        # Closed-baton-is-terminal gate (docs/plans/2026-08-13-closed-
+        # baton-is-terminal-d6-declines-per-predecessor.md, chunk C2 --
+        # review nit: distinguished from the UNRELATED "C2" label above
+        # (roadmap-baton blocked_by gate, chunk C2 of
+        # c2-supersede-gate-chaseable-terminus) so a grep for "C2" in this
+        # file is not ambiguous between the two plans' chunks).
+        # Defense-in-depth sibling to the DR-242 and roadmap-baton gates
+        # above, in the SAME `if mode == "supersede":` block, before
+        # `do_stamp` is computed and before the status flip — a target
+        # already `deployment_state: closed` is terminal and is refused
+        # outright, never superseded. This is the manual
+        # `handoff-archive-transition supersede` CLI route's backstop; the
+        # primary fix is brief-side (d6 declines per-predecessor before the
+        # directive is ever emitted, so this op is never reached on the
+        # common `/handoff` path for a closed predecessor).
+        #
+        # Refusal, not retention: returns the same refusal shape (`_err`,
+        # superseded: False, no mutation attempted) the roadmap-baton arm
+        # above uses. Per the module's own § Layering note, a
+        # `retained: True` here reaches a caller keyed on
+        # `result["superseded"]` that raises on False — a "graceful retain"
+        # would be a harder, dirtier block than a plain refusal.
+        #
+        # Negative-spec: this gate does NOT loosen
+        # `frontmatter/schema_validate.py::_cf_closed_reason_required` — that
+        # rule, and the bidirectional `closed_reason` <=> `deployment_state:
+        # closed` coupling it enforces, stay byte-unchanged and load-bearing
+        # across the rest of the corpus. This gate exists precisely because
+        # that coupling is real: superseding a closed target would strand
+        # `closed_reason` against a `deployment_state` no longer `closed`,
+        # failing this op's own post-mutation validation — refusing before
+        # the flip is cheaper and clearer than failing after it.
+        # ------------------------------------------------------------------
+        if _current_deployment_state(contained) == "closed":
+            closed_reason = _current_fm_field(contained, "closed_reason")
+            out = _err(
+                f"mode='supersede' refused: {rel_id} is deployment_state: "
+                f"closed (closed_reason: {closed_reason}) — a closed baton "
+                "is terminal and is not superseded; if the closure was "
+                "wrong, reopen it first"
+            )
+            out["mode"] = mode
+            return out
 
     do_stamp = mode in ("stamp_shipped", "supersede")
     do_supersede = mode == "supersede"

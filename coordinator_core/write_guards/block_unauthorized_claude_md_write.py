@@ -402,10 +402,23 @@ def _advisory_reason(file_path: str) -> str:
     write-grant.md): this guard's whole audience is dispatched subagents —
     a subagent cannot observe, from where it stands, whether its dispatch
     carries a PM ratification; it only hears what its EM tells it. The
-    rendered grant command is therefore attributed to the EM, not framed
-    as something the reading subagent should itself run — that framing
-    was this guard's original defect (the deny handed the very audience
-    it was meant to bind a command that cleared its own gate).
+    grant step is therefore attributed to the EM, not framed as something
+    the reading subagent should itself run — that framing was this
+    guard's original defect (the deny handed the very audience it was
+    meant to bind a command that cleared its own gate).
+
+    RESHAPE (C4(c), docs/plans/2026-08-13-guard-messages-stop-handing-
+    agents-the-keys.md, AC-1/AC-2): this leg fires ONLY when ``agent_id``
+    is present (``check()``'s allow condition (1) above) -- i.e. only for
+    a dispatched subagent, never an EM-inline write. The prior render
+    still spliced the resolved ``PYTHONPATH=... python3 -m
+    coordinator_core.session.claude_md_grant grant pm ...`` invocation
+    into this text, unconditionally, for that same audience -- the exact
+    "shown the button and told not to press it" shape ``_deny_reason``'s
+    own C4(b) reshape already closed on the DENY leg. Closed here too:
+    the command is gone, no `payload=`/audience gate substitutes for it
+    (this leg's audience is already known by construction, same reasoning
+    as `_deny_reason`'s own docstring note on `payload=`).
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     return (
@@ -414,8 +427,8 @@ def _advisory_reason(file_path: str) -> str:
         "without a session grant -- the growth-only deny this guard "
         "enforces does not apply here. If a later edit in this same "
         "session GROWS the file instead, that edit will need a live "
-        "session grant. Filing one is the EM's action, not this agent's: "
-        "the EM runs (" + _grant_cli_invocation() + ")."
+        "session grant. Filing one is the EM's action, not this agent's -- "
+        "report it as a dependency to your EM rather than working around it."
     )
 
 
@@ -495,8 +508,15 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
     # to the agent forbidden to run it) is exactly what this removes. Do
     # NOT re-add a pointer, wiki reference, or "an unlock exists" marker
     # here -- this guard has no EM audience to point at; see the ruling.
-    # `_grant_cli_invocation()` itself is NOT dead: `_advisory_reason`
-    # (the shrink/size-neutral leg) still calls it directly.
+    # `_grant_cli_invocation()` itself is retained, unused by any renderer
+    # as of C4(c) (docs/plans/2026-08-13-guard-messages-stop-handing-
+    # agents-the-keys.md): `_advisory_reason` (the shrink/size-neutral leg)
+    # used to call it directly, and that render was the same "shown the
+    # button, told not to press it" shape closed here. Kept, not deleted --
+    # its own test coverage
+    # (`TestDenyTextNamesAlternativeAndOverride::test_grant_cli_*`) still
+    # pins the claude-klabauter-root resolution/fallback/shell-safety logic on its
+    # own merits, independent of whether any guard message renders it.
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

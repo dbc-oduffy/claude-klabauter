@@ -673,7 +673,8 @@ def test_provisioned_doc_contains_superset_scaffold_fields(
 
     text = doc_path.read_text(encoding="utf-8")
     assert "commits: []" in text
-    assert "dispatch_feed: null" in text
+    assert "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter" in text
+    assert "  gate_kind: none" in text
     assert "## Run notes" in text
     assert "## Observations" in text
     assert "## Exit interview" in text
@@ -795,6 +796,39 @@ def test_divergence_field_parses_as_object_under_restricted_yaml_parser(
     assert divergence["diverged"] is False
 
 
+def test_dispatch_feed_field_is_block_style_and_parses_as_object() -> None:
+    """AC7 companion to the divergence-flow-style regression net above:
+    ``dispatch_feed`` is a real, block-style YAML object placeholder now
+    (no longer the literal ``dispatch_feed: null`` scalar), and must round
+    -trip through the SAME restricted parser (``schema_validate.parse_yaml``,
+    which does not support flow-style mappings). Assert block style
+    explicitly (no ``{`` on the ``dispatch_feed:`` line) rather than merely
+    that the field parses -- a flow-style ``dispatch_feed: {...}`` would
+    still happen to parse under full-spec ``yaml.safe_load`` but silently
+    fail the restricted parser, exactly the defect class recorded at
+    cross-repo/archive/2026-07-25-example-doctrine-repo-em-provision-report-
+    divergence-flow-style.md.
+    """
+    text = _build_doc_text(agent_type=REPORT_SIDECAR_TYPE, spawned_at="2026-07-13T00:00:00Z")
+
+    dispatch_feed_line = next(
+        line for line in text.splitlines() if line.startswith("dispatch_feed:")
+    )
+    assert "{" not in dispatch_feed_line, (
+        f"dispatch_feed header line is flow-style, not block-style: {dispatch_feed_line!r}"
+    )
+
+    frontmatter = text.split("---\n")[1]
+    parsed = parse_yaml(frontmatter)
+    dispatch_feed = parsed["dispatch_feed"]
+    assert isinstance(dispatch_feed, dict), (
+        f"dispatch_feed parsed as {type(dispatch_feed).__name__} ({dispatch_feed!r}), "
+        "not dict -- flow-style mapping regression"
+    )
+    assert dispatch_feed["gate_kind"] == "none"
+    assert dispatch_feed["write_files"] == []
+
+
 # ---------------------------------------------------------------------------
 # --type axis + template registry
 # ---------------------------------------------------------------------------
@@ -810,7 +844,16 @@ _LEGACY_RUN_REPORT_TEMPLATE = (
     "divergence:\n"
     "  diverged: false\n"
     "commits: []\n"
-    "dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter\n"
+    "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter\n"
+    "  label: null\n"
+    "  agent_type: null\n"
+    "  model: null\n"
+    "  effort: null\n"
+    "  schema_ref: null\n"
+    "  brief_ref: null\n"
+    "  gate_kind: none\n"
+    "  write_files: []\n"
+    "  est_min: null\n"
     "---\n\n"
     "## Run notes\n\n"
     "## Observations\n\n"
@@ -830,8 +873,7 @@ def test_build_doc_text_no_doc_type_matches_frozen_legacy_shape_byte_for_byte() 
     'Divergence from plan' or 'Completion' additions leak into the
     no-type-key path). The frontmatter now carries the SUBSUME
     `lead_session_id` field too -- omitted-arg here renders as the
-    literal `null`, mirroring the existing `dispatch_feed: null`
-    placeholder convention, since this 2-arg call predates and doesn't
+    literal `null`, since this 2-arg call predates and doesn't
     supply that field."""
     agent_type = REPORT_SIDECAR_TYPE
     spawned_at = "2026-07-13T00:00:00Z"
@@ -918,7 +960,8 @@ def test_type_argument_selects_expected_template_shape(
     assert "What did you have to work out that the brief could have told you?" in text
     # No new frontmatter fields -- same seven-field superset scaffold as run-report.
     assert "commits: []" in text
-    assert "dispatch_feed: null" in text
+    assert "dispatch_feed:  # forward-declared, INERT until pcli-04 emitter" in text
+    assert "  gate_kind: none" in text
     assert "divergence:\n  diverged: false" in text
     assert f"lead_session_id: {session_id}" in text
 

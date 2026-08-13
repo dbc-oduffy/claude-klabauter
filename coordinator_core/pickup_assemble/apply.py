@@ -166,6 +166,7 @@ from coordinator_core.archive_stamp import (
     cs_release_memo_revert,
     cs_unclaim_handoff,
 )
+from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.contract import apply_base
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
@@ -174,6 +175,7 @@ from coordinator_core.frontmatter.primitives import (
     replace_fm_field,
     split_frontmatter,
 )
+from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.locked_write import locked_rmw
 from coordinator_core.pickup_assemble import (
     DISPOSITION_CONTENT_KEYS,
@@ -191,6 +193,7 @@ from coordinator_core.session.claims import (
     CLAIM_STAGE_BRIEF,
     claim_artifact,
     claim_stage,
+    mark_claim_stamped,
     promote_claim_stage,
     release_artifact,
 )
@@ -351,9 +354,28 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
         if len(args) != 2:
             raise UnrecognizedDirective(f"archive-stamp-cli {verb}: expected 1 argument")
         handoff_path = _assert_in_repo_root(Path(args[1]), repo_root)
-        ok = _normalize_primitive_result(cs_claim_handoff(str(handoff_path)))
+        # return_result=True (C2/2026-08-13) — surface the op's real error
+        # (e.g. a `_HANDOFF_CROSS_FIELD_RULES` validation rejection) rather
+        # than a generic "failed", same reasoning as claim-memo-stamp below.
+        result = cs_claim_handoff(str(handoff_path), return_result=True)
+        ok = _normalize_primitive_result(result["exit_code"])
         if not ok:
-            raise RuntimeError(f"archive-stamp-cli {verb} {args[1]}: failed")
+            raise RuntimeError(
+                f"archive-stamp-cli {verb} {args[1]}: {result.get('error', 'failed')}"
+            )
+        # Durable stamp-landed marker (cross-repo/inbox/2026-08-13-example-doctrine-repo-
+        # em-pickup-already-satisfied-masks-a-refused-write.md) — written ONLY
+        # here, after `ok` has confirmed `cs_claim_handoff`'s underlying
+        # `handoff_transition._claim` genuinely landed the frontmatter mutation
+        # (its own post-write `_validate_fm` pass already happened inside that
+        # call). Best-effort: a marker-write failure must never fail a
+        # directive whose real work already succeeded.
+        try:
+            _common_dir = git_common_dir(repo_root)
+        except Exception:
+            _common_dir = None
+        if _common_dir is not None:
+            mark_claim_stamped(handoff_claim_dir(_common_dir, handoff_path))
         return {"cli": "archive-stamp-cli", "verb": "claim-handoff", "handoff_path": args[1]}
 
     if verb == "restamp-execution-sha":

@@ -2866,25 +2866,45 @@ def compute_deliverable_evidence(
 
 
 #: Subtrees that can never legitimately hold a committed repo artifact a
-#: handoff premise would cite — VCS internals, build/dist output, bytecode
-#: caches, and ephemeral scratch — pruned from the premise-witness walk
-#: below (2026-08-13 hot-path-over-acquisition fix). Deliberately NOT a
+#: handoff premise would cite — VCS internals, bytecode caches, and
+#: ephemeral scratch — pruned from the premise-witness walk below
+#: (2026-08-13 hot-path-over-acquisition fix). Deliberately NOT a
 #: narrower "known artifact roots" allowlist (state/docs/cross-repo/...):
 #: a path premise can cite ANY tracked file, including source under
 #: `coordinator_core/`, so excluding by what a directory categorically
 #: cannot hold is the only narrowing that cannot turn a real hit into a
-#: miss. Measured against this repo's tree (2026-08-13): full unpruned
-#: walk 85,737 entries; pruned walk 24,845 entries — a 3.45:1 reduction,
-#: `.git/` alone accounting for 45,682 of the excluded entries.
+#: miss.
+#:
+#: This is an empirical claim about THIS repo's tracked corpus, not a
+#: categorical one about the directory name — `dist` was removed from
+#: this set (2026-08-13) after it was found to hold 33 tracked files
+#: here, which is exactly the false-negative failure mode this set
+#: exists to avoid. Before adding any name to this set, verify it holds
+#: zero tracked files by running `git ls-files <dirname>` and confirming
+#: empty output — a directory name being conventionally build-output is
+#: not sufficient; only zero tracked files under it, verified against
+#: this repo, is. Re-verify periodically, since a name safe today can
+#: gain tracked content later.
+#:
+#: Measured against this repo's tree (2026-08-13, after removing `dist`):
+#: full unpruned walk 86,058 entries; pruned walk 25,225 entries — a
+#: 3.41:1 reduction, `.git/` alone accounting for 45,844 of the excluded
+#: entries.
 _PREMISE_WALK_PRUNE_DIRNAMES = frozenset({
-    ".git", "__pycache__", "build", "dist", "scratch", "scratchpad",
+    ".git", "__pycache__", "build", "scratch", "scratchpad",
 })
 
 
 def _premise_walk_prune(dirname: str) -> bool:
     """True when `dirname` (a bare directory name, not a path) must never be
     descended into by `_search_repo_for_basename` — see
-    `_PREMISE_WALK_PRUNE_DIRNAMES` for what and why."""
+    `_PREMISE_WALK_PRUNE_DIRNAMES` for what and why.
+
+    The `.egg-info` check is a deliberate suffix match, not an exact/pattern
+    match — it prunes any dirname ending in the literal `.egg-info`
+    (`foo.egg-info`, `x.egg-info`), which is safe because nothing tracked is
+    ever named that way; a name that merely contains but doesn't end with
+    `.egg-info` (e.g. `notegg-infowhatever`) is not pruned."""
     return dirname in _PREMISE_WALK_PRUNE_DIRNAMES or dirname.endswith(".egg-info")
 
 
@@ -4906,8 +4926,9 @@ def compute_reply_closure(frontmatter: dict[str, Any], memo_path: str, repo_root
         stamped `from: <this repo's EM id>`, `created` on or after the
         inbound memo's `created`, AND LINKED to the inbound memo (see
         `_candidate_is_linked`). `candidates` names only the linked ones
-        (repo-relative to the SENDER's tree); `unconfirmed_candidates` is
-        empty in this verdict.
+        (repo-relative to the SENDER's tree, with that tree's absolute root
+        carried alongside as `sender_root` so a rendered citation can
+        qualify them); `unconfirmed_candidates` is empty in this verdict.
       - `open` — a reply is required (`kind` is `consult`/`ask`/absent) and
         either (a) zero same-sender/same-window candidates exist at all, or
         (b) one or more exist but NONE are linked — `unconfirmed_candidates`
@@ -5013,7 +5034,13 @@ def compute_reply_closure(frontmatter: dict[str, Any], memo_path: str, repo_root
                 unconfirmed.append(rel)
 
     if linked:
-        return {"verdict": "evidenced", "reason": None, "candidates": linked, "unconfirmed_candidates": []}
+        return {
+            "verdict": "evidenced",
+            "reason": None,
+            "candidates": linked,
+            "unconfirmed_candidates": [],
+            "sender_root": str(sender_root),
+        }
     if unconfirmed:
         return {
             "verdict": "open",
@@ -5061,7 +5088,13 @@ def _render_reply_closure(
     verdict = closure["verdict"]
     if verdict in _REPLY_CLOSURE_TERMINAL_VERDICTS:
         if verdict == "evidenced":
-            cited = "; ".join(closure["candidates"])
+            # Candidates are repo-relative to the SENDER's tree, not this
+            # one — an unqualified citation sends the reader looking in the
+            # receiver's own cross-repo/ and finding nothing.
+            sender_root = closure.get("sender_root")
+            cited = "; ".join(
+                f"{sender_root}/{c}" if sender_root else c for c in closure["candidates"]
+            )
             return [], f"{base_narration} Reply evidenced at: {cited}.", base_next_move
         return [], base_narration, base_next_move
 
@@ -6936,21 +6969,44 @@ def brief(
         # so a ledger-confirmed prior stamp still satisfies the idempotence
         # check even when the mirror has reverted.
         #
-        # Ledger-stage gate (memo 2026-08-11-example-doctrine-repo-em-pickup-claim-never-
-        # reaches-frontmatter): `claim_state.holder is not None` alone is
+        # Landed-stamp gate (cross-repo/inbox/2026-08-13-example-doctrine-repo-em-pickup-
+        # already-satisfied-masks-a-refused-write.md, repairing the memo
+        # 2026-08-11-example-doctrine-repo-em-pickup-claim-never-reaches-frontmatter
+        # fallback below): `claim_state.holder is not None` alone is
         # satisfied by the `brief`-stage reservation `acquire_brief_claim`
         # just took a few lines above (same ledger dir `resolve_claim_state`
         # reads) — a pre-work lock, not evidence `d2` (archive-stamp-cli's
-        # durable frontmatter mutation) ever landed. On a first-ever pickup
-        # of an unclaimed handoff this made `self_claimed_in_frontmatter`
-        # True from the reservation alone, skipping `d2` and leaving the
-        # claim stranded in the ledger with `status: open` still on the
-        # mirror. A ledger-sourced `claim_state.holder` therefore only counts
-        # as stamp evidence when that ledger claim is at `apply` stage —
-        # `brief` stage never satisfies it. A mirror-sourced holder (the
-        # branch-switch-revert fallback C11 row 35 exists for) still counts
-        # regardless of ledger stage, since it has no stage concept and is
-        # itself already-landed frontmatter.
+        # durable frontmatter mutation) ever landed. The fallback used to read
+        # `claim_stage(...) == CLAIM_STAGE_APPLY`, but `apply.py::apply`
+        # promotes `brief` -> `apply` UNCONDITIONALLY, immediately BEFORE the
+        # directives (including `d2`) execute — so `apply` stage is reachable
+        # on a REFUSED stamp attempt exactly as much as on a landed one (e.g.
+        # a schema-violating handoff whose EVERY lifecycle write fails loud)
+        # and is never reverted on that failure. That let `d2` be reported
+        # `already_satisfied` for a write that never happened, permanently
+        # (a directive believed satisfied never re-fires, and `drop` refuses
+        # once `deployment_state` is terminal — no repair path).
+        #
+        # Fixed by reading the durable `stamped` marker (`session.claims.
+        # claim_stamped`) instead — written ONLY by `apply.py`'s
+        # `_dispatch_archive_stamp_cli` AFTER `cs_claim_handoff` has confirmed
+        # its own post-write `_validate_fm` pass succeeded, so it cannot exist
+        # on a refused write. It also still serves the ORIGINAL fallback's
+        # purpose (branch-switch-revert desync, C11 row 35): the marker lives
+        # in the same claim dir under `.git/`, which survives a branch switch
+        # that reverts the tracked frontmatter mirror, so a landed stamp
+        # remains visible even when the mirror has reverted. A mirror-sourced
+        # holder (the `mirror_holder` branch above) still counts regardless,
+        # since it has no stage/marker concept and is itself already-landed
+        # frontmatter.
+        #
+        # Back-compat: a claim dir written before this marker existed carries
+        # no `stamped` file, so `stamp_evidence` reads False for it and `d2`
+        # re-emits as unsatisfied on the next brief — safe, since
+        # `handoff_transition._claim` is idempotent at the full target state
+        # (`status: claimed` + `deployment_state: in_flight` + matching
+        # `claimed_by`), returning `applied: False` / exit 0 rather than a
+        # duplicate mutation. No migration needed.
         claim_state = resolve_claim_state(root / artifact["path"], repo_root=root)
         stamp_evidence = claim_state.mirror_holder is not None
         if not stamp_evidence and claim_state.ledger_holder is not None:
@@ -6960,7 +7016,7 @@ def brief(
                 _common_dir_for_stage = None
             if _common_dir_for_stage is not None:
                 _handoff_claim_dir = handoff_claim_dir(_common_dir_for_stage, root / artifact["path"])
-                stamp_evidence = _claims.claim_stage(_handoff_claim_dir) == _claims.CLAIM_STAGE_APPLY
+                stamp_evidence = _claims.claim_stamped(_handoff_claim_dir)
         self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and stamp_evidence
         directives = build_handoff_directives(
             artifact["path"], claim["holder"], basename, self_claimed_in_frontmatter=self_claimed_in_frontmatter

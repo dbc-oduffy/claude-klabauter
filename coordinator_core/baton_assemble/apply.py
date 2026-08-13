@@ -697,10 +697,20 @@ def _ledger_claim_record(predecessor_path: str, repo_root: Path) -> Optional[dic
     }
 
 
-def _reconcile_claim_from_ledger(predecessor_path: str, repo_root: Path) -> bool:
+def _reconcile_claim_from_ledger(
+    predecessor_path: str, repo_root: Path
+) -> tuple[bool, str | None]:
     """Re-stamps a predecessor's claim frontmatter FROM the durable claim ledger
     when the two have desynchronized, and reports whether the record now
-    satisfies DR-242. False leaves d6's refusal exactly as it was.
+    satisfies DR-242. Returns `(satisfied, rejection_error)`: `rejection_error`
+    is `None` unless the frontmatter re-stamp itself was attempted and refused
+    by schema validation, in which case it carries the op's own `error` text so
+    the caller can attribute the refusal correctly instead of folding it into
+    the genuine never-claimed case. `(False, None)` leaves d6's refusal exactly
+    as it was. When the re-stamp was attempted and refused but the op returned
+    no `error` text, `rejection_error` is `""` (empty string), not `None` --
+    deliberate: the caller's `is not None` test must still route to the
+    validation-rejected path, not fold this case into the never-claimed one.
 
     THE DEFECT THIS CLOSES (live repro, claude-klabauter 2026-08-07). The claim
     ledger lives under `.git/` -- branch-independent and shared by every
@@ -730,7 +740,7 @@ def _reconcile_claim_from_ledger(predecessor_path: str, repo_root: Path) -> bool
     """
     record = _ledger_claim_record(predecessor_path, repo_root)
     if record is None:
-        return False
+        return False, None
 
     from coordinator_core.archival import claimed_or_shipped_at_path
 
@@ -745,16 +755,17 @@ def _reconcile_claim_from_ledger(predecessor_path: str, repo_root: Path) -> bool
         repo_root,
     )
     if result.get("exit_code") != 0:
+        error_text = result.get("error")
         print(
             "baton-assemble apply: handoff.supersede_predecessor -- the durable "
             f"claim ledger holds a claim on {predecessor_path!r} (session "
             f"{record['session_id']}) but the frontmatter re-stamp failed "
-            f"({result.get('error')!r}); DR-242's refusal stands.",
+            f"({error_text!r}); DR-242's refusal stands.",
             file=sys.stderr,
         )
-        return False
+        return False, str(error_text) if error_text is not None else ""
     if not claimed_or_shipped_at_path(str(repo_root / predecessor_path)):
-        return False
+        return False, None
     print(
         "baton-assemble apply: handoff.supersede_predecessor reconciled "
         f"{predecessor_path!r} from the durable claim ledger -- its frontmatter "
@@ -764,7 +775,7 @@ def _reconcile_claim_from_ledger(predecessor_path: str, repo_root: Path) -> bool
         "claim was re-stamped from that record and the succession proceeds.",
         file=sys.stderr,
     )
-    return True
+    return True, None
 
 
 def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -910,9 +921,35 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
 
     from coordinator_core.archival import claimed_or_shipped_at_path
 
-    if not claimed_or_shipped_at_path(
-        str(repo_root / predecessor_path)
-    ) and not _reconcile_claim_from_ledger(predecessor_path, repo_root):
+    reconcile_error: str | None = None
+    if not claimed_or_shipped_at_path(str(repo_root / predecessor_path)):
+        reconciled, reconcile_error = _reconcile_claim_from_ledger(
+            predecessor_path, repo_root
+        )
+    else:
+        reconciled = True
+    if not reconciled and reconcile_error is not None:
+        print(
+            # Review: code-reviewer -- one fact, stated once, per
+            # docs/wiki/guard-messaging.md § Register: this predecessor WAS
+            # claimed, and the frontmatter re-stamp was refused by validation.
+            "baton-assemble apply: handoff.supersede_predecessor degraded -- "
+            f"{predecessor_path!r} was claimed per the durable claim ledger, "
+            f"but its frontmatter re-stamp was refused by schema validation "
+            f"({reconcile_error!r}); DR-242's refusal stands.",
+            file=sys.stderr,
+        )
+        return {
+            "cli": "handoff.supersede_predecessor",
+            "args": args,
+            "result": None,
+            "degraded": {
+                "reason": "predecessor-claim-restamp-validation-rejected",
+                "predecessor": predecessor_path,
+                "error": reconcile_error,
+            },
+        }
+    if not reconciled:
         print(
             "baton-assemble apply: handoff.supersede_predecessor degraded -- "
             f"{predecessor_path!r} was never claimed or shipped -- neither its own "

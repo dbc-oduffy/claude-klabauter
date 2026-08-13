@@ -415,7 +415,13 @@ class TestConsumeHandoffDeprecatedAlias:
         _init_repo(repo)
         hp = _seed_handoff(repo, "h1.md")
 
-        monkeypatch.setattr(pa_apply, "cs_claim_handoff", lambda _path: 0)
+        monkeypatch.setattr(
+            pa_apply,
+            "cs_claim_handoff",
+            lambda _path, return_result=False: (
+                {"exit_code": 0, "applied": True} if return_result else 0
+            ),
+        )
 
         result = pa_apply._dispatch_archive_stamp_cli(
             ["consume-handoff", str(hp.relative_to(repo))], repo
@@ -572,7 +578,15 @@ class TestReturnTypeNormalization:
         _init_repo(repo)
         handoff = _seed_handoff(repo, "h1.md")
 
-        monkeypatch.setattr(pa_apply, "cs_claim_handoff", lambda _path: 1)
+        monkeypatch.setattr(
+            pa_apply,
+            "cs_claim_handoff",
+            lambda _path, return_result=False: (
+                {"exit_code": 1, "applied": False, "error": "simulated failure"}
+                if return_result
+                else 1
+            ),
+        )
 
         with pytest.raises(RuntimeError):
             pa_apply._dispatch_archive_stamp_cli(

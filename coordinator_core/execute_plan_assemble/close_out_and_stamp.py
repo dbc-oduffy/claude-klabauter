@@ -3804,13 +3804,30 @@ def _dry_run_scratch_plan(text: str, suffix: str) -> Path:
 
 
 def _reach_post_commit_tail_stub_close(
-    root: Path, plan_path_rel: str, committed_sha: str
+    root: Path,
+    plan_path_rel: str,
+    committed_sha: str,
+    delivery_proof: Optional[dict] = None,
 ) -> dict:
     """Give this ceremony's own successful commit reach to
     `post_commit_tail`'s origin-stub-close leg (step 5d) -- the SAME
     composition `ceremony.wsc_tail` already invokes in-process (see
     `post_commit_tail.run()`'s own docstring), never a second copy of its
     join/scan/guard logic.
+
+    `delivery_proof` (optional; PM ruling -- let a positive, complete
+    delivery proof close the origin stub directly, with the live-children
+    guard retained as the fallback for callers holding no such proof) is
+    forwarded VERBATIM into `post_commit_tail.run()`, which forwards it
+    verbatim into `handoff.close_origin_stub`'s own `delivery_proof` param --
+    this function neither builds nor validates it; the caller (this
+    function's own two call sites, both inside the `status_target ==
+    "implemented"` branch, the only place this ceremony has a proof to give)
+    constructs it from THIS run's own already-computed `shipped`/
+    `join_provenance`/`missing`/`plan_deliverable_id`/`status_target`
+    values -- see `handoff_close_origin_stub._is_complete_delivery_proof`
+    for the exact completeness conditions it is checked against downstream.
+    `None` (the default) preserves today's guard-only behaviour exactly.
 
     Both `/execute-plan`'s close-out and `/mise-en-place`'s per-baton tail
     land here through the SAME `coordinator/bin/close-out-and-stamp` ->
@@ -3848,6 +3865,7 @@ def _reach_post_commit_tail_stub_close(
             governing_plan_slug=governing_plan_slug,
             initial_consumed=[],
             close_origin_stub_handler=_close_origin_stub_handler,
+            delivery_proof=delivery_proof,
         )
 
     import asyncio
@@ -4484,6 +4502,41 @@ def close_out_and_stamp(
     else:
         status_target = None
 
+    # Delivery proof for `_reach_post_commit_tail_stub_close` (PM ruling --
+    # let a positive, complete delivery proof close the origin stub
+    # directly). Built ONLY on the full-shipped path (`status_target ==
+    # "implemented"`) -- the only branch this function's own reach call
+    # sites run on -- from facts this run already computed (never re-derived
+    # or re-joined): `plan_deliverable_id` (this plan's own frontmatter),
+    # `join_provenance` (the SAME `_determine_shipped` verdict that gated
+    # this stamp), `missing` (empty here by construction, since
+    # `status_target == "implemented"` requires `fully_resolved`, which
+    # requires `not open_blocking` -- `missing` is intersected into
+    # `open_blocking` upstream), and the literal `status_target` value
+    # itself. `handoff_close_origin_stub._is_complete_delivery_proof`
+    # re-checks every one of these conditions independently -- this dict is
+    # the claim, not a bypass of that check.
+    delivery_proof: Optional[dict] = (
+        {
+            "deliverable_id": plan_deliverable_id,
+            "join_provenance": join_provenance,
+            "missing_chunk_ids": list(missing),
+            "status": status_target,
+            # Review: staff-eng Finding 0 -- `join_provenance == "joined"`
+            # alone does not prove the join ran: `_determine_shipped`'s
+            # `if not chunk_ids:` early branch also emits
+            # JOIN_PROVENANCE_JOINED with an empty `missing` on ZERO
+            # commit-required spine rows, without ever calling
+            # `_committed_chunk_shas`. Carrying the already-computed
+            # `len(commit_required_ids)` here lets
+            # `_is_complete_delivery_proof` require positive evidence
+            # existed to check in the first place.
+            "commit_required_chunk_count": len(commit_required_ids),
+        }
+        if status_target == "implemented"
+        else None
+    )
+
     stamped = False
     if status_target == "implemented":
         # Pass the already-resolved ABSOLUTE live_path, not plan_path_rel --
@@ -4736,8 +4789,14 @@ def close_out_and_stamp(
             ],
         }
         if commit_result["committed_sha"]:
+            # `delivery_proof` (PM ruling) lets a complete, stub-specific
+            # proof close the origin stub WITHOUT consulting the
+            # live-children guard: this close is IN PLACE (deployment_state
+            # -> shipped, no `git mv`), so it cannot strand a dependent the
+            # way an archival move could -- archival remains separately
+            # gated on liveness in `archive_handoffs.py`, untouched here.
             origin_stub_result = _reach_post_commit_tail_stub_close(
-                root, plan_path_rel, commit_result["committed_sha"]
+                root, plan_path_rel, commit_result["committed_sha"], delivery_proof
             )
     elif wrote_anything:
         # Explicit, non-empty stage_paths -- see this function's docstring
@@ -4820,8 +4879,14 @@ def close_out_and_stamp(
         if pipeline_result.committed_sha:
             # Reach `post_commit_tail`'s stub-close leg (AC4) -- see
             # `_reach_post_commit_tail_stub_close`'s own docstring.
+            # `delivery_proof` (PM ruling) lets a complete, stub-specific
+            # proof close the origin stub WITHOUT consulting the
+            # live-children guard: this close is IN PLACE (deployment_state
+            # -> shipped, no `git mv`), so it cannot strand a dependent the
+            # way an archival move could -- archival remains separately
+            # gated on liveness in `archive_handoffs.py`, untouched here.
             origin_stub_result = _reach_post_commit_tail_stub_close(
-                root, plan_path_rel, pipeline_result.committed_sha
+                root, plan_path_rel, pipeline_result.committed_sha, delivery_proof
             )
         elif pipeline_result.sha_unverified:
             # W3: the commit landed (`commit_failed=False` above, so this is

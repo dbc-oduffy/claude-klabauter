@@ -353,6 +353,14 @@
       },
       "description": "SHA provenance \u2014 which commit(s) discharged the gate. Written by _gate_cascade_clear; previously drifted onto disk undeclared (no additionalProperties:false to catch it) before this schema named it. Distinct from no_longer_blocked_by: gate_cleared_by answers 'which commit discharged the gate', no_longer_blocked_by answers 'which baton used to block' (slug history, not commit provenance). Both ship \u2014 they answer different questions, neither substitutes for the other."
     },
+    "reconcile_disposition": {
+      "type": "string",
+      "description": "Operator-recorded disposition clearing a D1 'severed-observer' conservation violation -- read by coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1 assertion) via the module-level `_DISPOSITION_FIELD` constant. D1 flags any handoff that surfaced in a prior reconcile pass and is still open with no recorded disposition; `_has_recorded_disposition` treats this field and reconcile_disposition_reason as BOTH required non-empty to discharge the violation. Optional -- absence is the undischarged state, not a defect; no schema-level requirement is imposed on any deployment_state (a required coupling would invalidate every existing handoff on write)."
+    },
+    "reconcile_disposition_reason": {
+      "type": "string",
+      "description": "Free-text justification paired with reconcile_disposition -- read by coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1 assertion) via the module-level `_DISPOSITION_REASON_FIELD` constant. Both fields must be non-empty for `_has_recorded_disposition` to clear a D1 conservation violation. Optional; no cross-field validation coupling to reconcile_disposition is enforced at the schema level -- see that field's description."
+    },
     "gate_evidence": {
       "type": "object",
       "required": [

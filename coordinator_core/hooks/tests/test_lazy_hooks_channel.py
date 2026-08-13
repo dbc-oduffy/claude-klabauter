@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_lazy_hooks_channel.py — the lazy-hooks contract (C1) and the C2
 registry-miss fallback, pinned as tests.
 
@@ -56,7 +55,7 @@ Four properties pinned:
 
   (e) RESILIENT-AND-LOUD `_eager_import_all()` (mirroring
       coordinator_core.ops's 2026-07-21 pattern): one hook module's
-      import-time failure does not prevent the OTHER fourteen from
+      import-time failure does not prevent the OTHER fifteen from
       registering, and a later lookup of the poisoned module's own op
       re-raises the real cause via `get_poisoned_modules()` rather than
       silently vanishing into "unknown op". Matters more after C2 than
@@ -172,6 +171,40 @@ _DEFAULT_EAGER_HOOKS_REGISTRY_SCRIPT = textwrap.dedent(
 )
 
 
+def _count_eager_hook_modules_source_literal() -> int:
+    """Count entries in `_EAGER_HOOK_MODULES`'s SOURCE literal in
+    coordinator_core/hooks/__init__.py, via AST — independent of the runtime
+    `hooks._EAGER_HOOK_MODULES` list `expected` (below) is itself built from.
+
+    Asserting `len(expected) == len(hooks._EAGER_HOOK_MODULES)` would be
+    tautological (both sides would read the same loaded object); this parses
+    the actual source text instead, mirroring
+    coordinator_core/tests/test_no_new_spawning_tests.py's `_BASELINE_COUNT`
+    self-check pattern — pin against the artifact a hand-edit actually
+    touches, not a hand-typed count that only agrees with it by memory.
+    """
+    import ast
+
+    source_path = REPO_ROOT / "coordinator_core" / "hooks" / "__init__.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    for node in ast.walk(tree):
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+        if isinstance(target, ast.Name) and target.id == "_EAGER_HOOK_MODULES":
+            assert isinstance(node.value, ast.List), (
+                "_EAGER_HOOK_MODULES source assignment is not a list literal "
+                "-- self-check helper needs updating to match"
+            )
+            return len(node.value.elts)
+    raise AssertionError(
+        "_EAGER_HOOK_MODULES literal not found in "
+        "coordinator_core/hooks/__init__.py -- self-check helper needs updating"
+    )
+
+
 def test_default_eager_registers_the_full_known_hook_op_set() -> None:
     """(a) — no env var, no sys attribute: the registered "hooks.*" set is
     exactly the set `_EAGER_HOOK_MODULES` names, derived from production
@@ -186,7 +219,12 @@ def test_default_eager_registers_the_full_known_hook_op_set() -> None:
         f"default-eager hooks registration diverged from _EAGER_HOOK_MODULES: "
         f"expected {expected!r}, got {registered!r}"
     )
-    assert len(expected) == 15, f"expected exactly 15 hooks.* ops, got {len(expected)}"
+    source_literal_count = _count_eager_hook_modules_source_literal()
+    assert len(expected) == source_literal_count, (
+        f"runtime _EAGER_HOOK_MODULES yielded {len(expected)} hooks.* ops but "
+        f"the source literal in coordinator_core/hooks/__init__.py holds "
+        f"{source_literal_count} entries -- these must never diverge silently"
+    )
 
 
 def _extract_quoted_op_names(text: str) -> set[str]:
@@ -366,7 +404,7 @@ _LAZY_RESOLUTION_SCRIPT = textwrap.dedent(
     }
     missing = expected_submodules - imported_submodules
     assert not missing, (
-        f"expected all 15 hooks.* op modules imported by the C2 fallback, "
+        f"expected all 16 hooks.* op modules imported by the C2 fallback, "
         f"missing {sorted(missing)!r} (imported: {sorted(imported_submodules)!r})"
     )
     print("HOOKS_LAZY_RESOLUTION_OK")
@@ -453,8 +491,12 @@ _POISONED_MODULE_SCRIPT = textwrap.dedent(
     import sys
     import coordinator_core.hooks as hooks
 
+    # Baseline BEFORE the spoof, not a hand-typed literal: the real module
+    # count must survive the poisoned addition below unchanged.
+    real_module_count = len(hooks._EAGER_HOOK_MODULES)
+
     # Spoof one entry to a module that raises at import time, without
-    # touching the other fourteen real entries.
+    # touching the real entries above.
     hooks._EAGER_HOOK_MODULES = list(hooks._EAGER_HOOK_MODULES) + [
         "coordinator_core.hooks._does_not_exist_probe_module"
     ]
@@ -467,9 +509,9 @@ _POISONED_MODULE_SCRIPT = textwrap.dedent(
 
     import coordinator_core.ipc as ipc
     registered = [k for k in ipc._REGISTRY if k.startswith("hooks.")]
-    assert len(registered) == 15, (
-        f"a poisoned sixteenth module must not block the real 15 hooks.* "
-        f"registrations, got {len(registered)}: {registered!r}"
+    assert len(registered) == real_module_count, (
+        f"a poisoned extra module must not block the real {real_module_count} "
+        f"hooks.* registrations, got {len(registered)}: {registered!r}"
     )
     print("POISONED_MODULE_RESILIENCE_OK")
     """
@@ -478,7 +520,7 @@ _POISONED_MODULE_SCRIPT = textwrap.dedent(
 
 def test_eager_import_all_is_resilient_to_one_poisoned_module() -> None:
     """(e) — a single hook module's import-time failure does not prevent the
-    other fourteen from registering, mirroring
+    other fifteen from registering, mirroring
     coordinator_core.ops._eager_import_all()'s per-module try/except."""
     proc = _run_script(_POISONED_MODULE_SCRIPT)
     assert proc.returncode == 0, (

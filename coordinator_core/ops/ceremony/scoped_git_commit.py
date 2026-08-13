@@ -79,81 +79,35 @@ after the pipeline's rollback) is never laundered into a success.
 Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
 § DEC-3, Wave 1 C1d.
 
-Sink-side ownership enforcement: REMOVED then REPLACED (PM ruling,
-2026-08-08; replacement landed same day, C2 of
-docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md).
+Sink-side ownership enforcement: REMOVED (2026-08-08, PM ruling),
+REPLACED (C2 of docs/plans/2026-08-08-claim-index-the-commit-gate-never-
+had.md), then REMOVED OUTRIGHT (2026-08-13, PM ruling, docs/plans/2026-08-
+13-claim-release-deadlock-and-the-doctrine-that-rejects-it.md, C1).
 
-The C4c/AC17/AC18 ownership-scope gate that used to run here composed
-`scope_report.assert_paths_in_session_scope`, which walks
-`compute_scope`/`compute_offer` -- both O(dirty tree x live claims), not
-O(pathspec). Measured on this repo at 594 dirty paths and 918 live claims,
-against a ONE-FILE pathspec: 13.9s for the gate, plus a second ~7.9s
-`compute_offer` re-walk inside `commit_pipeline`'s absorbed-peer-claims
-trailer, against a 30s `DISPATCH_TIMEOUT_SECS` with no per-op override.
-Cost scaled with how busy the tree was, not with what was being committed,
-so on a busy shared tree the op became structurally unable to commit
-anything -- and the caller-side timeout surfaced it as
-"Verify CLAUDE_KLABAUTER_ROOT and coordinator_core installation" on a healthy engine.
-It was excised outright (`de27716`, `b56f3f3`), leaving the sink-side
-backstop against a caller that bypasses the PreToolUse guard GONE for a
-short window -- `block_subagent_commit` (C4b, the guard-side check) stayed
-upstream and live, composing the same `assert_paths_in_session_scope`
-predicate (still not deleted -- C4b still composes it).
+The replacement gate the paragraph above used to describe --
+`_check_claim_conflicts()`, composing `claim_index.lookup()` +
+`liveness.session_live()` to refuse a commit whenever a live peer's
+session had TOUCHED a dirty path in the caller's own pathspec -- is gone.
+Path-touch claims are advisory swimlane guidance (they exist so an EM
+doesn't accidentally sweep a peer's uncommitted work), not an enforcement
+primitive; a mechanism that hard-denies on an advisory signal was the
+defect, not a missing escape route from it. See the plan's Problem section
+for the two live incidents this caused (a 9-test file left uncommittable
+for the rest of a session; a 20-minute block on two read-adjacent files)
+and its duration argument: a block may not outlive the operation it
+protects, and this one persisted for a session while protecting nothing
+git's own index lock (below) does not already protect.
 
-The replacement, now in place: `_check_claim_conflicts()` composes
-`coordinator_core.session.claim_index.lookup()` (C1's O(len(paths)) reverse
-index, never `compute_scope`/`compute_offer`/`assert_paths_in_session_
-scope`) plus `coordinator_core.session.liveness.session_live()` (C3, already
-O(1) per matched claimant -- no new entrypoint was needed). For each path in
-the caller's own pathspec: a claimant other than the calling session, who is
-live, AND whose path is currently DIRTY (C5, `_paths_dirty_status()` --
-see that function's own docstring), refuses THAT path, named individually
-(AC4) -- never a whole-pathspec refusal.
-
-C1 (docs/plans/2026-08-13-commit-gate-stops-refusing-your-own-staged-hunk.md)
-narrows the C5 conjunct once more: a path that is dirty AND claimed by a
-live peer refuses only when it is also DIVERGED (index content differs from
-worktree content, `coordinator_core.git.divergence.diverging_paths()`).
-Divergence, not dirtiness, is the discriminator, because `commit_scoped()`'s
-agree branch is git's own documented `--only` mode and always commits the
-WORKTREE version of an agreeing path -- a dirty-but-not-diverged path
-genuinely sweeps the peer's unstaged worktree lines into the commit, so the
-refusal there is doing real work and stays; a diverged path takes the
-private-index branch instead, which commits index bytes and structurally
-cannot sweep anything, so refusing it protects nothing. See
-`docs/research/spike-verdicts/2026-08-13-private-index-form-cannot-sweep-a-
-peers-worktree.md` for the proof of both arms.
-
-Cost is a function of `len(paths)` plus 0-2 liveness checks, plus (C5) at
-most one pathspec-scoped `git status --porcelain` call -- lazily invoked,
-only once a live other-session claimant is actually found on some path,
-never eagerly -- and, only for tracked paths reported unstaged, one further
-batched `git diff --name-only` call resolving EOL-phantom candidates (see
-`_paths_dirty_status()`), plus (C1) up to two further `git diff` calls from
-`diverging_paths()`, lazily invoked on the same terms -- only once a live
-claimant's path has also been found dirty, never eagerly. Still a function
-of `len(paths)`, never of how busy the tree is -- the negative spec below is
-what this gate now satisfies, not what it still owes.
-
-Caller-identity requirement (AC10a): `session_core.session_dir()` never
-verifies a `session_id` ever named a real session. A caller whose resolved
-identity does not correspond to an on-disk session directory gains no
-advantage over an honest one when a peer claim conflicts with it -- that
-case degrades to the same fail-closed policy as an unanswerable index path,
-never to an allow. AC10b is NOT closed by this or anything else: a forged
-`session_id` naming the ACTUAL live holder of the target path gets the
-identical verdict the real holder would, because there is no in-op secret
-to check -- any check this gate could perform reads the same repo-readable
-directory names an attacker already reads. This raises the bar from
-"invoke the op" to "enumerate peer session dirs and impersonate the
-specific holder," which is real, but is not tested as pass/fail and is not
-closed here (see `claim_index.py`'s own docstring for the same residual).
-
-NEGATIVE SPEC (still binding): this gate must not be O(dirty tree) or
-O(claims) on the commit hot path. A gate whose cost is a function of how
-busy the tree is re-creates the outage above exactly -- see
-`coordinator_core/ops/ceremony/tests/test_commit_gate_budget.py` (C4) for
-the executable form of this rule.
+Nothing in this file replaces it as a GATE -- no pause, no prompt, no
+control flow gated on anything `claim_index` or `session/scope.py`
+answers. C5 (docs/plans/2026-08-13-claim-release-deadlock-and-the-
+doctrine-that-rejects-it.md) assessed the substrate's remaining readers
+and returned SUBSTRATE SURVIVES (two live readers independent of the
+deleted gate), which authorized C1d to build the bounded recency-of-EDIT
+warn AC1d called for: `_warn_recent_edits`, below, logs (never gates,
+pauses, or prompts) when a path in the caller's pathspec was EDITED
+within `_RECENT_EDIT_WARN_WINDOW_SECS` by a live peer session -- "someone's
+hands are on it right now".
 
 Sweeping-pathspec rejection SURVIVES, and is independent of ownership:
 `.`, `./`, `:/`, `:(top)`, a glob (`*`/`?`/`[`), an empty pathspec element,
@@ -188,19 +142,10 @@ from coordinator_core.ops.ceremony.commit_pipeline import (
 )
 from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
-from coordinator_core.session import guard_unlock_sentinel
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
-# C2 (2026-08-08-claim-index-the-commit-gate-never-had.md): the sink-side
-# ownership gate composes `claim_index.lookup()` + `liveness.session_live()`
-# directly (imported plainly below, not wrapped) -- neither module has the
-# C4c-era ImportError-degrades-to-None hazard, since both are small,
-# dependency-free modules already required elsewhere on this same hot path
-# (`session_core` is already imported above). `_check_claim_conflicts()` is
-# the gate; see the module docstring's "Sink-side ownership enforcement"
-# section for what it does and does not close.
 _LOG = logging.getLogger(__name__)
 
 #: Literal pathspec tokens rejected outright, regardless of what they
@@ -217,6 +162,84 @@ _SWEEPING_PATHSPEC_LITERALS = frozenset({".", "./", ":/", ":(top)", "-A", "-a", 
 #: directory_pathspecs`).
 _GLOB_CHARS = frozenset("*?[")
 
+#: Recency-of-EDIT warn window (C1d, AC1d,
+#: state/audits/2026-08-13-edit-recency-spike.md). Grounded in OBSERVED
+#: edit cadence, not machine metrics -- staff-eng finding 7 asked for this
+#: to be derived from hook write latency plus claim-index rebuild time
+#: (how fast the machinery runs); DECLINED, because what the warn tracks
+#: is how long a human-shaped editing burst lasts, a different quantity
+#: those numbers don't measure. Observed: edits land roughly every 2s
+#: while an executor is actively working, and a quiet stretch past ~20s
+#: usually means that executor is done editing for now -- 30s sits just
+#: past that quiet threshold, so the warn covers an active editing run and
+#: goes silent once one has ended. Corollary (PM, stated directly): no EM
+#: needs longer than 30s to get a commit in, so a window this size cannot
+#: strand anyone. This is a SOFT threshold on observed behaviour, not a
+#: derived bound -- freely tunable if the observed cadence changes.
+_RECENT_EDIT_WARN_WINDOW_SECS = 30
+
+
+def _warn_recent_edits(
+    worktree_root: str,
+    paths: List[str],
+    caller_session_id: str,
+    now: Optional[datetime] = None,
+) -> None:
+    """Log a WARN (never gate, pause, or prompt) when a path in `paths` was
+    EDITED, within `_RECENT_EDIT_WARN_WINDOW_SECS`, by a live peer session
+    other than `caller_session_id` -- "someone's hands are on it right
+    now" (C1d, AC1d, module docstring's "Nothing in this file replaces it").
+
+    Reads `claim_index.lookup()`'s `.edit_ts` (C1d widening -- see that
+    module's docstring), never disk mtime: `touched.txt` T-events are
+    EDIT-only by construction (the hook that writes them fast-exits outside
+    `Write|Edit|MultiEdit|NotebookEdit`, state/audits/2026-08-13-edit-
+    recency-spike.md finding 1), so a bare filesystem touch with no
+    matching T-event produces no warn here, regardless of how recent it is.
+
+    Per-claimant `edit_ts` is read AS-IS (DR-296, PM ruling -- see
+    `claim_index.py`'s RECENCY-OF-EDIT WARN section): it is the FIRST edit
+    of that claimant's current claim run, not its latest, and this
+    function does nothing to correct that under-firing -- a session mid-
+    edit for longer than the window goes silent here, deliberately.
+
+    `now`, when given, pins the comparison instant for tests exercising
+    the window's edges; production callers never pass it (defaults to
+    `datetime.now(timezone.utc)`).
+
+    Every failure mode here (an index that could not answer, a liveness
+    check that raises, anything else) is swallowed to a debug log line,
+    never re-raised -- a warn that could fail the commit it accompanies
+    would be the same defect in softer clothes.
+    """
+    try:
+        now_ts = now if now is not None else datetime.now(timezone.utc)
+        result = claim_index.lookup(paths, cwd=worktree_root)
+        for path in paths:
+            path_edit_ts = result.edit_ts.get(path)
+            if not path_edit_ts:
+                continue
+            for sid, ts in path_edit_ts.items():
+                if sid == caller_session_id or ts is None:
+                    continue
+                age = (now_ts - ts).total_seconds()
+                if age < 0 or age > _RECENT_EDIT_WARN_WINDOW_SECS:
+                    continue
+                if not session_liveness.session_live(sid, cwd=worktree_root):
+                    continue
+                _LOG.warning(
+                    "ceremony.scoped_git_commit: %s was edited %ds ago by "
+                    "live peer session %s -- committing anyway",
+                    path,
+                    int(age),
+                    sid,
+                )
+    except Exception:  # noqa: BLE001 -- advisory-only, must never gate the commit
+        _LOG.debug(
+            "ceremony.scoped_git_commit: recency-of-edit warn check failed, ignoring",
+            exc_info=True,
+        )
+
 
 def _reject_sweeping_pathspec(paths: List[str], worktree_root: str) -> Optional[str]:
     """Return a human-readable rejection reason for the first sweeping
@@ -227,6 +250,16 @@ def _reject_sweeping_pathspec(paths: List[str], worktree_root: str) -> Optional[
     not "who does this path belong to" but "does this pathspec element name
     more than one path". A sweeping element is unsafe on a shared branch
     whoever owns the files.
+
+    AC3/AC11 (docs/plans/2026-08-13-claim-release-deadlock-and-the-doctrine-
+    that-rejects-it.md, C3): what this protects THAT GIT DOES NOT -- `git
+    add .`/`git commit -a` have no concept of "too broad for a shared
+    branch"; they stage and commit whatever a wide pathspec resolves to at
+    that instant, silently absorbing a concurrent sibling session's
+    in-progress edit into this caller's commit. Outlet, no human: the
+    caller re-issues the SAME call with an explicit, narrower `paths` list
+    it already had (its own edit set) -- this is a single-request reject,
+    not a hold; there is nothing to wait out.
 
     Rejects: an empty/non-string element; one of `_SWEEPING_PATHSPEC_
     LITERALS`; any element containing a glob metacharacter
@@ -283,6 +316,15 @@ def _reject_path_shaped_message(message: str) -> Optional[str]:
     path separator, and that is either absolute or resolves to a file that
     exists right now. A conventional-commit subject scoped to a directory
     (`fix(ops/ceremony): ...`) carries spaces and is unaffected.
+
+    AC3/AC11: what this protects THAT GIT DOES NOT -- `git commit -m <path>`
+    happily commits the literal string as the subject; git has no way to
+    know the caller meant `-F <path>` instead, so the failure is silent and
+    only legible later reading `git log` (see the 2026-08-04 incident
+    above). Outlet, no human: the returned `error` string names the fix
+    directly (read the file, pass its first line as `message`, the rest as
+    `prose`) -- a single-request reject the caller retries immediately with
+    corrected params, never a hold.
     """
     if not isinstance(message, str):
         return None
@@ -320,533 +362,6 @@ def _resolve_committing_session_id(params: dict, worktree_root: str) -> str:
     `release_committed_claims`.
     """
     return params.get("session_id") or session_core.resolve_session_id(worktree_root)
-
-
-#: Bounded, EM-available remedy named in every claim-conflict refusal
-#: (repo north star: ergonomics-over-enforcement -- a deny with no named
-#: escape is the shape that gets bypassed).
-#:
-#: The claim this gate refuses on is a PATH-TOUCH record (a session
-#: recorded touching this file in its touched.txt -- see claim_index.py's
-#: module docstring), NOT an artifact claim -- `session-claim-cli
-#: list-claims-by-session` reads a DIFFERENT plane (the artifact-claim
-#: record store) and will legitimately print nothing for a holder refused
-#: here. `session-claim-cli who-claims-path <path>` is the instrument that
-#: reads the SAME plane this gate does, and is named explicitly so a
-#: reader of the refusal has a way to inspect it rather than being told
-#: only that a refusal happened.
-#:
-#: Negative-spec: this text must NOT offer "ask an EM to re-issue" as an
-#: escape. `_check_claim_conflicts` takes no override parameter and no
-#: caller rank enters it, so an EM re-running the identical pathspec meets
-#: the identical refusal -- the same correction `_UNANSWERABLE_CLAIM_
-#: REMEDY` already carries in words. A named escape that does not exist is
-#: worse than no escape under this repo's north star, not better: it sends
-#: the reader hunting for a mechanism, and what they find instead is the
-#: bypass.
-#: DR-260 (docs/decisions/DR-260-a-reachable-one-shot-operator-unlock-bea.md)
-#: guard name this seam is keyed on -- the second half of the
-#: `(session_id, guard_name)` pair `guard_unlock_sentinel.consume()` is
-#: called with in `_check_claim_conflicts`, below. NOT path-scoped: DR-260's
-#: grant clears the whole claim-conflict refusal for one call, not one path
-#: within it -- see that function's own docstring and the mechanism-gate
-#: spike record (`docs/research/spike-verdicts/2026-08-11-dr-260-unlock-at-
-#: the-op-level-claim-gate.md`) this wiring is proven against.
-#:
-#: Named as a bare module constant (not inlined at the `consume()` call
-#: site) so the wiring has one name -- `test_scoped_git_commit_ownership.py`
-#: asserts this constant and the `consume()` call are the identical string.
-#:
-#: `_CLAIM_CONFLICT_REMEDY` no longer mentions this name at all (2026-08-13,
-#: docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md, C5):
-#: the remedy is agent-visible text, and naming the guard there handed the
-#: reader an artifact of the enforcement apparatus. The drift this comment
-#: once guarded against cannot occur, because there is no longer a mention to
-#: drift -- `test_claim_cli_remedy_invocations.py` now asserts that ABSENCE
-#: positively rather than asserting the two strings match.
-_CLAIM_CONFLICT_GUARD_NAME = "scoped_git_commit_claim_conflict"
-
-_CLAIM_CONFLICT_REMEDY = (
-    "this is a path-touch claim (a session recorded touching this file), not "
-    "an artifact claim -- inspect it with `session-claim-cli who-claims-path "
-    "<path>` (list-claims-by-session reads a different store and will not "
-    "show it); the claim clears when that session ends, so either re-run this "
-    "commit then, or drop the affected path(s) from the pathspec and commit "
-    "the rest now -- there is no rank-based override, an EM re-running the "
-    "same pathspec meets this same refusal; the session id this call's "
-    "refusal was evaluated under is named alongside this reason"
-)
-_UNANSWERABLE_CLAIM_REMEDY = (
-    "re-run once the claim index rebuild is unblocked; if `session-claim-cli "
-    "who-claims-path <path>` shows the claimant reads dead, clear it first "
-    "via `session-claim-cli clear-claim-if-dead artifact <path> <root>` and re-run this "
-    "commit -- \"ask an EM to re-issue\" is not a distinct remedy, any EM "
-    "hits this same refusal"
-)
-
-
-def _caller_identity_verified(caller_sid: str, worktree_root: str) -> bool:
-    """True iff *caller_sid* resolves to a session directory that actually
-    exists on disk (AC10a).
-
-    `session_core.session_dir()` is a bare string join over repo-readable
-    directory names -- it never verifies the named session ever existed
-    (see this module's docstring, "Caller-identity requirement"). This is
-    the one verification this gate CAN perform: does a directory by that
-    name exist. It cannot verify the id was not FORGED to match a real
-    peer's own id -- that is AC10b, a documented residual, not closable
-    in-op (see `claim_index.py`'s own docstring for the same limitation).
-    """
-    if not caller_sid:
-        return False
-    try:
-        sdir = session_core.session_dir(caller_sid, worktree_root)
-    except ValueError:
-        return False
-    return bool(sdir) and Path(sdir).is_dir()
-
-
-#: `_paths_dirty_status()` per-path verdicts.
-_DIRTY_STATUS_CLEAN = "clean"
-_DIRTY_STATUS_DIRTY = "dirty"
-_DIRTY_STATUS_UNANSWERABLE = "unanswerable"
-
-
-def _paths_dirty_status(worktree_root: str, paths: List[str]) -> Dict[str, str]:
-    """Classify each of *paths* as `_DIRTY_STATUS_CLEAN`,
-    `_DIRTY_STATUS_DIRTY`, or `_DIRTY_STATUS_UNANSWERABLE` (C5, A6/A7).
-
-    ONE pathspec-scoped `git status --porcelain -- <paths>` (never
-    whole-tree -- see this module's NEGATIVE SPEC section and
-    `test_commit_gate_budget.py`), plus the same batched EOL-phantom filter
-    `commit_gates.py::dirty_tree_gate` already runs (see
-    `commit_gates._diff_name_only_worktree`'s own docstring for why this is
-    the correct inversion of "diff --quiet per path"): every TRACKED,
-    UNSTAGED porcelain line (X==' ') is a phantom candidate, resolved by one
-    batched `git diff --name-only -- <candidates>`; a candidate ABSENT from
-    that output is a Git-for-Windows stat-staleness artifact (worktree
-    content already equals the index) and is reported CLEAN, not dirty.
-    Untracked files (`??`) are never phantoms -- there is no index entry to
-    diff against -- and are always DIRTY. Deliberately no `git
-    update-index --refresh`: it can never CLEAR phantom-dirty state (see
-    `commit_gates.py`'s own comment) and would leave every phantom
-    permanently dirty.
-
-    A path present in `paths` but absent from the porcelain output (nothing
-    reported for it at all) is CLEAN -- porcelain only ever reports rows for
-    paths that differ from HEAD.
-
-    Fails closed PER PATH, never per pathspec (matches
-    `_check_claim_conflicts`'s own UNANSWERABLE policy): when the initial
-    `git status` call itself fails, every path in *paths* is
-    UNANSWERABLE. When the call succeeds but a reported line for a given
-    path cannot be parsed, that ONE path is UNANSWERABLE and its siblings
-    are still classified normally.
-
-    Known, unclosable residual (not tested here, by design -- see this
-    module's own C5 spec): between this read and the commit landing, a live
-    peer can dirty a path in the committer's own pathspec; the subsequent
-    `git add` absorbs it before this check would see it again. Not closable
-    without a lock, and `ceremony_lock` was deliberately deleted 2026-08-07
-    (docs/plans/2026-08-07-excise-the-ceremony-lock.md, C10) -- do not
-    reintroduce one to close this window.
-    """
-    if not paths:
-        return {}
-
-    status_result = git_native._git(
-        ["-c", "core.quotepath=false", "status", "--porcelain", "--", *paths],
-        cwd=worktree_root,
-    )
-    if not status_result.ok:
-        return {p: _DIRTY_STATUS_UNANSWERABLE for p in paths}
-
-    status: Dict[str, str] = {p: _DIRTY_STATUS_CLEAN for p in paths}
-    path_set = set(paths)
-    phantom_candidates: List[str] = []
-    tracked_unstaged: List[str] = []
-
-    for line in status_result.stdout.splitlines():
-        if len(line) < 4:
-            # An unparseable line names no path this function can attribute
-            # to a specific caller path -- there is nothing to mark
-            # UNANSWERABLE against, since we don't know which path it was
-            # for. Skip it; it cannot silently mark a real path CLEAN,
-            # because every path's default above is CLEAN only when nothing
-            # in the output names it at all -- an actually-dirty path with a
-            # malformed line would still be under-detected, but that is the
-            # same shape `dirty_tree_gate` already accepts (see its own
-            # `parsed_lines` loop, which likewise `continue`s on `len(line)
-            # < 4`... note: this module's own line format uses a fixed XY +
-            # space prefix, so a short line here means git itself emitted
-            # something this parser does not recognize).
-            continue
-        xy = line[:2]
-        path = _porcelain_status_path(line)
-        if path not in path_set:
-            continue
-        x_char = xy[0] if xy else " "
-        y_char = xy[1] if len(xy) > 1 else " "
-
-        if xy == "??":
-            status[path] = _DIRTY_STATUS_DIRTY
-            continue
-
-        if x_char == " " and y_char != " ":
-            # Tracked, unstaged modification -- EOL-phantom candidate.
-            phantom_candidates.append(path)
-            tracked_unstaged.append(path)
-            continue
-
-        # Anything else with a non-blank status char (staged, or a mix of
-        # staged+unstaged such as `MM`/`AM`) is DIRTY outright -- see this
-        # function's docstring and the brief's own note: porcelain's Y
-        # column already carries the worktree-vs-index signal C5 needs, and
-        # a mixed state still means SOMETHING under this path is
-        # uncommitted right now, whoever authored which part of it.
-        if x_char != " " or y_char != " ":
-            status[path] = _DIRTY_STATUS_DIRTY
-
-    if phantom_candidates:
-        diff_result = git_native._git(
-            ["diff", "--name-only", "--", *phantom_candidates],
-            cwd=worktree_root,
-        )
-        if not diff_result.ok:
-            # The status call answered; the follow-up diff call did not --
-            # fail closed for exactly the paths this second call was
-            # supposed to resolve, not the whole pathspec.
-            for p in phantom_candidates:
-                status[p] = _DIRTY_STATUS_UNANSWERABLE
-        else:
-            real_diff_paths = {p for p in diff_result.stdout.splitlines() if p}
-            for p in tracked_unstaged:
-                status[p] = (
-                    _DIRTY_STATUS_DIRTY if p in real_diff_paths else _DIRTY_STATUS_CLEAN
-                )
-
-    return status
-
-
-def _porcelain_status_path(line: str) -> str:
-    """Extract the (destination) path from one `git status --porcelain`
-    line, matching `commit_gates.py::_porcelain_path`'s rename handling
-    (` -> ` separator) without importing across that module boundary for a
-    one-line helper.
-    """
-    path = line[3:]
-    if " -> " in path:
-        path = path.rsplit(" -> ", 1)[-1]
-    return path
-
-
-def _check_claim_conflicts(
-    worktree_root: str, paths: List[str], caller_sid: str
-) -> Optional[Dict[str, Any]]:
-    """The O(pathspec) ownership gate (C2, replaces the excised C4c gate).
-
-    Composes C1's `claim_index.lookup()` -- NEVER `compute_scope`/
-    `compute_offer`/`assert_paths_in_session_scope` (see this module's own
-    docstring, "Sink-side ownership enforcement", for why that predicate is
-    structurally different and was not reused). For each path: a claimant
-    other than *caller_sid* who is live (via `liveness.session_live()`,
-    called only for claimants `lookup()` actually returned -- typically
-    0-2 calls, never enumerated for all sessions) AND whose path is
-    currently DIRTY (C5, A6/A7 -- see `_paths_dirty_status()`) refuses THAT
-    path, named individually (AC4) -- never a whole-pathspec refusal.
-
-    C5 narrows this gate's refusal condition from "a live peer claims the
-    path" to the CONJUNCTION "a live peer claims the path AND the path is
-    currently dirty". This is a strict narrowing, never a new false
-    negative: the live-peer-claim conjunct is retained unchanged, and the
-    dead-session-left-a-dirty-file case was already permitted before this
-    change (`live_others` is empty when the claimant is not live) and stays
-    permitted identically now. It closes the rescue-commit class: a session
-    that died mid-work leaves a claim `release_committed_claims` is
-    structurally incapable of retiring for a DIFFERENT rescuing session
-    (`release_committed_claims` only ever accepts the claimant's own sid --
-    see `session/tests/test_scope.py`), so once a peer rescues and commits
-    that work, the path is CLEAN and must be committable again despite the
-    stale claim still existing; before C5 the mere existence of that claim
-    refused it forever.
-
-    C1 narrows the CONJUNCTION once more, to "a live peer claims the path
-    AND the path is currently dirty AND NOT DIVERGED" -- divergence, not
-    dirtiness, is the discriminator, because `commit_scoped()`'s agree
-    branch is git's own documented `--only` mode and always commits the
-    WORKTREE version of an agreeing path: a dirty-but-not-diverged path
-    genuinely sweeps a peer's unstaged worktree lines into the commit (the
-    refusal there is doing real work and stays), while a diverged path
-    takes the private-index branch instead, which commits index bytes and
-    structurally cannot sweep anything (the refusal there protects nothing,
-    and must not fire). See `coordinator_core.git.divergence.diverging_
-    paths()` and `docs/research/spike-verdicts/2026-08-13-private-index-
-    form-cannot-sweep-a-peers-worktree.md` for the proof of both arms.
-
-    Known, unclosable residual: this reads dirtiness (and divergence) once,
-    before staging; a live peer can dirty the path again between this read
-    and the commit landing, and the subsequent `git add` absorbs it before
-    this check would see it a second time. Not closable without a lock (see
-    `_paths_dirty_status()`'s own docstring) -- accepted, not tested for.
-
-    UNANSWERABLE-PATH POLICY -- fail closed PER PATH, never per pathspec. A
-    path `claim_index.lookup()` could not resolve (aborted/unresolvable
-    rebuild), OR whose dirtiness this function's own porcelain call could
-    not resolve, OR (C1) whose divergence `diverging_paths(fail_loud=True)`
-    could not resolve, is refused with a message naming the remedy; a
-    sibling path every call COULD resolve proceeds normally. An
-    indeterminate divergence answer degrades to this same fail-closed
-    policy -- NEVER to "not diverged, therefore refuse" (harmless but
-    wrong) and NEVER to "diverged, therefore allow" (the one direction that
-    can lose a peer's work). Whole-pathspec fail-closed would make commit
-    success a function of the WHOLE tree's index health rather than the
-    caller's own pathspec -- exactly the O(dirty tree) coupling this plan's
-    binding negative spec forbids.
-
-    C10 -- CALLER-ONLY POSITIVE UNDER AN INCOMPLETE WALK is ALSO
-    unanswerable, narrowly. `claim_index.lookup()` returns a positive
-    claimant list verbatim regardless of `state.complete` (see its
-    docstring's ordering), so a walk that aborted (wall-clock cap or an
-    unreadable claim source) after reading only the caller's own claim on a
-    path, before it could have reached a live peer's, previously resolved
-    `others = claimants - {caller_sid}` to empty and allowed -- a commit
-    landing over a peer's uncommitted work on nothing but partial evidence.
-    Fixed by reading `claim_index.lookup()`'s own `.complete` attribute (a
-    `_LookupResult`, a dict subclass -- see that module): when the overall
-    walk was incomplete AND a path's positive claimant set contains nothing
-    but the caller, that path is now unanswerable too. Deliberately NARROW,
-    not "any positive result under an incomplete walk becomes
-    unanswerable": a path whose claimant set already contains a live OTHER
-    session refuses through the existing conflict path regardless of walk
-    completeness (that path already found the thing that matters), so this
-    added conjunct never flips an already-correct refusal into anything
-    else, and never touches the `claimants == [dead peer]` allow -- only
-    the caller-only-positive-under-incomplete-walk case, which is the one
-    still capable of masking an unseen peer.
-
-    AC10a: a path with a conflicting OTHER claimant, evaluated while the
-    caller's own identity does NOT verify (`_caller_identity_verified` is
-    False), degrades to this same unanswerable-path fail-closed policy
-    rather than falling through to a liveness-gated allow -- an unverified
-    caller identity must never gain "no conflict, proceed" as its answer.
-
-    Returns a rejection response dict (the same shape as a validation
-    error), or `None` when every path clears.
-    """
-    claimants_by_path = claim_index.lookup(paths, cwd=worktree_root)
-    walk_complete = claimants_by_path.complete
-    identity_verified = _caller_identity_verified(caller_sid, worktree_root)
-
-    unanswerable: List[str] = []
-    conflicted: List[tuple] = []
-
-    # C5: only computed when at least one path has an other-live claimant to
-    # narrow against -- a pathspec with no conflicting claimant at all never
-    # pays this extra spawn (see the "AND dirty" gate below, evaluated only
-    # inside the `if live_others:` branch).
-    dirty_status: Optional[Dict[str, str]] = None
-
-    # C1: only computed when at least one path has ALSO reached the
-    # DIRTY verdict above -- a pathspec with no live-claimant-and-dirty
-    # path never pays this extra spawn. `diverged_paths is None` is the
-    # not-yet-computed sentinel (mirrors `dirty_status` above); once
-    # `diverging_paths()` is called, EITHER `diverged_paths` holds the
-    # resolved set (possibly empty) OR `divergence_unanswerable` is True --
-    # never both unresolved.
-    # `divergence_unanswerable` is sticky for the whole call: once the
-    # first `diverging_paths()` failure sets it, every later dirty+claimed
-    # path in this same pathspec is also marked unanswerable, with no
-    # per-path retry. Under the documented 50-70-concurrent-session load
-    # norm, one transient `git diff` failure therefore widens a
-    # single-path refusal to every dirty+claimed path in the call. This is
-    # deliberate fail-closed behaviour, not a missing retry.
-    diverged_paths: Optional[Set[str]] = None
-    divergence_unanswerable = False
-
-    for path in paths:
-        claimants = claimants_by_path.get(path, [])
-        if claim_index.UNANSWERABLE in claimants:
-            unanswerable.append(path)
-            continue
-        others = [c for c in claimants if c != caller_sid]
-        if not others:
-            if claimants and not walk_complete:
-                # C10: the walk that produced this positive, caller-only
-                # answer aborted before it could have reached a live
-                # peer's claim on this SAME path -- treat it the same as
-                # any other partial-evidence answer, never as "no
-                # conflict". A claimant list already containing a live
-                # OTHER session skips this branch entirely (`others` is
-                # non-empty) and refuses below regardless of completeness.
-                unanswerable.append(path)
-            continue
-        if not identity_verified:
-            unanswerable.append(path)
-            continue
-        live_others = [c for c in others if session_liveness.session_live(c, worktree_root)]
-        if not live_others:
-            continue
-
-        if dirty_status is None:
-            dirty_status = _paths_dirty_status(worktree_root, paths)
-        verdict = dirty_status.get(path, _DIRTY_STATUS_UNANSWERABLE)
-        if verdict == _DIRTY_STATUS_UNANSWERABLE:
-            unanswerable.append(path)
-        elif verdict == _DIRTY_STATUS_DIRTY:
-            # C1: dirty AND claimed by a live peer is no longer sufficient
-            # on its own -- refuse only if this path is also DIVERGED (see
-            # this function's own docstring for why). Computed at most once
-            # per call, lazily, only now that a live-claimant-and-dirty
-            # path has actually been found.
-            if diverged_paths is None and not divergence_unanswerable:
-                try:
-                    diverged_paths = set(
-                        git_divergence.diverging_paths(
-                            paths, cwd=worktree_root, fail_loud=True
-                        )
-                    )
-                except git_divergence.DivergenceCheckFailed:
-                    divergence_unanswerable = True
-            if divergence_unanswerable:
-                unanswerable.append(path)
-            elif path in diverged_paths:
-                # Diverged: `commit_scoped()` will take the private-index
-                # branch, which commits index bytes and structurally cannot
-                # sweep the peer's worktree lines -- this refusal would do
-                # no work, so it does not fire.
-                pass
-            else:
-                conflicted.append((path, live_others))
-        # _DIRTY_STATUS_CLEAN: a live peer claims it, but nothing is
-        # currently uncommitted under it (the rescue-commit case, A7) --
-        # proceeds.
-
-    if not unanswerable and not conflicted:
-        return None
-
-    # DR-260 break-past (B5): a live-claimant refusal on ANY path (never the
-    # UNANSWERABLE-path fail-closed policy above -- that guards claim-index
-    # health, a different concern DR-260's unlock has no bearing on) can be
-    # cleared by an operator-granted one-shot sentinel for THIS (session,
-    # guard) pair. `caller_sid` IS `owner_session_id` -- `_handler` calls
-    # this function with nothing else (see this module's docstring, "Resolved
-    # ONCE, here" comment at its own call site) -- never the
-    # `scoped-git-commit-<uuid4>` nonce minted lower down for the commit
-    # mechanism, which is fresh per invocation and could never be pre-minted
-    # against by an operator (the identity footgun the mechanism-gate spike
-    # exists to name -- see that record's Finding 1).
-    #
-    # `consume()` never raises (its own contract) -- a grant here only ever
-    # clears `conflicted`, so an UNANSWERABLE path from a degraded claim
-    # index still refuses below regardless of the grant; the loop that
-    # builds `reasons` further down only ever sees whatever remains after
-    # this clears.
-    if conflicted and guard_unlock_sentinel.consume(caller_sid, _CLAIM_CONFLICT_GUARD_NAME):
-        overridden_paths = sorted({path for path, _ in conflicted})
-        _LOG.warning(
-            "ceremony.scoped_git_commit: claim-conflict refusal for %s cleared "
-            "by an operator-granted DR-260 unlock (session=%s, guard=%s)",
-            overridden_paths, caller_sid, _CLAIM_CONFLICT_GUARD_NAME,
-        )
-        _record_claim_conflict_override(worktree_root, caller_sid, overridden_paths)
-        conflicted = []
-        if not unanswerable:
-            return None
-
-    # Observability: a silently-degraded index should be visible before it
-    # becomes an incident (C2 spec) -- one log line per unanswerable path.
-    for path in unanswerable:
-        _LOG.warning(
-            "ceremony.scoped_git_commit: claim ownership for %r could not be "
-            "verified (claim index unanswerable, or caller identity "
-            "unverified -- AC10a); failing closed for this path only",
-            path,
-        )
-
-    reasons: List[str] = []
-    for path in unanswerable:
-        reasons.append(
-            "%r: claim ownership could not be verified -- %s"
-            % (path, _UNANSWERABLE_CLAIM_REMEDY)
-        )
-    for path, holders in conflicted:
-        reasons.append(
-            "%r: claimed by live session(s) %s -- %s (this call's own "
-            "session id, for constructing the unlock sentinel: %s)"
-            % (path, ", ".join(sorted(holders)), _CLAIM_CONFLICT_REMEDY, caller_sid)
-        )
-
-    return {
-        "committed": False,
-        "sha": None,
-        "pushed": None,
-        "error": "ceremony.scoped_git_commit: rejected -- " + "; ".join(reasons),
-    }
-
-
-#: `_record_claim_conflict_override`'s durable-record filename, per session
-#: -- mirrors `coordinator_core.guard_advisory_counter`'s own per-session
-#: `state/subagent-share/<session_id>/*.jsonl` convention (guard name +
-#: timestamp) rather than importing that module directly: its own docstring
-#: pins its record shape to a PM-ruled minimum ("do not widen this record
-#: shape without a fresh PM ruling") that has no room for the overridden
-#: PATH LIST this record needs -- the one fact `consume()` itself destroys
-#: the moment it succeeds (unlinks the sentinel, returns a bare bool; see
-#: the mechanism-gate spike record's Finding 3). A second, differently-
-#: shaped file under the same per-session convention, not a reuse of that
-#: module's write path.
-_CLAIM_CONFLICT_OVERRIDE_LOG = "claim-conflict-overrides.jsonl"
-
-
-def _record_claim_conflict_override(
-    worktree_root: str, session_id: str, overridden_paths: List[str]
-) -> None:
-    """Append a durable record of a DR-260 grant that just cleared a
-    claim-conflict refusal (B7).
-
-    `guard_unlock_sentinel.consume()` writes nothing and logs nothing --
-    the sentinel it consumed is unlinked, and the grant is otherwise
-    invisible the instant it succeeds (mechanism-gate spike record, Finding
-    3). Without this, an override is indistinguishable after the fact from
-    the bug it exists to route around.
-
-    HARD CONSTRAINT (DR-260's own negative spec, carried by the spike
-    record): must never raise into `_check_claim_conflicts` -- a crash
-    there would fail a hard-deny guard OPEN, the one direction it must
-    never fail in. Every failure mode here (unwritable directory, disk
-    full, an unresolvable `worktree_root`) is caught and swallowed; nothing
-    this function does can turn a grant back into a refusal, nor a refusal
-    into a grant -- it runs strictly AFTER `_check_claim_conflicts` has
-    already decided to proceed.
-    """
-    try:
-        record = {
-            "guard": _CLAIM_CONFLICT_GUARD_NAME,
-            "session": session_id,
-            "overridden_paths": list(overridden_paths),
-            "at": datetime.now(timezone.utc).isoformat(),
-        }
-        # Serialized BEFORE any filesystem touch: a `json.dumps` failure
-        # (unexpected content, not that this record shape can ever produce
-        # one) must not leave behind an empty, half-written record file --
-        # either a complete line lands, or nothing does.
-        line = json.dumps(record) + "\n"
-        record_path = (
-            Path(worktree_root)
-            / "state"
-            / "subagent-share"
-            / session_id
-            / _CLAIM_CONFLICT_OVERRIDE_LOG
-        )
-        record_path.parent.mkdir(parents=True, exist_ok=True)
-        with record_path.open("a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception:
-        _LOG.debug(
-            "ceremony.scoped_git_commit: claim-conflict override record "
-            "write failed; grant proceeds, record lost",
-            exc_info=True,
-        )
 
 
 #: Shared per-directory `git status --porcelain` cache type -- maps a
@@ -1355,6 +870,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     prose_raw = params.get("prose", "")
     deliverable_id_raw = params.get("deliverable_id")
 
+    # AC3/AC11 (C3): the required-param and `deliverable_id`-shape checks
+    # below (through the `not message` check) are malformed-REQUEST
+    # rejects, not blocks -- they protect against nothing git enforces
+    # (a missing worktree_root/paths/message is not a git concept at all,
+    # it is this op's own JSON-RPC contract), and their outlet is trivial:
+    # the SAME call, corrected, with no wait and no human -- there was
+    # never anything to retry against, only a malformed request to fix.
     if not worktree_root_raw:
         return {
             "committed": False,
@@ -1415,9 +937,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     paths: List[str] = [str(p) for p in paths_raw]
     # Review: code-reviewer -- Finding [P3], 2026-08-08. `include_orphans` is
     # RETIRED (AC9, see this function's own docstring) and read nowhere in
-    # this file -- `_check_claim_conflicts` takes no such parameter. The
-    # param itself stays accepted (backward compatibility), it is simply
-    # never bound to a local now that there is nothing left for it to gate.
+    # this file. The param itself stays accepted (backward compatibility),
+    # it is simply never bound to a local now that there is nothing left for
+    # it to gate.
 
     # 2026-08-12 fix (state/bug-backlog/2026-08-12-scoped-git-commit-
     # silently-omits-untracked-files-in-a-pathspec.yaml): computed against
@@ -1461,23 +983,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "error": "ceremony.scoped_git_commit: rejected -- %s" % (sweep_reason,),
         }
 
-    # Resolved ONCE, here, and reused for both the ownership gate below and
-    # the post-commit `release_committed_claims` call further down -- the
-    # CALLING session's own identity, never the private per-invocation
-    # `scoped-git-commit-<uuid4>` nonce minted just below for
-    # `run_commit_pipeline` (see that mint's own comment).
+    # Resolved ONCE, here, and reused by the post-commit `release_committed_
+    # claims` call further down -- the CALLING session's own identity, never
+    # the private per-invocation `scoped-git-commit-<uuid4>` nonce minted
+    # just below for `run_commit_pipeline` (see that mint's own comment).
     owner_session_id = _resolve_committing_session_id(params, worktree_root)
 
-    # C2 (2026-08-08-claim-index-the-commit-gate-never-had.md): the O(pathspec)
-    # ownership gate, back in the commit sink -- see this module's docstring,
-    # "Sink-side ownership enforcement", and `_check_claim_conflicts`'s own
-    # docstring for what this does and does not close. Evaluated AFTER
-    # directory expansion (so it sees individual files, not a directory
-    # string) and AFTER the sweeping-pathspec rejection (cheaper, and
-    # correct regardless of ownership) -- both orderings are load-bearing.
-    conflict_rejection = _check_claim_conflicts(worktree_root, paths, owner_session_id)
-    if conflict_rejection is not None:
-        return conflict_rejection
+    # C2's ownership gate call site (`_check_claim_conflicts`) was removed
+    # outright 2026-08-13 (docs/plans/2026-08-13-claim-release-deadlock-and-
+    # the-doctrine-that-rejects-it.md, C1) -- see this module's docstring,
+    # "Sink-side ownership enforcement". Nothing GATES here in its place.
+    # `_warn_recent_edits` (C1d, AC1d) is advisory-only -- a log line, never
+    # control flow -- and runs unconditionally below.
+    _warn_recent_edits(worktree_root, paths, owner_session_id)
 
     # W3 dead-wire finding (docs/plans/2026-08-08-a-landed-commit-reported-
     # as-failed.md, item 4 -- verified on disk 2026-08-08): `session_id` is

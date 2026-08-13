@@ -211,6 +211,14 @@
       "type": "string",
       "description": "Roadmap identifier for spinoff-roadmap kind handoffs."
     },
+    "reconcile_disposition": {
+      "type": "string",
+      "description": "Operator-recorded disposition clearing a D1 'severed-observer' conservation violation -- read by coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1 assertion) via the module-level `_DISPOSITION_FIELD` constant. See the live handoff.schema.json's twin for the full read-side contract. Declared here so an already-archived handoff carrying this field validates; not enforced (this archived schema's cross-field rules from the live handoff do not apply)."
+    },
+    "reconcile_disposition_reason": {
+      "type": "string",
+      "description": "Free-text justification paired with reconcile_disposition -- read by coordinator_core/ops/handoff_reconcile.py's `_check_conservation` (D1 assertion) via the module-level `_DISPOSITION_REASON_FIELD` constant. See the live handoff.schema.json's twin for the full read-side contract."
+    },
     "reviewed_at_workstream_complete": {
       "type": "string",
       "description": "Review marker: '<sha-range> <reviewer> <YYYY-MM-DD>'. Written by /workstream-complete and /handoff after running coordinator:review-code. Absent on spinoff-kind handoffs."

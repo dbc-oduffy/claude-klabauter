@@ -86,9 +86,12 @@ import logging
 import os
 import random
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
+
+import yaml
 
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
@@ -98,6 +101,7 @@ from coordinator_core.frontmatter.primitives import (
     replace_fm_field,
     serialize_yaml_scalar,
     split_frontmatter,
+    unquote_yaml_scalar,
     write_fm_nested_field,
 )
 from coordinator_core.ipc import register_op
@@ -225,6 +229,100 @@ def _carry_value_for_file(
 
 
 # ---------------------------------------------------------------------------
+# Summary cap (ported from memo_transition._normalize_oversize_summary /
+# _normalize_block_scalar_summary — 2026-08-13, unwritable-handoff-records)
+# ---------------------------------------------------------------------------
+
+# Handoff `summary:` cap — matches schema_validate._cf_summary_length_cap's
+# literal 140.  Distinct constant from memo_transition's
+# `ops.fleet._memo_summary._SUMMARY_MAX_CHARS` (120) — the two gates cap
+# different record kinds at different limits; this module owns its own value
+# rather than importing the memo one, which would silently couple the two
+# caps.
+_SUMMARY_MAX_CHARS = 140
+
+# Matches the bare block-scalar indicator token read_fm_field returns for a
+# `summary: |` / `summary: >` line (optionally with chomping `+`/`-` and/or an
+# explicit indentation-indicator digit, e.g. `|-`, `>+`, `|2`, `|2-`) — never a
+# real single-line value.  Copied verbatim from memo_transition.py's own
+# `_BLOCK_SCALAR_INDICATOR_RE` (same shape, different module — no shared
+# import to avoid an ops-module-to-ops-module dependency).
+_BLOCK_SCALAR_INDICATOR_RE = re.compile(r'^[|>][+\-0-9]*$')
+
+
+def _replace_block_scalar_span(fm_text: str, key: str, new_line: str) -> Optional[str]:
+    """Replace a block-scalar ``key:`` line PLUS all its indented continuation lines.
+
+    Exact port of `memo_transition._replace_block_scalar_span` — locates the span
+    from the ``key: |``/``key: >`` line through the last contiguous line that is
+    either blank or indented (YAML requires block-scalar continuation lines to be
+    indented relative to the key, which at frontmatter top level is column 0 — so
+    "indented or blank" is exactly the continuation-line test).  Returns ``None``
+    if the span cannot be located (defensive — should not happen given the caller
+    already confirmed ``read_fm_field`` saw a block-scalar indicator for this key).
+    """
+    text = fm_text if fm_text.endswith('\n') else fm_text + '\n'
+    pattern = re.compile(
+        r'^' + re.escape(key) + r':(?=[ \t]|\r?$)[ \t]*[|>][+\-0-9]*[ \t]*\r?\n'
+        r'(?:(?:[ \t]+.*)?\r?\n)*',
+        re.MULTILINE,
+    )
+    m = pattern.search(text)
+    if not m:
+        return None
+    if m.group(0).partition('\n')[0].endswith('\r') and not new_line.endswith('\r\n'):
+        new_line = new_line[:-1] + '\r\n' if new_line.endswith('\n') else new_line + '\r\n'
+    return text[: m.start()] + new_line + text[m.end():]
+
+
+def _normalize_block_scalar_summary(fm_text: str, file_path: Path) -> str:
+    """Truncate an over-cap block-scalar ``summary: |`` / ``summary: >`` field.
+
+    Exact port of `memo_transition._normalize_block_scalar_summary`, capped to
+    this module's `_SUMMARY_MAX_CHARS` (140, not the memo side's 120).  Decodes
+    the full value via ``yaml.safe_load`` (the frontmatter text is a valid flow
+    mapping), flattens embedded newlines to spaces, truncates using the same
+    ``value[:CAP - 1] + "…"`` shape the plain-scalar path uses, and splices the
+    entire key-line-plus-continuation-block span with one quoted single-line
+    ``summary: "…"`` line.
+
+    Length gate mirrors ``schema_validate._cf_summary_length_cap`` exactly — that
+    validator measures ``len(str(summary))`` on the yaml.safe_load-decoded value
+    (embedded newlines counted as 1 char each, not flattened), so this helper
+    gates on the same decoded length before deciding to act.
+
+    Idempotent: an at-or-under-cap block scalar (decoded length) is left
+    byte-identical, no warning emitted.
+
+    Negative-spec: does NOT run when ``yaml.safe_load`` fails to parse ``fm_text``
+    — an unparseable frontmatter is left untouched.
+    """
+    try:
+        parsed = yaml.safe_load(fm_text) or {}
+    except Exception:  # noqa: BLE001
+        return fm_text
+
+    value = parsed.get("summary")
+    if value is None:
+        return fm_text
+    value = str(value)
+    if len(value) <= _SUMMARY_MAX_CHARS:
+        return fm_text
+
+    original_len = len(value)
+    flattened = " ".join(value.split())
+    truncated = flattened[: _SUMMARY_MAX_CHARS - 1] + "…"
+    print(
+        f"handoff.normalize: WARNING — {file_path}: summary: (block scalar) exceeded "
+        f"{_SUMMARY_MAX_CHARS} chars (was {original_len}); flattened and truncated to fit the cap",
+        file=sys.stderr,
+    )
+    new_line = f"summary: {serialize_yaml_scalar(truncated, numeric_quoting=True)}\n"
+    replaced = _replace_block_scalar_span(fm_text, "summary", new_line)
+    return replaced if replaced is not None else fm_text
+
+
+# ---------------------------------------------------------------------------
 # Category heuristic (exact port of matchCategory from JS)
 # ---------------------------------------------------------------------------
 
@@ -349,7 +447,17 @@ def _normalize_one_text(
         fm_text = insert_fm_field(fm_text, 'category', cat)
         changes.append(f'category: (absent) → {cat}')
 
-    # ── 4. summary: backfill when absent ──────────────────────────────────
+    # ── 4. summary: backfill when absent; cap when present ─────────────────
+    # Break-class fix (2026-08-13, unwritable-handoff-records-fail-loudly § C1):
+    # the >140 truncation used to live ONLY inside the absence branch below, so
+    # a present, already-over-cap summary fell straight through untouched and
+    # was then refused forever by schema_validate._cf_summary_length_cap on
+    # every subsequent write.  Ported from memo_transition._normalize_oversize_
+    # summary / _normalize_block_scalar_summary (see the module-level helpers
+    # above): truncate ahead of the gate, warn, never reject.  Truncation shape
+    # unified to `[:_SUMMARY_MAX_CHARS - 1] + "…"` (the memo side's shape) for
+    # both this present-value path and the backfill path below — the prior
+    # `[:137] + '...'` three-ASCII-dot shape is retired.
     summary_raw = read_fm_field(fm_text, 'summary')
     if summary_raw is None:
         # Extract text from the first H1 in the body; fall back to `title:` field.
@@ -365,13 +473,33 @@ def _normalize_one_text(
         summary_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', summary_text)         # **bold** → bold
         summary_text = re.sub(r'\*([^*]+)\*', r'\1', summary_text)             # *italic* → italic
         summary_text = summary_text.strip()
-        if len(summary_text) > 140:
-            summary_text = summary_text[:137] + '...'
+        if len(summary_text) > _SUMMARY_MAX_CHARS:
+            summary_text = summary_text[: _SUMMARY_MAX_CHARS - 1] + '…'
         if summary_text:
             fm_text = insert_fm_field(fm_text, 'summary', summary_text)
             short = summary_text[:60]
             ellipsis = '…' if len(summary_text) > 60 else ''
             changes.append(f'summary: (absent) → "{short}{ellipsis}"')
+    elif _BLOCK_SCALAR_INDICATOR_RE.match(summary_raw):
+        new_fm_text = _normalize_block_scalar_summary(fm_text, file_path)
+        if new_fm_text != fm_text:
+            fm_text = new_fm_text
+            changes.append('summary: (block scalar) truncated to fit 140-char cap')
+    else:
+        summary_val = unquote_yaml_scalar(summary_raw)
+        if summary_val is not None and len(summary_val) > _SUMMARY_MAX_CHARS:
+            original_len = len(summary_val)
+            truncated = summary_val[: _SUMMARY_MAX_CHARS - 1] + '…'
+            fm_text = replace_fm_field(fm_text, 'summary', truncated, numeric_quoting=True)
+            changes.append(
+                f'summary: truncated (was {original_len} chars) to fit {_SUMMARY_MAX_CHARS}-char cap'
+            )
+            print(
+                f"handoff.normalize: WARNING — {file_path}: summary: exceeded "
+                f"{_SUMMARY_MAX_CHARS} chars (was {original_len}); truncated to fit the cap",
+                file=sys.stderr,
+            )
+        # At-or-under-cap present value: carry unchanged — no drift, no warning.
 
     # ── 5. deliverable_id: carry if present; mint if absent (D1 carry rule) ──
     # Carry rule (D1): never re-mint an id that already exists — carrying preserves

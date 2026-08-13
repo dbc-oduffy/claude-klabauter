@@ -44,6 +44,7 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     assert_baseline_not_grown,
     check_against_baseline,
     check_implicit_encoding_zero_tolerance,
+    check_no_stale_baseline_entries,
     check_no_stale_exempt_prefixes,
     check_tier_a_zero_tolerance,
     is_prefix_excluded,
@@ -51,6 +52,7 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     repo_key_for_root,
     scan,
 )
+from coordinator_core.testing import symlink_capability
 
 # Declared, not excused: this file spawns a real git process because the
 # detectors under test read real git-index state -- mode bits (100755 vs
@@ -204,6 +206,7 @@ def test_scan_all_three_classes_are_independent_tells(tmp_path):
 # Tier A: checkout-breaker classes (exact, zero-tolerance, no baseline).
 # ---------------------------------------------------------------------------
 
+@symlink_capability.requires_symlink_capability
 def test_scan_detects_symlink_in_index(tmp_path):
     repo = _init_repo(tmp_path)
     (repo / "target.txt").write_text("real file\n")
@@ -1834,6 +1837,7 @@ def test_main_json_flag_emits_valid_json_with_expected_top_level_keys(tmp_path, 
         "tier_a",
         "implicit_encoding",
         "stale_exempt_prefixes",
+        "stale_baseline_entries",
     }
     assert "scan" in payload
     assert "env_shebang" in payload["scan"]
@@ -1887,3 +1891,136 @@ def test_real_tree_passes_tier_a_zero_tolerance():
 def test_real_tree_passes_implicit_encoding_zero_tolerance():
     ok, msg = check_implicit_encoding_zero_tolerance(_REPO_ROOT)
     assert ok, msg
+
+
+# ---------------------------------------------------------------------------
+# Debt-line desync: current scan vs frozen baseline must be printed as two
+# distinct, unmistakable numbers -- never one bare count a reader could
+# conflate with the baseline file's own total.
+# ---------------------------------------------------------------------------
+
+def test_debt_line_states_current_and_baseline_totals_distinctly_on_desync(tmp_path):
+    """Crafted baseline (2 entries, one of them stale) vs crafted scan (1
+    live violation, 1 NEW) driven through `check_against_baseline` -- the
+    same code path `main()` uses. The debt line must name BOTH totals
+    explicitly and not collapse them into a single ambiguous number."""
+    repo = _init_repo(tmp_path)
+    (repo / "new.sh").write_text("#!/usr/bin/env bash\n")
+    _commit_all(repo)
+
+    baseline_dir = repo / "state"
+    baseline_dir.mkdir()
+    baseline_path = baseline_dir / "posix-exec-baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                cls: (["gone.sh", "also-gone.sh"] if cls == "env_shebang" else [])
+                for cls in CLASSES
+            }
+        )
+    )
+
+    ok, msg = check_against_baseline(repo, baseline_path)
+
+    assert ok is False
+    assert "current scan 1 violation(s)" in msg
+    assert "frozen baseline 2 entry(ies)" in msg
+    # The bare pre-fix phrasing must be gone -- a reader must not be able to
+    # mistake the current-scan number for the baseline's own count.
+    assert "pre-existing violation(s)" not in msg
+    assert "baseline-frozen; shrinks" not in msg
+    assert "1 NEW violation(s) not yet in the baseline" in msg
+    assert "stale baseline entry(ies)" in msg
+
+
+def test_debt_line_omits_desync_explanation_when_totals_match(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.sh").write_text("#!/usr/bin/env bash\n")
+    _commit_all(repo)
+
+    baseline_dir = repo / "state"
+    baseline_dir.mkdir()
+    baseline_path = baseline_dir / "posix-exec-baseline.json"
+    baseline_path.write_text(
+        json.dumps({cls: (["tool.sh"] if cls == "env_shebang" else []) for cls in CLASSES})
+    )
+
+    ok, msg = check_against_baseline(repo, baseline_path)
+
+    assert ok is True
+    assert "current scan 1 violation(s)" in msg
+    assert "frozen baseline 1 entry(ies)" in msg
+    assert "Difference explained by" not in msg
+
+
+# ---------------------------------------------------------------------------
+# check_no_stale_baseline_entries: stale grandfather slots.
+# ---------------------------------------------------------------------------
+
+def test_check_no_stale_baseline_entries_is_green_when_baseline_is_subset_of_scan(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.sh").write_text("#!/usr/bin/env bash\n")
+    _commit_all(repo)
+
+    baseline_dir = repo / "state"
+    baseline_dir.mkdir()
+    baseline_path = baseline_dir / "posix-exec-baseline.json"
+    baseline_path.write_text(
+        json.dumps({cls: (["tool.sh"] if cls == "env_shebang" else []) for cls in CLASSES})
+    )
+
+    ok, msg = check_no_stale_baseline_entries(repo, baseline_path)
+
+    assert ok is True, msg
+    assert "OK" in msg
+
+
+def test_check_no_stale_baseline_entries_reds_on_path_absent_from_scan(tmp_path):
+    """A baseline entry naming a path the current scan does not produce for
+    that class -- deleted, renamed, or fixed -- is a dead grandfather slot
+    that must be surfaced RED, named, and attributed to its class."""
+    repo = _init_repo(tmp_path)
+    (repo / "clean.py").write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+
+    baseline_dir = repo / "state"
+    baseline_dir.mkdir()
+    baseline_path = baseline_dir / "posix-exec-baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {cls: (["deleted-tool.sh"] if cls == "env_shebang" else []) for cls in CLASSES}
+        )
+    )
+
+    ok, msg = check_no_stale_baseline_entries(repo, baseline_path)
+
+    assert ok is False, msg
+    assert "STALE BASELINE ENTRIES" in msg
+    assert "env_shebang" in msg
+    assert "deleted-tool.sh" in msg
+    assert "shrink-only" in msg
+
+
+def test_check_no_stale_baseline_entries_isolates_per_class(tmp_path):
+    """A stale entry in one class must not be misattributed to another, and
+    a class with no stale entries must not appear in the stale listing."""
+    repo = _init_repo(tmp_path)
+    (repo / "tool.sh").write_text("#!/usr/bin/env bash\n")
+    _commit_all(repo)
+
+    baseline_dir = repo / "state"
+    baseline_dir.mkdir()
+    baseline_path = baseline_dir / "posix-exec-baseline.json"
+    baseline = {cls: [] for cls in CLASSES}
+    baseline["env_shebang"] = ["tool.sh"]  # still live -- not stale
+    baseline["mode_100755"] = ["nonexistent-mode-entry.sh"]  # stale
+    baseline_path.write_text(json.dumps(baseline))
+
+    ok, msg = check_no_stale_baseline_entries(repo, baseline_path)
+
+    assert ok is False, msg
+    assert "mode_100755" in msg
+    assert "nonexistent-mode-entry.sh" in msg
+    # env_shebang's still-live entry must not be listed as stale.
+    env_shebang_idx = msg.find("env_shebang:")
+    assert env_shebang_idx == -1 or "stale entry" not in msg[env_shebang_idx:env_shebang_idx + 40]

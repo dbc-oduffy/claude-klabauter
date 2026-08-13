@@ -280,6 +280,18 @@ def holder_evidence(
                                  "unknown"
       last_activity_age_sec  - int seconds since meta.json's last_activity
       holder_goal            - meta.json's "goal" field
+      holder_goal_state       - "declared" | "undeclared" | "unreadable" —
+                                 disambiguates `holder_goal`'s two
+                                 pre-existing `None`-producing paths
+                                 (2026-08-13): "declared" means meta.json was
+                                 read and `goal` was non-empty; "undeclared"
+                                 means meta.json was read and `goal` is
+                                 empty/absent — the honest "this session
+                                 declared no goal"; "unreadable" means no
+                                 `holder_sid`, no session dir, or the
+                                 fail-soft `except` path fired below — a
+                                 goal-machinery-absent/evidence-gap case,
+                                 never conflated with "declared no goal"
       holder_branch          - meta.json's "branch" field
       recent_paths            - list[str], most-recent-first, deduplicated,
                                  <= 10 entries; only populated when
@@ -293,11 +305,22 @@ def holder_evidence(
                                  decisions; this is evidence, not a gate)
 
     Fail-soft (module contract): any exception during evidence-gathering
-    yields `evidence_error` plus `None`s for every field above, and NEVER
-    raises, changes a verdict, or hangs. This applies ONLY to the evidence
-    fields — it never touches `holder_live`/`verdict`, which the caller
-    already resolved via `session_live`/`claim_holder_live` before ever
-    calling this function.
+    yields `evidence_error` and NEVER raises, changes a verdict, or hangs.
+    Fields already successfully resolved before the exception fired are
+    preserved rather than clobbered, by omission — the handler never
+    reassigns them:
+      `liveness_basis`/`last_activity_age_sec` — always preserved by
+        omission (never reassigned in the handler; their pre-exception
+        value, `None` or resolved, stands either way).
+      `holder_goal`/`holder_goal_state`/`holder_branch` — preserved only
+        when `holder_goal_state` had already reached `"declared"`/
+        `"undeclared"` (i.e. the goal read completed before the raise);
+        otherwise reset to `None`/`"unreadable"`.
+    `recent_paths`, `recent_paths_source`, `scope_overlap` always reset —
+    they are only ever produced after the point where this exception can
+    fire. This applies ONLY to the evidence fields — it never touches
+    `holder_live`/`verdict`, which the caller already resolved via
+    `session_live`/`claim_holder_live` before ever calling this function.
 
     `holder_sid` is Optional because a claim dir CAN name no holder and still
     read live: `liveness.claim_holder_live` falls back to the ephemeral-pid
@@ -311,6 +334,7 @@ def holder_evidence(
         "liveness_basis": None,
         "last_activity_age_sec": None,
         "holder_goal": None,
+        "holder_goal_state": "unreadable",
         "holder_branch": None,
         "recent_paths": [],
         "recent_paths_source": "unavailable",
@@ -328,6 +352,7 @@ def holder_evidence(
         result["liveness_basis"] = _liveness_basis(holder_sid, str(repo_root))
         result["last_activity_age_sec"] = _last_activity_age_sec(sdir)
         result["holder_goal"] = _meta_str_or_none(sdir, "goal")
+        result["holder_goal_state"] = "declared" if result["holder_goal"] else "undeclared"
         result["holder_branch"] = _meta_str_or_none(sdir, "branch")
 
         if not want_activity:
@@ -350,11 +375,16 @@ def holder_evidence(
             )
         return result
     except Exception as exc:  # noqa: BLE001 - fail-soft is the contract here
+        # Review: code-reviewer P3 (2026-08-13) — only clobber fields that
+        # were never resolved before the exception fired. A transcript/
+        # recent-paths hiccup after holder_goal/holder_goal_state/
+        # holder_branch were already read must not discard a genuinely
+        # `declared` goal down to `unreadable` — that reintroduces the
+        # conflation holder_goal_state exists to prevent (spec AC3).
         result["evidence_error"] = f"{type(exc).__name__}: {exc}"
-        result["liveness_basis"] = None
-        result["last_activity_age_sec"] = None
-        result["holder_goal"] = None
-        result["holder_branch"] = None
+        if result["holder_goal_state"] == "unreadable":
+            result["holder_goal"] = None
+            result["holder_branch"] = None
         result["recent_paths"] = []
         result["recent_paths_source"] = "unavailable"
         result["scope_overlap"] = None

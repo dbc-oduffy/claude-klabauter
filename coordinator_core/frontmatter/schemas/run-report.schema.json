@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/run-report.schema.json",
   "x-schema-name": "run-report",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "top-level-array-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 added the optional top-level `reviewed_range` array (reviewer-attested commit ranges actually read).",
   "applies_to": "state/subagent-share/*/*.md",
   "description": "Universal subagent run-report sidecar — the SUPERSET schema unifying the plan/chunk-scoped executor flight-recorder (coordinator/schemas/flight-recorder.schema.json, applies_to tasks/*/flight/*.md) with the ad-hoc (no plan/chunk context) case. Written by claude-klabauter's engine-side `python3 -m coordinator_core.subagent_sandbox.provision_report` at spawn time (report_sidecar auto-provision, per state/lessons/... and MEMORY.md 'Subagent run-sidecar auto-provision ask' — example-doctrine-repo ACCEPTED design 2026-07-13) and updated by the spawned subagent during its run. Writer-side pin: claude-klabauter coordinator_core/subagent_sandbox/CONTRACT.md (react-memoed 2026-07-13) is authoritative for the provision_report entrypoint, stdin/stdout contract, provision_key grammar, and the path templating that produces the sidecar's on-disk location (state/subagent-share/<session-id>/<provision_key-or-nonce>.md) — this schema only validates the SHAPE of what gets written there, it does not own the provisioning mechanics (DR-047: that is claude-klabauter's engine tranche). A CURRENT flight-recorder doc (coordinator/schemas/flight-recorder.schema.json) MUST validate against this superset unchanged — this schema additively carries forward every flight-recorder field plus the universal agent_type/spawned_at/divergence fields and the '## Run notes' body section a plan/chunk-scoped flight-recorder does not need.",
   "type": "object",
@@ -36,6 +38,13 @@
         "type": "string"
       },
       "description": "Git commit SHAs for the EM-serial commit(s) that landed this dispatch's changes. The subagent NEVER writes this field, under any circumstance — `coordinator/agents/executor.md` (§ Commit Discipline, § EM-Only Commit Gate) states the executor never commits, no exceptions, no carve-out (the former `expected_branch:`/SC-DR-008 self-commit carve-out is retired); `coordinator/agents/review-integrator.md` (§ Commit Discipline) states the same for the integrator. Written as `[]` at provision time; the EM appends SHAs after landing the EM-serial commit that covers the subagent's edits (executor.md: 'commits: stays untouched by the executor ... the EM fills it in after landing the EM-serial commit'). Carried forward unchanged from flight-recorder, only the write-owner changed. NOTE: the unlanded `docs/plans/2026-07-24-g4-execute-pipeline-two-repo-rebuild.md` chunk M2pd targets a *different* artifact — `coordinator/commands/mise-en-place.md`'s Phase-5 DONE-summary/self-verify-and-commit contract — not this schema or executor.md/review-integrator.md, which already reflect the EM-only model as of `b714a548`."
+    },
+    "reviewed_range": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commit ranges (git rev-list syntax, e.g. 'abc123^..abc123') this reviewer attests to having ACTUALLY READ during this dispatch. WRITE-OWNER: the exact inverse of this schema's own `commits` property — written by the reviewing subagent ONLY, never by the EM, and never by a closing session, under any circumstance; an EM-written value is the retired PM vouch under a new name (docs/decisions/DR-156-reviewer-attests-at-review-time-is-admissible-evidence.md). ABSENCE: omitted entirely when nothing was reviewed — no empty-array sentinel, no 'reviewed nothing' value; a present-but-empty array asserts something nobody claimed. ADMITS, NEVER REPLACES: this field admits a state/review-trail/*.json record whose `sha_range` (coordinator/schemas/review-trail.schema.json) falls inside an attested range here — it does not credit coverage, does not duplicate or re-implement the trail record, and changes nothing about what counts as reviewed. LIST, NOT SINGLE: an array because the foreign-session partition already forces per-slice <sha>^..<sha> records; a single-range field would make widening the cheapest way to comply. Spec backlink: DR-156 (above); docs/plans/2026-08-13-reviewed-range-reviewer-attestation-field.md."
     },
     "sidecar_schema": {
       "type": "string",

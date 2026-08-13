@@ -41,8 +41,9 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.blocked_by_dependents":          "coordinator_core.ops.handoff_children",
     "handoff.reconcile_close_terminal":       "coordinator_core.ops.handoff_reconcile_close_terminal",
     "artifact.emit":                          "coordinator_core.ops.artifact_emit",
-    # coordinator_core.hooks registers all 15 hooks.* ops (6 advisory + 8 bookkeeping
-    # + 1 pull/poll arrival-check) in a single module import. This package-level
+    # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
+    # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module
+    # import. This package-level
     # granularity (one shared module value for all 15 keys, rather than a per-op
     # owning submodule) IS the correct mapping here, not a stand-in for a finer
     # split — confirmed C2 (docs/plans/2026-08-06-windows-hot-path-less-work-per-
@@ -67,6 +68,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.subagent_zero_tool_use_surface":   "coordinator_core.hooks",
     "hooks.subagent_zero_tool_use_resolve":   "coordinator_core.hooks",
     "hooks.subagent_arrival_check":           "coordinator_core.hooks",
+    "hooks.subagent_fabrication_check":       "coordinator_core.hooks",
     "backlog.record":                         "coordinator_core.ops.emit.recorder",
     "emit.cadence":                           "coordinator_core.ops.emit_cadence",
     "goal.append":                            "coordinator_core.ops.goal_append",
@@ -84,6 +86,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.transition":                     "coordinator_core.ops.handoff_transition",
     "handoff.stamp":                          "coordinator_core.ops.handoff_stamp",
     "handoff.stamp_phase":                    "coordinator_core.ops.handoff_phase_stamp",
+    "handoff.backfill_claim_stamp":           "coordinator_core.ops.handoff_backfill_claim_stamp",
     "handoff.ship_and_archive":               "coordinator_core.ops.handoff_ship_archive",
     "handoff.archive_transition":             "coordinator_core.ops.handoff_archive_transition",
     "handoff.repoint_origin":                 "coordinator_core.ops.handoff_repoint_origin",
@@ -95,6 +98,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "goal.match_candidates":                  "coordinator_core.ops.goals_match",
     "goal.set_kr_status":                     "coordinator_core.ops.goal_kr_status",
     "plan.match_candidates":                  "coordinator_core.ops.plan_match",
+    "plan.persist_capture":                   "coordinator_core.ops.plan_capture_persist",
     "handoff.match_candidates":               "coordinator_core.ops.handoff_match",
     "initiative.serve_set":                   "coordinator_core.ops.initiatives_serve",
     "roadmap.serve":                          "coordinator_core.ops.roadmap_serve",
@@ -189,6 +193,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.archive_paper_trail":              "coordinator_core.ops.fleet.archive_paper_trail",
     "fleet.archive_queue_entry":              "coordinator_core.ops.fleet.archive_queue_entry",
     "fleet.migrate_handoff_vocabulary":       "coordinator_core.ops.fleet.migrate_handoff_vocabulary",
+    "fleet.archive_terminal_sizings":         "coordinator_core.ops.fleet.archive_sizings",
     "git_branch.compute_descendant_tip":      "coordinator_core.ops.orphan_branch_sweep",
     "git_branch.detect_unpushed_commits":     "coordinator_core.ops.orphan_branch_sweep",
     "git_branch.list_unmerged_work":          "coordinator_core.ops.orphan_branch_sweep",
@@ -216,6 +221,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "percolate.list_files_newer_than_marker": "coordinator_core.ops.list_files_newer_than_marker",
     "plan.list_stale_executing":              "coordinator_core.ops.draft_plan_aging",
     "plan.list_orphaned":                     "coordinator_core.ops.draft_plan_aging",
+    "plan.suggest_completion_steps":          "coordinator_core.ops.plan_suggest_completion_steps",
     "cli.parse_flag":                         "coordinator_core.ops.parse_cli_args",
     "cli.parse_date_flags":                   "coordinator_core.ops.parse_cli_args",
     "merge.quiet_activity_gate":              "coordinator_core.ops.merge_quiet_activity_gate",

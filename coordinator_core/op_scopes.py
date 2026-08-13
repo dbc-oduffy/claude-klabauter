@@ -727,6 +727,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Without this entry dispatch resolves repo_root=None and the op returns an error.
     # Spec: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C3
     "handoff.author_fork":                   "common_dir",
+    # plan.persist_capture — keyed on git_common_dir: writes a new plan under
+    # main-worktree-rooted docs/plans/, same scope class as handoff.author_fork
+    # (handler derives worktree via main_worktree_root(common_dir)). Without this
+    # entry dispatch resolves repo_root=None and the op returns an error.
+    # Spec: state/handoffs/2026-08-13-vanilla-plan-mode-capture-safety-net.md § Part 2
+    "plan.persist_capture":                  "common_dir",
     # plan.tasks.mutate — keyed on git_common_dir: in-place mutation of a
     # docs/plans/*.md file's '## Tasks' fenced body block, which lives in the
     # main-worktree-rooted docs/plans/ tree — same scope class as handoff.transition.
@@ -772,6 +778,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.archive_paper_trail":              "common_dir",
     "fleet.archive_queue_entry":              "common_dir",
     "fleet.migrate_handoff_vocabulary":       "common_dir",
+    # fleet.archive_terminal_sizings — common_dir: git-mv's terminal
+    # sizing entries into archive/sizings/YYYY-MM/ under the caller's own
+    # repo tree, same archival-writer class as the fleet.* ops above.
+    # repo_root is the git common dir per the handler's own docstring;
+    # main_worktree_root(common_dir) resolves the worktree, mirroring
+    # archive_plans.py's Key Decision 5.
+    "fleet.archive_terminal_sizings":         "common_dir",
     # git_branch.* — orphan-branch-sweep ops. compute_descendant_tip/list_unmerged_work/
     # verify_commit_in_review_window read shared object-database/ref state (identical
     # across any linked worktree) but still need the caller's injected repo root, so
@@ -903,6 +916,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # repo.
     "install.write_shell_rc_guard_block":      "none",
     "install.wrapper_onto_path":               "none",
+    # install.detect_cmd_autorun_coverage / install.write_cmd_autorun_guard /
+    # install.strip_cmd_autorun_guard — "none": own-machine probe/write
+    # against the operator's own HKCU hive, not the caller's repo; matches
+    # install.detect_python3_appx_stub / install.write_shell_rc_guard_block's
+    # own scope verdicts per the handlers' own docstrings.
+    "install.detect_cmd_autorun_coverage":     "none",
+    "install.write_cmd_autorun_guard":         "none",
+    "install.strip_cmd_autorun_guard":         "none",
     # percolate.list_files_newer_than_marker — "none": mirrors percolate.run/
     # percolate.validate_store's existing precedent — source_dir is resolved from
     # the TARGETS entry and passed as an explicit param, never derived from the
@@ -918,6 +939,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # silently default to "none" and un-scope the op, scanning claude-klabauter's own
     # tree instead of the caller's.
     "plan.list_orphaned":                      "common_dir",
+    # plan.suggest_completion_steps — common_dir: scans the CALLER's own
+    # docs/plans/*.md and state/review-trail/*.json (+ archive/review-trail/)
+    # for the plan-completion assist surface (Part 3, state/handoffs/
+    # 2026-08-13-vanilla-plan-mode-capture-safety-net.md). Same rationale as
+    # plan.list_stale_executing/plan.list_orphaned directly above: an absent
+    # entry here would silently scan claude-klabauter's own tree instead of the
+    # caller's.
+    "plan.suggest_completion_steps":           "common_dir",
     # cli.parse_flag / cli.parse_date_flags — "none": parse a literal arguments
     # string handed in as a param; touch no filesystem or repo state.
     "cli.parse_flag":                          "none",

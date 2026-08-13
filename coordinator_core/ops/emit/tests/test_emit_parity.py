@@ -231,11 +231,18 @@ def _neutralize_live_coordinator_state_exec_summary(records: list) -> list:
 # dropped from parity comparison, so this compares a derivative of an uncompared field. Its
 # real coverage is its own unit tests plus the mapping-completeness assertion that every
 # HandoffKind except ``spike-result`` resolves to a class.
-_HANDOFF_POST_GOLDEN_KEYS = frozenset({"baton_class"})
+#
+# ``producer`` (cockpit contract 3.12.0 producer axis) joins it for the same reason and travels
+# the same two paths — the split documented above is exactly why it appears here AND in
+# ``_SECTION_DROP_KEYS``; adding it to one alone leaves ``test_full_parity`` red, which is how
+# the ``baton_class`` split was originally found. Unlike ``baton_class``, ``producer`` is not a
+# derivative of an already-dropped field: its coverage lives in
+# ``coordinator_core/contract/cockpit_schema/tests/test_producer_axis_entity.py``, not in a derivation argument.
+_HANDOFF_POST_GOLDEN_KEYS = frozenset({"baton_class", "producer"})
 
 
 def _neutralize_post_golden_handoff_fields(records: list) -> list:
-    """Drop ``baton_class`` from handoff records before golden comparison.
+    """Drop ``baton_class`` and ``producer`` from handoff records before golden comparison.
 
     Applied to BOTH the emitted candidate and the golden slice, mirroring
     ``_neutralize_live_coordinator_state_exec_summary`` above.

@@ -230,20 +230,20 @@ def _assert_branch(repo_root: Path, expected_branch: str) -> None:
         )
 
 
-def _commit_one(repo_root: Path, paths: list[str], message: str) -> Optional[str]:
-    """Stage + commit exactly `paths`, pathspec-scoped on both `add` and
-    `commit` (never `git add -A`/a bare `git commit`) — `apply` runs
-    against a shared concurrent-EM working tree that may already carry a
-    sibling session's own files staged, and a whole-tree add/commit would
-    sweep those into this run's commit. The `add` and `commit` calls are
-    each wrapped in `coordinator_core.git_lock_retry.run_with_lock_retry`,
-    so `.git/index.lock` contention from a sibling session's concurrent
-    commit retries with bounded backoff instead of crashing this run on
-    first contention; any other git failure still raises on the first
-    attempt. Returns the new commit's SHA, or `None` when there was
-    nothing staged for `paths` (a clean no-op, not a failure)."""
+def _stage_paths(repo_root: Path, paths: list[str]) -> None:
+    """`git add -- <paths>` for a COMBINED pathspec, wrapped in
+    `run_with_lock_retry` exactly like `_commit_one`'s own `add` call below
+    — the ONE `.git/index.lock` acquisition `_dispatch_commit_per_item`
+    now spends staging every verified item's paths, instead of one
+    acquisition PER ITEM (AC-7: the burst-source table's `backlog_grind_
+    assemble/apply.py` row, `add`+`commit` per item in a loop == 2 x N
+    acquisitions). Callers that already staged their own paths this way
+    pass `stage=False` to `_commit_one` below so its own `add` is skipped
+    — the combined `add` here is the ONLY staging acquisition for the
+    whole per-item batch. A no-op (no acquisition at all) for an empty
+    `paths` list — mirrors `_commit_one`'s own empty-paths no-op."""
     if not paths:
-        return None
+        return
     pathspec = ["--", *paths]
     add_proc = run_with_lock_retry(lambda: _run_git(["add", *pathspec], repo_root))
     if add_proc.returncode != 0:
@@ -251,6 +251,38 @@ def _commit_one(repo_root: Path, paths: list[str], message: str) -> Optional[str
             f"git add {paths} failed (rc={add_proc.returncode}): "
             f"{add_proc.stderr.strip() or '<no stderr>'}"
         )
+
+
+def _commit_one(
+    repo_root: Path, paths: list[str], message: str, *, stage: bool = True
+) -> Optional[str]:
+    """Stage (unless `stage=False`) + commit exactly `paths`, pathspec-
+    scoped on both `add` and `commit` (never `git add -A`/a bare `git
+    commit`) — `apply` runs against a shared concurrent-EM working tree
+    that may already carry a sibling session's own files staged, and a
+    whole-tree add/commit would sweep those into this run's commit. The
+    `add` (when `stage=True`) and `commit` calls are each wrapped in
+    `coordinator_core.git_lock_retry.run_with_lock_retry`, so
+    `.git/index.lock` contention from a sibling session's concurrent
+    commit retries with bounded backoff instead of crashing this run on
+    first contention; any other git failure still raises on the first
+    attempt. Returns the new commit's SHA, or `None` when there was
+    nothing staged for `paths` (a clean no-op, not a failure).
+
+    `stage=False` (AC-7): `_dispatch_commit_per_item` pre-stages every
+    verified item's paths in ONE combined `_stage_paths` call ahead of
+    this loop, so each item's own `_commit_one` call here skips its
+    redundant per-item `add` — the commit still fires per item
+    (D-3(b)/(c)'s own per-item cadence is untouched; only the STAGING
+    acquisition count changes, never the commit cardinality). Default
+    `True` preserves this function's original single-call behaviour for
+    every other caller (`_dispatch_commit_per_wave`, and this module's own
+    pre-C5 test corpus that calls `_commit_one` directly)."""
+    if not paths:
+        return None
+    pathspec = ["--", *paths]
+    if stage:
+        _stage_paths(repo_root, paths)
     unchanged = _run_git(["diff", "--cached", "--quiet", *pathspec], repo_root)
     if unchanged.returncode == 0:
         return None
@@ -348,6 +380,46 @@ def _non_pass_checkout(repo_root: Path, paths: list[str], note: str) -> dict[str
     return detail
 
 
+def _unstage_or_chain(repo_root: Path, paths: list[str], original_exc: BaseException) -> None:
+    """Reverses `paths` via `_unstage_paths` before `original_exc`
+    propagates. If `_unstage_paths` itself fails — its own `git reset` goes
+    through `run_with_lock_retry` (`_unstage_paths`'s own docstring), so
+    exhaustion under exactly the contention this module targets is
+    plausible, not hypothetical — that SECOND failure must never silently
+    replace `original_exc` in flight (that would mask a `BranchMismatch`/
+    the original `_commit_one`/`_stage_paths` failure from any caller doing
+    `except BranchMismatch`). Chains the cleanup failure as `__cause__`
+    instead of raising it: `raise original_exc from cleanup_exc` re-raises
+    the SAME original exception object (unmasked), with the cleanup
+    failure attached for diagnosis rather than substituted in its place."""
+    try:
+        _unstage_paths(repo_root, paths)
+    except Exception as cleanup_exc:
+        raise original_exc from cleanup_exc
+
+
+def _unstage_paths(repo_root: Path, paths: list[str]) -> None:
+    """`git reset -- <paths>` for a COMBINED, EXPLICIT pathspec only —
+    never a bare `git reset` (that would sweep a sibling session's own
+    staged work off this shared index, the same residue bug class in the
+    opposite direction, and doctrine forbids it). Wrapped in
+    `run_with_lock_retry` like every other index-touching call in this
+    module. Called ONLY from `_dispatch_commit_per_item`'s abnormal-exit
+    cleanup, to close the pre-staged-but-not-yet-committed residue window
+    a mid-loop `BranchMismatch` would otherwise leave open indefinitely on
+    this shared `.git/index` (`docs/reference/shared-index-residue.md`,
+    "Arm C"). A no-op for an empty `paths` list."""
+    if not paths:
+        return
+    pathspec = ["--", *paths]
+    reset_proc = run_with_lock_retry(lambda: _run_git(["reset", *pathspec], repo_root))
+    if reset_proc.returncode != 0:
+        raise RuntimeError(
+            f"git reset {paths} failed (rc={reset_proc.returncode}): "
+            f"{reset_proc.stderr.strip() or '<no stderr>'}"
+        )
+
+
 def _dispatch_commit_per_item(args: list[str], repo_root: Path) -> dict[str, Any]:
     """D-3's `per-item` granularity: one `git add`/`git commit` pair PER
     ITEM in the payload's `items` list, each re-verifying
@@ -357,19 +429,78 @@ def _dispatch_commit_per_item(args: list[str], repo_root: Path) -> dict[str, Any
     remaining items (D-3(b)'s own halt requirement). An item carrying
     `"verified": false` never commits — it is routed to D-3(c)'s non-PASS
     failure sub-path (`git checkout -- <paths>` + an appended backlog
-    note) instead, via `_non_pass_checkout`."""
+    note) instead, via `_non_pass_checkout`.
+
+    AC-7 (acquisition count, not hold time — see this module's own docstring
+    section and the plan's burst-source table): every VERIFIED item's paths
+    are staged in ONE combined `_stage_paths` call BEFORE this loop runs,
+    instead of one `add` acquisition per item — collapsing `add`+`commit`
+    per item (2 x N) down to 1 `add` + N `commit`s. The commit granularity
+    itself is deliberately NOT collapsed: D-3(b)'s per-item branch-recheck
+    cadence and D-3(c)'s per-item non-PASS failure sub-path both depend on
+    each item landing (or not) as its OWN commit, independently revertible
+    — batching the commits too would lose exactly that audit trail (see the
+    plan's anti-scope: "do not batch across a semantic boundary"). Each
+    item's own `_commit_one` call below passes `stage=False` since its
+    paths are already staged by the pre-pass; `_commit_one`'s own
+    `git diff --cached --quiet` check (still per-item pathspec-scoped) is
+    unaffected by other items' paths also being staged in the same index.
+
+    Abnormal-exit cleanup: if the pre-pass `_stage_paths` call itself fails
+    (a combined `add` can partially stage successfully-resolved paths and
+    still return nonzero for a bad one among N — the collapse from N `add`
+    calls to 1 widened this failure mode's blast radius from one item's
+    paths to every verified item's), OR if a mid-loop item raises
+    (`BranchMismatch`, or any other exception from `_non_pass_checkout`'s
+    `git checkout`/backlog-note write, or from `_commit_one`), every
+    VERIFIED item at or after the failing point is still staged from the
+    pre-pass but will now never reach its own commit — that is exactly the
+    residue window `docs/reference/shared-index-residue.md` ("Arm C")
+    describes. Both branches of the per-item loop body (the non-PASS
+    checkout arm and the verified commit arm) run inside the SAME
+    try/except — a structural choice, not incidental: the residue window
+    is a property of "this item's paths are staged but nothing has yet
+    resolved them," which is true the instant the loop reaches an item
+    regardless of which arm it takes, so cleanup covering only one arm
+    would silently reopen the window for the other on every future edit
+    that touches just one branch. `_unstage_or_chain` reverses ONLY the
+    remaining verified items' paths (an explicit combined pathspec, never a
+    bare `git reset`) before the original exception propagates — chaining
+    rather than masking it if the reversal itself fails (see
+    `_unstage_or_chain`'s own docstring). The happy path never calls it at
+    all, so its 1 `add` + N `commit`s acquisition count is untouched."""
     payload = _parse_commit_payload(args)
     expected_branch = payload.get("expected_branch", "")
+    items = payload["items"]
+
+    verified_paths: list[str] = []
+    for item in items:
+        if item.get("verified", True):
+            verified_paths.extend(item.get("paths") or [])
+    try:
+        _stage_paths(repo_root, verified_paths)
+    except Exception as exc:
+        _unstage_or_chain(repo_root, verified_paths, exc)
+        raise
+
     commits: list[dict[str, Any]] = []
-    for item in payload["items"]:
+    for index, item in enumerate(items):
         paths = list(item.get("paths") or [])
         message = item.get("message", "")
-        if not item.get("verified", True):
-            note = item.get("backlog_note") or f"non-PASS, reverted: {message}"
-            commits.append(_non_pass_checkout(repo_root, paths, note))
-            continue
-        _assert_branch(repo_root, expected_branch)
-        sha = _commit_one(repo_root, paths, message)
+        try:
+            if not item.get("verified", True):
+                note = item.get("backlog_note") or f"non-PASS, reverted: {message}"
+                commits.append(_non_pass_checkout(repo_root, paths, note))
+                continue
+            _assert_branch(repo_root, expected_branch)
+            sha = _commit_one(repo_root, paths, message, stage=False)
+        except Exception as exc:
+            residue: list[str] = []
+            for later_item in items[index:]:
+                if later_item.get("verified", True):
+                    residue.extend(later_item.get("paths") or [])
+            _unstage_or_chain(repo_root, residue, exc)
+            raise
         commits.append({"paths": paths, "message": message, "commit_sha": sha})
     return {"cli": _COMMIT_PER_ITEM_CLI, "commits": commits}
 
