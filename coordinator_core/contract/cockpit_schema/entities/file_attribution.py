@@ -1,6 +1,6 @@
 """
 FileAttribution — per-(session_id, file_path) aggregate view over session→file
-touches. Pydantic port of coordinator-claude
+touches. Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/file-attribution.ts` (Zod source).
 
 The source is now an on-demand derivation over Claude Code natural transcripts

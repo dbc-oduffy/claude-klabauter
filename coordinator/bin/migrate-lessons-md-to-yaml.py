@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 migrate-lessons-md-to-yaml.py -- one-shot migration of state/lessons.md entries
 into per-entry YAML files under state/lessons/.
@@ -56,6 +55,8 @@ from repo_identity import resolve_checked_repo_root  # noqa: E402
 # ---------------------------------------------------------------------------
 # Constants and patterns
 # ---------------------------------------------------------------------------
+
+MUTATES = ["state/lessons.md", "state/lessons/*.yaml", "state/migrate-lessons-dryrun-*.json"]
 
 DATE_PATTERN = re.compile(r'\b(\d{4}-\d{2}-\d{2})\b')
 

@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.verify_ue_overrides.
 
-Port of: verify-ue-overrides.sh (coordinator-claude b5a4192c, 2026-07-20), DOE-PORT R1.
+Port of: verify-ue-overrides.sh (DoE b5a4192c, 2026-07-20), DOE-PORT R1.
 """
 from __future__ import annotations
 

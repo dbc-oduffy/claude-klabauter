@@ -1,7 +1,7 @@
 """Tests for coordinator_core.ops.list_review_trail_records.
 
 Golden oracle snapshotted 2026-07-16 against the live repo state
-(Port of: list-review-trail-records.sh, coordinator-claude b5a4192c, 2026-07-20):
+(Port of: list-review-trail-records.sh, DoE b5a4192c, 2026-07-20):
 
     no args (real repo state/archive)                         -> 469 lines / 0
     --date-prefix 2026-05-21 (real match)                      -> N lines, sorted / 0

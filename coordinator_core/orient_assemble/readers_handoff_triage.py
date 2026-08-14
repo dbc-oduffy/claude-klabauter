@@ -4,7 +4,7 @@ handoff triage query (stale-executing-plan advisory, ready-to-fire listing,
 awaiting-gate listing) plus a fourth source, the tiered plan-orphan census
 (`_read_orphaned_plans`).
 
-Purpose: import coordinator-claude's `workday-start-handoff-triage.py` CLI's
+Purpose: import DoE-claude's `workday-start-handoff-triage.py` CLI's
 read-only subcommands (`_cmd_stale_plans`, `_cmd_ready`, `_cmd_awaiting_gate`)
 AS-IS — no reimplementation of their query/format logic — and translate their
 captured stdout into the shared decision-object shape, per
@@ -24,7 +24,7 @@ source CLI) is deliberately OUT OF SCOPE here — it mutates
 `tasks/orphan-sweep-notes.md` and stays ceremony/EM-dispatched, never
 assembler-owned (AC of this chunk).
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C2b
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C2b
 
 Negative-spec:
     - Does NOT call `trim_orphan_sweep_notes` / `_cmd_trim_notes` — that
@@ -67,7 +67,7 @@ from coordinator_core.orient_assemble.reader_result import (
 #: this bucket is NOT spec'd as "loud, one line per plan" the way P1
 #: `authorized_orphan` is (it's a diagnostic tally, not an actionable
 #: tier), and it grows with disk contents (11 entries on claude-klabauter, 28 on
-#: coordinator-claude at time of writing) — bound it the way `cap_judgment_points`
+#: DoE-claude at time of writing) — bound it the way `cap_judgment_points`
 #: bounds other unbounded per-item lists (Review: code-reviewer — Finding 3).
 _UNRECOGNIZED_STATUS_LINE_CAP = 10
 

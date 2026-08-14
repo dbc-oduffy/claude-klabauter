@@ -4,10 +4,10 @@ The bash oracle was the canonical guard scanning a coordinator-claude tree
 for unsuppressed console-window-flash spawn shapes (python/node/powershell
 without CREATE_NO_WINDOW/windowsHide/spawn-hidden routing). These tests
 exercise the ported detection logic against seeded fixture trees mirroring
-the coordinator-claude-side bats/sh oracle tests.
+the DoE-side bats/sh oracle tests.
 
-Port of: verify-no-console-flash.sh (coordinator-claude 894d4bc6, 2026-07-22)
-Test oracle: test-verify-no-console-flash.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Port of: verify-no-console-flash.sh (DoE 894d4bc6, 2026-07-22)
+Test oracle: test-verify-no-console-flash.sh (DoE 894d4bc6, 2026-07-22)
 """
 from __future__ import annotations
 
@@ -174,7 +174,7 @@ def test_pure_comment_mentioning_pwsh_not_flagged(
 
 
 # ---------------------------------------------------------------------------
-# Edge cases not in the coordinator-claude oracle suite but load-bearing for the port
+# Edge cases not in the DoE oracle suite but load-bearing for the port
 # ---------------------------------------------------------------------------
 
 

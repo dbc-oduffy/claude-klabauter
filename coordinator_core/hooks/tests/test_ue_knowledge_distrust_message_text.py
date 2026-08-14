@@ -23,8 +23,8 @@ from __future__ import annotations
 from coordinator_core.hooks import ue_knowledge_distrust as mod
 
 _FORBIDDEN_SUBSTRINGS = (
-    "coordinator-claude",
-    "coordinator-claude",
+    "DoE-claude",
+    "doe-claude",
     "cockpit",
     "example-fleet",
     "machine-b",

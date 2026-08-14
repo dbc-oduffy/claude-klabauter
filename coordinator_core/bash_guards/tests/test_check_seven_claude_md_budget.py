@@ -6,7 +6,7 @@ docs/plans/2026-07-27-doctrine-envelope-allocation.md).
 Covers:
     - Unification onto the coordinator_core.claude_md_budget SSOT
       (HARD_LIMIT_BYTES / SOFT_LIMIT_BYTES), replacing the two independent
-      literal pairs this check and coordinator-claude's check-claude-md-size.py hook used
+      literal pairs this check and DoE's check-claude-md-size.py hook used
       to carry (40000/38000 here, 39900/39000 there).
     - Boundary values at, just under, and just over each threshold.
     - The GOVERNED-surface discriminant: a repo-scoped CLAUDE.md (this
@@ -14,7 +14,7 @@ Covers:
       NOT be gated even when staged far over the hard limit -- the live
       bug a bare basename match produces.
 
-Spec backlink: docs/plans/2026-07-27-doctrine-envelope-allocation.md § C1(c)
+Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(c)
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ class TestCheckSevenThresholdsAreTheSSOT:
 class TestCheckSevenGovernedGlobalSurfaceBoundaries:
     """A `coordinator/CLAUDE.md` under a repo carrying the dev-repo sentinel
     is a governed surface -- Check 7 must gate it exactly like a real
-    coordinator-claude checkout would."""
+    DoE-claude checkout would."""
 
     def _init_dev_repo(self, tmp_path: Path) -> str:
         root = _init_repo(tmp_path)

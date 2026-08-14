@@ -6,7 +6,7 @@ provenance.source_kind="local_fs" but unconditionally populates provenance.ref w
 {branch, sha}. That violates the D9/cockpit-contract invariant (vendored schema
 lesson-summary.schema.json:135-151; context.py:_GIT_BACKED_SOURCE_KINDS) that ref MUST
 be null for non-git-backed source kinds, and threw a ZodError (90 identical
-provenance.ref violations) in coordinator-claude's SnapshotEnvelope.parse().
+provenance.ref violations) in DoE's SnapshotEnvelope.parse().
 
 Sibling regression: test_backlog_history.py::test_provenance_uses_canonical_contract_enums
 (landed 48d3c29) — same failure shape (non-null-only coverage let a canonical-value drift

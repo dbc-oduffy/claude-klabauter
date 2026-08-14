@@ -33,7 +33,7 @@ no-implicit-cwd bridge for in-process callers (``routine_signals.py``) that must
 depend on process cwd; absent ``--root``, behaviour is unchanged (cwd-based
 resolution, as documented below).
 
-Port of: check-arch-audit-staleness.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: check-arch-audit-staleness.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-05-23-weekly-gate-restructure-and-arch-survey-audit-rename.md § Strand 3b
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
                state/improvement-queue/2026-07-21-routine-signals-ac5-gate-vs-dr079-inprocess-design-conflict.yaml

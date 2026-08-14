@@ -1,21 +1,21 @@
 """
 coordinator_core.ops.coordinator_render_rollup — direct-call render helper backing
-coordinator/bin/coordinator-render-rollup.sh (coordinator-claude sh/python polyglot trampoline).
+coordinator/bin/coordinator-render-rollup.sh (DoE sh/python polyglot trampoline).
 
-Purpose: ports the CLI orchestration logic of the coordinator-claude bash render helper (arg
+Purpose: ports the CLI orchestration logic of the DoE bash render helper (arg
 parsing, transport-seam invocation, TWO-SIGNAL-style fail-open, omit-on-empty
 render) into claude-klabauter as a plain callable module. ``main(argv)`` is called by the
-Coordinator-claude trampoline exactly once per invocation and calls the ALREADY-REGISTERED
+DoE trampoline exactly once per invocation and calls the ALREADY-REGISTERED
 "deliverable.rollup" op handler (coordinator_core.ops.deliverable_rollup._handler)
 directly, in-process — no subprocess re-spawn of coordinator_core.invoke, no
 JSON-RPC envelope round-trip. This is the same direct-import shape used by
 coordinator_core.hooks.auto_push / coordinator_core.ops.handoff_gate_aging: the
-Coordinator-claude caller is itself Python (the polyglot trampoline), so an in-process call is
+DoE caller is itself Python (the polyglot trampoline), so an in-process call is
 strictly cheaper than shelling back out through the command-type transport.
 
 The command-type transport (coordinator_core.invoke / cc_invoke) explicitly does
 not enforce auth/authz on this path (see coordinator-core-invoke.sh's docstring,
-Coordinator-claude c6d97219 2026-07-22: "Does NOT read or require any auth token — the command
+DoE c6d97219 2026-07-22: "Does NOT read or require any auth token — the command
 path bypasses IPC auth"), so calling the handler directly is not a weaker-auth shortcut
 relative to the bash-era behavior.
 

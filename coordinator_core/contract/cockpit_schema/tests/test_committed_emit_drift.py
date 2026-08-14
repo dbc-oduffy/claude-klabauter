@@ -1,11 +1,11 @@
 """
-test_committed_emit_drift — guard that coordinator-claude's committed `schema/*.json` matches
+test_committed_emit_drift — guard that DoE's committed `schema/*.json` matches
 a fresh emit from THIS package's pydantic source.
 
-Pytest port of coordinator-claude `coordinator/cockpit-contract/test/committed-emit-drift.test.ts`.
+Pytest port of DoE `coordinator/cockpit-contract/test/committed-emit-drift.test.ts`.
 THE T4e parity oracle (recipe § 4) — the pre-delete gate for the Zod source.
 
-Failure class guarded: a merge or hand-edit leaves coordinator-claude's committed
+Failure class guarded: a merge or hand-edit leaves DoE's committed
 `schema/*.json` out of sync with this package's pydantic source, with no test
 failing. On divergence, the assertion message names the out-of-sync files.
 
@@ -15,18 +15,18 @@ code in this module.
 
 `CommitClosure` (docs/plans/2026-07-17-commit-closure-emission-fact.md § C2/AC2) is
 DELIBERATELY EXCLUDED from `ENTITY_SCHEMAS` — this is an architectural decision, not a
-pending follow-up. `CommitClosure` is claude-klabauter-net-new with no coordinator-claude `index.ts` counterpart;
+pending follow-up. `CommitClosure` is claude-klabauter-net-new with no DoE `index.ts` counterpart;
 registering it would (a) break the index.ts-verbatim-port invariant `ENTITY_SCHEMAS` exists
-to preserve, and (b) force a cross-repo committed coordinator-claude-side `commit-closure.schema.json` that
+to preserve, and (b) force a cross-repo committed DoE-side `commit-closure.schema.json` that
 this drift gate would then demand — exactly the store-less, no-cross-repo-schema-landing
 posture this emission leg is designed to avoid. `CommitClosure` is validated shape-based,
 per-repo, instead (`coordinator_core/contract/cockpit_schema/validate.py:440-467`). This gate
 therefore does not exercise `CommitClosure`, by design, until/unless it is promoted to a
-Coordinator-claude-contract entity. Tracked: `state/improvement-queue/2026-07-17-commit-closure-entity-intentionally-excl-328d5281c0d2.yaml`.
+DoE-contract entity. Tracked: `state/improvement-queue/2026-07-17-commit-closure-entity-intentionally-excl-328d5281c0d2.yaml`.
 No per-entity change belongs in this file; if `CommitClosure` is ever promoted, registering
 it in `ENTITY_SCHEMAS` is sufficient for this generic loop to pick it up.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def test_every_committed_schema_file_matches_fresh_emit(tmp_path, schema_dir):
 
     # File-set symmetry: catch added/removed entities that weren't re-emitted.
     assert fresh_files == committed_files, (
-        "fresh emit produced a different set of schema files than are committed in coordinator-claude — "
+        "fresh emit produced a different set of schema files than are committed in DoE — "
         "run emit_schema.py and commit the result in coordinator/cockpit-contract/schema/."
     )
 
@@ -59,9 +59,9 @@ def test_every_committed_schema_file_matches_fresh_emit(tmp_path, schema_dir):
             drifted.append(filename)
 
     assert drifted == [], (
-        "committed coordinator-claude cockpit-contract schema/*.json is out of sync with the claude-klabauter "
+        "committed DoE cockpit-contract schema/*.json is out of sync with the claude-klabauter "
         f"pydantic source.\nOut-of-sync files: {', '.join(drifted)}\n"
-        "Remediation: re-run emit_schema.py and commit the result in coordinator-claude's "
+        "Remediation: re-run emit_schema.py and commit the result in DoE-claude's "
         "coordinator/cockpit-contract/schema/."
     )
 

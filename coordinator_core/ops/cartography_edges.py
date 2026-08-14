@@ -28,7 +28,7 @@ _cartography_edges) as a side-effect. Wired into coordinator_core.ops.__init__,
 which imports this module — both ops here are LIVE on the dispatch path.
 
 Consumption status: UNCONSUMED — neither "cartography.edges" nor
-"cartography.count_references" has a call site today. Coordinator-claude's frozen
+"cartography.count_references" has a call site today. DoE-claude's frozen
 contract (`docs/contracts/arch-engine-scripts.md`) names "cartography.edges"
 under its `arch-callgraph` lane, but the survey's Workflow script does not
 call either op; only `cartography.chunk_table` and `cartography.churn` have

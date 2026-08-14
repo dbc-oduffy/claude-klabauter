@@ -2,7 +2,7 @@
 Tests for coordinator_core.ops.doc_content_verify.
 
 Three required groups (docs/plans/2026-07-28-human-facing-doc-staleness-detector.md
-§ C6b/AC12/AC13, coordinator-claude):
+§ C6b/AC12/AC13, DoE-claude):
     1. Positive — each v1 citation class is caught when genuinely broken.
     2. Negative — a known-good cross-repo citation produces no finding, plus
        one test per exclusion-set category. This group decides whether the
@@ -10,11 +10,11 @@ Three required groups (docs/plans/2026-07-28-human-facing-doc-staleness-detector
        this repo's own docs, an absence-only predicate fires on the large
        majority of citations, most of them correct cross-repo references.
     3. AC13, both halves: (a) a synthetic fixture reproducing the b644d5a9
-       shape is flagged; (b) a historical replay against coordinator-claude's real
+       shape is flagged; (b) a historical replay against DoE-claude's real
        history at commit b644d5a9 flags the true positive
        (coordinator/scripts/install-maximalist.py) and does NOT flag the
        correct-but-cross-repo citation present in the same tree
-       (coordinator/lib/install-substrate.py, verified absent from coordinator-claude
+       (coordinator/lib/install-substrate.py, verified absent from DoE-claude
        at that commit and present under the current CLAUDE_KLABAUTER_ROOT).
 """
 
@@ -35,7 +35,7 @@ from coordinator_core.ops.doc_content_verify import (
 )
 
 # Declared, not excused: the AC13 historical-replay group (TestAC13HistoricalReplay)
-# spawns real `git show`/`git ls-tree`/`git cat-file` against the actual coordinator-claude
+# spawns real `git show`/`git ls-tree`/`git cat-file` against the actual DoE-claude
 # checkout to prove the citation-verifier against real repo history, not a fixture --
 # no mock stands in for "did this path genuinely exist at commit b644d5a9". The
 # `_doe_repo_available` probe is cached (lru_cache), not per-test, since it fires at
@@ -151,10 +151,10 @@ class TestNegativeSurface:
         assert is_excluded("/coordinator:install") is True
 
     def test_exclusion_url_with_scheme(self):
-        assert is_excluded("https://github.com/dbc-oduffy/coordinator-claude") is True
+        assert is_excluded("https://github.com/dbc-oduffy/DoE-claude") is True
 
     def test_exclusion_bare_domain(self):
-        assert is_excluded("github.com/dbc-oduffy/coordinator-claude") is True
+        assert is_excluded("github.com/dbc-oduffy/DoE-claude") is True
 
     def test_exclusion_glob_metacharacter(self):
         assert is_excluded("coordinator/skills/*/SKILL.md") is True
@@ -234,7 +234,7 @@ class TestNegativeSurface:
 class TestDocRelativeResolution:
     """Plugin-root false-positive class: a doc in a subdirectory (e.g.
     `coordinator/README.md`) cites paths relative to ITS OWN directory, not
-    the repo root. Measured against coordinator-claude's real `coordinator/README.md`
+    the repo root. Measured against DoE-claude's real `coordinator/README.md`
     this produced 24 of 26 spurious `absent` findings before this piece of
     the resolution ladder existed."""
 
@@ -349,7 +349,7 @@ def _doe_repo_available() -> bool:
 
 class TestAC13HistoricalReplay:
     """Read-only replay via git plumbing (git show / git ls-tree) — never
-    checks out, resets, or otherwise mutates the live coordinator-claude working
+    checks out, resets, or otherwise mutates the live DoE-claude working
     tree, which other sessions may be using concurrently."""
 
     pytestmark = pytest.mark.real_home
@@ -362,7 +362,7 @@ class TestAC13HistoricalReplay:
         _doe_repo_available's docstring)."""
         if not _doe_repo_available():
             pytest.skip(
-                "coordinator-claude repo not resolvable/cloned on this machine, or commit b644d5a9 missing"
+                "DoE-claude repo not resolvable/cloned on this machine, or commit b644d5a9 missing"
             )
 
     @staticmethod
@@ -376,7 +376,7 @@ class TestAC13HistoricalReplay:
         """DISK-TRUTH ADAPTATION from the plan's stated feasibility note.
 
         The plan's C6b/AC13 text asserts `coordinator/scripts/install-maximalist.py`
-        is "absent everywhere" at b644d5a9 — absent from coordinator-claude AND absent
+        is "absent everywhere" at b644d5a9 — absent from DoE-claude AND absent
         under CLAUDE_KLABAUTER_ROOT. The first half holds (verified below via
         `git ls-tree`); the second half does not: `git log --follow --diff-filter=A`
         against claude-klabauter shows the file landed there at commit `8a28a6ca`,
@@ -387,7 +387,7 @@ class TestAC13HistoricalReplay:
         `resolves-cross-repo`, exactly like `install-substrate.py` below — the
         mechanism cannot tell the two apart, because at the moment b644d5a9
         landed there was no gap: the executable surface migration added the
-        claude-klabauter-side file before removing the coordinator-claude-side one.
+        claude-klabauter-side file before removing the DoE-side one.
 
         What actually made this a live defect on 2026-07-28 was that the
         README's cold-bootstrap section is explicitly for a machine with NO
@@ -408,7 +408,7 @@ class TestAC13HistoricalReplay:
 
         # Feasibility pinned in the plan: git ls-tree at this commit for
         # coordinator/scripts/ returns empty — the path was genuinely absent
-        # from the coordinator-claude tree.
+        # from the DoE-claude tree.
         assert not _git_ls_tree_exists(
             doe_root, _B644D5A9_SHA, "coordinator/scripts/install-maximalist.py"
         )
@@ -450,7 +450,7 @@ class TestAC13HistoricalReplay:
         doe_root = _doe_root()
         text = _git_show(doe_root, _B644D5A9_SHA, "INSTALL.md")
 
-        # Confirmed absent from coordinator-claude's tree at this commit...
+        # Confirmed absent from DoE-claude's tree at this commit...
         assert not _git_ls_tree_exists(
             doe_root, _B644D5A9_SHA, "coordinator/lib/install-substrate.py"
         )

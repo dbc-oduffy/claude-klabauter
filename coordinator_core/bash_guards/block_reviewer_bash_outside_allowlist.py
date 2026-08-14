@@ -1,7 +1,7 @@
 """coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist — Python
-engine-ification of coordinator-claude's retired
+engine-ification of DoE's retired
 ``coordinator/hooks/scripts/block-reviewer-bash-outside-allowlist.sh``
-PreToolUse(Bash) hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
+PreToolUse(Bash) hook (deleted 2026-07-16, DoE ``2f8b8450``).
 
 Purpose: this module confines a SET of subagent types, not only reviewers
 (as of Amendment 1, 2026-08-01, below) — see ``_helpers.
@@ -64,10 +64,10 @@ remains unchanged from the original byte-for-byte port.
 Divergence 4 (2026-07-25, THIS change): ``grep`` was added to
 ``_READONLY_FS_BINARIES``. This closes the last read-only gap: the
 confined findings-agent has no native content-search tool (no Grep/Glob
-in its harness tool surface — see the coordinator-claude-side correction memo below), so
+in its harness tool surface — see the DoE-side correction memo below), so
 without ``grep`` it could enumerate and read files but not search their
-contents. Requested by coordinator-claude via cross-repo memo
-``cross-repo/inbox/2026-07-25-coordinator-claude-em-reviewer-bash-search-fallback-correction.md``,
+contents. Requested by DoE-claude via cross-repo memo
+``cross-repo/inbox/2026-07-25-doe-claude-em-reviewer-bash-search-fallback-correction.md``,
 which retracts a larger earlier ask (that memo's predecessor claimed the
 reviewer had "zero search capability" and asked for both ``find`` and
 ``grep``; the correction, sent after empirically probing this guard,
@@ -139,7 +139,7 @@ Divergence 7 (2026-07-27, THIS change, policy-table refactor): the Tier A/B
 allowlist surface (git read-only subcommands, git global options, git
 subcommand write-flag denylist, read-only filesystem binaries, find's
 write-flag denylist, the scaffolder binary name and its required argument)
-is now resolved from coordinator-claude's declared ``bash_policy:`` table
+is now resolved from DoE's declared ``bash_policy:`` table
 (``coordinator/subagent-sandbox-policy.yaml``, loaded via
 ``coordinator_core.subagent_sandbox.engine.load_policy``) keyed by the
 resolved ``effective_type``, instead of being exclusively hardcoded module
@@ -380,8 +380,8 @@ and the Tier B scaffolder matching are untouched, and every other
 metacharacter in the 9-member set still denies unconditionally.
 
 Spec backlink: pln-findings-agents-self-persist-4c98b3 § D2 (bash-guard)
-Ported from the retired coordinator-claude bash guard ``block-reviewer-bash-outside-allowlist.sh``
-  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
+Ported from the retired DoE bash guard ``block-reviewer-bash-outside-allowlist.sh``
+  (deleted 2026-07-16, DoE ``2f8b8450``).
 Recipe: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md
   § (a) (shared identity resolver + confined-findings-agent SSOT),
   § (b) item 2 (exact deny conditions to preserve byte-for-byte)
@@ -590,8 +590,8 @@ ruleset does not require -- ``scaffolder_required_arg`` is ``""`` for it, per
 ``_DEFAULT_RULESET_TYPE_OVERRIDES``), calls the recipient a "findings agent"
 throughout, and closes with "dispatch a separate non-confined executor for
 that step" -- self-defeating advice when the executor IS the confined type
-being denied. Reported by coordinator-claude-em, cross-repo memo
-``cross-repo/inbox/2026-08-02-coordinator-claude-em-executor-confinement-deny-message-addresses-wrong-agent-class.md``.
+being denied. Reported by doe-claude-em, cross-repo memo
+``cross-repo/inbox/2026-08-02-doe-claude-em-executor-confinement-deny-message-addresses-wrong-agent-class.md``.
 Fix: the header line and the three agent-class-specific stanzas (scaffolder
 framing, "Accepted invocation forms", closing paragraph) are now resolved
 per ``effective_type`` via ``_DENY_MESSAGE_STANZA_OVERRIDES``, the same
@@ -803,7 +803,7 @@ The KNOWN RESIDUAL block's own accepted rationale for ``coordinator:executor``
 type "already has an unconfined Write tool," so this leg does not newly
 grant that capability -- applies identically to ``coordinator:code-reviewer``,
 confirmed from its own agent definition
-(``coordinator/agents/code-reviewer.md``, coordinator-claude repo):
+(``coordinator/agents/code-reviewer.md``, DoE-claude repo):
 ``tools: ["Bash", "Read", "Edit", "ToolSearch"]`` -- an unconfined ``Edit``,
 not a sandboxed one (the agent's own doc says so explicitly: "``Edit`` is
 **not** structurally confined -- nothing blocks a source edit but the
@@ -985,7 +985,7 @@ _GIT_READONLY_SUBCOMMANDS = frozenset(
 
 #: Tier A (2026-07-25): read-only filesystem enumeration/inspection/search
 #: binaries. ``grep`` was added same-day, after the initial Tier A landing,
-#: per the coordinator-claude correction memo (see module docstring Divergence 4):
+#: per the DoE-claude correction memo (see module docstring Divergence 4):
 #: content search was the only read-only gap left once ``find``/``cat``/
 #: ``git show`` were already in place -- the confined findings-agent has no
 #: native Grep/Glob tool in its harness surface, so ``grep`` is its only
@@ -1461,7 +1461,7 @@ def _resolve_ruleset(effective_type: str, policy: Any) -> Dict[str, Any]:
     #
     # Moving the YAML to a location a confined agent's tools cannot write
     # was also considered and rejected as OUT OF SCOPE for this module: the
-    # policy file lives in coordinator-claude's tree
+    # policy file lives in DoE-claude's tree
     # (`coordinator/subagent-sandbox-policy.yaml`), not this repo, and this
     # guard does not own that repo's write-surface or its Edit-tool sandbox
     # definition.
@@ -1531,7 +1531,7 @@ def _is_confined_type(effective_type: str, policy: Any) -> bool:
     another failing or being empty, only ever supplemented.
 
     Leg 3 is checked LAST, deliberately -- it is the one leg that performs
-    real disk I/O (``resolve_roster()`` reads coordinator-claude's policy YAML, walks
+    real disk I/O (``resolve_roster()`` reads DoE's policy YAML, walks
     ``coordinator/agents/*.md``, and walks the plugin discovery tree), so
     the common case (an already-known confined OR already-known-and-exempt
     enumerated type) never reaches it. Defense in depth, not the primary
@@ -2225,7 +2225,7 @@ def _normalize_windows_git_argv0(cmd: str, ruleset: Dict[str, Any]) -> str:
 # bare ``git``, ``/usr/bin/git``, and ``bin/git``. The ``.cmd`` half is a
 # DIFFERENT-direction fix for THIS module specifically: ``coordinator-doc-
 # new.cmd`` is this project's own generated Windows launcher twin
-# (confirmed on disk, ``coordinator/bin/coordinator-doc-new.cmd``) for the
+# (confirmed on disk, ``coordinator/bin/coordinator-doc-new.py.cmd``) for the
 # Tier B scaffolder, and before this fix it was wrongly DENIED by
 # ``_first_token_is_allowlisted_binary`` -- a Windows-usability defect
 # (blocking a legitimately-allowed tool's ordinary invocation), not a
@@ -2744,7 +2744,7 @@ def _sanitize_cmd_for_reason(cmd: str) -> str:
 #: stanza, the "Accepted invocation forms" stanza, and the closing framing
 #: paragraph -- selected the same data-driven way
 #: ``_DEFAULT_RULESET_TYPE_OVERRIDES`` selects ruleset content, per
-#: cross-repo/inbox/2026-08-02-coordinator-claude-em-executor-confinement-deny-message-addresses-wrong-agent-class.md.
+#: cross-repo/inbox/2026-08-02-doe-claude-em-executor-confinement-deny-message-addresses-wrong-agent-class.md.
 #: ``coordinator:code-reviewer`` (and any other type with no entry here) has
 #: no key in this dict, so ``_deny_reason`` falls through to the
 #: ``_DEFAULT_HEADER_LINE``/``_DEFAULT_*_STANZA`` values below unchanged --
@@ -2778,8 +2778,8 @@ _EXECUTOR_ACCEPTED_FORMS_STANZA = (
     "Accepted invocation forms (the dispatching EM resolves <claude-klabauter-root> from the",
     "machine-local registry key repos.claude_klabauter and injects the literal",
     "absolute path into the dispatch prompt -- a confined agent cannot resolve it):",
-    "  <claude-klabauter-root>/coordinator/bin/coordinator-doc-new [--plan <path>] [--chunk <id>] ...",
-    "  python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new [--plan <path>] [--chunk <id>] ...",
+    "  <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
+    "  python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py [--plan <path>] [--chunk <id>] ...",
 )
 
 _EXECUTOR_CLOSING_STANZA = (
@@ -2805,8 +2805,8 @@ _DEFAULT_SCAFFOLDER_STANZA = (
 #: the two indented forms are self-explanatory ready-to-run alternatives and
 #: sit in the same exempted cue window as the scaffolder/Tier-A lines above.
 _DEFAULT_ACCEPTED_FORMS_STANZA = (
-    "  <claude-klabauter-root>/coordinator/bin/coordinator-doc-new --type review-findings ...",
-    "  python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new --type review-findings ...",
+    "  <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
+    "  python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
 )
 
 #: (Message-size discipline, 2026-08-03) No closing stanza for the default
@@ -2936,7 +2936,7 @@ def _deny_reason(
 def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Evaluate the reviewer-bash-allowlist guard against a PreToolUse payload.
 
-    ``policy_path`` (Divergence 7, 2026-07-27) is the explicit path to coordinator-claude's
+    ``policy_path`` (Divergence 7, 2026-07-27) is the explicit path to DoE's
     ``subagent-sandbox-policy.yaml``, injected by the dispatch caller (C5a)
     -- ``None`` (the default, and what every pre-2026-07-27 caller and this
     module's own 99-test oracle suite still pass) makes ``load_policy``

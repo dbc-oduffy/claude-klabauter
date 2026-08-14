@@ -13,7 +13,7 @@ all**. That file is schema-invisible: it carries no ``plan_id``,
 ``assert_plan_sizing_citation.py`` (frontmatter-only reader) and every other
 frontmatter-driven gate cannot see it. This op is the compliant replacement
 for that raw write: given the plan body text, it scaffolds a real artifact
-via ``coordinator/bin/coordinator-doc-new --type plan`` (frontmatter,
+via ``coordinator/bin/coordinator-doc-new.py --type plan`` (frontmatter,
 ``plan_id``, ``deliverable_id``, the ``sizing_object`` reverse FK are all
 engine-written — this module never hand-authors a frontmatter key), carries
 the body into the canonical section skeleton, and synthesizes a
@@ -22,7 +22,7 @@ the body into the canonical section skeleton, and synthesizes a
 This module does NOT wire itself into the hook — that edit belongs to the
 hook's own (sibling doctrine) repo, a different scope (see the invocation
 contract memo this module ships alongside,
-``cross-repo/outbox/<date>-coordinator-claude-em-plan-persistence-hook-should-call-
+``cross-repo/outbox/<date>-doe-claude-em-plan-persistence-hook-should-call-
 plan-capture-persist.md``). Until that wiring lands, the hook's existing raw
 write is unchanged and this op is reachable only by direct invocation
 (JSON-RPC ``plan.persist_capture``, in-repo) or via its CLI trampoline
@@ -92,6 +92,13 @@ from coordinator_core.ipc import register_op
 from coordinator_core.win_portability import no_console_creationflags
 
 _PROG = "plan-capture-persist"
+
+# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# persist_captured_plan() writes a new docs/plans/<date>-<slug>.md whose name
+# is derived from the captured plan's own title each call (and may delete a
+# differently-slugged duplicate in the same dir) -- a data-dependent target
+# within docs/plans/, not a fixed artifact.
+MUTATES = ["docs/plans/*.md"]
 
 _TOP_HEADING_RE = re.compile(r"^##[ \t]+(.+?)[ \t]*$", re.MULTILINE)
 _CHUNK_HEADING_RE = re.compile(
@@ -383,7 +390,7 @@ def find_frontmatterless_duplicate(plans_dir: Path, title: str, exclude: Optiona
 
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]
-_DOC_NEW_PATH = _ENGINE_ROOT / "coordinator" / "bin" / "coordinator-doc-new"
+_DOC_NEW_PATH = _ENGINE_ROOT / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
 def invoke_coordinator_doc_new(
@@ -393,7 +400,7 @@ def invoke_coordinator_doc_new(
     sizing_object_relpath: Optional[str],
     branch: Optional[str],
 ) -> Path:
-    """Shell out to ``coordinator/bin/coordinator-doc-new --type plan``.
+    """Shell out to ``coordinator/bin/coordinator-doc-new.py --type plan``.
     Always lets that tool pick its OWN default ``--out`` (never passed here)
     so this op's collision pre-check (``predict_doc_new_plan_path``, the
     same algorithm) and the tool's actual write target can never disagree.
@@ -412,7 +419,7 @@ def invoke_coordinator_doc_new(
     ``machine-local`` CLI). Resolving the scaffolder against ``repo_root``
     instead was the bug this fix addresses: for any caller repo that is NOT
     the engine checkout (i.e. every real consumer repo), no
-    ``coordinator/bin/coordinator-doc-new`` exists there and the op always
+    ``coordinator/bin/coordinator-doc-new.py`` exists there and the op always
     raised ``PersistError``.
     """
     doc_new = _DOC_NEW_PATH

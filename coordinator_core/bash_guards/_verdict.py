@@ -67,7 +67,7 @@ mechanisms are not alternatives to one another -- a guard can be excluded by
 
 This is the same structural failure class named upstream, one layer up, by
 a ratified tripwire family -- cite ``coordinator-tripwires.md
-§ GUARD-WIRING-SILENT-SKIP`` (coordinator-claude repo): "absence of a guard must
+§ GUARD-WIRING-SILENT-SKIP`` (DoE-claude repo): "absence of a guard must
 not be indistinguishable from the guard passing... a loud warning that lets
 the operation proceed anyway is not the fix either." That entry
 cross-references its sibling ``§ BASH-POLICY-DENY-GUARD-FAIL-OPEN-

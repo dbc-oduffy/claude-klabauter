@@ -41,7 +41,7 @@ attach loop.
 #      outage must be distinguishable from a legitimate business
 #      pass/fail (0/1) rather than degrading silently to exit 0.
 #
-# Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-doe-land-d-slice.md § F4 (AC8)
+# Spec backlink: DoE-claude:pln-ceremony-as-pipeline-2-land-th-aa5ace § F4 (AC8)
 # Ported to coordinator_core/ops/backfill_initiative_fk.py, co-located pytest
 # test_backfill_initiative_fk.py (claude-klabauter-resident).
 

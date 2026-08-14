@@ -21,7 +21,7 @@ deny leg allows unconditionally when no `agent_id` is present, so the only
 callers who ever see the deny are dispatched subagents. Confirmed live
 2026-08-08: a subagent hit the deny, ran the named remediation verbatim, and
 produced a grant record reading `granted_by: "pm"` for an edit no human
-authorized (`cross-repo/inbox/2026-08-08-coordinator-claude-em-claude-md-grant-self-
+authorized (`cross-repo/inbox/2026-08-08-doe-claude-em-claude-md-grant-self-
 minted-as-pm.md`). The intended flow -- EM obtains PM ratification, EM
 acquires the grant, EM dispatches, the subagent's write inherits the EM's
 grant via shared-session-id resolution -- stays intact under this fix; only

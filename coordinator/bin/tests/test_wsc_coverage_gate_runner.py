@@ -1,7 +1,7 @@
 """test_wsc_coverage_gate_runner — pytest tests for wsc-coverage-gate-runner.py.
 
 Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md [DEAD-CITATION: plan file never committed to this repo]
-  (M3 chunk WSC-2). Source: coordinator-claude
+  (M3 chunk WSC-2). Source: DoE-claude
   coordinator/skills/workstream-complete/SKILL.md §§ Step 2.4 "Plan-claim
   guard", Step 2.9 "Coverage gate (chain-end path)" + "Marker write".
 
@@ -1532,7 +1532,7 @@ def test_brightline_gate_uncovered_message_partitions_mixed_set(monkeypatch, tmp
 
 
 # ---------------------------------------------------------------------------
-# 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-coordinator-claude-em-
+# 2026-08-10 narration fix (cross-repo/inbox/2026-08-10-doe-claude-em-
 # brightline-unrecordable-narration-is-false.md): the foreign partition of the
 # uncovered-set diagnostic must consult the chain-ancestry waiver store before
 # asserting unrecordability. A waived foreign sha IS recordable — the write

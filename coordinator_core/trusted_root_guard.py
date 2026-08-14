@@ -9,12 +9,12 @@ the bash sourced-lib.
 Trust boundary: a resolved root is trusted iff it sits under one of four
 anchors:
   1. the marketplace-cache install (``${CLAUDE_HOME:-$HOME}/.claude/``),
-  2. the coordinator-claude clone at the ``.doe-root`` sentinel's content, read registry-first
+  2. the DoE clone at the ``.doe-root`` sentinel's content, read registry-first
      per DR-071 (2026-07-22 — the settings-home machine-local registry key
-     ``repos.example_doctrine_repo`` is the canonical, authoritative coordinator-root
+     ``repos.doe_claude`` is the canonical, authoritative coordinator-root
      anchor; the ``.doe-root`` file is a demoted, non-authoritative mirror),
      with the durable/legacy file rungs retained as fallbacks:
-     ``repos.example_doctrine_repo`` registry key first, then
+     ``repos.doe_claude`` registry key first, then
      ``<settings-home>/machine-local/.doe-root``, then
      ``${CLAUDE_HOME:-$HOME}/.claude/.doe-root``,
   3. the registry-resolved claude-klabauter root (2026-07-22 — the settings-home
@@ -126,8 +126,8 @@ def _home_from_env(env: dict) -> str:
     return env.get("CLAUDE_HOME") or env.get("HOME") or env.get("USERPROFILE") or ""
 
 
-def _registry_example_doctrine_repo(settings_home_dir: str) -> Optional[str]:
-    """Direct-tomllib read of the ``repos.example_doctrine_repo`` registry key under
+def _registry_doe_claude(settings_home_dir: str) -> Optional[str]:
+    """Direct-tomllib read of the ``repos.doe_claude`` registry key under
     ``<settings_home_dir>/machine-local/`` — the DR-071 canonical anchor,
     reset-safe because it never shells out to the ``machine-local`` CLI
     (whose reader/exec bits live under the canonical ``<settings-home>/bin/``,
@@ -146,8 +146,8 @@ def _registry_example_doctrine_repo(settings_home_dir: str) -> Optional[str]:
     reg_dir = Path(settings_home_dir) / "machine-local"
     for fname in ("registry.local.toml", "registry.toml"):
         flat = _flatten(_load_toml(reg_dir / fname))
-        if "repos.example_doctrine_repo" in flat:
-            val = flat["repos.example_doctrine_repo"]
+        if "repos.doe_claude" in flat:
+            val = flat["repos.doe_claude"]
             if isinstance(val, list):
                 val = "\n".join(str(i) for i in val)
             s = str(val)
@@ -158,7 +158,7 @@ def _registry_example_doctrine_repo(settings_home_dir: str) -> Optional[str]:
 
 def _registry_claude_klabauter(settings_home_dir: str) -> Optional[str]:
     """Direct-tomllib read of the ``repos.claude_klabauter`` registry key,
-    mirroring ``_registry_example_doctrine_repo`` exactly (same file rungs, same
+    mirroring ``_registry_doe_claude`` exactly (same file rungs, same
     env-injection-friendly signature, same reuse of ``machine_resolver``'s
     pure TOML helpers instead of shelling out to the ``machine-local`` CLI).
     """
@@ -216,12 +216,12 @@ def _doe_root(env: dict) -> str:
     """Read the ``.doe-root`` sentinel content, trailing-slash normalized.
 
     Registry-first per DR-071 (2026-07-22 — the settings-home machine-local
-    registry key ``repos.example_doctrine_repo`` is the canonical, authoritative
+    registry key ``repos.doe_claude`` is the canonical, authoritative
     coordinator-root anchor; ``.doe-root`` is a demoted, non-authoritative
     mirror), durable-file-then-legacy-file fallback (Port of:
-    coordinator-trusted-root-guard.sh (coordinator-claude bd8cc0e9, 2026-07-22),
+    coordinator-trusted-root-guard.sh (DoE bd8cc0e9, 2026-07-22),
     updated for DR-071):
-        1. registry ``repos.example_doctrine_repo``                    (canonical anchor)
+        1. registry ``repos.doe_claude``                    (canonical anchor)
         2. <settings-home>/machine-local/.doe-root          (durable file mirror)
         3. ${CLAUDE_HOME:-$HOME}/.claude/.doe-root          (legacy fallback)
     Mirrors the bash ``cat ... || true`` (missing sentinel -> empty string)
@@ -243,7 +243,7 @@ def _doe_root(env: dict) -> str:
     settings_home_dir = _settings_home_dir_from_env(env)
 
     if settings_home_dir:
-        registry_value = _registry_example_doctrine_repo(settings_home_dir)
+        registry_value = _registry_doe_claude(settings_home_dir)
         if registry_value:
             content = registry_value
 
@@ -277,9 +277,9 @@ def _norm(p: str) -> str:
 
     On Windows the same location is spelled inconsistently across the anchors
     this guard compares: ``.doe-root`` is written with forward slashes
-    (``X:/coordinator-claude``) while ``CLAUDE_PLUGIN_ROOT`` arrives with backslashes
-    (``X:\\coordinator-claude\\coordinator``), and the filesystem is case-insensitive.
-    Without normalization the coordinator-claude-clone anchor can never match and the guard
+    (``X:/DoE-claude``) while ``CLAUDE_PLUGIN_ROOT`` arrives with backslashes
+    (``X:\\DoE-claude\\coordinator``), and the filesystem is case-insensitive.
+    Without normalization the DoE-clone anchor can never match and the guard
     false-rejects a legitimately-trusted dev clone — and, worse, the ``/..``
     traversal check silently misses ``\\..``.
 
@@ -309,16 +309,16 @@ def _doe_root_rungs(env: dict) -> list[tuple[str, str]]:
     exists purely so a rejection message can show which rung produced (or
     failed to produce) the value, instead of forcing a reader to reconstruct
     it by hand as happened during the 2026-07-28 Windows install dogfood
-    (coordinator-claude state/2026-07-28-machine-a-install-dogfood-friction-log.md F6).
+    (DoE-claude state/2026-07-28-machine-a-install-dogfood-friction-log.md F6).
     """
     home = _home_from_env(env)
     settings_home_dir = _settings_home_dir_from_env(env)
     rungs: list[tuple[str, str]] = []
 
     if settings_home_dir:
-        rungs.append(("registry repos.example_doctrine_repo", _registry_example_doctrine_repo(settings_home_dir) or "<absent>"))
+        rungs.append(("registry repos.doe_claude", _registry_doe_claude(settings_home_dir) or "<absent>"))
     else:
-        rungs.append(("registry repos.example_doctrine_repo", "<skipped: settings-home dir resolved empty>"))
+        rungs.append(("registry repos.doe_claude", "<skipped: settings-home dir resolved empty>"))
 
     if settings_home_dir:
         durable = os.path.join(settings_home_dir, "machine-local", ".doe-root")

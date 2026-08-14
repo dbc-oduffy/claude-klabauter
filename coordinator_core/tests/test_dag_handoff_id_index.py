@@ -19,7 +19,7 @@ shipped with zero new unit tests. This closes that gap:
       either, resolves to None rather than colliding with an id-shaped
       string that happens to also look like a valid filename fragment.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md § C6
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48 § C6
 """
 
 from __future__ import annotations

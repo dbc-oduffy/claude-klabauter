@@ -6,7 +6,7 @@ coordinator_core.distill.ripe_filter.
 Purpose: claude-klabauter's first DR-047 distill-ceremony engine script. Scans a spec directory's
 Markdown frontmatter (recursing into subdirectories, so a month-foldered
 `archive/specs/YYYY-MM/` layout is one invocation) and emits a JSON partition of
-harvest-ripe vs skip-worthy specs on stdout, for the coordinator-claude distill Workflow/skill to consume.
+harvest-ripe vs skip-worthy specs on stdout, for the DoE distill Workflow/skill to consume.
 
 Usage:
     coordinator/bin/distill-ripe-filter.py <spec-dir>
@@ -14,7 +14,7 @@ Usage:
 Output (stdout, JSON): {"harvest": [...], "skip": [{"path", "status", "reason"}, ...]}
 
 Negative-spec: no LLM calls, no writes, no coupling to the canonical distillation log or
-Coordinator-claude's distill_fate schema — pure frontmatter scan. All logic lives in
+DoE's distill_fate schema — pure frontmatter scan. All logic lives in
 coordinator_core.distill.ripe_filter; this file is argv/stdout plumbing only.
 
 Relocated from bin/distill-ripe-filter.py (DEC-3, 2026-07-23

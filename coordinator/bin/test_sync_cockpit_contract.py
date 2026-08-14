@@ -18,7 +18,7 @@ module's own `_CANONICAL` was a `__file__`-relative walk to
 `coordinator/../cockpit-contract/schema/...` that the 2026-07-22
 executable-surface migration (DR-047) left behind when it moved this test
 into this repo while `cockpit-contract/` (contract data) stayed in
-Coordinator-claude. `sync-cockpit-contract.py` itself was already fixed at migration
+DoE-claude. `sync-cockpit-contract.py` itself was already fixed at migration
 time via `_default_canonical()` -> `coordinator_data_root.data_root()`; only
 this test's copy of the path was never migrated. Fixed by resolving the same
 way the production script does, instead of re-deriving the path here.
@@ -44,11 +44,11 @@ from coordinator_core.win_portability import no_console_creationflags  # noqa: E
 
 def _resolve_canonical() -> str | None:
     """Resolve the canonical cockpit-contract schema the same way the script
-    under test does, or None when this machine has no coordinator-claude clone.
+    under test does, or None when this machine has no DoE clone.
 
     `data_root()` RAISES RuntimeError when neither rung resolves, and this
     resolution happens at module scope — so an unguarded call turns a
-    clone-less machine (fresh clone, CI runner, a Windows box with no coordinator-claude
+    clone-less machine (fresh clone, CI runner, a Windows box with no DoE
     checkout) into 7 collection ERRORS instead of 7 skips. Swallowing only
     RuntimeError keeps that one documented failure mode graceful without
     masking anything else.
@@ -64,21 +64,21 @@ _CANONICAL = _resolve_canonical()
 
 # Presence of the SPECIFIC required artifact, not merely of the clone root —
 # the same convention coordinator_core/contract/cockpit_schema/tests/conftest.py
-# uses (`SCHEMA_AVAILABLE`/`skip_no_schema`), and for the same reason: the coordinator-claude
+# uses (`SCHEMA_AVAILABLE`/`skip_no_schema`), and for the same reason: the DoE
 # clone resolving says nothing about whether `cockpit-contract/schema/` still
 # exists at that HEAD.
 _CANONICAL_AVAILABLE = _CANONICAL is not None and os.path.isfile(_CANONICAL)
 
 # Negative-spec: this guard is NOT how the 7 failures were resolved — the
 # resolver swap above is, and it makes every one of them pass on any machine
-# with a coordinator-claude clone (i.e. every machine that can exercise the script under test
+# with a DoE clone (i.e. every machine that can exercise the script under test
 # at all). This only covers the clone-less machine, where the production script
 # itself resolves no canonical and exits 2 by design; there is nothing left to
 # assert about vendor-sync drift there.
 requires_canonical = unittest.skipUnless(
     _CANONICAL_AVAILABLE,
-    "coordinator-claude cockpit-contract schema/ not available on this machine "
-    "(coordinator-claude clone absent, or schema/ missing at its HEAD)",
+    "DoE cockpit-contract schema/ not available on this machine "
+    "(DoE clone absent, or schema/ missing at its HEAD)",
 )
 
 

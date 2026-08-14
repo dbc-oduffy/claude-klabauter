@@ -84,6 +84,11 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import emit_script
 
 
+# Generator-provenance: writes the emitted script to a caller-supplied,
+# path-guarded output_path -- no fixed target, purely caller-named.
+GENERATES = []
+
+
 class PathEscapeError(ValueError):
     """Raised when ``output_path`` resolves outside ``target_root``."""
 

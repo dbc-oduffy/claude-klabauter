@@ -4,7 +4,7 @@ Mocks OS/git/filesystem probing throughout — none of these tests depend on
 the host actually being Windows or having a real ssh binary/git remote
 configured.
 
-Port of: check-windows-ssh-binary.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: check-windows-ssh-binary.sh (DoE 290997c7, 2026-07-22)
 
 Spec backlink: DR-079 tool 8 assignment; source memo
 cross-repo/inbox/2026-07-21-claude-central-em-dr079-doe-dispositions-and-install-health-defect.md

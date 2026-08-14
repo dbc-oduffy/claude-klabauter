@@ -465,7 +465,7 @@ def test_gate_detects_aliased_import_silent_bail(tmp_path):
         "from coordinator_core.machine_resolver import registry_get as real_registry_get\n"
         "\n"
         "def test_aliased_silent_bail():\n"
-        "    if not real_registry_get('repos.example_doctrine_repo'):\n"
+        "    if not real_registry_get('repos.doe_claude'):\n"
         "        return\n"
         "    assert True\n",
         encoding="utf-8",

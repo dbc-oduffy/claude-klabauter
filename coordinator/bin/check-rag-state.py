@@ -3,13 +3,13 @@
 check-rag-state.py — CLI trampoline over claude-klabauter coordinator_core.ops.check_rag_state.
 
 Finish-strangler port: the bash implementation (env-var fast-path → marker-file
-read → unknown fallback, plus the coordinator-claude-root/plugin-root trust-guard preflight)
+read → unknown fallback, plus the DoE-root/plugin-root trust-guard preflight)
 has been fully ported to coordinator_core/ops/check_rag_state.py, with a
 co-located pytest (test_check_rag_state.py, 16 tests).
 
 Port source: coordinator/bin/check-rag-state.py (this file, pre-port bash body
 retired; see git log)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 
 This is a **direct-import trampoline** (template-variant #1) — no JSON-RPC
 op registration, no cc_invoke() round trip. `check-rag-state.py` is invoked
@@ -18,7 +18,7 @@ but is not a per-commit hot path; direct import still avoids a second
 subprocess hop for no benefit, same rationale as coordinator-auto-push.
 
 Exit-code convention: this is a FAIL-LOUD gate-shaped script (its own bash
-oracle `exit 1`s on both "state is unknown" and "coordinator-claude-root/trust preflight
+oracle `exit 1`s on both "state is unknown" and "DoE-root/trust preflight
 failed") — the trampoline preserves that: sys.exit(1) on CLAUDE_KLABAUTER_ROOT
 resolution failure or import failure, exactly like handoff-gate-aging, NOT
 the auto-push "never block" exit-0 shape.

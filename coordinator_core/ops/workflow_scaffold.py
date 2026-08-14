@@ -5,7 +5,7 @@ Purpose: pure-generation RPC that composes a green-by-construction fleet
 Workflow `.mjs` skeleton from a caller-supplied name/description/phases, plus
 one of the four named house patterns (coordinator_core.ops._workflow_patterns,
 the C3 template SSOT), embedded as a commented fill-in block. Returns the
-composed script TEXT — it does not write to disk; the caller (a coordinator-claude bash
+composed script TEXT — it does not write to disk; the caller (a DoE bash
 veneer, the claude-klabauter op-invoke CLI via stdout redirect, or an EM) places the
 file. Scope "none" / COMPUTE_ONLY, mirrors ops/cartography_symbols.py's
 registration pattern.
@@ -19,7 +19,7 @@ Wire params:
                                      phase-conformant by construction.
     pattern (str, optional)       — one of "pipeline-default",
                                      "disk-poll-fanout", "adversarial-verify",
-                                     "loop-until-dry". OMITTED (coordinator-claude consult
+                                     "loop-until-dry". OMITTED (DoE consult
                                      note 3) -> "pipeline-default" (matches
                                      the harness "default to pipeline()"
                                      guidance) — never errors, never silently
@@ -54,7 +54,7 @@ DR-208 five-question affirmation (COMPUTE_ONLY; citing this handler):
   5. Persistent state changes observable across process boundaries?     No.
      Nothing is written to disk; the only observable effect is the return
      value handed back to the caller. Placing the returned text into a file
-     is the CALLER's responsibility (the coordinator-claude veneer, an op-invoke CLI stdout
+     is the CALLER's responsibility (the DoE veneer, an op-invoke CLI stdout
      redirect, or an EM) — deliberately kept out of this op's budget/surface
      (see plan § "workflow.scaffold returns text; it does NOT write to disk").
   Git-shelling-is-read-only precedent: this handler shells out to nothing and
@@ -157,7 +157,7 @@ def _workflow_scaffold(params: dict, repo_root: Optional[Path] = None) -> dict:
         phases (list[dict], optional): [{"title", "detail"}, ...]; falls
             back to a single default "Run" phase when omitted/empty.
         pattern (str, optional): one of HOUSE_PATTERNS' keys; OMITTED ->
-            "pipeline-default" (coordinator-claude consult note 3 — never errors, never
+            "pipeline-default" (DoE consult note 3 — never errors, never
             silently defaults to a fan-out shape).
 
     Returns:

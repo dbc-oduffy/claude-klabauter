@@ -9,7 +9,7 @@ invoke a real `node`/git subprocess for a directive handler — those are
 monkeypatched; `coordinator_core.contract.test_apply_base` already covers
 the generic directive-execution engine this module composes.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C6
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
 """
 from __future__ import annotations
 

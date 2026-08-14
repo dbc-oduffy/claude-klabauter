@@ -1,7 +1,7 @@
 """Characterization tests for coordinator_core.ops.generate_repomap.
 
 Built from the golden-oracle capture of Port of: generate-repomap.sh
-(coordinator-claude b5a4192c, 2026-07-20) run against real corpora — trust-guard fail-loud
+(DoE b5a4192c, 2026-07-20) run against real corpora — trust-guard fail-loud
 path, generator-not-found 3-tier resolution, default-args and
 passthrough-args invocation shapes.
 """

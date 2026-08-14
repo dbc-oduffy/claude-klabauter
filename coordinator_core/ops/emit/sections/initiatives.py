@@ -12,7 +12,7 @@ present-as-null when absent or non-string. Graceful-absent: no ``initiatives`` d
 Provenance is a ``coordinator_artifact`` envelope with ``ref: null`` (D1/D9 — not git-backed);
 Source A's ProvenanceEnvelope superRefine enforces that bidirectional invariant.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.15,
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 8.15,
   InitiativeSummary. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P18
 Spec backlink: cross-repo/inbox/2026-07-05-initiative-govern-sweep-shape-outcome.md § Ask 1 (canonical enum, PM-ratified 2026-07-04)
@@ -114,7 +114,7 @@ def _simple_yaml_load(content: str) -> dict:
     Handles single-line string values; unquotes double- and single-quoted strings. Lines
     starting with ``#`` or blank lines are ignored. Multi-line block scalars are NOT parsed;
     the field is simply absent if used. Mirrors the bash heredoc parser exactly (Port of:
-    emit-cockpit-snapshot.sh, coordinator-claude 07eedcfb, 2026-07-19) — including the null-sentinel
+    emit-cockpit-snapshot.sh, DoE 07eedcfb, 2026-07-19) — including the null-sentinel
     coercion of ``null``, ``~``, and the empty string to ``None``.
 
     Contract: returns a flat ``dict`` — every caller (``collect()`` below, plus

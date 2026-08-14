@@ -1,7 +1,7 @@
 """Tests for coordinator_core.data_root.
 
 Mirrors the fixture shape of coordinator/bin/lib's own coordinator_data_root.py
-tests (co-located rung, coordinator-claude-resident rung, both-rungs-fail hard error) but
+tests (co-located rung, DoE-resident rung, both-rungs-fail hard error) but
 exercises the coordinator_core-native module, which delegates rung 2 to
 coordinator_core.ops.coordinator_doe_root.coordinator_doe_root() instead of
 coordinator_registry.doe_root() — see data_root.py's module docstring for why.
@@ -187,9 +187,9 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     # coordinator_doe_root() is NOT stubbed — it IS the C1B ladder this test
     # proves engine-side gets "for free" via delegation (per C2's finding:
     # this module needs no ladder of its own). Its rung-1 env override
-    # (REPO_EXAMPLE_DOCTRINE_REPO) is cleared so it does not short-circuit ahead of the
+    # (REPO_DOE_CLAUDE) is cleared so it does not short-circuit ahead of the
     # ladder this test targets.
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("DOE_ROOT", raising=False)
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_core_miss)
 

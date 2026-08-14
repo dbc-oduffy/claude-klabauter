@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.setup_chain_walker — coordinator-claude install-chain walker.
 
-Purpose: full reimplementation of coordinator-claude's 922-line bash chain-walker as
-a native Python module. Coordinator-claude
+Purpose: full reimplementation of DoE-claude's 922-line bash chain-walker as
+a native Python module. coordinator-claude
 is the terminal node of the OSS plugin-adoption chain (chain step 5 of 5 —
 nothing installs "above" it) but, as of W0.5 Option B+C (2026-07-19),
 declares ONE hard direct_dep of its own: claude-klabauter (the engine).
@@ -35,7 +35,7 @@ call-site stability; the bash subprocess bridge to `scripts/lib/
 prereq_probe.sh` was retired in the C11 de-bash cutover — the function now
 calls `prereq_probe.probe_all()` in-process).
 
-Port of: setup.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Port of: setup.sh (DoE 6fb5fb37, 2026-07-22)
 Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase-b.md §7 C2
                docs/plans/2026-06-17-coordinator-install-seed-phase-and-manifest-alignment.md §C2
                docs/plans/2026-06-23-clone-auth-semi-hard-step-zero.md §C3
@@ -455,7 +455,7 @@ def command_succeeds_native(cmd: str, timeout: int) -> bool:
     `cmd` string WITHOUT spawning `bash`/`sh`.
 
     Narrowed shell-subset, not a general POSIX-shell evaluator (the manifest
-    is coordinator-claude-owned data, never claude-klabauter-authored, so full shell-grammar parity
+    is DoE-owned data, never claude-klabauter-authored, so full shell-grammar parity
     is not a reasonable native-port target — same "faithful subset, not the
     whole grammar" call as `coordinator_core.install.dep_check`'s sibling
     probe for this same manifest probe kind). Handles exactly the shape the
@@ -1136,13 +1136,13 @@ def parse_args(argv: list[str], out=None, err=None) -> dict[str, Any]:
 _COORDINATOR_ROOT_LADDER_REMEDIATION = (
     "  1. --coordinator-root <path>\n"
     "  2. $COORDINATOR_CLAUDE_ROOT\n"
-    "  3. engine.working_repos.example_doctrine_repo registry key\n"
+    "  3. engine.working_repos.doe_claude registry key\n"
     "  (repos.coordinator_claude stays RETIRED -- it names the publish-mirror\n"
     "  location, never a working checkout; see publish.mirrors.<name>.path in\n"
     "  the machine-local registry for the mirror this repo actually resolves\n"
-    "  that key to. `engine.working_repos.example_doctrine_repo` is written by coordinator-claude's own\n"
+    "  that key to. `engine.working_repos.doe_claude` is written by DoE's own\n"
     "  installer / self-heal, never by claude-klabauter -- claude-klabauter only reads this\n"
-    "  namespace. Absent: `machine-local set engine.working_repos.example_doctrine_repo\n"
+    "  namespace. Absent: `machine-local set engine.working_repos.doe_claude\n"
     "  <path>`.)\n"
     "  Every rung additionally requires the candidate to (a) NOT be a\n"
     "  registered publish.mirrors.*.path entry, and (b) show positive\n"
@@ -1201,7 +1201,7 @@ def _resolve_coordinator_root_ladder(
 
         1. --coordinator-root <path> / --coordinator-root=<path> (this argv)
         2. $COORDINATOR_CLAUDE_ROOT
-        3. `engine.working_repos.example_doctrine_repo` registry key (via
+        3. `engine.working_repos.doe_claude` registry key (via
            `coordinator_core.machine_resolver.registry_get` — never a
            `machine-local` subprocess), passed through C1a's shape
            derivation (`coordinator_core.coordinator_root.
@@ -1212,7 +1212,7 @@ def _resolve_coordinator_root_ladder(
     — that key is RETIRED (2026-06-30 registry-publish-vs-working-targets
     migration) and, on operator machines that still carry it, resolves
     straight to the publish mirror location, which `_is_publish_mirror`
-    exists to reject; it is never repointed. `engine.working_repos.example_doctrine_repo`
+    exists to reject; it is never repointed. `engine.working_repos.doe_claude`
     is a DIFFERENT, live-registered key that DOES name a coordinator-claude
     WORKING checkout generically on this fleet (verified live: the raw
     registered value is a repo root one directory ABOVE the actual plugin
@@ -1222,8 +1222,8 @@ def _resolve_coordinator_root_ladder(
     never pass gate 2 below). Absent key, empty value, or a derivation that
     returns `None` is a rung MISS, not an error — fail-open, so an OSS
     single-tree box with no such key behaves byte-identically to today.
-    This rung is written by coordinator-claude's own installer / self-heal via
-    `machine-local set engine.working_repos.example_doctrine_repo <path>` — claude-klabauter only
+    This rung is written by DoE's own installer / self-heal via
+    `machine-local set engine.working_repos.doe_claude <path>` — claude-klabauter only
     reads this namespace, never writes another repo's registry entry.
 
     Every candidate from any rung must clear TWO gates, in order, before
@@ -1267,11 +1267,11 @@ def _resolve_coordinator_root_ladder(
     if env_val:
         candidates.append((Path(env_val), "$COORDINATOR_CLAUDE_ROOT env"))
 
-    registry_val = registry_get("engine.working_repos.example_doctrine_repo")
+    registry_val = registry_get("engine.working_repos.doe_claude")
     if registry_val:
         derived = _resolve_plugin_root_for_machine_local(Path(registry_val))
         if derived is not None:
-            candidates.append((derived, "engine.working_repos.example_doctrine_repo registry key"))
+            candidates.append((derived, "engine.working_repos.doe_claude registry key"))
 
     for candidate, rung in candidates:
         if _is_publish_mirror(candidate):

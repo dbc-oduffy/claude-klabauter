@@ -5,7 +5,7 @@ this module shells out, so tests exercise it end-to-end rather than mocking
 subprocess) so the parity assertions match the bash oracle byte-for-byte on
 the `range=... VERDICT=...` output line.
 
-Port of: review-brightline-gate.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: review-brightline-gate.sh (DoE b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 """
 from __future__ import annotations

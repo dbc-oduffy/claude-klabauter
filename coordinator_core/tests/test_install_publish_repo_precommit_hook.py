@@ -5,8 +5,8 @@ a positive and negative corpus (missing arg, non-repo, mismatched repo,
 fresh install, already-installed no-op, upgrade-path append, foreign-hook
 offer, empty arg).
 
-Port of: install-publish-repo-precommit-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md (residual)
+Port of: install-publish-repo-precommit-hook.sh (DoE b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 (residual)
 """
 from __future__ import annotations
 

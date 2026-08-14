@@ -1,7 +1,7 @@
 """Full cross-product attack corpus: SHAPES x CONFINEMENT_GUARDS, driven
 through the real dispatcher (``dispatch.evaluate_payload_json``).
 
-Genesis: coordinator:staff-eng (the Staff Engineer) review, coordinator-claude
+Genesis: coordinator:staff-eng (the Staff Engineer) review, DoE-claude
 ``state/subagent-share/468b3c12-ad00-4773-98e5-901ed8e085e6/
 coordinatorstaff-eng-e44a8c47.md``, Findings 0-2 and 6. ``test_cd_prefix_
 bypass.py`` is 80% of the right artifact (real dispatcher, attack-not-read)

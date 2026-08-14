@@ -522,7 +522,7 @@ class TestMachineLocalDivergence(unittest.TestCase):
       COORDINATOR_SETTINGS_HOME → self.tmp_path / "settings"
       new path            → self.tmp_path / "settings" / "machine-local"
 
-    Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+    Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
     """
 
     def setUp(self):
@@ -611,7 +611,7 @@ class TestMachineLocalDir(unittest.TestCase):
       COORDINATOR_SETTINGS_HOME → self.tmp_path / "settings"
       new path            → self.tmp_path / "settings" / "machine-local"
 
-    Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+    Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
     """
 
     def setUp(self):

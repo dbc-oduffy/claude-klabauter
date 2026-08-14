@@ -7,13 +7,13 @@ reviewer persona ("the Staff Engineer" -> "Alex") by rewriting the articulated
 role-label sentinel in installed-copy prose (`*.md` / `*.sh` under `plugins/`, plus
 `docs/customization.md`), skipping YAML frontmatter.
 
-NOT imported by the coordinator-claude-side trampoline. The trampoline lives at
+NOT imported by the DoE-side trampoline. The trampoline lives at
 `coordinator/dist/publish-repo-setup/name-personas.sh`, which percolates verbatim
 (`sync_flat_mirror`) into the standalone OSS `coordinator-claude` publish repo as
 `setup/name-personas.sh` -- a bootstrap-time script that runs BEFORE (and with no
 guarantee of) a `claude-klabauter` sibling clone, `coordinator_core`, or a
 `.claude-klabauter-root` machine-local pointer. A `from coordinator_core.ops.name_personas
-import main` trampoline would resolve `CLAUDE_KLABAUTER_ROOT` on a Claude-Central/coordinator-claude
+import main` trampoline would resolve `CLAUDE_KLABAUTER_ROOT` on a Claude-Central/DoE
 developer machine but raise/no-op for every OSS installer -- silently defeating the
 "customize persona names" install step for every real end user. This module exists
 for engine-tree pytest coverage / potential future reuse from Claude-Central tooling
@@ -22,8 +22,8 @@ must be kept in sync by hand if either changes. Mirrors the deliberate-self-cont
 precedent already established for `dev-sync.sh` / `coordinator_core.ops.dev_sync`
 in the same `dist/publish-repo-setup/` family.
 
-Port source: coordinator/dist/publish-repo-setup/name-personas.sh (coordinator-claude, 291 lines)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Port source: coordinator/dist/publish-repo-setup/name-personas.sh (DoE-claude, 291 lines)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 
 Exit codes (parity-critical, preserved from the bash oracle):
     0 -- dry-run report printed, or live substitutions applied and reported.
@@ -69,6 +69,13 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 PROG = "name-personas.sh"
+
+# Rewrites plugins/*.md,*.sh and docs/customization.md under the resolved
+# repo root; neither exists as a tracked path in claude-klabauter's own tree (no
+# tracked plugins/ dir, no tracked docs/customization.md), so a default
+# in-repo run writes nothing here. Real production use is via
+# NAME_PERSONAS_REPO_ROOT pointed at an external publish-repo checkout.
+GENERATES = []
 
 # Articulated role label    | Subagent slug                  | Plugin
 # the Staff Engineer          | coordinator:staff-eng          | coordinator

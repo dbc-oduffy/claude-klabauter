@@ -2,7 +2,7 @@
 coordinator_core.write_guards.nudge_tasks_state_folder_split -- the
 load-bearing-surface-under-tasks/ advisory guard.
 
-Spec: coordinator-claude docs/plans/2026-07-27-claude-md-altitude-triage.md § C14
+Spec: DoE-claude docs/plans/2026-07-27-claude-md-altitude-triage.md § C14
 
 Covers: non-write-tool/non-tasks-path passthrough, literal-basename surface
 matches (orientation_cache, lessons), directory-form surface matches

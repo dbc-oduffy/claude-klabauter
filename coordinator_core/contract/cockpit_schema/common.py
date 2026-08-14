@@ -1,13 +1,13 @@
 """
 Shared scalar primitives for the cockpit work-state contract — pydantic port of
-Coordinator-claude `coordinator/cockpit-contract/src/common.ts` (Zod source).
+DoE `coordinator/cockpit-contract/src/common.ts` (Zod source).
 
 Every entity speaks ISO-8601 UTC for timestamps and ISO calendar dates for
 day-grained periods. Centralising these here keeps the emitted JSON Schema
 `format`/`pattern` hints consistent across every entity, mirroring the Zod
 source's own centralisation rationale.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

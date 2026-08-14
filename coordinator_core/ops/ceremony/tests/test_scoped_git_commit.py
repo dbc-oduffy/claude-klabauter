@@ -228,6 +228,241 @@ def test_agree_branch_reports_no_worktree_excluded_key(tmp_path):
     assert "worktree_excluded_warning" not in result
 
 
+def test_agree_branch_commit_carries_session_id_trailer_via_real_hook(tmp_path, monkeypatch):
+    """Regression: the AGREE branch (a plain `git commit -F`, `commit_with_
+    message_file` — the non-diverged path `commit_scoped()` selects when
+    index and worktree already agree) relies on the REAL `prepare-commit-msg`
+    git hook firing to stamp `Session-Id:`/`Deliverable-Id:` trailers (see
+    `git_native.py`'s own module docstring, "the `prepare-commit-msg` hook
+    that stamps Session-Id/Deliverable-Id on every ordinary `git commit`").
+    Unlike the PRIVATE-INDEX branch (`_commit_scoped_private_index`, plumbing
+    — `commit-tree`/`update-ref` — which computes trailers itself in Python
+    via `compute_missing_trailer_args`; hooks never fire for plumbing), the
+    agree branch has NO Python-side trailer fallback: if the script the
+    installed `.git/hooks/prepare-commit-msg` shim execs is missing from
+    disk, the shim silently warns on stderr and exits 0 — the commit lands,
+    with no Session-Id trailer, and no error surfaces anywhere in this op's
+    response.
+
+    2026-08-14 live incident: `coordinator/bin/coordinator-prepare-commit-
+    msg` (the extensionless script the installed shim execs) was deleted
+    from the working tree as uncommitted WIP for an in-flight extensionless
+    -> `.py` rename, leaving the installed shim (which only probed the
+    extensionless name) unable to find it. Every AGREE-branch commit landed
+    with no `Session-Id:` trailer; every PRIVATE-INDEX-branch commit (a
+    caller with a partially-staged/diverged path) kept its trailer, because
+    that branch never depends on the hook or the file the hook execs at all
+    — explaining the non-monotonic (not a clean time-cutover) trailer-
+    presence pattern observed across nearby commits on the shared branch.
+
+    This installs a MINIMAL, self-contained stand-in hook (never the live
+    repo's own `.git/hooks/prepare-commit-msg` or `coordinator/bin/` tree —
+    this test must never depend on, or be broken by, either) that replays
+    the identical `compute_missing_trailer_args` call the real script makes,
+    so an agree-branch commit through this op is asserted, end to end, to
+    carry a `Session-Id:` trailer — the exact assertion that had no test
+    before this incident.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # `git commit`'s hook subprocess starts with a bare `sys.path` (no
+    # inherited PYTHONPATH), so it cannot find `coordinator_core` on its own
+    # the way this TEST process can (pytest's own rootdir insertion) —
+    # inserted explicitly here, same shape the real
+    # `coordinator-prepare-commit-msg` script's own `_ensure_claude_klabauter_on_
+    # syspath()` bootstrap performs via `cc_invoke`, just derived from this
+    # test module's own file location rather than a hardcoded path.
+    claude_klabauter_root = Path(__file__).resolve().parents[4]
+    hook_path = repo / ".git" / "hooks" / "prepare-commit-msg"
+    hook_path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"sys.path.insert(0, {str(claude_klabauter_root)!r})\n"
+        "from coordinator_core.git.commit_trailers import compute_missing_trailer_args\n"
+        "from coordinator_core.ops.ceremony import git_native\n"
+        "args = compute_missing_trailer_args(sys.argv[1], '.')\n"
+        "if args:\n"
+        "    git_native._git(['interpret-trailers', '--in-place', *args, sys.argv[1]], cwd='.')\n",
+        encoding="utf-8",
+    )
+    hook_path.chmod(0o755)
+
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    session_id = "50826754-75f7-40b2-a787-e59c70a43e90"
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", session_id)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["tasks/feature/todo.md"],
+            "message": "add feature todo",
+        }
+    )
+
+    assert result["committed"] is True
+    assert "worktree_excluded" not in result  # confirms the AGREE branch ran
+
+    message = subprocess.run(
+        ["git", "log", "-1", "--format=%B", result["sha"]],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert f"Session-Id: {session_id}" in message
+
+
+def test_agree_branch_commit_carries_session_id_trailer_with_no_hook_installed(tmp_path, monkeypatch):
+    """Regression, the actual defect the sibling `..._via_real_hook` test
+    above cannot catch (2026-08-14 cross-repo memo,
+    `cross-repo/inbox/2026-08-14-doe-claude-em-scoped-git-commit-drops-
+    session-id-trailer.md`; fix landed in `git_native.py`'s agree branch,
+    the `if not diverged:` block in `commit_scoped()`).
+
+    The sibling test installs a stand-in `prepare-commit-msg` hook and
+    therefore only proves the AGREE branch still works when a hook fires —
+    it was already passing before this fix, because the live incident was
+    never "the hook computes the wrong trailer", it was "the hook, or the
+    script it execs, sometimes does not fire at all, and the branch had no
+    fallback of its own". This test installs NO `prepare-commit-msg` hook
+    whatsoever (no file under `.git/hooks/` for that name) — the exact
+    shape of a hook non-fire, whatever its proximate cause (missing shim
+    target, no python on PATH, `core.hooksPath` override, non-executable
+    hook, a future rename) — and asserts the trailer still lands, because
+    `commit_scoped()`'s agree branch now calls `compute_missing_trailer_args`
+    itself before committing, mirroring `_commit_scoped_private_index`'s
+    own hook-independent trailer computation rather than trusting a hook
+    that may silently not run.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    hook_path = repo / ".git" / "hooks" / "prepare-commit-msg"
+    assert not hook_path.exists()
+
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    session_id = "6f1c1e1a-2b3c-4d5e-8f9a-0b1c2d3e4f5a"
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", session_id)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["tasks/feature/todo.md"],
+            "message": "add feature todo",
+        }
+    )
+
+    assert result["committed"] is True
+    assert "worktree_excluded" not in result  # confirms the AGREE branch ran
+
+    message = subprocess.run(
+        ["git", "log", "-1", "--format=%B", result["sha"]],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert f"Session-Id: {session_id}" in message
+    assert message.count("Session-Id:") == 1
+
+
+def test_agree_branch_session_id_trailer_not_duplicated_when_hook_also_stamps(tmp_path, monkeypatch):
+    """Idempotency contract, end to end (module docstring item 5,
+    `coordinator_core.git.commit_trailers`: "Session-Id and Deliverable-Id
+    have INDEPENDENT idempotency checks"). Now that the AGREE branch itself
+    pre-composes `Session-Id:` into `msg_file` before `commit_with_message_
+    file` runs (this fix), a subsequently-firing `prepare-commit-msg` hook
+    must see the line already present via its own `need_session_id = not
+    _has_trailer_line(commit_msg_file, "Session-Id:")` check and skip
+    re-stamping — the same contract the pre-existing `deliverable_id`
+    pre-compose already relied on (`git_native.py`'s own comment, "LOAD-
+    BEARING, not incidental"). Reuses the sibling `..._via_real_hook`
+    test's minimal self-contained stand-in hook (never the live repo's
+    `.git/hooks/` or `coordinator/bin/` tree).
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    claude_klabauter_root = Path(__file__).resolve().parents[4]
+    hook_path = repo / ".git" / "hooks" / "prepare-commit-msg"
+    hook_path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"sys.path.insert(0, {str(claude_klabauter_root)!r})\n"
+        "from coordinator_core.git.commit_trailers import compute_missing_trailer_args\n"
+        "from coordinator_core.ops.ceremony import git_native\n"
+        "args = compute_missing_trailer_args(sys.argv[1], '.')\n"
+        "if args:\n"
+        "    git_native._git(['interpret-trailers', '--in-place', *args, sys.argv[1]], cwd='.')\n",
+        encoding="utf-8",
+    )
+    hook_path.chmod(0o755)
+
+    _seed_file(repo, "tasks/feature/todo.md", "content")
+
+    session_id = "9a8b7c6d-5e4f-4a3b-9c8d-7e6f5a4b3c2d"
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", session_id)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["tasks/feature/todo.md"],
+            "message": "add feature todo",
+        }
+    )
+
+    assert result["committed"] is True
+
+    message = subprocess.run(
+        ["git", "log", "-1", "--format=%B", result["sha"]],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert message.count(f"Session-Id: {session_id}") == 1
+    assert message.count("Session-Id:") == 1
+
+
+def test_agree_branch_explicit_deliverable_id_wins_and_appears_once(tmp_path, monkeypatch):
+    """C7a precedence, now sharing this fix's `trailer_args` list with the
+    Session-Id computation (`_drop_trailer_arg`-then-append shape, mirroring
+    `_commit_scoped_private_index`'s own use of the same pattern a few lines
+    below in `git_native.py`). An explicit `deliverable_id` parameter must
+    still win over anything `compute_missing_trailer_args` would infer from
+    the committed artifact's own frontmatter, and must land exactly once —
+    no duplicate `Deliverable-Id:` line from the two trailer sources
+    (this fix's `compute_missing_trailer_args` call and the pre-existing
+    explicit-parameter block) landing in the same message.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_deliverable_artifact(repo, "dlv-inferred00", slug="inferred-plan")
+    _seed_deliverable_artifact(repo, "dlv-explicit01", slug="explicit-plan")
+    _seed_file(repo, "a.md", "content")
+
+    session_id = "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d"
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", session_id)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.md", "docs/plans/inferred-plan.md"],
+            "message": "subject",
+            "deliverable_id": "dlv-explicit01",
+        }
+    )
+
+    assert result["committed"] is True
+
+    message = subprocess.run(
+        ["git", "log", "-1", "--format=%B", result["sha"]],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert message.count("Deliverable-Id: dlv-explicit01") == 1
+    assert message.count("Deliverable-Id:") == 1
+    assert f"Session-Id: {session_id}" in message
+
+
 def test_missing_worktree_root_param_errors():
     result = _call({"paths": ["a.md"], "message": "m"})
     assert result["committed"] is False
@@ -382,7 +617,7 @@ def test_op_schema_rejects_non_string_deliverable_id():
 
 
 def test_message_file_path_is_rejected_not_committed_verbatim(tmp_path):
-    """Regression for `fdbff578b7dc` / `40bf1064a124` (coordinator-claude-em FYI memo,
+    """Regression for `fdbff578b7dc` / `40bf1064a124` (doe-claude-em FYI memo,
     2026-08-04): a caller composed the message in a scratchpad file and passed
     that file's PATH as `message`, expecting `-F` semantics. The op committed
     the path as the subject line and the body was lost — silently, and only
@@ -511,10 +746,10 @@ def test_no_false_integrity_breach_when_something_else_pushed(tmp_path, monkeypa
     in `_handler` -- `_remote_sha_state` -- is the only thing that can make
     this assertion pass.
 
-    Second assertion set (2026-07-30, coordinator-claude-em memo): suppressing the
+    Second assertion set (2026-07-30, doe-claude-em memo): suppressing the
     breach was only half the fix. The op still REPORTED `pushed=False` for a
     sha it had just confirmed on the remote, and `scoped-git-commit` rendered
-    that as `(not pushed)` -- three times in one coordinator-claude session on commits that
+    that as `(not pushed)` -- three times in one DoE session on commits that
     had all pushed. `pushed` answers "is this commit published", so a
     confirmed-present sha is `True`, whoever's push put it there.
     """

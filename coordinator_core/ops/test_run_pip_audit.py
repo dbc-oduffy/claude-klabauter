@@ -3,7 +3,7 @@ coordinator_core.ops.test_run_pip_audit
 
 Characterization tests for the "ci.run_pip_audit" op
 (coordinator_core.ops.run_pip_audit) — the pip-audit external-tool wrapper
-replacing the coordinator-claude agents/dep-cve-auditor.md:68 fence.
+replacing the DoE agents/dep-cve-auditor.md:68 fence.
 
 subprocess.run is monkeypatched throughout: these tests must not require
 pip-audit to actually be installed (per the plan's chunk design note).

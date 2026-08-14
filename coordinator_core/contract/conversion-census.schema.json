@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claude-klabauter/coordinator_core/contract/conversion-census.schema.json",
   "title": "Conversion-census row",
-  "description": "Shape of one row in coordinator-claude's conversion census — the per-step classification of converting a skill into a computed skill. Coordinator-claude owns the procedure and tooling that produces rows; this schema defines only the shape a producing row must conform to, so claude-klabauter's compute-layer scaffolder can read a conforming census and know what to generate versus stub, without further co-design on the claude-klabauter side. Spec: coordinator_core/contract/conversion-census-producer-contract.md.",
+  "description": "Shape of one row in DoE-claude's conversion census — the per-step classification of converting a skill into a computed skill. DoE-claude owns the procedure and tooling that produces rows; this schema defines only the shape a producing row must conform to, so claude-klabauter's compute-layer scaffolder can read a conforming census and know what to generate versus stub, without further co-design on the claude-klabauter side. The document envelope that carries rows — file format, filename, location, transport — is DoE-claude's, per contract § 5. Spec: coordinator_core/contract/conversion-census-producer-contract.md.",
   "type": "object",
   "additionalProperties": false,
   "required": ["step_id", "classification"],
@@ -15,25 +15,87 @@
     "classification": {
       "type": "string",
       "enum": ["MECHANICAL", "JUDGMENT", "MIXED"],
-      "description": "MECHANICAL: fully generatable by the scaffolder. JUDGMENT: fully author-authored; the scaffolder emits a stub. MIXED: the step forcibly splits into a mechanical part and a judgment part — see mechanical_part / judgment_part, both required when classification is MIXED (contract § 2.2)."
+      "description": "MECHANICAL: fully generatable by the scaffolder. JUDGMENT: fully author-authored; the scaffolder emits a stub. MIXED: the step forcibly splits into a mechanical part and a judgment part — see mechanical_part / judgment_part, both required when classification is MIXED (contract § 2.2). Retained as an explicit discriminator rather than derived from which part objects are present: the redundancy is a checksum, and it is what makes a producer that attaches the wrong part fail loudly instead of silently reclassifying the step (contract § 2.3)."
+    },
+    "candidate_op": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the existing coordinator_core capability this step becomes. Optional — sometimes genuinely unknown at census time — but when present it is the difference between generating a directives[] entry and stubbing one. Only meaningful on a MECHANICAL row; the MIXED equivalent lives at mechanical_part.candidate_op."
+    },
+    "judgment_kind": {
+      "type": "string",
+      "enum": ["advisory", "untrusted_gate"],
+      "description": "Which judgment-point constructor the scaffolder emits. advisory: contract/decision_object/judgment.build_judgment_point, whose recommendation parameter is required with no default. untrusted_gate: build_untrusted_gate_judgment_point, which forbids one. Named rather than numbered deliberately — the discriminator is 'may the engine offer a recommendation at all?', a security-class boolean, not an ordinal; a 2|3 encoding invites >= comparisons with no defined meaning and collides with DoE-claude's own three-tier sort where tier 1 is MECHANICAL. Required on a JUDGMENT row; the MIXED equivalent lives at judgment_part.judgment_kind."
+    },
+    "round_trip": {
+      "type": "string",
+      "enum": ["terminal", "round_trip"],
+      "description": "Whether this judgment point gates downstream mechanical recomputation, deciding whether the emitted CLI is single-shot or genuinely two-phase. Orthogonal to revalidate_at_dispatch — see that field. Spelled as DoE-claude's own wiki spells it (coordinator/docs/wiki/computed-skills.md § round-trip classification). Required on a JUDGMENT row; the MIXED equivalent lives at judgment_part.round_trip."
+    },
+    "revalidate_at_dispatch": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this entry's evidence is freshness-sensitive and must be recomputed at dispatch time. Orthogonal to round_trip, not a value of it: round_trip: round_trip with revalidate_at_dispatch: false is a representable and meaningful state — an entry that gates downstream recomputation but whose evidence does not go stale — and a census that cannot express it silently mis-generates against the decision-object schema. Only meaningful on a JUDGMENT row; the MIXED equivalent lives at judgment_part.revalidate_at_dispatch."
     },
     "mechanical_part": {
-      "type": "string",
-      "minLength": 1,
-      "description": "The generatable portion of a MIXED step. Required, and only meaningful, when classification is MIXED — see the mixed-split conditional in § 3."
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "description": "The generatable portion of a MIXED step. Required, and only meaningful, when classification is MIXED — see the mixed-split conditional in § 3. An object rather than a string so the per-half fields key to the half they describe: a MIXED row is two half-steps, and a candidate_op keyed to the whole row cannot say which half it names.",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the generatable half of this step does."
+        },
+        "candidate_op": {
+          "type": "string",
+          "minLength": 1,
+          "description": "As the row-level candidate_op, scoped to this half."
+        }
+      }
     },
     "judgment_part": {
-      "type": "string",
-      "minLength": 1,
-      "description": "The author-authored portion of a MIXED step. Required, and only meaningful, when classification is MIXED — see the mixed-split conditional in § 3."
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "judgment_kind", "round_trip"],
+      "description": "The author-authored portion of a MIXED step. Required, and only meaningful, when classification is MIXED — see the mixed-split conditional in § 3. An object rather than a string for the same reason as mechanical_part, and carrying the same required per-half fields a flat JUDGMENT row carries: without them the scaffolder must guess between the two judgment-point constructors for every MIXED row's judgment half, which is the defect the fields exist to close.",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the author-authored half of this step requires."
+        },
+        "judgment_kind": {
+          "type": "string",
+          "enum": ["advisory", "untrusted_gate"],
+          "description": "As the row-level judgment_kind, scoped to this half."
+        },
+        "round_trip": {
+          "type": "string",
+          "enum": ["terminal", "round_trip"],
+          "description": "As the row-level round_trip, scoped to this half."
+        },
+        "revalidate_at_dispatch": {
+          "type": "boolean",
+          "default": false,
+          "description": "As the row-level revalidate_at_dispatch, scoped to this half."
+        }
+      }
     },
     "notes": {
       "type": "string",
       "description": "Optional free-text rationale for the classification. Not consumed structurally by the scaffolder."
+    },
+    "x_producer": {
+      "type": "object",
+      "description": "Producer-owned extension namespace. The producer's own per-row fields — the locus in the SKILL.md, structured classification rationale, evidence citation — live here and are never read by the scaffolder. Open inside, so the producer needs no claude-klabauter change to add one; the row itself stays closed, so a misspelling of a field this schema DOES model still fails loudly instead of being silently absorbed as an extra property. Named for the producer role this contract defines (§ 0), not for the current occupant of it.",
+      "additionalProperties": true
     }
   },
   "allOf": [
     {
+      "$comment": "MIXED requires both halves — a row claiming a split it doesn't fully describe would leave the scaffolder unable to generate either half correctly.",
       "if": {
         "properties": { "classification": { "const": "MIXED" } },
         "required": ["classification"]
@@ -43,6 +105,7 @@
       }
     },
     {
+      "$comment": "Non-MIXED rows carry no part objects — their presence would signal a split that isn't there.",
       "if": {
         "not": {
           "properties": { "classification": { "const": "MIXED" } },
@@ -50,18 +113,50 @@
         }
       },
       "then": {
-        "not": { "required": ["mechanical_part"] }
+        "allOf": [
+          { "not": { "required": ["mechanical_part"] } },
+          { "not": { "required": ["judgment_part"] } }
+        ]
       }
     },
     {
+      "$comment": "MIXED rows carry no flat per-half fields — they live inside the part objects, and two copies would leave which one wins undefined.",
       "if": {
-        "not": {
-          "properties": { "classification": { "const": "MIXED" } },
-          "required": ["classification"]
-        }
+        "properties": { "classification": { "const": "MIXED" } },
+        "required": ["classification"]
       },
       "then": {
-        "not": { "required": ["judgment_part"] }
+        "allOf": [
+          { "not": { "required": ["candidate_op"] } },
+          { "not": { "required": ["judgment_kind"] } },
+          { "not": { "required": ["round_trip"] } },
+          { "not": { "required": ["revalidate_at_dispatch"] } }
+        ]
+      }
+    },
+    {
+      "$comment": "JUDGMENT rows name their constructor and their round-trip shape, and carry no mechanical-side field — a judgment row is fully author-authored, so a stray candidate_op would falsely promise something is generatable.",
+      "if": {
+        "properties": { "classification": { "const": "JUDGMENT" } },
+        "required": ["classification"]
+      },
+      "then": {
+        "required": ["judgment_kind", "round_trip"],
+        "not": { "required": ["candidate_op"] }
+      }
+    },
+    {
+      "$comment": "MECHANICAL rows carry no judgment-side field — a mechanical row is fully generatable, so judgment-only fields would falsely imply an author-authored decision point exists.",
+      "if": {
+        "properties": { "classification": { "const": "MECHANICAL" } },
+        "required": ["classification"]
+      },
+      "then": {
+        "allOf": [
+          { "not": { "required": ["judgment_kind"] } },
+          { "not": { "required": ["round_trip"] } },
+          { "not": { "required": ["revalidate_at_dispatch"] } }
+        ]
       }
     }
   ]

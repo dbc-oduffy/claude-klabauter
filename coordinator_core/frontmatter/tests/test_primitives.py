@@ -1021,7 +1021,7 @@ _GATE_EVIDENCE_BLOCK = (
     '    ref: coordinator_core/ops/test_gate_eval.py::test_foo\n'
     '  - kind: commit-sha\n'
     '    ref: a1b2c3d\n'
-    '    repo: example_doctrine_repo\n'
+    '    repo: doe_claude\n'
 )
 
 
@@ -1045,14 +1045,14 @@ class TestNestedFieldRoundTrip:
 
     def test_write_adds_missing_trailing_newline(self):
         fm = 'title: Hello\n'
-        block_no_nl = '  - kind: human\n    repo: example_doctrine_repo'
+        block_no_nl = '  - kind: human\n    repo: doe_claude'
         result = write_fm_nested_field(fm, 'gate_evidence', block_no_nl)
         assert read_fm_nested_field(result, 'gate_evidence') == block_no_nl + '\n'
 
     def test_write_replaces_existing_block(self):
         fm = 'title: Hello\n'
         fm = write_fm_nested_field(fm, 'gate_evidence', _GATE_EVIDENCE_BLOCK)
-        new_block = '  - kind: human\n    repo: example_doctrine_repo\n'
+        new_block = '  - kind: human\n    repo: doe_claude\n'
         fm = write_fm_nested_field(fm, 'gate_evidence', new_block)
         assert read_fm_nested_field(fm, 'gate_evidence') == new_block
         assert fm.count('gate_evidence:') == 1
@@ -1106,7 +1106,7 @@ class TestNestedFieldRoundTrip:
         doc = (
             '---\n'
             'title: Awaiting handoff\n'
-            'gate_dependency: example_doctrine_repo fleet-capability\n'
+            'gate_dependency: doe_claude fleet-capability\n'
             '---\n'
             '# Body\n'
         )
@@ -1117,7 +1117,7 @@ class TestNestedFieldRoundTrip:
         out = split_frontmatter(result)
         assert out is not None
         assert read_fm_nested_field(out.fm_text, 'gate_evidence') == _GATE_EVIDENCE_BLOCK
-        assert read_fm_field(out.fm_text, 'gate_dependency') == 'example_doctrine_repo fleet-capability'
+        assert read_fm_field(out.fm_text, 'gate_dependency') == 'doe_claude fleet-capability'
         # Round trip through remove restores the pre-write shape.
         stripped = remove_fm_nested_field(out.fm_text, 'gate_evidence')
         assert stripped == split.fm_text

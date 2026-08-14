@@ -1,12 +1,12 @@
 """Characterization tests for coordinator_core.ops.handoff_gate_aging.
 
-Port of: handoff-gate-aging.sh (coordinator-claude 67202df6, 2026-07-16) — the bash
+Port of: handoff-gate-aging.sh (DoE 67202df6, 2026-07-16) — the bash
 predicate had ZERO existing test coverage, so these are the FIRST tests it
 has ever had. Built directly from the predicate spec (14d/7d, >= both
 boundaries) rather than ported from an existing bash test suite (none
 existed).
 
-Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/
+Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/
     recipe-small-bin-clis-gate-aging-scope-soak-scope-warning.md § 1
 """
 from __future__ import annotations
@@ -376,7 +376,7 @@ def test_classify_real_corpus_signed_commit_never_evidence_resolved():
     `signed-commit` (state/handoffs/2026-06-30_021546_12e715f3.md, real disk,
     not a fixture) has an elapsed deadline in its prose but carries NO
     `gate_evidence:` block on disk (none is authored onto it by this chunk —
-    the schema is coordinator-claude-gated). Against today's real corpus this must resolve
+    the schema is DoE-gated). Against today's real corpus this must resolve
     `indeterminate` (prose dominance, no evidence to demote it) — NEVER
     `freed`/"evidence-resolved". A classifier that reports this record as
     ACTIONABLE is a bug, not a pass (plan's own explicit corpus check).

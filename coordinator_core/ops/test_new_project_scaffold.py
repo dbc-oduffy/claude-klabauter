@@ -24,7 +24,7 @@ _REAL_REGISTER_REPO = new_project_scaffold._register_repo
 def _write_render_template_tree_sh(bin_dir: Path) -> Path:
     """A minimal, faithful-enough stand-in for render-template-tree.py's CLI contract
     (<src> <dst> [KEY=VALUE]...) -- plain-copy + naive {{KEY}} substitution, without
-    depending on the real coordinator-claude clone or a real render-template.py being present on the
+    depending on the real DoE clone or a real render-template.py being present on the
     test machine."""
     script = bin_dir / "render-template-tree.py"
     script.write_text(
@@ -82,7 +82,7 @@ def doe_root(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("COORDINATOR_PROJECTS_ROOT", raising=False)
 
 
@@ -118,11 +118,11 @@ def test_empty_template_no_smoke(tmp_path, monkeypatch):
 
 
 def test_next_app_template_renders_and_seeds(tmp_path, monkeypatch, doe_root):
-    # Force the coordinator-claude-root fallback rung: co-located resolution now wins
+    # Force the DoE-root fallback rung: co-located resolution now wins
     # unconditionally, so this test's fixture-authored render-template-tree.py
     # (staged under doe_root) would otherwise never run.
     monkeypatch.setattr(new_project_scaffold, "_co_located_render_tree", lambda: None)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     parent = tmp_path / "parent"
     parent.mkdir()
 
@@ -235,7 +235,7 @@ def test_occupied_nonempty_target_dir_fails(tmp_path):
 
 
 def test_next_app_missing_doe_root_fails(tmp_path, monkeypatch):
-    # No REPO_EXAMPLE_DOCTRINE_REPO, no machine-local on PATH -> coordinator-claude root unresolvable.
+    # No REPO_DOE_CLAUDE, no machine-local on PATH -> DoE root unresolvable.
     monkeypatch.setenv("PATH", "")
     parent = tmp_path / "parent"
     parent.mkdir()
@@ -248,7 +248,7 @@ def test_next_app_missing_doe_root_fails(tmp_path, monkeypatch):
 def test_next_app_missing_template_dir_fails(tmp_path, monkeypatch):
     bare_root = tmp_path / "bare-doe"
     (bare_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(bare_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(bare_root))
     parent = tmp_path / "parent"
     parent.mkdir()
 
@@ -263,7 +263,7 @@ def test_next_app_missing_render_tree_script_fails(tmp_path, monkeypatch):
     next_app.mkdir(parents=True)
     (next_app / "a.txt").write_text("hi\n")
     (root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(root))
     parent = tmp_path / "parent"
     parent.mkdir()
 

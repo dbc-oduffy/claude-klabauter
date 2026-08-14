@@ -3,7 +3,7 @@ single entry point the write-confinement bump guards consult to answer "does
 the bump apply at all" and "if the session's own anchor is in no git repo, is
 a given target a registered repo".
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md, chunk C2.
+Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567, chunk C2.
 Covers AC8 (fail-open on every unresolvable case), AC10 (nothing bumps under
 ~/.claude), AC11 (no-repo-anchor: outside-repo never bumps, registered-repo
 cross-repo still does), AC12 (an incidental `cd` does not suppress the bump
@@ -411,13 +411,13 @@ def test_ac11_unregistered_target_is_not_registered(tmp_path, monkeypatch):
 
 def test_ac11_enumerates_all_repos_star_entries_not_just_two_named_keys(tmp_path, monkeypatch):
     """Widened per the plan's the Director of Engineering finding 12 -- ANY `repos.*` key counts,
-    not only `repos.example_doctrine_repo` / `repos.claude_klabauter`."""
+    not only `repos.doe_claude` / `repos.claude_klabauter`."""
     reg_dir = tmp_path / "registry"
     third_party_root = tmp_path / "some-other-registered-repo"
     third_party_root.mkdir()
     _write_registry(
         reg_dir,
-        example_doctrine_repo=str(tmp_path / "coordinator-claude-placeholder"),
+        doe_claude=str(tmp_path / "doe-claude-placeholder"),
         claude_klabauter=str(tmp_path / "claude-klabauter-placeholder"),
         some_third_repo=str(third_party_root),
     )
@@ -750,7 +750,7 @@ def test_ac2_unresolvable_registry_withholds_only_the_publish_carveout(
 
 
 def test_ac11_extended_length_prefix_normalizes_same_as_the_bare_path(tmp_path, monkeypatch):
-    """AC11 / merged-in coordinator-claude source numbering C9 -- a Windows extended-length-
+    """AC11 / merged-in DoE source numbering C9 -- a Windows extended-length-
     prefixed path and its bare equivalent must resolve to the identical
     case-folded string, closing the desync on the comparison helper C1 is
     already adding a call site to (`_resolve_path`, consumed by

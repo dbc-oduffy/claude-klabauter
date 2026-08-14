@@ -63,7 +63,7 @@ def _repo_bin_dir() -> str:
 
 
 def _cli_path() -> str:
-    return os.path.join(_repo_bin_dir(), "coordinator-doc-new")
+    return os.path.join(_repo_bin_dir(), "coordinator-doc-new.py")
 
 
 def _invoke(doc_type: str, out_path: str, extra_args: list[str]) -> tuple[int, str]:

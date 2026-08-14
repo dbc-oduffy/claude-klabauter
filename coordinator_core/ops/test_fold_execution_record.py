@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.fold_execution_record.
 
-Port-parity coverage for coordinator/bin/coordinator-fold-execution-record
+Port-parity coverage for coordinator/bin/coordinator-fold-execution-record.py
 (DOE-PORT bin-entrypoint variant).
 """
 from __future__ import annotations
@@ -12,6 +12,7 @@ import textwrap
 import pytest
 
 from coordinator_core.ops import fold_execution_record as fer
+from coordinator_core.testing import symlink_capability
 
 
 def _git_init(repo_root) -> None:
@@ -167,6 +168,7 @@ def test_resolve_git_root_fallback_grandparent_no_git(tmp_path):
     assert result == str(non_git_root)
 
 
+@symlink_capability.requires_symlink_capability
 def test_resolve_git_root_fallback_does_not_resolve_symlinks(tmp_path):
     # Review: code-reviewer — locks in the module docstring's explicit
     # negative-spec claim ("never resolves symlinks when falling back to the

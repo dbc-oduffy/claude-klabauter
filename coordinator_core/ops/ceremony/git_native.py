@@ -342,7 +342,7 @@ def diff_quiet(cwd: Union[str, Path], paths: Optional[Sequence[str]] = None) -> 
     # `commit_gates`' EOL-phantom filter, which exists precisely to absorb
     # phantom-dirty entries; the flag would leave every phantom permanently
     # dirty and re-filtered on each ceremony (the flapping-count symptom in
-    # coordinator-claude's bash-on-windows-gotchas.md § 11). The contention win here is
+    # DoE-claude's bash-on-windows-gotchas.md § 11). The contention win here is
     # small anyway -- this is a narrow per-path diff, not the whole-tree status
     # scan the adoption pass targets.
     args = ["diff", "--quiet"]
@@ -683,7 +683,7 @@ def commit_with_message_file(
 #     deliberately-staged partial-hunk content (claude-klabauter 506748a0).
 #   a bare `git commit` (or one whose pathspec is a DIRECTORY, which matches
 #     whatever lands inside it AT COMMIT TIME) commits THE INDEX, silently
-#     absorbing whatever a peer session staged (coordinator-claude 726925b2).
+#     absorbing whatever a peer session staged (DoE-claude 726925b2).
 # `commit_scoped()` is the single entrypoint that computes which mechanism
 # is safe for a given explicit path set from OBSERVED index/worktree state
 # (via `diverging_paths()`), rather than asking the caller to pick.
@@ -785,14 +785,23 @@ def _validate_explicit_deliverable_id(deliverable_id: str, root: Path) -> Option
     and directory-pathspec guards a few lines below where this is called:
     FAILS LOUD (`GitResult.ok is False`), never a warning.
 
-    (a) SHAPE -- must start with `dlv-`, the convention `coordinator_core.
-        frontmatter.schema_validate._cf_deliverable_id_prefix` already
-        enforces for a plan/handoff's own frontmatter field (every value is
-        minted by `bin/mint-deliverable-id` with this prefix). Reproduced
-        here as a bare `str.startswith` rather than imported -- that
-        validator runs over a whole frontmatter dict as part of a larger
-        schema pass, not a bare string, so importing it would pull in that
-        entire pass for one prefix check.
+    (a) SHAPE -- must start with `dlv-` OR `pln-`. `dlv-` is the convention
+        `coordinator_core.frontmatter.schema_validate._cf_deliverable_id_prefix`
+        already enforces for a plan/handoff's own frontmatter field (every
+        value is minted by `bin/mint-deliverable-id` with this prefix).
+        `pln-` was added in C10b (docs/plans/2026-08-13-spec-backlinks-cite-
+        a-stable-deliverable-id.md): the citation convention now PREFERS
+        citing a plan by its own `pln-` id (§ PM rulings there, and DoE's
+        ratified doctrine at their commit fa72d1642), so an author following
+        that convention and passing the resulting id to
+        `scoped-git-commit --deliverable-id` must not be rejected here for
+        doing what the convention instructs. `--deliverable-id` is
+        deliberately ALIASED to accept a `pln-` id rather than adding a
+        second `--plan-id` flag for the same validation path (decided; see
+        that plan's C10b brief). Reproduced here as a bare `str.startswith`
+        rather than imported -- that validator runs over a whole frontmatter
+        dict as part of a larger schema pass, not a bare string, so
+        importing it would pull in that entire pass for one prefix check.
 
     (b) EXISTENCE -- must resolve to at least one real artifact (a plan,
         handoff, archived handoff stub, or archived spec) whose OWN
@@ -821,12 +830,13 @@ def _validate_explicit_deliverable_id(deliverable_id: str, root: Path) -> Option
     own at all; requiring the id to resolve from THIS commit's pathspec
     would defeat that on the very majority case it exists to serve.
     """
-    if not deliverable_id.startswith("dlv-"):
+    if not (deliverable_id.startswith("dlv-") or deliverable_id.startswith("pln-")):
         return (
             f"commit_scoped: deliverable_id {deliverable_id!r} rejected -- "
-            "does not match the 'dlv-' shape convention (every deliverable_id "
-            "is minted by bin/mint-deliverable-id with this prefix; see "
-            "coordinator_core/frontmatter/schema_validate.py's own "
+            "does not match the 'dlv-' or 'pln-' shape convention (every "
+            "deliverable_id is minted by bin/mint-deliverable-id and every "
+            "plan_id by bin/mint-plan-id with these prefixes respectively; "
+            "see coordinator_core/frontmatter/schema_validate.py's own "
             "deliverable_id-prefix check)"
         )
 
@@ -1297,6 +1307,25 @@ def commit_scoped(
         # see `_check_deliverable_id_precedence`'s own docstring; deliberately
         # uncaught here, before any staging happens.
         #
+        # 2026-08-14 (cross-repo memo, `2026-08-14-doe-claude-em-scoped-git-
+        # commit-drops-session-id-trailer.md`; docs/plans/2026-07-27-computed-
+        # commit-mechanism-selection.md chunk C10-remainder, AC18): this
+        # branch relied ENTIRELY on the installed `prepare-commit-msg` hook
+        # firing to stamp `Session-Id:` -- unlike `_commit_scoped_private_
+        # index` a few lines below, which never trusts hooks (plumbing runs
+        # none) and instead replays the hook's resolution logic itself via
+        # `compute_missing_trailer_args`. A hook non-fire (missing shim
+        # script, no python on PATH, `core.hooksPath` override, non-
+        # executable hook, a future rename) landed an agree-branch commit
+        # with NO Session-Id trailer at all, silently -- the incident this
+        # call closes. Same call, same `paths=path_list` shape as the
+        # private-index branch's own use a few lines below; only the
+        # trailers still MISSING from `msg_file` are returned (omit-rather-
+        # than-guess -- see that function's own docstring), so this is a
+        # pure addition when the hook already ran (or will run) and the
+        # sole source of the trailer when it does not.
+        trailer_args = compute_missing_trailer_args(msg_file, root, paths=path_list)
+
         # NOT `git interpret-trailers --if-exists replaceAll` as originally
         # proposed: a live probe against this repo's own git (this chunk's
         # own report) found that form silently APPENDS a duplicate trailer
@@ -1304,24 +1333,26 @@ def commit_scoped(
         # line separating its subject from an already-present `Deliverable-
         # Id:` line -- git's own trailer-block detection never recognizes
         # the existing line as a trailer to replace. This function instead
-        # only ever asks git to ADD (never replace), and only once
+        # only ever asks git to ADD (never replace): an explicit caller
+        # `deliverable_id` is folded into `trailer_args` -- dropping any
+        # computed entry for it first (mirroring `_commit_scoped_private_
+        # index`'s own `_drop_trailer_arg`-then-append shape) -- ONLY once
         # `_check_deliverable_id_precedence` has confirmed via a plain-text
-        # scan that no `Deliverable-Id:` line exists yet -- sidestepping
-        # that hazard rather than trusting every future caller's message
-        # shape to avoid it.
+        # scan that no disagreeing `Deliverable-Id:` line exists yet, so the
+        # single `interpret-trailers` call below never sees a trailer name
+        # it would need to replace.
         if deliverable_id:
             msg_text_before = Path(msg_file).read_text(encoding="utf-8")
             if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
-                interpret_result = _git(
-                    [
-                        "interpret-trailers",
-                        "--trailer", f"Deliverable-Id: {deliverable_id}",
-                        "--in-place", str(msg_file),
-                    ],
-                    cwd=root,
-                )
-                if not interpret_result.ok:
-                    return interpret_result
+                trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
+                trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
+        if trailer_args:
+            interpret_result = _git(
+                ["interpret-trailers", "--in-place", *trailer_args, str(msg_file)],
+                cwd=root,
+            )
+            if not interpret_result.ok:
+                return interpret_result
 
         existing = [p for p in path_list if (root / p).exists()]
         if existing:

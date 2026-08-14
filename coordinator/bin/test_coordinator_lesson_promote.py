@@ -19,9 +19,9 @@ Tests:
   11. --target-wiki 'unknown' bypasses the inventory check (schema sentinel).
   12. --target-wiki normalization: bare name / .md-suffixed / already-canonical all
       collapse to the identical 'docs/wiki/<name>.md' string in the written YAML.
-  13. Coordinator-claude root unresolvable during --target-wiki validation → exit 3,
-      remediation naming `machine-local set repos.example_doctrine_repo`, nothing written.
-  14. Coordinator-claude root unresolvable at write time (validation bypassed via
+  13. DoE-claude root unresolvable during --target-wiki validation → exit 3,
+      remediation naming `machine-local set repos.doe_claude`, nothing written.
+  14. DoE-claude root unresolvable at write time (validation bypassed via
       'unknown') → exit 3 via the legacy_fn path, nothing written.
   15. change_kind: skill-edit with a SKILL.md --target-wiki round-trips
       byte-identically (no docs/wiki/ collapse, no inventory validation) and
@@ -57,7 +57,7 @@ except ImportError:
 
 def _script_path() -> str:
     """Return the absolute path to coordinator-lesson-promote."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-promote")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-promote.py")
 
 
 def _python() -> str:
@@ -78,7 +78,7 @@ def _run_cli(args: list[str], env: dict[str, str | None] | None = None) -> subpr
 
     A None value in `env` UNSETS that key for the child process rather than
     setting it to the empty string — load-bearing for ambient vars like
-    REPO_EXAMPLE_DOCTRINE_REPO (exported into every login shell per the install surface):
+    REPO_DOE_CLAUDE (exported into every login shell per the install surface):
     an explicitly-empty-string override is NOT equivalent to "absent" for every
     downstream consumer (the real `machine-local` binary treats them
     differently), so a real absence must be a real dict-key removal.
@@ -104,7 +104,7 @@ def _wiki_root_with(tmpdir: str, *names: str) -> str:
     Returns the directory path, suitable for LESSON_PROMOTE_WIKI_ROOT — this is the
     A7-validation-isolation counterpart to LESSON_PROMOTE_OUTBOX_ROOT: it lets tests
     exercise --target-wiki validation against a known, disposable inventory instead
-    of depending on a real coordinator-claude checkout being present on the test runner.
+    of depending on a real DoE-claude checkout being present on the test runner.
     """
     wiki_dir = os.path.join(tmpdir, "wiki-inventory")
     os.makedirs(wiki_dir, exist_ok=True)
@@ -485,8 +485,8 @@ def test_multiline_body_roundtrip() -> None:
 def _force_doe_unresolvable_env() -> dict[str, str | None]:
     """Env overrides that make doe_root() raise _DoeUnresolvable deterministically.
 
-    UNSETS DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO (None → _run_cli removes the key entirely,
-    not just blanks it — REPO_EXAMPLE_DOCTRINE_REPO is exported into every login shell by
+    UNSETS DOE_ROOT/REPO_DOE_CLAUDE (None → _run_cli removes the key entirely,
+    not just blanks it — REPO_DOE_CLAUDE is exported into every login shell by
     this install surface, so it is present ambiently on a real dev machine; an
     empty-string override is NOT equivalent to absence here, since the real
     `machine-local` binary — used by coordinator_registry.py's own
@@ -495,12 +495,12 @@ def _force_doe_unresolvable_env() -> dict[str, str | None]:
     differently from an absent one). Also points MACHINE_LOCAL_IMPL at a
     nonexistent script so the registry lookup coordinator_registry.doe_root()
     performs AT RUNTIME (distinct from the import-time bootstrap above) fails
-    closed to None — independent of whatever repos.example_doctrine_repo happens to be
+    closed to None — independent of whatever repos.doe_claude happens to be
     registered on the machine actually running this test.
     """
     return {
         "DOE_ROOT": None,
-        "REPO_EXAMPLE_DOCTRINE_REPO": None,
+        "REPO_DOE_CLAUDE": None,
         "MACHINE_LOCAL_IMPL": "/nonexistent/coordinator-lesson-promote-test-probe.py",
     }
 
@@ -649,11 +649,11 @@ def test_target_wiki_normalization_collapses_equivalent_forms() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 13 — coordinator-claude root unresolvable during --target-wiki validation → exit 3
+# Test 13 — DoE root unresolvable during --target-wiki validation → exit 3
 # ---------------------------------------------------------------------------
 
 def test_doe_unresolvable_during_validation_exits_three() -> None:
-    name = "Test 13 — coordinator-claude root unresolvable during --target-wiki validation → exit 3, nothing written"
+    name = "Test 13 — DoE root unresolvable during --target-wiki validation → exit 3, nothing written"
     with tempfile.TemporaryDirectory() as tmpdir:
         outbox = os.path.join(tmpdir, "state", "lessons-outbox")
         env = {"LESSON_PROMOTE_OUTBOX_ROOT": outbox}
@@ -669,24 +669,24 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
         )
         if result.returncode != 3:
             raise AssertionError(f"{name}: " + (f"expected exit 3; got {result.returncode}. stderr: {result.stderr!r}"))
-        if "machine-local set repos.example_doctrine_repo" not in result.stderr:
+        if "machine-local set repos.doe_claude" not in result.stderr:
             raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {result.stderr!r}"))
         if os.path.isdir(outbox) and os.listdir(outbox):
             raise AssertionError(f"{name}: " + ("outbox has entries but the write should have been skipped"))
 
 
 # ---------------------------------------------------------------------------
-# Test 14 — coordinator-claude root unresolvable at write time (validation bypassed) → exit 3
+# Test 14 — DoE root unresolvable at write time (validation bypassed) → exit 3
 # ---------------------------------------------------------------------------
 
 def test_doe_unresolvable_at_write_time_exits_three() -> None:
-    """Test 14 — coordinator-claude root unresolvable at write time (validation bypassed via 'unknown') → exit 3.
+    """Test 14 — DoE root unresolvable at write time (validation bypassed via 'unknown') → exit 3.
 
     Rewired (de-node cutover, 480ad8f8 / W0.5 Option B+C, 2026-07-19): this test used
     to force a totally seam-absent CLAUDE_KLABAUTER_ROOT (`_force_legacy_route_env`) to route the
     OUTER queue.promote op to legacy_fn(), while `_force_doe_unresolvable_env()` made
     legacy_fn()'s own doe_root() call raise `_DoeUnresolvable` — pinning the CLI's
-    distinctive "machine-local set repos.example_doctrine_repo" remediation text, which only the
+    distinctive "machine-local set repos.doe_claude" remediation text, which only the
     legacy_fn() handler prints (the native op's {skipped:true} path returns a
     different, shorter reason string with no remediation line — see
     coordinator_core/ops/queue_promote.py's `_DoeUnresolvable` handler).
@@ -708,7 +708,7 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
     import io as _io
     import unittest.mock as _mock
 
-    name = "Test 14 — coordinator-claude root unresolvable at write time (validation bypassed via 'unknown') → exit 3"
+    name = "Test 14 — DoE root unresolvable at write time (validation bypassed via 'unknown') → exit 3"
     cli_path = _script_path()
     loader = importlib.machinery.SourceFileLoader("coordinator_lesson_promote_t14", cli_path)
     spec = _importlib_util.spec_from_loader("coordinator_lesson_promote_t14", loader)
@@ -727,12 +727,12 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
             cli_mod, "_describe_schema_node",
             return_value={"enums": {"change_kind": ["doctrine-edit", "wiki-append", "skill-edit"]}},
         ),
-        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="doe-claude"),
         _mock.patch.object(cli_mod, "_current_repo_root", return_value="/fake/repo"),
         _mock.patch.object(
             cli_mod, "_write_entry",
             side_effect=cli_mod._DoeUnresolvable(
-                "repos.example_doctrine_repo not set in machine-local registry and REPO_EXAMPLE_DOCTRINE_REPO env var not set"
+                "repos.doe_claude not set in machine-local registry and REPO_DOE_CLAUDE env var not set"
             ),
         ),
         _mock.patch("sys.stderr", captured_err),
@@ -748,8 +748,8 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
     if rc != 3:
         raise AssertionError(f"{name}: " + (f"expected exit 3; got {rc}. stderr: {captured_err.getvalue()!r}"))
     if "Lesson outbox entry written" in captured_out.getvalue():
-        raise AssertionError(f"{name}: " + (f"stdout claims a write happened despite unresolvable coordinator-claude root: {captured_out.getvalue()!r}"))
-    if "machine-local set repos.example_doctrine_repo" not in captured_err.getvalue():
+        raise AssertionError(f"{name}: " + (f"stdout claims a write happened despite unresolvable DoE root: {captured_out.getvalue()!r}"))
+    if "machine-local set repos.doe_claude" not in captured_err.getvalue():
         raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {captured_err.getvalue()!r}"))
 
 

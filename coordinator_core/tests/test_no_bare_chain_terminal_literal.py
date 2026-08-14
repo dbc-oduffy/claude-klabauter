@@ -44,7 +44,7 @@ oracle) found exactly 18 files carrying either legacy spelling as a literal
     architectural invariant — "Self-contained: no coordinator_core import, no
     cc_invoke/IPC hop" — because this CLI is invoked BOTH in-process (loaded
     by file path from ``workstream_complete/__init__.py``) AND standalone as a
-    subprocess (by the coordinator-claude skill's bash fence / a bare `python3` invocation)
+    subprocess (by the DoE skill's bash fence / a bare `python3` invocation)
     in an environment where ``coordinator_core`` may not be on ``sys.path`` at
     all. Repo-wide confirmation: zero files under ``coordinator/bin/`` import
     ``coordinator_core`` (``grep -rl coordinator_core coordinator/bin/*.py`` —

@@ -7,7 +7,7 @@ target-collision), ported to pytest against the Python module's main()
 directly (subprocess only for the `git` calls the module itself performs —
 matching the oracle's own reliance on a real git repo).
 
-Port of: test-migrate-cross-repo-layout.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: test-migrate-cross-repo-layout.sh (DoE 290997c7, 2026-07-22)
 """
 
 from __future__ import annotations

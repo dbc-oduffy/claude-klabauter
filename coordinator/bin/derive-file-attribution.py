@@ -74,6 +74,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+GENERATES = []  # output-contract disk-write-free by design (module docstring): stdout JSON only, plus an optional performance cache under the durable-data plane (settings-home), never state/ or any other tracked path
+
 # Bumped whenever the derivation logic that shapes a per-transcript-file cached row
 # changes — see module docstring "Derivation-version note for future editors".
 # v1 -> v2 (2026-07-29): transcript enumeration became recursive one level down into

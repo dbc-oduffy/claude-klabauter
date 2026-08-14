@@ -71,11 +71,11 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `handoff_lineage_ancestry.py` | `handoff.lineage_ancestry` | Read-only — walks a fork handoff's `origin_handoff` chain to compute ancestry |
 | `handoff_match.py` | `handoff.match_candidates` | Read-only ranked resolver over `state/handoffs/*.md` |
 | `handoff_normalize.py` | `handoff.normalize` | Port of `normalize-handoff-frontmatter.js` |
-| `handoff_reconcile.py` | `handoff.reconcile_open` | Auto-reconcile orchestrator — enumerates the widened consumed+non-terminal dead zone (`consumed`+`in_flight`, not only `active`) and reconciles pinned predecessor chains on ship, routing C2/C3 verdicts to `ship_and_archive`/`gate-cascade-clear` or `surfaced[]`; op name RATIFIED (coordinator-claude 2026-07-13), turnable-on — live caller flip is imminent (coordinator-claude lean-on-engine), gated only on C5's confirmation memo; forward-compatible subset of coordinator-claude's lvv-04/C3 fleet-archive fix (cc'd, not colliding) |
+| `handoff_reconcile.py` | `handoff.reconcile_open` | Auto-reconcile orchestrator — enumerates the widened consumed+non-terminal dead zone (`consumed`+`in_flight`, not only `active`) and reconciles pinned predecessor chains on ship, routing C2/C3 verdicts to `ship_and_archive`/`gate-cascade-clear` or `surfaced[]`; op name RATIFIED (DoE 2026-07-13), turnable-on — live caller flip is imminent (DoE lean-on-engine), gated only on C5's confirmation memo; forward-compatible subset of DoE's lvv-04/C3 fleet-archive fix (cc'd, not colliding) |
 | `handoff_stamp.py` | `handoff.stamp` | Port of `stamp-shipped-in.js` |
 | `handoff_transition.py` | `handoff.transition` | Port of `handoff-transition.js` — atomic lifecycle frontmatter mutation |
 | `hibernate_machine.py` | `machine.hibernate` | Cross-platform (macOS pmset/Windows/Linux systemctl) machine hibernate dispatch, no shell-out |
-| `init_anchor_injection_state.py` | `ceremony.init_anchor_injection_state` | Resolves the coordinator-claude/coordinator-claude root + today's date and initializes the empty anchor-injection accumulator |
+| `init_anchor_injection_state.py` | `ceremony.init_anchor_injection_state` | Resolves the coordinator-claude/DoE root + today's date and initializes the empty anchor-injection accumulator |
 | `initiatives_serve.py` | `initiative.serve_set` | Read-only — serves attachable-initiative set |
 | `lessons_filter.py` | `lessons.filter_undated_universal`, `lessons.reject_orphan_strip_entries` | learn-lessons routing-set filters — undated-universal-lesson filter + orphan strip-list-entry rejection |
 | `list_files_newer_than_marker.py` | `percolate.list_files_newer_than_marker` | Lists files newer than a marker file (`Path.stat().st_mtime` comparison), capped at 20 results |
@@ -107,7 +107,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `roadmap_dag.py` | — | Pure derivation helper — builds per-roadmap `{nodes, edges, roll_up, critical_path}` |
 | `roadmap_serve.py` | `roadmap.serve` | Read-only single-initiative DAG view |
 | `run_pip_audit.py` | `ci.run_pip_audit` | Runs pip-audit against a lock file, with optional `--extra-index-url` detection for non-PyPI wheel sources |
-| `bootstrap_repo.py` | `repo_setup.validate_target_root` | Git-as-revert bootstrap primitive for one target repo (full port; coordinator-claude `.sh` becomes a thin polyglot trampoline over this) |
+| `bootstrap_repo.py` | `repo_setup.validate_target_root` | Git-as-revert bootstrap primitive for one target repo (full port; DoE `.sh` becomes a thin polyglot trampoline over this) |
 | `self_persist_findings.py` | `findings.self_persist_fallback` | Native port of the ad hoc `python3 -c` write / bash-heredoc fallback for findings reports with escaping-hostile content |
 | `write_identity_file.py` | `install.write_identity_file` | Native port of the `mktemp`+heredoc+`mv` shell fence that persists `~/.claude/coordinator-identity.yaml`, unifying two call sites into one fields-dict write |
 | `workday_stitch_sidecar_summary.py` | `workday.stitch_sidecar_into_summary` | Port of the `commands/workday-complete.md` fence — atomically stitches a daily-observer sidecar into the day's summary file, then deletes the sidecar |
@@ -131,7 +131,7 @@ Spine in `context.py`/`validate.py`; per-entity porters under `sections/`.
 | `backlog_history.py` | Backlog-history block assembly (C5) |
 | `context.py` | `EmitContext` + provenance envelope builder |
 | `deliverable_status.py` | §8.16 `deliverable_status` cross-entity join |
-| `doe_drift.py` | coordinator-claude-HEAD conformance fixture resolver + drift-check |
+| `doe_drift.py` | DoE-HEAD conformance fixture resolver + drift-check |
 | `enrich.py` | Parallel, order-preserving last-modified-at enrichment |
 | `envelope.py` | Top-level snapshot assembly + output write |
 | `normalizers.py` | Shared AC5-PROVENANCE normalization utilities |
@@ -244,7 +244,7 @@ write files, git objects, or frontmatter — `handoff.reconcile_open` (via `ship
 |---|---|
 | `commit_reality.py` | DEC-1 three-signal shipped-ness matcher (`evaluate_commit_reality`) — subject-match + deliverable-present + SHA-reachable, plus the cross-handoff attribution demotion guard |
 | `gate_eval.py` | Unified gate evaluator (`evaluate_gate`) — structured `blocked_by` DAG-edge path + prose `gate_dependency` fallback path, `clear`/`narrow`/`surface`/`not-cleared` verdicts |
-| `policy_loader.py` | coordinator-claude-owned `auto-reconcile-policy.yaml` reader (`load_policy`) — fail-closed (absent=silent, malformed=warned) against the C9 grammar pin |
+| `policy_loader.py` | DoE-owned `auto-reconcile-policy.yaml` reader (`load_policy`) — fail-closed (absent=silent, malformed=warned) against the C9 grammar pin |
 
 ### `benchmarks/` — qsub-01 per-op latency benchmark harness (COMPUTE_ONLY, offline)
 CLI-driven N-iteration benchmark loop measuring per-op end-to-end invocation latency against
@@ -264,7 +264,7 @@ the DR-215 per-op budget; produces code_sha-keyed conformance records for the qs
 
 ### `percolate/` — generic percolation engine (data-driven, per-consumer store)
 Four-phase (pre_rsync/post_rsync/pre_ci) orchestrator over transform-kinds; driven by
-`percolate_run.py`/`percolate_validate.py` in `ops/`. Byte-parity with the retired coordinator-claude
+`percolate_run.py`/`percolate_validate.py` in `ops/`. Byte-parity with the retired DoE-claude
 v3 shell scripts, verified via golden fixtures.
 
 | File | Purpose |
@@ -286,7 +286,7 @@ v3 shell scripts, verified via golden fixtures.
 | `token.py` | Token provisioning primitives |
 
 ### `frontmatter/` — YAML frontmatter primitives
-Python port of the coordinator-claude coordinator JS text-manipulation primitives.
+Python port of the DoE-claude coordinator JS text-manipulation primitives.
 
 | File | Purpose |
 |---|---|
@@ -324,15 +324,15 @@ JSON-RPC dispatch utilities for the command-type execution model. The HTTP invok
 ### `contract/`
 Vendored cockpit-contract pin (see `docs/wiki/cockpit-contract-revendor.md`). Also home of
 producer-contract docs for claude-klabauter-owned ops, e.g. `handoff-reconcile-producer-contract.md`
-(`handoff.reconcile_open`, turnable-on) and `auto-reconcile-policy.grammar.md` (the coordinator-claude-owned
+(`handoff.reconcile_open`, turnable-on) and `auto-reconcile-policy.grammar.md` (the DoE-owned
 policy YAML's grammar pin).
 
 ### `subagent_sandbox/` — resolver + policy-load + provision/report seam
-Python engine-ification of coordinator-claude's `block-reviewer-write-outside-sidecar.sh` PreToolUse hook
-(Port of: block-reviewer-write-outside-sidecar.sh, coordinator-claude 8b29fa14, 2026-07-12; DR-047
+Python engine-ification of DoE's `block-reviewer-write-outside-sidecar.sh` PreToolUse hook
+(Port of: block-reviewer-write-outside-sidecar.sh, DoE 8b29fa14, 2026-07-12; DR-047
 contract-vs-engine split), since narrowed by DR-058: the ALLOW/DENY enforcement half
 (the two-tier confinement decision matrix) was retired as friction-over-EM-intent, leaving the
-shared resolver + policy-load layer and the `report_sidecar` provision/report path. Reads coordinator-claude's
+shared resolver + policy-load layer and the `report_sidecar` provision/report path. Reads DoE's
 policy YAML at an injected path; never vendors it. See `subagent_sandbox/CONTRACT.md` for the
 pinned policy-grammar + provision/report_sidecar contract.
 

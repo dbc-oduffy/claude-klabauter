@@ -5,7 +5,7 @@ subprocess.run per-probe (does NOT shell out to bash — this module is the
 native port, so a subprocess-parity test would only prove "the port calls
 the same binaries", not correctness of this module's own logic).
 
-Port of: prereq_probe.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: prereq_probe.sh (DoE 290997c7, 2026-07-22)
 """
 from __future__ import annotations
 

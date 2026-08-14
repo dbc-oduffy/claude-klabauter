@@ -6,9 +6,11 @@ resolvers (machine-local + claude-home families), and runs Windows
 PATH/AppX health checks. Invoked IN-PROCESS by
 ``coordinator_core.install.maximalist`` (Phase 3 Step 1) and
 ``coordinator_core.install.first_run`` (both COLD, one-shot human/CI-invoked
-install ceremonies); also invoked IN-PROCESS by
-``coordinator/hooks/scripts/bootstrap-substrate.py`` (SessionStart self-heal
-path, also COLD).
+install ceremonies); also invoked as a subprocess/CLI entry via
+``coordinator/lib/install-substrate.py`` (the DoE-claude trampoline behind
+``coordinator/commands/install.md`` Phase 3). No SessionStart hook currently
+invokes this module — confirmed against DoE-claude's ``coordinator/hooks/hooks.json``
+2026-08-14, which registers no ``substrate``-referencing SessionStart entry.
 
 MUST be run as a subprocess/CLI entry (``python3 -m coordinator_core.install.substrate``),
 never imported for its side effects — this module has no sourcing analogue;
@@ -19,8 +21,8 @@ of overwriting. Fail-loud on missing templates (hard precondition for
 downstream skills).
 
 Dual-anchor resolution (b644d5a9's executable-surface relocation moved
-``coordinator/lib/`` and ``coordinator/bin/`` out of coordinator-claude and into
-Claude-klabauter's own tree): coordinator-claude-side surfaces (``templates/``, ``whoami/``,
+``coordinator/lib/`` and ``coordinator/bin/`` out of DoE-claude and into
+Claude-klabauter's own tree): DoE-side surfaces (``templates/``, ``whoami/``,
 ``schemas/``) still resolve off ``CLAUDE_PLUGIN_ROOT``; claude-klabauter-side surfaces
 (``coordinator/lib/``, ``coordinator/bin/``) resolve off the claude-klabauter root via
 ``coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()`` — never by
@@ -28,7 +30,7 @@ Claude-klabauter's own tree): coordinator-claude-side surfaces (``templates/``, 
 
 Env:
     CLAUDE_PLUGIN_ROOT — required; the coordinator plugin install root
-        (coordinator-claude-side surfaces only — see dual-anchor note above).
+        (DoE-side surfaces only — see dual-anchor note above).
     CLAUDE_KLABAUTER_ROOT        — optional; short-circuits claude-klabauter-root resolution
         (see ``coordinator_core.claude_klabauter_root`` for the full resolution chain).
     CLAUDE_HOME        — optional; $HOME substitute.
@@ -97,6 +99,13 @@ from coordinator_core.install.write_surface import (
 )
 from coordinator_core.install.policy_gate import PolicyGateVerdict, evaluate_policy_gate
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
+
+# Generator-provenance declaration (generator_provenance.py). Every write
+# (dst.write_text, _write_bin_manifest, the policy-gate report) targets
+# <settings-home>/machine-local/ and its bin/ directory per this module's own
+# docstring ("Lays down <settings-home>/machine-local/ substrate") --
+# settings-home is outside the claude-klabauter repo tree.
+GENERATES = []
 
 _NO_CONSOLE = no_console_creationflags()
 
@@ -250,7 +259,7 @@ def _load_setup_template_manifest(claude_klabauter_root: Path):
     else").
 
     The manifest lives in claude-klabauter's OWN ``coordinator/lib/`` tree (b644d5a9's
-    executable-surface relocation moved ``lib/`` out of the coordinator-claude
+    executable-surface relocation moved ``lib/`` out of the DoE-claude
     ``CLAUDE_PLUGIN_ROOT`` entirely), so this resolves off ``coordinator_claude_klabauter_root()``,
     not ``plugin_root`` — a future reader must NOT "restore" plugin_root
     resolution here on the theory that lib/ files belong under the plugin root;
@@ -300,7 +309,7 @@ def _resolve_bin_templates_manifest_root() -> Path:
     when a caller does not already have one on hand.
 
     Rung 1: co-located — `bin-templates-manifest.py` lives in claude-klabauter's OWN
-    `coordinator/lib/`, the SAME repo as this file (unlike coordinator-claude's
+    `coordinator/lib/`, the SAME repo as this file (unlike DoE's
     `templates/bin/`, which genuinely is cross-repo and needs the parity
     test's registry-backed resolution). This rung is zero-subprocess,
     zero-env-dependent, and wins on every real checkout of this repo —
@@ -358,7 +367,7 @@ restating the strings — a rename here alone keeps both in sync."""
 
 def _load_bin_templates_manifest(claude_klabauter_root: Path) -> "_BinTemplatesManifest":
     """Load ``<claude_klabauter_root>/coordinator/lib/bin-templates-manifest.py``'s
-    named `BinTemplateEntry` groups — single source of truth for coordinator-claude's
+    named `BinTemplateEntry` groups — single source of truth for DoE's
     ``templates/bin/`` classification (its own header: "edited HERE and
     nowhere else"). See that module's docstring for the full contract; see
     `_load_setup_template_manifest` immediately above for why this is an
@@ -640,7 +649,7 @@ def _install_one(
     ``.gitkeep`` markers, the post-rsync allowlist, the README) are the
     motivating case: they read like operator config by suffix/name (a
     ``.yaml``, a ``.gitkeep``, a ``.txt``, a ``.md``) but are actually
-    doctrine-tracked templates sourced from the coordinator-claude/coordinator-claude tree,
+    doctrine-tracked templates sourced from the coordinator-claude/DoE tree,
     so a stale destination must be repaired on re-install rather than
     preserved as if it were operator customization — see
     `_percolation_and_path_steps`'s ``setup_hook_files`` loop, which passes
@@ -794,7 +803,7 @@ def _agent_cmd_dest_name(name: str) -> str:
 # separate literals) so a positive-identification check can never drift out
 # of sync with what the generators actually write. None of these strings
 # appears in any OTHER family this module installs (ml_family/ch_family's
-# machine-local and claude-home sources, the coordinator-claude-copied
+# machine-local and claude-home sources, the DoE-copied
 # platform-localize/resolve-coordinator-clone templates, python3.cmd, or
 # the 5 resolver files) — those are copied verbatim from source trees this
 # module does not author, so they carry none of this module's own
@@ -810,7 +819,7 @@ def _agent_cmd_dest_name(name: str) -> str:
 # Unlike the two markers above, this one is NOT exclusive to agent-helper
 # forwarders — `gen-launcher-shim.py` also generated the legitimate,
 # still-installed-every-run `platform-localize.cmd` and
-# `resolve-coordinator-clone.cmd` coordinator-claude templates, confirmed carrying this
+# `resolve-coordinator-clone.cmd` DoE templates, confirmed carrying this
 # exact marker on a live install. A legacy-marker match is therefore
 # NEVER sufficient on its own; `_sweep_orphaned_agent_helpers` additionally
 # requires the name be absent from `_static_bin_family_names()` (every
@@ -857,7 +866,7 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # verified-live defect (as below) -- never speculatively.
 #
 # `scoped-git-commit` and `cross-repo-memo` added per
-# cross-repo/inbox/2026-08-07-coordinator-claude-em-cmd-forwarder-drops-everything-
+# cross-repo/inbox/2026-08-07-doe-claude-em-cmd-forwarder-drops-everything-
 # after-a-newline.md: both take multi-line arguments as a matter of course
 # (commit messages, memo bodies) and both are extensionless on-disk CLIs
 # (no `.py` suffix -- see `_derive_agent_helper_target_map`'s stem-dedup
@@ -869,13 +878,13 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_substrate_targets`
 # as the drift guard. Extend BOTH sets together, or that test goes red.
 _RAW_CMDLINE_TARGETS = frozenset(
-    {"coordinator-write-review-trail.py", "scoped-git-commit", "cross-repo-memo"}
+    {"coordinator-write-review-trail.py", "scoped-git-commit", "cross-repo-memo.py"}
 )
 
 
 def _agent_cmd_raw_cmdline_block(target: str) -> str:
-    """The `_LAUNCHER_RAW_CMDLINE_FILE` capture line pair, or the empty
-    string when `target` is not in `_RAW_CMDLINE_TARGETS`.
+    """The `_LAUNCHER_RAW_CMDLINE_FILE` capture block, or the empty string
+    when `target` is not in `_RAW_CMDLINE_TARGETS`.
 
     Empty-by-default for the same reason as every other optional block this
     generator emits: every forwarder for a target NOT named in
@@ -883,8 +892,12 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
     mechanism existed (AC1).
 
     Mirrors `gen-launcher-shim.py::_cmd_raw_cmdline_block` line for line --
-    that function's own comment records the load-bearing reason this is
-    `echo %CMDCMDLINE%` redirected to a file rather than
+    see that function's docstring for the full rationale, including the
+    2026-08-14 collision fix (this block MUST change together with that
+    one; the two sets are kept in sync by convention per this module's
+    `_RAW_CMDLINE_TARGETS` docstring above, and so is this block's body).
+
+    `echo %CMDCMDLINE%` redirected to a file, not
     `set "_X=%CMDCMDLINE%"`: cmd.exe's `set` re-strips any literal `^` from
     its own right-hand-side expansion during ITS OWN population -- the same
     caret-eating defect this mechanism exists to work around, striking a
@@ -892,20 +905,57 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
     env var therefore names a FILE PATH (itself caret-free, so an ordinary
     `set` is safe for the var itself), never the raw text directly. Do not
     simplify this back to `set "_LAUNCHER_RAW_CMDLINE_FILE=%CMDCMDLINE%"`.
+
+    The file lives inside a freshly `mkdir`-ed, retry-until-unique directory
+    rather than at a bare `%RANDOM%%RANDOM%.tmp` path: `%RANDOM%` is seeded
+    once per `cmd.exe` process at one-second resolution, so two launcher
+    invocations starting in the same second draw the IDENTICAL sequence and
+    collide on the identical path -- routine, not a corner case, at this
+    machine's 50-70 concurrent-session norm. `mkdir` is atomic
+    (`CreateDirectory` either creates or fails outright, no separate
+    exists-check race window), so the retry loop below is genuinely
+    collision-free, unlike a check-then-write pattern.
+
+    Review: staff-eng (Finding 0) -- mirrors gen-launcher-shim.py::
+    _cmd_raw_cmdline_block's own fix for the same finding: the retry above
+    was originally an unbounded `goto`, which spins forever (stderr
+    swallowed by `2>nul`) under a full/read-only/ACL-denied `%TEMP%`,
+    hanging the forwarder BEFORE Python ever starts. Bounded to three
+    unrolled attempts behind distinct labels; on all three failing, control
+    falls through to `:_coordinator_raw_cmdline_giveup` WITHOUT setting
+    `_LAUNCHER_RAW_CMDLINE_FILE` -- `recover_windows_argv` already treats a
+    missing env var as a no-op fallback to `argv`, so this degrades to
+    best-effort like every other failure mode of this mechanism, never a
+    hang. MUST change together with the mirrored function above -- see this
+    module's own `_RAW_CMDLINE_TARGETS` docstring.
     """
     if target not in _RAW_CMDLINE_TARGETS:
         return ""
     return (
-        'set "_LAUNCHER_RAW_CMDLINE_FILE=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%.tmp"\n'
+        ":_coordinator_raw_cmdline_attempt1\n"
+        'set "_LAUNCHER_RAW_CMDLINE_DIR=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%%RANDOM%"\n'
+        '2>nul mkdir "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
+        "if not errorlevel 1 goto :_coordinator_raw_cmdline_captured\n"
+        ":_coordinator_raw_cmdline_attempt2\n"
+        'set "_LAUNCHER_RAW_CMDLINE_DIR=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%%RANDOM%"\n'
+        '2>nul mkdir "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
+        "if not errorlevel 1 goto :_coordinator_raw_cmdline_captured\n"
+        ":_coordinator_raw_cmdline_attempt3\n"
+        'set "_LAUNCHER_RAW_CMDLINE_DIR=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%%RANDOM%"\n'
+        '2>nul mkdir "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
+        "if errorlevel 1 goto :_coordinator_raw_cmdline_giveup\n"
+        ":_coordinator_raw_cmdline_captured\n"
+        'set "_LAUNCHER_RAW_CMDLINE_FILE=%_LAUNCHER_RAW_CMDLINE_DIR%\\cmdline.tmp"\n'
         'echo %CMDCMDLINE%>"%_LAUNCHER_RAW_CMDLINE_FILE%"\n'
+        ":_coordinator_raw_cmdline_giveup\n"
     )
 
 
 def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: str) -> None:
     """Naked-Python forwarder that resolves and execs the claude-klabauter-resident
     CLI at ``<claude-klabauter-root>/coordinator/bin/<target>``, per the ratified
-    resolve-claude-klabauter-bin contract (coordinator-claude
-    ``coordinator/snippets/resolve-claude-klabauter-bin.md``, coordinator-claude commit ``ad7fb0d1``).
+    resolve-claude-klabauter-bin contract (DoE-claude
+    ``coordinator/snippets/resolve-claude-klabauter-bin.md``, DoE commit ``ad7fb0d1``).
 
     ``target`` — the real on-disk filename inside ``coordinator/bin/`` this
     forwarder execs — is REQUIRED and keyword-only, sourced from
@@ -939,9 +989,9 @@ def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: st
     ``_claude_home.py`` co-located-impl precedent already used elsewhere in
     this install chain.
 
-    ``b644d5a9`` (coordinator-claude, 2026-07-22) relocated coordinator-claude's entire executable
+    ``b644d5a9`` (DoE, 2026-07-22) relocated DoE-claude's entire executable
     surface into claude-klabauter's own ``coordinator/bin/`` — the forwarder
-    this replaces still exec'd the now-empty coordinator-claude-side ``coordinator/bin/``
+    this replaces still exec'd the now-empty DoE-side ``coordinator/bin/``
     and every one of the 7 agent-helper CLIs was rc=126 in the field
     (claude-central-em memo,
     cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md).
@@ -972,7 +1022,7 @@ def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: st
     via the shim vs 980ms direct, byte-identical output -- measured by
     ``coordinator/bin/check-sh-suffix-polyglot.py``'s docstring,
     source-of-record ``state/audits/2026-07-20-sh-suffixed-python-
-    trampolines.md`` in the coordinator-claude clone, not this repo -- the path is
+    trampolines.md`` in the DoE-claude clone, not this repo -- the path is
     qualified deliberately, and its absence here is not evidence it is
     missing), paid unconditionally on EVERY call regardless of whether
     hazard (a) is ever triggered. This function's template is installed once
@@ -985,7 +1035,7 @@ def _write_agent_forwarder(name: str, dst: Path, check_only: bool, *, target: st
     content = f"""#!/usr/bin/env python3
 # coordinator-claude bin forwarder for {name} — resolves claude-klabauter's
 # `coordinator/bin/` directory via the co-located `_resolve_claude_klabauter.py`
-# shim (the ratified resolve-claude-klabauter-bin contract, coordinator-claude
+# shim (the ratified resolve-claude-klabauter-bin contract, DoE-claude
 # coordinator/snippets/resolve-claude-klabauter-bin.md) and execs `{target}` there.
 # Regenerated verbatim on every install run — do not hand-edit.
 # Spec backlink: cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
@@ -1071,11 +1121,49 @@ def _write_agent_cmd_forwarder(
     to it.
 
     Interpreter-resolution ladder mirrors ``coordinator/bin/wsc-close.cmd``:
-    baked ``__PYTHON_BIN__`` fast path -> ``where python.exe`` (skipping the
-    Microsoft Store App Execution Alias picker under ``WindowsApps``) ->
-    ``py -3`` -> fail-loud exit 127.
+    baked ``__PYTHON_BIN__`` fast path -> host-local ``%LOCALAPPDATA%``
+    resolution cache -> ``where python.exe`` (skipping the Microsoft Store
+    App Execution Alias picker under ``WindowsApps``, and caching a
+    successful hit for future invocations on this host) -> ``py -3`` ->
+    fail-loud exit 127.
 
-    The baked rung is guarded by ``if exist``, matching coordinator-claude's
+    The cache rung exists for DR-303 / the ``windows-interpreter-bake-is-
+    empty`` bug: an install performed off-Windows (or via ``--setup-only``)
+    bakes nothing (``_resolve_baked_python_bin`` is ``os.name``-gated), so
+    every invocation fell through to the ``where``/``findstr`` ladder
+    permanently — roughly 10 process spawns per op instead of 2. Caching
+    under ``%LOCALAPPDATA%`` rather than the settings-home is deliberate:
+    ``%LOCALAPPDATA%`` does not roam/sync between machines (unlike a
+    Mac/Windows-synced ``~/.claude``), so a cached path can never carry the
+    OTHER platform's interpreter the way a synced bake can — the exact
+    poisoning this fixes, one level down. Guarded by the same ``if exist``
+    self-heal as the bake rung: a stale or foreign cached path falls through
+    to full re-resolution and re-caches. The write on a cache miss is a
+    ``move`` (atomic same-volume rename) of a per-attempt temp file, never
+    an in-place write, so a torn read is not reachable — see the write
+    site's own comment for the concurrency argument. A stray temp file left
+    behind by a `move` that lost the race (target open by a concurrent
+    reader) is best-effort cleaned up (``rd /s /q``) after the move either
+    way — a leaked `.tmp` never blocks a future write, since the temp
+    DIRECTORY name is drawn fresh per attempt.
+
+    Cross-dialect encoding: this cmd body writes/reads the cached path in
+    the console's active codepage (``echo``/``set /p``); ``_write_agent_ps1_
+    forwarder``'s body writes/reads UTF-8 without a BOM
+    (``[System.IO.File]::WriteAllText``/``Get-Content``). Those two dialects
+    do NOT share a cache file — each writes/reads its own
+    ``%LOCALAPPDATA%\\coordinator\\`` file (``python-bin-cache.txt`` for
+    cmd, ``python-bin-cache-ps1.txt`` for ps1) for exactly this reason: a
+    single shared file would only round-trip for an ASCII interpreter path,
+    silently corrupting the cache for a non-ASCII one (a codepage cannot be
+    forced without spawning `chcp`/similar, which the zero-added-process
+    contract on this path forbids — see the DR-303 rung's own paragraph
+    above). The cost is that a host warms each dialect's cache
+    independently rather than cross-warming; both still hit
+    ``where python.exe``/``py -3`` on a cold cache exactly as before this
+    mechanism existed, so cold-path behavior is unaffected.
+
+    The baked rung is guarded by ``if exist``, matching DoE's
     ``templates/bin/python3.cmd``: the ladder falls through when the baked
     path is empty OR names something no longer on disk, so a *wrong* bake is
     self-healing rather than a permanent hard failure. Without the exist
@@ -1104,6 +1192,17 @@ def _write_agent_cmd_forwarder(
     """
     py = python3_cmd_resolved_bin or ""
     raw_cmdline_block = _agent_cmd_raw_cmdline_block(target)
+    # Review: staff-eng (Finding 2) -- mirrors gen-launcher-shim.py::
+    # render_cmd's own fix: cleans up the raw-cmdline capture dir on every
+    # exit path (interpreter-cascade failure included), not just the happy
+    # path recover_windows_argv itself cleans up after a successful read.
+    # Empty for targets outside _RAW_CMDLINE_TARGETS, so their body stays
+    # byte-identical.
+    raw_cmdline_cleanup = (
+        '2>nul rd /s /q "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
+        if target in _RAW_CMDLINE_TARGETS
+        else ""
+    )
     content = f"""@echo off
 setlocal
 REM Windows launcher for {name} -- batch-direct exec of the co-located
@@ -1123,11 +1222,45 @@ REM block-parse-time) with no delayed expansion needed.
 if not "%_py%"=="" if exist "%_py%" goto :run_baked
 set "_py="
 
+REM Host-local resolution cache (DR-303 / windows-interpreter-bake-is-empty):
+REM lives under %LOCALAPPDATA%, which never syncs between machines, so it
+REM cannot be poisoned by a Mac/Windows-synced settings-home the way a bake
+REM can. Guarded by `if exist`/non-empty exactly like the bake rung above --
+REM self-heals the same way when the cached path is stale or foreign.
+REM Review: staff-eng (Finding 4) -- `if exist`/non-empty is an EXISTENCE
+REM check, not a content validator: the cache file lives under
+REM %LOCALAPPDATA%, writable by this user and admins only (the same trust
+REM boundary %LOCALAPPDATA% itself already carries), so this is not
+REM cross-user exploitable. The WindowsApps reject below matches both
+REM writers' own filter so a cached App Execution Alias path can't slip
+REM back in through the read side.
+if not defined LOCALAPPDATA goto :skip_cache_read
+set "_cachefile=%LOCALAPPDATA%\\coordinator\\python-bin-cache.txt"
+if not exist "%_cachefile%" goto :skip_cache_read
+set "_cached="
+set /p _cached=<"%_cachefile%"
+if "%_cached%"=="" goto :skip_cache_read
+set "_cached=%_cached:"=%"
+REM Review: review-integrator (F1) -- the prior piped-substring-search form
+REM this replaces spawned a child cmd.exe (for the pipe) plus a second
+REM process on every cache HIT, contradicting the zero-added-process
+REM contract this whole rung exists for. cmd.exe's `%VAR:search=replace%`
+REM substitution performs a CASE-INSENSITIVE search for `search` (a
+REM documented cmd.exe quirk, not an assumption) and is parser-level -- no
+REM process, no enabledelayedexpansion needed. `_cachedtest` differs from
+REM `_cached` iff "WindowsApps" (any case) was found and substituted out.
+set "_cachedtest=%_cached:WindowsApps=%"
+if not "%_cachedtest%"=="%_cached%" goto :skip_cache_read
+if not exist "%_cached%" goto :skip_cache_read
+set "_py=%_cached%"
+goto :run_baked
+:skip_cache_read
+
 for /f "delims=" %%i in ('where python.exe 2^>nul') do (
     echo %%i| findstr /I /C:"\\WindowsApps\\" >nul
     if errorlevel 1 (
         set "_py=%%i"
-        goto :run_baked
+        goto :cache_and_run_baked
     )
 )
 
@@ -1136,15 +1269,56 @@ if not errorlevel 1 goto :run_py3
 
 echo [{name}] ERROR: no Python interpreter found (python.exe / py -3). 1>&2
 echo [{name}] Install Python: https://www.python.org/downloads/windows/ 1>&2
-exit /b 127
+{raw_cmdline_cleanup}exit /b 127
+
+:cache_and_run_baked
+REM Persist the resolved interpreter for future invocations on THIS host.
+REM Every writer resolves the same `_py` value (deterministic per machine),
+REM so a write-write race can only ever race identical content into the
+REM target. Review: staff-eng (Finding 0) -- the write happens inside a
+REM per-writer temp DIRECTORY, not a bare %RANDOM%%RANDOM% filename: mkdir
+REM is atomic (a second `mkdir` of the same name fails outright, no
+REM exists-then-write race window), whereas %RANDOM% is seeded once per
+REM cmd.exe at one-second resolution, so two writers started in the SAME
+REM second draw the IDENTICAL %RANDOM% sequence and would share a temp
+REM path -- see gen-launcher-shim.py::_cmd_raw_cmdline_block's docstring
+REM for the incident this mirrors. With a genuinely private temp dir, the
+REM target is mutated only via `move`, an atomic same-volume rename, never
+REM an in-place write, so a reader can never observe a torn file. A losing
+REM writer's `move` silently no-ops (`>nul 2>nul`): no retry, no wait,
+REM steady-state cost stays zero extra processes either way. No spawned
+REM process (wmic, an out-of-dialect shell, ...) is used to fetch a PID or
+REM GUID -- that would itself add a process hop on this path; three unrolled `mkdir`
+REM attempts (bounded, not an unbounded retry loop) is what actually
+REM guarantees uniqueness, matching the raw-cmdline-capture mechanism.
+if not defined LOCALAPPDATA goto :run_baked
+set "_cachedir=%LOCALAPPDATA%\\coordinator"
+if exist "%_cachedir%\\" goto :cache_write
+mkdir "%_cachedir%" 2>nul
+:cache_write
+set "_tmpdir=%_cachedir%\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
+2>nul mkdir "%_tmpdir%"
+if not errorlevel 1 goto :cache_write_got_dir
+set "_tmpdir=%_cachedir%\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
+2>nul mkdir "%_tmpdir%"
+if not errorlevel 1 goto :cache_write_got_dir
+set "_tmpdir=%_cachedir%\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
+2>nul mkdir "%_tmpdir%"
+if errorlevel 1 goto :run_baked
+:cache_write_got_dir
+set "_tmpfile=%_tmpdir%\python-bin-cache.tmp"
+echo "%_py%">"%_tmpfile%" 2>nul
+move /y "%_tmpfile%" "%_cachefile%" >nul 2>nul
+2>nul rd /s /q "%_tmpdir%"
+goto :run_baked
 
 :run_baked
 "%_py%" "%~dp0{name}" %*
-exit /b %ERRORLEVEL%
+{raw_cmdline_cleanup}exit /b %ERRORLEVEL%
 
 :run_py3
 py -3 "%~dp0{name}" %*
-exit /b %ERRORLEVEL%
+{raw_cmdline_cleanup}exit /b %ERRORLEVEL%
 """
     if check_only:
         if dst.exists() and dst.read_text(encoding="utf-8") == content:
@@ -1186,8 +1360,19 @@ def _write_agent_ps1_forwarder(
     fast path with a ``Test-Path`` existence guard so a bake naming a
     now-missing interpreter self-heals instead of hard-failing (the same
     Mac/Windows-sync hazard ``_write_agent_cmd_forwarder``'s docstring
-    documents), same ``where python.exe``-equivalent / ``py -3`` / fail-loud
-    exit-127 ladder.
+    documents), same host-local ``%LOCALAPPDATA%`` resolution-cache rung
+    (DR-303 — see that function's docstring for the full rationale; this
+    dialect writes/reads its OWN cache file,
+    ``<LOCALAPPDATA>/coordinator/python-bin-cache-ps1.txt`` — a SEPARATE
+    file from the cmd leg's ``python-bin-cache.txt``, never shared, because
+    the two dialects write/read in different encodings (console codepage
+    vs UTF-8 without BOM) and a single shared file only round-trips for an
+    ASCII interpreter path — see that function's docstring "Cross-dialect
+    encoding" paragraph for the full rationale), same ``where
+    python.exe``-equivalent / ``py -3`` / fail-loud
+    exit-127 ladder. Every cache step here is an in-process cmdlet
+    (``Test-Path``, ``Get-Content``, ``New-Item``, ``[System.IO.File]``,
+    ``Move-Item``) — no new process on the steady-state path.
 
     This is deliberately NOT ``gen-launcher-shim.py::render_ps1`` and does
     not call it -- that function is the GENERATOR's source-side path for
@@ -1223,8 +1408,44 @@ if ($_pybin -ne '' -and (Test-Path -LiteralPath $_pybin)) {{
     & $_pybin $_entry @args
     exit $LASTEXITCODE
 }}
+# Host-local resolution cache (DR-303 / windows-interpreter-bake-is-empty):
+# %LOCALAPPDATA% never syncs between machines, unlike the settings-home a
+# bake is written into, so it cannot be poisoned by a Mac/Windows-synced
+# home the way a bake can. Mirrors the bake's own Test-Path self-heal: a
+# cached path that is stale or foreign falls through to re-resolution.
+# Every step here is in-process (no new spawn on the steady-state path).
+$_cachefile = $null
+if ($env:LOCALAPPDATA) {{
+    $_cachefile = Join-Path $env:LOCALAPPDATA 'coordinator\\python-bin-cache-ps1.txt'
+    if (Test-Path -LiteralPath $_cachefile) {{
+        $_cached = $null
+        try {{ $_cached = Get-Content -LiteralPath $_cachefile -TotalCount 1 -ErrorAction SilentlyContinue }} catch {{}}
+        if ($_cached -and (Test-Path -LiteralPath $_cached)) {{
+            & $_cached $_entry @args
+            exit $LASTEXITCODE
+        }}
+    }}
+}}
 $_py = Get-Command python.exe -ErrorAction SilentlyContinue | Where-Object {{ $_.Source -notlike '*\\WindowsApps\\*' }} | Select-Object -First 1
 if ($_py) {{
+    if ($_cachefile) {{
+        # Persist for future invocations on THIS host. Every writer resolves
+        # the same value (deterministic per machine), so a write-write race
+        # can only race identical content -- and the target is only ever
+        # mutated via Move-Item -Force (an atomic same-volume rename, never
+        # an in-place write), so a reader can never observe a torn file. A
+        # losing writer's move is swallowed (SilentlyContinue): no retry, no
+        # wait, no added steady-state process either way.
+        try {{
+            $_cachedir = Split-Path -Parent $_cachefile
+            if (-not (Test-Path -LiteralPath $_cachedir)) {{
+                New-Item -ItemType Directory -Path $_cachedir -Force -ErrorAction SilentlyContinue | Out-Null
+            }}
+            $_tmpfile = Join-Path $_cachedir ([System.Guid]::NewGuid().ToString('N') + '.tmp')
+            [System.IO.File]::WriteAllText($_tmpfile, $_py.Source)
+            Move-Item -LiteralPath $_tmpfile -Destination $_cachefile -Force -ErrorAction SilentlyContinue
+        }} catch {{}}
+    }}
     & $_py.Source $_entry @args
     exit $LASTEXITCODE
 }}
@@ -1250,7 +1471,7 @@ exit 127
 
 
 # Names already installed by ml_family/ch_family/the coordinator-settings-home
-# and platform-localize install lines (all sourced from coordinator-claude's
+# and platform-localize install lines (all sourced from DoE-claude's
 # templates/bin or claude-klabauter's coordinator/lib/claude-home, NOT from
 # coordinator/bin/) — these run BEFORE the derived agent-helper forwarder
 # loop in _install_bin_resolvers, so a same-named entry surviving into the
@@ -1501,7 +1722,7 @@ def _sweep_orphaned_agent_helpers(
        NOT exclusive — it was stamped by
        ``coordinator/bin/gen-launcher-shim.py`` on every CLI's source-side
        ``.cmd`` AND ``.ps1``, including the legitimate,
-       still-installed-every-run coordinator-claude templates ``platform-localize.cmd``/
+       still-installed-every-run DoE templates ``platform-localize.cmd``/
        ``platform-localize.ps1`` and ``resolve-coordinator-clone.cmd``
        (confirmed on a live install), so a legacy-marker match is a
        necessary but not sufficient condition — and it is checked ONLY on
@@ -1612,7 +1833,7 @@ def _run_hardware_audit(check_only: bool) -> None:
     on `plugin_root/lib/detect-hardware.sh` existing on disk, a file-presence
     check that made no sense once the audit itself became a direct in-process
     Python call (the gate suppressed a working, file-independent audit any
-    time the coordinator-claude-side `.sh` happened to be absent — which is unconditionally,
+    time the DoE-side `.sh` happened to be absent — which is unconditionally,
     post-b644d5a9's executable-surface relocation). Never raises — a failed
     audit degrades to a WARNING, matching the bash oracle's own non-fatal
     posture for this step."""
@@ -1751,7 +1972,7 @@ def repo_key_to_env_var(machine_local_key: str) -> str:
     ``_``.
 
     Port source: ``coordinator/templates/bin/claude-machine-local.sh``
-    [coordinator-claude repo] normalization comment block.
+    [DoE-claude repo] normalization comment block.
     """
     suffix = machine_local_key[len("repos."):] if machine_local_key.startswith("repos.") else machine_local_key
     table = str.maketrans("abcdefghijklmnopqrstuvwxyz.-", "ABCDEFGHIJKLMNOPQRSTUVWXYZ__")
@@ -1958,7 +2179,7 @@ def resolve_hook_python_bin() -> str:
     ``resolve_python_bin()``'s tier 1/2 is ``COORDINATOR_PYTHON`` / machine-local
     ``coordinator.python`` -- the pinned coordinator venv interpreter -- and
     that is the one this resolver wants. Three live hook scripts import
-    ``yaml``, a venv-only package, and coordinator-claude's own
+    ``yaml``, a venv-only package, and DoE's own
     ``coordinator/hooks/scripts/enforce-agent-dispatch-mode.py`` imports it at
     MODULE LEVEL, unguarded -- a system interpreter without PyYAML takes that
     PreToolUse hook down on every fire. ``coordinator_core/hooks/nudge_unrouted_sizing.py``
@@ -1966,7 +2187,7 @@ def resolve_hook_python_bin() -> str:
     ``coordinator_core/hooks/scripts/_oss_operative_strings.py``, imports it
     guarded/fail-open -- unaffected either way, named here so this count is
     self-verifying against three (review: code-reviewer F3, 2026-08-03). The
-    known counter-cost (coordinator-claude friction-log F7:
+    known counter-cost (DoE friction-log F7:
     a baked venv path deadlocked a venv rebuild on a live Windows box) is
     accepted and mitigated downstream by C2's ``[ -x ]`` / ``Test-Path``
     self-healing fallback, not by pointing away from the venv.
@@ -2023,10 +2244,10 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
         return 1
     plugin_root = Path(plugin_root_env)
 
-    # coordinator-claude-side precondition only — templates/ is the last surface coordinator-claude's
+    # DoE-side precondition only — templates/ is the last surface DoE-claude's
     # CLAUDE_PLUGIN_ROOT still owns (b644d5a9 relocated lib/ and bin/ into
     # claude-klabauter's own coordinator/ tree; requiring lib/ here as well would be a
-    # vestigial check that always passes on a post-relocation coordinator-claude checkout and
+    # vestigial check that always passes on a post-relocation DoE checkout and
     # never catches anything real).
     if not (plugin_root / "templates").is_dir():
         print(
@@ -2055,7 +2276,8 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
             "resolves to the wrong tree. Remediation:\n"
             "  (a) confirm 'machine-local get repos.claude_klabauter' points at a real "
             "claude-klabauter checkout,\n"
-            "  (b) re-clone/re-sync claude-klabauter if the checkout is stale or partial.",
+            "  (b) git fetch/pull the existing claude-klabauter checkout to restore "
+            "coordinator/lib/ — do not re-clone a shared working tree.",
             file=sys.stderr,
         )
         return 1
@@ -2233,12 +2455,31 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
         _install_seed_wikis(plugin_root, settings_home_path, check_only)
 
         if setup_only:
-            print("[install-substrate] --setup-only: machine-local substrate seeded; skipping fnm/Windows machine-env steps")
+            seeded_verb = "would be seeded" if check_only else "seeded"
+            if _is_windows_shell():
+                print(
+                    f"[install-substrate] --setup-only: forwarders {seeded_verb}, but {bin_dst} "
+                    "was NOT added to the Windows user PATH (that step only runs in the full "
+                    "install). Bare-name coordinator CLI invocation will not resolve until "
+                    "you run the full install: "
+                    "python3 -m coordinator_core.install.substrate (same env, without --setup-only).",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"[install-substrate] --setup-only: machine-local substrate {seeded_verb}; skipping fnm/Windows machine-env steps")
             return 0
 
         _fnm_step(check_only)
 
         if not _is_windows_shell():
+            if os.name == "nt":
+                print(
+                    f"[install-substrate] WARNING: Windows PATH integration skipped — "
+                    f"os.name is 'nt' but OSTYPE/OS did not identify a Windows shell. "
+                    f"{bin_dst} will not be on PATH; bare-name CLI invocation will fail. "
+                    "Set OS=Windows_NT (or OSTYPE=msys/cygwin) and re-run install.",
+                    file=sys.stderr,
+                )
             return 0
 
         _windows_health_steps(bin_dst, check_only)
@@ -2311,11 +2552,11 @@ def _resolve_agent_cmd_dest_collisions(agent_helper_target_map: "dict[str, str]"
 
 # `_CH_FAMILY_FILES` and `_RM_FAMILY_FILES` are sourced from CLAUDE-KLABAUTER'S OWN
 # tree (`coordinator/lib/claude-home/` and `coordinator/lib/resolve-claude-klabauter/`
-# respectively) — NOT coordinator-claude's `templates/bin/` — so they are out of scope for
+# respectively) — NOT DoE's `templates/bin/` — so they are out of scope for
 # `coordinator/lib/bin-templates-manifest.py` (C12) by construction and stay
 # hand-maintained here. See that manifest's own negative-spec for why. The
 # `_ML_FAMILY_FILES` / `_ML_EXPLICIT_FILES` / `_PLATFORM_LOCALIZE_FILES`
-# tuples that USED to live here (all three sourced from `ml_bin`, coordinator-claude's
+# tuples that USED to live here (all three sourced from `ml_bin`, DoE's
 # `templates/bin/`) are now declared in that manifest instead — see
 # `_load_bin_templates_manifest` above and `_install_bin_resolvers` below.
 _CH_FAMILY_FILES = (
@@ -2350,7 +2591,7 @@ def _static_bin_family_names(claude_klabauter_root: "Optional[Path]" = None) -> 
     This is the completeness half of `_sweep_orphaned_agent_helpers`'s
     provenance check: a marker-carrying file is an orphan only if its name
     is absent from BOTH this static set AND the current agent-helper maps.
-    Without this, a coordinator-claude-owned/other-family file that happens to also carry
+    Without this, a DoE-owned/other-family file that happens to also carry
     a launcher marker (``platform-localize.cmd`` and
     ``resolve-coordinator-clone.cmd`` both do, on the live tree — they were
     generated by the same ``gen-launcher-shim.py`` tool as every CLI in
@@ -2775,7 +3016,7 @@ def _install_bin_resolvers(
     # `.cmd` twins are sourced from claude-klabauter's OWN coordinator/bin/, resolved
     # here (in-process, importable) rather than in the emitted forwarder body
     # (which must stay self-contained path arithmetic — see
-    # _write_agent_forwarder's docstring). `plugin_root / "bin"` (coordinator-claude's
+    # _write_agent_forwarder's docstring). `plugin_root / "bin"` (DoE-claude's
     # tree) is the now-empty, dead source this repoint replaces.
     agent_bin = claude_klabauter_root_resolved / "coordinator" / "bin"
     resolve_claude_klabauter_lib = claude_klabauter_root_resolved / "coordinator" / "lib" / "resolve-claude-klabauter"
@@ -2925,7 +3166,7 @@ def _percolation_and_path_steps(
     for hf in setup_hook_files:
         if not check_only:
             (setup_dest / hf).parent.mkdir(parents=True, exist_ok=True)
-        # Doctrine-tracked templates sourced from the coordinator-claude/coordinator-claude
+        # Doctrine-tracked templates sourced from the coordinator-claude/DoE
         # tree, not operator config — force-overwrite on re-install so a
         # stale destination gets repaired rather than silently preserved
         # (see `_install_one`'s docstring § force_overwrite).
@@ -3430,7 +3671,12 @@ def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
     # 3b: ensure the resolved bin dir on Windows user PATH.
     bin_dst_win = _cygpath_w(str(bin_dst))
     if not bin_dst_win:
-        print(f"[setup] WARNING: cygpath unavailable; cannot resolve Windows path for {bin_dst}; skipping PATH integration", file=sys.stderr)
+        print(
+            f"[setup] WARNING: cygpath unavailable; cannot resolve Windows path for {bin_dst}; "
+            "skipping PATH integration — bare-name CLI invocation will fail. Install cygpath "
+            "(provided by MSYS2, Cygwin, or Git-for-Windows) and re-run install.",
+            file=sys.stderr,
+        )
     else:
         env = dict(os.environ, BIN_DST_WIN=bin_dst_win)
         already = _powershell(
@@ -3440,7 +3686,12 @@ def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
             env=env,
         )
         if not already:
-            print("[setup] WARNING: could not read Windows user PATH (powershell.exe unavailable or check failed); skipping PATH integration", file=sys.stderr)
+            print(
+                "[setup] WARNING: could not read Windows user PATH (powershell.exe unavailable "
+                "or check failed); skipping PATH integration — bare-name CLI invocation will "
+                "fail. Confirm powershell.exe is on PATH and re-run install.",
+                file=sys.stderr,
+            )
         elif already != "yes":
             if check_only:
                 print(f"[install-substrate] would: add {bin_dst_win} to Windows user PATH")
@@ -3582,7 +3833,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         # deletes an orphan zero-byte AppX `python(3).exe` reparse-point
         # stub under `%LOCALAPPDATA%\Microsoft\WindowsApps\`, only after an
         # interactive "Delete this orphan stub? [y/N]" prompt. `effect=
-        # "delete"` per coordinator-claude's ruling that consent-gated machine mutations
+        # "delete"` per DoE's ruling that consent-gated machine mutations
         # must carry a paper trail even when they remove rather than write.
         StaticClause(
             effect="delete",
@@ -3723,7 +3974,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         ),
         # Clause 10 — the claude-home family: a STATIC, hand-maintained
         # 3-entry tuple (`_CH_FAMILY_FILES`), sourced from claude-klabauter's own
-        # `coordinator/lib/claude-home/` (NOT coordinator-claude's `templates/bin/`, so
+        # `coordinator/lib/claude-home/` (NOT DoE's `templates/bin/`, so
         # deliberately out of `bin-templates-manifest.py`/clauses 7-9 by
         # construction — see `_CH_FAMILY_FILES`'s own comment). Genuinely
         # enumerable in source, unlike the manifest-driven groups above, so

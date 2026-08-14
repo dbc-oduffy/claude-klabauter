@@ -155,7 +155,7 @@ class TestResolveContextLegacyNoArg:
 class TestNoTopLevelCoordinatorRootPathScalar:
     """The removed AC12 top-level coordinator_root_path scalar must not reappear.
 
-    Regression guard: the scalar had zero readers (rag/coordinator-claude read only the schema'd PER-RECORD
+    Regression guard: the scalar had zero readers (rag/DoE read only the schema'd PER-RECORD
     field) and is a forbidden key under the SnapshotEnvelope schema's additionalProperties:false.
     """
 
@@ -233,7 +233,7 @@ class TestRegistryCoordinatorRoot:
     def test_doe_key_only_in_tracked_registry_resolves(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """repos.example_doctrine_repo declared only in the tracked registry.toml resolves
+        """repos.doe_claude declared only in the tracked registry.toml resolves
         even when a registry.local.toml exists without the key (previously
         .local-only -- the tracked declaration was invisible)."""
         from coordinator_core.ops.emit.envelope import _registry_coordinator_root
@@ -249,7 +249,7 @@ class TestRegistryCoordinatorRoot:
         # raises, and the lookup silently degrades to the quoted-key regex fallback. The live
         # machine-local/registry.local.toml writes backslash paths this way for that reason —
         # the fixture must match the real on-disk shape.
-        (ml / "registry.toml").write_text(f"[repos]\nexample_doctrine_repo = '{doe}'\n", encoding="utf-8")
+        (ml / "registry.toml").write_text(f"[repos]\ndoe_claude = '{doe}'\n", encoding="utf-8")
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
         assert _registry_coordinator_root() == doe / "coordinator"
 

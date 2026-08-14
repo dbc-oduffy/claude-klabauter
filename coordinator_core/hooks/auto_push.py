@@ -1,17 +1,17 @@
 """
 coordinator_core.hooks.auto_push — naked-Python post-commit auto-push helper.
 
-Purpose: DR-059 windows-hostile-bash -> Python port of the coordinator-claude-owned bash script
+Purpose: DR-059 windows-hostile-bash -> Python port of the DoE-owned bash script
 `coordinator/bin/coordinator-auto-push` (223 lines). Pushes the current branch to
 origin if it is a `work/*` branch, classifying push failures so retryable classes
 (ref-lock, network, gh-transient) get a bounded jittered retry while everything
 else fails loud without blocking the commit. Always exits 0 -- auto-push must
 never block a commit.
 
-This module is the claude-klabauter half of the auto-push reimplementation; the coordinator-claude half
+This module is the claude-klabauter half of the auto-push reimplementation; the DoE half
 (retiring the bash script + repointing `coordinator-ensure-post-commit-hook` to
 exec this module directly, no `bash`/`nohup` layer) routes via cross-repo memo
-per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine). Do NOT edit coordinator-claude's
+per DR-047 (DoE owns contract/generator, claude-klabauter owns engine). Do NOT edit DoE's
 `coordinator-auto-push` or `coordinator-ensure-post-commit-hook` from here.
 
 Spec backlink: state/handoffs/2026-07-15_164501_auto-push-naked-python-reimpl.md
@@ -33,11 +33,11 @@ Behavior-preservation notes (read alongside the bash source):
     below for the preserved rationale. Native `git push` is the unconditional
     happy path on every platform, including Windows+SSH.
 
-This module also fires the coordinator-claude cockpit-contract release publish
+This module also fires the DoE cockpit-contract release publish
 (`.github/scripts/publish_cockpit_contract.py`) after a successful push, in
 place of a GitHub Actions trigger the org's billing-blocked Actions runner
 cannot execute. See the "cockpit-contract release publish" section below for
-the self-scoping guard (a filesystem check for a coordinator-claude-only script path) that
+the self-scoping guard (a filesystem check for a DoE-only script path) that
 keeps this a no-op in every other fleet repo.
 """
 
@@ -126,6 +126,12 @@ _ENV_SYNC = "COORDINATOR_AUTO_PUSH_SYNC"
 # Forensic seam: when the hook runs through a wrapper, sys.executable names the
 # wrapper's interpreter rather than the real host interpreter that launched it.
 _ENV_HOST_PYTHON = "COORDINATOR_HOST_PYTHON"
+
+#: Generator-provenance declaration: every write in this module (push-
+#: failures.log, push-stderr-*.log, coordinator-auto-push-pending.json)
+#: lands under resolve_git_common_dir() — inside .git/ — never a tracked
+#: repo artifact.
+GENERATES: list = []
 
 MAX_ATTEMPTS = 3
 # Classes that are safe to retry; see classify_error() for why each is/isn't.
@@ -434,7 +440,7 @@ def push_once(repo_root: str, branch: str, windows_bash: bool, ssh_remote: bool)
 def _module_provenance() -> str:
     """Identify the module file, interpreter, and Python version that actually ran.
 
-    The hook does not exec any fixed checkout: coordinator-claude's generated post-commit shim
+    The hook does not exec any fixed checkout: DoE's generated post-commit shim
     execs `coordinator/bin/coordinator-auto-push`, which resolves CLAUDE_KLABAUTER_ROOT at
     fire time and imports this module from *whatever* tree that resolves to --
     a mid-edit working tree, a second checkout, or a stale importable copy all
@@ -508,7 +514,7 @@ def log_failure(
             # as_posix(), not str(): this is a TEXT artifact, not a filesystem
             # call. str(Path) emits backslashes on nt, so the log's own rows
             # drift separator-norm mid-file (pre-port bash rows are all-forward;
-            # coordinator-claude observed the split in their .git/push-failures.log 2026-07-20).
+            # DoE observed the split in their .git/push-failures.log 2026-07-20).
             forensic = forensic_path.as_posix()
         except OSError:
             forensic = "<copy-failed>"
@@ -616,7 +622,7 @@ def log_race_resolved(repo_root: str, branch: str, route: str, attempts: int) ->
     entire job is "crash insurance is not currently working," and a resolved
     race (our commit is already on origin) is the opposite signal. Both
     `workday.surface_auto_push_failure_stats` and the Stop-time mid-session
-    detector (`runtime-tripwire-em-check.py::_check_push_failures`, coordinator-claude)
+    detector (`runtime-tripwire-em-check.py::_check_push_failures`, DoE-claude)
     read that file, so keeping resolved races out of it is what keeps their
     counts meaning "unrecovered failures" rather than "lines written." Stderr
     only, matching every other advisory print in this module.
@@ -642,7 +648,7 @@ def log_dead_ref_failure(
     `_RETRYABLE_CLASSES` so it is reported exactly once per attempt, never
     looped. Both `workday.surface_auto_push_failure_stats` and the
     Stop-time mid-session detector (`runtime-tripwire-em-check.py::
-    _check_push_failures`, coordinator-claude) read `push-failures.log`; keeping
+    _check_push_failures`, DoE-claude) read `push-failures.log`; keeping
     dead-ref rejections out of it is what keeps their counts meaning
     "unrecovered failures" rather than "lines written." The pending-record
     loop this class was introduced to close is `drain_pending_push()`'s own
@@ -663,19 +669,19 @@ def log_dead_ref_failure(
 # cockpit-contract release publish -- fires from THIS hook, not GitHub
 # Actions, per PM directive (the org's Actions runner is billing-blocked and
 # cannot start jobs at all). The publish logic itself
-# (`.github/scripts/publish_cockpit_contract.py`, coordinator-claude) is untouched
+# (`.github/scripts/publish_cockpit_contract.py`, DoE-claude) is untouched
 # and already correct -- this seam only decides WHETHER and WHEN to invoke
 # it, after a push this hook already performed successfully.
 #
 # Negative-spec, the one this seam exists to avoid repeating: an earlier
 # design attached the same publish step to the `/workday-complete` ceremony,
-# which is vendored into every coordinator-installed repo, not just coordinator-claude's --
+# which is vendored into every coordinator-installed repo, not just DoE's --
 # so example-retrieval-repo's and example-cockpit-repo's daily ceremonies would each have
-# tried to publish a tag to coordinator-claude's origin and failed forever on any machine
-# where coordinator-claude is unresolvable (coordinator-claude
+# tried to publish a tag to DoE's origin and failed forever on any machine
+# where DoE is unresolvable (DoE-claude
 # cross-repo/archive/2026-07-25-claude-klabauter-em-cockpit-publish-use-a-github-action-not-a-claude-klabauter-directive.md).
 # The guard below is intrinsic to the committing repo (a file that only
-# coordinator-claude tracks), not a repo-name allowlist or a ceremony hook, so it
+# DoE-claude tracks), not a repo-name allowlist or a ceremony hook, so it
 # cannot reproduce that failure mode in any other repo.
 # ---------------------------------------------------------------------------
 
@@ -690,16 +696,16 @@ _EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 def _cockpit_publish_script(repo_root: str) -> Path | None:
-    """Cheap existence check: does THIS repo track the coordinator-claude cockpit-contract
+    """Cheap existence check: does THIS repo track the DoE cockpit-contract
     publish script?
 
     This single filesystem stat is the entire scoping guard for the seam
     below. It cannot fire in example-retrieval-repo, example-cockpit-repo, or any other
     fleet repo, because none of them track
-    `.github/scripts/publish_cockpit_contract.py` -- only coordinator-claude does.
+    `.github/scripts/publish_cockpit_contract.py` -- only DoE-claude does.
     No repo-name allowlist, no machine-local registry lookup: the guard is
     derived from the committing repo's own working tree, so it stays
-    correct even if the script is renamed or coordinator-claude itself moves.
+    correct even if the script is renamed or DoE-claude itself moves.
     Deliberately a `Path.is_file()` stat, not a git call -- see
     `run_push_with_retry`'s docstring for why that ordering matters.
     """
@@ -732,7 +738,7 @@ def _schema_touched(repo_root: str, old_remote_sha: str | None, local_sha: str) 
 
 
 def _invoke_cockpit_publish(repo_root: str, script: Path) -> None:
-    """Run the coordinator-claude-owned publish script with the repo's own interpreter, cwd
+    """Run the DoE-owned publish script with the repo's own interpreter, cwd
     at the repo root, and let its own gates decide PUBLISH / NOOP / refuse.
 
     Never raises, and a non-zero exit from the script is NOT treated as a
@@ -1272,7 +1278,7 @@ def run_push_with_retry(repo_root: str, branch: str, *, _skip_hold: bool = False
     `_maybe_publish_cockpit_contract`, gated by the cheap `_cockpit_publish_script`
     filesystem check computed once up front (see that function's docstring
     for why the guard must be a stat, not a git call, and why it makes this
-    a no-op in every repo but coordinator-claude). Never fires on failure or on a
+    a no-op in every repo but DoE-claude). Never fires on failure or on a
     skipped push -- both of this function's `return` sites for a failed/
     exhausted push are left untouched.
 
@@ -1595,7 +1601,7 @@ def _detach_and_run(repo_root: str, branch: str) -> None:
     # 2026-07-20 on win32: `-m` from cwd=X:/example-retrieval-repo ->
     # "No module named 'coordinator_core'"; absolute path -> clean exit 0.
     # This mirrors the sh shim's own exec-by-abspath contract (Artifact A /
-    # coordinator-claude cutover memo contract point 3) -- keep the two in agreement.
+    # DoE cutover memo contract point 3) -- keep the two in agreement.
     #
     # 2026-08-01 follow-up regression: the module later grew its own
     # top-level `from coordinator_core.git.git_dir import

@@ -12,7 +12,7 @@ before touching this file — it is inherited here verbatim, not re-derived: an
 absent, unreadable, empty, or unparseable transcript resolves to `state: "unknown"`
 and is NEVER reported as `"arrived"`.
 
-Path derivation is this op's job, not the caller's — coordinator-claude (the caller) must not open
+Path derivation is this op's job, not the caller's — DoE (the caller) must not open
 any file or compute any path itself. Given the PARENT session's `transcript_path`
 (as carried on PostToolUse) and `agent_id`, the subagent transcript path is:
 
@@ -106,7 +106,7 @@ Negative-spec:
     only its path is used, to derive the subagent transcript path. The parent
     transcript itself is never opened by this op.
 
-Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
     (sibling contract; this op documents its own empirical basis above rather
     than re-deriving hooks.subagent_zero_tool_use's — the two ops answer
     different questions over different files)
@@ -145,7 +145,7 @@ def _derive_subagent_transcript_path(transcript_path: str, agent_id: str) -> str
     """dirname(transcript_path)/stem(transcript_path)/subagents/agent-<agent_id>.jsonl
 
     Pure string/path derivation — this is the ONE place path shape lives; callers
-    (coordinator-claude) must not derive or open this path themselves.
+    (DoE) must not derive or open this path themselves.
     """
     directory = os.path.dirname(transcript_path)
     basename = os.path.basename(transcript_path)

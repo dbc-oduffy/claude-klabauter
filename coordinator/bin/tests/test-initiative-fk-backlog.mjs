@@ -13,7 +13,7 @@
  * Run with: node coordinator/bin/tests/test-initiative-fk-backlog.mjs
  * Exits 0 on all-pass, 1 on any failure.
  *
- * Spec backlink: docs/plans/2026-07-04-initiative-govern-sweep-prioritize-doe-d.md § C0 (AC0)
+ * Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C0 (AC0)
  *
  * Negative-spec: this is a chunk-owned test file. Do NOT add these tests to the shared
  * schema.test.js harness — a peer chunk (C1) edits initiative.schema.json in parallel;
@@ -105,7 +105,7 @@ function improvementQueueBase(overrides = {}) {
     status: "open",
     surface: "coordinator/bin/query-records.js",
     proposed_action: "Improve it",
-    from_repo: "coordinator-claude",
+    from_repo: "doe-claude",
     change_kind: "script-edit",
   }, overrides);
 }

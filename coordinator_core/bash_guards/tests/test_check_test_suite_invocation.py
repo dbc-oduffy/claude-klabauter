@@ -195,7 +195,7 @@ def test_top_level_em_powershell_tool_unscoped_suite_denied_without_grant(grant_
 # ---------------------------------------------------------------------------
 # Start-Process -ArgumentList argv-reconstruction fix (2026-08-07 -- guard
 # bypass measured live via `dispatch.evaluate_payload_json`, see
-# `cross-repo/inbox/2026-08-07-coordinator-claude-em-powershell-suite-guard-
+# `cross-repo/inbox/2026-08-07-doe-claude-em-powershell-suite-guard-
 # converted-and-wave2-findings.md` Finding 1). Unlike the plain-string
 # PowerShell class above, this shape genuinely needed the `_dialect.py`
 # argv-reconstruction seam: a bare bash-`shlex` pass fuses `-ArgumentList
@@ -290,6 +290,45 @@ def test_subagent_testpaths_root_is_not_a_scope(repo, free_mutex):
 @pytest.mark.parametrize("command", ["pytest coordinator/", "pytest .", "pytest coordinator_core"])
 def test_subagent_testpaths_ancestor_is_not_a_scope(repo, free_mutex, command):
     assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is not None
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-14 correction: `-k`/scoping-flag laundering of a testpaths-root
+# positional (`pytest tests/ -k "expr"` still collects the whole suite to
+# deselect it -- `-k` filters SELECTION, never COLLECTION). See
+# `_classify_pytest`'s docstring and the module docstring's dated entry.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'pytest coordinator_core/ -k "expr"',
+        "pytest coordinator_core/ --lf",
+    ],
+)
+def test_testpaths_root_positional_with_scoping_flag_is_not_laundered(repo, free_mutex, command):
+    """A name-pattern/selection flag alongside a whole-suite positional must
+    not launder the invocation to Tier T -- this repo's own configured
+    `testpaths` root (`coordinator_core/`) is the regression shape."""
+    reason = _reason(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
+    assert "no test file, directory, or node-id scope" in reason
+
+
+def test_bare_dash_k_with_no_positional_stays_tier_t(repo, free_mutex):
+    """The BARE form (`-k` with no positional at all) is unaffected -- the
+    flag-derived `scoped` bit still governs when there is nothing to
+    launder."""
+    assert guard.check(_payload('pytest -k "expr"', repo, agent_id=_AGENT_ID)) is None
+
+
+def test_dash_k_alongside_a_real_file_scope_stays_tier_t(repo, free_mutex):
+    """A `-k` filter alongside a genuinely file-scoped positional is still
+    Tier T -- only a testpaths-ROOT positional is suite-shaped. Uses a FILE
+    (not directory) positional so DR-088 R9's separate directory-precision
+    leg -- which denies a dispatched agent's directory arg regardless of
+    Tier T -- does not confound this assertion."""
+    command = 'pytest coordinator_core/frontmatter/tests/test_x.py -k "expr"'
+    assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is None
 
 
 def test_compound_command_hiding_a_suite_run_denied(repo, free_mutex):
@@ -892,7 +931,7 @@ def test_classify_command_core_does_not_raise_on_malformed_configured():
 
 def test_classify_command_core_chained_fast_test_cmd_classifies_both_segments_as_tier_f():
     """Regression (2026-07-25 cockpit Tier-F-unreachable report), UPDATED
-    2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-
+    2026-07-25 for R1 (cross-repo/inbox/2026-07-25-doe-claude-em-validate-
     tier-u-shape-ruling.md): with ``fast_test_cmd`` chained (``pnpm run
     typecheck && pnpm run test``) and invoked verbatim, BOTH segments are
     matched by the configured-cmd containment leg (not just the trailing
@@ -1200,7 +1239,7 @@ class TestGrantLeg:
 
     def test_em_tier_f_chained_no_grant_denied_as_tier_u(self, grant_repo, free_mutex, monkeypatch):
         """Regression (2026-07-25 cockpit Tier-F-unreachable report),
-        UPDATED 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-claude-
+        UPDATED 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-doe-claude-
         em-validate-tier-u-shape-ruling.md): a CHAINED configured
         fast_test_cmd (``pnpm run typecheck && pnpm run test``), invoked
         verbatim, still has BOTH segments recognized by the configured-cmd
@@ -1359,7 +1398,7 @@ class TestGrantLeg:
         real resolver file (not just a monkeypatched stub) -- i.e. the
         fast_test_cmd match is genuinely recognized, not silently dropped.
 
-        Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-claude-
+        Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-doe-claude-
         em-validate-tier-u-shape-ruling.md): the fixture's fast_test_cmd
         (``python3 -m pytest -m 'not cadence'``, a marker filter -- not a
         file/dir/node-id scope) is an unscoped-runner SHAPE, so it now

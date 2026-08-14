@@ -3,9 +3,9 @@ coordinator_core.ops.init_anchor_injection_state — JSON-RPC
 "ceremony.init_anchor_injection_state" operation.
 
 Purpose: ports the Phase A0 state-init preamble of the workday-complete anchor-
-injection ceremony (`commands/workday-complete.md:437` in the coordinator-claude tree —
+injection ceremony (`commands/workday-complete.md:437` in the DoE-claude tree —
 distinct-ops-new.tsv row "init-anchor-injection-state"). The bash fence this
-replaces resolved the coordinator/coordinator-claude root, computed today's date, and declared
+replaces resolved the coordinator/DoE root, computed today's date, and declared
 two empty accumulator shell vars ahead of a multi-step anchor-injection loop
 that appends to them across later phases. This op reproduces exactly that: a
 pure resolve-and-seed step with NO writes and NO mutation of any accumulator —
@@ -20,7 +20,7 @@ either a pure resolution (doe_root via coordinator_doe_root()), a pure
 computation of the current date (today), or a fixed empty-list literal
 (injected_dates / content_gap_dates). Two invocations on the same calendar day
 with the same params ({}) are byte-identical; no disk state is read beyond the
-Coordinator-claude-root resolution chain and nothing is written at all, so there is no state
+DoE-root resolution chain and nothing is written at all, so there is no state
 to clobber on re-invocation.
 
 Spec backlink: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-
@@ -56,14 +56,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns:
         {
-            "doe_root": <str — resolved coordinator-claude / coordinator-claude root>,
+            "doe_root": <str — resolved DoE-claude / coordinator-claude root>,
             "today": <str — today's date, ISO 8601 "YYYY-MM-DD">,
             "injected_dates": [],
             "content_gap_dates": [],
         }
 
     Raises:
-        RuntimeError — coordinator_doe_root() could not resolve the coordinator-claude
+        RuntimeError — coordinator_doe_root() could not resolve the DoE-claude
         root. Fails loud rather than degrading to an empty/placeholder
         doe_root: the manifest contract types doe_root as `str`, and a
         ceremony phase silently anchoring against "" would misbehave far
@@ -74,8 +74,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         raise RuntimeError(
             "ceremony.init_anchor_injection_state: cannot resolve the coordinator "
             "root — coordinator_doe_root() returned no result. Set "
-            "repos.example_doctrine_repo in the machine-local registry, or set the "
-            "DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO env var."
+            "repos.doe_claude in the machine-local registry, or set the "
+            "DOE_ROOT/REPO_DOE_CLAUDE env var."
         )
     return {
         "doe_root": doe_root,

@@ -1,0 +1,271 @@
+"""
+bin/claude-klabauter-commit-anchors.py — Commit anchor trailer emitter for the DoE prepare-commit-msg hook.
+
+Purpose: Invoked by the DoE `prepare-commit-msg` git hook. Calls the claude-klabauter
+`commit.anchors` op via the command entrypoint (`python3 -m coordinator_core.invoke`),
+prints the returned trailer block verbatim to stdout, then exits 0. MUST fail-open on
+every error path: if the engine import fails, the subprocess times out, the response is
+malformed, or any exception fires, this script prints NOTHING and exits 0 — a commit must
+never be wedged by claude-klabauter being down.
+
+Inputs:
+  COORDINATOR_SESSION_ID     — session id (explicit test override, highest precedence);
+                               fall back to CLAUDE_SESSION_ID, then CLAUDE_CODE_SESSION_ID
+                               (KS-6, 2026-08-07 — widened to match the canonical
+                               coordinator_core.session.core.SESSION_ENV_PRECEDENCE ladder;
+                               see that constant's docstring for the prior break-class
+                               defect two disagreeing copies of this ladder caused).
+                               If none resolve, exit 0 silently. (The .git sentinel-file
+                               fallback tier was REMOVED 2026-08-07, KS-1 — see
+                               _resolve_session_id's own docstring.)
+  CLAUDE_KLABAUTER_COMMIT_NATURE       — optional nature string (e.g. "infra", "fix", "roadmap")
+  --nature <str>             — CLI alternative to CLAUDE_KLABAUTER_COMMIT_NATURE (env wins if both set)
+
+Wire: subprocess command entrypoint (DR-215, C5b — UDS daemon retired)
+  Command:  python3 -m coordinator_core.invoke commit.anchors '<params-json>' --repo <repo-root>
+  Params:   {"session_id": "<id>", "nature": <null|str>}
+  Result:   stdout JSON envelope → result.trailers (same shape as former UDS reply)
+
+Request shape (PINNED — same op/params as UDS predecessor, transport only changed):
+  op:     "commit.anchors"
+  params: {"session_id": "<id>", "nature": <null|str>}
+  --repo: <git-show-toplevel result>
+
+Success response (stdout from invoke):
+  {"jsonrpc":"2.0","id":1,"result":{"trailers":"<text>"}}
+  → print result.trailers verbatim; if empty, print nothing.
+
+Spec backlink: pln-claude-klabauter-commit-anchor-stamper-q-29b891 § C3-shim
+
+Negative-spec (hard-won):
+  - NEVER exits non-zero under any circumstances.
+  - NEVER prints to stdout on any error path (no partial/error text).
+  - NEVER blocks — invoke subprocess capped at _INVOKE_TIMEOUT_SECS; git subprocesses at 3 s.
+  - stdlib-only direct imports — coordinator_core is spawned as a subprocess, not imported.
+  - Does NOT open any UDS/AF_UNIX socket — the daemon and socket path are retired (DR-215).
+  - Does NOT read or require any auth token — the command path bypasses IPC auth.
+  - Does NOT write any files or sentinel state.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_SUBPROCESS_TIMEOUT_SECS: float = 3.0   # git subprocess cap
+_INVOKE_TIMEOUT_SECS: float = 10.0      # engine invoke cap — higher than git subprocesses
+                                         # because a cold coordinator_core import may take
+                                         # several seconds on first call; still bounded and
+                                         # fail-open on timeout.
+
+
+# ---------------------------------------------------------------------------
+# Git helpers — subprocess, all capped, never raise
+# ---------------------------------------------------------------------------
+
+
+def _git_show_toplevel() -> Optional[str]:
+    """Return the canonical repo root for CWD, or None on any failure."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT_SECS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return str(Path(r.stdout.strip()).resolve())
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _git_common_dir(repo_root: str) -> Optional[str]:
+    """Return the git common directory for repo_root, or None on any failure.
+
+    For a normal repo: <repo_root>/.git
+    For a linked worktree: <main-worktree>/.git
+
+    git rev-parse --git-common-dir may return a relative path; we resolve it
+    against repo_root.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT_SECS,
+            cwd=repo_root,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            p = Path(r.stdout.strip())
+            if not p.is_absolute():
+                p = Path(repo_root) / p
+            return str(p.resolve())
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Session ID resolution
+# Precedence:  COORDINATOR_SESSION_ID → CLAUDE_SESSION_ID → CLAUDE_CODE_SESSION_ID
+# (KS-6, 2026-08-07 — widened to match the canonical
+# coordinator_core.session.core.SESSION_ENV_PRECEDENCE ladder; this script
+# runs in DoE-claude's git-hook context and invokes claude-klabauter only via the
+# subprocess command entrypoint, so it keeps a hand-mirrored env-var-only
+# copy rather than importing coordinator_core directly — a change to the
+# canonical ladder must be mirrored here too.)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_session_id(repo_root: Optional[str], common_dir: Optional[str] = None) -> Optional[str]:
+    """Resolve the current session ID from env vars only.
+
+    The `.git/coordinator-sessions/.current-session-id` sentinel-file fallback
+    tier was REMOVED 2026-08-07 (KS-1), not merely gated. Two independent
+    reasons: (1) it is unsound by construction under this fleet's
+    concurrency — documented last-writer-wins in
+    `coordinator_core/bash_guards/guard_inprocess_search.py` ~L84 — ~18
+    concurrent sessions on one shared worktree means even a freshly-written
+    sentinel hands session A the id of whichever session wrote last; (2) its
+    writer was `session-init.py` (DoE-claude SessionStart hook), deleted by
+    PM directive 2026-07-15 ("full-kill-keep-fast-orientation") — no
+    production writer survives anywhere, contrary to this module's earlier
+    "written by session-init.sh SessionStart hook" comment. `repo_root` and
+    `common_dir` are retained as parameters for call-site compatibility but
+    are unused now that the sentinel tier is gone.
+    """
+    sid = (
+        os.environ.get("COORDINATOR_SESSION_ID", "").strip()
+        or os.environ.get("CLAUDE_SESSION_ID", "").strip()
+        or os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    )
+    if sid:
+        return sid
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Command-entrypoint transport (DR-215, C5b) — replaces former UDS transport
+# ---------------------------------------------------------------------------
+
+
+def _invoke_commit_anchors(
+    repo_root: str,
+    session_id: str,
+    nature: Optional[str],
+) -> Optional[str]:
+    """Call commit.anchors via python3 -m coordinator_core.invoke and return trailers.
+
+    Transport: subprocess to the command entrypoint (DR-215, C5b) — no socket, no daemon.
+    The invoke module injects _origin_worktree automatically for worktree-scoped ops
+    (commit.anchors has scope=common_dir; ipc dispatch resolves git_common_dir internally).
+
+    Fail-open contract: any exception (import failure, timeout, non-zero exit, bad JSON,
+    JSON-RPC error, missing trailers key) → returns None. Caller prints nothing and exits 0.
+    """
+    params = {"session_id": session_id, "nature": nature}
+    params_json = json.dumps(params, separators=(",", ":"))
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m", "coordinator_core.invoke",
+                "commit.anchors",
+                params_json,
+                "--repo", repo_root,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_INVOKE_TIMEOUT_SECS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    # Parse the JSON response from stdout (invoke prints indented JSON on success).
+    try:
+        resp = json.loads(result.stdout)
+    except Exception:  # noqa: BLE001
+        return None
+
+    # JSON-RPC error → fail-open (op-level failure, still no anchor data)
+    if not isinstance(resp, dict) or "result" not in resp:
+        return None
+
+    trailers = resp["result"].get("trailers")
+    if not trailers or not isinstance(trailers, str):
+        return None
+
+    return trailers
+
+
+# ---------------------------------------------------------------------------
+# Main — all failure paths produce no output and exit 0
+# ---------------------------------------------------------------------------
+
+
+def _main() -> None:
+    # Parse optional --nature CLI arg (env var wins if both supplied)
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--nature", default=None)
+    args, _ = parser.parse_known_args()
+
+    # Repo root for the working tree being committed (passed to --repo)
+    repo_root = _git_show_toplevel()
+    if not repo_root:
+        return
+
+    # Git common dir — hoisted before session ID resolution so the sentinel fallback
+    # in _resolve_session_id can use the common dir (not the worktree .git file path,
+    # which is a file pointer for linked worktrees — see F7 fix).
+    # Review: code-reviewer — F7: common_dir hoisted so it can be passed to _resolve_session_id.
+    common_dir = _git_common_dir(repo_root)
+    if not common_dir:
+        return
+
+    # Session ID — required; absent → nothing to stamp
+    # Pass common_dir so sentinel resolution works in linked worktrees.
+    session_id = _resolve_session_id(repo_root, common_dir=common_dir)
+    if not session_id:
+        return
+
+    # Nature — env wins over CLI arg; both optional
+    nature: Optional[str] = (
+        os.environ.get("CLAUDE_KLABAUTER_COMMIT_NATURE", "").strip() or args.nature or None
+    )
+
+    # Call the engine via command entrypoint — fail-open on any transport failure.
+    trailers = _invoke_commit_anchors(
+        repo_root=repo_root,
+        session_id=session_id,
+        nature=nature,
+    )
+    if trailers:
+        sys.stdout.write(trailers)
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    try:
+        _main()
+    except Exception:  # noqa: BLE001
+        # Belt-and-suspenders: any unhandled exception from _main() → fail-open.
+        # SystemExit propagates normally (not caught by `except Exception`).
+        pass
+    sys.exit(0)

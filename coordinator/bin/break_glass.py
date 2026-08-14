@@ -1,19 +1,19 @@
 """break_glass.py — Tier 1 operator-recovery diagnose-then-repair sweep for a
 wedged coordinator install.
 
-Design: coordinator-claude `docs/research/2026-07-28-break-glass-recovery-design.md`.
+Design: DoE-claude `docs/research/2026-07-28-break-glass-recovery-design.md`.
 Repo-placement note (deviation from that design doc's file table, judgment
 call made at build time — see this module's own build dispatch report, not
 repeated here as a changelog entry): the design doc's component table names
-`coordinator/bin/break_glass.py` as a coordinator-claude file. Coordinator-claude tracks ZERO
+`coordinator/bin/break_glass.py` as a DoE-claude file. DoE-claude tracks ZERO
 files under `coordinator/bin/` (`git ls-files coordinator/bin | wc -l` -> 0)
-— coordinator-claude's own CLAUDE.md states plainly that the executable bin surface
-is claude-klabauter-resident, not coordinator-claude-resident. This module therefore
+— DoE-claude's own CLAUDE.md states plainly that the executable bin surface
+is claude-klabauter-resident, not DoE-claude-resident. This module therefore
 lives in claude-klabauter, alongside `setup-verify.py` (one of the tools it
 calls) and the `gen_settings_hooks` / `guard_foreign_platform_paths` /
 `machine_resolver` modules it reuses — all of which are ALREADY claude-klabauter-side,
 so placing Tier 1 here is following the evidence, not inventing a new split.
-A thin `break-glass.cmd` mirror still lives at the coordinator-claude repo root (per
+A thin `break-glass.cmd` mirror still lives at the DoE-claude repo root (per
 AC-2, "whichever repo the operator opens first") and delegates to this file.
 
 Purpose: run the 8-layer diagnose pass (AC-3) and peer-safe repair (AC-4),
@@ -44,6 +44,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
+
+GENERATES = []  # writes only ~/.claude/settings.json, its .settings-last-good.*.json backups, and machine-local registry.local.toml — all outside claude-klabauter's own tracked tree
 
 _BIN_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BIN_DIR.parent.parent  # coordinator/bin -> coordinator -> repo root
@@ -160,7 +162,7 @@ def check_settings_json(
     """Layer 1 (AC-3 #1). Missing -> BROKEN. Invalid JSON -> BROKEN with the
     parse error. Valid -> classify every `command` string's hook paths via
     `guard_foreign_platform_paths.detect_foreign_platform_paths` (claude-klabauter's
-    own module — no coordinator-claude-side import needed; this check's classifier is
+    own module — no DoE-side import needed; this check's classifier is
     already resident in this repo, confirming the build-sequence step 1
     reusability check the design doc calls for).
 

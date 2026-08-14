@@ -7,8 +7,8 @@ Finish-strangler port (DR-059): the bash implementation (read-only harvest-
 debt nudge probe — basename-matched archive/specs vs canonical distillation
 log) has been fully ported to coordinator_core/ops/check_harvest_debt.py
 (direct-import op, co-located test coordinator_core/tests/test_check_harvest_debt.py).
-This file is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter
-(engine) module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
+This file is now a thin DoE-side (contract) trampoline over that claude-klabauter
+(engine) module, per DR-047 (DoE owns contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
 owned by `gen-launcher-shim.py --ensure-unix`, and correct for this shape. On
@@ -17,8 +17,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Exit convention: this is an ADVISORY orientation-nudge probe (invoked from
@@ -30,7 +30,7 @@ nudge or silent; 1 = archive/specs/ present but canonical log absent —
 fail-loud, see the claude-klabauter module's own docstring) are UNCHANGED and produced
 by check_harvest_debt.main() itself once import succeeds.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 """
 
 from __future__ import annotations

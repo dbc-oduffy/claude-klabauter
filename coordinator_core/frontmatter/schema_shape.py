@@ -2,7 +2,7 @@
 shape-hash over a vendored JSON Schema, so a change to what a schema
 VALIDATES can be detected independently of what it SAYS.
 
-Why this exists: claude-klabauter vendors coordinator-claude's schemas under
+Why this exists: claude-klabauter vendors DoE's schemas under
 `coordinator_core/frontmatter/schemas/`, and a local edit that widens one of
 them (an `enum` entry, a new `$defs` sub-schema, a changed `required` set) can
 land while `x-schema-version` stays put. It has happened on
@@ -16,16 +16,16 @@ NEGATIVE SPEC -- what this is NOT:
   - NOT a byte hash of the file. A byte hash trips on reindentation, key
     reordering, and a typo fix in a `description`, so a gate built on one
     would demand an `x-schema-version` bump for edits that change no
-    validator's behaviour -- and on a schema coordinator-claude and claude-klabauter hold
+    validator's behaviour -- and on a schema DoE and claude-klabauter hold
     byte-identically, a spurious bump costs a whole re-vendor round trip.
     Hence the annotation strip and the sorted-key canonical serialization.
 
   - NOT a cross-repo comparison. Three gates already compare claude-klabauter's copy to
-    coordinator-claude's (`schema_drift_watch.scan_vendored_schema_drift`,
+    DoE's (`schema_drift_watch.scan_vendored_schema_drift`,
     `schema_validate.check_schema_drift`, and schema_validate's consumer-ahead
     version gate) and all three read GREEN at the instant of the bad edit,
     because at that instant the two repos still agree on the version and the
-    shape edit has not reached coordinator-claude either. The axis this module serves is a
+    shape edit has not reached DoE either. The axis this module serves is a
     file against its OWN last-committed blob.
 
   - NOT an `x-*` prefix glob. The authoring annotations stripped here are a
@@ -40,7 +40,7 @@ NEGATIVE SPEC -- what this is NOT:
     is an authoring judgement.
 
 Spec backlink: pln-a-vendored-schema-cannot-chang-42124c
-(AC1, AC2; chunk C1). The annotation-stripping RULE is borrowed from coordinator-claude's
+(AC1, AC2; chunk C1). The annotation-stripping RULE is borrowed from DoE's
 `coordinator/tests/_schema_shape.py`; the code deliberately is not -- an
 unpoliced second copy of a must-not-drift file is the same defect class this
 plan closes.

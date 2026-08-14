@@ -2,7 +2,7 @@
 Tests for coordinator_core.install.substrate's manifest-reader,
 _load_setup_template_manifest().
 
-Port of: setup-templates-manifest.sh (coordinator-claude 6fb5fb37, 2026-07-22).
+Port of: setup-templates-manifest.sh (DoE 6fb5fb37, 2026-07-22).
 b644d5a9's executable-surface relocation moved the manifest into claude-klabauter's
 own `coordinator/lib/setup-templates-manifest.py` as a plain
 Python module exporting SETUP_TEMPLATE_FILES / SETUP_TEMPLATE_EXEC_FILES /

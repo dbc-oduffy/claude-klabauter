@@ -12,7 +12,7 @@ behavior — the in-process ``platform_localize.main()`` call, the
 branch — lives in coordinator_core.install.run_platform_localize; see that
 module's own docstring for the full design rationale.
 
-Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3
+Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3
 """
 
 from __future__ import annotations

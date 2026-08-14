@@ -1,8 +1,8 @@
 """
-coordinator_core.testing.doe_root — shared coordinator-claude sibling-checkout resolver for tests.
+coordinator_core.testing.doe_root — shared DoE-claude sibling-checkout resolver for tests.
 
 Purpose: one canonical `resolve_doe_root()` for every test module across
-`coordinator_core` that needs the sibling coordinator-claude checkout (parity oracles,
+`coordinator_core` that needs the sibling DoE-claude checkout (parity oracles,
 schema/records-query cross-repo fixtures, install-hook goldens) instead of each
 call site independently guessing checkout depth via `Path(__file__).parents[N]`
 or hardcoding a machine-local absolute path — both non-portable (the former
@@ -12,8 +12,8 @@ one user's literal home directory) and neither works on a machine other than
 the one it was written on.
 
 Wraps `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()` — the
-already-ratified, full-ladder "resolve the coordinator-claude sibling root" resolver
-(REPO_EXAMPLE_DOCTRINE_REPO env -> machine-local registry `repos.example_doctrine_repo` (canonical)
+already-ratified, full-ladder "resolve the DoE-claude sibling root" resolver
+(REPO_DOE_CLAUDE env -> machine-local registry `repos.doe_claude` (canonical)
 -> `plugin.mirrors.coordinator-claude.live_path` fallback -> the native
 `resolve_coordinator_clone.resolve_clone_root()` port, which itself falls
 through to the DR-072 `.doe-root` pointer file and finally the flat
@@ -22,7 +22,7 @@ through to the DR-072 `.doe-root` pointer file and finally the flat
 earlier revision of this module wrapped the bare pointer-file read alone;
 that was the wrong layer to standardize test call sites on. The registry key
 and the pointer file are independently-writable state (a machine can have
-`repos.example_doctrine_repo` set in the registry without the `.doe-root` pointer having
+`repos.doe_claude` set in the registry without the `.doe-root` pointer having
 been (re)seeded, or vice versa on an older/partial install) and
 `coordinator_doe_root()` already encodes the ratified precedence between
 them — wrapping the pointer file alone would silently ignore a machine that
@@ -34,7 +34,7 @@ here rather than keeping its own, now-duplicated, copy.
 Port source: none — net-new (test-harness authoring).
 
 Negative-spec:
-    - Does NOT validate the resolved root looks like a real coordinator-claude checkout
+    - Does NOT validate the resolved root looks like a real DoE-claude checkout
       (e.g. a `coordinator/` subdir present) — callers apply their own
       site-specific existence gate (a schemas dir, a bin dir, a particular
       fixture file), exactly as before, since "present" means something
@@ -53,7 +53,7 @@ from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
 
 def resolve_doe_root() -> str:
-    """Resolve the sibling coordinator-claude checkout root for test call sites.
+    """Resolve the sibling DoE-claude checkout root for test call sites.
 
     Precedence: `CLAUDE_KLABAUTER_TEST_DOE_ROOT` env override (test-only escape hatch),
     then `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`'s

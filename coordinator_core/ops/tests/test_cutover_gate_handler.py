@@ -16,7 +16,7 @@ Async invocation follows the house convention (test_coverage_gate.py):
 plain sync test functions wrapping the async handler in `asyncio.run(...)`
 — no `pytest.mark.asyncio` / pytest-asyncio dependency.
 
-Spec backlink: docs/plans/2026-07-25-cutover-state-machine.md § C4b
+Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 § C4b
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _write_record(
             "kind": "value-vocabulary",
             "pattern": "TARGET_TOKEN",
             "paths": ["sub"],
-            "repos": [{"repo": "coordinator-claude", "foreign": False}],
+            "repos": [{"repo": "doe-claude", "foreign": False}],
         },
     }
     if derivation_history is not None:
@@ -93,7 +93,7 @@ def test_confirmed_consumer_derivation_cannot_refind_is_refuse(tmp_path: Path) -
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/nonexistent.py",
+                "id": "doe-claude:sub/nonexistent.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -111,7 +111,7 @@ def test_agreement_holds_and_signal2_probe_op_key_reverifies_pass(tmp_path: Path
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -129,7 +129,7 @@ def test_signal2_unregistered_probe_op_key_is_indeterminate(tmp_path: Path) -> N
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "no.such.op"},
                 "verified_at": "2026-07-25",
             }
@@ -147,7 +147,7 @@ def test_unrecognized_verified_by_kind_is_indeterminate(tmp_path: Path) -> None:
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "free-prose", "ref": "trust me"},
                 "verified_at": "2026-07-25",
             }
@@ -185,7 +185,7 @@ def test_sibling_commitment_ref_fulfilled_reverifies_pass(tmp_path: Path) -> Non
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "sibling-commitment-ref", "ref": filename},
                 "verified_at": "2026-07-25",
             }
@@ -202,7 +202,7 @@ def test_sibling_commitment_ref_missing_record_is_indeterminate(tmp_path: Path) 
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {
                     "kind": "sibling-commitment-ref",
                     "ref": "2026-07-25-no-such-commitment-a1b2c3d4e5f6.yaml",
@@ -225,7 +225,7 @@ def test_sibling_commitment_ref_not_fulfilled_is_indeterminate(tmp_path: Path) -
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "sibling-commitment-ref", "ref": filename},
                 "verified_at": "2026-07-25",
             }
@@ -243,7 +243,7 @@ def test_shrinking_derived_count_without_reason_is_refuse(tmp_path: Path) -> Non
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -252,7 +252,7 @@ def test_shrinking_derived_count_without_reason_is_refuse(tmp_path: Path) -> Non
             {
                 "phase": "dual-write",
                 "derived_count": 5,
-                "derived_ids": ["coordinator-claude:sub/a.py"] * 5,
+                "derived_ids": ["doe-claude:sub/a.py"] * 5,
                 "at": "2026-07-24T00:00:00Z",
             }
         ],
@@ -271,7 +271,7 @@ def test_shrinking_derived_count_with_reason_does_not_refuse_on_narrowing(
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -280,7 +280,7 @@ def test_shrinking_derived_count_with_reason_does_not_refuse_on_narrowing(
             {
                 "phase": "dual-write",
                 "derived_count": 5,
-                "derived_ids": ["coordinator-claude:sub/a.py"] * 5,
+                "derived_ids": ["doe-claude:sub/a.py"] * 5,
                 "at": "2026-07-24T00:00:00Z",
                 "derivation_narrowed_reason": "4 consumers were deleted outright, see PR #1",
             }
@@ -296,7 +296,7 @@ def test_foreign_repo_with_no_sibling_confirmation_is_indeterminate(tmp_path: Pa
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -306,7 +306,7 @@ def test_foreign_repo_with_no_sibling_confirmation_is_indeterminate(tmp_path: Pa
             "pattern": "TARGET_TOKEN",
             "paths": ["sub"],
             "repos": [
-                {"repo": "coordinator-claude", "foreign": False},
+                {"repo": "doe-claude", "foreign": False},
                 {"repo": "cockpit", "foreign": True},
             ],
         },
@@ -321,7 +321,7 @@ def test_foreign_repo_confirmed_id_not_rederivable_refuses_at_agreement_leg(
     tmp_path: Path,
 ) -> None:
     """A confirmed_consumers entry claiming a foreign-repo id (e.g. "cockpit:...")
-    is never re-findable by derive() (only coordinator-claude/claude-klabauter are ever
+    is never re-findable by derive() (only doe-claude/claude-klabauter are ever
     scanned — see _build_repo_roots), so the subset-agreement leg (2) refuses
     before the foreign-repo fail-closed leg (4) is ever reached. This proves
     leg (2) fires first — a foreign entry cannot be used to short-circuit
@@ -332,7 +332,7 @@ def test_foreign_repo_confirmed_id_not_rederivable_refuses_at_agreement_leg(
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             },
@@ -347,7 +347,7 @@ def test_foreign_repo_confirmed_id_not_rederivable_refuses_at_agreement_leg(
             "pattern": "TARGET_TOKEN",
             "paths": ["sub"],
             "repos": [
-                {"repo": "coordinator-claude", "foreign": False},
+                {"repo": "doe-claude", "foreign": False},
                 {"repo": "cockpit", "foreign": True},
             ],
         },
@@ -397,7 +397,7 @@ def test_repo_qualified_confirmed_id_mismatch_still_refuses(tmp_path: Path) -> N
 def test_bare_relpath_confirmed_id_ambiguous_across_repos_refuses_and_asks_to_qualify(
     tmp_path: Path,
 ) -> None:
-    """coordinator-claude and example_doctrine_repo both alias to the same on-disk root
+    """doe-claude and doe_claude both alias to the same on-disk root
     (_DOE_ROOT_ALIASES), so declaring both as gate_source repos derives the
     same file twice under two different repo-qualified ids — a genuine
     cross-repo ambiguity for a bare relpath confirmation."""
@@ -416,8 +416,8 @@ def test_bare_relpath_confirmed_id_ambiguous_across_repos_refuses_and_asks_to_qu
             "pattern": "TARGET_TOKEN",
             "paths": ["sub"],
             "repos": [
-                {"repo": "coordinator-claude", "foreign": False},
-                {"repo": "example_doctrine_repo", "foreign": False},
+                {"repo": "doe-claude", "foreign": False},
+                {"repo": "doe_claude", "foreign": False},
             ],
         },
     )
@@ -457,7 +457,7 @@ def test_underconfirmed_record_refuses_and_names_unconfirmed_derived_ids(
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -468,7 +468,7 @@ def test_underconfirmed_record_refuses_and_names_unconfirmed_derived_ids(
     assert "VERDICT=REFUSE" in result["verdict_line"]
     refusal_notes = [n for n in result["notes"] if "no matching" in n.lower()]
     assert refusal_notes, result["notes"]
-    assert "coordinator-claude:sub/producer_two.py" in refusal_notes[0]
+    assert "doe-claude:sub/producer_two.py" in refusal_notes[0]
     assert "confirmed_consumers entry" in refusal_notes[0]
     assert "verified_by" in refusal_notes[0]
 
@@ -480,12 +480,12 @@ def test_fully_confirmed_record_with_multiple_consumers_passes(tmp_path: Path) -
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             },
             {
-                "id": "coordinator-claude:sub/producer_two.py",
+                "id": "doe-claude:sub/producer_two.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             },
@@ -513,7 +513,7 @@ def test_unknown_candidate_blocks_advance_even_when_confirmed_agrees(tmp_path: P
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -531,7 +531,7 @@ def test_gate_never_writes_the_record_file(tmp_path: Path) -> None:
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/producer.py",
+                "id": "doe-claude:sub/producer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }

@@ -2,14 +2,14 @@
 emit_memo_schema — generates cross-repo-memo.schema.json + archived-memo.schema.json
 as JSON Schema PROJECTIONS of claude-klabauter's own cross-repo-memo SSOT, mirroring the
 `coordinator_core.contract.cockpit_schema.emit_schema.emit_schemas(out_dir=...)`
-precedent that is the SOLE canonical regeneration path for coordinator-claude's frozen
+precedent that is the SOLE canonical regeneration path for DoE's frozen
 Cockpit-contract JSON.
 
 Ownership context (Decision-0, RATIFIED 2026-07-24): DR-210 previously held the
-two memo schema JSONs coordinator-claude-side permanently ("contract, not implementation").
-The 2026-07-24 coordinator-claude proposal reverses that, but the reversal is one of
+two memo schema JSONs DoE-side permanently ("contract, not implementation").
+The 2026-07-24 DoE proposal reverses that, but the reversal is one of
 BEHAVIOR-ownership, not a hand-authored-file relocation — claude-klabauter's engine
-never consumed the coordinator-claude JSON for validation in the first place (memos are
+never consumed the DoE JSON for validation in the first place (memos are
 validated cross-field-only, no schema file — see
 `coordinator_core.frontmatter.schema_validate.validate_memo_cross_fields`);
 the real SSOT for required-ness is the send-time gate in
@@ -17,8 +17,8 @@ the real SSOT for required-ness is the send-time gate in
 `_self_validate_frontmatter_fields`), and the cross-field lifecycle rules live
 in `coordinator_core.frontmatter.schema_validate._MEMO_CROSS_FIELD_RULES`. So
 these two JSON Schema documents are DERIVED artifacts describing that
-behavior for coordinator-claude's routing hook / the legacy JS `query-records` CLI to
-consume — not a second hand-owned copy of static JSON. Coordinator-claude's hook becomes a
+behavior for DoE's routing hook / the legacy JS `query-records` CLI to
+consume — not a second hand-owned copy of static JSON. DoE's hook becomes a
 pure consumer of the artifact this module emits, exactly as the
 Cockpit-contract hook already is a pure consumer of `emit_schema.emit_schemas`.
 
@@ -39,7 +39,7 @@ nothing in this module (or anywhere else — see
 `coordinator_core/ops/verify_schema_registry_sync.py` and
 `coordinator_core/frontmatter/schema_drift_watch.py`, updated in lockstep)
 registers the emitted files into `_byGlob` or `_byKind`. They are
-drift-reference / coordinator-claude-consumer artifacts only.
+drift-reference / DoE-consumer artifacts only.
 
 Spec backlink: pln-take-ownership-of-the-cross-re-ac97ef § C5 / Decision-0
 Negative-spec: this module does NOT vendor a hand-authored static JSON file —
@@ -59,7 +59,7 @@ from typing import Any
 from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KINDS
 
 # ---------------------------------------------------------------------------
-# x-schema-version — bumped independently of coordinator-claude's prior vendored "1.0.0"
+# x-schema-version — bumped independently of DoE's prior vendored "1.0.0"
 # pin. This is a NEW emission lineage (generated-from-SSOT, not
 # hand-authored-and-vendored); the version literal lives in exactly this one
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
@@ -67,14 +67,35 @@ from coordinator_core.ops.fleet.memo_send import _SUMMARY_MAX_CHARS, _VALID_KIND
 # ---------------------------------------------------------------------------
 MEMO_SCHEMA_VERSION = "1.5.0"
 
+#: Generator-provenance declaration: emit_schemas() writes both of these
+#: fixed tracked artifacts to this module's own directory by default.
+GENERATES = [
+    {
+        "artifact": "coordinator_core/contract/cross-repo-memo.schema.json",
+        "stamp_key": "x-schema-version",
+        "sources": [
+            "coordinator_core/contract/emit_memo_schema.py",
+            "coordinator_core/ops/fleet/memo_send.py",
+        ],
+    },
+    {
+        "artifact": "coordinator_core/contract/archived-memo.schema.json",
+        "stamp_key": "x-schema-version",
+        "sources": [
+            "coordinator_core/contract/emit_memo_schema.py",
+            "coordinator_core/ops/fleet/memo_send.py",
+        ],
+    },
+]
+
 # ---------------------------------------------------------------------------
-# x-bump-class / x-bump-note — coordinator-claude's bump-class annotation (memo
-# 2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md), sibling
+# x-bump-class / x-bump-note — DoE's bump-class annotation (memo
+# 2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md), sibling
 # keys to x-schema-version. Closed vocabulary per that memo:
 # top-level-array-additive | nested-field-additive | major. Non-behavioural
 # (an `x-` annotation key changes no record's validity) so it does NOT bump
 # MEMO_SCHEMA_VERSION — this pair only records how the CURRENT version
-# (1.0.0 -> 1.2.0) changed shape, mirroring coordinator-claude's own hand-added values so
+# (1.0.0 -> 1.2.0) changed shape, mirroring DoE's own hand-added values so
 # their vendored copy and this emission converge rather than drift again.
 # Single definition each, consumed at both emission sites below.
 # ---------------------------------------------------------------------------
@@ -117,13 +138,14 @@ _KIND_DESCRIPTION = (
 _SUMMARY_DESCRIPTION = (
     f"One-line memo summary (<= {_SUMMARY_MAX_CHARS} chars). Length enforced "
     "by a cross-field rule (schema_validate._memo_cf_summary_length_cap) for "
-    "post-cutoff memos (created >= 2026-05-22) — required at SEND time only "
-    "(DEC-1: memo_send.py's own gate, not this schema's `required` array)."
+    "non-grandfathered memos (created >= the grandfather cutoff) — required "
+    "at SEND time only (DEC-1: memo_send.py's own gate, not this schema's "
+    "`required` array)."
 )
 
 _IN_REPLY_TO_DESCRIPTION = (
-    "Optional linkage field (2026-07-25 write-side addition): the basename "
-    "of an inbound memo this memo replies to. Normalized to a bare basename "
+    "Optional linkage field: the basename of an inbound memo this memo "
+    "replies to. Normalized to a bare basename "
     "at send time and, for a receiver-repo delivery, existence-checked "
     "against the SENDER's own cross-repo/inbox/ or cross-repo/archive/ "
     "before anything is written (coordinator_core.ops.fleet.memo_send."
@@ -135,15 +157,15 @@ _IN_REPLY_TO_DESCRIPTION = (
 )
 
 _SPACE_DESCRIPTION = (
-    "Optional sender-declared thread / problem-space hint (2026-07-28 "
-    "addition, a sibling repo's inbox-blitz proposal). EXPLICITLY "
-    "NON-AUTHORITATIVE: the receiver may override or ignore it, and nothing "
-    "validates it against a controlled vocabulary — it is a grouping hint, "
-    "not a taxonomy. Its value is that reconstructing threads from memo "
-    "bodies is the single most expensive judgment step in a batch inbox "
-    "pass, and a sender-declared hint collapses that step to a GROUP BY "
-    "(a sibling repo's 16-memo dominant correspondent was five threads to the "
-    "sender and expensively so to the receiver). Consumed by "
+    "Optional sender-declared thread / problem-space hint, per a sibling "
+    "repo's inbox-blitz proposal. EXPLICITLY NON-AUTHORITATIVE: the "
+    "receiver may override or ignore it, and nothing validates it against a "
+    "controlled vocabulary — it is a grouping hint, not a taxonomy. Its "
+    "value is that reconstructing threads from memo bodies is the single "
+    "most expensive judgment step in a batch inbox pass, and a "
+    "sender-declared hint collapses that step to a GROUP BY (a sibling "
+    "repo's 16-memo dominant correspondent was five threads to the sender "
+    "and expensively so to the receiver). Consumed by "
     "coordinator_core.ops.fleet.memo_blitz_buckets as the preferred "
     "space key. Never required — the entire pre-2026-07-28 corpus lacks it "
     "and must keep validating."
@@ -152,21 +174,21 @@ _SPACE_DESCRIPTION = (
 _SUPERSEDES_DESCRIPTION = (
     "Sender-declared supersession — points FROM new TO old. Accepts either a "
     "single memo reference (string, the original 'set on a new memo when "
-    "re-issuing a pre-lifecycle memo' shape) OR a list of references "
-    "(widened 2026-07-28 so one memo can retire several earlier ones, which "
-    "is the observed shape of a running thread that ends in a correction). "
-    "A reference is a memo basename or topic ref. Sender-declared rather "
-    "than receiver-inferred because the sender usually knows: two of the "
-    "three supersessions a sibling repo inferred during their 2026-07-28 blitz "
-    "were memos whose own bodies said 'this corrects my earlier one' in "
-    "prose. memo.send's same-day re-delivery filename disambiguator "
-    "(memo_send._redelivery_filename) slugs the FIRST reference when a list "
-    "is supplied — the list form does not change that filename's shape."
+    "re-issuing a pre-lifecycle memo' shape) OR a list of references, "
+    "supporting one memo retiring several earlier ones — the observed shape "
+    "of a running thread that ends in a correction. A reference is a memo "
+    "basename or topic ref. Sender-declared rather than receiver-inferred "
+    "because the sender usually knows: a sibling repo's inbox-blitz sweep "
+    "found two of three inferred supersessions were memos whose own bodies "
+    "said 'this corrects my earlier one' in prose. memo.send's same-day "
+    "re-delivery filename disambiguator (memo_send._redelivery_filename) "
+    "slugs the FIRST reference when a list is supplied — the list form does "
+    "not change that filename's shape."
 )
 
 _TO_REPO_CROSS_REPO_MEMO_DESCRIPTION = (
     "OPTIONAL machine-local registry key of the receiver repo, in "
-    "`repos.<key>` form (e.g. repos.example_doctrine_repo, repos.claude_klabauter, "
+    "`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "
     "repos.example_retrieval_repo — the same key family used fleet-wide for "
     "sibling-repo resolution). `to:` remains the human-readable addressee "
     "and all its existing aliases stay valid; `to_repo` disambiguates "
@@ -200,7 +222,7 @@ _SUPERSEDED_BY_ARCHIVED_MEMO_DESCRIPTION = (
 
 _TO_REPO_ARCHIVED_MEMO_DESCRIPTION = (
     "OPTIONAL machine-local registry key of the receiver repo, in "
-    "`repos.<key>` form (e.g. repos.example_doctrine_repo, repos.claude_klabauter, "
+    "`repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, "
     "repos.example_retrieval_repo). Sibling of the cross-repo-memo schema's "
     "`to_repo` field, carried through to archival so a memo bearing it "
     "still validates after `git mv` to cross-repo/archive/. `to:` "
@@ -212,7 +234,7 @@ _TO_REPO_ARCHIVED_MEMO_DESCRIPTION = (
 
 _CAMPAIGN_ID_DESCRIPTION = (
     "Optional shared correlation id stamped by memo.send's 1->N fan-out "
-    "(DEC-3/C7, 2026-07-24 memo-ownership-and-redesign plan). Present only "
+    "(DEC-3/C7, per the memo-ownership-and-redesign plan). Present only "
     "on memos delivered via a to:[] fan-out send; identical across every "
     "receiver in the same campaign, persisted to disk on every successful "
     "per-receiver write (coordinator_core.ops.fleet.memo_send."
@@ -317,7 +339,7 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
 
     Field set + cross-field-rule pointers mirror
     `coordinator_core.frontmatter.schema_validate._MEMO_CROSS_FIELD_RULES`
-    (the claude-klabauter-native SSOT, ported from coordinator-claude's now-superseded
+    (the claude-klabauter-native SSOT, ported from DoE's now-superseded
     `bin/lib/schema.js` CROSS_FIELD_RULES['cross-repo-memo']). `required`
     lists only the base structural fields memo_send.py's
     `_self_validate_frontmatter_fields` enforces unconditionally
@@ -347,8 +369,8 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
             "kind enum, distill_fate=ratification -> in_repo_capture shape, "
             "disposition_superseded=true -> superseding_note/"
             "superseding_realized_by/superseded_at + status already "
-            "actioned/superseded. Grandfather cutoff: memos created < "
-            "2026-05-22 skip cross-field validation."
+            "actioned/superseded. Memos created before the grandfather "
+            "cutoff (see `created`) skip cross-field validation entirely."
         ),
         "type": "object",
         "required": ["title", "from", "to", "created", "status", "delivery_mode"],
@@ -424,6 +446,19 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
                     "Claim attribution stamped at pickup-start when status flips "
                     "to in_progress. Required by cross-field rule when "
                     "status=in_progress."
+                ),
+            },
+            "sent_by": {
+                "type": "string",
+                "description": (
+                    "Sender's session UUID, stamped at SEND time (never at draft "
+                    "time — draft time is not send time). Mirrors picked_up_by on "
+                    "the receive path. A durable session UUID, never a resolved "
+                    "messaging address (addresses are per-process and a replayed "
+                    "one is actively wrong, not merely stale). Optional and never "
+                    "required — absent on memos predating this field, and a sender "
+                    "that could not resolve its own session id renders an explicit "
+                    "unresolved sentinel rather than omitting the field silently."
                 ),
             },
             "picked_up_at": {
@@ -582,7 +617,7 @@ def _build_archived_memo_schema() -> dict[str, Any]:
             "cross-repo/archive/. GENERATED PROJECTION, not hand-vendored — see "
             "cross-repo-memo.schema.json's description for the ownership note. "
             "Spec backlink: docs/plans/2026-06-23-deliverable-type-schema-taxonomy.md "
-            "§ C1b; docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C5."
+            "§ C1b; pln-take-ownership-of-the-cross-re-ac97ef § C5."
         ),
         "type": "object",
         "required": ["from", "to", "status"],

@@ -6,7 +6,7 @@ eligible agent's run-report sidecar, across BOTH of that module's homes:
 the session-keyed ``state/subagent-share/<session_id>/`` tree, and the
 plan-derivable ``state/plan-sidecars/`` tree the four G2 emitters use
 (canonical spec § 2.7, `state/subagent-share/conductor/seam-adjudication.md`,
-Coordinator-claude). Both trees carry the identical ``## Exit interview`` shape --
+DoE-claude). Both trees carry the identical ``## Exit interview`` shape --
 this module walks them the same way and folds the results into one report.
 
 This is deliberately the smallest useful tool: walk the sidecar tree(s),

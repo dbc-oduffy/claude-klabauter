@@ -19,7 +19,7 @@ schema-validation half natively:
      copy's own call sites.
   2. On a live (non ``--check-only``) run that completed with rc 0, performs
      the SAME conditional schema-validation the retired bash step performed:
-     shell out to ``.github/scripts/validate-json-schemas.py`` (a coordinator-claude
+     shell out to ``.github/scripts/validate-json-schemas.py`` (a DoE-claude
      repo script, resolved via :func:`coordinator_core.ops.coordinator_doe_root.
      coordinator_doe_root`) IFF that script AND a resulting
      ``known_marketplaces.json`` both exist. Under the maximalist
@@ -39,7 +39,7 @@ Status rows (install.md Step 9 Phase 7 contract, verbatim):
   ``platform_localize: error (see stderr)``
   ``platform_localize: ran (known_marketplaces.json not applicable — no local plugin dirs)``
 
-Spec backlink: coordinator/commands/install.md § Step 9 [coordinator-claude repo]
+Spec backlink: coordinator/commands/install.md § Step 9 [DoE-claude repo]
 """
 
 from __future__ import annotations
@@ -75,10 +75,10 @@ def _default_plugins_dir() -> Path:
 
 
 def _default_validate_schemas_path() -> Optional[Path]:
-    """Resolve `.github/scripts/validate-json-schemas.py`, coordinator-claude-repo-
+    """Resolve `.github/scripts/validate-json-schemas.py`, DoE-claude-repo-
     relative — mirrors the retired bash step's plain-relative-path lookup
-    (which assumed cwd == the coordinator-claude repo root at install time). Tries
-    the resolved coordinator-claude root first (works regardless of caller cwd), falling
+    (which assumed cwd == the DoE-claude repo root at install time). Tries
+    the resolved DoE root first (works regardless of caller cwd), falling
     back to a literal cwd-relative lookup for parity with the old bash
     behavior. Returns None if neither resolves to an existing file — the
     caller treats that as "nothing to validate", not an error."""

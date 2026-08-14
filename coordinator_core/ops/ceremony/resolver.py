@@ -78,7 +78,7 @@ def resolve_in_repo(worktree_root: Path, candidate_path: str) -> Path | None:
 
     Guards against a producer-written pickup.handoff that is absolute or
     uses ../ traversal to escape the invoking repo — the foreign-repo bleed
-    defect (a example-retrieval-repo handoff mis-bound into a coordinator-claude ceremony).  Containment,
+    defect (a example-retrieval-repo handoff mis-bound into a DoE ceremony).  Containment,
     not mere existence, is the invariant: hf must live under THIS repo.
 
     Negative-spec: do NOT downgrade to a string-prefix check — resolve() first;
@@ -264,7 +264,7 @@ def detect_git_provenance_consumed(
     --find-renames --name-status`` with a per-commit ``%(trailers:key=Session-
     Id,valueonly)`` marker line, mirroring the bash oracle's own
     ``awk -v sid=`` pass line-for-line (see
-    ``coordinator-claude/coordinator/skills/workstream-complete/SKILL.md`` Step 0,
+    ``DoE-claude/coordinator/skills/workstream-complete/SKILL.md`` Step 0,
     Detector B). Collects EVERY match across the range (not just the first —
     unlike the bash oracle's awk ``exit`` at first hit — so a DAG-pickup
     session that shipped/archived N predecessor handoffs this run gets all N

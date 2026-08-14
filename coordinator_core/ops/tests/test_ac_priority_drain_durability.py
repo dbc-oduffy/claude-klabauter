@@ -7,7 +7,7 @@ test_priority_drain.py's unit coverage — see that file for the fixture/style
 precedent this module follows (same _isolated_central_root shape, same
 POSIX-lock-backend skip guard).
 
-Coverage maps to coordinator-claude docs/plans/2026-07-26-priority-ledger.md
+Coverage maps to DoE-claude docs/plans/2026-07-26-priority-ledger.md
 § Acceptance Criteria:
 
   AC12 — end-to-end: an intent record dropped in the inbox is drained by
@@ -42,7 +42,7 @@ skipped when the platform is not POSIX, matching the module's existing
 fcntl/msvcrt lock-backend skip precedent below for the same "physics, not
 missing coverage" reason.
 
-Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § Acceptance Criteria
+Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § Acceptance Criteria
 """
 
 from __future__ import annotations

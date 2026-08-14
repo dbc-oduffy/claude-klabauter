@@ -29,15 +29,15 @@ exit-code-equivalent to the old spawn without invoking node at all. See
 whose `_EXEMPT_NODE_ORACLE_CALLS` entry for this module is retired in the
 same change.
 
-Port of: verify-schema-registry-sync.sh (coordinator-claude b5a4192c, 2026-07-20); node-spawn
+Port of: verify-schema-registry-sync.sh (DoE b5a4192c, 2026-07-20); node-spawn
 era ported from coordinator/bin/query-records.js (2026-07-22, see
 schema_validate.py build_type_to_glob for the line-cited registry-derivation
 port).
 Spec backlink: docs/plans/2026-06-23-deliverable-type-schema-taxonomy.md
-§ Decision 3 + C4 (coordinator-claude repo).
+§ Decision 3 + C4 (DoE-claude repo).
 
 Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
-import from the coordinator-claude-side polyglot trampoline (template-variant #1, mirrors
+import from the DoE-side polyglot trampoline (template-variant #1, mirrors
 coordinator-auto-push / handoff-gate-aging).
 
 Negative-spec (hard-won, faithfully reproduced from the .sh/node-spawn
@@ -53,7 +53,7 @@ original except where corrected below):
     - GENERATED-NOT-VENDORED (Decision-0, 2026-07-24, plan
       docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C5):
       `cross-repo-memo.schema.json` on this gate's `schemas_dir`
-      (`data_root("schemas")`, coordinator-claude-resident when not co-located) is now a
+      (`data_root("schemas")`, DoE-resident when not co-located) is now a
       DOWNSTREAM CONSUMED ARTIFACT of claude-klabauter's own emission —
       `coordinator_core.contract.emit_memo_schema.emit_schemas()` is the
       canonical regeneration path, mirroring the cockpit_schema precedent.
@@ -65,7 +65,7 @@ original except where corrected below):
       generated file is registered into claude-klabauter's own
       `coordinator_core/frontmatter/schemas/` auto-load dir (see
       `emit_memo_schema`'s module docstring CRITICAL note) — this gate's
-      `schemas_dir` is a wholly separate directory (coordinator-claude's/the shared
+      `schemas_dir` is a wholly separate directory (DoE's/the shared
       plugin-distribution `coordinator/schemas/`), so that non-auto-load
       invariant is orthogonal to (and unaffected by) this check.
     - CORRECTED 2026-07-22 (false-positive fix, PM-ratified): bug-backlog,
@@ -103,9 +103,9 @@ _DELIBERATE_DIVERGENCES = frozenset(
      "cross-repo-memo.schema.json", "handoff-archived.schema.json"}
 )
 
-# DR-047 schema-format-migration note (2026-07, coordinator-claude commit 758de78b
+# DR-047 schema-format-migration note (2026-07, DoE-claude commit 758de78b
 # "schema: migrate 8 legacy .yaml schemas to first-class .schema.json"):
-# coordinator-claude's live schemas/ dir has since migrated ALL schema files from
+# DoE-claude's live schemas/ dir has since migrated ALL schema files from
 # schemas/*.yaml to schemas/*.schema.json (JSON Schema, applies_to: still a
 # top-level string field, now JSON-quoted rather than YAML-bare). Both
 # extensions are recognised here so the gate keeps working across the
@@ -273,7 +273,7 @@ def _resolve_plugin_root() -> Path:
     invocation (no argv[0] hint) resolves the SAME live schemas/ dir natively via
     `coordinator_core.data_root.data_root("schemas")` and returns its parent —
     the coordinator root containing that schemas/ dir, co-located or
-    coordinator-claude-resident. Previously fell back to `Path.cwd()` (a plain `node` no-op
+    DoE-resident. Previously fell back to `Path.cwd()` (a plain `node` no-op
     search-failure analog); that stopped being correct once schemas/ moved to a
     split-repo layout unrelated to cwd. Raises RuntimeError (naming both rungs
     tried) if neither rung resolves — `main()` catches and reports rather than

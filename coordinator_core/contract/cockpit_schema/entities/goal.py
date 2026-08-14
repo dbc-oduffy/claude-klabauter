@@ -1,6 +1,6 @@
 """
 Goal — the one net-new WRITABLE entity in the cockpit, modelled as an
-append-only event record (the Data Science Reviewer P1-D6, R3). Pydantic port of coordinator-claude
+append-only event record (the Data Science Reviewer P1-D6, R3). Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/goal.ts` (Zod source).
 
 Goals are mutable, low-frequency, single-author-per-edit but MULTI-MACHINE
@@ -15,7 +15,7 @@ R3: goals are DECLARED (not inferred), captured via enhanced existing
 ceremonies (workweek-start, workday-start, HEADER.md per-repo) — tc-3 owns the
 write; this contract owns the shape.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

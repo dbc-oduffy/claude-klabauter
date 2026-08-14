@@ -5,7 +5,7 @@ envelope.
 Purpose: report per-file and total token cost for a NAMED SET of "boot
 envelope" surfaces — files a Claude Code session (or subagent) loads
 automatically at start, such as the CLAUDE.md-class files enumerated in
-`coordinator_core.claude_md_budget`. Every pre-existing gate (coordinator-claude's
+`coordinator_core.claude_md_budget`. Every pre-existing gate (DoE's
 `check-claude-md-size.py` hook, claude-klabauter's Check 7 in
 `coordinator_core.bash_guards.dispatch_checks`) counts BYTES only — nothing in
 either repo answers "how many tokens does this cost," even though
@@ -24,11 +24,11 @@ needing exact parity with a specific model's tokenizer must not treat this as
 authoritative.
 
 Consumed by (or intended to be consumed by):
-    - coordinator-claude `coordinator/hooks/scripts/check-claude-md-size.py`
+    - DoE-claude `coordinator/hooks/scripts/check-claude-md-size.py`
     - claude-klabauter `coordinator_core.bash_guards.dispatch_checks.check_validate_commit`
       ("Check 7")
 
-Spec backlink: docs/plans/2026-07-27-doctrine-envelope-allocation.md § C1(a)
+Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(a)
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ def main(argv: List[str]) -> int:
 
     This is a REPORTING oracle, not a gate — it always exits 0 given at least
     one argument (2 on missing-args usage error). Callers that need block/warn
-    behaviour against a budget (coordinator-claude's hook, claude-klabauter's Check 7) apply their own
+    behaviour against a budget (DoE's hook, claude-klabauter's Check 7) apply their own
     thresholds from `coordinator_core.claude_md_budget` on top of this report;
     this module has no opinion on what counts as "too large".
     """

@@ -1,10 +1,10 @@
 """Characterization tests for coordinator_core.ops.plan_status_transition.
 
 Golden-oracle-derived: each case was hand-run against the node CLI
-(coordinator-claude coordinator/bin/plan-status-transition.js) during the port to
+(DoE-claude coordinator/bin/plan-status-transition.js) during the port to
 capture exact stdout/stderr text and exit codes, then reproduced here.
 
-Port source: coordinator/bin/plan-status-transition.js (coordinator-claude)
+Port source: coordinator/bin/plan-status-transition.js (DoE-claude)
 """
 from __future__ import annotations
 
@@ -829,7 +829,7 @@ def test_stamp_superseded_rejects_override_reason_flag(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 def _load_doc_new_cli():
-    """Load `coordinator/bin/coordinator-doc-new` as a module by file path --
+    """Load `coordinator/bin/coordinator-doc-new.py` as a module by file path --
     it is an extensionless polyglot entrypoint, not a `.py` module, so it
     cannot be imported normally. Mirrors the load idiom in
     `coordinator/bin/tests/test_coordinator_doc_new_sizing_object_gate.py`'s
@@ -839,7 +839,7 @@ def _load_doc_new_cli():
     import importlib.util
 
     repo_root = Path(__file__).resolve().parents[3]
-    cli_path = repo_root / "coordinator" / "bin" / "coordinator-doc-new"
+    cli_path = repo_root / "coordinator" / "bin" / "coordinator-doc-new.py"
     loader = importlib.machinery.SourceFileLoader(
         "plan_status_transition_test_doc_new_cli", str(cli_path)
     )
@@ -944,3 +944,147 @@ def test_no_head_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "HEAD does not resolve" in err
     assert "left uncommitted" in err
+
+
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md):
+# the plan trigger stops handing the cascade its own caller's flip commit as
+# ship evidence -- end-to-end through the real production caller
+# (`main(["stamp-implemented", ...])`), which is the only place the incident
+# this plan closes is actually reachable: `_commit_plan_flip` commits the
+# plan document immediately BEFORE `_run_cascade` fires, so `source_path` on
+# this trigger really is the caller's own just-made bookkeeping commit.
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_plan_trigger_never_stamps_own_flip_commit_as_shipped_in_e2e(tmp_path, capsys, monkeypatch):
+    """AC1, end-to-end: a governing handoff's `shipped_in` must never resolve
+    to the plan's own flip commit (`_commit_plan_flip`'s write, made
+    immediately before the cascade fires) -- it must come from the handoff's
+    own scope-derived evidence instead. Regression scenario: the flip commit
+    is real, committed, and (via `resolve_source_ship_sha`'s own contract)
+    would have resolved cleanly as `source_path`'s newest non-mechanical
+    toucher had Position 1 run unconditionally on this trigger.
+    """
+    import os
+
+    session_id = "88888888-8888-8888-8888-888888888888"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    env = {**os.environ, **_GIT_ENV_KEYS}
+
+    _ensure_git_repo(tmp_path)
+
+    # Genuine ship evidence: a scope file, committed with a Session-Id
+    # trailer so the scope-derived stamp clears the ownership guard.
+    feature = tmp_path / "feature.txt"
+    feature.write_text("feature body\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "--", "feature.txt"],
+        cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", f"implement the feature this handoff scopes\n\nSession-Id: {session_id}"],
+        cwd=str(tmp_path), capture_output=True, env=env, timeout=15,
+    )
+    feature_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(tmp_path), capture_output=True, env=env, timeout=15, text=True,
+    ).stdout.strip()
+
+    deliverable_id = "dlv-ac1-e2e-000000"
+    (tmp_path / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    handoff = _write(
+        tmp_path,
+        "state/handoffs/20260101-h.md",
+        (
+            "---\n"
+            'title: "AC1 e2e handoff"\n'
+            "created: 2026-01-01\n"
+            "branch: work/test/2026-01-01\n"
+            "status: open\n"
+            'predecessor: "none"\n'
+            "deployment_state: ready_to_fire\n"
+            f"deliverable_id: {deliverable_id}\n"
+            "scope:\n"
+            "  - feature.txt\n"
+            "---\n\n# Handoff\n\nBody.\n"
+        ),
+    )
+
+    plan = _write(
+        tmp_path,
+        "docs/plans/2026-01-01-ac1-e2e-plan.md",
+        (
+            "---\ntitle: AC1 e2e plan\nstatus: draft\n"
+            f"deliverable_id: {deliverable_id}\n---\n\nBody.\n"
+        ),
+    )
+
+    rc = main(["stamp-implemented", "--plan", str(plan)])
+    out, err = capsys.readouterr()
+    assert rc == 0, (out, err)
+
+    # The flip commit `_commit_plan_flip` just made -- HEAD at this point,
+    # since the cascade itself (C2, a separate chunk) does not yet commit
+    # its own write.
+    flip_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(tmp_path), capture_output=True, env=env, timeout=15, text=True,
+    ).stdout.strip()
+    assert flip_sha != feature_sha
+
+    split = split_frontmatter(handoff.read_text(encoding="utf-8"))
+    assert split is not None
+    shipped_in = read_fm_field_unquoted(split.fm_text, "shipped_in")
+    assert shipped_in is not None
+    assert shipped_in != flip_sha[:8]
+    assert shipped_in == feature_sha[:8]
+
+
+def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_e2e(tmp_path, capsys):
+    """AC3, end-to-end: when the governing handoff's own `scope:` resolves no
+    commit, the plan trigger must leave `shipped_in` unset rather than fall
+    back to (or invent) any other evidence -- including the plan's own flip
+    commit, which is real, committed, and would resolve cleanly if Position 1
+    ran on this trigger."""
+    deliverable_id = "dlv-ac3-e2e-000000"
+    (tmp_path / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    handoff = _write(
+        tmp_path,
+        "state/handoffs/20260101-h.md",
+        (
+            "---\n"
+            'title: "AC3 e2e handoff"\n'
+            "created: 2026-01-01\n"
+            "branch: work/test/2026-01-01\n"
+            "status: open\n"
+            'predecessor: "none"\n'
+            "deployment_state: ready_to_fire\n"
+            f"deliverable_id: {deliverable_id}\n"
+            "scope:\n"
+            "  - never-committed.txt\n"
+            "---\n\n# Handoff\n\nBody.\n"
+        ),
+    )
+
+    plan = _write(
+        tmp_path,
+        "docs/plans/2026-01-01-ac3-e2e-plan.md",
+        (
+            "---\ntitle: AC3 e2e plan\nstatus: draft\n"
+            f"deliverable_id: {deliverable_id}\n---\n\nBody.\n"
+        ),
+    )
+
+    rc = main(["stamp-implemented", "--plan", str(plan)])
+    out, err = capsys.readouterr()
+    assert rc == 2, (out, err)
+    assert "no commit evidence resolvable" in err
+
+    split = split_frontmatter(handoff.read_text(encoding="utf-8"))
+    assert split is not None
+    assert read_fm_field_unquoted(split.fm_text, "shipped_in") is None
+    assert read_fm_field_unquoted(split.fm_text, "deployment_state") == "ready_to_fire"

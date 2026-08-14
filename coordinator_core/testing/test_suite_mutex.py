@@ -7,7 +7,7 @@ staleness signals (dead PID and TTL expiry), re-entrancy, non-owner release
 safety, and the never-raises contract on `holder()`.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-test-suite-invocation-guards.md § ask 4
-Spec backlink: coordinator-claude coordinator/docs/wiki/test-environment-discipline.md §5, §6
+Spec backlink: DoE coordinator/docs/wiki/test-environment-discipline.md §5, §6
 
 Negative-spec:
     - Does NOT touch the real machine-wide lock. Every test repoints

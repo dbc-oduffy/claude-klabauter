@@ -51,7 +51,7 @@ Negative-spec:
   - Does NOT call any LLM — deterministic partition only.
   - Does NOT judge whether a ``residue`` memo's eventual fate SHOULD be ratification/
     commitment/ephemeral — that judgment belongs to the LLM specialist wave this op's
-    ``residue`` bucket feeds (memo.triage / coordinator-claude's C6 cascade), not this mechanical prefilter.
+    ``residue`` bucket feeds (memo.triage / DoE's C6 cascade), not this mechanical prefilter.
   - Does NOT delete, mutate-in-place, or commit anything — one whole-JSON create-or-
     overwrite of its own run-scoped shard, full stop (DR-228 § D6).
   - Does NOT write outside ``state/scratch/artifact-distillation/<run_id>/`` — a sibling
@@ -85,6 +85,10 @@ __all__ = [
     "partition_memos",
     "collect_memo_records",
 ]
+
+# writes only state/scratch/artifact-distillation/<run_id>/fate-partition.json,
+# which matches the repo's own .gitignore "scratch/" pattern (untracked)
+GENERATES = []
 
 # fate -> log_append disposition, for the "prefiled" bucket's pre-rendered log_row
 # (C9 alignment — see module docstring). Only fates with a well-defined disposition

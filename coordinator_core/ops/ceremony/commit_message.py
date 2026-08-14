@@ -3,7 +3,7 @@ coordinator_core.ops.ceremony.commit_message -- native port of the deleted
 wsc-commit.sh commit-message composer + dual path-set computation.
 
 Purpose: reconstructs, byte-for-byte, the message-composition logic the OLD
-`wsc-commit.sh` (recovered for behavior from `coordinator-claude:85006468^:coordinator/bin/wsc-commit.sh`,
+`wsc-commit.sh` (recovered for behavior from `DoE:85006468^:coordinator/bin/wsc-commit.sh`,
 since deleted by the 2026-07-15 kill) implemented in bash. Pure functions only --
 no I/O, no subprocess, no git. This is the C2 chunk of the `wsc_tail` rebuild
 (docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
@@ -143,6 +143,45 @@ def _ends_with_trailer_block(message: str) -> bool:
     return all(_TRAILER_LINE_RE.match(ln) is not None for ln in block)
 
 
+def _split_trailer_tail(text: str) -> Tuple[str, str]:
+    """Split `text` into `(body, trailer_tail)`, detaching a trailing run of
+    "Key: value" lines (git-trailer-shaped) that forms `text`'s own LAST
+    paragraph, iff that run is preceded by a blank line (i.e. is genuinely a
+    separate trailing paragraph, not the whole of `text` from its start --
+    same "reached_start" carve-out as `_ends_with_trailer_block`, so a bare
+    subject/prose line that happens to look like "Key: value" is never
+    misread as a detachable trailer).
+
+    Purpose: `compose_message()` uses this ONLY when Step-2.67 blocks are
+    present (`has_blocks`), to pull a trailer-shaped tail out of `prose`
+    BEFORE splicing the Deleted/Kept blocks + `_STEP267_FOOTER` in after it
+    -- otherwise that tail is left stranded mid-message, never the message's
+    terminal paragraph, and so invisible to `git log --format=%(trailers)`
+    (the exact silent-attribution-loss bug this function exists to close;
+    see module docstring). When no detachable tail exists, returns
+    `(text, "")` unchanged -- every other `compose_message()` call shape is
+    untouched by this function's existence.
+    """
+    if not text:
+        return text, ""
+    stripped = text.rstrip("\n")
+    if not stripped:
+        return text, ""
+    lines = stripped.split("\n")
+    idx = len(lines) - 1
+    while idx >= 0 and lines[idx].strip() != "":
+        idx -= 1
+    if idx < 0:
+        # No preceding blank line -- the trailing non-blank run reaches the
+        # start of `text`, so it is `text` itself, never a detachable tail.
+        return text, ""
+    trailer_lines = lines[idx + 1 :]
+    if not trailer_lines or not all(_TRAILER_LINE_RE.match(ln) for ln in trailer_lines):
+        return text, ""
+    body = "\n".join(lines[:idx])
+    return body, "\n".join(trailer_lines)
+
+
 class SweptRenameError(ValueError):
     """Raised on a malformed `--swept-rename '<src>|<dst>'` CLI value.
 
@@ -194,6 +233,19 @@ def compose_message(
     """
     has_blocks = _has_blocks(deleted_paths, kept_entries)
 
+    # Detach a trailer-shaped tail from `prose` BEFORE splicing the blocks in
+    # -- only when blocks are present, since that is the only shape where the
+    # blocks+footer would otherwise land between that tail and the message's
+    # true end, severing it from git's trailer parser (see
+    # `_split_trailer_tail`'s docstring). When no blocks follow, `prose`'s own
+    # trailing paragraph -- trailer-shaped or not -- is already terminal
+    # (modulo the explicit `trailers` param handling below), so this step
+    # must not fire there.
+    if has_blocks:
+        prose_body, prose_trailer_tail = _split_trailer_tail(prose)
+    else:
+        prose_body, prose_trailer_tail = prose, ""
+
     msg = subject + "\n"
 
     # 1. Blank line after subject -- iff prose OR any block follows.
@@ -201,11 +253,11 @@ def compose_message(
         msg += "\n"
 
     # 2. Prose body.
-    if prose:
-        msg += prose + "\n"
+    if prose_body:
+        msg += prose_body + "\n"
 
     # 3. Blank line between prose and the Step 2.67 blocks -- iff BOTH present.
-    if prose and has_blocks:
+    if prose_body and has_blocks:
         msg += "\n"
 
     # Deleted (Step 2.67): block -- one bare path per line.
@@ -229,20 +281,33 @@ def compose_message(
         msg += _STEP267_FOOTER + "\n"
 
     # Trailer block -- new (not in the bash original); appended last, only
-    # when the caller supplied non-empty trailers. When `subject`/`prose`
-    # ALREADY ends in a trailer block (e.g. the caller's own prose closed
-    # with "Deliverable-Id: ..."), joining with a blank line would start a
-    # NEW paragraph and demote that existing block to body prose for git's
+    # when the caller supplied non-empty trailers, OR `prose` carried a
+    # trailer-shaped tail detached above (`prose_trailer_tail`). Both are
+    # joined into ONE combined trailer paragraph so a caller-embedded
+    # trailer (e.g. `prose` closing with "Deliverable-Id: ...") and an
+    # explicit `trailers=` value never end up as two separate paragraphs --
+    # only the LAST paragraph is ever trailer-parseable, so two would demote
+    # the first to body prose exactly as the blocks/footer would have.
+    combined_trailers = (
+        prose_trailer_tail + "\n" + trailers
+        if prose_trailer_tail and trailers
+        else prose_trailer_tail or trailers
+    )
+
+    # When `subject`/`prose_body` ALREADY ends in a trailer block (e.g. no
+    # Step-2.67 blocks were present, so `prose`'s own trailing trailer-shaped
+    # lines were never detached above), joining with a blank line would start
+    # a NEW paragraph and demote that existing block to body prose for git's
     # trailer parser (see `_ends_with_trailer_block`'s docstring) -- join it
     # onto the same paragraph instead (single "\n", no blank line). Only
     # when no trailer block already terminates the message does today's
     # blank-line-separated convention apply.
-    if trailers:
+    if combined_trailers:
         if _ends_with_trailer_block(msg):
             base = msg if msg.endswith("\n") else msg + "\n"
-            msg = base + trailers + "\n"
+            msg = base + combined_trailers + "\n"
         else:
-            msg += "\n" + trailers + "\n"
+            msg += "\n" + combined_trailers + "\n"
 
     return msg
 

@@ -15,12 +15,12 @@ risk to the real install.
 
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
     (T4a-g3b chunk).
-Spec backlink: docs/plans/2026-07-08-coordinator-uninstall.md § C3-C6
+Spec backlink: DoE-claude:pln-first-class-coordinator-uninst-15db2e § C3-C6
 Surface source of truth: tasks/coordinator-uninstall/surface-map.md
 Identity-key source of truth: coordinator/lib/settings-hook-identity.sh (C2),
     ported at coordinator_core.install._shared.settings_hook_identity_inverse_strip.
 
-Negative-spec: does NOT delete ``<coordinator-claude>/coordinator`` source in full-remove
+Negative-spec: does NOT delete ``<DoE>/coordinator`` source in full-remove
 mode — that is a separate, PM-gated decision (anti-scope, matches bash).
 """
 
@@ -69,6 +69,13 @@ from coordinator_core.install.receipt import InstallReceipt, load_receipt
 from coordinator_core.claude_klabauter_root import coordinator_claude_klabauter_root
 from coordinator_core.ops import render_template
 from coordinator_core.hooks import platform_localize
+
+# Generator-provenance declaration (generator_provenance.py). Every leg
+# resolves its targets from CLAUDE_HOME/COORDINATOR_SETTINGS_HOME env
+# overrides per this module's own docstring ("Every leg resolves its
+# filesystem/registry targets from environment overrides...NEVER a
+# hardcoded real-user path") -- the operator's home tree, not claude-klabauter's own.
+GENERATES = []
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +153,7 @@ UNINSTALL_DISPOSITIONS: tuple[str, ...] = (
 )
 """The frozen three-way disposition set every receipt entry must land in
 exactly one of — see module-section docstring above. C9 restates coverage
-of this set over the receipt to coordinator-claude as a correspondence property; do not
+of this set over the receipt to DoE as a correspondence property; do not
 add a fourth value without updating that restatement."""
 
 _MARKER_KINDS = frozenset({"rc-block", "hook-gate-region"})
@@ -194,7 +201,7 @@ def classify_entry_disposition(
         complete it (e.g. a hand-modified block, per Rule 1); proposes
         ``cannot-reverse-safely``. ``manual_command`` SHOULD be supplied.
       - ``None``  — this entry was deliberately never attempted (a named
-        policy choice, e.g. "we do not delete `<coordinator-claude>/coordinator` source in
+        policy choice, e.g. "we do not delete `<DoE>/coordinator` source in
         full-remove mode"); proposes ``deliberately-not-reversed``.
         ``reason`` MUST name the policy, not be a shrug.
 
@@ -268,7 +275,7 @@ class UninstallDispositionReport:
     report, not just per-call — that every record supplied landed in
     exactly one of ``UNINSTALL_DISPOSITIONS`` and none was silently
     dropped, since C9 restates this coverage as an external commitment to
-    coordinator-claude."""
+    DoE."""
 
     records: tuple[DispositionRecord, ...] = field(default_factory=tuple)
 
@@ -563,7 +570,7 @@ def render_uninstall_dry_run_report(receipt: "InstallReceipt | None") -> str:
     # ``classify_entry_disposition`` maps to ``deliberately-not-reversed``:
     # every entry a real run WOULD reverse was mislabeled identically to an
     # entry coordinator has permanently decided never to touch (e.g.
-    # ``<coordinator-claude>/coordinator`` source), contradicting
+    # ``<DoE>/coordinator`` source), contradicting
     # ``docs/wiki/uninstall-agentic-judgment.md``'s "Dry-run is standard,
     # not optional" promise that "the only difference is that `reversed`
     # becomes 'would reverse'." Landing every ordinary entry in the
@@ -865,16 +872,16 @@ def uninstall_remove_shim() -> bool:
         text = legacy_bashrc.read_text(encoding="utf-8", errors="replace")
         lines = text.split("\n")
         if legacy_marker_begin in lines:
-            # `X/coordinator-claude` is a fingerprint of the literal text a prior generator
+            # `X/DoE-claude` is a fingerprint of the literal text a prior generator
             # wrote into `~/.bashrc`, matched as a string below -- never resolved as
             # a path. It must stay frozen to keep matching that historical output, so
             # it must NOT be swapped for registry/settings-home resolution. A mismatch
             # fails closed either way: false negative re-strips a hand-edited block,
             # false positive refuses and prints manual-removal instructions.
-            expected_claude_bin = f"{home}/X/coordinator-claude/coordinator/bin/claude-doe"
-            expected_repo = f"{home}/X/coordinator-claude"
+            expected_claude_bin = f"{home}/X/DoE-claude/coordinator/bin/claude-doe"
+            expected_repo = f"{home}/X/DoE-claude"
             expected_line = (
-                f'claude() {{ REPO_EXAMPLE_DOCTRINE_REPO="{expected_repo}" command bash '
+                f'claude() {{ REPO_DOE_CLAUDE="{expected_repo}" command bash '
                 f'"{expected_claude_bin}" "$@"; }}'
             )
 
@@ -1278,7 +1285,7 @@ def uninstall_remove_substrate(
             "plugin.mirrors.coordinator-claude.propagation_mode",
             "coordinator.python",
             "coordinator.whoami_src",
-            "repos.example_doctrine_repo",
+            "repos.doe_claude",
         ):
             if not ml_set(key, "", plugin_root=plugin_root, registry_dir=ml_dir):
                 errors.append(f"failed to clear registry key {key}")
@@ -1331,7 +1338,7 @@ def uninstall_remove_substrate(
             "claude-home", "_claude_home.py", "claude-home.cmd",
             "resolve-coordinator-clone", "coordinator-settings-home",
             # platform-localize.sh: legacy cleanup of pre-2026-07-22 installs
-            # (coordinator-claude commit 6fb5fb37 renamed the source to .py/.cmd) — kept so a
+            # (DoE commit 6fb5fb37 renamed the source to .py/.cmd) — kept so a
             # full-remove on a machine installed before the rename still
             # sweeps the old artifact.
             "platform-localize.sh", "platform-localize.py", "platform-localize.cmd",
@@ -1548,7 +1555,7 @@ def uninstall_set_plugin_endstate(
 ) -> bool:
     """Reverses surface #1 (plugin-source wiring).
 
-    full-remove: clears the mirror wiring keys (does NOT delete <coordinator-claude>/coordinator
+    full-remove: clears the mirror wiring keys (does NOT delete <DoE>/coordinator
     source — separate PM-gated decision).
     revert-to-marketplace: re-registers the flat
     ${CLAUDE_HOME:-$HOME}/.claude/plugins/coordinator-claude plugin AND clears
@@ -1625,7 +1632,7 @@ def uninstall_set_plugin_endstate(
 
     # ---- satisfy CHECK 5's tri-file agreement postcondition ----
     # In-process call to the already-ported coordinator_core.hooks.platform_localize
-    # — no subprocess/bash spawn; platform-localize.sh no longer exists (coordinator-claude
+    # — no subprocess/bash spawn; platform-localize.sh no longer exists (DoE
     # 6fb5fb37, replaced by platform-localize.py). The env-var save/mutate/restore
     # below reproduces the former subprocess env exactly (CLAUDE_HOME popped,
     # HOME pointed at the derived home) so
@@ -1730,8 +1737,8 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     (fail-loud-on-ambiguity: does not continue sequencing past a failed
     leg), matching the bash oracle's exit-code contract.
 
-    Port of: coordinator-uninstall.sh (coordinator-claude b5a4192c, 2026-07-20, C7).
-    Spec backlink: docs/plans/2026-07-08-coordinator-uninstall.md § C7
+    Port of: coordinator-uninstall.sh (DoE b5a4192c, 2026-07-20, C7).
+    Spec backlink: DoE-claude:pln-first-class-coordinator-uninst-15db2e § C7
     """
     mode = "full-remove"
     purge_operator_config = False
@@ -1805,7 +1812,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
         return fail_loud(
             "settings.json generated hooks (surface #2)",
             "Resolve coordinator root explicitly (COORDINATOR_ROOT env, machine-local "
-            "repos.example_doctrine_repo, REPO_EXAMPLE_DOCTRINE_REPO env, or ${CLAUDE_HOME:-$HOME}/.doe-root "
+            "repos.doe_claude, REPO_DOE_CLAUDE env, or ${CLAUDE_HOME:-$HOME}/.doe-root "
             "pointer) and re-run.",
         )
 
@@ -1881,7 +1888,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invoked directly, bypassing the coordinator-uninstall.sh wrapper that
     # normally exports it) must not silently degrade ml_set/resolve_machine_local_cli
     # to PATH-only resolution. resolve_coordinator_root() carries the same
-    # self-locating fallback chain (machine-local registry -> REPO_EXAMPLE_DOCTRINE_REPO
+    # self-locating fallback chain (machine-local registry -> REPO_DOE_CLAUDE
     # env -> .doe-root pointer) already used elsewhere in this module for the
     # analogous CLAUDE.local.md render seam.
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")

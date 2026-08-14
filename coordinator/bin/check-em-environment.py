@@ -5,8 +5,8 @@ check-em-environment.py — CLI trampoline over claude-klabauter coordinator_cor
 Finish-strangler port (clean-slate residual migration, R2-R6): the bash
 implementation (EFFORT/MODEL drift banner for the three start ceremonies) has
 been fully ported to coordinator_core/ops/check_em_environment.py, tests
-co-located as test_check_em_environment.py. This file is now a thin coordinator-claude-side
-(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+co-located as test_check_em_environment.py. This file is now a thin DoE-side
+(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -16,8 +16,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Exit convention: ALWAYS exits 0, even if the claude-klabauter link fails — this check
@@ -26,7 +26,7 @@ The bash oracle's own final line is an unconditional `exit 0`; this trampoline
 preserves that even on CLAUDE_KLABAUTER_ROOT-resolution / import failure (unlike a
 fail-loud gate/config-writer trampoline, which would sys.exit(1) there).
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 """
 
 from __future__ import annotations

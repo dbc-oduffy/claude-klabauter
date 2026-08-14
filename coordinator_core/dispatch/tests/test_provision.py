@@ -7,7 +7,7 @@ fixture conventions (git_repo/policy_path, synthetic payload dicts) since
 coordinator_core.dispatch.provision deliberately reuses the same
 eligibility/session/path resolution primitives.
 
-Spec backlink: docs/plans/2026-07-24-canonical-resolution-engine.md § W2-B3
+Spec backlink: DoE-claude:pln-canonical-resolution-engine-6eea37 § W2-B3
 Module under test: coordinator_core/dispatch/provision.py
 """
 

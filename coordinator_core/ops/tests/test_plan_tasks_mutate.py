@@ -1031,7 +1031,7 @@ def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
     directs the author to the PM WITHOUT naming a command that would satisfy
     the gate (D4, as amended by the 2026-07-29 grouping-approval contract).
 
-    Uses `backlogged` rather than `spun_off` (2026-08-05): coordinator-claude's ruling
+    Uses `backlogged` rather than `spun_off` (2026-08-05): DoE's ruling
     relaxed `spun_off`'s pm_approved requirement unconditionally, so it no
     longer exercises this gate in either legacy or governed mode — see
     `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`. `backlogged` remains
@@ -1042,7 +1042,7 @@ def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
     unblock: stamp pm_approved: true first". That was the defect, not the
     feature: the field being checked was one the same agent could set one
     command earlier, so the gate printed its own key and the test held it
-    there. Coordinator-claude's contract makes the requirement explicit — whatever refuses
+    there. DoE's contract makes the requirement explicit — whatever refuses
     must direct the author to ask the PM, and must NOT print a stamp
     command, a CLI invocation, or any other means of satisfying the field
     without one.
@@ -2960,3 +2960,281 @@ def test_to_repo_relative_outside_worktree_falls_back_unchanged(tmp_path):
     result = _to_repo_relative(str(outside), worktree)
 
     assert result == str(outside)
+
+
+# ---------------------------------------------------------------------------
+# C1 (2026-08-14) -- resolve stamps `landed` when no row is left open, via
+# the EXISTING sole writer (execute_plan_assemble.close_out_and_stamp.
+# _stamp_plan_landed). See docs/plans/2026-08-14-landed-fires-at-spine-
+# resolution-and-clo.md § C1 / AC1, AC2, AC4, AC5.
+# ---------------------------------------------------------------------------
+
+
+def _read_status(plan: Path) -> str:
+    m = re.search(r'^status:\s*"?([A-Za-z_]+)"?\s*$', plan.read_text(encoding="utf-8"), re.MULTILINE)
+    assert m, plan.read_text(encoding="utf-8")
+    return m.group(1)
+
+
+def test_resolve_all_rows_resolved_stamps_landed_no_execute_plan_involved(tmp_path):
+    """AC1: resolving the LAST still-open row of an otherwise-fully-resolved
+    spine acquires `status: landed` from the `resolve` path alone -- no
+    operator action, no `/execute-plan` run. `_PLAN_WITH_CODED_PREFIX_AND_
+    OPEN_TAIL` already has C1/C2 `coded`; only C3 is open."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(
+        repo, "resolve-landed-all-resolved.md", _PLAN_WITH_CODED_PREFIX_AND_OPEN_TAIL
+    )
+    assert _read_status(plan) == "draft"
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C3",
+            "disposition": "coded",
+            "disposition_ref": "abc3333",
+            "disposition_detail": "shipped in this session",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    assert result.get("landed_stamp") == "ok", result
+
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: coded" in text
+    assert _read_status(plan) == "landed"
+
+
+def test_resolve_landed_stamp_exception_does_not_fail_the_resolve(tmp_path, monkeypatch):
+    """Review: code-reviewer (P2 #2) -- the `try/except Exception` around
+    `_stamp_plan_landed` (C1) is plan-specified as a derived side effect
+    that "must never fail resolve", but that contract had zero test
+    coverage of its failure branch. Force the stamp call itself to RAISE
+    and assert BOTH halves of the contract: the row resolution the caller
+    actually asked for still applied to disk with exit_code == 0, AND
+    `landed_stamp` reports the error rather than silently omitting it."""
+    import coordinator_core.execute_plan_assemble.close_out_and_stamp as close_out_and_stamp
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated stamp failure")
+
+    monkeypatch.setattr(close_out_and_stamp, "_stamp_plan_landed", _boom)
+
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(
+        repo, "resolve-landed-stamp-raises.md", _PLAN_WITH_CODED_PREFIX_AND_OPEN_TAIL
+    )
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C3",
+            "disposition": "coded",
+            "disposition_ref": "abc3333",
+            "disposition_detail": "shipped in this session",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    assert result.get("landed_stamp", "").startswith("error"), result
+    assert "simulated stamp failure" in result["landed_stamp"]
+
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: coded" in text
+    # The row resolution itself applied even though the derived stamp
+    # attempt raised -- but the stamp never ran, so status is untouched.
+    assert _read_status(plan) == "draft"
+
+
+def test_resolve_landed_stamp_nonzero_rc_does_not_fail_the_resolve(tmp_path, monkeypatch):
+    """Same contract as above, exercised via the OTHER failure shape the
+    swallow's own body distinguishes: `_stamp_plan_landed` returning a
+    non-zero rc (an ordinary business-logic failure, no exception) rather
+    than raising. `landed_stamp` must report "error" here too, and the
+    row resolution must still have applied."""
+    import coordinator_core.execute_plan_assemble.close_out_and_stamp as close_out_and_stamp
+
+    monkeypatch.setattr(close_out_and_stamp, "_stamp_plan_landed", lambda *a, **k: 1)
+
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(
+        repo, "resolve-landed-stamp-nonzero-rc.md", _PLAN_WITH_CODED_PREFIX_AND_OPEN_TAIL
+    )
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C3",
+            "disposition": "coded",
+            "disposition_ref": "abc3333",
+            "disposition_detail": "shipped in this session",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    assert result.get("landed_stamp") == "error", result
+
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: coded" in text
+    assert _read_status(plan) == "draft"
+
+
+def test_resolve_one_row_still_open_does_not_acquire_landed(tmp_path):
+    """AC2: a plan with at least one `open` row does NOT acquire `landed`
+    via the resolve path -- resolving one of two rows leaves the other
+    `open`, so status is left exactly as it was."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-landed-one-open.md", _PLAN_TWO_ROWS)
+    assert _read_status(plan) == "draft"
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C1",
+            "disposition": "coded",
+            "disposition_ref": "abc1111",
+            "disposition_detail": "shipped",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
+    assert "landed_stamp" not in result, result
+
+    assert _read_status(plan) == "draft"
+    text = plan.read_text(encoding="utf-8")
+    assert "id: C2" in text
+    assert "disposition: coded" not in text.split("id: C2", 1)[1].split("- id:", 1)[0], (
+        "C2 must remain unresolved (still 'open' by omission)"
+    )
+
+
+def test_resolve_all_wont_do_backlogged_reaches_landed_never_implemented(tmp_path, monkeypatch):
+    """AC4: a plan whose rows resolve entirely as `wont_do`/`backlogged`
+    (i.e. NOTHING shipped) still reaches `landed`, and never `implemented`
+    -- landed derivation is a separate oracle from the ACs/shipped-evidence
+    gate that guards `implemented`."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-landed-wont-do-backlogged.md", _PLAN_TWO_ROWS)
+
+    fake_harvest = _make_fake_harvest_module(repo)
+    monkeypatch.setattr(plan_tasks_mutate, "_load_harvest_module", lambda: fake_harvest)
+
+    stamp_result = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [
+                {"id": "C1", "pm_approved": True},
+                {"id": "C2", "pm_approved": True},
+            ],
+        },
+        repo_root=repo / ".git",
+    ))
+    assert stamp_result["exit_code"] == 0, stamp_result
+
+    backlogged_result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C1",
+            "disposition": "backlogged",
+            "disposition_detail": "deferred to backlog",
+            "case_against": "waiting costs little; nothing depends on this landing now",
+        },
+        repo_root=repo / ".git",
+    ))
+    assert backlogged_result["exit_code"] == 0, backlogged_result
+    assert "landed_stamp" not in backlogged_result, backlogged_result
+    assert _read_status(plan) == "draft"
+
+    wont_do_result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C2",
+            "disposition": "wont_do",
+            "disposition_detail": "no longer worth doing",
+            "case_against": "nothing depends on this landing now",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert wont_do_result["exit_code"] == 0, wont_do_result
+    assert wont_do_result.get("landed_stamp") == "ok", wont_do_result
+
+    assert _read_status(plan) == "landed"
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: backlogged" in text
+    assert "disposition: wont_do" in text
+
+
+def test_resolve_path_never_reaches_a_terminal_status(tmp_path):
+    """AC5: no path exists from spine-resolution to a terminal status.
+
+    Distinct from `test_landed_transition_does_not_reach_the_cascade_
+    entrypoint` (execute_plan_assemble's own test, over the CLOSE-OUT
+    path): this asserts directly against the RESOLVE path in this module
+    -- across a full-resolution-to-coded scenario and a full-resolution-
+    to-wont_do/backlogged scenario, the resulting `status:` is never one
+    of `_FROZEN_STATUSES` (implemented/superseded/abandoned/deferred), and
+    is never `implemented` -- landed is the only status resolve can ever
+    produce."""
+    from coordinator_core.ops.plan_status_transition import _FROZEN_STATUSES
+
+    repo = _make_git_repo(tmp_path)
+
+    coded_plan = _seed_plan(
+        repo, "resolve-terminal-check-coded.md", _PLAN_WITH_CODED_PREFIX_AND_OPEN_TAIL
+    )
+    coded_result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(coded_plan),
+            "id": "C3",
+            "disposition": "coded",
+            "disposition_ref": "abc3333",
+            "disposition_detail": "shipped in this session",
+        },
+        repo_root=repo / ".git",
+    ))
+    assert coded_result["exit_code"] == 0, coded_result
+    coded_status = _read_status(coded_plan)
+    assert coded_status not in _FROZEN_STATUSES, coded_status
+    assert coded_status != "implemented", coded_status
+    assert coded_status == "landed", coded_status
+
+    wont_do_plan = _seed_plan(repo, "resolve-terminal-check-wont-do.md", _PLAN_WITH_TASKS)
+    stamp_result = _run(_handler(
+        {"verb": "stamp", "plan_path": str(wont_do_plan), "updates": [{"id": "C1", "pm_approved": True}]},
+        repo_root=repo / ".git",
+    ))
+    assert stamp_result["exit_code"] == 0, stamp_result
+
+    wont_do_result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(wont_do_plan),
+            "id": "C1",
+            "disposition": "wont_do",
+            "disposition_detail": "not worth doing",
+            "case_against": "nothing depends on this landing now",
+        },
+        repo_root=repo / ".git",
+    ))
+    assert wont_do_result["exit_code"] == 0, wont_do_result
+    wont_do_status = _read_status(wont_do_plan)
+    assert wont_do_status not in _FROZEN_STATUSES, wont_do_status
+    assert wont_do_status != "implemented", wont_do_status
+    assert wont_do_status == "landed", wont_do_status

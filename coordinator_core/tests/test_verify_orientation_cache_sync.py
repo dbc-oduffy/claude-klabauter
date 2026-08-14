@@ -7,8 +7,8 @@ present/absent x trust-caveats present/absent), pre-port. This test suite
 reproduces the same fixtures and asserts byte-identical violation text +
 exit-code parity.
 
-Port of: verify-orientation-cache-sync.sh (coordinator-claude b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Port of: verify-orientation-cache-sync.sh (DoE b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 C6 (2026-07-30): the positive fixture and its heading-shape negative tests
 were updated for the writer's purpose-map rewrite -- ``## Project`` /
@@ -30,7 +30,7 @@ git_head_at_generation: ae65840f
 # Orientation Cache
 
 ## Active workstreams
-1. Coordinator-claude authoring repo build & doctrine migration
+1. DoE authoring repo build & doctrine migration
 
 ## Pinboard
 - 2026-07-16 doe-porter: some note here.

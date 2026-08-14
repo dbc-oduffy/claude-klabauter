@@ -65,7 +65,7 @@ Guard coverage in this file:
     named above, so no Windows-shaped variant is attempted here — see the
     spinoff for that leg.
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C16
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C16
 """
 
 from __future__ import annotations
@@ -117,11 +117,11 @@ def test_settings_guard_denies_windows_drive_letter_forward_slash(monkeypatch):
         lambda: __import__("pathlib").Path("/Users/x/.claude"),
     )
     result = guard_settings_json_write.check(
-        _write_payload('{"hooks": {"command": "X:/coordinator-claude/coordinator/hooks/scripts/x.py"}}')
+        _write_payload('{"hooks": {"command": "X:/DoE-claude/coordinator/hooks/scripts/x.py"}}')
     )
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "X:/coordinator-claude" in reason
+    assert "X:/DoE-claude" in reason
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
@@ -133,13 +133,13 @@ def test_settings_guard_denies_windows_drive_letter_backslash_form(monkeypatch):
         lambda: __import__("pathlib").Path("/Users/x/.claude"),
     )
     result = guard_settings_json_write.check(
-        _write_payload('{"command": "C:\\Users\\me\\coordinator-claude\\x.py"}')
+        _write_payload('{"command": "C:\\Users\\me\\DoE-claude\\x.py"}')
     )
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     # The reason embeds `repr(token)`, so a literal backslash prints doubled;
     # assert on the content rather than the exact escaping.
-    assert "Users" in reason and "me" in reason and "coordinator-claude" in reason
+    assert "Users" in reason and "me" in reason and "DoE-claude" in reason
 
 
 def test_settings_guard_denies_posix_home_path_when_simulated_windows(monkeypatch):
@@ -150,7 +150,7 @@ def test_settings_guard_denies_posix_home_path_when_simulated_windows(monkeypatc
         lambda: __import__("pathlib").Path("/Users/x/.claude"),
     )
     result = guard_settings_json_write.check(
-        _write_payload('{"command": "/Users/alice/X/coordinator-claude/coordinator/hooks/scripts/x.py"}')
+        _write_payload('{"command": "/Users/alice/X/DoE-claude/coordinator/hooks/scripts/x.py"}')
     )
     assert result is not None
     assert "/Users/alice" in result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -197,7 +197,7 @@ def test_settings_guard_denies_differently_cased_settings_path(monkeypatch):
             "tool_name": "Write",
             "tool_input": {
                 "file_path": "/Users/x/.CLAUDE/Settings.JSON",
-                "content": '{"hooks": {"command": "X:/coordinator-claude/coordinator/hooks/scripts/x.py"}}',
+                "content": '{"hooks": {"command": "X:/DoE-claude/coordinator/hooks/scripts/x.py"}}',
             },
         }
     )
@@ -222,7 +222,7 @@ def test_settings_guard_unrelated_differently_cased_path_still_allowed(monkeypat
             "tool_name": "Write",
             "tool_input": {
                 "file_path": "/Users/x/.CLAUDE/settings.local.json.bak",
-                "content": '{"hooks": {"command": "X:/coordinator-claude/coordinator/hooks/scripts/x.py"}}',
+                "content": '{"hooks": {"command": "X:/DoE-claude/coordinator/hooks/scripts/x.py"}}',
             },
         }
     )
@@ -357,7 +357,7 @@ def test_doctrine_guard_allows_unrelated_windows_shaped_path(_windows_os_path, m
 
 def test_derive_executor_info_windows_shaped_coordinator_path(_windows_os_path):
     executor_type, ambiguous = nudge_hook._derive_executor_info(
-        "C:\\Users\\me\\coordinator-claude\\coordinator\\hooks\\scripts\\foo.py"
+        "C:\\Users\\me\\DoE-claude\\coordinator\\hooks\\scripts\\foo.py"
     )
     assert executor_type == "coordinator-executor"
     assert ambiguous is False
@@ -377,14 +377,14 @@ def test_to_repo_relative_normalizes_mixed_separators():
     """`_to_repo_relative` never touches the filesystem — pure `.replace`
     calls on both operands — so this is a direct (no-swap-needed) proof the
     backslash-normalization logic is correct regardless of host."""
-    abs_path = "C:\\coordinator-claude\\state\\handoffs\\foo.md"
-    repo_root = "C:\\coordinator-claude"
+    abs_path = "C:\\DoE-claude\\state\\handoffs\\foo.md"
+    repo_root = "C:\\DoE-claude"
     rel = vfs_deny._to_repo_relative(abs_path, repo_root)
     assert rel == "state/handoffs/foo.md"
 
 
 def test_to_repo_relative_mismatched_root_returns_none():
-    abs_path = "C:\\coordinator-claude\\state\\handoffs\\foo.md"
+    abs_path = "C:\\DoE-claude\\state\\handoffs\\foo.md"
     repo_root = "C:\\some-other-repo"
     assert vfs_deny._to_repo_relative(abs_path, repo_root) is None
 

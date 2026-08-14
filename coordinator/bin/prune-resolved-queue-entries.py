@@ -22,9 +22,9 @@ to improvement-queue.md and bug-backlog.md, invoked from /update-docs
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Usage:
 #   prune-resolved-queue-entries.py <queue-file>
@@ -45,9 +45,9 @@ to improvement-queue.md and bug-backlog.md, invoked from /update-docs
 # Spec backlink: docs/plans/2026-05-07-prune-resolved-state-bloat.md § S5
 #                (lives in consumer-project docs/plans/, not in this plugin tree)
 # Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-# Port of: prune-resolved-queue-entries.sh (coordinator-claude b5a4192c, 2026-07-20) — the
+# Port of: prune-resolved-queue-entries.sh (DoE b5a4192c, 2026-07-20) — the
 #          8-rule awk program's fixture-diff regression net
-#          (prune-resolved-queue-entries.test.sh, coordinator-claude 3a561713, 2026-07-22)
+#          (prune-resolved-queue-entries.test.sh, DoE 3a561713, 2026-07-22)
 #          was ported to pytest claude-klabauter-side as
 #          coordinator_core/ops/test_prune_resolved_queue_entries.py.
 

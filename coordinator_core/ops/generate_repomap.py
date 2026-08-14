@@ -1,11 +1,11 @@
 """
 coordinator_core.ops.generate_repomap — thin wrapper around the Python
-repomap generator. Port of: generate-repomap.sh (coordinator-claude b5a4192c, 2026-07-20).
+repomap generator. Port of: generate-repomap.sh (DoE b5a4192c, 2026-07-20).
 
 Purpose: run generate-repomap.py with default arguments. Contains NO
 RAG-gating logic — callers gate via coordinator/bin/check-rag-state.py
-(coordinator-claude-resident) before invoking this. Full gating doctrine:
-docs/wiki/repomap-rag-gating.md (coordinator-claude-resident).
+(DoE-resident) before invoking this. Full gating doctrine:
+docs/wiki/repomap-rag-gating.md (DoE-resident).
 
 Spec backlink: docs/plans/2026-05-09-skill-consolidation-pass.md § T2
 
@@ -21,7 +21,7 @@ Negative-spec:
     - Trust-checks the resolved plugin_root via the canonical
       `coordinator_core.trusted_root_guard.is_trusted` (fail-loud
       call-site shape) rather than a local reimplementation — see that
-      module for the full anchor list (`.claude/` prefix, coordinator-claude clone,
+      module for the full anchor list (`.claude/` prefix, DoE clone,
       registry-resolved claude-klabauter root, `COORDINATOR_PLUGIN_ROOT_TRUSTED=1`
       opt-out).
     - Reproduces the original's interpreter-probe order (python3 → python →

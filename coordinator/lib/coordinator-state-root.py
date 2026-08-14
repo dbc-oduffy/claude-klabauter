@@ -10,7 +10,7 @@ already-native `coordinator_core.ops.coordinator_doe_root`,
 `coordinator_core.claude_klabauter_root`, `coordinator_core.artifact_subject`, and
 `coordinator_core.meta_repo_identity`), so this file is a thin argv/exit-code
 + importable bridge over that seam — mirroring `coordinator-is-meta-repo.py`'s
-bridge shape (DR-047: coordinator-claude owns contract, claude-klabauter owns engine).
+bridge shape (DR-047: DoE owns contract, claude-klabauter owns engine).
 
 De-bash campaign port: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Spec backlinks:
@@ -63,7 +63,7 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
     coordinator_core.state_root.
   - Does NOT fall back silently when git root is missing (Rule 5) — the
     native module fails loud; this bridge does not swallow that failure.
-  - Does NOT fall back to claude-klabauter when doctrine coordinator-claude root fails (Rule 1).
+  - Does NOT fall back to claude-klabauter when doctrine DoE root fails (Rule 1).
   - Does NOT auto-route a cross-cutting artifact (Rule 3) — rc=2 preserved.
   - Does NOT define any function named `coordinator_claude_klabauter_root` — that
     identifier is owned by the still-live coordinator-claude-klabauter-root.sh
@@ -71,7 +71,7 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
     see that file's own header for why a same-named public function here
     would silently collide via source-order-dependent resolution).
 
-Port of: coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22, bash sourced-lib oracle)
+Port of: coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22, bash sourced-lib oracle)
 Native module: claude-klabauter coordinator_core/state_root.py
 """
 from __future__ import annotations

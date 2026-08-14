@@ -13,7 +13,7 @@ Extensible by construction (canonical spec requirement): G1 and G2 append
 their own `(block_name, consumer_relpath)` rows to CASES when they wire new
 `contract_blocks` consumers. Neither plan re-authors this test body.
 
-Requires the sibling coordinator-claude checkout (where `coordinator/snippets/` and
+Requires the sibling DoE-claude checkout (where `coordinator/snippets/` and
 the agent `.md` consumers actually live) -- skipped, not failed, when it
 can't be resolved on the running machine.
 
@@ -35,11 +35,11 @@ DOE_ROOT, DOE_ROOT_PRESENT = doe_root_and_present()
 
 pytestmark = pytest.mark.skipif(
     not DOE_ROOT_PRESENT,
-    reason="sibling coordinator-claude checkout not resolvable on this machine "
+    reason="sibling DoE-claude checkout not resolvable on this machine "
     "(see coordinator_core.testing.doe_root.resolve_doe_root)",
 )
 
-#: (block_name, consumer .md path repo-relative to the coordinator-claude root) --
+#: (block_name, consumer .md path repo-relative to the DoE-claude root) --
 #: one representative pairing per `header_style` dialect that has a REAL
 #: block on disk today (canonical spec § 2.2(3) / § 2.3), each an existing
 #: `verify-snippet-sync`-paste-governed consumer whose pasted copy is
@@ -49,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 #: has nothing to do with the assembler under test).
 #:
 #: `reviewer-calibration` and `plan-coverage-check-consumption` (the original
-#: rows here) were retired 2026-07-25: coordinator-claude completed a paste-to-inject
+#: rows here) were retired 2026-07-25: DoE-claude completed a paste-to-inject
 #: migration for all four of reviewer-calibration / docs-checker-consumption /
 #: prior-art-check-consumption / plan-coverage-check-consumption -- every
 #: named reviewer/eng-director consumer now receives these via dispatch-time
@@ -61,7 +61,7 @@ pytestmark = pytest.mark.skipif(
 #: supplies this test's `sentinel-embedded` case instead: diagnosing the two
 #: original failing rows also surfaced that persona-dispatch-contract's
 #: registry `header_style` was itself wrong (declared `comment-block`; fixed
-#: to `sentinel-embedded` in the same coordinator-claude commit) -- see
+#: to `sentinel-embedded` in the same DoE-claude commit) -- see
 #: `docs-checker-consumption`'s known trailing-blank-line drift note below,
 #: which is a distinct, still-open issue and NOT why the original rows failed.
 #: `do-not-commit` supplies the `comment-block` case instead of
@@ -72,10 +72,10 @@ pytestmark = pytest.mark.skipif(
 #: that dialect for a separate, still-open reason: as of this writing its
 #: canonical source carries a trailing blank line before its own END sentinel
 #: that none of its real consumers carried even before the paste-to-inject
-#: migration (a pre-existing coordinator-claude content drift, out of this
+#: migration (a pre-existing DoE-claude content drift, out of this
 #: module's/repo's scope to fix).
 #:
-#: Reconciled 2026-08-02 (stale-test cleanup, triage-F): coordinator-claude commit c76ba3e36
+#: Reconciled 2026-08-02 (stale-test cleanup, triage-F): DoE commit c76ba3e36
 #: ("registry: flip three stale paste rows to inject before --fix re-pastes
 #: 37 blocks") flipped `persona-dispatch-contract` and
 #: `quota-self-detect-preamble` themselves from delivery="paste" to
@@ -88,7 +88,7 @@ pytestmark = pytest.mark.skipif(
 #: retired rows above. Both CASES rows are dropped rather than repointed:
 #: `quota-self-detect-preamble`'s remaining genuine paste surface is the 14
 #: example-game-repo `conditional_consumer` entries (a separate live-install tree,
-#: not resolvable from a coordinator-claude-relative consumer_relpath the way this
+#: not resolvable from a DoE-claude-relative consumer_relpath the way this
 #: module's CASES shape requires), and `persona-dispatch-contract` has no
 #: live paste consumer left anywhere -- see `_KNOWN_HEADER_STYLES` below for
 #: the resulting dialect-coverage consequence.
@@ -108,9 +108,9 @@ _KNOWN_HEADER_STYLES = {
     "comment-block",
 }
 
-# Reconciled 2026-08-02 (stale-test cleanup, triage-F, coordinator-claude commit c76ba3e36):
+# Reconciled 2026-08-02 (stale-test cleanup, triage-F, DoE commit c76ba3e36):
 # `sentinel-embedded` and `fixed-2-line-strip-end-sentinel` no longer have
-# ANY live paste consumer in coordinator-claude -- every snippet declaring either
+# ANY live paste consumer in DoE-claude -- every snippet declaring either
 # dialect (docs-checker-consumption, plan-coverage-check-consumption,
 # prior-art-check-consumption, persona-dispatch-contract,
 # persona-persisting-findings, quota-self-detect-preamble) is now
@@ -171,7 +171,7 @@ def test_all_known_header_style_dialects_covered_by_a_case() -> None:
     knows how to handle that still has a live paste consumer to prove it against
     (canonical spec § 2.2(3) / § 5.4: "the branch is still mandatory in W0").
 
-    Reconciled 2026-08-02 (stale-test cleanup, triage-F, coordinator-claude commit c76ba3e36):
+    Reconciled 2026-08-02 (stale-test cleanup, triage-F, DoE commit c76ba3e36):
     the original assertion pinned coverage against `_KNOWN_HEADER_STYLES`
     (every dialect the assembler supports). Two of those dialects
     (`sentinel-embedded`, `fixed-2-line-strip-end-sentinel`) lost their last

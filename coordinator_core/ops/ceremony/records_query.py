@@ -10,7 +10,7 @@ build their table assembly on.  Unlike ``coordinator_core.ops.records_query`` (t
 renderer ops — no ``register_op``, no async handler, no wire envelope.
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8a
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4d-g1
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4d-g1
   (query-records.js grammar EXTEND, ``since=`` + full type-set widening)
 
 Negative-spec:
@@ -183,7 +183,7 @@ def legacy_prose_signal(record_type: str, worktree_root: Path) -> Optional[dict]
     prose-queue entries on disk under ``worktree_root``, else ``None``.
 
     Thin re-export of ``coordinator_core.ops.records_query._legacy_prose_signal``
-    (DR-115 — coordinator-claude ``docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-
+    (DR-115 — DoE ``docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-
     staleness.md``) — the single shared implementation, not a second reader. See
     that function's own docstring for the exact ``None``-vs-populated rules
     (no known legacy path for this type, path absent, zero pipe-row entry

@@ -2,7 +2,7 @@
 coordinator_core.cartography.churn — emergent/churn-set primitive (pure functions).
 
 Purpose: promotes the already-correct inline-bash "chunk K" emergence-detection
-pass from coordinator-claude's architecture-survey skill
+pass from DoE's architecture-survey skill
 (architecture-survey.md:104-120, the `emergent.txt` computation) into tested
 Python. The bash already fixes three footguns inline (verified 2026-07-12,
 The Staff Engineer plan-review Finding 0) — this module is a PROMOTION of already-correct
@@ -40,7 +40,7 @@ Negative-spec:
     fixture for every call site.
   - Does NOT re-derive the chunk-K threshold decision (churned-files > 50% of
     catalogued-files) — this module returns the emergent set; threshold
-    policy is a caller/consumer concern (coordinator-claude's Phase-0.5 gate, Part B, not
+    policy is a caller/consumer concern (DoE's Phase-0.5 gate, Part B, not
     executed here).
   - Does NOT treat a path outside every prefiltered source dir as "not
     emergent" silently — such paths are excluded from the emergent set

@@ -6,9 +6,9 @@ hardlink/copy needs a real NTFS volume with python.exe present — this
 module's logic is OS-gate-independent below main(), so it's exercised
 directly here without a Windows host).
 
-Port of: test-ensure-python3-exe-shim.sh (coordinator-claude 432e3285, 2026-07-22)
+Port of: test-ensure-python3-exe-shim.sh (DoE 432e3285, 2026-07-22)
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 """
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 """harvest-exit-interviews.py — CLI trampoline over claude-klabauter
 coordinator_core.subagent_sandbox.harvest_exit_interviews.
 
-Three coordinator-claude plan ACs cite ``harvest_exit_interviews.py`` by filename as an
+Three DoE plan ACs cite ``harvest_exit_interviews.py`` by filename as an
 entrypoint, but the module lives under ``coordinator_core/subagent_sandbox/``
 and was invocable only via ``python3 -m coordinator_core.subagent_sandbox.
 harvest_exit_interviews`` — no bareword/bin entrypoint existed for it to be
@@ -19,8 +19,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Exit convention: this is a read-only harvest/report tool, not a commit gate.

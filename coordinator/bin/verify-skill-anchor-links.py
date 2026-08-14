@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """verify-skill-anchor-links.py — dead-anchor gate for `<path>.md § <section>` citations.
 
-Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
+Thin DoE-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.verify_skill_anchor_links. Resolution is PATH-DIRECTED:
 each `<path>.md § <section>` citation is checked against the file that citation
 itself names, never against a union of doctrine files. An OPTIONAL manifest at
@@ -30,9 +30,9 @@ from __future__ import annotations
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Exit-code convention: this is a fail-loud verification gate, and its three
 # outcomes are load-bearing contract for `/update-docs` Phase 11h — 0 checked/
@@ -45,7 +45,7 @@ from __future__ import annotations
 # resolution and import failures exit 2, so a broken link surfaces as "the gate
 # could not run" rather than a false "clean" report OR a fabricated finding.
 #
-# Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+# Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 #
 # DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than a
 # plain in-process `import ... as _op_main` + `sys.exit(op_main(argv))` tail, so

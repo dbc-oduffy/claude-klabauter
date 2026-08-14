@@ -2957,7 +2957,7 @@ class TestRepairArchivedDeploymentState:
     parsing itself (covered separately, mock-only, in
     coordinator/bin/tests/test_archive_stamp_cli_repair_archived_deployment_state.py).
 
-    Spec backlink: coordinator-claude cross-repo memo, 2026-07-26 — 13 archived
+    Spec backlink: DoE-claude cross-repo memo, 2026-07-26 — 13 archived
     handoffs stuck at deployment_state: in_flight, hand-edited because
     ship-handoff's state/handoffs/-only containment refuses archive/handoffs/
     paths. This is the AC the whole verb exists to satisfy: an archived
@@ -3254,11 +3254,7 @@ class TestArchiveStampCliCorrectHandoffBodyDispatch:
         import importlib.util
         from importlib.machinery import SourceFileLoader
 
-        # archive-stamp-cli has no .py suffix — spec_from_file_location cannot
-        # infer a loader from the extension alone, so an explicit
-        # SourceFileLoader is required (mirrors how a shebang-only script gets
-        # imported for testing elsewhere in this repo).
-        cli_path = _REPO_ROOT / "coordinator" / "bin" / "archive-stamp-cli"
+        cli_path = _REPO_ROOT / "coordinator" / "bin" / "archive-stamp-cli.py"
         loader = SourceFileLoader("archive_stamp_cli_under_test", str(cli_path))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         mod = importlib.util.module_from_spec(spec)

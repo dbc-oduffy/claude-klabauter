@@ -10,9 +10,9 @@ scripts:
 Purpose: git operations are done natively (subprocess `git`). The bash-lib bridge
 (`bash_capture`/`lib_func`) this module used to expose for not-yet-ported bash libs is
 RETIRED (de-bash campaign, docs/2026-07-29-debash-residual-sites-spec.md § Group C):
-coordinator-daily-branch.sh (Port of: coordinator-claude 2fbe0e77, 2026-07-19), coordinator-daily-day.sh
-(Port of: coordinator-claude c6d97219, 2026-07-22), coordinator-resolve-validation-cmd.sh (Port of: coordinator-claude
-c187f5b9, 2026-07-21), and coordinator-state-root.sh (Port of: coordinator-claude 6fb5fb37, 2026-07-22)
+coordinator-daily-branch.sh (Port of: DoE 2fbe0e77, 2026-07-19), coordinator-daily-day.sh
+(Port of: DoE c6d97219, 2026-07-22), coordinator-resolve-validation-cmd.sh (Port of: DoE
+c187f5b9, 2026-07-21), and coordinator-state-root.sh (Port of: DoE 6fb5fb37, 2026-07-22)
 were already retired before this — their consumer entrypoints import
 coordinator_core.daily_branch / coordinator_core.machine_resolver / coordinator_core.daily_day
 natively instead of using this bridge. The bridge's LAST caller,

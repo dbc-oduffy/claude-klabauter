@@ -103,7 +103,7 @@ _SENTINEL_PREFIX = "coordinator-guard-unlock-"
 
 #: Portable, never-resolved pointer, unconditional as of this dispatch (the
 #: PM-ratified admission of the dedicated wiki page has not yet landed in
-#: coordinator-claude's seed set; see docs/decisions/ for the ruling): the settings root is
+#: DoE's seed set; see docs/decisions/ for the ruling): the settings root is
 #: a real, portable path on every coordinator machine (unlike an
 #: in-process-resolved home directory -- see this module's own Negative-spec
 #: and ``_helpers.OVERRIDE_KEYS_DOC_DISPLAY``'s 2026-08-05 history for why an
@@ -221,7 +221,7 @@ def annotate_deny(
        needs-separate-invocation-clause.md` — the leading disclaimer needed
        its own sentence, not a shared one with the bypass instruction. Fixed
        by giving the disclaimer its own leading clause (still true today).
-    2. `cross-repo/inbox/2026-08-11-coordinator-claude-em-guard-unlock-banner-still-
+    2. `cross-repo/inbox/2026-08-11-doe-claude-em-guard-unlock-banner-still-
        reads-as-agent-instruction.md` — leading was not sufficient. Four
        independently-dispatched agents still hit the (then-prepended) line
        and three classified it as prompt injection: an agent under a
@@ -355,8 +355,8 @@ def annotate_deny(
        fail-open-on-unresolved direction is exactly what AC-3 now reverses.
     6. (2026-08-12, this dispatch) Branch collapse and instruction inlining
        — REVERTED by item 7 below, kept here as the historical record: the
-       coordinator-claude-source-tree pointer branch is gone — the dedicated wiki page
-       (`guard-unlock-channel.md`) has not landed in coordinator-claude's seed set, so the
+       DoE-source-tree pointer branch is gone — the dedicated wiki page
+       (`guard-unlock-channel.md`) has not landed in DoE's seed set, so the
        settings-root pointer is now unconditional, and `_unlock_wiki_pointer`
        (with its process-lifetime cache) is gone with it — nothing is left
        to resolve between. The pointer alone was insufficient even before

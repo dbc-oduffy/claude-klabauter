@@ -6,7 +6,7 @@ coordinator_core.bash_guards.block_reviewer_bash_outside_allowlist (fail-closed,
 no escape hatch, correctly so) — it cannot run `git show` / `git diff` / `git
 log` itself. Every non-weekly review-dispatch gate therefore needs the diff
 frozen to a file BEFORE dispatch, with the reviewer pointed at the path. Five
-Coordinator-claude skill surfaces landed this as a hand-written `git diff > file`
+DoE-claude skill surfaces landed this as a hand-written `git diff > file`
 fenced shell block — a command payload the EM reads out of a markdown fence
 and retypes into a shell (unlintable, untestable, invisible to the coverage
 gate, because a fence is not a file — PM ruling, 2026-07-22). This CLI is the
@@ -56,7 +56,7 @@ never an open-coded record write). Record fields: ``sha_range`` = ``--range``,
 Emission is unconditional BY DESIGN, per that plan's discharge test: a
 mechanism that only fires when a caller remembers a flag has discharged
 nothing, and the callers that would have to remember are a sibling repo's
-prose fences (coordinator-claude's mise ``PIPELINE.md``, ``review-wave.mjs``) — which
+prose fences (DoE-claude's mise ``PIPELINE.md``, ``review-wave.mjs``) — which
 relocates the obligation instead of discharging it.
 
 ``pending`` is the open state — no new record field exists for it, and no
@@ -67,7 +67,7 @@ STDOUT stays exactly one line by default (the ``.diff`` path), record or no
 record. ``parallel-review-orthogonality-guard.py``'s ``snapshot`` subcommand
 (``_cmd_snapshot``) consumes this CLI's stdout as ``proc.stdout.strip()`` — a
 whole-stdout slurp treated as one path, from which it derives the
-``.head.sha`` sibling by suffix substitution; coordinator-claude's fences slurp the
+``.head.sha`` sibling by suffix substitution; DoE-claude's fences slurp the
 same way via ``$(...)`` command substitution. A second unconditional stdout
 line would silently corrupt those derived paths while still exiting 0. So
 what is opt-in is the PRINTING, never the writing: ``--print-trail-record``
@@ -135,7 +135,7 @@ Exit codes (the full matrix — freeze outcome x record outcome x flags):
         not start failing merely because record emission became automatic.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-review-diff-freeze-op-wanted.md
-Prior pattern: coordinator/skills/parallel-code-review/SKILL.md (coordinator-claude) — the
+Prior pattern: coordinator/skills/parallel-code-review/SKILL.md (DoE-claude) — the
 existing frozen-diff + head.sha shape this CLI generalizes to the other five
 non-weekly review-dispatch gates.
 
@@ -226,6 +226,37 @@ def _resolve_repo_root(explicit: str) -> Path | None:
 _PENDING_VERDICT = "pending"
 _DEFAULT_RECORD_REVIEWER = "code-reviewer"
 _DEFAULT_RECORD_SCOPE = "session"
+
+
+def _paths_contributing_nothing(repo_root: Path, range_: str, paths: list[str]) -> list[str]:
+    """Which ``--paths`` entries matched no change in ``range_``.
+
+    A pathspec that matches nothing is indistinguishable, in the frozen diff,
+    from one the reviewer simply had no findings on — the slice is smaller than
+    the caller asked for and nothing says so. The common cause is a path that
+    moved: a concurrent archival sweep renames the file mid-session, the old
+    path stops matching, and its content silently leaves the review slice.
+
+    Returned for a stderr warning, never an error: a path legitimately unchanged
+    across the range is a valid outcome, same as the whole-diff empty case.
+    A failed or timed-out probe yields no entry — this check may under-report,
+    but must never invent an omission that would send a reviewer hunting.
+    """
+    missing: list[str] = []
+    for path in paths:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(repo_root), "diff", "--name-only", range_, "--", path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                **no_console_creationflags(),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode == 0 and not proc.stdout.strip():
+            missing.append(path)
+    return missing
 
 
 def _diff_loc(diff_path: str) -> int:
@@ -375,6 +406,18 @@ def main(argv: list[str]) -> int:
             f"(paths={args.paths or 'all'}) — froze an empty diff, not an error",
             file=sys.stderr,
         )
+    elif args.paths:
+        uncovered = _paths_contributing_nothing(repo_root, args.range_, args.paths)
+        if uncovered:
+            print(
+                f"{_PROG}: warning: {len(uncovered)} of {len(args.paths)} --paths "
+                f"entries matched no change in {args.range_!r} and contributed "
+                f"nothing to this slice: {', '.join(uncovered)}. The frozen diff is "
+                "narrower than requested. If the path moved (a concurrent archival "
+                "sweep is the usual cause), re-freeze against its current location — "
+                "a reviewer cannot tell an omitted file from a clean one.",
+                file=sys.stderr,
+            )
 
     print(result["diff_path"])
 

@@ -18,7 +18,7 @@ the translated match expression rejects a differently-cased name that a
 naively-`fnmatch.fnmatch`'d version would have accepted on Windows.
 
 Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-
-storms.md row BX-16 (coordinator-claude); sibling fidelity fix to this same
+storms.md row BX-16 (DoE-claude); sibling fidelity fix to this same
 dispatch's grep-dialect-conflation correction
 (`test_bx16_grep_dialect_fidelity.py`).
 """

@@ -15,7 +15,7 @@ backlog member).
 Shard (D5, per-machine append-only — NOT a shared file; goals-log shard precedent): rows are
 appended to ``<R>/state/backlog-snapshots.<machine>.jsonl`` where ``<machine>`` is the hostname
 slug (lowercased, non-[a-z0-9] runs collapsed to '-'), matching the
-``goals-log.<machine>.jsonl`` slug convention (Port of: append-goal-event.sh, coordinator-claude
+``goals-log.<machine>.jsonl`` slug convention (Port of: append-goal-event.sh, DoE
 b5a4192c, 2026-07-20).
 
 MUTATING op (writes coordinator substrate ONLY — never rag's relational store; dual-write ban,
@@ -51,6 +51,11 @@ _BACKLOG_SUBDIRS: dict[str, str] = {
 
 # Shard filename template (D5). central_state_root / this.format(machine=<slug>).
 _SHARD_NAME_TEMPLATE = "backlog-snapshots.{machine}.jsonl"
+
+# Generator-provenance: appends one row per invocation to a per-machine,
+# append-only shard whose filename is hostname-slug-dependent -- a
+# data-dependent set of tracked files, not one fixed path.
+MUTATES = ["state/backlog-snapshots.*.jsonl"]
 
 
 def _today() -> str:

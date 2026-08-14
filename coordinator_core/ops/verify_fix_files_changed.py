@@ -3,7 +3,7 @@ coordinator_core.ops.verify_fix_files_changed — JSON-RPC
 "bug_sweep.verify_fix_files_changed" operation.
 
 Purpose: the bug-sweep Phase-4 mechanical diff gate, ported native (fence:
-Coordinator-claude coordinator/skills/bug-sweep/SKILL.md:261). The bash oracle piped
+DoE coordinator/skills/bug-sweep/SKILL.md:261). The bash oracle piped
 `jq -r '.[].file'` through `sort -u`, `comm -23`, and `<(...)` process
 substitution — bash-only (no dash/sh/native-Windows equivalent) and
 dependent on `jq` and `comm` being installed. Settlement B9

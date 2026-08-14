@@ -7,8 +7,8 @@ Finish-strangler port (DR-059): the bash implementation (idempotent
 cores-scaled fan-out large-wave threshold capture into the machine-local
 registry — 100 lines) has been fully ported to
 coordinator_core/ops/capture_fan_out_threshold.py (co-located pytest:
-test_capture_fan_out_threshold.py). This file is now a thin coordinator-claude-side
-(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+test_capture_fan_out_threshold.py). This file is now a thin DoE-side
+(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -18,8 +18,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Filename intentionally KEEPS the `.sh` suffix (unlike coordinator-auto-push,
@@ -38,7 +38,7 @@ this is a config-writer gate script: CLAUDE_KLABAUTER_ROOT resolution failure or
 import failure here MUST propagate as a non-zero exit so the install phase
 fails loud rather than silently skipping the threshold capture.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 
 DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than a
 plain in-process `import ... as _op_main` + `sys.exit(op_main(argv))` tail, so

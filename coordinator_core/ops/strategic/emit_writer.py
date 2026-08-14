@@ -44,6 +44,8 @@ Spec backlink: docs/plans/strategic-feed-emission stub.md (tasks/strategic-feed-
 
 from __future__ import annotations
 
+GENERATES = [{"artifact": "state/strategic-emission.json", "stamp_key": "emitted_at", "sources": ["state/strategic/self-description.yaml"]}]
+
 import json
 from pathlib import Path
 from typing import Optional

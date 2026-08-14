@@ -3,9 +3,9 @@ guard for a direct write to the DERIVED live global-doctrine copy
 (``~/.claude/CLAUDE.md``).
 
 Purpose (the failure this closes): of the four ``CLAUDE.md``-class surfaces,
-global doctrine is AUTHORED at ``global-doctrine/CLAUDE.md`` in the coordinator-claude
+global doctrine is AUTHORED at ``global-doctrine/CLAUDE.md`` in the DoE-claude
 repo; ``coordinator/hooks/scripts/derive-global-doctrine-live-copy.py`` (a
-PostToolUse hook, coordinator-claude repo) re-derives ``~/.claude/CLAUDE.md`` from it
+PostToolUse hook, DoE-claude repo) re-derives ``~/.claude/CLAUDE.md`` from it
 on every matching write to the authoring copy. There is no ``--plugin-dir``-
 style live resolution for the derived copy the way there is for
 ``skills/``/``hooks/``/``bin/``/``lib/`` — it is a plain file, kept in sync
@@ -22,7 +22,7 @@ regardless of who is writing or how large the edit is.
 
 Deny, not advisory (evidence, not a guess): the loss this guard prevents is
 TOTAL (the whole edit vanishes) and SILENT (no error at write time, no error
-at the moment of loss either) — the same total-and-silent shape the coordinator-claude
+at the moment of loss either) — the same total-and-silent shape the DoE
 ``invisible-doctrine.md`` FLOOR classification exists for. An advisory would
 let the edit land and vanish anyway; only a deny actually prevents the loss.
 The one concern a deny would need to clear — blocking the re-derivation hook
@@ -43,7 +43,7 @@ same asymmetry ``block_dev_side_mirror_wiki`` and
 ``coordinator_core.claude_md_budget.is_claude_md_class``/
 ``is_governed_claude_md`` — both of those predicates ALSO match
 ``global-doctrine/CLAUDE.md`` (the authoring surface, where writes are
-correct), coordinator-claude's ``coordinator/CLAUDE.md`` (dev-repo-sentinel gated, also an
+correct), DoE's ``coordinator/CLAUDE.md`` (dev-repo-sentinel gated, also an
 authoring surface), the two ``coordinator/snippets/*.md`` surfaces, and any
 repo-root project ``CLAUDE.md`` — none of those are derived, and firing on
 them would block legitimate authoring, which is worse than the defect this
@@ -70,8 +70,8 @@ EM or a dispatched subagent performs the write — an EM unaware of the
 re-derivation hook loses the edit exactly the same way a subagent does.
 
 Deny text: leads with the alternative (edit the authoring copy in the
-Coordinator-claude repo, path resolved via ``coordinator_core.machine_resolver.
-registry_get("repos.example_doctrine_repo")`` at message-render time, never a literal),
+DoE-claude repo, path resolved via ``coordinator_core.machine_resolver.
+registry_get("repos.doe_claude")`` at message-render time, never a literal),
 then states the consequence (silent overwrite, no error, no signal) without
 overstating severity — this guard defends against an EAGER edit landing in
 the wrong place, not a hostile one.
@@ -93,9 +93,9 @@ Override env var: ``COORDINATOR_OVERRIDE_DERIVED_GLOBAL_DOCTRINE_WRITE``,
 following the same rare-use escape-hatch convention every sibling
 write_guards module carries (see ``INTERFACE.md`` fidelity rule 3).
 
-Spec backlink: coordinator-claude coordinator/hooks/scripts/
+Spec backlink: DoE-claude coordinator/hooks/scripts/
   derive-global-doctrine-live-copy.py (the derivation this guard protects);
-  coordinator-claude CLAUDE.md "Four CLAUDE.md-class surfaces, one trap" (the failure
+  DoE-claude CLAUDE.md "Four CLAUDE.md-class surfaces, one trap" (the failure
   this guard names).
 Precedent (module shape — derived-vs-authoring routing, not authority):
   coordinator_core/write_guards/block_dev_side_mirror_wiki.py.
@@ -227,7 +227,7 @@ def _authoring_path() -> Optional[str]:
     Returns None when the root is unregistered on this machine, so the
     caller can name the registry key rather than render a fabricated path.
     """
-    root = registry_get("repos.example_doctrine_repo")
+    root = registry_get("repos.doe_claude")
     if not root:
         return None
     return root.replace("\\", "/").rstrip("/") + "/global-doctrine/CLAUDE.md"
@@ -240,7 +240,7 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
         if authoring
         else (
             "the authoring root is unregistered here — "
-            "`machine-local set repos.example_doctrine_repo <path>` names it"
+            "`machine-local set repos.doe_claude <path>` names it"
         )
     )
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)

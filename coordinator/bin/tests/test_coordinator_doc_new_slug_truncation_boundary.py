@@ -43,7 +43,7 @@ _BOUNDARY_TITLE = (
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "coordinator_doc_new_slug_boundary_test", str(_BIN_DIR / "coordinator-doc-new")
+        "coordinator_doc_new_slug_boundary_test", str(_BIN_DIR / "coordinator-doc-new.py")
     )
     spec = importlib.util.spec_from_loader(
         "coordinator_doc_new_slug_boundary_test", loader

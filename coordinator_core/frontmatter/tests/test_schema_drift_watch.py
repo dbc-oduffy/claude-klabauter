@@ -5,12 +5,12 @@ vendored-schema drift watch.
 Covers the three verdicts the cadence gate must never confuse:
   no drift        -> MATCH   (clean)
   drift present   -> DRIFT   (surfaced, names the schema)
-  coordinator-claude unreadable  -> INDETERMINATE, never MATCH and never DRIFT
-  coordinator-claude absent      -> UNRESOLVED (not applicable — fresh machine / CI without sibling)
+  DoE unreadable  -> INDETERMINATE, never MATCH and never DRIFT
+  DoE absent      -> UNRESOLVED (not applicable — fresh machine / CI without sibling)
 
 Every test builds its own throwaway git repo + schema dir under tmp_path. NOTHING here
 touches the real vendored schemas under coordinator_core/frontmatter/schemas/ or the
-real coordinator-claude clone — a drift test that perturbs the artifact it watches is a test that
+real DoE clone — a drift test that perturbs the artifact it watches is a test that
 leaves the tree dirty.
 
 Negative-spec asserted throughout: scan_vendored_schema_drift NEVER raises. That is
@@ -60,10 +60,10 @@ def _schema_body(marker: str) -> str:
 
 @pytest.fixture()
 def fake_doe(tmp_path: Path) -> Path:
-    """A throwaway git repo shaped like a coordinator-claude clone: coordinator/schemas/*.schema.json at HEAD."""
+    """A throwaway git repo shaped like a DoE clone: coordinator/schemas/*.schema.json at HEAD."""
     if shutil.which("git") is None:
         pytest.skip("git not available")
-    repo = tmp_path / "coordinator-claude-fake"
+    repo = tmp_path / "DoE-fake"
     schemas = repo / "coordinator" / "schemas"
     schemas.mkdir(parents=True)
     for name in (_SCHEMA_A, _SCHEMA_B):
@@ -109,7 +109,7 @@ class TestVendoredSchemaPaths:
 
     def test_excludes_generated_not_vendored_memo_schemas(self, vendored_dir: Path) -> None:
         """cross-repo-memo.schema.json / archived-memo.schema.json are claude-klabauter-
-        GENERATED projections (Decision-0, C5), never coordinator-claude-vendored copies — if one
+        GENERATED projections (Decision-0, C5), never DoE-vendored copies — if one
         ever lands in this dir by mistake it must not silently join the watch."""
         (vendored_dir / "cross-repo-memo.schema.json").write_text(_schema_body("x"), encoding="utf-8")
         (vendored_dir / "archived-memo.schema.json").write_text(_schema_body("y"), encoding="utf-8")
@@ -119,7 +119,7 @@ class TestVendoredSchemaPaths:
 
 
 class TestNoDrift:
-    """Vendored copies byte-identical to coordinator-claude HEAD -> MATCH, clean."""
+    """Vendored copies byte-identical to DoE HEAD -> MATCH, clean."""
 
     def test_all_match_yields_match(self, fake_doe: Path, vendored_dir: Path) -> None:
         report = scan_vendored_schema_drift(fake_doe, vendored_dir)
@@ -145,12 +145,12 @@ class TestDriftSurfaced:
         assert "re-vendor" in report["summary"].lower()
 
     def test_doe_moving_forward_is_surfaced(self, fake_doe: Path, vendored_dir: Path) -> None:
-        """The real-world shape: coordinator-claude commits a change, our pin stays put."""
+        """The real-world shape: DoE commits a change, our pin stays put."""
         (fake_doe / "coordinator" / "schemas" / _SCHEMA_B).write_text(
-            _schema_body("coordinator-claude MOVED"), encoding="utf-8"
+            _schema_body("DoE MOVED"), encoding="utf-8"
         )
         _git(fake_doe, "add", "-A")
-        _git(fake_doe, "commit", "-q", "-m", "coordinator-claude evolves the schema")
+        _git(fake_doe, "commit", "-q", "-m", "DoE evolves the schema")
 
         report = scan_vendored_schema_drift(fake_doe, vendored_dir)
 
@@ -160,7 +160,7 @@ class TestDriftSurfaced:
     def test_drift_outranks_indeterminate(self, fake_doe: Path, vendored_dir: Path) -> None:
         """One observed divergence must not be masked by another schema being unreadable."""
         (vendored_dir / _SCHEMA_B).write_text(_schema_body("LOCALLY CHANGED"), encoding="utf-8")
-        # A vendored file with no counterpart at coordinator-claude HEAD -> indeterminate.
+        # A vendored file with no counterpart at DoE HEAD -> indeterminate.
         (vendored_dir / "orphan.schema.json").write_text(_schema_body("orphan"), encoding="utf-8")
 
         report = scan_vendored_schema_drift(fake_doe, vendored_dir)
@@ -187,10 +187,10 @@ class TestDriftDirection:
     def test_doe_addition_is_we_are_behind(self, fake_doe: Path, vendored_dir: Path) -> None:
         doe_schema_path = fake_doe / "coordinator" / "schemas" / _SCHEMA_B
         doe_schema = json.loads(doe_schema_path.read_text(encoding="utf-8"))
-        doe_schema["extra_upstream_field"] = "only on coordinator-claude's side"
+        doe_schema["extra_upstream_field"] = "only on DoE's side"
         doe_schema_path.write_text(json.dumps(doe_schema, indent=2) + "\n", encoding="utf-8")
         _git(fake_doe, "add", "-A")
-        _git(fake_doe, "commit", "-q", "-m", "coordinator-claude adds a field")
+        _git(fake_doe, "commit", "-q", "-m", "DoE adds a field")
 
         report = scan_vendored_schema_drift(fake_doe, vendored_dir)
 
@@ -201,10 +201,10 @@ class TestDriftDirection:
     def test_independent_changes_on_both_sides_is_both(self, fake_doe: Path, vendored_dir: Path) -> None:
         doe_schema_path = fake_doe / "coordinator" / "schemas" / _SCHEMA_B
         doe_schema = json.loads(doe_schema_path.read_text(encoding="utf-8"))
-        doe_schema["title"] = "coordinator-claude renamed it"
+        doe_schema["title"] = "DoE renamed it"
         doe_schema_path.write_text(json.dumps(doe_schema, indent=2) + "\n", encoding="utf-8")
         _git(fake_doe, "add", "-A")
-        _git(fake_doe, "commit", "-q", "-m", "coordinator-claude renames")
+        _git(fake_doe, "commit", "-q", "-m", "DoE renames")
 
         vendored = json.loads((vendored_dir / _SCHEMA_B).read_text(encoding="utf-8"))
         vendored["title"] = "we renamed it differently"
@@ -248,7 +248,7 @@ class TestDriftSchemaVersions:
     verbatim from check_schema_drift_advisory, never re-parsed by this module (see
     the module docstring's "SHAPE TO AVOID" note).
 
-    Spec backlink: cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
+    Spec backlink: cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
     """
 
     def test_drifted_entry_carries_both_versions(self, fake_doe: Path, vendored_dir: Path) -> None:
@@ -257,7 +257,7 @@ class TestDriftSchemaVersions:
         doe_schema["x-schema-version"] = "2.0.0"
         doe_schema_path.write_text(json.dumps(doe_schema, indent=2) + "\n", encoding="utf-8")
         _git(fake_doe, "add", "-A")
-        _git(fake_doe, "commit", "-q", "-m", "coordinator-claude bumps x-schema-version")
+        _git(fake_doe, "commit", "-q", "-m", "DoE bumps x-schema-version")
 
         vendored = json.loads((vendored_dir / _SCHEMA_B).read_text(encoding="utf-8"))
         vendored["x-schema-version"] = "1.0.0"
@@ -291,7 +291,7 @@ class TestDriftBumpClass:
     module never derives a hold/no-hold verdict from the class (DR-097 §
     Reconciliation — holding is axis-dependent and out of scope here).
 
-    Spec backlink: cross-repo/inbox/2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md
+    Spec backlink: cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md
     """
 
     def test_drifted_entry_carries_bump_class_and_note(self, fake_doe: Path, vendored_dir: Path) -> None:
@@ -301,7 +301,7 @@ class TestDriftBumpClass:
         doe_schema["x-bump-note"] = "added an optional field"
         doe_schema_path.write_text(json.dumps(doe_schema, indent=2) + "\n", encoding="utf-8")
         _git(fake_doe, "add", "-A")
-        _git(fake_doe, "commit", "-q", "-m", "coordinator-claude declares a bump class")
+        _git(fake_doe, "commit", "-q", "-m", "DoE declares a bump class")
 
         report = scan_vendored_schema_drift(fake_doe, vendored_dir)
 
@@ -319,7 +319,7 @@ class TestDriftBumpClass:
         doe_schema["x-bump-class"] = "major"
         doe_schema_path.write_text(json.dumps(doe_schema, indent=2) + "\n", encoding="utf-8")
         _git(fake_doe, "add", "-A")
-        _git(fake_doe, "commit", "-q", "-m", "coordinator-claude declares a major bump")
+        _git(fake_doe, "commit", "-q", "-m", "DoE declares a major bump")
 
         report = scan_vendored_schema_drift(fake_doe, vendored_dir)
 
@@ -345,7 +345,7 @@ class TestDriftBumpClass:
 
 
 class TestIndeterminate:
-    """Unreadable coordinator-claude side -> INDETERMINATE. Never MATCH (silent green), never DRIFT (false alarm)."""
+    """Unreadable DoE side -> INDETERMINATE. Never MATCH (silent green), never DRIFT (false alarm)."""
 
     def test_not_a_git_repo_is_indeterminate(self, tmp_path: Path, vendored_dir: Path) -> None:
         not_a_repo = tmp_path / "not-a-repo"
@@ -383,7 +383,7 @@ class TestIndeterminate:
 
 
 class TestDoeCloneAbsent:
-    """No coordinator-claude clone at all -> UNRESOLVED. Graceful, not an explosion, not a fault."""
+    """No DoE clone at all -> UNRESOLVED. Graceful, not an explosion, not a fault."""
 
     def test_unresolvable_doe_root_yields_unresolved(
         self, tmp_path: Path, vendored_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -403,7 +403,7 @@ class TestDoeCloneAbsent:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Ladder rungs that do not carry coordinator/schemas/ are rejected, not returned."""
-        monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(tmp_path / "does-not-exist"))
+        monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "does-not-exist"))
         monkeypatch.setattr(
             "coordinator_core.frontmatter.schema_drift_watch.read_doe_root_pointer",
             lambda: str(tmp_path / "also-not-there"),
@@ -417,7 +417,7 @@ class TestDoeCloneAbsent:
     def test_env_override_wins_when_valid(
         self, fake_doe: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(fake_doe))
+        monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe))
         assert resolve_doe_repo_path() == fake_doe
 
 

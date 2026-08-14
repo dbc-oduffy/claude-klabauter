@@ -69,11 +69,15 @@ Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-p
       unpredictable arithmetic error), not an oversight.
 
 Spec backlink: cross-repo/inbox/2026-05-30-index-lock-leak-concurrent-em.md (example-game-repo
-    consult); docs/wiki/concurrent-em-hazards.md § H21 (coordinator-claude tree).
-Prior bash implementation: coordinator/bin/coordinator-reap-stale-locks (coordinator-claude tree,
+    consult); docs/wiki/concurrent-em-hazards.md § H21 (DoE-claude tree).
+Prior bash implementation: coordinator/bin/coordinator-reap-stale-locks (DoE-claude tree,
     read-only oracle for this port).
 """
+
+
 from __future__ import annotations
+
+GENERATES = []  # removes only stale .git/index.lock, .git/next-index-*.lock, .git/objects/maintenance.lock -- never a tracked repo artifact
 
 import os
 import subprocess

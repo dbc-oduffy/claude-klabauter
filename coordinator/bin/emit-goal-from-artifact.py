@@ -13,9 +13,9 @@ Identity chain (executor pin, plan C7):
 
 Provenance: source_kind="coordinator_artifact", path="state/goals/<file>.yaml".
 
-Spec backlink: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C7
+Spec backlink: DoE-claude:pln-per-repo-okr-goal-setting-syst-80bced § C7
 Spec backlink: docs/plans/2026-06-22-cockpit-tc-3-coordinator-emission.md § DR-210
-Spec backlink: docs/plans/2026-07-13-close-weekly-goal-loop.md § C11 (thin passthrough
+Spec backlink: DoE-claude:pln-close-the-weekly-goal-loop-yam-d31316 § C11 (thin passthrough
     of weekly_perceptible / parent_goal_id / key_results_status / goal_id to
     append-goal-event.py; claude-klabauter's artifact.emit carries the wire projection + engine)
 

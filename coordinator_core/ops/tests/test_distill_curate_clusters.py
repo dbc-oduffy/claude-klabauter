@@ -231,7 +231,7 @@ def test_misc_and_other_are_structurally_dropped_not_denylisted() -> None:
 
 def test_downstream_consumer_contract_drop_and_merge_fields() -> None:
     """Enforces the module docstring's Downstream-consumer contract, ratified
-    2026-08-06 with coordinator-claude-em: their /distill C3 leg logs each dropped
+    2026-08-06 with doe-claude-em: their /distill C3 leg logs each dropped
     nugget as EPHEMERAL-with-reason, and their clustering resolves a merged tag
     to its destination — so drop-set enumerability, drop `reason` presence, and
     `merge_target` presence are a stability commitment to a named sibling
@@ -270,7 +270,7 @@ def test_downstream_consumer_contract_drop_and_merge_fields() -> None:
 def test_keep_verdict_weights_nugget_volume_via_keep_threshold() -> None:
     """The keep gate DOES weight per-tag nugget volume — summed across the
     family, compared against `keep_threshold`. Consumer-visible consequence
-    (answered to coordinator-claude-em 2026-08-06): a caller wanting singleton-floor
+    (answered to doe-claude-em 2026-08-06): a caller wanting singleton-floor
     semantics ("a 1-2 nugget cluster does not earn its own file") must pass
     keep_threshold=3; the default of 2 drops only 1-nugget families."""
     two_nuggets = {"audit-trail": 2}

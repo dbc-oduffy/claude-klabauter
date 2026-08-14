@@ -1,11 +1,11 @@
 """Tests for coordinator_core.ops.check_machine_local_regeneratability.
 
-Golden oracle snapshotted 2026-07-17 against the coordinator-claude-side bats-equivalent fixture
+Golden oracle snapshotted 2026-07-17 against the DoE-side bats-equivalent fixture
 corpus (cases a-d) plus additional edge cases for the in-process TOML parsing
 this port introduces (no subprocess helper).
 
-Port of: check-machine-local-regeneratability.sh (coordinator-claude b5a4192c, 2026-07-20)
-Oracle: check-machine-local-regeneratability.test.sh (coordinator-claude a2fe06f8, 2026-07-22)
+Port of: check-machine-local-regeneratability.sh (DoE b5a4192c, 2026-07-20)
+Oracle: check-machine-local-regeneratability.test.sh (DoE a2fe06f8, 2026-07-22)
 """
 
 from __future__ import annotations
@@ -444,7 +444,7 @@ schema = 1
 
 
 def test_family_prefix_arm_resolves_dotted_key_against_bare_family_entry():
-    assert _key_matches_regen_entry("engine.working_repos.example_doctrine_repo", "engine.working_repos")
+    assert _key_matches_regen_entry("engine.working_repos.doe_claude", "engine.working_repos")
 
 
 def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary():

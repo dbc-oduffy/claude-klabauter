@@ -1,18 +1,18 @@
 """
 coordinator_core.doe_root_pointer
 
-Port of: read-doe-root-pointer.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Port of: read-doe-root-pointer.sh (DoE 6fb5fb37, 2026-07-22)
 
-Purpose: resolves the coordinator-claude repo root, registry-first per DR-071 (2026-07-22 — the
-settings-home machine-local registry key `repos.example_doctrine_repo` is the canonical,
+Purpose: resolves the DoE repo root, registry-first per DR-071 (2026-07-22 — the
+settings-home machine-local registry key `repos.doe_claude` is the canonical,
 authoritative coordinator-root anchor; `.doe-root` is a demoted, non-authoritative
 mirror), with the pointer-file rungs retained as durable-then-legacy fallbacks:
-    1. `repos.example_doctrine_repo`                                (registry — canonical, DR-071)
+    1. `repos.doe_claude`                                (registry — canonical, DR-071)
     2. `<settings-home>/machine-local/.doe-root`         (durable file mirror)
     3. `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`         (legacy fallback)
 written by `coordinator_core.ops.gen_doe_root_pointer`. Mirror-image of
 `coordinator_core.claude_klabauter_root` (which resolves CLAUDE_KLABAUTER_ROOT from inside the claude-klabauter
-engine) — this module resolves the coordinator-claude root from the registry/pointer file, the
+engine) — this module resolves the DoE root from the registry/pointer file, the
 cold-read primitive consumed by the coordinator-clone resolver's rung 3.
 
 **Why registry-first, and why direct tomllib (not the `machine-local` CLI):**
@@ -23,11 +23,11 @@ the `machine-local` CLI's `~/.claude/bin/` mirror of its reader/exec bits — th
 canonical home is `<settings-home>/bin/`, outside `~/.claude`, but the demoted
 mirror is what a reset actually wipes). Reading the registry TOML directly via
 `coordinator_core.machine_resolver.registry_get` — rather than shelling out to
-`machine-local get repos.example_doctrine_repo` — is what makes this rung actually
+`machine-local get repos.doe_claude` — is what makes this rung actually
 reset-safe: "`machine-local get` works" is not proof of reset-survival, since the
 CLI itself can be the thing a reset just broke. See DR-071
 (`docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-registry-doe-root-demoted-to-cache.md`
-in coordinator-claude) and the consumer-contract memo
+in DoE-claude) and the consumer-contract memo
 `cross-repo/inbox/2026-07-22-claude-central-em-durable-root-anchor-contract.md`.
 
 Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md [DEAD-CITATION: plan file never committed to this repo]
@@ -38,7 +38,7 @@ behavior) mirror the bash oracle exactly for the two file rungs.
 Public API:
     def read_doe_root_pointer() -> str   — registry-first successor to the shell
         function coordinator_read_doe_root_pointer(). Returns the registry
-        `repos.example_doctrine_repo` value if resolvable, else the pointer file's content
+        `repos.doe_claude` value if resolvable, else the pointer file's content
         (single line, stripped) or "" if the registry key is unresolved, the
         home directory cannot be resolved, both pointer files are absent, or
         they are unreadable. Does NOT validate whether the returned path exists
@@ -76,7 +76,7 @@ from coordinator_core.machine_resolver import registry_get
 
 
 def read_doe_root_pointer_file(home: str | None = None) -> str:
-    """Resolve the coordinator-claude root from the pointer FILES only — durable, then legacy.
+    """Resolve the DoE root from the pointer FILES only — durable, then legacy.
 
         1. <settings-home>/machine-local/.doe-root   (durable — the write target)
         2. <home>/.claude/.doe-root                  (legacy fallback)
@@ -90,7 +90,7 @@ def read_doe_root_pointer_file(home: str | None = None) -> str:
     registry at a different priority than DR-071's registry-first order (several
     try the pointer file, then a *different* registry key such as
     ``plugin.mirrors.coordinator-claude.live_path``) — those must not have the
-    ``repos.example_doctrine_repo`` rung silently spliced in ahead of their own. Prefer
+    ``repos.doe_claude`` rung silently spliced in ahead of their own. Prefer
     :func:`read_doe_root_pointer` unless you are one of those.
 
     Extracted 2026-07-28: the durable rung became load-bearing when
@@ -148,15 +148,15 @@ def read_doe_root_pointer_file(home: str | None = None) -> str:
 
 
 def read_doe_root_pointer() -> str:
-    """Resolve the coordinator-claude repo root — registry-first (DR-071), durable-file, legacy-file.
+    """Resolve the DoE repo root — registry-first (DR-071), durable-file, legacy-file.
 
     Read order (DR-071, 2026-07-22 — supersedes the prior durable-file-first
     order of read-doe-root-pointer.sh, DR-072, 2026-07-21):
-        1. registry `repos.example_doctrine_repo`                     (canonical anchor)
+        1. registry `repos.doe_claude`                     (canonical anchor)
         2. <settings-home>/machine-local/.doe-root        (durable file mirror)
         3. ${CLAUDE_HOME:-$HOME}/.claude/.doe-root         (legacy fallback)
 
-    Returns the coordinator-claude repo root path (single line, stripped) or "" if the
+    Returns the DoE repo root path (single line, stripped) or "" if the
     registry key is unresolved AND neither pointer file is present/readable,
     or no home directory can be resolved.
     """
@@ -172,7 +172,7 @@ def read_doe_root_pointer() -> str:
     # contract case this function documents as returning "" would otherwise
     # silently read this machine's actual settings-home registry instead.
     if home or settings_home_override:
-        registry_value = registry_get("repos.example_doctrine_repo")
+        registry_value = registry_get("repos.doe_claude")
         if registry_value:
             return registry_value
 

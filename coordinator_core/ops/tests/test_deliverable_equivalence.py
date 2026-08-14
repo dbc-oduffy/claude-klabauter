@@ -63,18 +63,30 @@ def _reset_memo():
 
 
 def _write_artifact(worktree_root: Path, entries: list[dict]) -> Path:
-    """Write a minimal state/deliverable-equivalence.yaml fixture and return its path."""
+    """Write a minimal state/deliverable-equivalence.yaml fixture and return its path.
+
+    Extended for the retraction-as-observation widening (2026-08-14): an entry dict
+    may additionally carry ``adjudicated_at`` and/or ``retracted_at`` (both optional,
+    both passed through verbatim when present) — the same axes C1 added to the real
+    artifact. Omitting either key from an entry dict reproduces a pre-widening row
+    (no stamp, never retracted), which is what every pre-existing test in this file
+    still constructs.
+    """
     state_dir = worktree_root / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = state_dir / "deliverable-equivalence.yaml"
-    dumped_entries = [
-        {
+    dumped_entries = []
+    for entry in entries:
+        dumped = {
             "loser": entry["loser"],
             "winner": entry["winner"],
             "evidence": entry.get("evidence", "test fixture"),
         }
-        for entry in entries
-    ]
+        if "adjudicated_at" in entry:
+            dumped["adjudicated_at"] = entry["adjudicated_at"]
+        if "retracted_at" in entry:
+            dumped["retracted_at"] = entry["retracted_at"]
+        dumped_entries.append(dumped)
     artifact_path.write_text(
         yaml.safe_dump({"entries": dumped_entries}, sort_keys=False), encoding="utf-8"
     )
@@ -234,6 +246,193 @@ def test_transitive_chain_warns_but_resolves_only_one_level(tmp_path, caplog):
     # One level only — the loader does not walk the chain to dlv-a-final.
     assert canonicalize("dlv-a-old", equivalence_map) == "dlv-a-mid"
     assert any("transitive chain" in record.message for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Retraction-as-observation widening (2026-08-14) — pln-retraction-as-observation-for-
+# 1500a9 § AC4/AC5/AC6/AC8/AC9. Extends the retained fixture at scratchpad/eqfix/
+# (duplicate-loser -> first-seen-wins, chain -> warns-and-stops-at-one-level, unknown
+# id -> passthrough), which verified this plan's premise before any code changed.
+# ---------------------------------------------------------------------------
+
+
+def test_latest_adjudicated_at_wins_on_duplicate_loser(tmp_path, caplog):
+    """Two rows sharing a `loser`, both stamped: the LATER `adjudicated_at` wins, and
+    this is no longer treated as an artifact defect — no WARNING fires (AC4)."""
+    _write_artifact(
+        tmp_path,
+        [
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-earlier-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+            },
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-later-winner",
+                "adjudicated_at": "2026-08-02T00:00:00+00:00",
+            },
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        equivalence_map = load_equivalence_map(tmp_path)
+
+    assert equivalence_map == {"dlv-dup": "dlv-later-winner"}
+    assert not any(
+        "duplicate loser" in record.message.lower() for record in caplog.records
+    )
+
+
+def test_latest_adjudicated_at_wins_regardless_of_row_order(tmp_path):
+    """The later-stamped row wins even when it is listed FIRST in the artifact — this
+    is adjudicated-time resolution, not artifact-order resolution."""
+    _write_artifact(
+        tmp_path,
+        [
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-later-winner",
+                "adjudicated_at": "2026-08-02T00:00:00+00:00",
+            },
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-earlier-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+            },
+        ],
+    )
+
+    equivalence_map = load_equivalence_map(tmp_path)
+
+    assert equivalence_map == {"dlv-dup": "dlv-later-winner"}
+
+
+def test_inversion_pin_first_seen_no_longer_wins(tmp_path):
+    """PIN: this exact fixture resolved to the FIRST-seen winner before this widening
+    (see test_duplicate_loser_keeps_first_seen_and_warns, which reproduces the old
+    behaviour for UNSTAMPED rows) and resolves to the LATEST-adjudicated winner now
+    that both rows carry `adjudicated_at`. A future refactor that quietly restores
+    first-seen-wins for stamped rows must fail this test."""
+    _write_artifact(
+        tmp_path,
+        [
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-first-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+            },
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-second-winner",
+                "adjudicated_at": "2026-08-02T00:00:00+00:00",
+            },
+        ],
+    )
+
+    equivalence_map = load_equivalence_map(tmp_path)
+
+    # NOT dlv-first-winner (the pre-widening answer) — dlv-second-winner, because it
+    # carries the later adjudicated_at.
+    assert equivalence_map == {"dlv-dup": "dlv-second-winner"}
+
+
+def test_retraction_removes_mapping(tmp_path):
+    """A row with `retracted_at` removes its `loser`'s mapping entirely —
+    canonicalize(loser, map) returns the loser unchanged, as for an id never mapped
+    (AC5)."""
+    _write_artifact(
+        tmp_path,
+        [
+            {
+                "loser": "dlv-was-mapped",
+                "winner": "dlv-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+                "retracted_at": "2026-08-02T00:00:00+00:00",
+            },
+        ],
+    )
+
+    equivalence_map = load_equivalence_map(tmp_path)
+
+    assert equivalence_map == {}
+    assert canonicalize("dlv-was-mapped", equivalence_map) == "dlv-was-mapped"
+
+
+def test_retraction_withdraws_a_previously_live_mapping(tmp_path):
+    """A live row installs a mapping; a later-processed retraction row for the SAME
+    loser withdraws it — the map ends up with no entry for that loser, not the live
+    row's winner."""
+    _write_artifact(
+        tmp_path,
+        [
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-live-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+            },
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-live-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+                "retracted_at": "2026-08-03T00:00:00+00:00",
+            },
+        ],
+    )
+
+    equivalence_map = load_equivalence_map(tmp_path)
+
+    assert equivalence_map == {}
+    assert canonicalize("dlv-dup", equivalence_map) == "dlv-dup"
+
+
+def test_missing_stamp_tie_break_warns_and_keeps_installed(tmp_path, caplog):
+    """Two rows share a `loser`; one lacks `adjudicated_at`. This is the documented
+    AMBIGUOUS case (AC6) — it must not resolve silently. The already-installed row
+    (first-processed) is kept, and a WARNING fires naming the ambiguity."""
+    _write_artifact(
+        tmp_path,
+        [
+            {"loser": "dlv-dup", "winner": "dlv-unstamped-winner"},
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-stamped-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+            },
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        equivalence_map = load_equivalence_map(tmp_path)
+
+    assert equivalence_map == {"dlv-dup": "dlv-unstamped-winner"}
+    assert any(
+        "ambiguous duplicate loser id" in record.message for record in caplog.records
+    )
+
+
+def test_missing_stamp_tie_break_fires_regardless_of_which_row_lacks_it(tmp_path, caplog):
+    """Same ambiguous case, with the UNSTAMPED row arriving second — still warns,
+    still keeps the already-installed (first-processed, stamped) row."""
+    _write_artifact(
+        tmp_path,
+        [
+            {
+                "loser": "dlv-dup",
+                "winner": "dlv-stamped-winner",
+                "adjudicated_at": "2026-08-01T00:00:00+00:00",
+            },
+            {"loser": "dlv-dup", "winner": "dlv-unstamped-winner"},
+        ],
+    )
+
+    with caplog.at_level("WARNING"):
+        equivalence_map = load_equivalence_map(tmp_path)
+
+    assert equivalence_map == {"dlv-dup": "dlv-stamped-winner"}
+    assert any(
+        "ambiguous duplicate loser id" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(
@@ -790,7 +989,7 @@ def test_dual_read_three_way_outcome_is_distinguishable(tmp_path):
 
 
 def test_normalize_strips_quotes_and_trailing_inline_comment():
-    raw = '"dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"  # minted here; deliberately NOT coordinator-claude\'s dlv-...-276e8d'
+    raw = '"dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"  # minted here; deliberately NOT DoE\'s dlv-...-276e8d'
     assert (
         _normalize_extracted_deliverable_id(raw)
         == "dlv-narrow-the-write-confinement-bump-a-publish-af3aa9"

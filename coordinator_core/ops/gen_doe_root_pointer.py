@@ -1,9 +1,9 @@
 """
 coordinator_core.ops.gen_doe_root_pointer — Port of: gen-doe-root-pointer.sh
-(coordinator-claude b5a4192c, 2026-07-20).
+(DoE b5a4192c, 2026-07-20).
 
-Purpose: reads `repos.example_doctrine_repo` (env override first, then the `machine-local` registry)
-and writes `<settings-home>/machine-local/.doe-root` (one line, the coordinator-claude repo root, no
+Purpose: reads `repos.doe_claude` (env override first, then the `machine-local` registry)
+and writes `<settings-home>/machine-local/.doe-root` (one line, the DoE repo root, no
 trailing junk) so cold-terminal consumers (the `claude()` shim, inline resolver
 fallbacks) can `cat` the pointer with zero tool dependency.
 
@@ -14,13 +14,13 @@ overwrote the other machine's value (Windows clobbering macOS and back). The set
 `machine-local/` plane never syncs, and was already rung 2 of every reader, so the write
 seam now agrees with the read seam. See `_pointer_file()` for the no-dual-write rationale.
 
-Spec backlink: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § C1
+Spec backlink: DoE-claude:pln-coordinator-maximalist-install-e73afa § C1
 Design: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § Design decisions
         (pointer is a projected cache; registry = source of truth; dry-run lesson cited)
 
-Resolution order for the coordinator-claude clone root (unchanged from the bash oracle):
-  1. REPO_EXAMPLE_DOCTRINE_REPO env var (operator override, also used by install sandbox tests)
-  2. `machine-local get repos.example_doctrine_repo`  (registry — primary)
+Resolution order for the DoE clone root (unchanged from the bash oracle):
+  1. REPO_DOE_CLAUDE env var (operator override, also used by install sandbox tests)
+  2. `machine-local get repos.doe_claude`  (registry — primary)
   3. fail-loud with remediation
 
 Recast (thin caller): docs/plans/2026-07-09-resolver-unification-v3split-01.md § C3 —
@@ -35,11 +35,11 @@ rewritten (avoids spurious mtime churn and concurrent-write races in steady stat
 Dry-run safety: `--check-only` writes to a temp path, validates the content, then
 discards. The live pointer is byte-unchanged after any `--check-only` run.
 
-Fail-loud contract: if repos.example_doctrine_repo is unset/empty in both the env override and the
+Fail-loud contract: if repos.doe_claude is unset/empty in both the env override and the
 registry, `main()` returns non-zero with a stderr message and a remediation hint.
 
 Negative-spec:
-    - Does NOT clone the coordinator-claude repo, does NOT edit any registry key, does NOT write any
+    - Does NOT clone the DoE repo, does NOT edit any registry key, does NOT write any
       file other than the live pointer (and a temp file discarded in --check-only mode).
     - Does NOT reimplement the machine-local registry.toml/registry.local.toml parser —
       shells out to the `machine-local` CLI (PATH-resolved) exactly like the bash oracle's
@@ -66,7 +66,9 @@ from typing import List, Optional
 from coordinator_core._settings_home import machine_local_dir
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-doe-root-pointer.sh"  # literal program-name prefix, matches the coordinator-claude filename
+GENERATES = []  # writes only <settings-home>/machine-local/.doe-root, outside any git tree
+
+_PROG = "gen-doe-root-pointer.sh"  # literal program-name prefix, matches the DoE filename
 
 
 def _resolve_machine_local() -> Optional[str]:
@@ -75,14 +77,14 @@ def _resolve_machine_local() -> Optional[str]:
 
 
 def _resolve_doe_root() -> "tuple[Optional[str], int]":
-    """Resolve the coordinator-claude clone root. Returns (root_or_None, exit_code_on_failure).
+    """Resolve the DoE clone root. Returns (root_or_None, exit_code_on_failure).
 
     On success returns (root, 0). On failure returns (None, 1) after printing a
     stderr diagnostic + remediation hint, mirroring the bash oracle's two-tier
     resolution (env override, then machine-local registry).
     """
     # Tier 1: explicit env override (install sandbox tests / operator pin).
-    env_override = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "")
+    env_override = os.environ.get("REPO_DOE_CLAUDE", "")
     if env_override:
         return env_override, 0
 
@@ -95,7 +97,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
         )
         print(
             "  Remediation: run /coordinator:install (Phase 3) to install machine-local,\n"
-            "  or set REPO_EXAMPLE_DOCTRINE_REPO=<path> to bypass the registry lookup.",
+            "  or set REPO_DOE_CLAUDE=<path> to bypass the registry lookup.",
             file=sys.stderr,
         )
         return None, 1
@@ -104,7 +106,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
         from coordinator_core.win_portability import no_console_creationflags
 
         result = subprocess.run(
-            [ml_bin, "get", "repos.example_doctrine_repo"],
+            [ml_bin, "get", "repos.doe_claude"],
             capture_output=True,
             text=True,
             check=False,
@@ -114,9 +116,9 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
         result = None
 
     if result is None or result.returncode != 0:
-        print(f"{_PROG}: machine-local get repos.example_doctrine_repo failed", file=sys.stderr)
+        print(f"{_PROG}: machine-local get repos.doe_claude failed", file=sys.stderr)
         print(
-            "  Remediation: machine-local set repos.example_doctrine_repo <path>  then /coordinator:install",
+            "  Remediation: machine-local set repos.doe_claude <path>  then /coordinator:install",
             file=sys.stderr,
         )
         return None, 1
@@ -124,11 +126,11 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     resolved = result.stdout.strip()
     if not resolved:
         print(
-            f"{_PROG}: repos.example_doctrine_repo is unset in the registry",
+            f"{_PROG}: repos.doe_claude is unset in the registry",
             file=sys.stderr,
         )
         print(
-            "  Remediation: machine-local set repos.example_doctrine_repo <path>  then /coordinator:install",
+            "  Remediation: machine-local set repos.doe_claude <path>  then /coordinator:install",
             file=sys.stderr,
         )
         return None, 1
@@ -149,7 +151,7 @@ def _pointer_file() -> str:
     — was exactly such a place: `~/.claude` is a git working tree that is
     committed and pushed across machines, and `.doe-root` was a TRACKED file in
     it, so a Windows-written pointer would land on macOS (and back) and resolve
-    the coordinator-claude clone to a path that does not exist on the reading machine.
+    the DoE clone to a path that does not exist on the reading machine.
 
     This is a move, not a new rung: `_doe_root`'s resolution order already ranked
     `<settings-home>/machine-local/.doe-root` as rung 2 (durable mirror) above
@@ -240,14 +242,14 @@ def main(argv: List[str]) -> int:
             print("  (no flag)                   Write or refresh <settings-home>/machine-local/.doe-root from the registry.", file=sys.stderr)
             print("  --check-only                Validate without mutating the live pointer (dry-run-safe).", file=sys.stderr)
             print("  --graceful-skip-unresolved  Exit 0 with a 'skipped' row (not fail-loud) when", file=sys.stderr)
-            print("                              repos.example_doctrine_repo cannot be resolved on the live path.", file=sys.stderr)
+            print("                              repos.doe_claude cannot be resolved on the live path.", file=sys.stderr)
             return 0
         # else: silently ignored -- see docstring.
 
     doe_root, rc = _resolve_doe_root()
     if doe_root is None:
         if graceful_skip_unresolved and not check_only:
-            print("doe_root_pointer: skipped (repos.example_doctrine_repo not resolved — complete step 3.5a first)")
+            print("doe_root_pointer: skipped (repos.doe_claude not resolved — complete step 3.5a first)")
             return 0
         return rc
 
@@ -257,8 +259,8 @@ def main(argv: List[str]) -> int:
     if not os.path.isdir(doe_root):
         print(f'{_PROG}: resolved root not found at "{doe_root}"', file=sys.stderr)
         print(
-            "  Remediation: confirm repos.example_doctrine_repo in the registry is a valid directory,\n"
-            "  or set REPO_EXAMPLE_DOCTRINE_REPO=<path>  then /coordinator:install",
+            "  Remediation: confirm repos.doe_claude in the registry is a valid directory,\n"
+            "  or set REPO_DOE_CLAUDE=<path>  then /coordinator:install",
             file=sys.stderr,
         )
         print("doe_root_pointer: failed (see stderr for gen-doe-root-pointer.py output)")
@@ -270,7 +272,7 @@ def main(argv: List[str]) -> int:
             file=sys.stderr,
         )
         print(
-            "  Remediation: confirm the resolved repos.example_doctrine_repo root has coordinator/ populated (W4.2 cutover required).",
+            "  Remediation: confirm the resolved repos.doe_claude root has coordinator/ populated (W4.2 cutover required).",
             file=sys.stderr,
         )
         print("doe_root_pointer: failed (see stderr for gen-doe-root-pointer.py output)")

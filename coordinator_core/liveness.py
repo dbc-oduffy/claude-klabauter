@@ -4,7 +4,7 @@ Purpose: Provide the two liveness predicates (+ the heartbeat write) that
 coordinator_core operations depend on. As of the de-bash W2 leg (2026-07-19)
 this module DELEGATES to the in-process native port
 ``coordinator_core.session.liveness`` / ``coordinator_core.session.core``
-rather than shelling out to the coordinator-claude bash ``coordinator-session.sh`` — the
+rather than shelling out to the DoE bash ``coordinator-session.sh`` — the
 Windows critical path can no longer depend on a POSIX shell (PM mandate:
 kill ALL bash on the critical path). The public surface
 (``resolve_live_session_ids`` / ``cs_claim_holder_live`` /
@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 # 3-rung __file__-walk + resolve-coordinator-clone subprocess ladder this
 # function used to run is GONE: coordinator-session.sh was retired
 # repo-wide (migrated to claude-klabauter's coordinator/lib/coordinator_session.py,
-# not to a coordinator-claude-side sibling __file__ can walk to), so every one of those
+# not to a DoE-side sibling __file__ can walk to), so every one of those
 # rungs always missed. The ladder collapses to a single call through the
 # canonical claude-klabauter-root resolver (coordinator_core.claude_klabauter_root) — no
 # __file__-walking, no hardcoded sibling names, no subprocess spawn (and
@@ -111,7 +111,7 @@ def _lib_path() -> Optional[str]:
 # ---------------------------------------------------------------------------
 #
 # The cache key is the RESOLVED SESSIONS DIR, not a bare timestamp (break-class
-# fix, 2026-08-07; cross-repo memo `2026-08-07-coordinator-claude-em-scoped-commit-
+# fix, 2026-08-07; cross-repo memo `2026-08-07-doe-claude-em-scoped-commit-
 # calls-a-live-peer-dead-and-reapable`). This function is zero-arg and resolves
 # its registry from the PROCESS cwd, so in a process that touches two repos --
 # ordinary in a fleet where one engine serves sibling clones -- an unkeyed

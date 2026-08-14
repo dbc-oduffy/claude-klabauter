@@ -28,7 +28,7 @@ Contract:
   - Pin file + fnm absent   → exits 1 with remediation message on stderr.
   - Idempotent: `fnm install` itself is idempotent; safe to call multiple times.
 
-Port of: setup-fnm-pin.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Port of: setup-fnm-pin.sh (DoE 6fb5fb37, 2026-07-22)
 Spec backlink: docs/plans/2026-06-23-setup-time-substrate-completeness.md § C1d (AC6)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 

@@ -23,7 +23,7 @@ Covers:
      three-way token mismatch.
 
 Spec backlink: state/sizings/2026-08-12-producer-axis-claude-klabauter-engine-half.yaml
-Spec backlink (cross-repo contract): coordinator-claude
+Spec backlink (cross-repo contract): DoE-claude
     docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md
 
 Negative-spec: does NOT append to `test_handoff_normalize.py` — that module is

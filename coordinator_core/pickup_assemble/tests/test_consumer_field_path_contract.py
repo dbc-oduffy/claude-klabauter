@@ -2,7 +2,7 @@
 coordinator_core.pickup_assemble.tests.test_consumer_field_path_contract
 
 Purpose: pins six `brief()` decision-object field paths as a
-**consumer-facing contract**. A sibling repo (coordinator-claude-em) ships skill
+**consumer-facing contract**. A sibling repo (doe-claude-em) ships skill
 prose in the coordinator-claude repo — the `pickup` and `workstream-complete`
 skills — citing these six paths BY NAME as the reader's verification route at
 the fleet's two scarcest-context gates. That prose does not live in this

@@ -346,7 +346,7 @@ class TestComputeOffer:
         `claims.my_agent_touched`.
 
         Negative-spec (touched-txt-release-is-append-only-correction, 2026-08-03
-        cross-repo ruling — coordinator-claude declared authoritative over the earlier,
+        cross-repo ruling — DoE-claude declared authoritative over the earlier,
         superseded `touched-txt-prunable-not-append-only`): `touched.txt` is an
         APPEND-ONLY `T`/`R` event log resolved last-event-wins, never a mutable
         set a reader may delete lines from. This module never writes to ANY

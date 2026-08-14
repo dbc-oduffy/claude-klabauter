@@ -3,7 +3,7 @@ guard closing the file-write leg of the `.coordinator-dev-repo` removal
 guard.
 
 WHY THIS EXISTS. `coordinator_core.bash_guards.block_dev_repo_sentinel_
-removal` closes the Bash leg for `.coordinator-dev-repo` (the coordinator-claude
+removal` closes the Bash leg for `.coordinator-dev-repo` (the DoE-claude
 repo-root dev-vs-OSS discriminant consumed by `claude_md_budget.
 DEV_REPO_SENTINEL` and `resolve_coordinator_clone.py`, written at install
 by `coordinator_core.install.maximalist`). This module is the companion

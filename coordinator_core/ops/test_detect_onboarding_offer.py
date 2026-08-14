@@ -1,10 +1,10 @@
 """
 Tests for coordinator_core.ops.detect_onboarding_offer.
 
-Mirrors the coordinator-claude bash test suite case for case -- the bash suite's case
+Mirrors the DoE bash test suite case for case -- the bash suite's case
 matrix is the parity oracle for this port.
 
-Port of: test-detect-onboarding-offer.sh (coordinator-claude 432e3285, 2026-07-22)
+Port of: test-detect-onboarding-offer.sh (DoE 432e3285, 2026-07-22)
 """
 
 from __future__ import annotations

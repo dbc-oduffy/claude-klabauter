@@ -6,7 +6,7 @@ status: active
 
 # Project Tracker
 **Last updated:** 2026-07-30
-**Overall status:** generated from state/workstreams/ — see coordinator/bin/render-project-tracker
+**Overall status:** generated from state/workstreams/ — see coordinator/bin/render-project-tracker.py
 
 ## Active Workstreams
 

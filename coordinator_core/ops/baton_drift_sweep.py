@@ -196,7 +196,7 @@ Negative-spec (FOURTH LEG / C8):
     only ever evaluates the same no-successor population `reconciled_no_successor` and
     `reaped_orphan` already isolate.
 
-Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D2d
+Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d § D2d
 Spec backlink (SECOND LEG): cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
 terminal-state-not-cleared-programmatically.md, defect 1, item 3.
 Spec backlink (C5): pln-stranded-baton-drainage-make-t-f4a679 § C5.

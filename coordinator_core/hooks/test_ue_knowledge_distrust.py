@@ -1,6 +1,6 @@
 """
 Tests for coordinator_core.hooks.ue_knowledge_distrust._run_bootstrap --
-the C5 native-Python Port of: claude-ue-bootstrap.sh (coordinator-claude 4518ca1a,
+the C5 native-Python Port of: claude-ue-bootstrap.sh (DoE 4518ca1a,
 2026-07-21)'s settings.json write/merge logic (retires the bash subprocess
 spawn on this session-hot-path hook; see module docstring).
 

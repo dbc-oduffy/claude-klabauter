@@ -85,9 +85,9 @@ does NOT skip silently. Only operates on the allowlisted queue file
 basenames below (path-allowlist guard, matched by basename so both absolute
 and relative paths work).
 
-Port of: prune-resolved-queue-entries.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: prune-resolved-queue-entries.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-05-07-prune-resolved-state-bloat.md § S5
-               (lives in the coordinator-claude consumer-project docs/plans/, not
+               (lives in the DoE-claude consumer-project docs/plans/, not
                here — this module is the claude-klabauter-owned engine half)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -114,7 +114,10 @@ Negative-spec (faithful oracle-bug repro — do not silently "fix" these):
       faithfully carried forward from the oracle.
 """
 
+
 from __future__ import annotations
+
+GENERATES = []  # operates only on caller-supplied paths basenamed improvement-queue.md/bug-backlog.md, neither currently tracked in claude-klabauter's own tree
 
 import os
 import re

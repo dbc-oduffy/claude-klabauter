@@ -4,7 +4,7 @@ coordinator_core.distill._common — shared barrier module for the distill-cerem
 Purpose: the 3 independent scripts (ripe-filter, sidecar-sweep, delete-guard) and the
 2 coupled scripts (harvest-debt, memo-triage) all import this module. It carries:
 
-  1. The canonical distillation-log PARSER for the coordinator-claude canonical format (used by C4/C7's
+  1. The canonical distillation-log PARSER for the DoE canonical format (used by C4/C7's
      `/pickup` stamp + handoff-symmetry work) — NOT the legacy pipe-table format found in
      today's `state/distillation-log.md` (date | action | path | last_sha | belongs_to_spec
      | reason). The canonical format is line-oriented under `## Run <id>` headers:
@@ -17,7 +17,7 @@ Purpose: the 3 independent scripts (ripe-filter, sidecar-sweep, delete-guard) an
   2. The active-reference ripgrep guard, scoped to docs/ tasks/ archive/ (sidecar-sweep and
      delete-guard both gate deletions on this before emitting a deletion-manifest row).
   3. SIDECAR_SUFFIXES — the single named, full-suffix-anchored constant enumerating the
-     process-scaffolding sidecar suffixes sidecar-sweep matches against. C8 (coordinator-claude's contract)
+     process-scaffolding sidecar suffixes sidecar-sweep matches against. C8 (DoE's contract)
      is the eventual single owner of this enumeration; this constant is claude-klabauter's half of that
      shared list, not an independently-authored duplicate.
   4. Frontmatter access — re-exports EXACTLY split_frontmatter and read_fm_field from
@@ -60,7 +60,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 DISPOSITIONS = frozenset({"DISTILLED", "PROMOTE", "EPHEMERAL", "SKIP", "PRESERVE"})
-"""Valid disposition values for a canonical-log row (per the coordinator-claude canonical format)."""
+"""Valid disposition values for a canonical-log row (per the DoE canonical format)."""
 
 _RUN_HEADER_RE = re.compile(r"^##\s+Run\s+(?P<run_id>\S+)\s*$")
 
@@ -166,8 +166,8 @@ PROVENANCE_MARKER_KEYS = ("archived_handoff:", "cross_repo_memo:")
 """Frontmatter keys that mark a harvest-provenance TOMBSTONE block — a record of where a
 `/distill`-harvested artifact's content went, not a live dependency on it.
 
-Coordinator-claude owns this vocabulary as a cross-repo contract; claude-klabauter mirrors it here in lockstep,
-same ownership split `SIDECAR_SUFFIXES`'s own comment already documents (coordinator-claude authors and
+DoE owns this vocabulary as a cross-repo contract; claude-klabauter mirrors it here in lockstep,
+same ownership split `SIDECAR_SUFFIXES`'s own comment already documents (DoE authors and
 evolves the list, the engine mirrors it locally rather than reading it live). Source of
 truth: `coordinator/docs/wiki/provenance-markers.md` § "The marker key set (the contract)"
 (lines 20-28 as of 2026-07-23) — currently exactly these two keys; `provenance:` and
@@ -362,8 +362,8 @@ vocabulary; `coordinator_core/ops/check_harvest_debt.py`'s own local 3-tuple
 (`.review.md`, `-check.md`, `.the Director of Engineering-review.md`) is reconciled against it here (C1
 of the 2026-07-23 claude-klabauter-driven-ceremony-redesign plan) and is expected to adopt
 this constant directly (C5, separate task) rather than keep an independently
-authored duplicate. C8 (coordinator-claude's contract) is the eventual cross-repo single owner
-of this enumeration; keep in lockstep with coordinator-claude's list.
+authored duplicate. C8 (DoE's contract) is the eventual cross-repo single owner
+of this enumeration; keep in lockstep with DoE's list.
 
 The `-check.md`/`-review.md` dash-separated shape (as opposed to the plain
 `.review.md` dotted generic above) is a DIFFERENT separator convention from the

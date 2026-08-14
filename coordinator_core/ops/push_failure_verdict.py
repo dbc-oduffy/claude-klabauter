@@ -3,14 +3,14 @@ coordinator_core.ops.push_failure_verdict — JSON-RPC "git.push_failure_verdict
 operation.
 
 Purpose: classify a non-fast-forward push failure into one of five states so
-Coordinator-claude's Stop-hook auto-push advisory (`coordinator/hooks/scripts/
+DoE-claude's Stop-hook auto-push advisory (`coordinator/hooks/scripts/
 runtime-tripwire-em-check.py`, THEIR repo, not touched here) renders a verdict
 we computed instead of re-deriving one from a regex. The classification is
 the value this op sells; the advisory is a pure renderer over it.
 
 Origin memos (read for full context, not reproduced here):
-    cross-repo/inbox/2026-08-06-coordinator-claude-em-autopush-advisory-worktree-contention.md
-    cross-repo/inbox/2026-08-06-coordinator-claude-em-autopush-advisory-yes-build-the-verdict-op.md
+    cross-repo/inbox/2026-08-06-doe-claude-em-autopush-advisory-worktree-contention.md
+    cross-repo/inbox/2026-08-06-doe-claude-em-autopush-advisory-yes-build-the-verdict-op.md
 
 Op-key / contract:
     git.push_failure_verdict

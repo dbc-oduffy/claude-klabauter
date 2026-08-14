@@ -954,7 +954,7 @@ def test_list_orphaned_terminal_status_excluded_from_population(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Non-plan population exclusion (cross-repo memo
-# 2026-08-03-coordinator-claude-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
+# 2026-08-03-doe-claude-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
 # § 1): frontmatter presence, structurally, is the discriminator — NOT a
 # filename denylist and NOT a probe for a particular key like status:.
 # ---------------------------------------------------------------------------
@@ -1549,7 +1549,7 @@ def test_plan_deliverable_ids_reverse_index_preserves_both_paths_on_canonicaliza
 
 
 # ---------------------------------------------------------------------------
-# Status-partition totality and disjointness. Coordinator-claude ruling 80b0b29fb struck
+# Status-partition totality and disjointness. DoE ruling 80b0b29fb struck
 # "landed" from PLAN_ORPHAN_TERMINAL_STATUS; a value that is neither terminal
 # NOR listed in _KNOWN_NON_TERMINAL_PLAN_STATUSES falls into the
 # unrecognized_status bucket, which is the false-report class that made every

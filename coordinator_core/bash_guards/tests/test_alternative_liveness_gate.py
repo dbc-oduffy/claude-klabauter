@@ -289,7 +289,7 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # truth audit, likely FALSE) claim about its python3-subprocess rewrite, and the manifest
     # is keyed `<guard>::<marker>` specifically so one guard's true claim can never make an
     # unrelated guard's same-worded claim grade LIVE by prose coincidence.
-    # `python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new ...` --
+    # `python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py ...` --
     # the `<claude-klabauter-root>` placeholder makes this a template, not a directly
     # invocable path, AND it is a `python3 <script.py>` invocation (no -c/
     # -m flag), a form `_probe_python_dash_c` does not attempt to run --
@@ -560,7 +560,7 @@ class TestCapabilityManifestOracle:
         mirroring that guard's own real, unverified "in-process, zero
         extra forks" claim about what is actually a `python3 -c`
         subprocess (see harness_capability_manifest.json's own comment;
-        roster-truth audit: coordinator-claude state/audits/2026-07-29-search-
+        roster-truth audit: DoE-claude state/audits/2026-07-29-search-
         capability-roster-truth.md). The REAL, guard-scoped oracle must
         refuse to grade this LIVE just because `guard_inprocess_search::
         in-process` happens to be a true entry."""

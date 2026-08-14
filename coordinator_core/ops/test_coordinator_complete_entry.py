@@ -6,7 +6,7 @@ contract (arg validation table, exit-code table, frontmatter field order,
 idempotency guard, degrade-on-absence for the rollup-sentence PATH-first
 test shim) rather than merely re-asserting the module's own transcription.
 
-Port of: coordinator-complete-entry.sh (coordinator-claude a1a568d2, 2026-07-22)
+Port of: coordinator-complete-entry.sh (DoE a1a568d2, 2026-07-22)
 """
 
 from __future__ import annotations
@@ -718,11 +718,11 @@ class TestRollupSentence:
 
     def test_path_first_shim_preferred_over_in_process(self, tmp_path, monkeypatch):
         """Oracle parity: PATH-first `command -v coordinator-render-rollup.sh`
-        wins over the in-process call — preserves coordinator-claude's own test-shim
+        wins over the in-process call — preserves DoE's own test-shim
         mechanism (Test A relies on exactly this: a stub executable
         PATH-prepended ahead of the real sibling).
 
-        Port of: test-complete-entry-rollup.sh (coordinator-claude 432e3285, 2026-07-22)
+        Port of: test-complete-entry-rollup.sh (DoE 432e3285, 2026-07-22)
         """
         repo = _make_repo(tmp_path)
         plans_dir = repo / "docs" / "plans"
@@ -931,11 +931,11 @@ class TestNativeSingleSessionLoe:
 
 
 # ---------------------------------------------------------------------------
-# Byte-parity against the coordinator-claude oracle trampoline (best-effort — skipped when
+# Byte-parity against the DoE oracle trampoline (best-effort — skipped when
 # the oracle script isn't reachable from this checkout, e.g. a claude-klabauter-only CI
-# runner with no coordinator-claude sibling clone).
+# runner with no DoE-claude sibling clone).
 #
-# 2026-07-22: repointed from coordinator-complete-entry.sh (retired by coordinator-claude's
+# 2026-07-22: repointed from coordinator-complete-entry.sh (retired by DoE's
 # de-bash wave, commit 6fb5fb37) to coordinator-complete-entry.py — the .sh
 # file no longer exists on disk; only .py and .cmd siblings remain. The .py
 # oracle is invoked via `[sys.executable, oracle_path, ...]`, never a bash/sh
@@ -952,7 +952,7 @@ def _find_oracle() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-@pytest.mark.skipif(_find_oracle() is None, reason="coordinator-claude oracle script not found as a sibling checkout")
+@pytest.mark.skipif(_find_oracle() is None, reason="DoE-claude oracle script not found as a sibling checkout")
 @pytest.mark.real_home
 class TestOracleParity:
     def test_basic_frontmatter_shape_matches_oracle(self, tmp_path, monkeypatch):

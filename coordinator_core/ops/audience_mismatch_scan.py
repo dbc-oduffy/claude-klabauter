@@ -23,7 +23,7 @@ body, not a JSON-RPC op (no register_op; this is the same standalone-CLI
 family as check_harvest_debt.py / check_weekly_staleness.py, not the
 locked_rmw-mutating op family like workday_stitch_sidecar_summary.py).
 
-Spec backlink: docs/plans/2026-07-27-claude-md-altitude-triage.md, Tasks/C14
+Spec backlink: DoE-claude:pln-claude-md-altitude-triage-earn-31f32e, Tasks/C14
 ("the audience-mis-routing detector" named starter).
 
 Matching strategy: near-duplicate clustering over the free-text

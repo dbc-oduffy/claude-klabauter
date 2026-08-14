@@ -1,5 +1,5 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""coordinator-workflow-scaffold.py — coordinator-claude-side veneer over the claude-klabauter
+"""coordinator-workflow-scaffold.py — DoE-side veneer over the claude-klabauter
 workflow.scaffold op.
 
 Builds the workflow.scaffold params object (name, description, phases,
@@ -8,7 +8,7 @@ shared cc_invoke_bare() transport (--bare/--params-file), and writes the
 returned Workflow skeleton `.script` text to --out or stdout. Does not
 implement the skeleton-stamper engine itself — thin transport veneer only.
 """
-# coordinator-workflow-scaffold.py — coordinator-claude-side veneer for the claude-klabauter workflow.scaffold op.
+# coordinator-workflow-scaffold.py — DoE-side veneer for the claude-klabauter workflow.scaffold op.
 #
 # Purpose: builds the workflow.scaffold params object from CLI flags, dispatches via
 # the shared cc_invoke.py transport seam (cc_invoke_bare(), the --bare/--params-file
@@ -91,6 +91,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 from cc_invoke import StructuralPinError, cc_invoke_bare  # noqa: E402
 
+GENERATES = []  # writes only to the caller-supplied --out path (or stdout when omitted) — no fixed tracked artifact
 
 _PROG = "coordinator-workflow-scaffold.py"
 

@@ -2,7 +2,7 @@
 CROSS-REPO write-confinement speed bump (C4): a well-meaning session commits
 or writes into a git repo other than its own, and nothing today notices.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
+Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
 repo], chunk C4 "Cross-repo detection and registration".
 
 THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY. Read the plan's "Design
@@ -482,7 +482,7 @@ _BRANCH_WRITE_FLAGS = frozenset(
 
 #: `git branch` read spellings. `--show-current` is the one this fleet's own
 #: doctrine puts on the hot path (an EM verifying a peer's branch before
-#: memoing them), and the one the coordinator-claude memo named as costing a real
+#: memoing them), and the one the DoE-claude memo named as costing a real
 #: session real time.
 _BRANCH_READ_FLAGS = frozenset(
     {
@@ -722,7 +722,7 @@ def _symbolic_ref_is_read(args: List[str]) -> bool:
 #: Dual-mode verbs: in `_GIT_WRITE_SUBCOMMANDS` by default, vetoed by these
 #: predicates for their recognised READ spellings.
 #:
-#: Closing the residual the first pass left open (coordinator-claude memo,
+#: Closing the residual the first pass left open (DoE-claude memo,
 #: 2026-08-12; the sender named `git branch --show-current` as one of three
 #: commands the misfiring bump cost them, and listing the dual-mode verbs
 #: wholesale kept that one bumping). Every predicate fails toward WRITE on
@@ -858,7 +858,7 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     module docstring section there, "LESSONS-OUTBOX IS NOT A MISWRITE, EVEN
     THOUGH IT IS A FOREIGN REPO"). `coordinator-lesson-promote`
     (`ops/queue_promote.py`) writes a universal lesson's durable home to
-    `<doe_root>/state/lessons-outbox/<id>.yaml` BY DESIGN -- coordinator-claude is
+    `<doe_root>/state/lessons-outbox/<id>.yaml` BY DESIGN -- DoE-claude is
     the central lessons repo, there is no in-repo alternative, and a foreign-
     repo bump on that write is a false positive on both surfaces alike.
     Callers treat `True` as "never bump".
@@ -867,7 +867,7 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     sibling `_target_is_bare_temp_scratch`-shaped exemptions (see the tool
     surface's own docstring, same section, for why): the whole point of this
     exemption is that the target IS a foreign repo -- `queue.promote` always
-    writes into an actual coordinator-claude checkout -- so gating on "no repo"
+    writes into an actual DoE-claude checkout -- so gating on "no repo"
     would exempt nothing real. This is exactly why the check below sits
     INSIDE the per-candidate loop, after `target_gitdir` is already
     confirmed non-`None`: this guard (C4) only ever sees candidates that

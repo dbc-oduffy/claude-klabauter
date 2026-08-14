@@ -2,7 +2,7 @@
 coordinator_core.ops.lessons_filter — learn-lessons routing-set filters.
 
 Purpose: two pure, payload-to-payload filters used by the learn-lessons
-skill's central/local routing pipeline (`coordinator-claude coordinator/skills/
+skill's central/local routing pipeline (`DoE-claude coordinator/skills/
 learn-lessons/SKILL.md`), collapsed into one module per the buildout plan's
 chunk design (`docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-
 inventory.md` § Wave 2 unclustered pairs):
@@ -34,7 +34,7 @@ docstring note is required (manifest rates both `none` on the idempotency-
 hazard column).
 
 Spec backlink: pln-coordinator-ops-buildout-from--903224 § Wave 2
-Port source: coordinator-claude coordinator/skills/learn-lessons/SKILL.md (undated-pass fence ~L601,
+Port source: DoE-claude coordinator/skills/learn-lessons/SKILL.md (undated-pass fence ~L601,
              strip-list orphan-rejection fence ~L649)
 """
 

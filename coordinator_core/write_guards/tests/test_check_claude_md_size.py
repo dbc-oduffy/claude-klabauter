@@ -1,5 +1,5 @@
 """Tests for coordinator_core.write_guards.check_claude_md_size -- the
-Write/Edit/MultiEdit SIZE leg ported from coordinator-claude
+Write/Edit/MultiEdit SIZE leg ported from DoE-claude
 coordinator/hooks/scripts/check-claude-md-size.py, flipped from hard-deny
 to advisory by plan chunk C2 of
 docs/plans/2026-08-06-apply-guard-class-census.md (DR-277).
@@ -11,9 +11,9 @@ cut-and-refill-gate.md § C7b) adds two new behaviours this file covers:
   - AC3: governance widens from the two hardcoded fleet-loaded surfaces to
     ANY surface a repo's own coordinator/audience-manifest.txt names.
   - AC4: the per-surface ratchet watermark, read from the same repo-local
-    ledger-file convention coordinator-claude's (still coordinator-claude-resident) admission gate uses.
+    ledger-file convention DoE's (still DoE-resident) admission gate uses.
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C8;
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C8;
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C7b.
 """
 

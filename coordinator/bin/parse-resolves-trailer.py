@@ -14,8 +14,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Usage:
@@ -25,7 +25,7 @@ Exit codes: 0 — success (incl. vacuous zero-trailer output); 1 — usage error
 2 — not a git repo / invalid commit / CLAUDE_KLABAUTER_ROOT resolution or import failure
 (fail-loud, matching the ported script's own internal-error convention).
 
-Spec backlink: docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md § C4
+Spec backlink: DoE-claude:pln-lifecycle-vocab-c2-durable-cro-991bd4 § C4
 Doctrine: coordinator/docs/wiki/resolves-commit-trailer.md
 Port of: coordinator/bin/parse-resolves-trailer.py (bash body retired on cutover; see git log)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md

@@ -3,7 +3,7 @@
 the reference-hook port this is a faithful engine-ification of).
 
 Covers the 2026-08-03 widening (memo
-cross-repo/inbox/2026-08-03-coordinator-claude-em-archive-write-guard-pincer.md):
+cross-repo/inbox/2026-08-03-doe-claude-em-archive-write-guard-pincer.md):
 
   (A) the fire condition now gates on RAW agent_id presence, not the
       bare-hex-only format guard -- a named-teammate agent_id

@@ -28,9 +28,9 @@ Checks — seven ProbeResult objects, in dependency order:
                          .draft.yaml is missing (SKIP, not a fault) or older than the newest
                          state/week-changelog/*.md entry (INFO nudge).
   claude-klabauter.schema.vendor_drift  OPTIONAL — every schema vendored under coordinator_core/
-                         frontmatter/schemas/ still matches coordinator-claude HEAD (DEGRADED on drift,
-                         DEGRADED-as-INDETERMINATE when the coordinator-claude clone is unreadable,
-                         SKIP when no coordinator-claude clone exists on this machine).
+                         frontmatter/schemas/ still matches DoE HEAD (DEGRADED on drift,
+                         DEGRADED-as-INDETERMINATE when the DoE clone is unreadable,
+                         SKIP when no DoE clone exists on this machine).
   claude-klabauter.root.pointer    OPTIONAL — claude-klabauter-root pointer file present at
                          <settings-home>/machine-local/.claude-klabauter-root and matches the resolved
                          CLAUDE_KLABAUTER_ROOT (DEGRADED, not hard FAIL, on absence/mismatch — without it,
@@ -93,6 +93,8 @@ except ImportError:
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+GENERATES = []  # writes only state/doctor-last-run.json, which is gitignored (.gitignore: "Per-machine cadence/health sentinels") — never a tracked artifact
 
 # ---------------------------------------------------------------------------
 # Step-zero NDJSON vocabulary (step-zero-emitter-contract.md §The Five Keys)
@@ -1368,7 +1370,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
                     "on demand, not scheduled (DEC-5)."
                 ),
                 remediation=(
-                    "Optional: run strategic.generate to produce a draft, then the coordinator-claude "
+                    "Optional: run strategic.generate to produce a draft, then the DoE "
                     "refresh ceremony to reconcile it against the canonical "
                     "self-description.yaml."
                 ),
@@ -1434,7 +1436,7 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
                     "— the draft may be stale."
                 ),
                 remediation=(
-                    "Run strategic.generate to refresh the draft, then the coordinator-claude refresh "
+                    "Run strategic.generate to refresh the draft, then the DoE refresh "
                     "ceremony to reconcile it against the canonical self-description.yaml."
                 ),
                 required=False,
@@ -1479,22 +1481,22 @@ _VENDOR_DRIFT_PROBE = "claude-klabauter.schema.vendor_drift"
 def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.schema.vendor_drift — OPTIONAL (required=False); never gating.
 
-    Cadence surface for "has coordinator-claude moved since our vendored-schema pin?". Delegates the
+    Cadence surface for "has DoE moved since our vendored-schema pin?". Delegates the
     whole comparison to coordinator_core.frontmatter.schema_drift_watch, which globs
     every schema under coordinator_core/frontmatter/schemas/ and runs the non-gating
-    check_schema_drift_advisory over each against coordinator-claude HEAD.
+    check_schema_drift_advisory over each against DoE HEAD.
 
     Exists because that advisory had ZERO callers: claude-klabauter's vendored
-    improvement-queue.schema.json drifted ~12h behind coordinator-claude on 2026-07-22 and the gap was
+    improvement-queue.schema.json drifted ~12h behind DoE on 2026-07-22 and the gap was
     only found when a sibling repo's CLI rejected a value valid on their surface. This
     probe is what makes the next one self-surface — its verdict reaches
-    state/doctor-last-run.json, which coordinator-claude's /workday-start already reads.
+    state/doctor-last-run.json, which DoE's /workday-start already reads.
 
     Two-oracle warning (the remediation below exists for this reason): THIS probe
-    compares against coordinator-claude **HEAD**, while the GATING tamper-check
+    compares against DoE **HEAD**, while the GATING tamper-check
     (`check_schema_drift(..., ref=...)` in
     `coordinator_core/frontmatter/tests/test_schema_validate.py`) compares against a
-    per-schema pinned SHA in `_QUEUE_SCHEMA_PINS`. Copying coordinator-claude's file in by hand
+    per-schema pinned SHA in `_QUEUE_SCHEMA_PINS`. Copying DoE's file in by hand
     satisfies this probe and breaks that gate — an installing agent did exactly that
     on 2026-07-28 (state/audits/2026-07-28-windows-install-dogfood-friction.md § F3).
     The remediation therefore names `bin/claude-klabauter-revendor-schema.py`, which moves the
@@ -1504,7 +1506,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
       DRIFT          -> DEGRADED (sentinel AMBER + hint) — re-vendor.
       INDETERMINATE  -> DEGRADED, worded as INDETERMINATE — the check could not run;
                         neither a drift claim nor a clean bill of health.
-      UNRESOLVED     -> SKIP (required=False) — no coordinator-claude clone on this machine at all
+      UNRESOLVED     -> SKIP (required=False) — no DoE clone on this machine at all
                         (fresh install / CI without the sibling); not applicable, not
                         a fault. Surfaces in envelope.warnings / missing_optional.
       MATCH          -> PASS.
@@ -1514,7 +1516,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
         re-vendor nudge, not a broken install, and must never fail --step-zero (whose
         exit code keys off REQUIRED probes only).
       - Does NOT report a clean PASS for a comparison it could not perform; an
-        unreadable coordinator-claude clone is DEGRADED-as-indeterminate, never silent green, and
+        unreadable DoE clone is DEGRADED-as-indeterminate, never silent green, and
         never a false drift alarm.
       - Does NOT re-vendor anything — read-only.
       - Does NOT hard-depend on coordinator_core being importable: an ImportError
@@ -1530,7 +1532,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
     `_write_doctor_sentinel`'s `vendor_drift` sentinel key.
 
     Spec backlink: coordinator_core/frontmatter/schema_drift_watch.py module docstring;
-    cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md.
+    cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md.
     """
     try:
         if claude_klabauter_root is None:
@@ -1589,7 +1591,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                 status=_INFO,
                 detail=summary,
                 remediation=(
-                    "Optional: check out the coordinator-claude sibling repo (or set REPO_EXAMPLE_DOCTRINE_REPO) "
+                    "Optional: check out the DoE-claude sibling repo (or set REPO_DOE_CLAUDE) "
                     "to enable the vendored-schema drift watch on this machine."
                 ),
                 required=False,
@@ -1609,9 +1611,11 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                     "It writes the bytes AND updates the gating pin in "
                     "coordinator_core/frontmatter/tests/test_schema_validate.py"
                     "::_QUEUE_SCHEMA_PINS in one verified operation. Do NOT cp the file in "
-                    "by hand: THIS probe compares against coordinator-claude HEAD, but the gating "
+                    "by hand: THIS probe compares against DoE HEAD, but the gating "
                     "tamper-check compares against that pinned SHA, so a hand copy turns "
-                    "this probe green while breaking check_schema_drift."
+                    "this probe green while breaking check_schema_drift. "
+                    "A shape recorded as declined is refused: the entrypoint reports the "
+                    "decline's reason and the commit that backed it out."
                 ),
                 required=False,
                 data=data,
@@ -1623,7 +1627,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                 status=_DEGRADED,
                 detail=summary,
                 remediation=(
-                    "Vendored-schema drift is UNKNOWN, not clean. Verify the coordinator-claude "
+                    "Vendored-schema drift is UNKNOWN, not clean. Verify the DoE-claude "
                     "clone is a readable git repo whose HEAD carries coordinator/schemas/, "
                     "then re-run the drift probe."
                 ),
@@ -1652,6 +1656,189 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
         )
 
 
+_GENERATOR_STALENESS_PROBE = "claude-klabauter.generator.output_staleness"
+
+
+def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.generator.output_staleness — OPTIONAL (required=False); never gating.
+
+    Cadence surface for "did a generator move after the artifact it emits was last
+    stamped?" (AC7). Delegates the whole comparison to
+    coordinator_core.ops.check_generator_output_staleness.compute_all_staleness, which
+    merges the local leg (C3, generator_provenance-declared pairs) and the vendored leg
+    (C6, DoE's emission-stamped artifacts) into one verdict dict keyed by artifact path,
+    each entry carrying `{"artifact", "verdict", "detail"}`. This probe carries that dict
+    into `data` verbatim, per the shipped `_run_probe_vendored_schema_drift` pattern
+    (same seam, same lazy-import-and-fold-to-SKIP discipline) — it never re-derives a
+    verdict, only classifies the worst one present.
+
+    THIS PROBE IS THE CADENCE: the `--triage` envelope already writes
+    state/doctor-last-run.json, and DoE's /workday-start already reads it via
+    coordinator_core.ops.check_claude_klabauter_doctor_sentinel — no second cadence hook, no new
+    sentinel, no git hook. Staleness surfaces daily with NO change to any DoE-owned
+    surface.
+
+    Verdict mapping (worst-of across the returned dict):
+      any STALE          -> DEGRADED (AMBER) — a declared pair has drifted.
+      no STALE, any
+        UNDECLARED/
+        WRITE_TARGET_UNRESOLVED/
+        INDETERMINATE    -> INFO/skipped=True — coverage gap or the check could not
+                            resolve a verdict; excluded from `_local_reduce_overall`
+                            so it cannot capture the daily sentinel's verdict/hint the
+                            way a real STALE finding must (mirrors
+                            `_run_probe_vendored_schema_drift`'s UNRESOLVED case).
+                            WRITE_TARGET_UNRESOLVED is a standing ~230-record population
+                            — it is folded into the same INFO/skipped path as UNDECLARED
+                            precisely so it cannot pin the sentinel to AMBER or consume
+                            a hint slot.
+      no STALE/UNDECLARED/WRITE_TARGET_UNRESOLVED/INDETERMINATE, all
+        FRESH/UNSTAMPED/
+        MUTATES_DECLARED -> PASS. UNSTAMPED pairs are named in `detail` but do not
+                            degrade the probe on their own — C2 is the chunk that closes
+                            UNSTAMPED coverage, not this cadence wiring. MUTATES_DECLARED
+                            is a HEALTHY declared state (a corpus mutator with no fixed
+                            artifact, so no staleness contract), NOT a coverage gap — it
+                            deliberately does not join `gap` and folds into this same PASS
+                            path, closer to FRESH than to UNDECLARED for reporting purposes.
+      empty dict (no
+        declared pairs)  -> PASS — a repo with nothing declared has nothing stale.
+
+    Negative-spec (AC7):
+      - NEVER a non-zero process exit, a commit hook, or a gate — this probe REPORTS,
+        it does not GATE. It fails no suite and blocks no ceremony.
+      - Does NOT re-derive a verdict from raw git state; the checker's own dict is
+        carried through unchanged.
+      - Does NOT raise past this probe: an ImportError (checker not importable) or any
+        unexpected exception folds into a SKIP/INFO result, matching the optional-probe
+        contract shared with `_run_probe_vendored_schema_drift`.
+
+    Spec backlink: docs/plans/2026-08-13-generator-output-staleness-detector.md § Tasks
+    id C5, § Acceptance Criteria AC7.
+    """
+    try:
+        if claude_klabauter_root is None:
+            return _ProbeResult(
+                probe=_GENERATOR_STALENESS_PROBE,
+                status=_INFO,
+                detail="Cannot check generator/output staleness — CLAUDE_KLABAUTER_ROOT unresolved; skipping.",
+                remediation="Resolve CLAUDE_KLABAUTER_ROOT first (see claude-klabauter.root.resolve probe).",
+                required=False,
+                skipped=True,
+            )
+
+        root_str = str(claude_klabauter_root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+
+        try:
+            from coordinator_core.ops.check_generator_output_staleness import (  # type: ignore[import]
+                compute_all_staleness,
+            )
+        except Exception as exc:
+            return _ProbeResult(
+                probe=_GENERATOR_STALENESS_PROBE,
+                status=_INFO,
+                detail=(
+                    "Cannot import coordinator_core.ops.check_generator_output_staleness "
+                    f"from {root_str!r}: {type(exc).__name__}: {exc}"
+                ),
+                remediation="See claude-klabauter.core.import probe — the engine tree is not importable.",
+                required=False,
+                skipped=True,
+            )
+
+        # Review: coordinator:code-reviewer — thread claude_klabauter_root through so this
+        # resolves against the claude-klabauter repo, not compute_all_staleness's cwd-derived
+        # git_root() fallback.
+        report = compute_all_staleness(repo_root=claude_klabauter_root)
+
+        def _verdict_str(entry: dict) -> str:
+            verdict = entry.get("verdict")
+            value = getattr(verdict, "value", None)
+            return value if value is not None else str(verdict)
+
+        data = {
+            artifact: {
+                "artifact": entry.get("artifact"),
+                "verdict": _verdict_str(entry),
+                "detail": entry.get("detail"),
+            }
+            for artifact, entry in report.items()
+        }
+
+        stale = {k: v for k, v in data.items() if v["verdict"] == "STALE"}
+        gap = {
+            k: v
+            for k, v in data.items()
+            if v["verdict"] in ("UNDECLARED", "WRITE_TARGET_UNRESOLVED", "INDETERMINATE")
+        }
+
+        if stale:
+            names = ", ".join(sorted(str(k) for k in stale))
+            return _ProbeResult(
+                probe=_GENERATOR_STALENESS_PROBE,
+                status=_DEGRADED,
+                detail=f"Generator/output pair(s) STALE: {names}",
+                remediation=(
+                    "A generator moved after the artifact it emits was last stamped. "
+                    "Re-run the generator named in the pair's `detail` field to "
+                    "refresh the artifact, then re-run this probe."
+                ),
+                required=False,
+                data=data,
+            )
+
+        if gap:
+            # Review: coordinator:code-reviewer — a coverage/resolution gap (no STALE
+            # present) must not capture the daily sentinel's verdict/hint the way a
+            # real STALE finding does; mirrors _run_probe_vendored_schema_drift's
+            # UNRESOLVED -> INFO/skipped=True precedent, which _local_reduce_overall
+            # excludes from the reduction.
+            names = ", ".join(sorted(str(k) for k in gap))
+            return _ProbeResult(
+                probe=_GENERATOR_STALENESS_PROBE,
+                status=_INFO,
+                detail=f"Generator/output staleness verdict incomplete for: {names}",
+                remediation=(
+                    "UNDECLARED means a discovered generator writes a resolved tracked "
+                    "path with no GENERATES declaration; WRITE_TARGET_UNRESOLVED means a "
+                    "discovered generator writes through a path expression the sweep "
+                    "could not resolve, so whether it emits a repo artifact is unknown; "
+                    "INDETERMINATE means the check could not resolve a verdict (git "
+                    "failure, unreadable peer clone, or a malformed sources pathspec). "
+                    "See each entry's `detail` for the specific cause."
+                ),
+                required=False,
+                skipped=True,
+                data=data,
+            )
+
+        return _ProbeResult(
+            probe=_GENERATOR_STALENESS_PROBE,
+            status=_PASS,
+            detail=(
+                f"{len(data)} generator/output pair(s) checked; none STALE."
+                if data
+                else "No declared generator/output pairs found."
+            ),
+            remediation="—",
+            required=False,
+            data=data,
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_GENERATOR_STALENESS_PROBE,
+            status=_INFO,
+            detail=(
+                f"Unexpected error in generator/output staleness probe: {type(exc).__name__}: {exc}"
+            ),
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+        )
+
+
 _COMMITMENTS_RECHECK_PROBE = "claude-klabauter.commitments.recheck"
 
 
@@ -1667,7 +1854,7 @@ def _run_probe_commitments_recheck(claude_klabauter_root: Path | None) -> _Probe
     reproduces on its own — one record's own title read "(now satisfied)" beside
     status: open, thirteen days on, with nothing to ever re-check it. This probe is
     what makes the corpus self-surface — its verdict reaches state/doctor-last-run.json,
-    which coordinator-claude's /workday-start already reads.
+    which DoE's /workday-start already reads.
 
     Verdict mapping:
       any record actionable (evidence resolved truthy, status still "open")
@@ -1820,7 +2007,7 @@ def _run_probe_root_pointer(claude_klabauter_root: Path | None) -> _ProbeResult:
 
     Negative-spec:
       - Does NOT write the pointer file — read-only diagnostic; the writer is a
-        separate install-time step (gen-claude-klabauter-root-pointer.py, coordinator-claude C1b).
+        separate install-time step (gen-claude-klabauter-root-pointer.py, DoE-claude C1b).
       - Does NOT emit BROKEN/hard-fail on absence — a missing pointer degrades
         per-invoke latency, it does not break correctness (the ladder fallback still
         resolves CLAUDE_KLABAUTER_ROOT, just slowly).
@@ -2536,6 +2723,7 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results.append(_run_probe_invoke_smoke(claude_klabauter_root))
     results.append(_run_probe_strategic_draft_staleness(claude_klabauter_root))
     results.append(_run_probe_vendored_schema_drift(claude_klabauter_root))
+    results.append(_run_probe_generator_output_staleness(claude_klabauter_root))
     results.append(_run_probe_commitments_recheck(claude_klabauter_root))
     results.append(_run_probe_root_pointer(claude_klabauter_root))
     results.append(_run_probe_invoke_latency(claude_klabauter_root))
@@ -2743,7 +2931,7 @@ def _manifest_broken_envelope(detail: str, remediation: str) -> dict[str, Any]:
 # Health sentinel — state/doctor-last-run.json
 #
 # Relocated from skills/doctor/SKILL.md Step 1.5 (that SKILL.md step is being
-# retired) so coordinator-claude's /workday-start consumer (coordinator_core.ops.
+# retired) so DoE-claude's /workday-start consumer (coordinator_core.ops.
 # check_claude_klabauter_doctor_sentinel) keeps seeing a fresh sentinel.
 #
 # Two decisions already made (do not re-decide):
@@ -2856,8 +3044,8 @@ def _write_doctor_sentinel(envelope: dict[str, Any], claude_klabauter_root: Path
     on an older sentinel already on disk.
 
     `vendor_drift` is exactly such an additive key (2026-07-26, cross-repo
-    ratification — see cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md).
-    It is a DOCUMENTED PUBLIC key — external consumers (coordinator-claude) MAY gate a
+    ratification — see cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md).
+    It is a DOCUMENTED PUBLIC key — external consumers (DoE-claude) MAY gate a
     commit-time check on it directly, unlike the rest of this sentinel's contents
     which are claude-klabauter-internal cadence output. See _sentinel_vendor_drift's docstring
     for its exact shape and the absent-probe-row UNKNOWN default, and

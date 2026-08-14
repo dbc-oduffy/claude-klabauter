@@ -10,7 +10,7 @@ Coverage:
   (c) target_date        — is either None (burn-down shape) or a valid ISO YYYY-MM-DD string
   (d) status_enum        — status is in canonical-4 {active, paused, shipped, abandoned}
   (e) gate_b_constraint  — ALL currently seeded files use status: active (Gate-B constraint;
-                           non-active is reserved until coordinator-claude InitiativeStatus source widen lands)
+                           non-active is reserved until DoE InitiativeStatus source widen lands)
   (f) id_filename_match  — id field matches the YAML filename stem
   (g) fixture_roundtrip  — real on-disk YAML fixture files (in tmp_path) parse correctly via
                            _simple_yaml_load (lesson: test-fidelity-seed-fixtures-in-the-real)
@@ -155,7 +155,7 @@ def test_status_in_canonical_4(initiative_file: tuple[Path, dict]) -> None:
 def test_gate_b_constraint_status_active(initiative_file: tuple[Path, dict]) -> None:
     """(e) Gate-B constraint: ALL currently seeded files must use status: active.
 
-    Non-active statuses (paused, shipped, abandoned) are reserved until the coordinator-claude
+    Non-active statuses (paused, shipped, abandoned) are reserved until the DoE
     InitiativeStatus source widen vendors in claude-klabauter (Gate B).  Setting a non-active
     status before Gate B produces cockpit records the vendored Zod validator rejects.
     See SCHEMA.md § Gate B constraint.
@@ -164,7 +164,7 @@ def test_gate_b_constraint_status_active(initiative_file: tuple[Path, dict]) -> 
     status = data.get("status")
     assert status == "active", (
         f"{path.name}: Gate-B constraint violated — status must be 'active' until "
-        f"coordinator-claude InitiativeStatus source widen lands, found {status!r}"
+        f"DoE InitiativeStatus source widen lands, found {status!r}"
     )
 
 

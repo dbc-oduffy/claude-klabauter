@@ -8,8 +8,8 @@ Finish-strangler port: the bash implementation (repo-setup-time helper that
 seeds a skeleton state/health-ledger.md so workday-complete Step 4 can append
 without a "create if missing" branch) has been fully ported to
 coordinator_core/ops/setup_seed_health_ledger.py, with a co-located pytest
-suite (test_setup_seed_health_ledger.py). This file is now a thin coordinator-claude-side
-(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+suite (test_setup_seed_health_ledger.py). This file is now a thin DoE-side
+(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 contract/generator, claude-klabauter owns engine).
 
 Renamed from setup-seed-health-ledger.sh (2026-07-22 bash-kill campaign):
@@ -30,7 +30,7 @@ Exit codes: 0 — ledger seeded or already present (idempotent no-op); 1 — bad
 REPO_ROOT, or state/ directory/ledger file could not be created (fail-loud —
 this is a setup-time gate/config-writer, not a never-block hook).
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 """
 
 from __future__ import annotations

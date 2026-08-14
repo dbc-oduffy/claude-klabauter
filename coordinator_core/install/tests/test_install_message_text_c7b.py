@@ -2,7 +2,7 @@
 docs/plans/2026-08-12-message-text-stops-naming-an-unreachable-repo.md.
 
 Purpose: pin that `gen_settings_hooks.py` and `prereq_probe.py` no longer
-print prose naming an unreachable private repo (`coordinator-claude`,
+print prose naming an unreachable private repo (`DoE-claude`,
 `example-retrieval-repo-ue-addon`) at a reader who cannot navigate to it on a
 published OSS mirror — while their functional identifiers (env var names,
 registry keys, `EXAMPLE_GAME_REPO_UE_ROOT`, etc.) are untouched.
@@ -16,7 +16,7 @@ from pathlib import Path
 from coordinator_core.install import gen_settings_hooks, prereq_probe
 
 
-def test_gen_settings_hooks_remediation_does_not_name_example_doctrine_repo(tmp_path: Path):
+def test_gen_settings_hooks_remediation_does_not_name_doe_claude(tmp_path: Path):
     out_path = tmp_path / "settings.json"
     (tmp_path / ".coordinator-hooks-enabled").touch()
 
@@ -30,15 +30,15 @@ def test_gen_settings_hooks_remediation_does_not_name_example_doctrine_repo(tmp_
     else:
         raise AssertionError("expected GenSettingsHooksError for a nonexistent coordinator root")
 
-    assert "coordinator-claude" not in message
+    assert "DoE-claude" not in message
     assert "coordinator-claude repo is cloned" in message
 
 
 def test_gen_settings_hooks_usage_text_keeps_functional_env_key():
     usage = gen_settings_hooks._usage_text()
     # Functional identifiers (env var name + registry key) stay untouched.
-    assert "REPO_EXAMPLE_DOCTRINE_REPO" in usage
-    assert "repos.example_doctrine_repo" in usage
+    assert "REPO_DOE_CLAUDE" in usage
+    assert "repos.doe_claude" in usage
 
 
 def test_probe_git_lfs_remediation_does_not_name_example_retrieval_repo_ue_addon():

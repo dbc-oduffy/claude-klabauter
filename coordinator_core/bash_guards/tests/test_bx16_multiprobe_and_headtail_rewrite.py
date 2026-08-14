@@ -1,5 +1,5 @@
 """Tests for the two BX-16 rewrite checks that close BX-7's and BX-8's
-missing-rewrite-target gap (coordinator-claude docs/plans/2026-07-29-windows-viability-
+missing-rewrite-target gap (DoE docs/plans/2026-07-29-windows-viability-
 stop-the-spawn-storms.md, row BX-16): ``check_multiprobe_banner_rewrite``
 (MULTI_PROBE_BANNER, 40.1% of measured forks) and
 ``check_head_tail_plumbing_rewrite`` (HEAD_TAIL_PLUMBING, 25%).

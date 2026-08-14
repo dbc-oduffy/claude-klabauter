@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.render_template_tree.
 
-Port of: render-template-tree.sh (coordinator-claude 290997c7, 2026-07-22).
+Port of: render-template-tree.sh (DoE 290997c7, 2026-07-22).
 Spec backlink: docs/plans/2026-06-22-new-project-bootstrap-skill.md § C2
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ def _write_render_template_sh(bin_dir: Path) -> Path:
 
     Implements the same CLI contract (<path> -o <path> KEY=VALUE...) and the same
     fail-loud-on-unsubstituted-token behavior as the real bash oracle, without
-    depending on the coordinator-claude clone being present on the test machine.
+    depending on the DoE clone being present on the test machine.
     """
     script = bin_dir / "render-template.py"
     script.write_text(
@@ -79,7 +79,7 @@ def doe_root(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
 
 def _make_happy_src(tmp_path: Path) -> Path:
@@ -93,11 +93,11 @@ def _make_happy_src(tmp_path: Path) -> Path:
 
 
 def test_happy_path_renders_and_copies(tmp_path, monkeypatch, doe_root):
-    # Force the coordinator-claude-root fallback rung: co-located resolution now wins
+    # Force the DoE-root fallback rung: co-located resolution now wins
     # unconditionally, so this test's fixture-authored render-template.py
     # (staged under doe_root) would otherwise never run.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     src = _make_happy_src(tmp_path)
     dst = tmp_path / "dst1"
 
@@ -112,9 +112,9 @@ def test_happy_path_renders_and_copies(tmp_path, monkeypatch, doe_root):
 
 
 def test_dst_may_be_pre_existing_empty_dir(tmp_path, monkeypatch, doe_root):
-    # Force the coordinator-claude-root fallback rung — see test_happy_path_renders_and_copies.
+    # Force the DoE-root fallback rung — see test_happy_path_renders_and_copies.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     src = _make_happy_src(tmp_path)
     dst = tmp_path / "dst-empty"
     dst.mkdir()
@@ -131,19 +131,19 @@ def test_dst_may_be_pre_existing_empty_dir(tmp_path, monkeypatch, doe_root):
 
 
 def test_usage_error_on_too_few_args(monkeypatch, doe_root):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     rc = main(["only-one-arg"])
     assert rc == 1
 
 
 def test_missing_src_dir_fails(tmp_path, monkeypatch, doe_root):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     rc = main([str(tmp_path / "nope"), str(tmp_path / "dst")])
     assert rc == 1
 
 
 def test_non_empty_dst_dir_fails(tmp_path, monkeypatch, doe_root):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     src = tmp_path / "src3"
     src.mkdir()
     (src / "a.txt").write_text("hi\n")
@@ -157,7 +157,7 @@ def test_non_empty_dst_dir_fails(tmp_path, monkeypatch, doe_root):
 
 
 def test_unsubstituted_token_fails_loud(tmp_path, monkeypatch, doe_root, capsys):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     src = tmp_path / "src4"
     src.mkdir()
     (src / "broken.txt").write_text("hello={{UNDEFINED}}\n")
@@ -169,13 +169,13 @@ def test_unsubstituted_token_fails_loud(tmp_path, monkeypatch, doe_root, capsys)
 
 
 def test_missing_render_template_sh_fails(tmp_path, monkeypatch):
-    # Force the coordinator-claude-root fallback rung so the empty coordinator-claude clone (no
+    # Force the DoE-root fallback rung so the empty DoE clone (no
     # render-template.py sibling) is actually consulted, rather than the
     # real co-located script this repo ships winning unconditionally.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
     empty_root = tmp_path / "empty-doe"
     (empty_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(empty_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(empty_root))
     src = tmp_path / "src5"
     src.mkdir()
     (src / "a.txt").write_text("hi\n")
@@ -186,11 +186,11 @@ def test_missing_render_template_sh_fails(tmp_path, monkeypatch):
 
 
 def test_doe_root_unresolvable_fails(tmp_path, monkeypatch):
-    # Force the coordinator-claude-root fallback rung so coordinator-claude-root unresolvability is
+    # Force the DoE-root fallback rung so DoE-root unresolvability is
     # actually reached, rather than short-circuited by the real
     # co-located script this repo ships.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    # No REPO_EXAMPLE_DOCTRINE_REPO, no machine-local on PATH.
+    # No REPO_DOE_CLAUDE, no machine-local on PATH.
     monkeypatch.setenv("PATH", "")
     src = tmp_path / "src6"
     src.mkdir()

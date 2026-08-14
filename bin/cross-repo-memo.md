@@ -6,8 +6,8 @@ The executable is `cross-repo-memo`, on PATH as `cross-repo-memo`, with a `.cmd`
 sibling for native Windows shells. Per DR-210 (the claude-klabauter-native-tooling-ownership
 strangler) and `docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md`,
 the coordinator executable surface — including this CLI — has migrated out of
-Coordinator-claude and now lives in THIS repo, at `coordinator/bin/cross-repo-memo`. It is
-no longer a coordinator-claude-owned file; resolve it repo-relatively when you're already in this
+DoE-claude and now lives in THIS repo, at `coordinator/bin/cross-repo-memo.py`. It is
+no longer a DoE-owned file; resolve it repo-relatively when you're already in this
 tree, or via PATH otherwise (PATH setup is machine-local, not this doc's concern).
 
 ## One-shot form
@@ -86,7 +86,7 @@ with all receiver hooks neutralized for that one commit via `core.hooksPath` (no
 trailer, no auto-push), per DR-214 Amendment A1. Propagation is the receiver's own next
 push; the receiver actions the memo in place from there. (The delivery-commit is a
 deliberate, sanctioned exception to "don't touch others' repos"; the commit mechanism is
-Coordinator-claude-owned in the CLI, so the observable contract is simply: delivery is committed, not
+DoE-owned in the CLI, so the observable contract is simply: delivery is committed, not
 left dirty.)
 
 Run `cross-repo-memo --list-receivers` for valid `--to` targets on this machine.

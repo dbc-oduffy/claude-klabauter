@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """verify-schema-registry-sync.py — SSOT drift gate over the schema registry.
 
-Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
+Thin DoE-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.verify_schema_registry_sync. Checks that every
 schemas/*.yaml carrying an applies_to: has a corresponding query --type
 recognised by bin/query-records.js at runtime, so a new schema wired into
@@ -19,9 +19,9 @@ from __future__ import annotations
 # query-records" impossible.
 #
 # Finish-strangler port (DR-059): the bash implementation has been fully
-# ported to coordinator_core/ops/verify_schema_registry_sync.py (coordinator-claude
-# clean-slate migration, 2026-07-16). This file is now a thin coordinator-claude-side
-# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude
+# ported to coordinator_core/ops/verify_schema_registry_sync.py (DoE-claude
+# clean-slate migration, 2026-07-16). This file is now a thin DoE-side
+# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE
 # owns contract/generator, claude-klabauter owns engine).
 #
 # Exit convention: this is a fail-loud gate script (SSOT drift check), NOT a
@@ -58,7 +58,7 @@ def _resolve_plugin_root() -> str:
     Previously a bare `os.path.dirname(os.path.dirname(__file__))` walk — the
     old co-located-only assumption, broken by the 2026-07-22 executable-surface
     migration that moved this script into claude-klabauter while schemas/ stayed
-    coordinator-claude-resident (DR-047: contract/data lives with coordinator-claude, engine with claude-klabauter; see
+    DoE-resident (DR-047: contract/data lives with DoE, engine with claude-klabauter; see
     `lib/coordinator_data_root.py`'s module docstring for the full two-rung
     resolution chain this now delegates to). Returns the PARENT of the resolved
     schemas/ dir, matching what `coordinator_core.ops.verify_schema_registry_sync

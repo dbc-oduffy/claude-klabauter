@@ -82,9 +82,9 @@ what the port op already produces at scaffold time — extend that op's own
 verification, not this one, to avoid two overlapping notions of plan
 completeness.
 
-Invocation contract (for the coordinator-claude consumer — see the driving
+Invocation contract (for the DoE-claude consumer — see the driving
 handoff's Part 3 and its own anti-scope: "every coordinator hook lives in
-Coordinator-claude, not here"):
+DoE-claude, not here"):
 
     JSON-RPC: {"method": "plan.suggest_completion_steps", "params": {}}
     scope: common_dir (the CALLER's own docs/plans/ + state/review-trail/ +
@@ -126,7 +126,7 @@ Negative-spec:
       ratio.
     - Does NOT emit surfacing/nudge prose itself — the `description`/
       `supplied_by` strings below are structured data naming a mechanism,
-      not agent-facing copy; a consuming surface (built in coordinator-claude, not
+      not agent-facing copy; a consuming surface (built in DoE-claude, not
       here) owns actual wording shown to an EM.
     - Does NOT assert, imply, or log that anything was "skipped",
       "violated", or done wrong — see module docstring.

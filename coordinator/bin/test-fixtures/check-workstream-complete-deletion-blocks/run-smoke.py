@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """run-smoke.py — behavior smoke test for check-workstream-complete-deletion-blocks.py
 
 Sets up a throwaway git repo via `tempfile.mkdtemp()`, stages expected changes,
@@ -16,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+GENERATES = []  # every git/file write happens inside a throwaway tempfile.mkdtemp() repo, cleaned up via shutil.rmtree in a finally block — nothing tracked is touched
 
 FIXTURES_DIR = Path(__file__).resolve().parent
 GATE = FIXTURES_DIR.parent.parent / "check-workstream-complete-deletion-blocks.py"

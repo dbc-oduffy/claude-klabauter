@@ -204,7 +204,7 @@ def _is_roadmap_workflow_authoring_session(value: str) -> bool:
     return bool(_ROADMAP_ID_ALLOWLIST_RE.fullmatch(roadmap_id))
 
 # Same three-variable precedence chain `_resolve_current_session_id` (baton_assemble)
-# and `coordinator/bin/coordinator-doc-new`'s `_resolve_session_id` both use — see
+# and `coordinator/bin/coordinator-doc-new.py`'s `_resolve_session_id` both use — see
 # module docstring for why this op still needs its own source-variable-name lookup
 # (`_resolve_session_id_with_source`, below), which the shared function does not
 # expose. The chain ITSELF is no longer a local copy — imported from

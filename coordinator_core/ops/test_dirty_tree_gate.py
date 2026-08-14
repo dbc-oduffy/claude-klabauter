@@ -2,8 +2,8 @@
 Characterization tests for coordinator_core.ops.dirty_tree_gate — same 8
 assertions as the bash oracle's own test suite.
 
-Port of: dirty-tree-gate.sh (coordinator-claude 894d4bc6, 2026-07-22)
-Oracle: test-dirty-tree-gate.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Port of: dirty-tree-gate.sh (DoE 894d4bc6, 2026-07-22)
+Oracle: test-dirty-tree-gate.sh (DoE 894d4bc6, 2026-07-22)
 """
 from __future__ import annotations
 
@@ -40,12 +40,12 @@ def _make_repo(tmp_path: Path, name: str) -> Path:
 
 @pytest.fixture
 def isolated_plugin_root(tmp_path, monkeypatch):
-    """Point CLAUDE_PLUGIN_ROOT at the real coordinator-claude coordinator/ checkout.
+    """Point CLAUDE_PLUGIN_ROOT at the real DoE-claude coordinator/ checkout.
 
     The gate's own resolution logic (CLAUDE_PLUGIN_ROOT / .doe-root) is
     exercised by _resolve_plugin_root's own unit coverage below; classifier
     behavior tests need a *working* coordinator-state-root.sh, so they point
-    straight at the sibling coordinator-claude repo's coordinator/ tree.
+    straight at the sibling DoE-claude repo's coordinator/ tree.
     """
     doe_coordinator = os.environ.get("DOE_COORDINATOR_ROOT")
     if not doe_coordinator:
@@ -55,7 +55,7 @@ def isolated_plugin_root(tmp_path, monkeypatch):
             if candidate.is_dir():
                 doe_coordinator = str(candidate)
     if not doe_coordinator or not Path(doe_coordinator).is_dir():
-        pytest.skip("sibling coordinator-claude/coordinator checkout not found")
+        pytest.skip("sibling DoE-claude/coordinator checkout not found")
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", doe_coordinator)
     return doe_coordinator
 

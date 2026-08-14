@@ -74,6 +74,11 @@ from coordinator_core.subagent_sandbox import resolve_git_root
 _COUNTS_FILENAME = "advisory-fire-counts.jsonl"
 _DENY_COUNTS_FILENAME = "deny-fire-counts.jsonl"
 
+#: Corpus-mutator declaration (generator-provenance sweep): both recorders
+#: append to a per-session file under state/subagent-share/<session_id>/ —
+#: the target file set is data-dependent on session_id.
+MUTATES = ["state/subagent-share/**/*.jsonl"]
+
 
 def record_advisory_fire(guard_name: str, session_id: str, cwd: Optional[str] = None) -> None:
     """Append one `{"guard", "at"}` record for a true advisory-class firing.

@@ -43,7 +43,7 @@ divergence (byte compare — a distinct, narrower check, see module
 
 Port backlink: docs/plans/2026-07-17-retire-doe-bash-bridges-native-python.md
     (C1 chunk — Port A).
-Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C3
+Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C3
 
 Negative-spec:
   - Does NOT migrate `setup/` — see header note above.

@@ -1,6 +1,6 @@
 """
 coordinator_core.hooks.test_platform_localize -- behavior-parity tests for the
-Port of: coordinator/templates/bin/platform-localize.sh (coordinator-claude 6fb5fb37,
+Port of: coordinator/templates/bin/platform-localize.sh (DoE 6fb5fb37,
 2026-07-22) SessionStart hook (DOE-PORT Wave B, id: platform-localize).
 
 Tests independently re-derive expected JSON/dict shapes from the bash oracle's

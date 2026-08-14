@@ -16,7 +16,7 @@ from repo history. Signal readers, in priority order:
   3. **Neither tags nor changelog data** — bounded `git log` subject window as last resort.
 
 Pinned return shape (frozen schema, generatable subset — see
-Coordinator-claude/coordinator/schemas/strategic-self-description.schema.json):
+DoE-claude/coordinator/schemas/strategic-self-description.schema.json):
     list[{
         "label":      str,               # short human-readable version/period label
         "date":       str,               # "YYYY-MM-DD" (schema format:date)

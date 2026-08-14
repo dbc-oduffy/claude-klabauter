@@ -5,7 +5,7 @@ architecture (same tokenizer/segmenter/indirection substrate) so a second
 protected removal-sentinel is a target basename plus a deny/advisory message
 away.
 
-WHY THIS EXISTS. `.coordinator-dev-repo` sits at the coordinator-claude repo root.
+WHY THIS EXISTS. `.coordinator-dev-repo` sits at the DoE-claude repo root.
 Its PRESENCE is the dev-vs-OSS discriminant consumed by
 `coordinator_core.claude_md_budget` (`DEV_REPO_SENTINEL`),
 `coordinator_core.resolve_coordinator_clone`, and written at install time by

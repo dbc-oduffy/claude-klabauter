@@ -332,7 +332,7 @@ class TestReviewerAgentTypeSet:
     """The gate is a SET, and its membership is pinned.
 
     Rationale for pinning rather than asserting shape: the set mirrors the
-    types coordinator-claude's `report_type_map:` routes to a reviewer template, but
+    types DoE-claude's `report_type_map:` routes to a reviewer template, but
     this module deliberately does not read that peer policy at runtime (see the
     constant's own comment). A pinned membership test is what carries the drift
     risk that decision accepts — widening the set must be a deliberate edit

@@ -1,7 +1,7 @@
 """test_gen_claude_doe_shim_default_template_follows_shell.py — the default
 `--template` the trampoline injects must follow `--shell`.
 
-Regression origin: the coordinator-claude memo of 2026-08-13 (PowerShell shim landed).
+Regression origin: the DoE-claude memo of 2026-08-13 (PowerShell shim landed).
 `_default_template_path()` hardcoded `claude-doe-shim.sh.tmpl` and never
 branched on `--shell`, so `gen-claude-doe-shim --shell powershell` with no
 explicit `--template` rendered the bash oracle's bytes into a file named
@@ -85,7 +85,7 @@ class TestShellFamilyFromArgv(unittest.TestCase):
 
 
 class TestBothTemplatesExistOnDisk(unittest.TestCase):
-    """The `.ps1.tmpl` default is only correct because coordinator-claude ships the
+    """The `.ps1.tmpl` default is only correct because DoE-claude ships the
     template at the mirrored name; if that ever drifts, the short form silently
     regresses to a template-not-found instead of a wrong-language render."""
 

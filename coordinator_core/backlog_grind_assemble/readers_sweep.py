@@ -32,7 +32,7 @@ built via `directives.build_tier_u_grant_flow` — this module never
 re-derives the grant token shape, the `tier-u-grant-cli` argv shape, or a
 local `build_untrusted_gate_judgment_point` call for it.
 
-Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Spec backlink: DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C3c.
 
 Negative-spec:

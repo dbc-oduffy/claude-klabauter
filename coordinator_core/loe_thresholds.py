@@ -1,7 +1,7 @@
 """
 coordinator_core.loe_thresholds — shared t-shirt LoE sizing loader + calculator.
 
-Purpose: load a ``loe-thresholds.yaml``-shaped document (coordinator-claude
+Purpose: load a ``loe-thresholds.yaml``-shaped document (DoE-claude
 ``coordinator/config/loe-thresholds.yaml``) and compute the "any-criterion,
 highest-tier-first" t-shirt classification shared by
 ``coordinator/bin/coordinator-session-loe.py`` and
@@ -13,10 +13,10 @@ a 2026-05-19 dogfood-fix already had to be hand-repropagated across the two bash
 scripts that predated the port (see ``config/loe-thresholds.yaml``'s own
 changelog comment).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g3
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 4
 Port of (fallback table values only): aggregate-chain-loe.sh TSHIRT_TABLE
-    (coordinator-claude b644d5a9, 2026-07-22) / coordinator/config/loe-thresholds.yaml (coordinator-claude)
+    (DoE b644d5a9, 2026-07-22) / coordinator/config/loe-thresholds.yaml (DoE-claude)
 
 Negative-spec:
   - Does NOT hardcode a config file path. Callers supply ``path`` to

@@ -17,8 +17,8 @@ The decision logic itself lives in coordinator_core/ops/setup_rag_decision.py.
 # resolver for /repo-setup — three-branch UE/daemon decision tree, idempotent
 # tripwire-block writer) has been fully ported to
 # coordinator_core/ops/setup_rag_decision.py (28 co-located pytest cases).
-# This file is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter
-# (engine) module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns
+# This file is now a thin DoE-side (contract) trampoline over that claude-klabauter
+# (engine) module, per DR-047 (DoE owns contract/generator, claude-klabauter owns
 # engine).
 #
 # Scope note (NOT a regression — see the claude-klabauter module's own negative-spec):

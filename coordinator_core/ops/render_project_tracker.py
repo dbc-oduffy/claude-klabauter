@@ -1,9 +1,9 @@
 """coordinator_core.ops.render_project_tracker — fold + render engine for
 docs/project-tracker.md.
 
-Port of: render-project-tracker.sh (coordinator-claude 93887f6f, 2026-07-17) — embedded
+Port of: render-project-tracker.sh (DoE 93887f6f, 2026-07-17) — embedded
 Python heredoc portion; the store-root/coordinator-root-path RESOLUTION half
-of the oracle stays on the coordinator-claude-side trampoline; see its own module docstring
+of the oracle stays on the DoE-side trampoline; see its own module docstring
 for why. This module reads all state/workstreams/<id>.yaml definitions and
 all state/workstreams/events/*.yaml field-scoped events under a given store
 root, folds each (workstream, field) pair to its current value by
@@ -19,7 +19,7 @@ Idempotent: two consecutive renders of an unchanged store are byte-identical
 session-id) — both deterministic total orders).
 
 Op registered? NO — plain module, direct import (R1 DOE-PORT template
-variant #1). The coordinator-claude-side trampoline (coordinator/bin/render-project-tracker,
+variant #1). The DoE-side trampoline (coordinator/bin/render-project-tracker,
 polyglot) imports ``main`` directly and calls it in-process; there is no
 JSON-RPC/cc_invoke hop for this op (single-shot maintenance-render CLI, not
 a hot path, but also has no live claude-klabauter subprocess caller to motivate a
@@ -29,19 +29,19 @@ strictly cheaper here per the template's variant-#1 discriminator).
 coordinator_root_path is a CALLER-SUPPLIED PARAMETER (argv[1]), never
 re-derived from this module's own __file__ location. This is load-bearing:
 the writer (coordinator-queue-append) stamps each record with the
-coordinator_root_path resolved at ITS OWN invocation cwd inside the coordinator-claude
+coordinator_root_path resolved at ITS OWN invocation cwd inside the DoE
 repo; this module lives in claude-klabauter's tree, so deriving a git root
-from __file__ here would resolve claude-klabauter's root instead of coordinator-claude's —
-silently breaking the dual-tenant filter (AC9). The coordinator-claude-side trampoline
+from __file__ here would resolve claude-klabauter's root instead of DoE's —
+silently breaking the dual-tenant filter (AC9). The DoE-side trampoline
 resolves the discriminator from ITS OWN on-disk git root (mirroring the
 bash oracle's ``git -C "${_script_dir}" rev-parse --show-toplevel``) and
 passes the resolved value in; this module trusts it verbatim.
 
-Spec backlink: docs/plans/2026-07-08-project-tracker-render-from-queue.md
+Spec backlink: DoE-claude:pln-project-tracker-render-from-qu-41e413
 § Approach / § Substrate / § Chunks C3.
 Prior parity oracle (retired at this port's cutover, review-integrator
 note F2/F3, 2026-07-17 BIG_PORT Wave B review): the pre-port bash oracle
-no longer exists on disk (the coordinator-claude trampoline was renamed to
+no longer exists on disk (the DoE trampoline was renamed to
 coordinator/bin/render-project-tracker, no suffix). Byte parity was
 verified at port-time, before the bash source was removed. The regression
 net going forward is the checked-in golden fixture in
@@ -86,7 +86,7 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # Do NOT duplicate this literal anywhere else in the module.
 _GENERATED_MARKER_LINE = (
     "**Overall status:** generated from state/workstreams/ — "
-    "see coordinator/bin/render-project-tracker"
+    "see coordinator/bin/render-project-tracker.py"
 )
 
 # FLEET-WIDE COMPATIBILITY CONTRACT (plan § C4): main()'s truncation guard
@@ -219,7 +219,7 @@ def _normalize_crp_for_comparison(crp: str | None, store_root: str) -> str:
 # module docstring's negative-spec against deriving coordinator_root_path
 # from __file__. That rule concerns a caller-supplied repo-identity
 # discriminator (deriving it from __file__ would resolve claude-klabauter's
-# own root instead of the coordinator-claude-side caller's); this is locating this
+# own root instead of the DoE-side caller's); this is locating this
 # module's own sibling schema files, a fixed on-disk relationship
 # independent of caller cwd. The two derivations are not in tension — a
 # later reader must not "fix" one by analogy with the other.
@@ -867,7 +867,7 @@ def render(store_root: str, coordinator_root_path: str, render_date: str | None 
 
 def main(argv: list[str]) -> int:
     """CLI entry point. ``argv`` is [store_root, coordinator_root_path] —
-    both RESOLVED BY THE CALLER (the coordinator-claude-side trampoline), never re-derived
+    both RESOLVED BY THE CALLER (the DoE-side trampoline), never re-derived
     here. See the module docstring's discriminator note for why
     coordinator_root_path must not be derived from this module's own
     __file__ location.

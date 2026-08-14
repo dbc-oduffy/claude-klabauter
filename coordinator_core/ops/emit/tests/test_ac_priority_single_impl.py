@@ -14,7 +14,7 @@ longer carries it at all. ``resolve_priority`` now has exactly one caller
 (the emission path below), which makes the cross-check moot rather than
 failing — nothing left to fork a second walk into.
 
-Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § Acceptance Criteria
+Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § Acceptance Criteria
   (AC2, AC9, AC16).
 """
 

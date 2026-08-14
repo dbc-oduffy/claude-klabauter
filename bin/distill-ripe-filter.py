@@ -2,7 +2,7 @@
 
 DEC-3 (2026-07-23 claude-klabauter-driven-ceremony-redesign): the distill CLIs relocated to
 coordinator/bin/ conventions (discoverability + Windows .cmd twins). This forwarder
-keeps `bin/distill-ripe-filter.py` working for one release while coordinator-claude's PIPELINE.md
+keeps `bin/distill-ripe-filter.py` working for one release while DoE's PIPELINE.md
 is repointed (M1); delete once that repoint lands.
 """
 from __future__ import annotations

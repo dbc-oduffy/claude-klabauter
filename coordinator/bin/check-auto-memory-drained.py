@@ -16,7 +16,7 @@ install must never silently block every closure ceremony), but once the op
 itself runs, its exit code (0 drained/absent, 1 residue found) is passed
 through unchanged.
 
-Spec backlink: coordinator-claude
+Spec backlink: DoE-claude
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C13, AC15.
 """
 

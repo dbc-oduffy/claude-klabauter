@@ -3,7 +3,7 @@ test_exec_summary_docs_staleness — parse/reject tests for `ExecSummary.
 docs_staleness` and its leaf `DocStalenessEntry` (C6,
 `entities/exec_summary.py`).
 
-Spec backlink: docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C6
+Spec backlink: DoE-claude:pln-human-facing-doc-staleness-det-d9c047 § C6
 """
 from __future__ import annotations
 

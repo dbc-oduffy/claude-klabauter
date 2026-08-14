@@ -23,8 +23,8 @@ directly — this module has no mutation opinion of its own; every directive
 here names an existing atomic `cli` this package's own `apply.py` dispatch
 table resolves.
 
-Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C8
+Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C8
 
 `brief()` routes every construction through the shipped
 `coordinator_core.contract.decision_object.envelope.build_envelope` /
@@ -216,8 +216,8 @@ def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[s
     sha git prints. Per-commit bytes are unchanged from the per-commit call
     this replaces.
 
-    A git spawn on Windows costs ~100ms (coordinator-claude memo
-    `cross-repo/inbox/2026-08-08-coordinator-claude-em-engine-side-git-spawn-cost.md`,
+    A git spawn on Windows costs ~100ms (DoE memo
+    `cross-repo/inbox/2026-08-08-doe-claude-em-engine-side-git-spawn-cost.md`,
     7-rep median), so the per-commit shape cost `unique_commits × ~100ms` on
     every consolidation.
     """
@@ -467,13 +467,21 @@ def brief(
     )
 
 
+_USAGE_TEXT = "consolidate-assemble: usage: consolidate-assemble brief|apply [...]"
+
+
 def main(argv: list[str]) -> int:
     import json
     import sys
 
     if not argv:
-        print("consolidate-assemble: usage: consolidate-assemble brief|apply [...]", file=sys.stderr)
+        print(_USAGE_TEXT, file=sys.stderr)
         return EXIT_USAGE
+
+    if argv[0] in ("--help", "-h"):
+        print(_USAGE_TEXT)
+        return EXIT_OK
+
     subcmd, rest = argv[0], argv[1:]
 
     if subcmd == "apply":

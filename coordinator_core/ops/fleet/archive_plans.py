@@ -89,9 +89,14 @@ Live plan definition: status NOT in {implemented, superseded, abandoned},
   and would otherwise hold every plan-with-sidecar in place indefinitely).
 
 Sidecar co-move: any file matching <stem>.*.md alongside the primary plan in
-docs/plans/ is moved alongside it.  Sidecar results are not reported in the
-wire output (supplementary files); if a sidecar move fails, a warning is logged
-and the primary plan is still reported as acted.
+docs/plans/ is moved alongside it.  A SUCCESSFUL sidecar move is not reported in
+the wire output (supplementary file, subsumed by its primary's acted[] row).  A
+REFUSED sidecar move is: the primary plan is still reported acted (it did
+archive), and the sidecar lands in failed[] under its own repo-relative id with
+the mover's reason, so the envelope reads determinate-partial (exit_code:2) —
+the plan archived, the sidecar left behind in docs/plans/ — rather than clean
+success.  The dirty-tree guard runs against the primary's path only, so a
+sidecar carrying an uncommitted edit is the reachable case.
 
 Archive destination: archive/specs/YYYY-MM/ (YYYY-MM from leading date in
 filename, e.g. 2026-07-04-foo.md → 2026-07).
@@ -122,6 +127,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.assert_no_dangling_plan_backlinks import run_gate as _run_backlink_gate
 from coordinator_core.ops.fleet._common import (
     Move,
     _make_git_env,
@@ -681,7 +687,9 @@ async def _handle_act(
     8. Otherwise: build Move (primary + sidecars) and add to batch.
 
     After all checks, calls archive_and_commit once for the full batch (ONE commit).
-    Sidecar results are filtered from wire output; sidecar failures are logged only.
+    Successful sidecar results are filtered from wire output; a REFUSED sidecar
+    is logged AND reported in failed[] under its own repo-relative id (see
+    module docstring "Sidecar co-move").
     """
     # Collect live-reference text once (shared across all candidates in this act call).
     live_ref_text, live_ref_incomplete = _collect_live_reference_text(worktree_root)
@@ -826,16 +834,28 @@ async def _handle_act(
         elif primary_move.candidate_id in raw_acted_ids:
             # Primary succeeded → report acted regardless of sidecar outcome.
             acted.append({"id": cid, "archived": True})
-            # Log any sidecar failures as warnings (not fatal for the primary).
+            # A refused sidecar reaches the wire in failed[] under its OWN
+            # repo-relative id, not the primary's: the plan is archived and
+            # the sidecar is still in docs/plans/, which is a partial outcome
+            # (contract §3.2's determinate-partial, exit_code:2), not the
+            # clean success the acted[] row alone reported. acted[]'s frozen
+            # {id, archived} shape is untouched — see build_act_result's
+            # WIRE-SAFETY note; the primary's own _plan_worktree_dirty guard
+            # never covered sidecar paths, so this is reachable.
             for scar_move in sidecar_moves:
                 if scar_move.candidate_id in raw_failed_by_id:
+                    reason = raw_failed_by_id[scar_move.candidate_id]
                     _LOG.warning(
                         "archive_plans: sidecar move failed (primary plan still archived): "
                         "plan=%s sidecar=%s reason=%s",
                         cid,
                         scar_move.src.name,
-                        raw_failed_by_id[scar_move.candidate_id],
+                        reason,
                     )
+                    failed.append({
+                        "id": rel_id(scar_move.src, worktree_root),
+                        "reason": f"sidecar of {cid} not archived: {reason}",
+                    })
         else:
             # Should not occur (primary not in acted or failed after archive_and_commit).
             # Treat as failed to avoid silent omission.
@@ -845,5 +865,39 @@ async def _handle_act(
                 cid,
             )
             failed.append({"id": cid, "reason": "unexpected: absent from acted and failed"})
+
+    if acted:
+        # C5 AC7: the citation-surface gate is checked on every act call that
+        # actually landed a move — this is POST-HOC AUDIT VISIBILITY, NOT
+        # ENFORCEMENT. It is read-only, does not alter the wire result (the
+        # frozen act-result schema takes no new field), and NEVER blocks the
+        # already-committed move (git history is already written by
+        # archive_and_commit above) — a residual dangling/unresolved/
+        # ungrandfathered citation is logged loudly rather than silently
+        # passing unnoticed, but the archive stands either way. scan_incomplete
+        # is already inherited fail-closed for free: a live-reference-scan-
+        # incomplete candidate never reaches `acted` (skipped above), so this
+        # call only ever runs after at least one move that itself required a
+        # COMPLETE live-reference scan.
+        import contextlib
+        import io
+
+        gate_out, gate_err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(gate_out), contextlib.redirect_stderr(gate_err):
+                gate_rc = _run_backlink_gate(str(worktree_root))
+        except Exception as exc:  # noqa: BLE001 — a gate crash must not mask a landed archive
+            _LOG.warning(
+                "archive_plans: T3 post-move citation-surface gate errored — %s "
+                "(archive already landed; gate result unknown)", exc,
+            )
+        else:
+            if gate_rc != 0:
+                _LOG.warning(
+                    "archive_plans: T3 post-move citation-surface gate found "
+                    "dangling/unresolved/ungrandfathered spec_backlink citation(s) "
+                    "after archiving %d plan(s):\n%s",
+                    len(acted), gate_err.getvalue(),
+                )
 
     return build_act_result(mode, acted, skipped, failed)

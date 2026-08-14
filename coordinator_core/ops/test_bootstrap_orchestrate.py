@@ -1,22 +1,22 @@
 """
 Tests for coordinator_core.ops.bootstrap_orchestrate.
 
-Port of: bootstrap-orchestrate.sh (coordinator-claude 0fc2b3ba, 2026-07-22)
+Port of: bootstrap-orchestrate.sh (DoE 0fc2b3ba, 2026-07-22)
 Spec backlink: docs/plans/2026-05-29-it-just-works-agentic-install-currency.md § Chunk 4
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md (BIG_PORT wave)
 
-These tests independently re-derive the acceptance criteria from the coordinator-claude-side
+These tests independently re-derive the acceptance criteria from the DoE-side
 bash oracle test (`coordinator/bin/tests/test-bootstrap-orchestrate.sh`, ACs
 AC-ABSENT / AC-DRY / AC-IDEM / AC-MISSING-REPO / AC-HOOK-FAIL / AC-DASH-PREFIX /
 AC-COMMENT-STRIP) against THIS module directly, rather than re-asserting the
 port's own transcription. Fixture note: the pipeline shells out to two
-Coordinator-claude-resident siblings via `coordinator_core.ops.bootstrap_repo`
+DoE-resident siblings via `coordinator_core.ops.bootstrap_repo`
 (scaffold-canonical-structure.sh, check-install-divergence.py) that this port
 does NOT own. Tests stub minimal fakes of both under a throwaway
 `COORDINATOR_ROOT` so the suite is self-contained and does not depend on the
-sibling coordinator-claude repo being checked out on the test machine. The currency
+sibling DoE-claude repo being checked out on the test machine. The currency
 stamp (`lib/coordinator-currency.sh::coordinator_currency_write`) is no
-longer a coordinator-claude-resident dependency as of C19 — `_coordinator_currency_write`
+longer a DoE-resident dependency as of C19 — `_coordinator_currency_write`
 below is a native in-package reimplementation; see its own parity tests
 further down this file.
 """
@@ -84,7 +84,7 @@ def _head_sha(root: str) -> str:
 
 
 def _make_coordinator_root(tmp_path, name: str = "fake-coordinator") -> str:
-    """Fake coordinator-claude coordinator/ tree with the siblings this port depends on:
+    """Fake DoE coordinator/ tree with the siblings this port depends on:
     bin/{scaffold-canonical-structure.sh,check-install-divergence.py} (needed
     by coordinator_core.ops.bootstrap_repo, transitively) and a
     coordinator-schema-version file (read natively by
@@ -455,7 +455,7 @@ def test_out_of_tree_paths_not_collected(tmp_path, fake_home, capsys):
 
 # ---------------------------------------------------------------------------
 # C19 parity — _coordinator_currency_write (Port of:
-# coordinator-currency.sh::coordinator_currency_write, coordinator-claude 9cc1d315,
+# coordinator-currency.sh::coordinator_currency_write, DoE 9cc1d315,
 # 2026-07-21). Locks the
 # observable contract the retired `bash -c 'source ... && coordinator_
 # currency_write ...'` bridge used to provide: idempotent write, atomic

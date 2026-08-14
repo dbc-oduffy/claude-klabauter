@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_lazy_ops_channel.py — the two lazy-op-registration channels and their
 precedence, plus the engine-side pytest-child env strip.
 

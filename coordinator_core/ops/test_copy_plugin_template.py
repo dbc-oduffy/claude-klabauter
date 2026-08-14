@@ -6,9 +6,9 @@ Covers the settled branch matrix (dest absent → copy; byte-identical → skip;
 differing bytes → skip-and-report NEVER clobber), the CC-4 double-invocation
 no-op proof, the direct-pytest verification contract
 ([sys.executable, "-m", "pytest", dest]), and the CC-7 structured-error
-premises. All filesystem work is tmp_path-hermetic; the coordinator-claude-root resolver is
+premises. All filesystem work is tmp_path-hermetic; the DoE-root resolver is
 never exercised (template_path is injected), so tests pass on a machine with
-no coordinator-claude clone.
+no DoE clone.
 """
 
 from __future__ import annotations

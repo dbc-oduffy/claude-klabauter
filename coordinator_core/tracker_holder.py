@@ -37,7 +37,7 @@ string comparison between two independently-drifting path values instead of
 an identity check on one registry key.
 
 This shape is now RATIFIED DOCTRINE, not just this module's local argument:
-Coordinator-claude `coordinator/docs/wiki/machine-local-registry.md` § 5c.4
+DoE-claude `coordinator/docs/wiki/machine-local-registry.md` § 5c.4
 ("Role-key indirection — a value that names another registry key", landed
 `af17845ea`), with the anti-pattern registered as the greppable tripwire
 `ROLE-KEY-NAMES-A-REPO-KEY-NOT-A-PATH` in `coordinator-tripwires.md`.

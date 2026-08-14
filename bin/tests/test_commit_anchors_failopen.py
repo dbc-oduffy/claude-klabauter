@@ -33,13 +33,13 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).parent.parent.parent.resolve()
-_SHIM = _REPO_ROOT / "bin" / "claude-klabauter-commit-anchors"
+_SHIM = _REPO_ROOT / "bin" / "claude-klabauter-commit-anchors.py"
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _require_shim() -> None:
     if not _SHIM.exists():
-        pytest.skip("bin/claude-klabauter-commit-anchors not on disk")
+        pytest.skip("bin/claude-klabauter-commit-anchors.py not on disk")
 
 
 def _run(
@@ -139,16 +139,20 @@ def test_nature_env_no_service(tmp_path: Path) -> None:
     _assert_fail_open(result)
 
 
-def test_shim_is_executable() -> None:
-    """Case 5: shim is executable (sanity gate).
+def test_shim_is_not_exec_bit_bare_invoked() -> None:
+    """Case 5: shim's exec bit is deliberately OFF post-rename (POSIX-exec
+    drain, 2026-08-14).
 
     POSIX-only: this test always invokes the shim via `[sys.executable,
     str(_SHIM), ...]` (see `_run` above), so the exec bit is not load-bearing
-    for the test itself -- it's an installer-hygiene check, and
-    `os.access(X_OK)` degrades to a meaningless existence check on Windows
-    anyway. Guarded rather than dropped so the POSIX assertion still fires."""
+    for the test itself. Prior to the rename this asserted the exec bit WAS
+    set as installer hygiene for a bare/shebang-invocable `.sh`; renamed to
+    `bin/claude-klabauter-commit-anchors.py` it has no bare-invocation caller (the
+    `.cmd`/`.ps1` twins resolve their own interpreter), so the exec bit is
+    stripped like every other C6-pattern rename and this asserts that instead
+    of the old executable-hygiene shape."""
     if os.name != "nt":
-        assert os.access(_SHIM, os.X_OK), f"{_SHIM} is not executable"
+        assert not os.access(_SHIM, os.X_OK), f"{_SHIM} unexpectedly carries the exec bit"
 
 
 def test_not_a_git_repo_fails_open(tmp_path: Path) -> None:

@@ -17,7 +17,7 @@ DEC-1 three-signal rule (verdict=auto-ship iff ALL THREE hold, per handoff):
         stopwords`) contribute no tokens — excluding denylisted mechanical-commit-subject
         prefixes (policy `mechanical_commit_denylist`) so a `pickup:`/`memo:`/session-init/
         handoff.transition-family/frontmatter-mutation commit is never treated as
-        completion evidence on its own (the Staff Engineer #2 / coordinator-claude alignment reply — the OPPOSITE
+        completion evidence on its own (the Staff Engineer #2 / DoE alignment reply — the OPPOSITE
         risk from the /pickup Step 3 bare-commit-existence false-"still-live" guard,
         `state/lessons/2026-07-09-git-log-liveness-checks-on-the-coordinat-669018b53b04.yaml`).
         (2026-07-20 claude-central-em false-positive memo, Defect 2a: a lone
@@ -66,7 +66,7 @@ Negative-spec:
     subprocess reads and in-memory frontmatter dicts.
   - Does NOT invoke handoff.ship_and_archive or any mutating op — that is C4's job.
   - Does NOT encode the mechanical-commit denylist or any threshold constant here —
-    both come from the caller-supplied policy dict (C9); a coordinator-claude policy-YAML edit
+    both come from the caller-supplied policy dict (C9); a DoE policy-YAML edit
     changes matcher behavior with zero claude-klabauter code change.
   - Does NOT treat a mechanical-only commit subject match as evidence for signal (a).
   - Does NOT auto-ship when attribution is ambiguous — cross-handoff overlap always
@@ -102,7 +102,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 # extraction logic.
 
 #: The four `shipped_in_kind` values DR-096 § Decision 2 declares
-#: (`docs/decisions/DR-096-shipped-in-names-the-ship-commit.md`, coordinator-claude).
+#: (`docs/decisions/DR-096-shipped-in-names-the-ship-commit.md`, DoE-claude).
 #: Kept as a code-side mirror of the schema enum (A1's schema edit is the
 #: grammar SSOT; this set is the resolver's own discriminant, per AC26 — the
 #: resolver must not infer the enum shape from the schema at runtime).
@@ -124,7 +124,7 @@ _SHIPPED_IN_KIND_CLEAR_ELIGIBLE: frozenset = frozenset({"ship-commit", "successo
 
 #: Fallback mechanical-commit-subject denylist used only when the policy dict omits
 #: `mechanical_commit_denylist` (defensive default — C9 policy_loader normally supplies
-#: this from the coordinator-claude-owned YAML). Kept in sync with the plan's five prefixes, plus the
+#: this from the DoE-owned YAML). Kept in sync with the plan's five prefixes, plus the
 #: archival/migration-machinery prefixes `archive_stamp.resolve_source_ship_sha` /
 #: `stamp_shipped_in`'s scope-derived walk-back added (2026-08-05): a handoff or plan's
 #: most recent toucher is very often the fleet-archive sweep or a corpus-wide vocabulary
@@ -158,7 +158,7 @@ _STOPWORD_TOKENS: frozenset = frozenset({
 #: nearly every scope entry passes through, and so carry ~zero discriminating
 #: signal for "does this commit's subject describe THIS handoff's actual work".
 #: Code-side default for the policy-driven `three_signal.subject_match_extra_
-#: stopwords` key (see `evaluate_commit_reality`); a coordinator-claude policy-YAML edit can
+#: stopwords` key (see `evaluate_commit_reality`); a DoE policy-YAML edit can
 #: extend or override this set with zero claude-klabauter code change.
 _STRUCTURAL_STOPWORD_TOKENS: frozenset = frozenset({
     "ops", "core", "config", "plans", "docs", "state", "tests", "lib", "bin",
@@ -628,7 +628,7 @@ def _discriminating_pathspecs_on_disk(
 #: space). The mandatory-whitespace grammar matched a form nobody could
 #: structurally write, silently disabling cross-repo scope recognition
 #: entirely. Verified against real plans: `grep -rhoE '^\s+- [a-z0-9-]+:
-#: [^ ]+' docs/plans/*.md` in coordinator-claude returns only no-space entries like
+#: [^ ]+' docs/plans/*.md` in DoE-claude returns only no-space entries like
 #: `- claude-klabauter:coordinator_core/ops/plan_tasks_mutate.py`.
 #:
 #: Windows-drive-letter safety is UNCHANGED by this fix and does not depend
@@ -855,14 +855,39 @@ def _evaluate_explicit_ship_claim(
     plan_path = _find_plan_path_in_scope(scope)
     plan_status = _read_plan_status(worktree_root, plan_path) if plan_path else None
     plan_implemented = plan_status == "implemented"
+    # `landed` is a distinct, WEAKER corroboration tier than `implemented` — never
+    # widen `plan_implemented` to include it (see this module's plan, C2: a
+    # `landed` plan corroborates "code is in", not "shipped", and `landed` is
+    # explicitly non-terminal per `lifecycle_constants.py`'s negative-spec /
+    # DoE ruling `80b0b29fb`). Kept as its own flag with its own evidence string
+    # so the two tiers stay distinguishable rather than merging into one path.
+    plan_landed = plan_status == "landed"
     if plan_path and plan_implemented:
         evidence.append(f"linked plan {plan_path} stamped status:implemented (corroborating)")
+    elif plan_path and plan_landed:
+        evidence.append(
+            f"linked plan {plan_path} stamped status:landed (weaker corroborating "
+            "evidence — code is in, not confirmed shipped)"
+        )
 
     if not shipped_in:
         if plan_implemented:
             evidence.append(
                 "no reachable self-scope-overlapping SHA available to gate the "
                 "linked plan's status:implemented stamp"
+            )
+            return {
+                "handoff_id": handoff.get("id") or handoff.get("title") or "",
+                "candidate_sha": None,
+                "confidence": "partial",
+                "evidence": evidence,
+                "verdict": "surface",
+            }
+        if plan_landed:
+            evidence.append(
+                "no reachable self-scope-overlapping SHA available to gate the "
+                "linked plan's status:landed stamp — surfacing landed-but-unshipped "
+                "for reconciliation rather than dropping silently"
             )
             return {
                 "handoff_id": handoff.get("id") or handoff.get("title") or "",
@@ -1053,7 +1078,7 @@ def evaluate_commit_reality(
     # Defect 2) — nested under `three_signal`, per the grammar doc's own note that
     # this mapping is "reserved for future threshold tuning... without a matcher
     # code change". Code-side defaults apply when the key/mapping is absent, so a
-    # coordinator-claude policy-YAML edit is the only thing needed to retune these, same as
+    # DoE policy-YAML edit is the only thing needed to retune these, same as
     # `mechanical_commit_denylist` above.
     three_signal_policy = policy.get("three_signal") or {}
     subject_match_min_tokens = three_signal_policy.get(

@@ -18,12 +18,12 @@ FINAL scratch state with `bash -n` and land it via a single atomic
 same-filesystem replace — there is no window where the live path is a
 partially-written file.
 
-See: docs/wiki/concurrent-em-hazards.md (coordinator-claude repo) § H33 for the
+See: docs/wiki/concurrent-em-hazards.md (DoE-claude repo) § H33 for the
 incident this helper was built to prevent (2026-07-09, block-illegal-filename.sh
 heredoc-fix took down 4 concurrent agents' Bash tool fleet-wide).
 
-Port of: edit-live-hook.sh (coordinator-claude b5a4192c, 2026-07-20, 229 lines)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Port of: edit-live-hook.sh (DoE b5a4192c, 2026-07-20, 229 lines)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 
 Behavior-preservation notes (read alongside the bash source):
   - `stage` copies the live hook to a same-directory scratch file
@@ -61,7 +61,7 @@ Negative-spec (faithful oracle-bug reproduction):
     (`[[ "Bash" != *"$matcher"* ]]`-shaped substring test), not a stricter
     exact-match, and is preserved as-is.
   - hooks.json resolution order is: (1) a script-directory-relative
-    `../hooks/hooks.json` next to the invoking coordinator-claude-side entrypoint (passed
+    `../hooks/hooks.json` next to the invoking DoE-side entrypoint (passed
     via the `EDIT_LIVE_HOOK_SCRIPT_DIR` env var set by the trampoline, since
     this module has no fixed on-disk sibling to hooks.json the way the
     original bash script did), then (2) `CLAUDE_PLUGIN_ROOT`. If neither
@@ -111,7 +111,7 @@ def _usage(stream=None) -> None:
 
 See coordinator_core.ops.edit_live_hook module docstring for the full
 stage/edit/validate/atomic-swap pattern and the H33 hazard it prevents
-(docs/wiki/concurrent-em-hazards.md § H33, coordinator-claude repo).""",
+(docs/wiki/concurrent-em-hazards.md § H33, DoE-claude repo).""",
         file=stream,
     )
 

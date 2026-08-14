@@ -4,7 +4,7 @@ Tests for coordinator_core.frontmatter.baton_class's `canonical_kind` and
 single normaliser and query-term helper (see that module's own "Vocabulary
 bridge" section).
 
-Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § C4
+Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § C4
 """
 
 from __future__ import annotations

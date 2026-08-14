@@ -18,10 +18,10 @@ replaces this process image with the real binary, so this module's own exit code
 whatever the real `machine-local` returns (never observed as a Python-level return —
 `os.execv` does not return on success).
 
-Coordinator-claude's swap story may retire the source `.sh` file entirely rather than keep it as a
+DoE's swap story may retire the source `.sh` file entirely rather than keep it as a
 polyglot trampoline over this module — this forwarder's own justification (bare-name
 resolution on PATH-less POSIX shells) holds regardless of what, if anything, remains on
-the coordinator-claude side.
+the DoE side.
 
 Spec backlink: docs/plans/2026-06-18-machine-local-bare-invocation-macos.md
 Prior bash implementation: coordinator/bin/machine-local.

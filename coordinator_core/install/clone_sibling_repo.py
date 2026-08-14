@@ -3,7 +3,7 @@ coordinator_core.install.clone_sibling_repo — JSON-RPC "install.clone_idempote
 operation.
 
 Purpose: idempotent native git-clone-a-sibling-repo primitive. Port of the
-fence at coordinator-claude `commands/install.md:1142`
+fence at DoE-claude `commands/install.md:1142`
 (``[[ ! -d "$DOE_CLONE/.git" ]] && git clone ...``): checks for an existing
 `.git` directory at the target before invoking `git clone`, so a second
 invocation against an already-cloned target is a true no-op rather than a

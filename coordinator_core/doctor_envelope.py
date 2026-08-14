@@ -16,7 +16,7 @@ Negative-spec:
     from here, and do NOT import this module from there.
 
     Also unrelated to coordinator_core.plugin_health — that package is a DIFFERENT
-    "doctor"/"health" domain: read-only drift/currency probes for coordinator-claude's OWN
+    "doctor"/"health" domain: read-only drift/currency probes for DoE-claude's OWN
     plugin ecosystem (live-install git-state, venv-state, sentinel/scan health).
     It does NOT use this envelope schema (ProbeResult/BROKEN|DEGRADED|INFO|PASS)
     and is not a third tier

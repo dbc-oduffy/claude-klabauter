@@ -145,7 +145,7 @@ def test_build_envelope_clause_tolerates_a_legitimate_extra_key() -> None:
     (AC6's two reach styles), never the shape of the emitted dict — so a
     call site carrying a legitimate 9th key (as `review_assemble`'s
     `segments`) still scores conformant. Pins that this stays "all required
-    keys present", never "exactly the 8 `ENVELOPE_KEYS`" — the coordinator-claude schema of
+    keys present", never "exactly the 8 `ENVELOPE_KEYS`" — the DoE schema of
     record has no `additionalProperties: false`, so a 9-key envelope is
     valid and this clause must not regress into a per-module waiver later.
     """

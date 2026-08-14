@@ -3,7 +3,7 @@ test_handoff_kind_baton_widen — union non-narrowing guard for the D1
 baton-kind vocabulary widen (C8a, critical-path chunk).
 
 `HandoffKind` (entities/summaries.py) and its emitted wire twin
-(coordinator-claude `coordinator/cockpit-contract/schema/handoff-summary.schema.json`
+(DoE-claude `coordinator/cockpit-contract/schema/handoff-summary.schema.json`
 `properties.kind.enum`) must both accept the three D1 rename targets
 ("roadmap-baton", "roadmap-seed", "goal-seed") AND still carry every
 pre-existing value, including the three tokens those targets retire on the
@@ -14,7 +14,7 @@ would silently drop archived records from the emission instead of failing
 loudly — this test asserts the widen is a pure union (superset), not a
 substitution, on both the Python Literal and the generated JSON Schema.
 
-Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § D1/C8a
+Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1/C8a
 """
 from __future__ import annotations
 

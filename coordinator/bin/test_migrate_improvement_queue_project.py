@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_migrate_improvement_queue_project.py — tests for migrate-improvement-queue-project.py
 

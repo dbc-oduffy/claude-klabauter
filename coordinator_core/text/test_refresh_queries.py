@@ -2,7 +2,7 @@
 
 Unit 1 (parsing/traversal, below) is Golden-oracle-derived: fixtures were
 hand-run against the real node oracle (coordinator/bin/refresh-queries.js,
-Coordinator-claude) on 2026-07-17 BEFORE this port was authored (per the porter
+DoE-claude) on 2026-07-17 BEFORE this port was authored (per the porter
 brief's characterization-first requirement — no pre-existing
 characterization test covered this script). Expected outputs/exit-codes/
 stderr text asserted there are transcribed directly from that oracle run,
@@ -32,7 +32,7 @@ Oracle commands used to derive the ORIGINAL Unit-1 fixtures (for reproduction):
     node coordinator/bin/refresh-queries.js --root <workdir> --files <a>,<b>,<c>
     node coordinator/bin/refresh-queries.js --root <workdir> --bogus-flag
 
-Port source: coordinator/bin/refresh-queries.js (coordinator-claude)
+Port source: coordinator/bin/refresh-queries.js (DoE-claude)
 """
 from __future__ import annotations
 

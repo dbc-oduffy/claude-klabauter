@@ -88,7 +88,7 @@ coordinator/bin/check-description-length.py
 coordinator/bin/check-harvest-debt.py
 coordinator/bin/check-shipped-on-main.py
 coordinator/bin/check-surface-inline-budget.py
-coordinator/bin/coordinator-fold-execution-record
+coordinator/bin/coordinator-fold-execution-record.py
 coordinator/bin/coordinator-prepare-commit-msg
 coordinator/bin/coordinator-safe-commit
 coordinator/bin/day-coverage-sweep.py

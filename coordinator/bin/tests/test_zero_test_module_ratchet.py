@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_zero_test_module_ratchet.py — regression net for the 2026-07-28 rule
 "a test module that collects zero test nodes is a defect, not a neutral
 file": every file on disk under the configured `testpaths` whose basename

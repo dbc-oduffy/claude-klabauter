@@ -48,7 +48,7 @@ into a bare bin/ directory, deliberately import-independent of
 coordinator_core, and lives under a hyphenated directory name that
 precludes a normal ``import``.
 
-Spec backlink: docs/plans/2026-07-24-canonical-resolution-engine.md W0-3
+Spec backlink: DoE-claude:pln-canonical-resolution-engine-6eea37 W0-3
 (AC-8) — replaces the prior subprocess-of-a-second-interpreter Windows
 branch this file used to cover.
 Spec backlink: pln-converge-exec-cli-s-posix-leg--d7e29a
@@ -449,7 +449,7 @@ def test_resolution_failure_exits_1(os_name, tmp_path, monkeypatch, capsys):
 # on sys.path for the forwarded target, or any target that imports
 # `coordinator_core` at module top dies with ModuleNotFoundError before
 # running a line of its own logic (2026-08-07 cross-repo memo:
-# cross-repo/inbox/2026-08-07-coordinator-claude-em-settings-home-forwarder-drops-
+# cross-repo/inbox/2026-08-07-doe-claude-em-settings-home-forwarder-drops-
 # coordinator-core-from-syspath.md).
 #
 # The prior coverage in this module could not catch this class: every other

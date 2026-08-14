@@ -15,8 +15,8 @@ from the CONTRACT module (`coordinator_core.contract.decision_object.
 judgment`), never re-derived and never `pickup_assemble`'s own
 same-named-but-incompatible constructor — see the signature warning below.
 
-Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C2. D-1..D-6 (esp. D-3, the granularity policy this module encodes)
 live in that plan's "Key decisions" section — read them before changing
 `build_stage_and_commit`'s shape.

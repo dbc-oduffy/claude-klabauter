@@ -8,7 +8,7 @@ else (absent, blank, malformed) is synthesized deterministically from ``(repo, b
 — see ``sections/handoffs.py``'s ``_derive_handoff_id``/``_resolve_handoff_id`` docstrings
 for the full basename-not-provenance.path rationale.
 
-Spec backlink: docs/plans/2026-07-26-priority-ledger.md § C4
+Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C4
 """
 
 from __future__ import annotations

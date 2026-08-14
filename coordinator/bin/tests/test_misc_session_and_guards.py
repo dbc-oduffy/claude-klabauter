@@ -1,7 +1,7 @@
 """test_misc_session_and_guards.py — unit coverage for
 coordinator/bin/misc-session-and-guards.py (M3 chunk C-MISC port).
 
-Covers the pure-logic paths that were ported off coordinator-claude instruction-file
+Covers the pure-logic paths that were ported off DoE-claude instruction-file
 bash fences: the claim-error peer-vs-infra classifier, the rag-freshness-gate
 check-rag-state/generate-repomap branching, the ~/.claude.json example-retrieval-repo
 CLI/root resolution + silent-skip contract, and the autonomous-sentinel

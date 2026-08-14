@@ -259,7 +259,7 @@ def test_classify_command_identical_scoped_string_under_both_keys_now_classifies
 ):
     """RECONCILED 2026-07-30: this test formerly pinned an OBSERVED
     divergence from the ruling memo's own worked example
-    (cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-
+    (cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-
     ruling.md "The correction" section) -- the memo illustrates a repo
     declaring an identical, genuinely-scoped (real descendant of
     testpaths, NOT the testpaths root) command string under BOTH
@@ -443,7 +443,7 @@ def test_position_unknown_on_unterminated_fence(repo):
 
 
 def test_position_load_bearing_denylist_deletion_brief(repo):
-    """The false-positive class coordinator-claude flagged: an executor brief quoting the
+    """The false-positive class DoE flagged: an executor brief quoting the
     ENTIRE deny-list verbatim, inside a fence, under a delete instruction --
     every match must report a non-imperative position so the caller can
     choose not to deny the very dispatch that fixes the problem."""
@@ -629,7 +629,7 @@ def test_classify_text_still_blocks_lettered_list_command(repo):
 
 # ---------------------------------------------------------------------------
 # 2026-07-25 defect A -- imperative cue must be CLAUSE-scoped, not
-# whole-prefix. Repro: cross-repo/inbox/2026-07-25-coordinator-claude-em-dispatch-
+# whole-prefix. Repro: cross-repo/inbox/2026-07-25-doe-claude-em-dispatch-
 # suite-classifier-two-live-defects.md.
 # ---------------------------------------------------------------------------
 
@@ -784,7 +784,7 @@ def test_classify_text_pipe_delimited_prose_enum_not_shredded_into_bare_runner(r
 # ---------------------------------------------------------------------------
 
 def test_classify_text_tier_f_vs_u(repo, monkeypatch):
-    """Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-coordinator-claude-
+    """Updated 2026-07-25 for R1 (cross-repo/inbox/2026-07-25-doe-claude-
     em-validate-tier-u-shape-ruling.md): the original fixture command here
     ("python3 -m pytest coordinator_core/") pointed exactly at the pinned
     testpaths root -- an unscoped-runner-invocation SHAPE -- so it now
@@ -876,7 +876,7 @@ def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch):
 # not bare "do not", and per the module/consumer contract, negation only
 # relabels an already-detected match's ``position``; it does not gate
 # detection). The correct fix is that no match is produced at all -- the
-# consumer (coordinator-claude's block-dispatch-suite-invocation.py) has nothing to see.
+# consumer (DoE's block-dispatch-suite-invocation.py) has nothing to see.
 # ---------------------------------------------------------------------------
 
 def test_classify_text_no_match_re_verify_settled_claims_repro(repo):
@@ -884,7 +884,7 @@ def test_classify_text_no_match_re_verify_settled_claims_repro(repo):
     bare-line pass must never reach command-shape classification here, not
     merely mark the (nonexistent) match "negated". This is a stronger bar
     than position-relabeling because ``check()``'s only override is a
-    blast-radius-wide repo sentinel or an env var, and coordinator-claude's consumer gates
+    blast-radius-wide repo sentinel or an env var, and DoE's consumer gates
     exclusively on ``position == "imperative"`` -- a spurious match with any
     OTHER position would still show up in ``classify_text``'s return value
     and could still be mishandled by a caller that doesn't filter by
@@ -1008,7 +1008,7 @@ def test_classify_text_negation_on_preceding_line_still_flips_position(repo):
 # instruction anywhere in the sentence. ``_NEGATION_RE`` could not fix this:
 # it only recognizes "do not run"/"don't run"/"never run", not
 # modal-capability negation ("could not run") or past-tense reporting
-# frames ("they stated"). The downstream consumer (coordinator-claude's
+# frames ("they stated"). The downstream consumer (DoE-claude's
 # ``block-dispatch-suite-invocation.py``) denies a dispatch iff any match
 # has ``position == "imperative"``, so this false positive blocked
 # legitimate Agent dispatches.
@@ -1491,7 +1491,7 @@ def test_position_fronted_adverbial_without_comma_stays_descriptive_deliberate_g
 # ---------------------------------------------------------------------------
 # classify_command_precision / classify_text_precision / PrecisionMatch
 # (DR-088 R9 layer-2 seam -- cross-repo/inbox/2026-07-28-market-
-# intelligence-em-dispatched-agent-scoped-test-breadth.md, coordinator-claude repo)
+# intelligence-em-dispatched-agent-scoped-test-breadth.md, DoE-claude repo)
 #
 # ``classify_command``/``classify_text`` report nothing for a SCOPED-looking
 # pytest invocation ("run pytest over tests/acquisition/") -- that is exactly

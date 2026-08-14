@@ -199,7 +199,7 @@ Negative-spec -- what this module deliberately does NOT do:
     command already fails to match ANY shape by the classifier's own
     contract, so this guard has nothing to act on.
 
-Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md § BX-6
+Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 § BX-6
 Consumes: coordinator_core/bash_guards/_shape_classifier.py (BX-2)
 Consumes: coordinator_core/bash_guards/dispatch_checks.py's
   ``check_grep_via_bash_rewrite`` and its private helpers (BX-16 shape 2)
@@ -466,7 +466,7 @@ def _partial_pipe_rewrite(tokens: list) -> Optional[str]:
     rewrite `check()`'s final branch offers. It is nonetheless a REAL
     alternative for the single largest bucket of otherwise-untouched
     grep-via-Bash traffic (state/audits/2026-07-29-guard-module-ladder-
-    worklist.md Row G2, coordinator-claude repo) -- unlike that bucket's prior
+    worklist.md Row G2, DoE-claude repo) -- unlike that bucket's prior
     prose-only advisory, this names something the caller can actually run.
 
     Returns ``None`` for anything outside this narrow shape: not exactly

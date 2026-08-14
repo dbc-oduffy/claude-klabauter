@@ -16,10 +16,12 @@ import importlib.util
 import io
 from pathlib import Path
 
-import pytest
 import yaml
 
-pytestmark = [pytest.mark.cadence]
+# Review: code-reviewer — no `cadence` marker: `_cmd_scan_secrets` (the only
+# command this file drives) never calls `subprocess.run` — that lives only
+# in `_git_log_batched`/`_cmd_inverse_drift`, untouched here — so this suite
+# belongs in the per-commit tier, not deferred to cadence gates.
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
@@ -131,29 +133,33 @@ def test_registry_codename_guard_splits_medium_render(tmp_path):
     assert "example-retrieval-repo" not in plain_medium_section
 
 
-def test_registry_codename_guard_total_medium_count_unchanged(tmp_path):
-    """AC3: the split changes rendering only — the total count the Step 3
-    gate predicate consumes (every ``<path>:<line>:``-shaped hit between the
-    HIGH and LOW headers) is identical whether or not the guard fires.
+def test_registry_codename_guard_informational_panel_excluded_from_gate_count(tmp_path):
+    """Corrects the prior (buggy) AC3 pin: the informational Panel A
+    (transform-covered peer-repo-name reads) must NOT contribute to the
+    Step 3 gate's blocking medium count — only Panel B ("surfaces to gate")
+    does. When the guard fires, the sole hit renders under Panel A only, so
+    the gate count is 0; the same fixture run with no declared guard (no
+    split) renders that hit under the always-present gating panel, so the
+    gate count is 1.
 
-    Review: code-reviewer — the expected count is derived independently of
-    ``_count_medium_hits`` (by counting the peer-repo-name occurrence
-    directly in the source fixture), not by parsing both CLI outputs with
-    the same function under test elsewhere — a systematic bug in the shared
-    parser must still be able to fail this test."""
+    Review: code-reviewer — the expected per-run count is derived
+    independently of ``_count_medium_hits`` (by counting the peer-repo-name
+    occurrence directly in the source fixture), not by parsing both CLI
+    outputs with the same function under test elsewhere — a systematic bug
+    in the shared parser must still be able to fail this test."""
     percolate_root = tmp_path / "percolate-root"
     registry = _write_peer_registry(tmp_path, "alpha", "example-retrieval-repo")
     mentions = _write_mentions_file(tmp_path, "example-retrieval-repo")
     file_list = _write_file_list(tmp_path, mentions)
 
     # Independently-derived expected count: exactly one line in the fixture
-    # mentions "example-retrieval-repo", so exactly one MEDIUM hit is expected total,
-    # regardless of which group (covered or plain) it renders under.
-    expected_count = sum(
+    # mentions "example-retrieval-repo", so exactly one MEDIUM hit exists in the raw
+    # scan, regardless of which panel it renders under.
+    expected_raw_hits = sum(
         1 for line in mentions.read_text(encoding="utf-8").splitlines()
         if "example-retrieval-repo" in line
     )
-    assert expected_count == 1
+    assert expected_raw_hits == 1
 
     _write_store(percolate_root, "alpha", guarded=True)
     rc_split, out_split = _run_cli(
@@ -184,9 +190,12 @@ def test_registry_codename_guard_total_medium_count_unchanged(tmp_path):
     )
     assert rc_unsplit == 0
 
-    count_split = _round_mod._count_medium_hits(out_split)
-    count_unsplit = _round_mod._count_medium_hits(out_unsplit)
-    assert count_split == count_unsplit == expected_count
+    # Guard fires: the hit is informational-only (Panel A) — it must not
+    # inflate the blocking gate count.
+    assert _round_mod._count_medium_hits(out_split) == 0
+    # No guard declared: the same hit renders under the always-present
+    # gating panel (Panel B) — it must still count.
+    assert _round_mod._count_medium_hits(out_unsplit) == expected_raw_hits
 
 
 # ---------------------------------------------------------------------------

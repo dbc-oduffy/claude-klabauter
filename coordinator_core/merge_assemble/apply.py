@@ -16,8 +16,8 @@ bin/*.py` script (or, for the node ceremony gate, `node --test`) via an
 explicit argv list resolved from this module's own file location — never a
 brief-derived import, never a shell string built from `directives[].args`.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C6
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
 
 Negative-spec:
     - Do NOT add a dispatch entry that resolves `cli` via `getattr`,

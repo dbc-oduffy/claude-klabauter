@@ -45,9 +45,9 @@ stdout when neither branch is satisfied.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Filename note: the `.sh` extension is retained (NOT dropped per the
 # `coordinator-auto-push`/`handoff-gate-aging` convention) — this script is
@@ -58,7 +58,7 @@ stdout when neither branch is satisfied.
 # ...` still Just Works), avoiding an otherwise-unnecessary multi-caller
 # repoint.
 #
-# Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+# Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 #
 # DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than a
 # plain in-process `import ... as _op_main` + `sys.exit(op_main(argv))` tail, so

@@ -14,9 +14,9 @@ Idempotent and enduring: each milestone timestamp is set ONCE (first
 occurrence wins) and never overwritten on re-run, so re-running /setup or
 re-taking the tour does not rewrite history.
 
-Spec backlink: docs/wiki/coordinator-setup-state-receipt.md (coordinator-claude)
-Port of: coordinator-setup-state.sh (coordinator-claude b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: docs/wiki/coordinator-setup-state-receipt.md (DoE-claude)
+Port of: coordinator-setup-state.sh (DoE b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Commands:
     record <milestone>   set <milestone>_at if unset (atomic, first-write-wins)
@@ -60,6 +60,11 @@ Negative-spec (faithfully reproduced bash-oracle quirks, NOT bugs to fix here):
 """
 
 from __future__ import annotations
+
+# Generator-provenance declaration: cmd_record()/_seed_file_if_absent()
+# write only to <CLAUDE_HOME>/.claude/coordinator-setup-state.yaml -- the
+# operator's home directory, outside claude-klabauter's own tracked tree entirely.
+GENERATES = []
 
 import contextlib
 import io

@@ -33,12 +33,12 @@ chunk C10-remainder (AC18).
 Mirrors: coordinator/bin/coordinator-prepare-commit-msg (resolution logic,
 verbatim ladder + fail-safe semantics -- including the 2026-07-27
 cross-repo Deliverable-Id fallback added to both files in the same change:
-`_resolve_deliverable_id()` now re-checks coordinator-claude's own git-dir, located
+`_resolve_deliverable_id()` now re-checks DoE-claude's own git-dir, located
 via the `.doe-root` pointer convention, when the local git-dir's
 `session-shape.json` lookup misses -- the structural miss for every commit
-landed directly into claude-klabauter under the coordinator-claude->claude-klabauter cross-repo write
+landed directly into claude-klabauter under the DoE->claude-klabauter cross-repo write
 grant, since `session-shape.json` is written wherever `/pickup` actually
-ran (almost always coordinator-claude), not wherever the eventual commit lands --
+ran (almost always DoE-claude), not wherever the eventual commit lands --
 and the 2026-08-01 claimed-plan tier added to both files in this same
 change: when neither `session-shape.json` lookup yields a value,
 `_resolve_deliverable_id()` falls back to the session's claimed PLAN, the
@@ -114,7 +114,7 @@ def _resolve_session_id(git_dir: str) -> str:
     shared worktree means even a freshly-written sentinel hands session A
     the id of whichever session wrote last, so a liveness gate only makes
     it confidently wrong rather than obviously wrong; (2) its writer,
-    `session-init.py` (coordinator-claude SessionStart hook), was deleted by PM
+    `session-init.py` (DoE-claude SessionStart hook), was deleted by PM
     directive 2026-07-15 ("full-kill-keep-fast-orientation") -- no
     production writer survives anywhere. `git_dir` is accepted (and
     resolved by callers) purely for the Deliverable-Id lookups below, which
@@ -131,7 +131,7 @@ def _resolve_session_id(git_dir: str) -> str:
 
 
 def _resolve_doe_root() -> str:
-    """Locate coordinator-claude's repo root via the `.doe-root` pointer convention
+    """Locate DoE-claude's repo root via the `.doe-root` pointer convention
     (settings-home machine-local pointer first, then legacy `~/.claude`).
     Returns "" if neither resolves. No subprocess spawn -- verbatim parity
     with the hook's `_resolve_doe_root()` (2026-07-27 cross-repo-fallback
@@ -516,10 +516,10 @@ def _resolve_deliverable_id(
     gated by the ambiguity predicate `session_holds_multiple_plan_claims`
     (C2 spec § (2)), which OMITS rather than guesses whenever the session
     holds more than one plan claim and neither tier above disambiguated --
-    check `git_dir`, then fall back to coordinator-claude's own git-dir -- the
+    check `git_dir`, then fall back to DoE-claude's own git-dir -- the
     cross-repo case where a commit lands directly into claude-klabauter under
-    the standing coordinator-claude->claude-klabauter write grant while `session-shape.json` was
-    written into coordinator-claude's git-dir (wherever `/pickup` actually ran).
+    the standing DoE->claude-klabauter write grant while `session-shape.json` was
+    written into DoE-claude's git-dir (wherever `/pickup` actually ran).
     When all of those miss (or the ambiguity gate fired), fall back to the
     session's claimed PLAN (tier 3 -- see
     `_resolve_deliverable_id_from_claimed_plan`), the same-session

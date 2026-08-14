@@ -1,6 +1,6 @@
 """
 coordinator_core.session.claims — Python engine port of the CLAIMS module of
-the coordinator session hub (Port of: coordinator-session.sh, coordinator-claude e34f2484,
+the coordinator session hub (Port of: coordinator-session.sh, DoE e34f2484,
 2026-07-22).
 
 The claim primitives were deliberately NOT extracted to a ``lib/session/``
@@ -24,7 +24,7 @@ TWO DISTINCT DISCIPLINES the claim layer routes through (both in liveness.py):
       holder? — via ``liveness.claim_held_by_me`` with a PRE-RESOLVED my_sid
       (the two-call TOCTOU re-read keys both reads off ONE identity).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4a-g1
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 Spec backlinks (original claim contracts):
     archive/specs/2026-06/2026-06-17-foreign-cwd-pickup-hardening.md § C1;
     archive/specs/2026-06/2026-06-17-concurrent-pickup-guard-sid-regression.md § C1;
@@ -99,6 +99,12 @@ from coordinator_core.session import shape
 # package (under the sibling ``coordinator/bin/lib/`` tree), so it cannot be
 # a plain ``import`` — it must be loaded by file path via ``importlib``.
 # ---------------------------------------------------------------------------
+
+# Generator-provenance declaration (generator_provenance.py). Every write in this
+# module (claim-dir pid/session_id/claimed_at/stage files, touched.txt appends,
+# stamped markers) targets `.git/coordinator-sessions/<sid>/...` -- git-internal
+# session-hub state, never a tracked repo artifact.
+GENERATES = []
 
 _HANDOFF_LIFECYCLE_ACCESSOR_PATH = (
     Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib" / "handoff_lifecycle.py"
@@ -642,7 +648,7 @@ def mark_claim_stamped(claim_dir: Union[str, Path]) -> bool:
     a genuinely successful mutation (e.g. ``archive_stamp.cs_claim_handoff``
     returning ok on its OWN post-write ``_validate_fm`` pass), never before.
 
-    WHY THIS EXISTS (cross-repo/inbox/2026-08-13-coordinator-claude-em-pickup-
+    WHY THIS EXISTS (cross-repo/inbox/2026-08-13-doe-claude-em-pickup-
     already-satisfied-masks-a-refused-write.md): ``claim_stage`` reads
     ``apply`` the moment ``promote_claim_stage`` runs, which ``pickup_
     assemble.apply.apply`` does UNCONDITIONALLY, BEFORE the directives that
@@ -1020,7 +1026,7 @@ def claim_plan(slug: str, cwd: Optional[str] = None) -> bool:
 #: answers over and ``ceremony.scoped_git_commit``'s commit gate
 #: (``coordinator_core/ops/ceremony/scoped_git_commit.py::
 #: _check_claim_conflicts``) fails closed on -- widened onto here per
-#: cross-repo/inbox/2026-08-11-coordinator-claude-em-dead-claim-on-a-non-plan-
+#: cross-repo/inbox/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md: a dead session's claim on an arbitrary
 #: repo-relative path (e.g. a doctrine/code file the three classed forms
 #: were never meant to cover) had a query surface (``who-claims-path``) and
@@ -1146,7 +1152,7 @@ def _clear_path_claim_if_dead(
     """``class_ == "artifact"`` entrypoint for ``clear_claim_if_dead`` -- the
     CLEAR-ONLY, liveness-gated counterpart to ``_release_path_claim_
     artifact`` for the PATH-TOUCH claim plane. This is the release path
-    cross-repo/inbox/2026-08-11-coordinator-claude-em-dead-claim-on-a-non-plan-
+    cross-repo/inbox/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
     artifact-has-no-clear-path.md asks for: a claim ``who-claims-path``
     reports and ``ceremony.scoped_git_commit`` fails closed on, whose
     claimant is confirmed dead, had no sanctioned release path before this.
@@ -1326,7 +1332,7 @@ def _clear_shape_plan_pointer(
     the shape pointer BEFORE the durable ``plan-claims/`` store and returns on
     a hit — so ``/handoff`` after a shipped plan resolved the shipped plan and
     surfaced a ``DivergentDeliverableIdError`` against the handoff chain's own
-    ``deliverable_id`` (coordinator-claude-em memo, 2026-08-10; the two ids differing
+    ``deliverable_id`` (doe-claude-em memo, 2026-08-10; the two ids differing
     is the EXPECTED steady state for a chain spanning several plans, so the
     stale pointer made a routine seam fail loud).
 
@@ -2144,7 +2150,7 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
     Do NOT re-inline a second normalization dialect here; a caller (e.g.
     ``coordinator_core.text.refresh_queries.process_file``) routinely
     invokes this with an ALWAYS-absolute path, so skipping this step is
-    exactly how an absolute entry lands in ``touched.txt`` (coordinator-claude
+    exactly how an absolute entry lands in ``touched.txt`` (DoE
     security-audit 2026-07-31: 240 such entries corroborated on disk). A
     path that is still absolute after normalization is SKIPPED (fail-open,
     advisory-only — this function's return-True-always contract already

@@ -7,7 +7,7 @@ must be 'draft', the required sender-side fields must be present/non-empty
 (summary's KEY only), kind (if present) must be a valid enum value, and
 scoped_to (if any sub-field is present) must be the complete triple.
 
-Extracted (2026-08-07) from `coordinator/bin/cross-repo-memo`'s
+Extracted (2026-08-07) from `coordinator/bin/cross-repo-memo.py`'s
 `_validate_outbox_frontmatter` / `_scoped_to_errors`, per the cross-repo memo
 that named the write-time gap this closes:
 cross-repo/inbox/2026-08-07-example-store-repo-em-memo-tool-rejects-the-shape-it-
@@ -18,7 +18,7 @@ for a session because nothing caught the mismatch until the very last step
 
 Two write-time consumers now share this ONE rule set instead of drifting
 copies:
-  - `coordinator/bin/cross-repo-memo`'s `_validate_outbox_frontmatter` (send-
+  - `coordinator/bin/cross-repo-memo.py`'s `_validate_outbox_frontmatter` (send-
     time hard-gate; unchanged error strings/exit codes — see its own
     docstring for the `open` → `draft` normalization now applied BEFORE this
     validator runs, so a hand-authored `status: open` self-heals at send
@@ -39,7 +39,7 @@ that pre-existing three-way duplication is unchanged. This module closes
 specifically the CLI-vs-guard duplication the incident named.
 
 Negative-spec:
-  - Does NOT validate the coordinator-claude inbox schema shape
+  - Does NOT validate the DoE inbox schema shape
     (`coordinator/schemas/cross-repo-memo.schema.json`) — that schema's
     `applies_to` glob is `cross-repo/inbox/[0-9]*.md` and must NOT be
     extended to cover `state/memo-outbox/*.md`; outbox drafts and delivered

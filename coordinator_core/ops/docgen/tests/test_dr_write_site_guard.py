@@ -5,7 +5,7 @@ Purpose: ``dr_allocator.py``'s module docstring makes a promise —
 "A future ``doc.scaffold`` op wiring this in front of an actual write MUST
 re-add that check at the write site" — referring to the oracle's
 ``_assert_dr_id_unique`` write-time collision guard
-(``coordinator/bin/coordinator-doc-new`` in the coordinator-claude clone), which this port
+(``coordinator/bin/coordinator-doc-new.py`` in the DoE clone), which this port
 deliberately does not carry (allocate-without-write has no collision window
 to guard yet).
 
@@ -36,7 +36,7 @@ Design — conditional tripwire, not ``xfail`` (negative-spec):
 
 Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5), D1
 Originating memo: cross-repo/inbox/2026-07-22-claude-central-em-dr-allocator-consume-not-reimplement.md
-Reference implementation: coordinator-claude clone `coordinator/bin/coordinator-doc-new` `_assert_dr_id_unique`
+Reference implementation: DoE clone `coordinator/bin/coordinator-doc-new.py` `_assert_dr_id_unique`
 """
 
 from __future__ import annotations
@@ -156,8 +156,8 @@ def test_doc_scaffold_write_site_reverifies_uniqueness_before_writing():
         "nothing re-verifying, at write time, that the allocated id is "
         "still unique. Re-add the oracle's write-time collision check "
         "before writing — reference implementation: "
-        "coordinator/bin/coordinator-doc-new `_assert_dr_id_unique` "
-        "(coordinator-claude clone). See coordinator_core/ops/docgen/dr_allocator.py's "
+        "coordinator/bin/coordinator-doc-new.py `_assert_dr_id_unique` "
+        "(DoE clone). See coordinator_core/ops/docgen/dr_allocator.py's "
         "module docstring § Scope for the promise this test enforces."
     )
 

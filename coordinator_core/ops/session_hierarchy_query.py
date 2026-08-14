@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.session_hierarchy_query — CLI entry for the
-Coordinator-claude ``query-session-hierarchy.sh`` polyglot trampoline.
+DoE ``query-session-hierarchy.sh`` polyglot trampoline.
 
 Purpose: reverse-query interface over the per-machine session/workstream
 hierarchy projection shards (``state/session-hierarchy.<machine>.json``,
@@ -19,20 +19,20 @@ T3a-g3c cutover, shards are written into claude-klabauter's own checkout regardl
 which repo dispatches the query, so the query default must look there too.
 The bash oracle's default (``${REPO_ROOT}/state`` relative to the SCRIPT's
 OWN location) predates that cutover and would silently find zero shards when
-invoked from a coordinator-claude checkout after derive started writing engine-side — this
+invoked from a DoE checkout after derive started writing engine-side — this
 default is a deliberate parity-plus fix, not a behavior drift, matching the
 derive module's own already-landed convention. ``QUERY_SHARD_DIR`` env
 override (test isolation, mirrors ``CLAUDE_HOME``-style overrides elsewhere)
 takes precedence over both.
 
-CLI entrypoint: ``main(argv)`` is the direct-import target for the coordinator-claude
+CLI entrypoint: ``main(argv)`` is the direct-import target for the DoE
 trampoline (``coordinator/bin/query-session-hierarchy.sh``, mirrors the
 ``derive-session-hierarchy`` / ``handoff-gate-aging`` shape) — a plain
 synchronous call, NOT routed through the JSON-RPC handler (no registration;
 this module is a plain CLI helper, not an op).
 
 Spec backlink: docs/plans/2026-06-27-ccos-5-session-workstream-hierarchy-record.md § C3
-Port of: query-session-hierarchy.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: query-session-hierarchy.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec:
 - Does NOT parse handoff YAML; does NOT write any state; is NOT the derive

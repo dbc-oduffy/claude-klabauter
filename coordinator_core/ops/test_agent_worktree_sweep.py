@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.agent_worktree_sweep.
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 """
 from __future__ import annotations
 

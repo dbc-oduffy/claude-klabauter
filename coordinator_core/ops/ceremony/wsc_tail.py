@@ -280,15 +280,15 @@ Negative-spec (hard-won):
     `unrouted-sizing-nudge.fired`, `harness-directive-nudge.fired`,
     `em-report-altitude-tally.json`, `em-report-altitude-nudged`,
     `multiwave-workflow-nudged`/`workflow-launched`,
-    `exploration-tier-dispatch-offered`) -- observed live in coordinator-claude.
-    Archival is now SOLELY a SessionEnd-hook occasion: coordinator-claude
+    `exploration-tier-dispatch-offered`) -- observed live in DoE-claude.
+    Archival is now SOLELY a SessionEnd-hook occasion: DoE
     `coordinator/hooks/scripts/sessionend-archive-session.py` ->
     `coordinator/bin/wsc-close.py archive-session` (this repo) ->
     `coordinator_core.session.scope.archive`, plus
     `ops/session/reap.py`'s 24h live-excluding backstop. If this ever
     returns, it MUST NOT precede `_clear_sentinel` (AC18's crash-window
     invariant this op still guarantees) -- see the originating memo,
-    `cross-repo/inbox/2026-07-31-coordinator-claude-em-cs-archive-runs-mid-session.md`.
+    `cross-repo/inbox/2026-07-31-doe-claude-em-cs-archive-runs-mid-session.md`.
     `tail_ops.cs_archive` itself is untouched and remains callable by other
     sites.
   - Does NOT revive the `ceremony.wsc_commit` op name.
@@ -332,7 +332,7 @@ Negative-spec (hard-won):
     -- it also runs the unintegrated-findings reap (a tracked `git rm`),
     out of scope for a call fired on every ceremony pass.
   - `completion_title`/completion-entry scaffold -- REMOVED (C4 Phase 2,
-    2026-07-23 wsc-tail-slim-down). Coordinator-claude's `ba085887` (`coordinator/skills/
+    2026-07-23 wsc-tail-slim-down). DoE's `ba085887` (`coordinator/skills/
     workstream-complete/SKILL.md`) re-expanded Step 2.6 Action (a) to invoke
     `coordinator-complete-entry.py` directly and synchronously again,
     staging the written entry into the Step 3 ceremony commit via
@@ -340,7 +340,7 @@ Negative-spec (hard-won):
     That landing made this op's own scaffold+residue-fill branch (formerly
     `_run_precommit_tail`'s `if completion_title:`) dead weight -- it is
     gone from this op entirely; `completion_entry.py` itself is untouched
-    (coordinator-claude's CLI still fronts it directly). `completion_title` was ALREADY
+    (DoE's CLI still fronts it directly). `completion_title` was ALREADY
     optional at this op layer before C4 Phase 1 (`params.get(
     "completion_title")` always tolerated absence) -- Phase 1 flipped only
     the *trampoline's* CLI flag (`coordinator/bin/wsc-tail.py`) to
@@ -359,7 +359,7 @@ Negative-spec (hard-won):
     reasoning. `review_trail.write` is explicitly NOT shed by C6 and must
     not be shed as a follow-on "cleanup" without a fresh PM ruling -- see
     `tail_ops.py`'s module docstring negative-spec for the cross-repo reason
-    (coordinator-claude's `review-coverage-gate.py` is a sequential predecessor reader).
+    (DoE's `review-coverage-gate.py` is a sequential predecessor reader).
   - C7 (2026-07-23 wsc-tail-slim-down): the step-1 resolve's residue was
     UNCHANGED by this chunk at the time it landed -- an explicit consumer
     enumeration (see the comment above "Step 1: initial resolve" below)
@@ -389,6 +389,13 @@ Negative-spec (hard-won):
 
 from __future__ import annotations
 import sys
+
+# Generator-provenance declaration: this op is pure sequencing ("contains NO
+# business logic of its own beyond sequencing; every step is delegated to
+# its owning C1-C8 module" -- module docstring). Its own direct write
+# (_write_sentinel) targets <common_dir>/coordinator-sessions/<sid>/
+# wsc-tail-commit-landed under .git, never a tracked repo path.
+GENERATES = []
 
 import asyncio
 import logging
@@ -1140,7 +1147,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         completion_title      -- REMOVED (C4 Phase 2, 2026-07-23 wsc-tail-slim-
                                 down); accepted-and-ignored if present. The
                                 completion-entry scaffold this op used to run
-                                is now owned by coordinator-claude's `workstream-complete`
+                                is now owned by DoE's `workstream-complete`
                                 skill (Step 2.6 Action (a), `ba085887`), which
                                 invokes `coordinator-complete-entry.py` directly.
         review_trail          (dict | list[dict], optional) -- forwarded to
@@ -1251,7 +1258,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # (C4 Phase 2, 2026-07-23 wsc-tail-slim-down: the completion-entry
     # `chain_terminal` fill that used to be a fifth consumer here is GONE --
     # the completion-entry scaffold itself was removed from `_run_precommit_
-    # tail` once coordinator-claude's `ba085887` re-expanded the workstream-complete skill's
+    # tail` once DoE's `ba085887` re-expanded the workstream-complete skill's
     # Step 2.6 to call `coordinator-complete-entry.py` directly. `chain_terminal`
     # is no longer threaded into `_run_precommit_tail` at all.)
     #   1. `disposition` computation (`chain_terminal = bool(initial_consumed)`
@@ -1579,6 +1586,21 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # indistinguishable from "nothing to do".
             *([f"consumed_handoff_stamp:{_commit_gap_reason(commit_failed, sha_unverified)}"]
               if committed_sha is None else []),
+            # Negative-spec: neither zero-candidate path may emit a bare `[]`.
+            # A receipt that cannot distinguish "nothing to flip" from "could
+            # not see what to flip" is what let a missed terminal flip sit
+            # three days undetected upstream -- the sweep reading it was handed
+            # a healthy-looking receipt. Outer-empty: resolve found no consumed
+            # handoff for this sid. Inner-empty: a candidate existed, the
+            # post-commit re-derive found none. Distinct labels, because they
+            # are distinct conclusions.
+            # -> cross-repo/inbox/2026-08-14-example-retrieval-repo-em-wsc-tail-consumed
+            #    -handoff-resolver-blind-to-unclaimed-baton.md
+            *(["consumed_handoff_stamp:no-consumed-handoff-resolved"]
+              if committed_sha is not None and not chain_terminal else []),
+            *(["consumed_handoff_stamp:empty-consumed-set-on-recheck"]
+              if committed_sha is not None and chain_terminal and stamp_outcome.empty_consumed_set
+              else []),
             *[f"future-dated:{p}" for p in stamp_outcome.skipped_future_dated],
             *[f"live-children:{p}" for p in stamp_outcome.skipped_live_children],
             *[f"indeterminate:{p}" for p in stamp_outcome.skipped_indeterminate],
@@ -1597,7 +1619,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # candidate (future-dated / live-children / indeterminate) and stamped
     # NOTHING left the closed baton silently `deployment_state: in_flight`
     # while this op still exited 0 -- exit 0 with a landed commit is exactly
-    # the signal callers are told to trust (see coordinator-claude's `/workstream-complete`
+    # the signal callers are told to trust (see DoE's `/workstream-complete`
     # skill body), so a stamp-nothing outcome MUST surface through the SAME
     # `tail_results["..."]["failed"]` channel `soft_failed` already reads
     # below (never a new channel -- exit_code=2 here means "tail item
@@ -1651,7 +1673,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     "what that sha is."
                 )
     elif not chain_terminal:
-        # Silent-exit-0 fix (cross-repo/inbox/2026-08-10-coordinator-claude-em-wsc-
+        # Silent-exit-0 fix (cross-repo/inbox/2026-08-10-doe-claude-em-wsc-
         # tail-silent-noop-and-gate-rewalk.md finding 1): the block above
         # only names a stamp outcome when `chain_terminal` is True --
         # `post_commit_stamp_and_ship()` short-circuits to an untouched
@@ -1698,7 +1720,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"ship-handoff <predecessor-handoff-path> {committed_sha}` "
                 "once you have confirmed the real predecessor."
             )
-        # Claim-store contradiction (cross-repo/inbox/2026-08-11-coordinator-claude-
+        # Claim-store contradiction (cross-repo/inbox/2026-08-11-doe-claude-
         # em-pickup-claim-never-reaches-frontmatter.md): a fully-clean resolve
         # (neither Detector A's `consumed_by:` frontmatter scan nor Detector
         # B's git-provenance scan hit anything, and `resolve_degraded` above
@@ -1863,7 +1885,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     #         clean success writes nothing there (life-support principle:
     #         visible only when something breaks).
     #     (C4 Phase 2 already landed -- the completion-entry scaffold left by
-    #     a different route than this forward contract predicted: coordinator-claude's
+    #     a different route than this forward contract predicted: DoE's
     #     `workstream-complete` skill now runs `coordinator-complete-entry.py`
     #     directly instead of this op scaffolding it, so there is no D-node
     #     AND no C17 log entry for it here -- it simply never runs from this

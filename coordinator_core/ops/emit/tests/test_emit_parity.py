@@ -1,6 +1,6 @@
 """Parity net for the cockpit-emission Python port (tc-3).
 
-The bash emitter (Port of: emit-cockpit-snapshot.sh, coordinator-claude 07eedcfb 2026-07-19,
+The bash emitter (Port of: emit-cockpit-snapshot.sh, DoE 07eedcfb 2026-07-19,
 READ-ONLY oracle) was run once to capture `fixtures/golden-cockpit-emission.json`.
 Every section porter under
 `coordinator_core/ops/emit/sections/<name>.py` must reproduce, via `collect(ctx)`, the
@@ -164,12 +164,12 @@ def _section_normalize_and_sort(records: list) -> list:
 # explicitly tracked: commit ca650501 ("fix(strang-01 C6): finish C4a golden refresh —
 # roadmaps live-state fragility remains backlog 2026-06-22").
 #
-# ``roadmaps`` — EVERY record is coordinator-claude-live-derived: ``_query_roadmap_records`` runs
+# ``roadmaps`` — EVERY record is DoE-live-derived: ``_query_roadmap_records`` runs
 # ``query-records.js`` with cwd resolved from ``ctx.central_state_root.parent`` for git
 # root detection, but the fixture tree is deliberately not a git repo (see
-# ``build_emit_context`` docstring), so resolution escapes to the real coordinator-claude checkout's own
+# ``build_emit_context`` docstring), so resolution escapes to the real DoE checkout's own
 # ``state/roadmap/*/OVERVIEW.md`` records — verified directly: this machine's current
-# ``collect()`` output surfaces real coordinator-claude roadmap slugs (e.g. ``python-core-2026-07-01``,
+# ``collect()`` output surfaces real DoE roadmap slugs (e.g. ``python-core-2026-07-01``,
 # ``claude-klabauter-strangler-2026-07-04``) that do not exist anywhere in ``fixtures/root``.
 # Excluded wholesale below rather than re-snapshotted — a re-snapshot buys days, not
 # weeks, and re-arms the exact drift trap (same anti-goal the golden-drift fix for this
@@ -416,7 +416,7 @@ def assert_full_parity(emission: dict) -> None:
             # covered by a bespoke fixture-commit test instead, not the golden-slice diff.
             continue
         if name in _LIVE_COORDINATOR_STATE_SECTIONS:
-            # F7: roadmaps section compares against LIVE coordinator-claude state, not a frozen fixture
+            # F7: roadmaps section compares against LIVE DoE state, not a frozen fixture
             # sub-tree — see _LIVE_COORDINATOR_STATE_SECTIONS docstring above. golden drift
             # here is not a producer regression; excluded rather than re-snapshotted (a
             # re-snapshot re-arms the same drift trap this module exists to close). The

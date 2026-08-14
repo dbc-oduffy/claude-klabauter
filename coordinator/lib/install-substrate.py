@@ -43,7 +43,7 @@ CLI flags (passed through to the claude-klabauter module's argparse):
     --check-only  — report would-do, write nothing.
 
 Ported to: coordinator_core.install.substrate [claude-klabauter repo] (T4a-g3b chunk).
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md;
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292;
     coordinator/commands/install.md § Phase 3.
 """
 

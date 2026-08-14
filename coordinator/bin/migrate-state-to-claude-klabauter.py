@@ -6,7 +6,7 @@ docs/{plans,research,problems}/, and archive/ into the engine repo; `--finalize`
 delta re-syncs, guards per-path, then removes the ~/.claude originals only
 after the C3/C4/C12 repoint and C11 dogfood consistency gate. Copy/guard/
 remove logic lives claude-klabauter-side in coordinator_core.ops.migrate_state_to_claude_klabauter
-(DR-047: coordinator-claude owns contract, claude-klabauter owns engine); this file is a thin argv
+(DR-047: DoE owns contract, claude-klabauter owns engine); this file is a thin argv
 passthrough.
 
 Two subcommands:
@@ -34,7 +34,7 @@ Exit codes (parity-critical):
 Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787
                § Phase 2 / C6 / AC5 / § Execution Notes (C6a/C6b split)
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: migrate-state-to-claude-klabauter.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: migrate-state-to-claude-klabauter.sh (DoE b5a4192c, 2026-07-20)
 """
 
 import os

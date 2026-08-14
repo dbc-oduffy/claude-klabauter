@@ -7,14 +7,14 @@ supported queue schemas: debt-backlog, bug-backlog, improvement-queue, lessons,
 cross-repo-commitment. The trailing ``-<digest12>`` filename component is a content
 digest (DR-213 D2(i) amendment, 2026-07-08) — see § Content digest below.
 
-Byte-parity target: ``[coordinator-claude] coordinator/bin/coordinator-queue-append``. NOTE:
+Byte-parity target: ``[DoE-claude] coordinator/bin/coordinator-queue-append``. NOTE:
 byte parity covers file *content*, not filename — the digest component is an
 intentional, documented divergence from the bash oracle's ``<date>-<slug>.yaml`` shape.
 
 Schema routing (contract-derived, ``_output_dir_for_schema``): the output directory for
-each schema is DERIVED from the coordinator-claude schema contract (``schema_validate.describe(<schema>)``
+each schema is DERIVED from the DoE schema contract (``schema_validate.describe(<schema>)``
 → ``applies_to`` glob → dirname), not a hand-maintained table. Illustrative
-examples of the current 5-schema set (any queue schema the coordinator-claude contract defines is
+examples of the current 5-schema set (any queue schema the DoE contract defines is
 supported — the set is no longer enumerated here by hand):
     debt-backlog          → state/debt-backlog/<date>-<slug>-<digest12>.yaml
     bug-backlog           → state/bug-backlog/<date>-<slug>-<digest12>.yaml
@@ -35,7 +35,7 @@ entirely from in-hand params (DR-213 D4).
 ``_SCHEMA_CLI_NAME`` alias: ``lessons`` → ``lesson-entry`` (schema-cli.js name).
 
 Store schemas (``workstream``, ``workstream-event``): field acceptance for these
-two schemas (and any future coordinator-claude schema field not in the base ~30-param hand list)
+two schemas (and any future DoE schema field not in the base ~30-param hand list)
 is CONTRACT-DERIVED via ``append_queue_entry(**schema_fields)`` — only fields
 ``schema_validate.describe(<schema>)`` actually declares (required or optional)
 for the given schema are accepted, never a second hand-maintained field-name
@@ -84,17 +84,26 @@ Negative-spec (DR-213 § D2):
       overwrites (idempotent, one file). Same date+slug with DISTINCT content →
       different digest → different filename (both survive, no overwrite). Dedup for
       near-duplicate-but-not-identical entries lives in the coordinator-lesson-add
-      wrapper, preserved coordinator-claude-side.
+      wrapper, preserved DoE-side.
     - NO rag store write (dual-write ban).
     - NO HTTP route (Gate 6; UDS-only).
     - NO cwd-based repo resolution; always uses caller_worktree from repo_root param.
 
 Spec backlink: pln-strang-08-queue-append-strangl-2a3499 § C1
-Parity oracle: [coordinator-claude] coordinator/bin/coordinator-queue-append
+Parity oracle: [DoE-claude] coordinator/bin/coordinator-queue-append
 DR authority: docs/decisions/DR-213-queue-write-substrate-carveout.md
 """
 
+
 from __future__ import annotations
+
+MUTATES = [
+    "state/debt-backlog/*.yaml",
+    "state/bug-backlog/*.yaml",
+    "state/improvement-queue/*.yaml",
+    "state/lessons/*.yaml",
+    "state/cross-repo-commitments/*.yaml",
+]  # date+slug+content-digest-keyed new entries; data-dependent filename set per schema
 
 import datetime
 import functools
@@ -213,9 +222,9 @@ def _output_dir_for_schema(schema_name: str) -> str:
     """Derive the state/<queue> output dir from the schema contract's applies_to glob.
 
     Replaces the former hardcoded _SCHEMA_OUTPUT_DIRS table (removed) — the engine now
-    consumes coordinator-claude's schema contract (schema-cli --describe applies_to) rather than keeping a
+    consumes DoE's schema contract (schema-cli --describe applies_to) rather than keeping a
     private hand-copy that drifted from it (2026-07-11 cross-repo-commitment gap). Adding a
-    new queue schema in coordinator-claude now propagates here for free — zero recurring claude-klabauter work.
+    new queue schema in DoE now propagates here for free — zero recurring claude-klabauter work.
 
     applies_to shape is a uniform ``state/<dir>/*.yaml`` glob; the output dir is its dirname.
     Raises ValueError when describe fails (surfacing the underlying cause) or applies_to
@@ -1067,7 +1076,7 @@ def append_queue_entry(
     ``**schema_fields`` — CONTRACT-DERIVED plumbing for fields the base ~30-param
     hand list above does not name (workstream_id, workstream, field, value,
     sequence, session, deliverables, specs, dependency_annotations, supersedes,
-    coordinator_root_path, and any future coordinator-claude schema field). Only keys the
+    coordinator_root_path, and any future DoE schema field). Only keys the
     contract actually declares (``describe(schema).required``/``.optional``) for
     THIS ``schema`` are accepted into the emitted entry; anything else is
     silently dropped here (with a WARN log, see the merge loop below) — a
@@ -1121,7 +1130,7 @@ def append_queue_entry(
         session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
 
     # Resolve from_repo fallback. cross-repo-commitment forbids from_repo entirely
-    # (it uses committed_by for the sibling identity instead) — mirrors the coordinator-claude
+    # (it uses committed_by for the sibling identity instead) — mirrors the DoE
     # CLI's explicit strip of from_repo for this schema.
     if from_repo is None and schema != "cross-repo-commitment":
         if caller_worktree is not None:
@@ -1336,7 +1345,7 @@ def _queue_append_handler(
     before any ``state/`` path construction (F1 / AC13 — never daemon cwd).
 
     Required params:
-        schema  (str) — any queue schema the coordinator-claude schema contract defines (output dir
+        schema  (str) — any queue schema the DoE schema contract defines (output dir
             is contract-derived via schema-cli --describe applies_to, not a hardcoded
             list). Current schemas: debt-backlog, bug-backlog, improvement-queue,
             lessons, cross-repo-commitment, workstream, workstream-event.
@@ -1360,7 +1369,7 @@ def _queue_append_handler(
 
         Any OTHER param name not listed above is passed through to
         ``append_queue_entry`` generically (as ``**schema_fields``) and accepted
-        only if the coordinator-claude contract declares it for the given ``schema`` — e.g.
+        only if the DoE contract declares it for the given ``schema`` — e.g.
         workstream_id, workstream, field, value, sequence, session, deliverables,
         specs, dependency_annotations, supersedes, coordinator_root_path for the
         workstream/workstream-event schemas. This handler deliberately does not
@@ -1396,7 +1405,7 @@ def _queue_append_handler(
     # explicitly (below) plus "tags" (parsed above). Anything else in `params`
     # (workstream_id, workstream, field, value, sequence, session, deliverables,
     # specs, dependency_annotations, supersedes, coordinator_root_path, or any
-    # future coordinator-claude schema field) passes through generically via **schema_fields —
+    # future DoE schema field) passes through generically via **schema_fields —
     # contract-derived acceptance happens inside append_queue_entry itself, not
     # here (see its docstring). Deliberately NOT a hand-maintained field list.
     _NAMED_PARAM_KEYS = frozenset(

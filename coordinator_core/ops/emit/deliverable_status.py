@@ -18,7 +18,7 @@ Phase ordering / scores:
 Score→phase fallback (score_to_phase): score 0 → "proposed" (not "abandoned"),
 matching the all-abandoned-group conditional that gates before this path.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — SECTION 8.16.
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — SECTION 8.16.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C3
 
 Fork-equivalence canonicalization (C4b, 2026-08-01): ``_compute_map`` and ``stamp`` both

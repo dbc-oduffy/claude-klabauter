@@ -5,7 +5,7 @@ back to the pre-migration ~/.claude/bin/), and --fix copies template -> live
 (template canonical). See the module docstring and the cross-repo memo it
 backlinks for the full rationale.
 
-Port of: verify-templates-bin-sync.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: verify-templates-bin-sync.sh (DoE b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ def test_fix_mode_installs_live_missing_and_repairs_mismatch(fixture, capsys):
     assert (live / "resolve-coordinator-clone").read_text() == "templatetruth\n"
     # ...and the template is the source of truth: byte-unchanged. This is
     # the regression lock for the hazard the reversal exists to prevent —
-    # a --fix run must never mutate coordinator-claude's template/source-repo content.
+    # a --fix run must never mutate DoE's template/source-repo content.
     assert (tmpl / "claude-machine-local.ps1").read_text() == "tmplonly\n"
     assert (tmpl / "resolve-coordinator-clone").read_text() == "templatetruth\n"
     # only NOT_PRESENT pairs remain -> exit 0

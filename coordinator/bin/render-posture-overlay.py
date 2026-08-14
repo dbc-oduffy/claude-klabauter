@@ -2,7 +2,7 @@
 """render-posture-overlay.py — merges a Posture overlay block into a target file.
 
 CLI trampoline over claude-klabauter coordinator_core.ops.render_posture_overlay, per
-DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine). Performs an
+DR-047 (DoE owns contract/generator, claude-klabauter owns engine). Performs an
 idempotent managed-section merge (marker-delimited insert/swap), detects
 collisions against markerless legacy '## Posture'/'## Working Style'
 headings, and creates the target when absent. The target is a consumer
@@ -13,15 +13,15 @@ per-repo file. What lives on the consuming side (assert-em-role.py's
 repo-snippet soft cap) is read-time visibility, not a write-time refusal —
 it banners an oversized em-context.md and then delivers it in full anyway,
 so nothing blocks an oversized em-context.md from being written here, by
-design. Do not reintroduce a size gate here. The coordinator-claude-resident coordinator_root (anchor templates) is
+design. Do not reintroduce a size gate here. The DoE-resident coordinator_root (anchor templates) is
 resolved here and passed into the op explicitly, since the op
-cannot re-derive a coordinator-claude-only path itself. Resolution honors a
+cannot re-derive a DoE-only path itself. Resolution honors a
 CLAUDE_PLUGIN_ROOT override first (matching every other bin/ trampoline's
 env-override convention, e.g. coordinator/bin/snippet-registry's
 _resolve_plugin_root), then falls back to the shared
 coordinator_data_root.data_root() split-repo ladder — this file no longer
 walks its own on-disk location to find templates/, since templates/ moved
-to coordinator-claude in the 2026-07-22 executable-surface migration.
+to DoE-claude in the 2026-07-22 executable-surface migration.
 """
 # render-posture-overlay.py — CLI trampoline over claude-klabauter
 # coordinator_core.ops.render_posture_overlay.
@@ -33,22 +33,22 @@ to coordinator-claude in the 2026-07-22 executable-surface migration.
 # headings, size-guard enforcement against the check-claude-md-size.py hook's
 # HARD threshold) has been fully ported to
 # coordinator_core/ops/render_posture_overlay.py (see
-# test_render_posture_overlay.py). This file is now a thin coordinator-claude-side
-# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude
+# test_render_posture_overlay.py). This file is now a thin DoE-side
+# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE
 # owns contract/generator, claude-klabauter owns engine).
 #
-# coordinator_root is resolved HERE (coordinator-claude-side) and passed into the op's
+# coordinator_root is resolved HERE (DoE-side) and passed into the op's
 # main() explicitly — the anchor templates (templates/postures/<anchor>.md)
-# are coordinator-claude-resident, not claude-klabauter-resident, so the op cannot re-derive this root
+# are DoE-resident, not claude-klabauter-resident, so the op cannot re-derive this root
 # itself the way a claude-klabauter-native op would. The op no longer reads a
-# size-guard SSOT at all; templates/ is now the only coordinator-claude-resident input.
+# size-guard SSOT at all; templates/ is now the only DoE-resident input.
 #
 # Post-2026-07-22 executable-surface migration, this file's own on-disk
 # location (coordinator/bin/ under claude-klabauter) is no longer a valid
-# anchor for templates/ or hooks/ (those stayed in coordinator-claude, per DR-047).
+# anchor for templates/ or hooks/ (those stayed in DoE-claude, per DR-047).
 # coordinator_root is now resolved via the shared
 # coordinator_data_root.data_root() split-repo ladder (co-located rung 1 ->
-# coordinator-claude-resident rung 2 via coordinator_registry.doe_root()), with a
+# DoE-resident rung 2 via coordinator_registry.doe_root()), with a
 # CLAUDE_PLUGIN_ROOT env override taking precedence first — the same
 # override convention every other bin/ trampoline honors (see
 # coordinator/bin/snippet-registry's _resolve_plugin_root).
@@ -67,7 +67,7 @@ to coordinator-claude in the 2026-07-22 executable-surface migration.
 #       coordinator-auto-push's never-block posture — a claude-klabauter-link failure
 #       here degrades to a loud, distinguishable exit 2, not a silent 0.
 #
-# Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+# Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 # Prior bash implementation: see git log (render-posture-overlay.py, 262
 #   lines pre-port, retired on this cutover)
 import os
@@ -91,7 +91,7 @@ def _import_main():
 
     DR-276: the op's `main(argv, coordinator_root=...)` signature carries a
     keyword this trampoline resolves itself (the anchor templates are
-    coordinator-claude-resident, not derivable by the op) — `run_op_main`'s contract is
+    DoE-resident, not derivable by the op) — `run_op_main`'s contract is
     `entrypoint(argv)` only, with no room for an extra caller-supplied
     keyword, so this CLI cannot route through it. Instead this file's own
     `main()` wraps the op call in `coordinator_core.cli_entry
@@ -118,14 +118,14 @@ def _import_recorder():
 
 
 def _coordinator_root() -> str:
-    """coordinator-claude-side coordinator/ root (parent of templates/ and hooks/).
+    """DoE-side coordinator/ root (parent of templates/ and hooks/).
 
     CLAUDE_PLUGIN_ROOT env override always wins (matches every other bin/
     trampoline's convention, e.g. coordinator/bin/snippet-registry's
     _resolve_plugin_root — this lets test fixtures and CI point the CLI at a
     synthetic coordinator root without touching real disk). Otherwise
     resolved via coordinator_data_root.data_root("templates").parent, the
-    shared split-repo ladder (co-located rung 1 -> coordinator-claude-resident rung 2 via
+    shared split-repo ladder (co-located rung 1 -> DoE-resident rung 2 via
     coordinator_registry.doe_root()) — never re-derived here (see that
     module's negative-spec).
     """

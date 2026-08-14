@@ -2,8 +2,8 @@
 test_priority_ledger_entity — parse/reject tests for `PriorityLedgerEntry`
 (C6b, `entities/priority_ledger_entry.py`).
 
-Spec backlink: docs/plans/2026-07-26-priority-ledger.md § C6b
-Spec backlink: coordinator/schemas/priority-ledger.schema.json (coordinator-claude repo)
+Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C6b
+Spec backlink: coordinator/schemas/priority-ledger.schema.json (DoE-claude repo)
 """
 from __future__ import annotations
 

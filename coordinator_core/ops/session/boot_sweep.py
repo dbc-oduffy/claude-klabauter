@@ -25,15 +25,15 @@ The sweeps, in order:
            "continued" schema landing (C4+). This deliberately inflates every
            open-set predicate's in-flight view (including cockpit's
            query_fleet_state) until then — bounded and intentional, mirroring
-           coordinator-claude's own interim reaper skip disposition; do NOT "fix" the
+           DoE's own interim reaper skip disposition; do NOT "fix" the
            inflation mid-window. See _sweep_consumed_handoffs' skip-and-
            surface block.
        (c) shipped_in stamp: best-effort scope-path git-log lookup; absent when no
            commit found.  NO branch-tip fallback (misattribution worse than omission
-           for orphaned handoffs — mirrors the deleted session-init.sh, coordinator-claude 2f8b8450).  Applied to
+           for orphaned handoffs — mirrors the deleted session-init.sh, DoE 2f8b8450).  Applied to
            every non-heir candidate NOT skip-and-surfaced by (b).
        (d) WARN marker appended to tasks/orphan-sweep-notes.md, consumed by
-           /workday-start Step 0.8 (mirrors the deleted session-init.sh, coordinator-claude 2f8b8450).  As of the
+           /workday-start Step 0.8 (mirrors the deleted session-init.sh, DoE 2f8b8450).  As of the
            DR-084 stop-gap this also fires for (b) skip-and-surface
            candidates (never just archived ones), naming the disposition
            "awaiting human adjudication or DR-084 continued semantics".
@@ -46,7 +46,7 @@ The sweeps, in order:
            already proved a resolvable shipped_in BEFORE the git-mv, so this
            stamp can no longer produce "abandoned"; that fallback path is
            DELETED — sweep-authored abandoned no longer exists, fleet-wide
-           coordinator doctrine; reaper-scoped precedent, coordinator-claude
+           coordinator doctrine; reaper-scoped precedent, DoE
            coordinator/docs/wiki/handoff-tracker-system.md:536-540 (that
            section's "never by this sweep" names the reaper, not this
            sweep). See _sweep_consumed_handoffs and
@@ -62,7 +62,7 @@ The sweeps, in order:
            supply.  See _sweep_consumed_handoffs' pre-preview pass.
 
   Negative-spec (2026-07-22): DR-224's supersede→abandoned disposition is
-  the coordinator-claude REAPER's own disposition (a separate op, a separate repo) and is
+  the DoE REAPER's own disposition (a separate op, a separate repo) and is
   deliberately NOT applied by this sweep — see archive_handoffs.py module
   docstring's matching negative-spec.  Non-heir candidates DR-224 would have
   reached via this sweep's own (now-deleted) in_flight→abandoned flip get
@@ -139,7 +139,7 @@ Spec backlinks:
   - Plan (C1b): docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C1b
   - Plan (two-repo split): docs/plans/2026-07-07-boot-sweep-two-repo-split.md
   - Shell ref: retired coordinator/hooks/scripts/session-init.sh
-    (deleted 2026-07-16, coordinator-claude ``2f8b8450``)
+    (deleted 2026-07-16, DoE ``2f8b8450``)
   - the Staff Engineer F0 (consumed-handoff behavioral contract):
     docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § Design-decisions #3
   - Design-decision 1: composite boot entrypoint — one cold-start per boot
@@ -176,7 +176,16 @@ Negative-spec:
     GIT_ROOT → unified-state collapse; single-worktree behavior, byte-identical to today.
 """
 
+
 from __future__ import annotations
+
+MUTATES = [
+    "state/handoffs/*.md",
+    "docs/plans/*.md",
+    "state/sizings/*.md",
+    "state/review-trail/findings/*.md",
+    "tasks/orphan-sweep-notes.md",
+]  # composite boot-time archival sweep across data-dependent tracked sets
 import sys
 
 import asyncio
@@ -262,7 +271,7 @@ _MODE = "already-terminal"
 # consumed_at) is within the last 30 minutes — the consuming session is almost
 # certainly live even if liveness returned False (heartbeat lag, session dir
 # not yet present on this machine).
-# Mirrors the deleted session-init.sh (coordinator-claude 2f8b8450, 2026-07-16).
+# Mirrors the deleted session-init.sh (DoE 2f8b8450, 2026-07-16).
 _CONSUMED_AT_RECENCY_FLOOR_SECONDS: int = 30 * 60
 
 # DR-084 stop-gap (2026-07-22): distinct reason token for the skip-and-surface
@@ -444,7 +453,7 @@ def _is_consumed_at_too_recent(handoff_path: Path) -> bool:
     cs_reap_stale reaper is the backstop for any handoff this floor shields
     that is genuinely orphaned.
 
-    Mirrors the deleted session-init.sh (coordinator-claude 2f8b8450, 2026-07-16).
+    Mirrors the deleted session-init.sh (DoE 2f8b8450, 2026-07-16).
 
     DR-084 transitional field-read (C5, restored 2026-07-23): reads claimed_at
     with a consumed_at fallback for frontmatter not yet migrated to the new
@@ -556,7 +565,7 @@ async def _stamp_shipped_in_besteff(
     stamp_shipped_in fix (ownership guard, force/sha repair escape) covers BOTH
     writers instead of one.
 
-    Mirrors the deleted session-init.sh (coordinator-claude 2f8b8450, 2026-07-16):
+    Mirrors the deleted session-init.sh (DoE 2f8b8450, 2026-07-16):
       stamp_shipped_in "$fpath" || true
       # DO NOT pass --allow-branch-tip-fallback here.
       # If scope-paths yield no commit, shipped_in: is left absent —
@@ -593,7 +602,7 @@ async def _stamp_shipped_in_besteff(
     """
     from coordinator_core.archive_stamp import stamp_shipped_in
 
-    # kind (DR-096, coordinator-claude 2026-07-26): stamp_shipped_in's cross-validation
+    # kind (DR-096, DoE-claude 2026-07-26): stamp_shipped_in's cross-validation
     # requires kind="ship-commit" whenever a caller-supplied sha override is
     # present (a caller passing sha= already has a specific commit in hand,
     # never something this wrapper derives) and kind="scope-derived" when sha
@@ -679,7 +688,7 @@ async def _resolve_heir_deployment_state(handoff_path: Path, git_root_worktree: 
     """Return "shipped" for a heir-archived candidate (I1 / DR-224, revised FIX-1 2026-07-22).
 
     `abandoned` retirement is fleet-wide coordinator doctrine; reaper-scoped
-    precedent, coordinator-claude coordinator/docs/wiki/handoff-tracker-system.md:536-540
+    precedent, DoE coordinator/docs/wiki/handoff-tracker-system.md:536-540
     (2026-07-20): "archival only ever happens after a handoff reaches
     shipped ... Liveness-based auto-abandonment no longer exists ...
     abandoned is now reachable only by explicit human/session decision,
@@ -759,7 +768,7 @@ def _append_warn_marker(
     is append-only here; /workday-start rotates it after reading.
 
     Creates the file with a header if it does not yet exist (mirrors
-    the deleted session-init.sh, coordinator-claude 2f8b8450).  Fails silently on any I/O error.
+    the deleted session-init.sh, DoE 2f8b8450).  Fails silently on any I/O error.
 
     Dedupe (2026-07-29): every session-boot sweep re-visits the same
     already-archived handoffs, so an unconditional append re-logged an
@@ -785,7 +794,7 @@ def _append_warn_marker(
     dropping the record -- this function is on the session-boot path and
     must never let a dedup check turn into a lost marker or a wedged boot.
 
-    Spec backlink: the deleted session-init.sh (coordinator-claude 2f8b8450, 2026-07-16), per-archive WARN marker block.
+    Spec backlink: the deleted session-init.sh (DoE 2f8b8450, 2026-07-16), per-archive WARN marker block.
 
     WARN: called for successfully archived handoffs (after act_result is
     known) AND, as of the DR-084 stop-gap, for (b) skip-and-surface
@@ -924,7 +933,7 @@ async def _commit_consumed_metadata(
     CRITICAL: every git commit invocation carries -c commit.gpgsign=false (GAP-6 / AC3).
       No commit path may prompt for a signing passphrase in a TTY-less hook.
 
-    Mirrors the shell's two-commit split in the deleted session-init.sh (coordinator-claude 2f8b8450, 2026-07-16).
+    Mirrors the shell's two-commit split in the deleted session-init.sh (DoE 2f8b8450, 2026-07-16).
 
     Negative-spec:
       - Does NOT use the private index (no GIT_INDEX_FILE) — targets main .git/index.
@@ -1613,7 +1622,7 @@ async def _sweep_consumed_handoffs(
             filtered_ids.append(cid)
             continue
 
-        # (a) 30-minute recency floor (mirrors the deleted session-init.sh, coordinator-claude 2f8b8450).
+        # (a) 30-minute recency floor (mirrors the deleted session-init.sh, DoE 2f8b8450).
         if _is_consumed_at_too_recent(handoff_path):
             recency_skipped.append({
                 "id": cid,
@@ -1635,7 +1644,7 @@ async def _sweep_consumed_handoffs(
     # deliberately inflates every open-set predicate's in-flight view
     # (including cockpit's query_fleet_state) until a human adjudicates or
     # DR-084's "continued" schema lands (C4+) — bounded and intentional,
-    # mirroring coordinator-claude's own interim reaper skip disposition. Do NOT "fix" the
+    # mirroring DoE's own interim reaper skip disposition. Do NOT "fix" the
     # inflation mid-window.
     awaiting_adjudication: List[dict] = []  # [{"id": cid, "sid": str}, ...]
     for cid in list(filtered_ids):
@@ -1744,11 +1753,16 @@ async def _sweep_consumed_handoffs(
 
     # (c) Stamp shipped_in — NON-HEIR candidates only (that were not pulled
     # into the (b) skip-and-surface set above), in-place BEFORE archival.
-    # After git-mv (inside _handle_act_handoffs), the modified file content is
-    # on disk at the archive destination. archive_and_commit's main-index
-    # resync then stages the modified content via git update-index --add --
-    # dst. _commit_consumed_metadata commits those staged modifications
-    # separately. Both operations act on handoff files in the STATE repo
+    # This write is left UNCOMMITTED on src, so archive_and_commit's disk/HEAD
+    # drift guard (commit 4541069c3) refuses a plain move of any candidate it
+    # actually applied to: src differs from HEAD, and a git-mv would commit
+    # HEAD's stale pre-stamp blob. This sweep is the caller that AUTHORED that
+    # drift, so it names exactly those candidates in _handle_act_handoffs'
+    # restage_src_ids below — every id the stamp did NOT apply to keeps the
+    # guard, since a difference there belongs to someone else. Post-move,
+    # _commit_consumed_metadata's pathspec'd commit over dst carries any
+    # further disk modification (see test_boot_sweep_stamp_preservation.py's
+    # mechanism finding). All of it acts on handoff files in the STATE repo
     # (state_worktree).
     #
     # Heir candidates are intentionally SKIPPED here and handled AFTER
@@ -1767,6 +1781,7 @@ async def _sweep_consumed_handoffs(
     # _handle_act_handoffs has already archived it via Branch A's heir
     # bypass — sidesteps this reclassification entirely, since _is_terminal
     # is never called again on an already-archived file.
+    stamped_cids: "set[str]" = set()
     for cid in filtered_ids:
         if cid in heir_cids:
             continue
@@ -1776,17 +1791,27 @@ async def _sweep_consumed_handoffs(
         # shipped_in stamp: git log must run in GIT_ROOT — scope_paths are
         # GIT_ROOT-relative code paths.  Running git log in state_worktree returns
         # an empty SHA for any GIT_ROOT-scoped handoff, silently leaving shipped_in
-        # absent (mirrors the deleted session-init.sh, coordinator-claude 2f8b8450, which ran git-log against GIT_ROOT).
-        await _stamp_shipped_in_besteff(handoff_path, git_root_worktree)
+        # absent (mirrors the deleted session-init.sh, DoE 2f8b8450, which ran git-log against GIT_ROOT).
+        #
+        # The return value is the drift-authorship record: True iff this call
+        # actually wrote shipped_in (a no-op skip — already stamped, or no
+        # commit resolvable from scope: — leaves src byte-identical to HEAD and
+        # must NOT be opted into restaging).
+        if await _stamp_shipped_in_besteff(handoff_path, git_root_worktree):
+            stamped_cids.add(cid)
 
     # T3: archive via per-family internal (git-mv + private-index commit).
     # state_worktree: git-mv and commit both operate in the STATE repo.
     # dag_incomplete: see the _handle_preview_handoffs call site above — same
     # fail-closed rationale, threaded through so a partial dag_index skips
     # every candidate rather than archiving off a scan known to be incomplete.
+    # restage_src_ids: the (c) loop's own uncommitted shipped_in writes, named
+    # per-candidate so the drift guard still covers every candidate this sweep
+    # did not write. See that loop's comment and _handle_act_handoffs' param doc.
     act_result = await _handle_act_handoffs(
         _MODE, state_worktree, dag_index, filtered_ids, common_dir,
         dag_incomplete=dag_incomplete,
+        restage_src_ids=stamped_cids,
     )
 
     acted: List[dict] = act_result.get("acted", [])

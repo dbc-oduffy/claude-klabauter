@@ -32,7 +32,7 @@ own offered alternative shape) rather than editing every ``_advisory()``/
 ``deny()`` call site across the emitter modules, which stay untouched by
 this chunk.
 
-The two-axis firing predicate this module operationalizes (coordinator-claude's contract,
+The two-axis firing predicate this module operationalizes (DoE's contract,
 adopted verbatim, docs/plans/2026-08-01-advisory-firing-shape-predicate.md):
 
 - **Axis A (obligation).** Any emission that asks the agent to change or
@@ -87,7 +87,7 @@ NEGATIVE-SPEC -- what this gate deliberately does NOT do
 ===========================================================================
 Design-as-offers
 ===========================================================================
-This gate operationalizes the design-as-offers doctrine (coordinator-claude
+This gate operationalizes the design-as-offers doctrine (DoE-claude
 ``coordinator/docs/wiki/eager-agent-calibration.md``: "Design agent-facing
 tooling as offers, not nags... lead with the better alternative, not the
 violation") as an ENFORCEMENT surface: Axis A is exactly "does this emission

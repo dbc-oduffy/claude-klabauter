@@ -21,9 +21,9 @@ Wire-vocabulary note (2026-08-04): the shard keys were renamed from their
 prior persona-named forms to the current role-based `staff_eng`/
 `staff_eng_seam_files` per the PM ruling that a persona slug must never be a
 wire key/value/enum member (state/sizings/2026-08-04-persona-wire-vocabulary-
-rename.yaml; docs/decisions/DR-262 Amendment cl.3). Coordinated with coordinator-claude
-via cross-repo memo (cross-repo/inbox/2026-08-04-coordinator-claude-em-correction-the-
-shard-key-coupling-is-three-keys-five-files.md) — coordinator-claude's five reader sites move
+rename.yaml; docs/decisions/DR-262 Amendment cl.3). Coordinated with DoE-claude
+via cross-repo memo (cross-repo/inbox/2026-08-04-doe-claude-em-correction-the-
+shard-key-coupling-is-three-keys-five-files.md) — DoE's five reader sites move
 in the same window, no back-compat/dual-spelling transition.
 
 Session-keyed append-only (not a singleton overwrite): two concurrent
@@ -43,7 +43,7 @@ coordinator_core.ops.review_coverage_core (shared with the chain-end coverage
 gate's coordinator_core.coverage) — this port does NOT reimplement that
 logic; it calls collect_segments() directly (same-process, in-package import;
 equivalent to `--segments-json --on-unresolvable-ref skip`). Originally this
-shelled out to the still-bash coordinator-claude-owned `coordinator/lib/
+shelled out to the still-bash DoE-owned `coordinator/lib/
 review-coverage-core.sh` oracle via subprocess (that file is now itself a
 polyglot trampoline over this same coordinator_core.ops.review_coverage_core
 module) — once BOTH sides of that call lived in claude-klabauter, the subprocess hop
@@ -54,7 +54,7 @@ intersection across segments) IS native Python here — it was already a
 Python heredoc block in the bash oracle, lifted essentially unchanged.
 
 Session-id resolution delegates to coordinator_core.session.core.resolve_session_id
-(C19 — retired the bash-spawn bridge that shelled out to source the coordinator-claude-owned
+(C19 — retired the bash-spawn bridge that shelled out to source the DoE-owned
 `coordinator/lib/coordinator-session.sh` and call its `cs_resolve_session_id`).
 That module is itself a full native port of the same 4-tier chain, including
 the tier-4 concurrency-ambiguity guard over `coordinator_core.session.liveness`
@@ -93,11 +93,11 @@ Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-p
     note above; this is the one deliberate divergence and it does not change
     any consumer-visible contract.
 
-Port of: workweek-trail-scope.sh (coordinator-claude 6fb5fb37, 2026-07-22).
+Port of: workweek-trail-scope.sh (DoE 6fb5fb37, 2026-07-22).
 Spec backlink: docs/plans/2026-06-23-chain-end-review-coverage-gate.md § C2
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Central-reg: this op is a PLAIN MODULE (no @register_op) — direct-import
-trampoline variant (template-variant #1; see coordinator-claude
+trampoline variant (template-variant #1; see DoE-claude
 tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1, exemplified by
 coordinator_core.hooks.auto_push / coordinator_core.ops.handoff_gate_aging).
 NOT wired into ops/__init__.py / _registry_map.py / ipc.py /
@@ -105,6 +105,8 @@ authz/classification.py — no registration action needed.
 """
 
 from __future__ import annotations
+
+MUTATES = ["state/review-trail/*.json"]  # session-keyed shard state/review-trail/.weekly-reviewer-scopes-<TIMESTAMP>-<SID_SHORT>.json per invocation; state/review-trail/.weekly-reviewer-scopes.json and other state/review-trail/*.json files are tracked
 
 import json
 import os

@@ -56,7 +56,7 @@ pytestmark = [pytest.mark.spawns_process]
 
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
-_CLI_PATH = _BIN_DIR / "coordinator-doc-new"
+_CLI_PATH = _BIN_DIR / "coordinator-doc-new.py"
 
 _NO_CONSOLE = no_console_creationflags()
 

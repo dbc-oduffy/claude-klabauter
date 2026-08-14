@@ -42,7 +42,7 @@ CLAUDE_HOME (default `~/.claude`):
                                  not-declared (machine_resolver.registry_get
                                  semantics). The bash oracle this module ports
                                  is retired (no platform-localize.sh remains in
-                                 coordinator-claude or this repo), so oracle parity no longer
+                                 DoE or this repo), so oracle parity no longer
                                  pins the legacy location.
 
 Idempotent: every write compares before touching disk (no churn if already
@@ -57,7 +57,7 @@ whole install chain by first-run.sh and install-maximalist.sh's
 `run_required`. See the trampoline's own header for its full exit-code
 contract (0/1/3).
 
-Port of: platform-localize.sh (coordinator-claude 6fb5fb37, 2026-07-22).
+Port of: platform-localize.sh (DoE 6fb5fb37, 2026-07-22).
 Byte-oracle for the JSON/TOML manipulation logic is that script's embedded
 Python heredoc -- this module is a 1:1 behavioral port of that
 heredoc, restructured into testable functions; the surrounding bash (Python
@@ -122,6 +122,11 @@ COORDINATOR_MP = "coordinator-claude"
 COORDINATOR_GITHUB_REPO = "dbc-oduffy/coordinator-claude"
 
 _REGISTRY_LINE_RE = re.compile(r'^"?([^"=]+)"?\s*=\s*"([^"]*)"')
+
+#: Generator-provenance declaration: this install-time localizer patches
+#: settings.local.json / known_marketplaces.json under CLAUDE_HOME (the
+#: operator's ~/.claude), entirely outside this repo's tracked tree.
+GENERATES: list = []
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ coordinator_core.distill.tests.test_log_normalize
 
 Unit tests for coordinator_core.distill.log_normalize — the one-time legacy-log
 NORMALIZER (C8). Migrates a legacy pipe-table distillation log (`date | action | path |
-last_sha | belongs_to_spec | reason`) to the coordinator-claude C1 canonical schema, run exactly once
+last_sha | belongs_to_spec | reason`) to the DoE C1 canonical schema, run exactly once
 per repo.
 
 Coverage:
@@ -41,7 +41,7 @@ unrecognized rows skipped-not-dropped, run-header trailing prose preserved verba
 the accounting invariant across a mixed fixture.
 
 Spec backlink: pln-distill-ceremony-mechanical-su-1bcb38 § C8;
-Coordinator-claude/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
+DoE-claude/docs/contracts/distill-engine-scripts.md § 7 (binding I/O contract).
 """
 
 from __future__ import annotations

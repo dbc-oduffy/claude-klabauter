@@ -21,7 +21,7 @@ Coverage:
       the registered handler produces the same result as calling
       run_fork_census directly.
 
-Spec backlink: docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md § C1.
+Spec backlink: DoE-claude:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C1.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from coordinator_core.probes import fork_census
 
 
 def test_classify_platform_macos_users_path():
-    assert fork_census.classify_platform("/Users/alice/X/coordinator-claude") == "macos"
+    assert fork_census.classify_platform("/Users/alice/X/DoE-claude") == "macos"
 
 
 def test_classify_platform_macos_private_tmp():
@@ -179,7 +179,7 @@ def _cwd_marker(cwd: str) -> str:
 def fixture_corpus(tmp_path: Path) -> Path:
     """Builds a two-machine fixture corpus with hand-computed expected totals.
 
-    macOS session (proj-a/s1.jsonl), cwd=/Users/alice/X/coordinator-claude:
+    macOS session (proj-a/s1.jsonl), cwd=/Users/alice/X/DoE-claude:
       t1 "git status"              -> 1 external fork (git)
       t2 "echo hi"                 -> 1 builtin, 0 forks
       t3 "cd /tmp && git log"      -> 1 builtin (cd) + 1 fork (git), cd_then_git
@@ -203,7 +203,7 @@ def fixture_corpus(tmp_path: Path) -> Path:
     proj_b = base / "proj-b"
     proj_b.mkdir(parents=True)
 
-    macos_cwd = "/Users/alice/X/coordinator-claude"
+    macos_cwd = "/Users/alice/X/DoE-claude"
     lines_a = [
         _cwd_marker(macos_cwd),
         _bash_tool_use("t1", "git status"),

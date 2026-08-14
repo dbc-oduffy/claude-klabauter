@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """resolve-repo-path.py — emit the on-disk path for a registered repo shortname.
 
-Port of: resolve-repo-path.sh (coordinator-claude a1a568d2, 2026-07-22) — naked-Python port,
+Port of: resolve-repo-path.sh (DoE a1a568d2, 2026-07-22) — naked-Python port,
 2026-07-19 Windows de-bash campaign, chunk E3-c. Reads the machine-local [repos] registry for machine-portable
 cross-repo path resolution.
 

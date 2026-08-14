@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -158,9 +158,22 @@ def test_recent_edit_by_dead_peer_is_silent(tmp_path, caplog):
     assert caplog.records == []
 
 
-def test_recent_live_peer_edit_never_gates_the_commit(tmp_path):
+def test_recent_live_peer_edit_never_gates_the_commit(tmp_path, caplog):
     """The hard constraint: a warn-triggering scenario still commits --
-    nothing in this file may pause/prompt/gate on what the warn reads."""
+    nothing in this file may pause/prompt/gate on what the warn reads.
+
+    Review: coordinator:code-reviewer -- the prior version pinned the
+    touch timestamp to 2020-01-01, always outside `_warn_recent_edits`'s
+    real `datetime.now(timezone.utc)` comparison window at any wall-clock
+    time this suite runs. That made the test pass vacuously: it proved an
+    unclaimed/aged commit still lands (already covered by
+    `test_scoped_git_commit_claim_gate_removed.py`), never that a commit
+    proceeds despite a warn that ACTUALLY fired. `_handler` takes no
+    `now=` override, so this pins the edit a few seconds before the real
+    wall clock -- inside the 30s window at the instant `_handler` runs --
+    and asserts both legs of the conjunction: the warn logged AND the
+    commit landed.
+    """
     repo = _init_repo(tmp_path)
     f = repo / "hot.py"
     f.write_text("v1\n", encoding="utf-8")
@@ -168,22 +181,30 @@ def test_recent_live_peer_edit_never_gates_the_commit(tmp_path):
     _git(["commit", "-q", "-m", "seed"], repo)
     f.write_text("v2\n", encoding="utf-8")
 
+    # A few seconds before the real wall clock -- inside the 30s window
+    # at the moment `_handler` below actually reads `datetime.now(...)`.
+    recent_ts = (
+        datetime.now(timezone.utc) - timedelta(seconds=5)
+    ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     _write_touched(
-        repo, "sess-peer", [_touch_line("T", "hot.py", "2020-01-01T00:00:00.000000Z")]
+        repo, "sess-peer", [_touch_line("T", "hot.py", recent_ts)]
     )
     _write_meta(repo, "sess-peer", live=True)
     _write_meta(repo, "sess-caller", live=True)
 
-    result = scoped_git_commit._handler(
-        {
-            "worktree_root": str(repo),
-            "paths": ["hot.py"],
-            "message": "commit despite a warn-shaped scenario",
-            "session_id": "sess-caller",
-        },
-        repo_root=None,
-    )
+    with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.ceremony.scoped_git_commit"):
+        result = scoped_git_commit._handler(
+            {
+                "worktree_root": str(repo),
+                "paths": ["hot.py"],
+                "message": "commit despite a warn-shaped scenario",
+                "session_id": "sess-caller",
+            },
+            repo_root=None,
+        )
 
+    assert any("hot.py" in r.message for r in caplog.records), caplog.text
+    assert any("sess-peer" in r.message for r in caplog.records), caplog.text
     assert result["committed"] is True, result
     assert not result.get("error"), result
 

@@ -153,7 +153,7 @@ CONTINUATION_EDGE_KINDS: FrozenSet[str] = frozenset(
 # ---------------------------------------------------------------------------
 # Id-suffixed pointer-field aliases (C6 pointer-normalization seam, 2026-07-26).
 #
-# coordinator-claude's on-disk baton corpus also carries `predecessor_id` (73 occurrences) and
+# DoE's on-disk baton corpus also carries `predecessor_id` (73 occurrences) and
 # `origin_handoff_id` (25) — frontmatter fields that name the SAME edge kind as
 # `predecessor` / `origin_handoff` but by handoff_id rather than by path/filename.
 # Deliberately NOT folded into EDGE_KIND_META itself. NOTE: test_dag_edge_kinds.py
@@ -686,7 +686,7 @@ def read_handoff_meta(file_path: str) -> dict:
 # ---------------------------------------------------------------------------
 # Utility: git-history-aware existence check (tier 3 of resolve_target).
 #
-# Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C2 (F1)
+# Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C2 (F1)
 #
 # A target that is disk-absent (relocated, e.g. flat archive → month-foldered
 # archive) but git-reachable is NOT "never existed". Best-effort: any git failure
@@ -824,7 +824,7 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
 #     rename detection left on, a renamed path's target name never appears in
 #     --name-only output as an "A" line at all, regardless of --diff-filter.)
 #
-# MEASURED numbers (coordinator-claude corpus, one full envelope.emit() run, fresh
+# MEASURED numbers (DoE-claude corpus, one full envelope.emit() run, fresh
 # process each time — see the fresh-process warning below):
 #   - Landing the ADD-only cache (commit 9667177c) reduced fresh-process
 #     TOTAL subprocess spawns 466 -> 448 for the run. Of that ~448-452,
@@ -837,8 +837,8 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
 #     one-off spawns.)
 #   - This widening (isolated before/after trees, only dag.py differing,
 #     PYTHONHASHSEED pinned) measured fallback spawns 313 -> 308 (-5) on
-#     coordinator-claude and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION
-#     (measured against claude-klabauter's own corpus only — the coordinator-claude
+#     DoE-claude and 39 -> 38 (-1) on claude-klabauter's own corpus. CORRECTION
+#     (measured against claude-klabauter's own corpus only — the DoE-claude
 #     figures above are left as historical record, not re-verified here):
 #     the prior text characterized the residual spawns on THIS corpus as
 #     "orphaned / malformed predecessor references" hitting a correct
@@ -855,7 +855,7 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
 #     that call site finds — a deliberately preserved behaviour, see
 #     priority_resolve.py's NEGATIVE-SPEC block). Verified independently: the
 #     widened cache is a strict superset of the ADD-only one (12064 -> 14473
-#     raw entries on coordinator-claude, zero entries lost) and none of the remaining
+#     raw entries on DoE-claude, zero entries lost) and none of the remaining
 #     fallback candidates are in it.
 #   - FRESH PROCESS ONLY: _EVER_TRACKED_CACHE (below) is process-lifetime, so
 #     a second emit() in the SAME process serves most lookups from that cache
@@ -928,7 +928,7 @@ def _git_path_ever_tracked(repo_rel_path: str, repo_root: str) -> bool:
 #     here as a considered, not silently skipped, scope boundary rather than
 #     added to the two checks above.
 #
-# Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C2 (F5)
+# Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C2 (F5)
 # ---------------------------------------------------------------------------
 
 class GitHistoryCache(set):
@@ -1775,7 +1775,7 @@ def referenced_by(
 # Waived pre-reclaim-boundary dangling predecessors (C6 GAP2, 2026-07-08).
 #
 # All five entries below were introduced to this repo by a SINGLE commit,
-# `50e2847 reclaim(archive): coordinator-claude pre-July archive history from claude-klabauter`, which
+# `50e2847 reclaim(archive): DoE pre-July archive history from claude-klabauter`, which
 # squash-reclaimed inert pre-July archive records that had been stranded in
 # claude-klabauter by the 2026-07-03 relocation. That reclaim brought in each SUCCESSOR
 # handoff (the record listed as a key below) but NOT its own predecessor,
@@ -1793,7 +1793,7 @@ def referenced_by(
 #
 # Mirrors JS WAIVED_DANGLING_PREDECESSORS verbatim (same keys/values).
 #
-# Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C6 (GAP2)
+# Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C6 (GAP2)
 # ---------------------------------------------------------------------------
 WAIVED_DANGLING_PREDECESSORS: Dict[str, str] = {
     'archive/handoffs/2026-06-28_081122_d5714a02-8a54-4897-babf-457e5833ed9c.md':
@@ -1851,7 +1851,7 @@ WAIVED_DANGLING_PREDECESSORS: Dict[str, str] = {
 #
 # Mirrors JS checkLineageReachability verbatim.
 #
-# Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C2, § C6 (GAP1/GAP2), F5
+# Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C2, § C6 (GAP1/GAP2), F5
 # ---------------------------------------------------------------------------
 
 def check_lineage_reachability(

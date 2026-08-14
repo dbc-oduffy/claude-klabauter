@@ -363,7 +363,7 @@ class TestDenyOffersOp:
         assert "archive-stamp-cli resolve-memo" in reason
 
         cli_path = (
-            Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "archive-stamp-cli"
+            Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "archive-stamp-cli.py"
         )
         assert cli_path.is_file(), f"archive-stamp-cli not found at {cli_path}"
         loader = SourceFileLoader("archive_stamp_cli_under_test", str(cli_path))

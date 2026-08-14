@@ -34,7 +34,7 @@ use Linux namespacing; CreateProcess is not involved), so the OS gate
 correctly no-ops.
 
 Direct-import adaptation: the bash oracle (coordinator/bin/install-health/
-ensure-python3-exe-shim.sh, coordinator-claude) bootstrapped a bare off-PATH
+ensure-python3-exe-shim.sh, DoE-claude) bootstrapped a bare off-PATH
 interpreter, then shelled BACK into coordinator_core.pyresolve's print-bin
 CLI mode (a subprocess hop) because the caller was itself bash. This module
 IS that claude-klabauter process now, so it calls
@@ -46,7 +46,7 @@ oracle's own bootstrap interpreter (the bare off-PATH lookup), i.e. "the
 interpreter this process is already running under" in both shapes.
 
 Port source: coordinator/bin/install-health/ensure-python3-exe-shim.sh
-(coordinator-claude). The coordinator-claude .sh keeps its filename AND its bash-side security guard
+(DoE-claude). The DoE .sh keeps its filename AND its bash-side security guard
 (coordinator-trusted-root-guard.sh, a bash-only sourced lib out of this
 port's scope) — it is now a thin veneer: bash runs the trust guard, then
 invokes this module's main() in a child interpreter, rather than the
@@ -56,7 +56,7 @@ line 1), so bash-only statements between the shebang and the exec line would
 break under python — incompatible with keeping the trust guard live. See the
 .sh's own header comment for the mechanical detail.
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Negative-spec:
     - Never mutates when CHECK_ONLY is set — reports what would happen and

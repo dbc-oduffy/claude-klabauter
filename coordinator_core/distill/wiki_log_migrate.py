@@ -4,10 +4,10 @@ wiki-side distill ledger (C7).
 
 Purpose: `docs/wiki/.distill-log.md` (the `<spec> → <wiki-target>` unicode-arrow
 ledger) is a SECOND, divergent distillation-log instance — the real one cockpit's §2
-reflection was pointing at (cockpit's premise that "coordinator-claude has two logs" is wrong; coordinator-claude's
+reflection was pointing at (cockpit's premise that "DoE has two logs" is wrong; DoE's
 schema declares the wiki-side path fictional. Claude-Klabauter's own copy is the genuine
 divergent instance). This module folds every row of that ledger into the canonical
-`state/distillation-log.md` (coordinator-claude C1 canonical schema, `_common.parse_distillation_log`
+`state/distillation-log.md` (DoE C1 canonical schema, `_common.parse_distillation_log`
 grammar) as a DISTILLED or SKIP row, then replaces the wiki-side file with a one-line
 tombstone. Run exactly once per repo.
 
@@ -16,7 +16,7 @@ Why a sibling module rather than extending `log_normalize` (chunk brief named
 — "or a one-shot sibling migrator, EM's call at execute time"): the two source
 formats are unrelated schemas serving unrelated grammars — `log_normalize` migrates
 the legacy PIPE-TABLE format (`date | action | path | last_sha | belongs_to_spec |
-reason`, DR-053-governed, a coordinator-claude-binding contract §7), while this module migrates a
+reason`, DR-053-governed, a DoE-binding contract §7), while this module migrates a
 freeform markdown ledger with THREE distinct section shapes (see below) and no
 DR-053 contract obligations of its own. Merging them into one module would blur two
 independently-evolving contracts; this module instead reuses `log_append` (the
@@ -24,7 +24,7 @@ canonical-log WRITER both modules share) and mirrors `log_normalize`'s
 backup-before-write + refuse-rerun discipline verbatim.
 
 Source ledger shape (as authored, `docs/wiki/.distill-log.md`):
-    ## Harvested-upstream — <label> (reclaimed to coordinator-claude, pruned <date>)
+    ## Harvested-upstream — <label> (reclaimed to DoE, pruned <date>)
     <glob-or-path> → harvested-upstream (<free text>) — <free text>
 
     ## Harvested — <label> (run <run-id>)

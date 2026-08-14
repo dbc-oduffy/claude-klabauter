@@ -72,7 +72,7 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 #: `.cmd` twin for EVERY bin/ entrypoint unconditionally
 #: (`generate()`/`render_cmd()`), confirmed on disk
 #: (`coordinator/bin/coordinator-safe-commit.cmd`,
-#: `coordinator/bin/coordinator-doc-new.cmd`) -- so `.cmd` is the ordinary,
+#: `coordinator/bin/coordinator-doc-new.py.cmd`) -- so `.cmd` is the ordinary,
 #: load-bearing Windows invocation form for those two binaries, not a
 #: hypothetical one (PATHEXT resolves it, and `CreateProcess` cannot exec
 #: their POSIX shebang directly). `.bat` is deliberately NOT included: the

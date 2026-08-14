@@ -296,7 +296,7 @@ def resolve_advisory_address(session_id: str | None) -> str:
     mapping, once, so neither caller re-derives it.
 
     Spec backlink: `state/handoffs/2026-08-13-session-owner-reachability-
-    registry.md` § 3; `cross-repo/inbox/2026-08-13-coordinator-claude-em-peer-
+    registry.md` § 3; `cross-repo/inbox/2026-08-13-doe-claude-em-peer-
     roster-doctrine-reply.md` § Counter 2.
 
     Negative-spec: never raises on a well-formed `session_id` -- `""` on
@@ -335,12 +335,19 @@ def resolve_addresses_bulk(session_ids: list[str]) -> dict[str, str]:
     per id.
 
     Spec backlink: `state/handoffs/2026-08-13-session-owner-reachability-
-    registry.md` § 3; `cross-repo/inbox/2026-08-13-coordinator-claude-em-peer-
+    registry.md` § 3; `cross-repo/inbox/2026-08-13-doe-claude-em-peer-
     roster-doctrine-reply.md` § Counter 2 (performance).
 
-    Negative-spec: a `session_id` absent from the live snapshot, or falsy,
-    maps to `""`, never omitted from the returned dict and never a raised
-    `KeyError` for a caller indexing by every id it passed in.
+    Negative-spec: a `session_id` present in `session_ids` but absent from
+    the live snapshot maps to `""` in the returned dict, never a raised
+    `KeyError` for a caller indexing by that id. A FALSY `session_id`
+    (`""`/`None`) is instead SKIPPED by the loop (`if not sid: continue`)
+    and never appears as a key in the returned dict at all -- distinct from
+    the absent-but-truthy case above, and unlike `resolve_advisory_address`
+    (which accepts a falsy id and returns `""` inline). A caller indexing
+    the returned dict directly with a falsy key, rather than going through
+    `.get(sid, "")`, gets a `KeyError`, not `""` (Review: code-reviewer --
+    P3, docstring/loop mismatch).
     """
     snapshot = harness_registry.snapshot()
     self_info = harness_registry.self_record()

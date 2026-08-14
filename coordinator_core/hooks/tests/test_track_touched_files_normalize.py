@@ -4,7 +4,7 @@ for session.scope.normalize_touch_path's absolute-path handling (imported into
 track_touched_files as `normalize_touch_path`; the module no longer carries
 its own parallel `_normalize_path` implementation).
 
-Spec backlink: coordinator-claude security-audit 2026-07-31 (coordinatorsecurity-audit-worker
+Spec backlink: DoE security-audit 2026-07-31 (coordinatorsecurity-audit-worker
 -1671c577.md) — Writer 1 finding: on POSIX, os.path.relpath's only exception
 (ValueError) is the Windows cross-drive case, and the pre-fix fallback
 returned file_path UNCHANGED (still absolute) rather than skipping — an

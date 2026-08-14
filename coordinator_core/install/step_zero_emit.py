@@ -8,7 +8,7 @@ primitives; it contains NO probe logic (probe logic lives in
 `coordinator_core.install.prereq_probe`). It NEVER mutates the machine —
 pure string transforms only.
 
-Port of: step_zero_emit.sh (coordinator-claude 290997c7, 2026-07-22) — a byte-parity
+Port of: step_zero_emit.sh (DoE 290997c7, 2026-07-22) — a byte-parity
 Python-native implementation for Python-side Step Zero consumers.
 
 Spec backlink: docs/wiki/step-zero-emitter-contract.md (canonical contract)

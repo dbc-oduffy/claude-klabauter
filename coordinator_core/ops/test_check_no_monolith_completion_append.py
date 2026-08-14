@@ -5,7 +5,7 @@ Mirrors the bash oracle's own test suite — same eight scenarios, ported to
 pytest against the Python module's scan()/main() directly (no subprocess, no
 bash dependency).
 
-Port of: test-check-no-monolith-completion-append.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Port of: test-check-no-monolith-completion-append.sh (DoE 894d4bc6, 2026-07-22)
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.fold_execution_record — ported from
-coordinator/bin/coordinator-fold-execution-record (DOE-PORT bin-entrypoint variant,
+coordinator/bin/coordinator-fold-execution-record.py (DOE-PORT bin-entrypoint variant,
 bash-kill campaign).
 
 Purpose: given a plan file, reads all state/subagent-share/*/<plan-slug>.<chunk-id>.md
@@ -38,7 +38,7 @@ only to stdout; exit is always 0 for all SKIPs.
 
 NEVER commits or stages files. NEVER edits the plan or any sidecar.
 
-Sidecar addressing (DR-047 contract-derived, NOT a coordinator-claude-side path reconstruction):
+Sidecar addressing (DR-047 contract-derived, NOT a DoE-side path reconstruction):
 each chunk sidecar lives at state/subagent-share/<session-id>/<provision_key>.md per
 Claude-klabauter's landed CONTRACT.md (coordinator_core/subagent_sandbox/CONTRACT.md
 § Provision-and-emit contract). provision_key is the SAME pre-flattened
@@ -52,7 +52,7 @@ plan_slug derivation contract (CRITICAL SEMANTIC COUPLING): this module and
 coordinator/bin/fan-out-dispatch.py derive plan_slug via the IDENTICAL idiom — strip
 a leading "YYYY-MM-DD-" date prefix from the plan's basename via regex
 `^[0-9]{4}-[0-9]{2}-[0-9]{2}-`, then strip a trailing ".md" suffix. This equivalence
-is asserted by coordinator-claude's coordinator/tests/run-report-provision-key-flattening.bats
+is asserted by DoE's coordinator/tests/run-report-provision-key-flattening.bats
 (parity test), which greps both scripts for their respective idiom fragments — same
 input MUST yield a byte-identical slug on both sides, or provisioning (write side)
 and folding (read side) silently mislocate each other's sidecars.
@@ -72,9 +72,9 @@ Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-p
       grandparent-of-plan-dir repo-root heuristic (mirrors the oracle's logical
       `cd && pwd`, not a physical/resolved path).
 
-Spec backlink: (inline — no plan doc yet on the coordinator-claude side; this module inherits that
+Spec backlink: (inline — no plan doc yet on the DoE side; this module inherits that
 posture from its bash oracle, which names itself as the spec surface)
-Prior bash implementation: coordinator/bin/coordinator-fold-execution-record.
+Prior bash implementation: coordinator/bin/coordinator-fold-execution-record.py.
 """
 from __future__ import annotations
 
@@ -273,6 +273,9 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional
     n = len(argv)
     while i < n:
         arg = argv[i]
+        if arg in ("--help", "-h"):
+            sys.stdout.write(f"Usage: {_PROG} --plan <path> [--desc <one-liner>]\n")
+            return None, None, 0
         if arg == "--plan":
             if i + 1 >= n or argv[i + 1] == "":
                 sys.stderr.write(f"{_PROG}: --plan requires an argument\n")

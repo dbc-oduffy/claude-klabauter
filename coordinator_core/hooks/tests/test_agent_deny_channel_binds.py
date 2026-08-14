@@ -195,7 +195,7 @@ def test_main_subprocess_contract_exit_and_stdout_shape() -> None:
     it asserts only the CHANNEL shape -- exit 0 and a well-formed JSON
     object with `hookSpecificOutput.permissionDecision` when non-silent,
     or empty stdout when silent -- never a specific deny/allow verdict,
-    since that depends on this host's real coordinator-claude/plugin state.
+    since that depends on this host's real DoE-claude/plugin state.
     """
     payload = {
         "tool_name": "Agent",

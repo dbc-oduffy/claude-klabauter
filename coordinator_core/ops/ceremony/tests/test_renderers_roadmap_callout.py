@@ -5,7 +5,7 @@ golden-fixture tests for C8c's ``refresh_roadmap_callout`` (pure-Python port of
 
 Golden-fixture provenance (plan-mandated, load-bearing for AC12's "full-fidelity"
 claim): the expected outputs below were captured by running the REAL
-``refresh-queries.js`` (coordinator-claude ``coordinator/bin/refresh-queries.js``,
+``refresh-queries.js`` (DoE-claude ``coordinator/bin/refresh-queries.js``,
 node v24.18.0) against the exact fixture tree built in ``_build_fixture_repo``,
 BEFORE the node source is removed from the fleet. Capture transcript:
 

@@ -1,11 +1,11 @@
 """Tests for coordinator_core.ops.orphan_branch_sweep.
 
-Golden oracle verified byte-parity against the coordinator-claude-side plugin-ecosystem test
+Golden oracle verified byte-parity against the DoE-side plugin-ecosystem test
 suite (coordinator/tests/plugin-ecosystem/orphan-sweep.test.js —
 CRITICAL/WARNING/OK classification with a stubbed `gh`) during the
 2026-07-17 BIG_PORT port.
 
-Port of: orphan-branch-sweep.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: orphan-branch-sweep.sh (DoE b5a4192c, 2026-07-20)
 
 Regression coverage: `test_unmerged_count_uses_separate_revs` locks in a P1 bug
 found and fixed during this port — `git rev-list --count "<sha> ^<ref>"` (one
@@ -171,7 +171,7 @@ def test_unmerged_count_uses_separate_revs(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # End-to-end classification via main() — mirrors the golden JS suite's 3 cases,
-# using a stubbed `gh` on PATH exactly like the coordinator-claude-side parity harness.
+# using a stubbed `gh` on PATH exactly like the DoE-side parity harness.
 # ---------------------------------------------------------------------------
 
 

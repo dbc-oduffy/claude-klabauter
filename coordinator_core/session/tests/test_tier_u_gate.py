@@ -3,7 +3,7 @@ coordinator_core.session.tests.test_tier_u_gate -- tests for
 coordinator_core.session.tier_u_gate.enforce_tier_u_gate (R3+R4 shared
 resolve-and-execute shape gate).
 
-Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-
+Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-
 shape-ruling.md (R3, R4).
 
 Fixtures mirror test_grant.py's ``_make_repo``/``_live_session`` idiom --

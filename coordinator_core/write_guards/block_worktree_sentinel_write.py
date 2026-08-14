@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.block_worktree_sentinel_write — hard-deny guard.
 
-Python engine-ification of coordinator-claude's
+Python engine-ification of DoE's
 ``coordinator/hooks/scripts/guard-worktree-sentinel-write.py`` PreToolUse
 (Write|Edit|MultiEdit|NotebookEdit) hook, per the write-guard fold
 (write_guards/INTERFACE.md).

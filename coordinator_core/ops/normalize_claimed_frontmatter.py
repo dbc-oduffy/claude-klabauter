@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.normalize_claimed_frontmatter
 
-Purpose: native Python port of coordinator-claude
+Purpose: native Python port of DoE-claude
 coordinator/bin/normalize-consumed-frontmatter.js -- flips frontmatter to
 match `<!-- consumed: YYYY-MM-DD [notes] -->` body markers. Belt-and-suspenders
 companion to the claude-klabauter port of query-records.js: query-records normalizes
@@ -61,18 +61,18 @@ introduced by this port; see Negative-spec):
 
 This module is NOT a JSON-RPC op (no `@register_op`, no registry-map entry).
 It is a plain module with a `main(argv)` CLI entry point, called by the
-Coordinator-claude-side trampoline (coordinator/bin/normalize-consumed-frontmatter.js) via
+DoE-side trampoline (coordinator/bin/normalize-consumed-frontmatter.js) via
 a spawned `python -c` bootstrap that direct-imports and calls main() --
 template-variant #1 (safe-leaf early-win port), same shape as
-plan_status_transition / handoff_gate_aging. The coordinator-claude trampoline stays a
+plan_status_transition / handoff_gate_aging. The DoE trampoline stays a
 Node CLI (not an sh/python polyglot shebang) because its one live caller
 (coordinator/commands/workday-start.md) invokes it as `node <script>` --
 node parses the whole file as JavaScript regardless of a leading shebang
 line, so a polyglot sh/python shebang would be inert there; the trampoline
 instead bridges via a synchronous `python -c` child-process spawn.
 
-Port source: coordinator/bin/normalize-consumed-frontmatter.js (coordinator-claude)
-Parity oracle: coordinator-claude coordinator/bin/normalize-consumed-frontmatter.js
+Port source: coordinator/bin/normalize-consumed-frontmatter.js (DoE-claude)
+Parity oracle: DoE-claude coordinator/bin/normalize-consumed-frontmatter.js
     (node, golden-oracle diff run during the port).
 
 Negative-spec:
@@ -133,12 +133,24 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "normalize-claimed-frontmatter"
 
+# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# main() rewrites whichever tracked handoff/plan/decision/review files
+# currently carry a <!-- consumed: --> body marker -- a data-dependent subset
+# of TYPE_TO_GLOB's directories, not a fixed artifact list.
+MUTATES = [
+    "state/handoffs/*.md",
+    "archive/handoffs/**/*.md",
+    "docs/plans/*.md",
+    "docs/decisions/*.md",
+    "state/reviews/*.md",
+]
+
 # DR-054 console-flash guard: suppresses the transient console window Windows
 # spawns for a subprocess.run child when the parent has no console of its
 # own (e.g. this op invoked from a GUI-launched context). No-op on POSIX
 # (getattr falls back to 0). Applied to both `git` subprocess.run calls below.
 
-# shipped_in shape guard: DR-096 (coordinator-claude 2026-07-26 ruling) retires this
+# shipped_in shape guard: DR-096 (DoE-claude 2026-07-26 ruling) retires this
 # module's own bespoke copy of the value grammar in favor of the single choke
 # point's -- `coordinator_core.shipped_in_tokens._SHA_HEX_RE` /
 # `_NO_COMMIT_TOKEN_RE` (the same shape `stamp_shipped_in` validates a `sha`

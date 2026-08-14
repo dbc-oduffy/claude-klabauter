@@ -228,6 +228,54 @@ def test_artifact_path_excludes_regeneration_commit_timestamp_form(tmp_path):
     assert verdict_from_range(rng) == Verdict.FRESH
 
 
+def test_artifact_path_excludes_root_commit_regeneration_timestamp_form(tmp_path):
+    # Review: coordinator:code-reviewer — `git diff-tree <commit>` without
+    # `--root` never reports a parentless commit as touching anything (it
+    # diffs against nothing rather than the empty tree), so a root commit
+    # that touches BOTH sources and the artifact must still be excluded by
+    # the regeneration filter once `--root` is present.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    root_sha = _commit(
+        repo, "root touches both", {"src.py": "1", "artifact.json": "1"}, when="2020-01-01T00:00:00"
+    )
+
+    rng = commits_touching_since(
+        repo, ["src.py"], "1970-01-01T00:00:00", artifact_path="artifact.json"
+    )
+
+    assert rng.indeterminate is False
+    assert root_sha not in rng.commits
+    assert rng.commits == ()
+    assert verdict_from_range(rng) == Verdict.FRESH
+
+
+def test_artifact_path_excludes_root_commit_regeneration_commit_ish_form(tmp_path):
+    # Same as above but with a commit-ish `since_point` that is not an
+    # ancestor of the root commit under test -- forces `<since>..HEAD` to
+    # include the root commit itself in the query, exercising `--root` via
+    # the SHA-form comparison path rather than `--since=`.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    default_branch = _run(repo, "branch", "--show-current").stdout.strip()
+    root_sha = _commit(repo, "root touches both", {"src.py": "1", "artifact.json": "1"})
+
+    _run(repo, "checkout", "--orphan", "other-root")
+    _run(repo, "rm", "-rf", "--cached", ".")
+    _run(repo, "clean", "-fd")
+    other_root_sha = _commit(repo, "unrelated other root", {"unrelated.txt": "1"})
+    _run(repo, "checkout", default_branch)
+
+    rng = commits_touching_since(
+        repo, ["src.py"], other_root_sha, artifact_path="artifact.json"
+    )
+
+    assert rng.indeterminate is False
+    assert root_sha not in rng.commits
+    assert rng.commits == ()
+    assert verdict_from_range(rng) == Verdict.FRESH
+
+
 def test_artifact_path_does_not_exclude_source_only_commit(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)

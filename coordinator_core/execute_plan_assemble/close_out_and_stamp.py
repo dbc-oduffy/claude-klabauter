@@ -2,7 +2,7 @@
 coordinator_core.execute_plan_assemble.close_out_and_stamp — mutating
 assembler for `/execute-plan` Phase 4's close-out sequence.
 
-Purpose: `/execute-plan`'s Phase 4 (coordinator-claude
+Purpose: `/execute-plan`'s Phase 4 (DoE-claude
 `coordinator/skills/execute-plan/SKILL.md` § "Phase 4: Commit, Report, and
 Offer the Next Step", item 1) narrates a hand-sequenced git close-out as
 inline prose -- decide whether every wave-map chunk landed, stamp the plan's
@@ -15,7 +15,7 @@ single CLI (`close-out-and-stamp <plan-path>`) instead of hand-sequencing
 
 Full-shipped vs. halted determination: reads the plan's `## Tasks`
 machine-parseable spine (the single fenced ```yaml plan-tasks``` block
-directly under `## Tasks` -- coordinator-claude `docs/wiki/writing-plans.md` §
+directly under `## Tasks` -- DoE-claude `docs/wiki/writing-plans.md` §
 Machine-Parseable Task Spine), takes every row with `deferred` absent or
 `false`, and cross-references each row's `id` against
 `git log --oneline <range>` commit subjects using the `<chunk-id>: ...` /
@@ -231,7 +231,7 @@ A chunk that legitimately shipped as a commit in that sibling repo could
 never be seen by a completeness scan that only ever ran `git log` against
 `repo_root` -- observed live, `docs/plans/
 2026-07-27-plan-line-item-resolution-model.md`'s chunk C5b shipped as
-commit `649797c9` in claude-klabauter, and the oracle (run from coordinator-claude)
+commit `649797c9` in claude-klabauter, and the oracle (run from DoE-claude)
 reported it uncommitted because it never looked there. A SECOND
 false-negative in this same grammar (the mandatory-whitespace-after-colon
 pattern, when every real plan author writes the zero-space
@@ -376,7 +376,7 @@ protection -- ancestry-of-HEAD already proves the commit is real and landed
 -- while reintroducing the identical false-negative the near-miss
 diagnostic exists to explain, for the one evidence path meant to survive it.
 
-Spec backlink: coordinator-claude coordinator/skills/execute-plan/SKILL.md § Phase 4,
+Spec backlink: DoE-claude coordinator/skills/execute-plan/SKILL.md § Phase 4,
 docs/plans/2026-07-27-plan-line-item-resolution-model.md § C7 (AC7/AC8/AC9),
 docs/plans/2026-08-03-klabauter-rows-relocate-into-claude-klabauter.md § C5/C6
 (disposition_ref evidence)
@@ -418,6 +418,7 @@ from coordinator_core.frontmatter.primitives import (
     unquote_yaml_scalar,
 )
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.locked_write import LOCK_TIMEOUT_SECS, LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.ceremony import git_native, post_commit_tail
 from coordinator_core.ops.ceremony.commit_pipeline import (
@@ -439,6 +440,12 @@ from coordinator_core.wire_paths import rel_id
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
+
+#: Corpus-mutator declaration (generator-provenance sweep): this module
+#: stamps whichever plan doc it is given (plan_path/live_path, and its
+#: tracker_path sibling) — the target file is caller-supplied and
+#: data-dependent (any plan being closed out), not a fixed artifact.
+MUTATES = ["docs/plans/*.md"]
 
 #: Chunk-id token character class (Defect fix, 2026-08-06 -- apostrophe
 #: chunk-ids invisible to the DEC-2 subject matcher): a review-time split of
@@ -579,7 +586,7 @@ def _extract_chunk_ids(
     `/`-joined subject failed the match ENTIRELY and contributed zero ids --
     observed live, `C8p` shipped inside `C8a-doe/C8p: ...` and this oracle
     reported it uncommitted). Separator set is corpus-derived (`git log
-    --format='%s'` over both coordinator-claude and claude-klabauter, 2026-07-27) --
+    --format='%s'` over both DoE-claude and claude-klabauter, 2026-07-27) --
     do not widen it past `,`/`+`/`/` without fresh corpus evidence.
 
     Whitespace around `+`/`/` (Defect fix, 2026-08-06 cross-repo memo
@@ -651,7 +658,7 @@ def _extract_chunk_ids(
     token `mise` -- both `C12` and `C3` are invisible to every caller of
     this function. This is a REAL, RECURRING corpus shape, not a one-off --
     confirmed by `git log --format='%s'` over both claude-klabauter (8372
-    subjects) and coordinator-claude (9940 subjects), 2026-08-04: e.g. `mise: wave
+    subjects) and DoE-claude (9940 subjects), 2026-08-04: e.g. `mise: wave
     1 -- DOCTRINE-C7a admission gate ...; RESIDUE-C9 named-dispatch strip
     guard ...; RESIDUE-C10 read-only tier offer ...` and `mise: wave 2 --
     RESIDUE-C1..C7 relocate the auto-memory corpus ... so C8 can verify
@@ -717,6 +724,15 @@ _SINGLE_LETTER_SUFFIX_RE = re.compile(r"^[a-z]$")
 _DASH_TAG_SUFFIX_RE = re.compile(r"^-[a-z][a-z0-9]*$")
 _TRAILING_DIGITS_SUFFIX_RE = re.compile(r"^\d+$")
 
+#: Dash tags denoting ADJACENCY to a spine row rather than a variant OF it
+#: (rule 2's exclusion set -- see `_committed_id_covers_spine_id`). A
+#: `C8a-pre` commit is evidence spine row `C8a` is still OPEN, so covering
+#: it under-reports `missing_chunk_ids` -- the false-POSITIVE direction this
+#: module's oracle is deliberately biased against. Closed set, matched
+#: case-insensitively against the dash tag only; extend it only for a tag
+#: whose meaning is likewise "next to", never "instead of".
+_ADJACENCY_DASH_TAGS = frozenset({"pre", "prep", "post"})
+
 
 def _committed_id_covers_spine_id(committed_id: str, spine_id: str) -> bool:
     """True iff `committed_id` satisfies `spine_id`'s chunk-completion
@@ -731,13 +747,22 @@ def _committed_id_covers_spine_id(committed_id: str, spine_id: str) -> bool:
        alphanumerics (`-doe`, `-mak`, `-fix2`) -- the repo-side/variant tag
        a chunk's commit subject carries when the same spine row lands via
        more than one commit (e.g. `C8a-mak: ...` in claude-klabauter,
-       `C8a-doe/C8p: ...` in coordinator-claude, both covering spine `C8a`; real
+       `C8a-doe/C8p: ...` in DoE-claude, both covering spine `C8a`; real
        corpus examples also include `C1-fix2`, `C3-classification`). This
        is a LOCAL-repo concern, not cross-repo lookup: this function only
        ever sees commit subjects already present in THIS repo's own git
        log -- it never reaches into a sibling repo's history to resolve
        the OTHER side of a cross-repo-split chunk (that remains explicitly
-       out of scope for this oracle).
+       out of scope for this oracle). EXCEPT the `_ADJACENCY_DASH_TAGS`
+       set: a tag meaning "adjacent to" rather than "variant of" denotes a
+       chunk that lands BEFORE or AFTER the spine row, so its commit is
+       evidence the row is still open, not that it shipped (live repro
+       from example-retrieval-repo, 2026-08-14: `b58edc057 "C8a-pre: green the
+       posix-exec baseline"` read as covering spine `C8a`, whose
+       entrypoint flip had NOT landed, reporting one open chunk where
+       two were). Shape alone cannot separate the two readings -- the
+       distinction is in the tag's meaning -- so the exclusion is a named
+       closed set, not a pattern.
     3. One or more trailing DIGITS (Defect fix, 2026-08-07 -- see bug-
        backlog entry `2026-08-07-close-out-and-stamp-reports-key-mismatch-
        dc4072b44474.yaml`), but ONLY when `spine_id` itself does NOT end in
@@ -771,7 +796,7 @@ def _committed_id_covers_spine_id(committed_id: str, spine_id: str) -> bool:
     if _SINGLE_LETTER_SUFFIX_RE.match(suffix):
         return True
     if _DASH_TAG_SUFFIX_RE.match(suffix):
-        return True
+        return suffix[1:].lower() not in _ADJACENCY_DASH_TAGS
     if spine_id and not spine_id[-1].isdigit() and _TRAILING_DIGITS_SUFFIX_RE.match(suffix):
         return True
     return False
@@ -833,7 +858,7 @@ def _plan_deliverable_id(plan_text: str) -> Optional[str]:
 #: YAML parses `- repo: path` (with a space) as a MAPPING, not the plain
 #: string a `scope:` list wants, so every real author writes `- repo:path`
 #: (no space) instead. Confirmed against real plans: `grep -rhoE '^\s+-
-#: [a-z0-9-]+:[^ ]+' docs/plans/*.md` in coordinator-claude returns only no-space
+#: [a-z0-9-]+:[^ ]+' docs/plans/*.md` in DoE-claude returns only no-space
 #: entries, e.g. `claude-klabauter:coordinator_core/ops/plan_tasks_mutate.py`.
 #: Do not reintroduce a mandatory `\s+` here even if it looks like it
 #: "keeps the grammar strict" -- it excludes the only form real authors
@@ -3498,7 +3523,11 @@ def _peek_plan_status(plan_text: str) -> Optional[str]:
 
 
 def _stamp_plan_landed(
-    plan_path: str, *, dry_run: bool = False, plan_text: Optional[str] = None
+    plan_path: str,
+    *,
+    dry_run: bool = False,
+    plan_text: Optional[str] = None,
+    timeout: float = LOCK_TIMEOUT_SECS,
 ) -> int:
     """Flips a plan's `status:` frontmatter field to `landed` (D9) -- the
     intermediate status meaning "every chunk's code is on the branch, but
@@ -3536,66 +3565,119 @@ def _stamp_plan_landed(
     content; `plan_text` lets this call see the same effective input a
     live run's own sequential writes would have produced. Live callers
     never pass `plan_text` -- `None` preserves the original
-    read-from-disk behavior verbatim."""
+    read-from-disk behavior verbatim.
+
+    `timeout` (seconds) is forwarded to `locked_write.locked_rmw`'s own
+    `timeout` on the disk-read path only (see below) -- test-only knob,
+    live callers rely on the default `LOCK_TIMEOUT_SECS`."""
+    # Review: code-reviewer (P2 #1) -- C1 (plan_tasks_mutate.resolve) now
+    # calls this function from a hot path reached far more frequently and
+    # from more concurrent contexts than the low-frequency close-out
+    # ceremony it previously served alone, on a machine whose own doctrine
+    # names 50-70 concurrent LLM sessions as average load (repo CLAUDE.md
+    # § Load norm). An unlocked plain read/write here is a lost-update
+    # window. `state` carries the parse/decision outcome out of the
+    # `_mutate` closure below so the surrounding rc/message logic (which
+    # must stay byte-identical to the pre-lock version) can read it without
+    # `locked_rmw` needing to know anything about this function's specific
+    # status-transition contract.
+    state: dict[str, Any] = {}
+
+    def _mutate(old_text: str) -> str:
+        original = old_text.replace("\r\n", "\n")
+        split = split_frontmatter(original)
+        if split is None:
+            state["error"] = (
+                f"close-out-and-stamp: no parseable YAML frontmatter in {plan_path}"
+            )
+            raise MutateAbort(state["error"])
+
+        status = read_fm_field(split.fm_text, "status")
+        if status is None or status.startswith("#"):
+            state["error"] = (
+                f"close-out-and-stamp: no \"status\" field found in frontmatter of {plan_path}"
+            )
+            raise MutateAbort(state["error"])
+        status = _strip_unquoted_trailing_comment(status)
+        if status and status[0] in ("'", '"') and not status.endswith(status[0]):
+            state["error"] = (
+                f"close-out-and-stamp: status value appears to carry a "
+                "quoted-scalar-plus-trailing-comment, which stamp-landed does not "
+                f"support -- remove the inline comment or the quotes ({plan_path})"
+            )
+            raise MutateAbort(state["error"])
+        status = unquote_yaml_scalar(status)
+
+        if status in _FROZEN_STATUSES:
+            state["noop_message"] = (
+                f"close-out-and-stamp: {plan_path} status \"{status}\" is terminal/deferred — no-op"
+            )
+            return old_text
+        if status == _LANDED_STATUS:
+            state["noop_message"] = (
+                f"close-out-and-stamp: {plan_path} status already \"landed\" — no-op"
+            )
+            return old_text
+        if status not in _FLIPPABLE_STATUSES:
+            state["error"] = (
+                f"close-out-and-stamp: unexpected current status \"{status}\" for stamp-landed"
+            )
+            raise MutateAbort(state["error"])
+
+        state["prior_status"] = status
+        fm_text = replace_fm_field(split.fm_text, "status", _LANDED_STATUS)
+        return rebuild(split, fm_text)
+
     if plan_text is not None:
-        original = plan_text.replace("\r\n", "\n")
-    else:
-        if not os.path.exists(plan_path):
-            print(f"close-out-and-stamp: plan not found: {plan_path}", file=sys.stderr)
+        # Dry-run / ceremony caller supplying already-in-memory text (see
+        # this function's own docstring on `plan_text`) -- the surrounding
+        # ceremony is already a multi-step, non-atomic sequence at the
+        # call site, and the low-frequency path this serves is the one the
+        # review explicitly characterised as pre-existing/tolerable, not
+        # the hot path this fix targets. Locking a single sub-step of an
+        # already-non-atomic multi-write ceremony would not make the
+        # ceremony atomic, so this branch keeps its original unlocked
+        # decide-then-write shape verbatim.
+        try:
+            new_text = _mutate(plan_text.replace("\r\n", "\n"))
+        except MutateAbort:
+            print(state["error"], file=sys.stderr)
             return 1
 
-        with open(plan_path, "r", encoding="utf-8", newline="") as f:
-            original = f.read()
-        original = original.replace("\r\n", "\n")
+        if not dry_run and "noop_message" not in state:
+            with open(plan_path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
 
-    split = split_frontmatter(original)
-    if split is None:
-        print(
-            f"close-out-and-stamp: no parseable YAML frontmatter in {plan_path}",
-            file=sys.stderr,
-        )
-        return 1
-
-    status = read_fm_field(split.fm_text, "status")
-    if status is None or status.startswith("#"):
-        print(
-            f"close-out-and-stamp: no \"status\" field found in frontmatter of {plan_path}",
-            file=sys.stderr,
-        )
-        return 1
-    status = _strip_unquoted_trailing_comment(status)
-    if status and status[0] in ("'", '"') and not status.endswith(status[0]):
-        print(
-            f"close-out-and-stamp: status value appears to carry a "
-            "quoted-scalar-plus-trailing-comment, which stamp-landed does not "
-            f"support -- remove the inline comment or the quotes ({plan_path})",
-            file=sys.stderr,
-        )
-        return 1
-    status = unquote_yaml_scalar(status)
-
-    if status in _FROZEN_STATUSES:
-        print(f"close-out-and-stamp: {plan_path} status \"{status}\" is terminal/deferred — no-op")
+        if "noop_message" in state:
+            print(state["noop_message"])
+            return 0
+        suffix = " (dry-run, not written)" if dry_run else ""
+        print(f"close-out-and-stamp: {plan_path} status \"{state['prior_status']}\" → landed{suffix}")
         return 0
-    if status == _LANDED_STATUS:
-        print(f"close-out-and-stamp: {plan_path} status already \"landed\" — no-op")
-        return 0
-    if status not in _FLIPPABLE_STATUSES:
+
+    if not os.path.exists(plan_path):
+        print(f"close-out-and-stamp: plan not found: {plan_path}", file=sys.stderr)
+        return 1
+
+    try:
+        locked_rmw(Path(plan_path), _mutate, repo_root=Path(plan_path), timeout=timeout)
+    except LockTimeout as exc:
         print(
-            f"close-out-and-stamp: unexpected current status \"{status}\" for stamp-landed",
+            f"close-out-and-stamp: timed out waiting for file lock on {plan_path}: {exc}",
             file=sys.stderr,
         )
         return 1
+    except MutateAbort:
+        print(state["error"], file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print(f"close-out-and-stamp: plan not found: {plan_path}", file=sys.stderr)
+        return 1
 
-    fm_text = replace_fm_field(split.fm_text, "status", _LANDED_STATUS)
-    rebuilt = rebuild(split, fm_text)
-
-    if not dry_run:
-        with open(plan_path, "w", encoding="utf-8", newline="") as f:
-            f.write(rebuilt)
-
-    suffix = " (dry-run, not written)" if dry_run else ""
-    print(f"close-out-and-stamp: {plan_path} status \"{status}\" → landed{suffix}")
+    if "noop_message" in state:
+        print(state["noop_message"])
+        return 0
+    print(f"close-out-and-stamp: {plan_path} status \"{state['prior_status']}\" → landed")
     return 0
 
 
@@ -3830,7 +3912,7 @@ def _reach_post_commit_tail_stub_close(
     `None` (the default) preserves today's guard-only behaviour exactly.
 
     Both `/execute-plan`'s close-out and `/mise-en-place`'s per-baton tail
-    land here through the SAME `coordinator/bin/close-out-and-stamp` ->
+    land here through the SAME `coordinator/bin/close-out-and-stamp.py` ->
     `close_out_and_stamp()` call path, so wiring this one call site gives
     both ceremonies reach in one place (spec: docs/plans/2026-08-04-
     terminal-state-propagation-join-keys.md § C5).
@@ -4132,7 +4214,7 @@ def close_out_and_stamp(
     this ceremony itself changed.
 
     `dry_run` (2026-08-04 -- see this module's own docstring and
-    `coordinator/bin/close-out-and-stamp`'s `--dry-run` usage text for the
+    `coordinator/bin/close-out-and-stamp.py`'s `--dry-run` usage text for the
     incident this closes: a caller with no way to observe this ceremony's
     verdict short of MUTATING had no choice but to run the mutating path
     purely to read it, and did): one computation, two dispositions of the
@@ -4834,7 +4916,7 @@ def close_out_and_stamp(
             # AC7 (C3b): the pushed-extent fields belong on THIS payload,
             # not buried in `diagnostics` prose -- this is the exact site
             # the original memo pinned as reporting `"pushed": true` while
-            # coordinator-claude's stamp had actually advanced `origin/main` by
+            # DoE-claude's stamp had actually advanced `origin/main` by
             # three commits that were not its own; an operator reading
             # `commit_result` needs the range/count alongside the bare
             # boolean to see the extent of what landed. `None` unless a
@@ -4956,30 +5038,40 @@ def close_out_and_stamp(
                 "committed partial state"
             )
         if deliverable_id_mismatch:
-            # Points at the CAUSE (a Deliverable-Id VALUE mismatch between
-            # this plan's own frontmatter and its commits' own trailers),
-            # not the symptom (`missing_chunk_ids` naming chunk-ids that
-            # never had a chance to match) -- see
+            # Register-matched, unscoped-search NOTE (2026-08-14,
+            # key_mismatch stops naming strangers -- docs/plans/2026-08-14-
+            # excise-cut-reaches-the-divergence-check.md C3). Points at the
+            # CAUSE CLASS (commits in range carrying a foreign Deliverable-Id
+            # trailer), not the symptom (`missing_chunk_ids` naming chunk-ids
+            # that never had a chance to match) -- see
             # `_deliverable_id_near_miss_diagnostics`'s own docstring.
-            # Names the top (highest-commit-count) candidate only; the
-            # full candidate set is always available via the structured
-            # `deliverable_id_mismatch` result key. Appended regardless of
-            # `join_provenance` above -- it is additive context (a SPECIFIC
-            # near-miss candidate, when one exists), never a replacement for
-            # the provenance-aware base message.
-            top = deliverable_id_mismatch[0]
+            #
+            # Deliberately does NOT name a specific foreign id, and does NOT
+            # advise declaring a `state/deliverable-equivalence.yaml`
+            # equivalence, the way an earlier version of this message did.
+            # `_deliverable_log_records` (the sole `git log` site behind
+            # every chunk-evidence reader, including this diagnostic) bounds
+            # its candidate set by commit RANGE only -- no author, committer,
+            # or `Session-Id` restriction. On a shared worktree with dozens
+            # of concurrent sessions, that means a wholly unrelated peer's
+            # landed commit routinely lands in `deliverable_id_mismatch`
+            # here; naming it as "evidence" against THIS plan misattributes
+            # a stranger's work, and the old equivalence-declaration advice
+            # was actively dangerous on that same unscoped set -- acted on
+            # against a stranger's commit, it would write a FALSE
+            # equivalence into `state/deliverable-equivalence.yaml`, which
+            # is persistent and fleet-wide. The full candidate set (still
+            # id-and-count, unfiltered) remains available via the structured
+            # `deliverable_id_mismatch` result key for a caller that wants
+            # to inspect it directly. Appended regardless of `join_provenance`
+            # above -- additive context, never a replacement for the
+            # provenance-aware base message.
+            total_foreign_commits = sum(
+                candidate["commit_count"] for candidate in deliverable_id_mismatch
+            )
             message += (
-                f" -- NOTE: {top['commit_count']} commit(s) carry Deliverable-Id "
-                f"'{top['deliverable_id']}' but this plan's frontmatter "
-                f"deliverable_id is '{plan_deliverable_id}'; chunk evidence is "
-                "joined on canonicalized equality (state/deliverable-"
-                "equivalence.yaml), and this pair is not (yet) a declared "
-                "equivalence, so those commits do not count. If these are the "
-                "SAME deliverable forked into two ids, declare it in "
-                "state/deliverable-equivalence.yaml: earliest artifact wins "
-                "(DR-207 DD#1) -- the direction must be established from "
-                "creation-order evidence (commit/handoff timestamps), never "
-                "from commit_count above."
+                f" -- NOTE: {total_foreign_commits} commit(s) in range belong "
+                "to other deliverables (expected on a shared tree)."
             )
         if disposition_ref_rejections:
             # Points at a SPECIFIC still-missing row's own disposition_ref

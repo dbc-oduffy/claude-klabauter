@@ -1,7 +1,7 @@
 """
 coordinator_core.install.ensure_venv — Port of:
-``coordinator/bin/ensure-coordinator-venv.sh`` (coordinator-claude e19314de, 2026-07-17)
-[coordinator-claude repo].
+``coordinator/bin/ensure-coordinator-venv.sh`` (DoE e19314de, 2026-07-17)
+[DoE-claude repo].
 
 Purpose: idempotently ensure a coordinator-owned Python venv exists with
 ``coordinator_whoami``, ``pydantic``, and ``psutil`` importable (the
@@ -713,8 +713,8 @@ def _ensure_whoami_under_general_pin(
     pin — so on a box whose operator pins a non-venv interpreter, nothing in
     the install chain ever installs whoami under the interpreter ``probe_p5``
     actually probes. P-5 came up red at first doctor run and stayed red until
-    a human ran the pip line by hand (observed on coordinator-claude-em's box,
-    cross-repo/archive/2026-08-10-coordinator-claude-em-general-pin-is-self-sufficient-
+    a human ran the pip line by hand (observed on doe-claude-em's box,
+    cross-repo/archive/2026-08-10-doe-claude-em-general-pin-is-self-sufficient-
     here-fresh-install-is-not.md). ``_set_pin``'s advisory naming that pip line
     is the gap stated in the code; this closes it by attempting the install
     first and advising only if the attempt genuinely failed.

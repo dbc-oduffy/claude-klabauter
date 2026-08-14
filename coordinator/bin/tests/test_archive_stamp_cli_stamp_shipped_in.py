@@ -19,7 +19,7 @@ Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `archive-stamp-cli` is an extensionless polyglot entrypoint, not a `.py`
 module — same load idiom as the sibling ship-handoff test.
 
-Spec backlink: DR-096 (coordinator-claude, 2026-07-26, "kind must be REQUIRED at the
+Spec backlink: DR-096 (DoE-claude, 2026-07-26, "kind must be REQUIRED at the
 seam, not defaulted silently"), `coordinator_core/archive_stamp.py`'s
 `stamp_shipped_in` docstring (kind cross-validation + default-shaped-caller
 guidance), `coordinator_core/ops/handoff_stamp.py`'s `_SHIPPED_IN_KIND_ENUM`.
@@ -62,7 +62,7 @@ class _StubStampOutcome:
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "archive_stamp_cli_stamp_shipped_in_test", str(_BIN_DIR / "archive-stamp-cli")
+        "archive_stamp_cli_stamp_shipped_in_test", str(_BIN_DIR / "archive-stamp-cli.py")
     )
     spec = importlib.util.spec_from_loader(
         "archive_stamp_cli_stamp_shipped_in_test", loader

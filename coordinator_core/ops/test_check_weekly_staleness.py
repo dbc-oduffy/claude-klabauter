@@ -1,7 +1,7 @@
 """Tests for coordinator_core.ops.check_weekly_staleness.
 
 Golden oracle snapshotted 2026-07-16
-(Port of: check-weekly-staleness.sh, coordinator-claude b5a4192c, 2026-07-20):
+(Port of: check-weekly-staleness.sh, DoE b5a4192c, 2026-07-20):
 
     real HEADER.md (this repo, on-disk)                       -> MILD  / 0
     cwd outside any git repo                                    -> UNKNOWN / 0

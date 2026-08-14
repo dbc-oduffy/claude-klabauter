@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.ceremony.tests.test_wsc_tail_outer_empty_claim_contradiction
 
-cross-repo/inbox/2026-08-11-coordinator-claude-em-pickup-claim-never-reaches-frontmatter.md:
+cross-repo/inbox/2026-08-11-doe-claude-em-pickup-claim-never-reaches-frontmatter.md:
 a full `/pickup` -> work -> `/workstream-complete` cycle can leave a handoff's
 frontmatter never advanced past `ready_to_fire` (a separate, `pickup_assemble`-
 side bug) while the closing session's claim-record LEDGER still shows a live
@@ -161,6 +161,9 @@ def test_outer_empty_no_claim_held_stays_exit_0(claim_contradiction_repo):
     assert not any(
         "outer-empty-claim-contradiction" in e for e in stamp_result["failed"]
     ), stamp_result
+    assert "consumed_handoff_stamp:no-consumed-handoff-resolved" in stamp_result["skipped"], (
+        stamp_result
+    )
 
 
 def test_outer_empty_claim_held_by_other_session_stays_exit_0(claim_contradiction_repo):
@@ -193,3 +196,6 @@ def test_outer_empty_claim_held_by_other_session_stays_exit_0(claim_contradictio
     assert not any(
         "outer-empty-claim-contradiction" in e for e in stamp_result["failed"]
     ), stamp_result
+    assert "consumed_handoff_stamp:no-consumed-handoff-resolved" in stamp_result["skipped"], (
+        stamp_result
+    )

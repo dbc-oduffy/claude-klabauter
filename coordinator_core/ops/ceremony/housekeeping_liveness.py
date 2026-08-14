@@ -10,10 +10,10 @@ through the orientation cache's ``## Housekeeping`` section
 
 Deliberately NOT a registry (plan `docs/plans/2026-07-23-wsc-tail-slim-down.md` C17, finding
 10): claude-klabauter does not own doctrine (project CLAUDE.md § Project Overview), and a registry
-asserting "the tracker refreshes at /handoff" would drift silently the moment a coordinator-claude edit
+asserting "the tracker refreshes at /handoff" would drift silently the moment a DoE edit
 quietly removed that call — looking authoritative while lying, which is worse than today's
 honest silence. A timestamp makes NO claim about WHERE or WHY a class fires, only THAT it
-last fired, computed entirely from claude-klabauter's own substrate with zero dependency on coordinator-claude's
+last fired, computed entirely from claude-klabauter's own substrate with zero dependency on DoE's
 prose being accurate. Do not "improve" this into a call-site registry.
 
 This module lands the stamp-writing helper + the staleness check only (C17b's remit). The
@@ -62,6 +62,11 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Generator-provenance declaration: stamp_liveness() writes only
+# state/housekeeping-liveness.json, which is gitignored (.gitignore:70) --
+# never a tracked repo artifact.
+GENERATES = []
 
 _LOG = logging.getLogger(__name__)
 

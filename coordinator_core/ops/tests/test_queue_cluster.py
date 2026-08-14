@@ -125,7 +125,7 @@ def _init_repo(root) -> None:
 def test_signal_enum_pinned() -> None:
     """The signal enum's names AND order are frozen.
 
-    coordinator-claude's `/debt-triage` Step 6b suppresses the "directory" signal by literal
+    DoE's `/debt-triage` Step 6b suppresses the "directory" signal by literal
     string comparison against this exact value. A rename or re-case here does
     not error on their side -- it silently stops matching, and the next
     triage run hands their ceremony one un-suppressed, oversized cluster as a

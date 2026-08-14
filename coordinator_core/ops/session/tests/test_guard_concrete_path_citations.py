@@ -191,6 +191,40 @@ def test_mixed_separators_flagged_even_with_placeholder_first_segment() -> None:
     assert any(f.rule == "mixed-separators" for f in hits)
 
 
+def test_unc_escape_artifact_not_flagged() -> None:
+    """A JSON-escaped `\\\\sizing\\n` -- the backslash of the `\\n` escape
+    misread as the UNC share separator, no real UNC path present. Regression
+    for the false positive `_UNC_RE` picked up before the escape-letter
+    lookahead was added to its share segment."""
+    # Review: coordinator:code-reviewer -- original fixture had 4 leading
+    # backslashes, which `_UNC_RE` never matches under old or new pattern
+    # (vacuous regression coverage). 2 backslashes is the real JSON-escaped
+    # byte sequence the guard false-positived on.
+    hits = detect_in_text(r'"cmd": "\\sizing\n"')  # abs-path-ok: synthetic test fixture
+    assert not any(f.rule == "unc" for f in hits)
+
+
+def test_mixed_separators_escape_artifact_not_flagged() -> None:
+    """`X:/DoE-claude/coordinator/skills/x/SKILL.md\\r\\n` -- the trailing
+    JSON-escaped `\\r\\n` supplies the sole backslash, no real mixed-
+    separator path present. The genuine hit is `posix-home`/`drive-letter`
+    territory, not `mixed-separators`."""
+    hits = detect_in_text(
+        r'"path": "X:/DoE-claude/coordinator/skills/x/SKILL.md\r\n"'
+    )  # abs-path-ok: synthetic test fixture
+    assert not any(f.rule == "mixed-separators" for f in hits)
+
+
+def test_mixed_separators_gated_cut_does_not_break_real_path() -> None:
+    """The escape-cut gate must not truncate a REAL path token merely
+    because a segment starts with an escape letter (`test` starts with `t`).
+    `C:\\test\\project/sub\\file` must still fire `mixed-separators` in
+    full, not get chopped at `\\t`."""
+    hits = detect_in_text(r"C:\test\project/sub\file is wrong on any platform")  # abs-path-ok: synthetic test fixture
+    matches = [f.matched for f in hits if f.rule == "mixed-separators"]
+    assert any(m == r"C:\test\project/sub\file" for m in matches)
+
+
 def test_well_known_root_does_not_swallow_a_concrete_segment_further_along() -> None:
     """A well-known Windows system root (`Windows`) is an installation
     convention, not a machine-specific claim -- but a REAL segment further
@@ -302,7 +336,7 @@ def test_new_violations_flags_a_duplicate_of_an_existing_citation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# `dead-registry-rung` (ported from coordinator-claude's former Rule B) -- see the
+# `dead-registry-rung` (ported from DoE-claude's former Rule B) -- see the
 # module docstring's own "mention-awareness, per surface" section.
 # ---------------------------------------------------------------------------
 
@@ -460,6 +494,75 @@ def test_evidence_artifact_exemption_is_prefix_scoped_not_ambient() -> None:
     assert any(f.rule == "drive-letter" for f in hits)
 
 
+def test_capture_data_jsonl_under_audits_data_is_exempt() -> None:
+    """A `.jsonl` capture dump under `state/audits/data/` has no comment
+    syntax, so the `abs-path-ok:` escape hatch is unusable -- format-scoped
+    exemption, not the directory-prefix class above."""
+    text = '{"cwd": "/Users/realperson/X/claude-klabauter"}\n'  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/audits/data/2026-08-13-capture.jsonl")
+    assert not hits
+
+
+def test_capture_data_json_under_recovery_is_exempt() -> None:
+    text = '{"cwd": "/Users/realperson/X/claude-klabauter"}\n'  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/recovery/2026-08-13-snapshot.json")
+    assert not hits
+
+
+def test_capture_data_hand_authored_md_under_recovery_is_not_exempt() -> None:
+    """The negative-spec case, and the point of the change: a `.md` file
+    under `state/recovery/` keeps its comment syntax and the `abs-path-ok:`
+    escape hatch, so it stays fully in scope."""
+    text = "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/recovery/2026-08-13-findings.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_capture_data_hand_authored_py_under_recovery_is_not_exempt() -> None:
+    """Same negative-spec case for `.py` -- also keeps comment syntax and
+    stays in scope under `state/recovery/`."""
+    text = "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/recovery/probe.py")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_json_outside_prefix_is_exempt_on_format_alone() -> None:
+    """`.json` has no comment syntax at any path, so the prefix pairing was
+    only producing undischargeable reds outside the two capture directories.
+    Superseded the earlier assertion that format alone is not enough."""
+    text = '{"cwd": "/Users/realperson/X/claude-klabauter"}\n'  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/handoffs/some-handoff.json")
+    assert not hits
+
+
+def test_jsonl_outside_prefix_is_exempt_on_format_alone() -> None:
+    """The sent-ledger case DoE-claude named: `.jsonl` matching
+    `_CAPTURE_DATA_EXTENSIONS` exactly but living outside every prefix."""
+    text = '{"delivery_commit_reason": "fatal: /Users/realperson/X/claude-klabauter/x"}\n'  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/memo-outbox/sent-ledger.jsonl")
+    assert not hits
+
+
+def test_patch_outside_prefix_is_not_exempt() -> None:
+    """Negative spec: `.patch`/`.diff` stay prefix-paired. A diff transcribes
+    lines from files that DO have comment syntax, so it does not join the
+    comment-syntax-free class."""
+    text = "+the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/handoffs/some-change.patch")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_yaml_scalar_exempt_via_content_model_not_extension() -> None:
+    """Superseded by classes 2/3, and corrected by the 2026-08-14 spike: a
+    YAML PLAIN scalar's trailing `# abs-path-ok: <reason>` is legal YAML
+    and leaves the parsed value byte-identical, so a plain scalar is NOT a
+    position where the hatch is unusable -- it stays fully in scope,
+    marker required, same as anywhere else."""
+    text = "decision_note: failed at /Users/realperson/X/claude-klabauter/x\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/sizings/some-sizing.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
 def test_new_violations_evidence_artifact_filename_exempts_both_sides() -> None:
     """`new_violations` threads `filename` through to both `detect_in_text`
     calls -- a sidecar that quotes a NEW finding in its `after` text must not
@@ -585,7 +688,7 @@ def test_dead_registry_rung_yaml_non_prose_key_not_swallowed() -> None:
     etc.) stays flagged -- the prose-key exemption is a named list, not a
     blanket YAML carve-out."""
     text = "cwd: \"~/.claude/plugins/coordinator-claude/coordinator\"\n"  # abs-path-ok: synthetic test fixture
-    hits = detect_in_text(text, filename="evidence.json")
+    hits = detect_in_text(text, filename="evidence.yaml")
     assert any(f.rule == "dead-registry-rung" for f in hits)
 
 
@@ -596,3 +699,442 @@ def test_dead_registry_rung_json_description_field_not_flagged() -> None:
     text = '{\n  "description": "True when ~/.claude/plugins/coordinator/CLAUDE.md exists."\n}\n'  # abs-path-ok: synthetic test fixture
     hits = detect_in_text(text, filename="schema.json")
     assert "dead-registry-rung" not in _rules(hits)
+
+
+# ---------------------------------------------------------------------------
+# Classes 2/3 -- position-scoped content model (YAML scalars, markdown code
+# blocks). See the module docstring's "Position-scoped exemptions" section.
+# ---------------------------------------------------------------------------
+
+
+def test_yaml_plain_scalar_still_fires() -> None:
+    """Negative spec: a plain (unquoted) YAML scalar keeps a lossless
+    `abs-path-ok:` hatch (a trailing `# abs-path-ok: r` is legal YAML and
+    leaves the value byte-identical), so it must stay fully in scope."""
+    text = "note: the failure was at /Users/realperson/X/claude-klabauter/x\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="entry.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_yaml_single_quoted_scalar_still_fires() -> None:
+    """Negative spec: a single-quoted YAML scalar's hatch is equally
+    lossless -- stays in scope."""
+    text = "note: 'the failure was at /Users/realperson/X/claude-klabauter/x'\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="entry.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_yaml_double_quoted_scalar_still_fires() -> None:
+    """Negative spec: a double-quoted YAML scalar's hatch is equally
+    lossless -- stays in scope."""
+    text = 'note: "the failure was at /Users/realperson/X/claude-klabauter/x"\n'  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="entry.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_yaml_path_shaped_mapping_key_still_fires() -> None:
+    """Negative spec / the exact defect the spike caught: a `<path>: value`
+    mapping line where the path is the KEY, not the value, must stay
+    flagged -- a key is never a protected value position regardless of the
+    value's own style."""
+    text = "/Users/realperson/X/claude-klabauter: value\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="entry.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_yaml_folded_block_scalar_exempt() -> None:
+    text = (
+        "note: >-\n"
+        "  the failure was at /Users/realperson/X/claude-klabauter/x\n"  # abs-path-ok: synthetic test fixture
+    )
+    assert not detect_in_text(text, filename="entry.yaml")
+
+
+def test_yaml_literal_block_scalar_exempt() -> None:
+    text = (
+        "note: |\n"
+        "  the failure was at /Users/realperson/X/claude-klabauter/x\n"  # abs-path-ok: synthetic test fixture
+    )
+    assert not detect_in_text(text, filename="entry.yaml")
+
+
+def test_yaml_comment_line_still_fires() -> None:
+    """A `#`-led comment line never matches the key-line pattern, so it is
+    never part of a YAML scalar -- the hatch works there like anywhere
+    else, and the line stays fully in scope."""
+    text = "# see /Users/realperson/X/claude-klabauter/x for the shape\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="entry.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_frontmatter_value_still_fires() -> None:
+    """Negative spec, reversing the memo's original class-2 ask (spike
+    verdict item 3): a frontmatter value is a YAML scalar like any other --
+    the hatch is lossless for it, so frontmatter values stay fully in
+    scope, marker required."""
+    text = (
+        "---\n"
+        "note: the failure was at /Users/realperson/X/claude-klabauter/x\n"  # abs-path-ok: synthetic test fixture
+        "---\n"
+        "prose after frontmatter\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_prose_after_frontmatter_still_fires() -> None:
+    text = (
+        "---\n"
+        "title: fine\n"
+        "---\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_fenced_backtick_block_exempt() -> None:
+    text = (
+        "prose before\n"
+        "```\n"
+        "cd /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+        "```\n"
+        "prose after\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert not hits
+
+
+def test_md_fenced_tilde_block_exempt() -> None:
+    text = (
+        "prose before\n"
+        "~~~\n"
+        "cd /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+        "~~~\n"
+        "prose after\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert not hits
+
+
+def test_md_indented_code_block_exempt() -> None:
+    text = "prose\n\n    cd /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="doc.md")
+    assert not hits
+
+
+def test_md_prose_between_two_fences_still_fires() -> None:
+    text = (
+        "```\ncode block one\n```\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+        "```\ncode block two\n```\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_unterminated_fence_does_not_swallow_rest_of_file() -> None:
+    """An unterminated fence opens NO exempt span -- the citation after it
+    must still fire, not be silently swallowed as "inside code"."""
+    text = (
+        "```\n"
+        "unterminated code block\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_horizontal_rule_dash_is_not_frontmatter() -> None:
+    """A `---` that is NOT the first line of the file is an ordinary
+    markdown horizontal rule, not a frontmatter fence -- content after it
+    must not be swallowed as if it were YAML."""
+    text = (
+        "# Title\n"
+        "\n"
+        "---\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_unterminated_frontmatter_does_not_swallow_rest_of_file() -> None:
+    text = (
+        "---\n"
+        "note: fine\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_py_string_literal_path_still_fires() -> None:
+    """`.py` is not a covered class for classes 2/3 -- a path in a Python
+    string is ordinary corpus debt, still fully in scope."""
+    text = "path = '/Users/realperson/X/claude-klabauter'\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="mod.py")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_class1_json_still_exempt_after_classes_2_3() -> None:
+    text = '{"cwd": "/Users/realperson/X/claude-klabauter"}\n'  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="state/handoffs/some-handoff.json")
+    assert not hits
+
+
+# ---------------------------------------------------------------------------
+# Positional exemption -- 2026-08-14 spike-proven correction (block scalars
+# only, code blocks; every other position from the earlier revision reverts
+# to fully in scope). See docs/research/spike-verdicts/2026-08-14-
+# positional-parse-for-abs-path-ok-discharge.md.
+# ---------------------------------------------------------------------------
+
+
+def test_yaml_folded_dash_chomping_block_scalar_exempt() -> None:
+    """`>-` (folded, strip chomping) normalizes to PyYAML style `>` like any
+    other folded-scalar spelling -- still protected."""
+    text = (
+        "note: >-\n"
+        "  the failure was at /Users/realperson/X/claude-klabauter/x\n"  # abs-path-ok: synthetic test fixture
+    )
+    assert not detect_in_text(text, filename="entry.yaml")
+
+
+def test_md_fence_info_string_still_exempt() -> None:
+    """A fenced block carrying an info string (` ```bash `) is still a
+    fence -- the info string doesn't change the protected-span shape."""
+    text = (
+        "prose before\n"
+        "```bash\n"
+        "cd /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+        "```\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert not hits
+
+
+def test_md_longer_fence_not_closed_by_shorter_run() -> None:
+    """A 5-backtick opener is NOT closed by a 3-backtick line -- CommonMark
+    requires the closer to be AT LEAST as long as the opener, so the
+    3-tick line is literal fence content, not a close. The block only
+    closes at the later 5-backtick line, and the citation between them
+    stays protected throughout."""
+    text = (
+        "`````\n"
+        "```\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+        "`````\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert not hits
+
+
+def test_md_mixed_char_fence_not_closed() -> None:
+    """Negative spec: a `~~~` fence must NOT be closed by a ``` ``` ``` line
+    -- the two fence characters are not interchangeable. Content is treated
+    as still inside the open `~~~` fence, so it stays protected."""
+    text = (
+        "~~~\n"
+        "cd /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+        "```\n"
+        "~~~\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert not hits
+
+
+def test_md_html_comment_inside_fence_exempt() -> None:
+    """An HTML comment marker sitting inside a fenced block renders as
+    literal text in the transcript -- the position is still protected."""
+    text = (
+        "```\n"
+        "<!-- the repo lives at /Users/realperson/X/claude-klabauter -->\n"  # abs-path-ok: synthetic test fixture
+        "```\n"
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert not hits
+
+
+def test_yaml_malformed_keeps_firing() -> None:
+    """Negative spec: malformed YAML (unparseable by `yaml.compose_all`)
+    yields NO protected spans at all -- every uncertainty resolves to
+    keep-firing, never to guessing at a boundary in broken input."""
+    text = (
+        "note: [unclosed flow sequence\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="entry.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_yaml_tab_indented_keeps_firing() -> None:
+    """Negative spec: YAML forbids tabs for indentation, so a tab-indented
+    document fails to compose -- keep-firing, not a guessed boundary."""
+    text = "note:\n\t- the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="entry.yaml")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_four_space_lazy_list_continuation_still_fires() -> None:
+    """Negative spec: a 4-space-indented line that is a LAZY CONTINUATION of
+    an open list item's paragraph text is not indented code (CommonMark) --
+    it must stay in scope, not be swallowed as a code block."""
+    text = (
+        "- item one starts here\n"
+        "    continues at /Users/realperson/X/claude-klabauter as a lazy line\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_lazy_list_continuation_after_blank_line_still_fires() -> None:
+    """The case a preceded-by-blank rule alone gets WRONG. With a blank line
+    between the marker and the indented text, "previous line was blank" is
+    satisfied, so a threshold-free scanner reads this as code and silently
+    exempts a real citation. Inside a list item the code threshold rebases to
+    the item's content indent plus four, and four spaces does not clear it."""
+    text = (
+        "- item one starts here\n"
+        "\n"
+        "    /Users/realperson/X/claude-klabauter is item text, not code\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_ordered_list_continuation_after_blank_line_still_fires() -> None:
+    """Same rebasing for an ordered marker -- the width of `1. ` sets the
+    threshold, so the rule cannot be special-cased to bullets."""
+    text = (
+        "1. item one starts here\n"
+        "\n"
+        "    /Users/realperson/X/claude-klabauter is item text, not code\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_genuine_indented_code_inside_list_item_is_exempt() -> None:
+    """The other side of the rebasing: six spaces DOES clear `- `'s content
+    indent plus four, so it is real indented code inside the item and the
+    marker is unusable there."""
+    text = (
+        "- item one starts here\n"
+        "\n"
+        "      /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    assert not detect_in_text(text, filename="doc.md")
+
+
+def test_md_deeply_nested_list_continuation_still_fires() -> None:
+    """The defect a 0-3 indent cap on the list-marker pattern produced. At
+    three-plus levels the markers themselves sit past column 3, so a capped
+    pattern stops matching, the threshold freezes at the last recognised
+    level, and the deep item's own paragraph starts clearing a stale-low bar
+    -- silently exempted as code. Item d's content indent is 8, so code needs
+    12; this text at 8 is prose and must stay in scope."""
+    text = (
+        "- a\n"
+        "  - b\n"
+        "    - c\n"
+        "      - d\n"
+        "\n"
+        "        /Users/realperson/X/claude-klabauter is item text\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_genuine_code_in_deeply_nested_item_is_exempt() -> None:
+    """The other side of the same rebasing: twelve columns DOES clear item
+    d's content indent plus four, so it is real indented code and the marker
+    is unusable there. Guards against fixing the case above by disabling the
+    rebasing outright."""
+    text = (
+        "- a\n"
+        "  - b\n"
+        "    - c\n"
+        "      - d\n"
+        "\n"
+        "            /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    assert not detect_in_text(text, filename="doc.md")
+
+
+def test_md_wide_ordered_marker_continuation_still_fires() -> None:
+    """A two-digit ordered marker is four columns wide, so `10. `'s content
+    indent is 4 and code needs 8. Four spaces is item text -- the threshold
+    is computed from the marker's real width, never assumed."""
+    text = (
+        "10. item one starts here\n"
+        "\n"
+        "    /Users/realperson/X/claude-klabauter is item text\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="posix.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_blockquote_nested_list_falls_back_to_firing() -> None:
+    """Blockquote-nested lists are not tracked. Documenting the behaviour
+    rather than claiming coverage: the `> ` prefix means the line never
+    matches the indented-code shape at all, so it keeps firing. That is the
+    safe direction (a citation stays reportable), and this test pins it so a
+    later change cannot quietly flip it into an exemption."""
+    text = (
+        "> - item one\n"
+        ">\n"
+        ">     /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_indented_code_after_list_closes_is_exempt() -> None:
+    """A non-blank line at the margin closes the list item, so the threshold
+    drops back to the document's own four columns."""
+    text = (
+        "- item one\n"
+        "\n"
+        "prose at the margin closes the list\n"
+        "\n"
+        "    /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    assert not detect_in_text(text, filename="doc.md")
+
+
+def test_md_thematic_break_not_mistaken_for_frontmatter() -> None:
+    """Negative spec: a `---` thematic break appearing anywhere other than
+    line 1 is ordinary markdown, never treated as a frontmatter open --
+    content after it stays in scope (duplicate coverage of the existing
+    horizontal-rule test, phrased against the AC's own wording)."""
+    text = (
+        "prose\n"
+        "\n"
+        "---\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_setext_heading_underline_not_mistaken_for_frontmatter() -> None:
+    """Negative spec: a setext heading underline (`---` directly beneath a
+    heading's text, line 1 not being the file's own first line) must not be
+    mistaken for a frontmatter delimiter or a code fence -- content after
+    it stays in scope."""
+    text = (
+        "Heading Text\n"
+        "---\n"
+        "the repo lives at /Users/realperson/X/claude-klabauter\n"  # abs-path-ok: synthetic test fixture
+    )
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_md_inline_code_span_still_fires() -> None:
+    """Negative spec: a single-backtick inline code span is not a fenced or
+    indented code BLOCK -- it stays fully in scope."""
+    text = "see `/Users/realperson/X/claude-klabauter` for the shape\n"  # abs-path-ok: synthetic test fixture
+    hits = detect_in_text(text, filename="doc.md")
+    assert any(f.rule == "posix-home" for f in hits)

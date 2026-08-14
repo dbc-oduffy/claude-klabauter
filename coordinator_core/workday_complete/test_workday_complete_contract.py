@@ -33,7 +33,7 @@ see `brief.py`'s "AC10 fix" comment block.
 
 Run scoped only:
     python3 -m pytest coordinator_core/workday_complete/test_workday_complete_contract.py -q
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md § AC10
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54 § AC10
 """
 
 from __future__ import annotations
@@ -535,6 +535,25 @@ def test_step4_evidence_reports_resolved_state_not_unevaluated_rule() -> None:
     step4_5_evidence = by_id["jp_step4_5_clustering_dispatch"]["evidence"]
     assert "<today>" not in step4_5_evidence
     assert not step4_5_evidence.rstrip().endswith(":")
+
+
+def test_step4e_evidence_reports_no_producer_not_unproduced_set() -> None:
+    """Same defect class as `test_step4_evidence_reports_resolved_state_not_
+    unevaluated_rule` above, applied to `jp_step4e_health_ledger_new_rows`:
+    its `evidence` must not assert a "today's touched-systems set" as an
+    observed fact -- no producer in this module (module docstring: "computes
+    exactly two facts", neither of which is a touched-systems set) computes
+    it. The string must instead report the honest unproduced state, matching
+    the 2026-08-08 jp_step4b/jp_step4c remedy rather than inventing a new
+    wording."""
+    points = wc_brief._build_judgment_points(_EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
+    by_id = {p["id"]: p for p in points}
+
+    step4e_evidence = by_id["jp_step4e_health_ledger_new_rows"]["evidence"]
+
+    assert "no producer computes" in step4e_evidence
+    assert "today's touched-systems set" in step4e_evidence
+    assert "disposition, not" in step4e_evidence
 
 
 def test_step4_points_still_emitted_unconditionally() -> None:

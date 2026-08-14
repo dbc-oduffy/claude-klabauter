@@ -2,7 +2,7 @@
 coordinator_core.frontmatter
 
 Python port of the YAML frontmatter text-manipulation primitives used by the
-Coordinator-claude coordinator JS tools. Exposes the unified public surface for import
+DoE-claude coordinator JS tools. Exposes the unified public surface for import
 by C2/C3/C4/C5 executors.
 """
 from coordinator_core.frontmatter.primitives import (

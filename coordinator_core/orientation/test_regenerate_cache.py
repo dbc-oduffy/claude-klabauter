@@ -415,7 +415,7 @@ def test_pinboard_only_rederives_housekeeping_section(tmp_path):
     the OLD, now-wrong behaviour (housekeeping frozen at seed time, surviving byte-identical
     through a pinboard-only patch). That was exactly the AC5 hole reported in
     `cross-repo/inbox/2026-07-23-claude-central-em-wsc-tail-preflight-doe-reply.md`
-    § "New -- an AC5 hole your own ask 4 opens": coordinator-claude adopted --pinboard-only at BOTH
+    § "New -- an AC5 hole your own ask 4 opens": DoE adopted --pinboard-only at BOTH
     mid-session call sites (/workstream-complete, /handoff), so a failure recorded between
     two full regens would not reach the EM within one session boundary. DO NOT "restore" the
     old assertions below -- they encode the bug, not the contract.
@@ -951,7 +951,7 @@ def test_cli_valid_invokers_match_the_engine_tier_map():
 
     cli_path = (
         Path(__file__).resolve().parents[2] / "coordinator" / "bin"
-        / "regenerate-orientation-cache"
+        / "regenerate-orientation-cache.py"
     )
     spec = importlib.util.spec_from_loader(
         "_regen_cli_under_test",
@@ -1091,6 +1091,143 @@ def test_recent_commits_caps_at_recent_commits_max(tmp_path):
     assert len(lines) == mod.RECENT_COMMITS_MAX
 
 
+# ---------------------------------------------------------------------------
+# Capabilities (2026-08-14) -- repo-declared discoverability pointers, fed
+# from coordinator.local.md's `capability_pointers:` frontmatter list via the
+# same declare-once-in-config seam `fast_test_cmd:` established.
+# Spec backlink: cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_capability_pointers_reads_local_md_list(tmp_path):
+    repo = _make_repo(tmp_path)
+    (repo / "coordinator.local.md").write_text(
+        "---\n"
+        "capability_pointers:\n"
+        '  - "example-retrieval-repo: query engine source via mcp__example_retrieval_repo__* tools"\n'
+        "  - architecture atlas: docs/architecture/systems/\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    pointers = mod.resolve_capability_pointers(str(repo))
+
+    assert pointers == [
+        "example-retrieval-repo: query engine source via mcp__example_retrieval_repo__* tools",
+        "architecture atlas: docs/architecture/systems/",
+    ]
+
+
+def test_resolve_capability_pointers_absent_key_returns_empty(tmp_path):
+    repo = _make_repo(tmp_path)
+    (repo / "coordinator.local.md").write_text(
+        "---\nfast_test_cmd: pytest -q\n---\n", encoding="utf-8"
+    )
+
+    assert mod.resolve_capability_pointers(str(repo)) == []
+
+
+def test_resolve_capability_pointers_no_local_md_returns_empty(tmp_path):
+    repo = _make_repo(tmp_path)
+    assert mod.resolve_capability_pointers(str(repo)) == []
+
+
+def test_emit_capability_pointers_omitted_when_absent(tmp_path):
+    repo = _make_repo(tmp_path)
+    assert mod.emit_capability_pointers(repo) == []
+
+
+def test_emit_capability_pointers_renders_configured_entries(tmp_path):
+    repo = _make_repo(tmp_path)
+    (repo / "coordinator.local.md").write_text(
+        "---\ncapability_pointers:\n  - one\n  - two\n---\n", encoding="utf-8"
+    )
+
+    assert mod.emit_capability_pointers(repo) == ["- one", "- two"]
+
+
+def test_emit_capability_pointers_caps_with_ellipsis_not_count(tmp_path):
+    repo = _make_repo(tmp_path)
+    entries = "\n".join(f"  - entry {i}" for i in range(mod.CAPABILITY_POINTERS_MAX + 3))
+    (repo / "coordinator.local.md").write_text(
+        f"---\ncapability_pointers:\n{entries}\n---\n", encoding="utf-8"
+    )
+
+    out = mod.emit_capability_pointers(repo)
+
+    assert len(out) == mod.CAPABILITY_POINTERS_MAX + 1  # capped entries + ellipsis marker
+    assert out[-1] == "- …"
+    assert all("entry " in line for line in out[:-1])
+
+
+def test_capabilities_section_renders_between_atlas_and_fast_test(tmp_path):
+    repo = _make_repo(tmp_path)
+    (repo / "docs" / "architecture" / "systems").mkdir(parents=True)
+    (repo / "docs" / "architecture" / "systems" / "foo.md").write_text("x", encoding="utf-8")
+    (repo / "coordinator.local.md").write_text(
+        "---\n"
+        "fast_test_cmd: pytest -q\n"
+        "capability_pointers:\n"
+        "  - example-retrieval-repo: query engine source\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    output = mod.build_cache(invoker="workday-start", repo_root=repo)["output"]
+
+    atlas_idx = output.index("## Architecture atlas")
+    caps_idx = output.index("## Capabilities")
+    fast_idx = output.index("## Fast test")
+    assert atlas_idx < caps_idx < fast_idx
+    assert "- example-retrieval-repo: query engine source" in output
+
+
+def test_capabilities_section_is_elastic_not_protected():
+    """Same discipline as `test_recent_commits_section_is_trimmed_not_protected_under_budget`
+    above -- exercises the real `_enforce_cache_budget` path, not membership by inspection."""
+    assert "Capabilities" in mod._CACHE_ELASTIC_SECTIONS
+    assert "Capabilities" not in mod._CACHE_PROTECTED_SECTIONS
+
+    huge = "\n".join(f"- capability entry {i} " + "x" * 80 for i in range(200))
+    text = (
+        f"{_CACHE_PREAMBLE}\n## Branch\n`main` (no origin/main reference)\n"
+        f"\n## Capabilities\n{huge}\n"
+        "\n## Pinboard\n- note\n"
+    )
+    assert mod._cache_size(text) > mod.CACHE_BUDGET_BYTES
+
+    out = mod._enforce_cache_budget(text)
+
+    assert mod._cache_size(out) <= mod.CACHE_BUDGET_BYTES
+    assert "## Capabilities\n- [" in out  # trimmed to a marker, not dropped
+    assert "## Branch\n`main` (no origin/main reference)\n" in out
+    assert "## Pinboard\n- note\n" in out
+
+
+def test_pinboard_only_does_not_rederive_capabilities(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    (repo / "coordinator.local.md").write_text(
+        "---\ncapability_pointers:\n  - example-retrieval-repo: query engine source\n---\n",
+        encoding="utf-8",
+    )
+    cache_file = _seed_full_cache(repo, pinboard="2026-08-14 handoff: old note")
+    before = cache_file.read_text(encoding="utf-8")
+    assert "## Capabilities" in before
+
+    def _boom(*a, **k):
+        raise AssertionError("patch_pinboard_only must not re-derive Capabilities")
+
+    monkeypatch.setattr(mod, "emit_capability_pointers", _boom)
+    monkeypatch.setattr(mod, "resolve_capability_pointers", _boom)
+
+    mod.patch_pinboard_only(cache_file, "2026-08-14 handoff: new note")
+
+    after = cache_file.read_text(encoding="utf-8")
+    caps_before = before.split("## Capabilities", 1)[1].split("\n## ", 1)[0]
+    caps_after = after.split("## Capabilities", 1)[1].split("\n## ", 1)[0]
+    assert caps_before == caps_after
+
+
 def test_recent_commits_section_is_trimmed_not_protected_under_budget():
     """Recent commits is an ELASTIC section -- must be trimmable via the real
     _enforce_cache_budget path (not merely present in _CACHE_ELASTIC_SECTIONS by
@@ -1116,13 +1253,12 @@ def test_recent_commits_section_is_trimmed_not_protected_under_budget():
 
 # ---------------------------------------------------------------------------
 # CLI trampoline -- --invoker sweep-boot acceptance / --pinboard-only rejection.
-# Invokes coordinator/bin/regenerate-orientation-cache as a real subprocess
-# (it is not a `.py`-suffixed, cleanly importable module) with CLAUDE_KLABAUTER_ROOT
-# pinned to this checkout so it resolves coordinator_core without any
-# machine-local registry dependency.
+# Invokes coordinator/bin/regenerate-orientation-cache.py as a real subprocess
+# with CLAUDE_KLABAUTER_ROOT pinned to this checkout so it resolves coordinator_core
+# without any machine-local registry dependency.
 # ---------------------------------------------------------------------------
 
-_CLI_SCRIPT = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "regenerate-orientation-cache"
+_CLI_SCRIPT = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "regenerate-orientation-cache.py"
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
 
 

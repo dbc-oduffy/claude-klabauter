@@ -1,7 +1,7 @@
-"""lessons-outbox-drain.py — mechanical backbone of the coordinator-claude Phase 2.6 outbox drain.
+"""lessons-outbox-drain.py — mechanical backbone of the DoE Phase 2.6 outbox drain.
 
 `skills/learn-lessons/SKILL.md` § Phase 2.6 (Lessons-Outbox Drain, Central Mode Only)
-describes a coordinator-claude-owned central-mode state drain: read the outbox's own
+describes a DoE-owned central-mode state drain: read the outbox's own
 `state/lessons-outbox/*.yaml` entries, dedupe across `from_repo` origins, route the
 survivors through the (agent-mediated) central-mode apply pipeline, then mark drained —
 `git mv` the drained entries to `state/lessons-outbox/drained/` and commit locally. Before
@@ -29,7 +29,7 @@ Two subcommands remain, one per mechanical step:
                           depends on: that no OTHER registered peer plane has stranded
                           `state/lessons-outbox/*.yaml` entries this drain never sees. Added
                           2026-07-23 after `state/lessons-outbox/` was silently split across
-                          two repos for six weeks — coordinator-claude's drain reads a single repo root, so
+                          two repos for six weeks — DoE's drain reads a single repo root, so
                           103 entries stranded in claude-klabauter's plane were structurally invisible
                           and every drain reported clean. See `assert_empty()` below for the
                           fail-loud exit-code divergence from its `learn-lessons-roots.py`
@@ -198,7 +198,7 @@ def dedup_entries(entries: list[dict]) -> tuple[list[dict], list[dict]]:
 
 def assert_empty(this_repo_root: Path) -> dict:
     """Detector for the incident this subcommand exists to close: `state/lessons-outbox/`
-    was silently split across two repos for six weeks because coordinator-claude's drain reads a single
+    was silently split across two repos for six weeks because DoE's drain reads a single
     repo root and had no way to notice a SECOND plane accumulating entries unseen. Every
     drain reported clean while 103 entries sat stranded in claude-klabauter's plane, structurally
     invisible to a drain that only ever looked at one root.

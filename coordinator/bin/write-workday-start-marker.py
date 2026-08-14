@@ -17,15 +17,15 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not here).
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not here).
 
 Exit convention: this is a once-a-day bookkeeping write, never a gate — mirrors
 central-run-due.py's fail-open shape (CLAUDE_KLABAUTER_ROOT/import resolution failure
 degrades to a stderr note + exit 0, never a nonzero abort), NOT
 capture-fan-out-threshold.py's fail-loud install-gate shape.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md § Reader-in-process port scoping, chunk C2d
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420 § Reader-in-process port scoping, chunk C2d
 """
 
 from __future__ import annotations

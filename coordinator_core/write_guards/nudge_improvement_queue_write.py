@@ -1,9 +1,9 @@
 """coordinator_core.write_guards.nudge_improvement_queue_write — advisory guard.
 
-Originally an engine-ification of coordinator-claude's retired
+Originally an engine-ification of DoE's retired
 ``coordinator/hooks/scripts/nudge-improvement-queue-write.sh`` PreToolUse
-(Write|Edit|MultiEdit) hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``). That
-fidelity claim is now VOID (2026-07-30 escape-mechanism rework): coordinator-claude no
+(Write|Edit|MultiEdit) hook (deleted 2026-07-16, DoE ``2f8b8450``). That
+fidelity claim is now VOID (2026-07-30 escape-mechanism rework): DoE no
 longer ships that reference hook at all, and ``COORDINATOR_QUEUE_PUNT``
 appears nowhere in their tree. Claude-klabauter is the sole owner of this guard going
 forward; there is no upstream parity left to preserve, and no future reader

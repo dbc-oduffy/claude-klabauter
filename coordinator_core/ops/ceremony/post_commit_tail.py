@@ -10,7 +10,7 @@ across its fresh-pass and AC18-resumed-pass branches. This module extracts
 that sequencing into one standalone op so C1's per-step timing instrumentation
 can attribute the ~3 git commits these two steps together produce to one op,
 and so a LATER chunk (C3b — NOT this one) can move the invocation itself
-across the repo boundary into the coordinator-claude skill occasion without re-deriving the
+across the repo boundary into the DoE skill occasion without re-deriving the
 sequencing logic. `wsc_tail.py` still invokes this op IN-PROCESS at both call
 sites, on both the fresh pass and the AC18-resumed pass, exactly as it did
 before this extraction — this chunk changes WHERE the sequencing logic lives,
@@ -101,7 +101,7 @@ Negative-spec (hard-won):
     `ceremony_lock` mechanism entirely.
   - Does NOT move the `wsc_tail` call site — that is C3b, a separate chunk
     with its own PM-recorded fallback (moving invocation across the repo
-    boundary into a coordinator-claude skill occasion needs a durable pending-work
+    boundary into a DoE skill occasion needs a durable pending-work
     sentinel). `wsc_tail.py` still invokes this op in-process at steps
     5c/5d, on both the fresh and AC18-resumed pass, exactly as before this
     extraction.
@@ -624,6 +624,14 @@ async def _run_deliverable_cascade(
         if result.get("exit_code") == 0:
             advanced = result.get("advanced") or []
             acted.extend(a.get("handoff_path", "") for a in advanced)
+            # Review: coordinator:code-reviewer -- `commit_error` (AC8) is
+            # present in the op's own result dict independent of exit_code
+            # (a commit failure never flips exit_code, which stays keyed off
+            # `advanced` alone), but was never read here, so it never reached
+            # `has_failure` below. Fold it into `failed` so it does.
+            commit_error = result.get("commit_error")
+            if commit_error:
+                failed.append(f"{OP_DELIVERABLE_CASCADE}:{relpath}: commit failed: {commit_error}")
         else:
             skipped.append(
                 f"{OP_DELIVERABLE_CASCADE}:{relpath}: {result.get('error', 'no downstream artifact advanced')}"

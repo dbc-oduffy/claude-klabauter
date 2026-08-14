@@ -1,7 +1,7 @@
 """Behavioral tests for
 coordinator_core.write_guards._sentinel_write_guard.reconstruct_after --
-the consolidated home for an idiom six coordinator-claude guards each hand-copied a
-local ``_reconstruct_after`` for (DR-047: claude-klabauter owns guard logic, coordinator-claude owns
+the consolidated home for an idiom six DoE-claude guards each hand-copied a
+local ``_reconstruct_after`` for (DR-047: claude-klabauter owns guard logic, DoE owns
 plumbing).
 
 Spec backlink: dispatch brief "Add shared reconstruct_after to

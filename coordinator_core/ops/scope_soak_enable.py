@@ -10,8 +10,8 @@ Run this ONCE after Phase 2's scope-guard commit hook is live. The
 flip-readiness evaluator (scope-flip-readiness) reads this sentinel to compute
 the "2-week minimum soak" criterion.
 
-Port source: coordinator/bin/scope-soak-enable (coordinator-claude)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, chunk B3
+Port source: coordinator/bin/scope-soak-enable (DoE-claude)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292, chunk B3
 See also: docs/pretooluse-deny-contract.md, docs/wiki/scoped-safety-commits.md § Phase 5
 
 Negative-spec:
@@ -24,6 +24,8 @@ Negative-spec:
 """
 
 from __future__ import annotations
+
+GENERATES = []  # writes only .git/coordinator-sessions/.warn-mode-enabled-at inside the worktree's own .git directory
 
 import os
 import sys

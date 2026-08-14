@@ -36,12 +36,12 @@ script body, since sibling discovery/merging (3.3-3.4) between the first read an
 the destructive sites can take arbitrarily long (conflict-laden, PM-attended) and a
 peer session going live in that window must not be invisible to the gate.
 
-Port of: workday-complete-step3-consolidate.sh (coordinator-claude 091c0f3e, 2026-07-19).
+Port of: workday-complete-step3-consolidate.sh (DoE 091c0f3e, 2026-07-19).
 `today` is natively imported from coordinator_core.daily_day.local_day (de-bash campaign,
-2026-07-21 — Port of: coordinator-daily-day.sh, coordinator-claude c6d97219, 2026-07-22).
+2026-07-21 — Port of: coordinator-daily-day.sh, DoE c6d97219, 2026-07-22).
 cs_compute_machine / cs_parse_branch_span are natively imported from
 coordinator_core.machine_resolver / coordinator_core.daily_branch (de-bash campaign,
-unit "daily-branch" — Port of: coordinator-daily-branch.sh, coordinator-claude 2fbe0e77, 2026-07-19, see
+unit "daily-branch" — Port of: coordinator-daily-branch.sh, DoE 2fbe0e77, 2026-07-19, see
 cc_invoke._resolve_claude_klabauter_root for the CLAUDE_KLABAUTER_ROOT ladder this import rides). sync-main.py
 is invoked as a subprocess.
 """

@@ -46,7 +46,7 @@ Call sites become::
     run([*resolve_launchable(script), *args])
 
 Resolution order (Windows only -- see the POSIX note below):
-    1. ``<script>.cmd`` twin, if present. ``coordinator-claude/coordinator/bin/`` deliberately
+    1. ``<script>.cmd`` twin, if present. ``DoE-claude/coordinator/bin/`` deliberately
        ships ``.cmd`` twins alongside its shebang scripts (see
        ``coordinator_core.install.substrate`` Step C10a-2) precisely because
        CreateProcess cannot exec a shebang. Prefer the twin when it exists: it is the
@@ -127,7 +127,7 @@ def _shebang_launcher(script_path: str) -> List[str]:
     docstring) -- on POSIX this helper is never consulted, since the OS
     already does the honoring, more completely than we ever could. On
     Windows it is checked BEFORE the extension-keyed
-    ``_INTERPRETER_BY_SUFFIX`` map: the coordinator-claude bash-clean-slate residual
+    ``_INTERPRETER_BY_SUFFIX`` map: the DoE bash-clean-slate residual
     migration (``docs/plans/2026-07-16-bash-clean-slate-residual-migration.md``)
     ported several ``bin/*.sh`` oracles' CONTENT to Python before their
     filename caught up, leaving transitional ``.sh``-named files whose body
@@ -221,13 +221,51 @@ def resolve_launchable(script_path: str) -> List[str]:
     """Return the argv prefix that correctly launches ``script_path`` on this OS.
 
     The returned list always ends with a path/name for the thing being launched, so
-    ``[*resolve_launchable(p), *args]`` is the complete vector. On POSIX the result is
-    always ``[script_path]`` -- the shebang is authoritative there (see module
-    docstring § Negative-spec).
+    ``[*resolve_launchable(p), *args]`` is the complete vector.
+
+    POSIX is no longer "always ``[script_path]``, the shebang is authoritative"
+    (2026-08-13). The POSIX-exec drain
+    (docs/plans/2026-08-13-grind-the-posix-exec-baseline-to-zero.md, chunk C6)
+    renames ``coordinator/bin`` entrypoints to ``<name>.py`` and strips BOTH the
+    shebang and the exec bit, so a caller holding the old bare path gets "can't
+    open file", and a caller holding the new path gets an exec-format error from
+    a file with no shebang to be authoritative. Two probes close both, in the
+    order that keeps a still-extensionless name on its existing path:
+
+      1. bare path missing -> try ``<path>.py``
+      2. resolved target not executable -> prefix ``sys.executable``
+
+    This is the same absorption ``exec_cli`` took for the installed forwarders in
+    ``23d162e6c4ff``; this function is the repo-local half of that surface, and
+    peers hit it within the hour on three separate CLIs in one ceremony.
     """
     script_path = os.fspath(script_path)
 
+    if not os.path.isfile(script_path) and not script_path.endswith(".py"):
+        suffixed = script_path + ".py"
+        if os.path.isfile(suffixed):
+            script_path = suffixed
+
     if not _is_windows():
+        # Narrowly `.py`: the drain strips shebang+exec bit from Python
+        # entrypoints only, so this is the one extension whose non-executable
+        # form is known to want `sys.executable`. Prefixing any other
+        # non-executable file would hand `python3` a `.js`/`.sh` it cannot run
+        # — a worse failure than the exec-format error it replaces.
+        # The leading `os.name != "nt"` is redundant against the enclosing
+        # `not _is_windows()` and is deliberate: `check_posix_exec_assumptions`'s
+        # `posix_mode_bits` class recognizes a literal `os.name`/`sys.platform`
+        # test or short-circuit and-chain as a Windows guard, but NOT a
+        # project-local wrapper like `_is_windows()` (that limit is named in its
+        # own docstring). Spelling the guard the detector understands keeps this
+        # correct cross-platform code out of the gate without an exemption.
+        if (
+            os.name != "nt"
+            and script_path.endswith(".py")
+            and os.path.isfile(script_path)
+            and not os.access(script_path, os.X_OK)
+        ):
+            return [sys.executable, script_path]
         return [script_path]
 
     cmd_twin = script_path + ".cmd"
@@ -306,7 +344,7 @@ def resolve_by_shebang(script_path: str) -> List[str]:
     ``coordinator_core.ops.install_health_run``) that iterate a directory of
     ``*.sh``-suffixed scripts whose actual interpreter may not be bash: the
     ``.sh`` suffix is sometimes kept purely so a directory glob still finds
-    the drop-in (see ``coordinator-claude/coordinator/bin/install-health/
+    the drop-in (see ``DoE-claude/coordinator/bin/install-health/
     seed-skill-overrides.sh``, which is pure Python under a ``.sh`` name).
     Running such a script as ``bash <script>`` dies immediately on its first
     non-bash line; this function reads the shebang instead of assuming it.

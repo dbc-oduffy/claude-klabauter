@@ -1,10 +1,10 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """render-handoff-tracker.py — CLI trampoline over the handoff-tracker render op.
 
-Thin coordinator-claude-side (contract) trampoline over claude-klabauter
-coordinator_core.ops.ceremony.render_handoff_tracker, per DR-047 (coordinator-claude owns
+Thin DoE-side (contract) trampoline over claude-klabauter
+coordinator_core.ops.ceremony.render_handoff_tracker, per DR-047 (DoE owns
 contract/generator, claude-klabauter owns engine). Renders `state/handoff-tracker.md`
-(per-repo). The fleet-aggregate `--all-repos` mode (coordinator-claude-aggregate
+(per-repo). The fleet-aggregate `--all-repos` mode (DoE-aggregate
 `state/doe-handoff-tracker.md`) was REMOVED 2026-07-23 (PM-ratified) — see
 the removal negative-spec in
 coordinator_core/ops/ceremony/render_handoff_tracker.py.
@@ -24,8 +24,8 @@ from __future__ import annotations
 # over C8b's render_repo_section), exposing both a registered op
 # (ceremony.render_handoff_tracker, for IPC-dispatch callers) and a
 # trampoline-importable main(argv) -> int (for this CLI). This file is a thin
-# coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
-# (coordinator-claude owns contract/generator, claude-klabauter owns engine) — mirrors the
+# DoE-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
+# (DoE owns contract/generator, claude-klabauter owns engine) — mirrors the
 # refresh-queries.py precedent exactly.
 #
 # Filename note / DELIBERATELY NOT DELETED: coordinator/bin/render-handoff-
@@ -51,9 +51,9 @@ from __future__ import annotations
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Exit-code contract:
 #   0 — success (rendered and wrote, or --stdout printed)

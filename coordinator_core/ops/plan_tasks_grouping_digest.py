@@ -14,7 +14,7 @@ a digest someone already wrote. Nothing computes the value FOR the person who
 has to write it, and doctrine forbids hand-authoring it. This module is that
 missing compute-and-print step, nothing else.
 
-Homing (per coordinator-claude's dispatch brief for this module, mirroring
+Homing (per DoE-claude's dispatch brief for this module, mirroring
 `plan_tasks_render.py`'s own homing note): a NEW module, not a verb bolted
 onto `plan_tasks_mutate.py`. This is a READ concern — it never opens the plan
 for write, never takes the file lock, never calls `locked_rmw`. Giving
@@ -82,7 +82,7 @@ Negative-spec:
     fails loud instead (see `_apply_cut` / `_handler` below). A digest
     computed over a set the caller had to guess at is worse than no digest.
 
-Spec backlink: docs/plans/2026-07-29-grouping-approval-contract.md (coordinator-claude) [DEAD-CITATION: plan file never committed to this repo]
+Spec backlink: docs/plans/2026-07-29-grouping-approval-contract.md (DoE-claude) [DEAD-CITATION: plan file never committed to this repo]
 """
 
 from __future__ import annotations

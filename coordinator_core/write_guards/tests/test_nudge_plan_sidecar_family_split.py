@@ -136,7 +136,7 @@ class TestRow39LegalLensesSilent:
         second, hand-maintained list living in this test or the guard."""
         assert guard._ROW_39_LENSES == frozenset(_PLAN_DERIVABLE_LENS.values())
         # Bumped 4 -> 5 on 2026-08-06 when coordinator:plan-reviewer joined the
-        # map (coordinator-claude DR-133). This literal exists to make a map change a
+        # map (DoE DR-133). This literal exists to make a map change a
         # deliberate, reviewed act rather than a silent widening of the
         # guard's silent-passthrough vocabulary -- bump it only alongside a
         # membership ruling recorded in provision_report/CONTRACT.md.

@@ -64,7 +64,7 @@ Reply fields:
       "degraded": bool,
     }
 
-Downstream-consumer contract (ratified 2026-08-06 with coordinator-claude-em, whose
+Downstream-consumer contract (ratified 2026-08-06 with doe-claude-em, whose
 `/distill` C3 leg records dropped nuggets as EPHEMERAL-with-reason rather than
 letting them vanish silently; that logging is load-bearing on both fields
 below, so they are a stability commitment, not an implementation detail):

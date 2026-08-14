@@ -1,6 +1,6 @@
 """test_merge_recovery_and_tag_cut — pytest tests for merge-recovery-and-tag-cut.py.
 
-Covers the two genuinely imperative cores ported from coordinator-claude's
+Covers the two genuinely imperative cores ported from DoE-claude's
 merging-to-main SKILL.md: the idempotent annotated-tag cut (`cut_tag`) and the
 `tag_prefix:` frontmatter parse (`resolve_tag_prefix`), including its
 fail-loud quoted-value branch.

@@ -36,7 +36,7 @@ number is the thing that must change with it. The three are irreducible: they
 are the only end-to-end evidence that `cc_invoke`'s failure ladder classifies a
 REAL engine child correctly, which no in-process case can supply.
 
-Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C1 / AC1 / AC9
+Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C1 / AC1 / AC9
 Spec backlink: pln-a-safe-target-for-transport-fa-7ea067 § C2 / AC3 / AC6
 """
 from __future__ import annotations
@@ -2056,14 +2056,14 @@ class RequireEngineVariantsTest(unittest.TestCase):
 class TestNonzeroExitStdoutDiagnosis(unittest.TestCase):
     """`_raise_on_process_failure` must surface the engine's own failure text.
 
-    The defect this pins (reported by coordinator-claude-em,
-    `cross-repo/inbox/2026-08-07-coordinator-claude-em-windows-ceremony-cli-coordinator-core-import-break.md`,
+    The defect this pins (reported by doe-claude-em,
+    `cross-repo/inbox/2026-08-07-doe-claude-em-windows-ceremony-cli-coordinator-core-import-break.md`,
     item 3): `coordinator_core.invoke` writes a PRE-dispatch failure to stderr but
     a COMPLETED-dispatch op-level error to **stdout**, exiting 1 either way. This
     ladder read stderr only, so every op-level failure surfaced as a bare
     `invoke process exited 1 (op=X) — op or dispatch error` with an empty
     `stderr:` line and the reason nowhere — it was on stdout, discarded unread.
-    That is the exact string coordinator-claude reported for `ceremony.wsc_tail`, and the reason
+    That is the exact string DoE reported for `ceremony.wsc_tail`, and the reason
     they could not diagnose it: the transport, not the op, was withholding it.
 
     Spawn-free by construction: `_raise_on_process_failure` is a pure function

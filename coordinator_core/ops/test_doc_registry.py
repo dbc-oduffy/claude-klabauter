@@ -82,8 +82,8 @@ def test_partial_override_one_key_set_others_default(tmp_path):
     assert cfg.doc_verify_ignore == []
 
 
-def test_example_doctrine_repo_own_override_shape_dogfood(tmp_path):
-    """Mirrors the exact frontmatter coordinator-claude's own coordinator.local.md declares (C4)."""
+def test_doe_claude_own_override_shape_dogfood(tmp_path):
+    """Mirrors the exact frontmatter DoE-claude's own coordinator.local.md declares (C4)."""
     _write_local_md(
         tmp_path,
         "human_facing_docs: [README.md, INSTALL.md, CONTEXT.md, CONTRIBUTING.md, "

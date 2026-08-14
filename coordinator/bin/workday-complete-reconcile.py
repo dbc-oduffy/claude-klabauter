@@ -4,7 +4,7 @@ workday-complete-reconcile.py — /workday-complete Step 1.5 (cruft-sweep
 dispatch) + Step 2.6 (completion-entry reconcile sweep with cross-machine
 liveness gating), ported to naked Python. Bash-kill campaign, M3 chunk WDC-2.
 
-Two subcommands, each mirroring one bash fence from the coordinator-claude ceremony file
+Two subcommands, each mirroring one bash fence from the DoE ceremony file
 verbatim in behavior (both non-blocking — neither ever fails the ceremony):
 
     cruft-sweep
@@ -23,7 +23,7 @@ verbatim in behavior (both non-blocking — neither ever fails the ceremony):
         only when their authoring session is confirmed DEAD via the sanctioned
         liveness predicate (coordinator_core.session.liveness.
         resolve_live_session_ids — the native successor to the retired bash
-        `cs_live_session_ids` / the js_bridge_cli subprocess bridge the coordinator-claude
+        `cs_live_session_ids` / the js_bridge_cli subprocess bridge the DoE
         bash fence shelled out to; this port calls the Python liveness module
         directly, no subprocess hop needed since this file is already
         in-process Python). A live cross-machine session is mid-edit — stand
@@ -48,9 +48,9 @@ script owns only the outer month-scoped scan/frontmatter-gate/liveness-gate/
 dispatch loop the retired bash Step 2.6 fence performed BEFORE calling that
 helper, plus the Step 1.5 cruft-sweep dispatch wrapper.
 
-Spec backlink: coordinator-claude coordinator/commands/workday-complete.md § Step 1.5
+Spec backlink: DoE-claude coordinator/commands/workday-complete.md § Step 1.5
     (Cruft Sweep Apply), § Step 2.6 (Completion-Entry Reconcile Sweep)
-Port source: coordinator-claude coordinator/commands/workday-complete.md Step 1.5 +
+Port source: DoE-claude coordinator/commands/workday-complete.md Step 1.5 +
     Step 2.6 bash fences, ported verbatim to naked Python as part of the
     bash-kill campaign (2026-07-23, M3 chunk WDC-2).
 """
@@ -138,7 +138,7 @@ def _authored_by_field(content: str) -> str:
 
 
 def _default_cruft_sweep_bin() -> str:
-    return os.path.join(_BIN_DIR, "cruft-sweep")
+    return os.path.join(_BIN_DIR, "cruft-sweep.py")
 
 
 def _cruft_sweep_argv(cruft_sweep_bin: str) -> list[str]:
@@ -240,7 +240,7 @@ def _resolve_session_id() -> str:
     REMOVED (KS-4, 2026-08-07): unsound under concurrency (documented
     last-writer-wins across concurrent sessions sharing one worktree — see
     coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND its
-    sole writer (session-init.py, the coordinator-claude SessionStart hook) was
+    sole writer (session-init.py, the DoE-claude SessionStart hook) was
     deleted by PM directive 2026-07-15 — no production writer survives.
     """
     try:

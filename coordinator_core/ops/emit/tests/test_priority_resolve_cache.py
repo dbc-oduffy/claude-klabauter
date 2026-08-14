@@ -17,7 +17,7 @@ timing assertion flaky in CI), but a call-count regression is exactly what
 would silently reintroduce the N-rebuilds-over-one-corpus shape this fix
 removes, so THAT'S what a future change is guarded against here.
 
-Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C5, § C10
+Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C5, § C10
 (cache is a C6b addendum to the same priority-resolution work).
 """
 

@@ -48,12 +48,12 @@ class TestCwdFiltering:
     def test_named_sibling_repo_filters_correctly(self, monkeypatch):
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
-            "sid-b": _record("other-12", "/sock/b.sock", cwd="/repo/coordinator-claude"),
+            "sid-b": _record("other-12", "/sock/b.sock", cwd="/repo/doe-claude"),
         }
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
-        rows = peer_roster.build_roster("/repo/coordinator-claude")
+        rows = peer_roster.build_roster("/repo/doe-claude")
         assert {r.session_id for r in rows} == {"sid-b"}
 
     def test_subdirectory_cwd_is_contained(self, monkeypatch):
@@ -302,6 +302,48 @@ class TestEmptyOrAbsentRegistry:
         assert len(rows) == 1
         assert rows[0].is_self is False
         assert rows[0].self_determination == "unresolved"
+
+    def test_snapshot_exception_reraised_when_raise_on_failure(self, monkeypatch):
+        # Defect 5: a caller opting into raise_on_failure=True must see the
+        # registry-unreadable failure distinctly from an empty roster --
+        # default behaviour (above test) is unaffected.
+        def _raise():
+            raise RuntimeError("registry unreadable")
+
+        monkeypatch.setattr(hr, "snapshot", _raise)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        import pytest
+
+        with pytest.raises(RuntimeError, match="registry unreadable"):
+            peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True)
+
+    def test_self_record_exception_reraised_when_raise_on_failure(self, monkeypatch):
+        snap = {
+            "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
+        }
+
+        def _raise():
+            raise RuntimeError("self record unreadable")
+
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", _raise)
+
+        import pytest
+
+        with pytest.raises(RuntimeError, match="self record unreadable"):
+            peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True)
+
+    def test_empty_snapshot_still_returns_empty_list_even_with_raise_on_failure(
+        self, monkeypatch
+    ):
+        # A genuinely empty snapshot (no live peers) is not a failure -- it
+        # must still return [] even when raise_on_failure=True, distinct
+        # from an internal exception.
+        monkeypatch.setattr(hr, "snapshot", lambda: {})
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        assert peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True) == []
 
 
 class TestStatusAndRunningSeconds:

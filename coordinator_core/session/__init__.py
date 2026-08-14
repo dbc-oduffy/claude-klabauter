@@ -1,6 +1,6 @@
 """
 coordinator_core.session — Python engine port of coordinator's session substrate
-(Port of: coordinator-session.sh, coordinator-claude e34f2484, 2026-07-22, + its
+(Port of: coordinator-session.sh, DoE e34f2484, 2026-07-22, + its
 ``coordinator/lib/session/*.sh`` sibling modules).
 
 Purpose: package namespace for the session-tracking primitives (identity
@@ -14,6 +14,6 @@ Negative-spec: keep this file minimal — a thin namespace marker only. Sibling
 agents add their own modules under this package; they do not need to touch
 this ``__init__.py``.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4a-g1
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t4a-coordinator-session-hub.md
 """

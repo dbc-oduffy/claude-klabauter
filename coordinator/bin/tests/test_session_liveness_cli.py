@@ -15,9 +15,8 @@ an explicit verdict, none exits 0 silently):
     dead (session dir, stale) -> stdout "dead (<basis>)"        -> exit 1
     unknown (no verdict)      -> stdout "unknown"               -> exit 1
 
-Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-`session-liveness-cli` is an extensionless polyglot entrypoint, not a `.py`
-module -- same load idiom as test_session_claim_cli.py's `_load_cli_module`.
+Loaded by file path (`importlib.machinery.SourceFileLoader`) --
+same load idiom as test_session_claim_cli.py's `_load_cli_module`.
 
 Spec backlink: pln-the-liveness-surface-stops-ans-402265 § C2 / AC4 / AC6.
 """
@@ -35,7 +34,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "session_liveness_cli", str(_BIN_DIR / "session-liveness-cli")
+        "session_liveness_cli", str(_BIN_DIR / "session-liveness-cli.py")
     )
     spec = importlib.util.spec_from_loader("session_liveness_cli", loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]

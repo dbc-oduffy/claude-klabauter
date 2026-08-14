@@ -4,9 +4,9 @@ coordinator_core.ops.deliverable_rollup — JSON-RPC "deliverable.rollup" COMPUT
 Purpose: Given a ``deliverable_id`` wire parameter, scans the deliverable-spine read-model
 (plan frontmatter, stub handoff frontmatter) for artifacts carrying that id, then unions
 their non-null ``initiative`` FKs and resolves each to its ``state/initiatives/<id>.yaml``
-entry. Returns structured fields only — no prose is composed here; coordinator-claude owns the render.
+entry. Returns structured fields only — no prose is composed here; DoE owns the render.
 
-The scan surface covers four paths:
+The scan surface covers five paths:
   docs/plans/*.md          — primary; deliverable_id + initiative FK co-occur here most
                              (plans mint the id and most often carry the initiative FK).
   state/handoffs/*.md      — secondary; stub handoffs may carry deliverable_id.
@@ -15,6 +15,8 @@ The scan surface covers four paths:
                              from docs/plans/ to archive/specs/<YYYY-MM>/ the moment its
                              status flips terminal; excluding this root would un-resolve
                              every shipped deliverable's own plan the instant it ships.
+  state/sizings/*.yaml     — sizing objects (C10, whole-document YAML, no frontmatter
+                             fence — read via `_read_sizing_yaml`, not the markdown parser).
 
 Resolution semantics: DIRECT only (slice-1). Each artifact's own ``initiative`` frontmatter
 FK is the forward-edge. Transitive resolution (DAG walk via ``blocks``/``blocked_by`` edges)
@@ -270,6 +272,70 @@ def _empty_payload(deliverable_id: str = "", scan_incomplete: bool = False) -> d
 
 
 # ---------------------------------------------------------------------------
+# Shared resolvable-root surface (C10, docs/plans/2026-08-13-spec-backlinks-
+# cite-a-stable-deliverable-id.md). ONE constant so this scanner and
+# coordinator_core.ops.spec_backlink_resolve.build_index cannot drift into two
+# hard-coded root lists that happen to agree. Each entry is
+# (relative_path_parts, "flat" | "recursive") — "flat" scans base_dir/* only
+# (iterdir()), "recursive" walks base_dir/** (os.walk()). "flat" roots hold
+# either *.md (frontmatter-fenced) or *.yaml/*.yml (whole-document, the
+# state/sizings/ root only) — see `_scan_artifacts_by_deliverable_id`'s
+# per-root reader dispatch.
+#
+# LEG (a) of C10 CLEARED (cross-repo/inbox/2026-08-13-doe-claude-em-spec-
+# backlink-id-form-ruled-and-rollup-cleared.md): the reader
+# (coordinator_render_rollup.py) is count-agnostic over `artifacts_matched`
+# and, since the finish-strangler port, claude-klabauter-resident — no DoE-side change
+# or sign-off was required. `SIZINGS_ONLY_ROOT` is folded directly into this
+# tuple; `_scan_artifacts_by_deliverable_id` now scans all five roots,
+# including `state/sizings/*.yaml` via a YAML-capable collector (mirrors
+# `spec_backlink_resolve._index_sizings_dir`'s existing implementation).
+SIZINGS_ONLY_ROOT: tuple[tuple[str, ...], str] = (("state", "sizings"), "flat")
+
+RESOLVABLE_ARTIFACT_ROOTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("docs", "plans"), "flat"),
+    (("state", "handoffs"), "flat"),
+    (("archive", "handoffs"), "recursive"),
+    (("archive", "specs"), "recursive"),
+    SIZINGS_ONLY_ROOT,
+)
+
+
+# ---------------------------------------------------------------------------
+# Sizing-object reader (whole-document YAML, no frontmatter fence)
+# ---------------------------------------------------------------------------
+
+
+def _read_sizing_yaml(path: Path) -> dict:
+    """Read a `state/sizings/*.yaml` record. Returns {} on any error.
+
+    Sizings are whole-document YAML (no `---` frontmatter fence) — reading
+    them via `_read_meta`'s fence-scanning parser would silently return {}
+    (correctly, but for the wrong reason: it never finds a closing fence).
+    This reader is a same-shape twin of
+    `spec_backlink_resolve._read_sizing_yaml` (same rationale: no runtime
+    coupling between this module and a peer chunk's file — that module
+    already imports FROM this one for the shared root constants, so the
+    reverse import would be circular).
+    """
+    try:
+        import yaml
+    except ImportError:
+        logger.debug("deliverable.rollup: PyYAML unavailable; cannot read %s", path)
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            data = yaml.safe_load(fh)
+    except OSError as exc:
+        logger.debug("deliverable.rollup: could not read %s: %s", path, exc)
+        return {}
+    except Exception as exc:  # noqa: BLE001 — malformed YAML degrades to empty, not a crash
+        logger.debug("deliverable.rollup: could not parse %s: %s", path, exc)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+# ---------------------------------------------------------------------------
 # Artifact scanner — collects frontmatter dicts for a given deliverable_id
 # ---------------------------------------------------------------------------
 
@@ -278,10 +344,10 @@ def _scan_artifacts_by_deliverable_id(
     worktree_root: Path,
     deliverable_id: str,
 ) -> tuple[List[dict], bool]:
-    """Scan the four-path surface and return frontmatter dicts for matching artifacts.
+    """Scan the five-path surface and return frontmatter/sizing dicts for matching artifacts.
 
-    Purpose: collects every artifact (plan or handoff) whose frontmatter ``deliverable_id``
-    field equals the queried value. The four scan paths are:
+    Purpose: collects every artifact (plan, handoff, or sizing object) whose
+    ``deliverable_id`` field equals the queried value. The five scan paths are:
       - docs/plans/*.md          (primary: plans mint deliverable_id + initiative FK)
       - state/handoffs/*.md      (secondary: stub handoffs)
       - archive/handoffs/**/*.md (archived stubs)
@@ -289,6 +355,8 @@ def _scan_artifacts_by_deliverable_id(
                                   plan here from docs/plans/ the instant its status flips
                                   terminal, so excluding this root un-resolves every
                                   shipped deliverable's own plan)
+      - state/sizings/*.yaml     (sizing objects — whole-document YAML, no frontmatter
+                                  fence; read via `_read_sizing_yaml`, not `_read_meta`)
 
     deliverable_id is used ONLY as a comparison value against the parsed frontmatter field —
     it is NEVER used as a path component. Scan roots are hard-coded constants.
@@ -346,16 +414,57 @@ def _scan_artifacts_by_deliverable_id(
         # fm itself (the artifact's own frontmatter dict) is never mutated: canonicalize()
         # is a join-key transform for THIS comparison only, never a field write.
         artifact_did = fm.get("deliverable_id")
-        if not isinstance(artifact_did, str):
-            return
-        canonical_artifact_id = canonicalize(artifact_did.strip(), equivalence_map)
-        if canonical_artifact_id == canonical_query_id:
+        if isinstance(artifact_did, str):
+            canonical_artifact_id = canonicalize(artifact_did.strip(), equivalence_map)
+            if canonical_artifact_id == canonical_query_id:
+                matches.append(fm)
+                return
+        # plan_id match arm (C10b leg (c), docs/plans/2026-08-13-spec-backlinks-
+        # cite-a-stable-deliverable-id.md): compares the SAME `deliverable_id`
+        # argument against the artifact's own `plan_id` field, RAW (no
+        # canonicalize() — fork-equivalence is a deliverable_id-only concept).
+        # `pln-` and `dlv-` mint prefixes are disjoint by construction
+        # (bin/mint-deliverable-id / bin/mint-plan-id), so a correctly-minted
+        # `dlv-`-shaped query can never match a correctly-minted plan_id
+        # value and vice versa. This module's invariance test proves the arm
+        # is a no-op for every correctly-minted `pln-`-prefixed plan_id
+        # value against every `dlv-`-shaped query deliverable.rollup's own
+        # handler can produce — it does NOT cover a hand-authored or
+        # otherwise malformed plan_id value that happens to carry a `dlv-`
+        # prefix (frontmatter is not attacker-controlled in this system, so
+        # this is treated as low practical risk rather than handled).
+        artifact_pid = fm.get("plan_id")
+        if isinstance(artifact_pid, str) and artifact_pid.strip() == deliverable_id:
             matches.append(fm)
 
-    # Flat scan roots: docs/plans/*.md, state/handoffs/*.md.
+    def _collect_sizing(path: Path) -> None:
+        doc = _read_sizing_yaml(path)
+        if not doc:
+            return
+        # Same fork-equivalence join + plan_id match-arm shape as `_collect`
+        # above, applied to a whole-document YAML dict instead of a
+        # frontmatter dict — sizings are the one root whose records are not
+        # markdown-fenced.
+        artifact_did = doc.get("deliverable_id")
+        if isinstance(artifact_did, str):
+            canonical_artifact_id = canonicalize(artifact_did.strip(), equivalence_map)
+            if canonical_artifact_id == canonical_query_id:
+                matches.append(doc)
+                return
+        artifact_pid = doc.get("plan_id")
+        if isinstance(artifact_pid, str) and artifact_pid.strip() == deliverable_id:
+            matches.append(doc)
+
+    sizings_parts, _sizings_kind = SIZINGS_ONLY_ROOT
+    sizings_dir = worktree_root.joinpath(*sizings_parts)
+
+    # Flat scan roots (from the shared RESOLVABLE_ARTIFACT_ROOTS constant).
+    # state/sizings/ is whole-document YAML (*.yaml/*.yml, no frontmatter
+    # fence) — every other flat root is markdown frontmatter (*.md).
     flat_dirs = [
-        worktree_root / "docs" / "plans",
-        worktree_root / "state" / "handoffs",
+        worktree_root.joinpath(*parts)
+        for parts, kind in RESOLVABLE_ARTIFACT_ROOTS
+        if kind == "flat"
     ]
     for base_dir in flat_dirs:
         if not base_dir.is_dir():
@@ -371,14 +480,21 @@ def _scan_artifacts_by_deliverable_id(
             )
             scan_incomplete = True
             continue
+        is_sizings_root = base_dir == sizings_dir
         for path in entries:
-            if path.suffix == ".md" and path.is_file():
+            if not path.is_file():
+                continue
+            if is_sizings_root:
+                if path.suffix in (".yaml", ".yml"):
+                    _collect_sizing(path)
+            elif path.suffix == ".md":
                 _collect(path)
 
-    # Recursive scan roots: archive/handoffs/**/*.md, archive/specs/**/*.md.
+    # Recursive scan roots (from the shared RESOLVABLE_ARTIFACT_ROOTS constant).
     recursive_dirs = [
-        worktree_root / "archive" / "handoffs",
-        worktree_root / "archive" / "specs",
+        worktree_root.joinpath(*parts)
+        for parts, kind in RESOLVABLE_ARTIFACT_ROOTS
+        if kind == "recursive"
     ]
     for archive_dir in recursive_dirs:
         if not archive_dir.is_dir():
@@ -500,7 +616,7 @@ def _handler(
     scan_incomplete: _scan_artifacts_by_deliverable_id also returns whether a scan
     root (docs/plans, state/handoffs, or archive/handoffs) could not be fully
     enumerated (e.g. permission-denied); a WARNING is logged naming the blocked
-    root. That signal is on the wire as of coordinator-claude's be8b5d88 reader-widen (their
+    root. That signal is on the wire as of DoE's be8b5d88 reader-widen (their
     render layer appends " (partial scan)" per rendered line when it is set) —
     it is emitted here as an explicit bool on every payload, including the
     safe-empty shapes.
@@ -560,7 +676,7 @@ def _handler(
         # Unknown deliverable — safe-empty is the correct response, not an error.
         # scan_incomplete=True means this "0 matches" may instead be a blocked scan
         # root — the WARNING already logged inside _scan_artifacts_by_deliverable_id
-        # is today's only signal of that; scan_incomplete is on the wire as of coordinator-claude's
+        # is today's only signal of that; scan_incomplete is on the wire as of DoE's
         # be8b5d88 reader-widen, so it is passed through here rather than dropped.
         # Review: code-reviewer — use _empty_payload to avoid dual maintenance of the safe-null shape.
         return _empty_payload(deliverable_id, scan_incomplete=scan_incomplete)

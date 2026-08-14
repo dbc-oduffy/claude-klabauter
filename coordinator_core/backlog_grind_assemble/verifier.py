@@ -36,8 +36,8 @@ that the two shared values are present in whatever set is passed — it does
 NOT merge, widen, or offer a combined enum. See the plan's own instruction:
 "Parameterize; do NOT unify the enums."
 
-Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C6.
 
 Negative-spec:

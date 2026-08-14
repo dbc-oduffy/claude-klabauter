@@ -12,14 +12,14 @@ defect has recurred, and why this test must not later be "simplified" into one
 of them:
 
   - `schema_drift_watch.scan_vendored_schema_drift` compares claude-klabauter's copy to
-    coordinator-claude's. At the instant of a local shape edit the two files still agree on
-    the version, and the shape change has not reached coordinator-claude's side either, so
+    DoE's. At the instant of a local shape edit the two files still agree on
+    the version, and the shape change has not reached DoE's side either, so
     there is nothing for it to report.
   - `schema_validate.check_schema_drift` is a byte-for-byte TAMPER check
-    against a pinned coordinator-claude ref. Its own docstring says it is expected to be
+    against a pinned DoE ref. Its own docstring says it is expected to be
     always-green and is explicitly not a staleness check.
   - `schema_validate`'s consumer-ahead gate asserts claude-klabauter's
-    `x-schema-version` is strictly greater than coordinator-claude's at `doe_ref`. It
+    `x-schema-version` is strictly greater than DoE's at `doe_ref`. It
     constrains the relationship between two REPOS, never the relationship
     between a file and its own history.
 
@@ -77,9 +77,9 @@ PERCOLATE_STORE_REL = f"{SCHEMAS_REL_DIR}/percolate-store.schema.json"
 #: rather than run once at a console.
 #:
 #: DO NOT re-add `7bc1500d2` here. It appears in this schema's own
-#: `x-bump-note` and in this plan's prose, but it is a coordinator-claude-CLAUDE sha
+#: `x-bump-note` and in this plan's prose, but it is a DoE-CLAUDE sha
 #: (`percolate: label the percolation-only doctrine copies, and stop shipping a
-#: false delivery claim`) authored against coordinator-claude's history; it does not resolve
+#: false delivery claim`) authored against DoE's history; it does not resolve
 #: in this repository at all. Claude-klabauter's counterpart -- the commit that made the
 #: same `sentinel-strip` transform-kind edit here -- is `8bbe56808`, whose
 #: version bump did not arrive until the separate later commit `914cf8c11`.
@@ -482,7 +482,7 @@ class TestFullHistoryShapeBumpSweep:
         version has always meant, so there is no live inconsistency, even
         though the version string itself never moved. The motivating case is
         `handoff.schema.json` at 7.1.0: `1825e7771 -> 4e0d47e88` widened
-        shape (a re-vendor that imported coordinator-claude's unbumped shape move), and
+        shape (a re-vendor that imported DoE's unbumped shape move), and
         `4e0d47e88 -> e6af1c6cf` backed it out byte-for-byte. BOTH
         transitions in that pair are Class C, not just the first -- the
         second transition's own `before` (`4e0d47e88`) still carries the bad
@@ -608,7 +608,7 @@ class TestMotivatingCommitsReplay:
         `x-bump-class`, `x-bump-note` and two `description` strings and nothing
         else. Shape must read UNCHANGED across it. A red here means the hash is
         picking up prose, which would make the gate demand a bump for doc-only
-        syncs -- and on a schema coordinator-claude holds byte-identically, that costs a
+        syncs -- and on a schema DoE holds byte-identically, that costs a
         re-vendor round trip for a typo fix."""
         sha = "60f27f2a6a15"
         before = cat_file_batch(REPO_ROOT, f"{sha}~1", [PERCOLATE_STORE_REL]).get(PERCOLATE_STORE_REL)

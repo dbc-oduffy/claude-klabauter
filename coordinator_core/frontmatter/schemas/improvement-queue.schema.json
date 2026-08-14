@@ -67,7 +67,7 @@
     },
     "case_against": {
       "type": "string",
-      "description": "OPTIONAL. The argument that lost — carried through from a plan deferral this entry was harvested from, so a triager sees both the case for doing the work (proposed_action/body) and the case against it. Populated by the claude-klabauter-side harvest carry-through as of claude-klabauter 697b7d451 (2026-08-06), and it MUST stay optional even so: the carry-through OMITS the field entirely when the source row has none rather than writing an empty string, because an omitted optional field says nothing was carried while an empty string asserts there was no argument. Pre-1.6.0 plan rows are the common case there. A required field here would reject exactly those legitimately-omitting entries."
+      "description": "OPTIONAL. The argument that lost — carried through from a plan deferral this entry was harvested from, so a triager sees both the case for doing the work (proposed_action/body) and the case against it. Populated by the claude-klabauter-side harvest carry-through as of claude-klabauter 697b7d451, and it MUST stay optional even so: the carry-through OMITS the field entirely when the source row has none rather than writing an empty string, because an omitted optional field says nothing was carried while an empty string asserts there was no argument. Pre-1.6.0 plan rows are the common case there. A required field here would reject exactly those legitimately-omitting entries."
     },
     "queue_scope": {
       "type": "string",

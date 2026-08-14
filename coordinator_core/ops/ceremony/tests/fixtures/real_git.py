@@ -98,7 +98,7 @@ def make_peer_staged_path(root: Path, rel: str, content: str) -> None:
     in-flight staged work -- a path the caller's own scope never names.
 
     A pathspec-less ``git commit`` sweeps this into the caller's commit
-    alongside their own paths -- this is the coordinator-claude 726925b2 incident
+    alongside their own paths -- this is the DoE-claude 726925b2 incident
     shape.
     """
     p = root / rel

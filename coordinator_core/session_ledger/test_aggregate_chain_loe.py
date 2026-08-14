@@ -1,11 +1,11 @@
 """
 coordinator_core.session_ledger.test_aggregate_chain_loe — CLI-entry-point
 tests for aggregate_chain_loe.main(), the in-process entry point consumed by
-the coordinator-claude-side CLI trampoline (coordinator/bin/aggregate-chain-loe.py).
+the DoE-side CLI trampoline (coordinator/bin/aggregate-chain-loe.py).
 
 The chain-walk/aggregate/format logic itself (aggregate(), parse_session_ledgers(),
 resolve_handoff_path(), format_yaml_frontmatter/format_json) is covered
-byte-for-byte against the retired bash oracle by the coordinator-claude-side test suite
+byte-for-byte against the retired bash oracle by the DoE-side test suite
 (14 cases, run via the trampoline in-process). This file covers only
 main()'s own CLI-parsing / exit-code / help-text surface, added for the
 DOE-PORT trampoline.

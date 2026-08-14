@@ -87,10 +87,10 @@ SPEC_SKIP_STATUSES = frozenset({"superseded", "abandoned", "partial"})
 # ._FROZEN_STATUSES, or records_query.liveness()'s plan branch. Do not reuse
 # those names or assert this set equal to any of them; the module's
 # established convention here is deliberately-disagreeing partitions, not one
-# canonical terminal set. Spec of record: coordinator-claude
+# canonical terminal set. Spec of record: DoE-claude
 # coordinator/docs/wiki/coordinator-tripwires.md § PLAN-ORPHAN-OWNERSHIP.
 #
-# Negative-spec — "landed" is deliberately absent (struck 2026-08-06, coordinator-claude
+# Negative-spec — "landed" is deliberately absent (struck 2026-08-06, DoE
 # ruling 80b0b29fb adopting this repo's proposal); do not re-add it.
 # plan.schema.json documents "landed" as explicitly NON-terminal: chunk code
 # is on the branch, spine rows are still open. Excluding it dropped exactly

@@ -43,7 +43,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "coordinator_doc_new_predecessor_test", str(_BIN_DIR / "coordinator-doc-new")
+        "coordinator_doc_new_predecessor_test", str(_BIN_DIR / "coordinator-doc-new.py")
     )
     spec = importlib.util.spec_from_loader(
         "coordinator_doc_new_predecessor_test", loader

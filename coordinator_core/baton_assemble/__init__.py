@@ -33,7 +33,7 @@ is not None -- i.e. a continuation, never a fork -- and composes
 `_dispatch_handoff_supersede_predecessor`) to stamp the PREDECESSOR
 `continued` + `continued_into:<this successor>` and archive it, in the SAME
 transaction as this successor's own mint. Fixes the pathology where minting a
-continuation baton left its predecessor non-terminal forever (76/91 coordinator-claude
+continuation baton left its predecessor non-terminal forever (76/91 DoE
 batons). The discriminator is the plain `kind == "handoff" and
 lineage["predecessor"] is not None` predicate -- NOT the
 `j-continuation-vs-fork` judgment point below, which stays untouched
@@ -141,7 +141,7 @@ CONSUMES B0's shared resolver: `coordinator_core.resolution.facade.
 resolve_operator_config()` for settings_home/claude_klabauter_root/doe_root -- this module
 does NOT define its own local `_settings_home()`.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
 chunk C1
 
@@ -577,7 +577,7 @@ def _compute_fresh_output_path(
         return candidate
 
     # 2026-07-29 follow-up (successor-derivation archive-collision fix, see
-    # bug-report evidence at coordinator-claude state/handoffs/
+    # bug-report evidence at DoE-claude state/handoffs/
     # 2026-07-29_175200_confinement-band-split-plan-awaiting-review.md §
     # Session Ledger): `_exists` must check BOTH the live `state/handoffs/`
     # location AND every known archive location, not the live location
@@ -790,7 +790,7 @@ def _resolve_current_session_id() -> Optional[str]:
     """Resolve THIS RUN's own harness session id, for gating
     `_adopt_prior_attempt_scaffold_path`'s authorship check below.
 
-    Same env var + precedence chain `coordinator/bin/coordinator-doc-new`'s
+    Same env var + precedence chain `coordinator/bin/coordinator-doc-new.py`'s
     `_resolve_session_id` uses (`COORDINATOR_SESSION_ID` > `CLAUDE_SESSION_ID`
     > `CLAUDE_CODE_SESSION_ID`) -- kept as a SECOND, cross-referenced
     definition rather than an import. That CLI's own comment above its
@@ -1249,7 +1249,7 @@ def _adopt_prior_attempt_scaffold_path(
         resolved from this process's own environment, never a value passed in
         by the caller. Absent field, absent/unresolvable env on this run, or a
         mismatch all return `None` alike; there is no partial-credit branch.
-        This is the authorship fact `coordinator/bin/coordinator-doc-new`'s
+        This is the authorship fact `coordinator/bin/coordinator-doc-new.py`'s
         `_scaffold_handoff` now stamps at scaffold time (see that function's
         docstring) -- machine-written, not operator-typed prose, and
         therefore safe to gate on, unlike the `PLACEHOLDER` string the OTHER
@@ -1437,7 +1437,7 @@ def _tracking_read_frontmatter_field(
 
     Returns `(tracked_read_fn, tier_list)` -- `tier_list` is empty until the
     cascade fires a truthy `deliverable_id` read, then holds exactly one of
-    `"plan"` / `"artifact"` (the coordinator-claude-cascade's own vocabulary, ported
+    `"plan"` / `"artifact"` (the DoE-claude-cascade's own vocabulary, ported
     verbatim rather than reusing "predecessor" -- see module docstring at
     `resolve_lineage`). `resolve_lineage` itself relabels an `"artifact"` hit
     to a THIRD value, `"plan-input"`, when the hit's `_predecessor_file` is
@@ -1687,7 +1687,7 @@ def _scan_deliverable_collision(
     roadmap-baton root would still warn even though it is exactly the chain
     tip's own root. `_build_roadmap_baton_decline_judgment_point`'s own d6
     gate deliberately declines to supersede a roadmap-baton predecessor for
-    the identical reason. Coordinator-claude `coordinator/docs/wiki/coordinator-
+    the identical reason. DoE-claude `coordinator/docs/wiki/coordinator-
     tripwires.md:1454` mandates this exclusion directly: "Any backfill,
     reconciler, or convergence pass over `deliverable_id` MUST exclude
     `kind: roadmap-baton` records."
@@ -1829,6 +1829,8 @@ def resolve_lineage(
     additional_predecessor_paths: Optional[list[str]] = None,
     title: Optional[str] = None,
     explicit_deliverable_id: Optional[str] = None,
+    *,
+    excise_rung: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolve the `kind`-selected parent-discovery order into a lineage dict.
 
@@ -1921,6 +1923,16 @@ def resolve_lineage(
     order. For every OTHER `kind`/branch -- including `kind == "spinoff"`
     entirely -- this key is ABSENT from the returned dict, not `False`; a
     caller that needs the value regardless of branch must use `.get()`.
+
+    `excise_rung` (2026-08-14, break-glass excise reaching the cascade):
+    `kind == "handoff"`-only. `None` (default) leaves the cascade untouched.
+    `"plan_file"` drops `_plan_file` before the `resolve_deliverable_and_
+    initiative` call -- used when the caller supplied an explicit
+    `artifact_path` (the OPERATOR-NAMED rung wins). `"predecessor_file"`
+    drops `_predecessor_file` instead -- used when `artifact_path` was
+    empty and the predecessor was self-resolved from the claim ledger (the
+    AUTO-DISCOVERED rung is the one cut). The caller (`brief`) computes
+    which value to pass; this function only applies it.
     """
     # `was_bare_slug` distinguishes the bare-slug mint convention (fresh
     # output target -- legitimately absent on disk, nothing to archive-
@@ -1994,6 +2006,35 @@ def resolve_lineage(
         _predecessor_file = (
             str(_artifact_frontmatter_abs_path) if _artifact_frontmatter_abs_path else None
         )
+        # Break-glass excise, reaching the cascade (2026-08-14): applied HERE,
+        # before `resolve_deliverable_and_initiative` runs, so a divergent
+        # rung is gone by the time it would otherwise raise
+        # `DivergentDeliverableIdError` -- not after, when the raise has
+        # already propagated. Cuts exactly ONE rung, per `excise_rung`'s own
+        # docstring above; the other rung (and the carry it supplies) is
+        # untouched.
+        #
+        # Inertness guard (2026-08-14, review finding P2): `excise_rung` on
+        # its own does not know whether the two rungs actually diverge --
+        # when both `_plan_file` and `_predecessor_file` are present and
+        # agree on `deliverable_id`, there is nothing to rescue, and cutting
+        # a rung anyway would silently swap which artifact
+        # `resolve_deliverable_and_initiative`'s `initiative` fallback reads
+        # from (it is resolved independently of `deliverable_id`, plan-file
+        # first). Read directly here, BEFORE either rung is nulled -- the
+        # cascade's own `_tracked` read (`_tracking_read_frontmatter_field`)
+        # fires too late, after this cut has already happened. When either
+        # rung is absent there is no agreement to detect (only one source
+        # exists), so the cut proceeds as before.
+        _rungs_diverge_on_deliverable_id = True
+        if excise_rung in ("plan_file", "predecessor_file") and _plan_file and _predecessor_file:
+            _rungs_diverge_on_deliverable_id = _read_frontmatter_field(
+                _plan_file, "deliverable_id"
+            ) != _read_frontmatter_field(_predecessor_file, "deliverable_id")
+        if excise_rung == "plan_file" and _rungs_diverge_on_deliverable_id:
+            _plan_file = None
+        elif excise_rung == "predecessor_file" and _rungs_diverge_on_deliverable_id:
+            _predecessor_file = None
         # Dropped-join guard, plan-input axis (2026-08-13): computed HERE,
         # BEFORE the cascade call, from `fm`/`artifact_path` this function
         # already holds -- the SAME predicate the `is_plan_input` relabel
@@ -2177,7 +2218,7 @@ def resolve_lineage(
         # the existing field-walk rather than being routed to the ledger on
         # a weaker signal alone.
         #
-        # THE DEFECT this closes: coordinator-claude's `plan.schema.json` defines
+        # THE DEFECT this closes: DoE's `plan.schema.json` defines
         # `predecessor_handoff` as the handoff that SPAWNED this plan
         # (provenance) -- this module used to consume it as the handoff to
         # TERMINATE (a different relation). The actual supersession target
@@ -3453,15 +3494,31 @@ def _build_directives(
 # ---------------------------------------------------------------------------
 
 
-def _tracker_hand_curated_evidence(root: Path) -> str:
+def _tracker_hand_curated_evidence(root: Path, kind: str = "handoff") -> str:
     """Evidence string for `j-tracker-hand-curated` -- states plainly that
     the tracker at `docs/project-tracker.md` is hand-curated, names the
     path, and states the obligation the skill previously only carried in
     prose: the EM must update it by hand if this session progressed
     anything. That is the whole point of surfacing this judgment point in
     d4's place -- see `_build_directives`'s own comment on why d4 is not
-    armed here."""
+    armed here.
+
+    2026-08-14 fix: `kind == "spinoff"` carries a DIFFERENT obligation than
+    `kind == "handoff"` -- a spinoff's SKILL prose (`/spinoff` step 2) asks
+    the EM to mark the fork in the SOURCE session's own tracker, not to
+    record this session's own progress in it (there is no "this session
+    progressed anything" framing for a spinoff, which forks off rather than
+    concluding). The `kind` parameter selects the correctly-framed sentence
+    so the evidence does not mislead a spinoff EM into reading a handoff's
+    framing."""
     tracker_path = root / "docs" / "project-tracker.md"
+    if kind == "spinoff":
+        return (
+            f"{tracker_path} is hand-curated (predates render-project-tracker "
+            "and carries no generated-marker) -- the EM must mark this fork "
+            "in the SOURCE session's own tracker by hand, per the /spinoff "
+            "skill's own prose obligation (step 2)."
+        )
     return (
         f"{tracker_path} is hand-curated (predates render-project-tracker "
         "and carries no generated-marker), so d4 (render-project-tracker) "
@@ -3628,16 +3685,42 @@ def _build_judgment_points(
     # by hand, if this session progressed items worth recording in it"); this
     # surfaces it as an actual judgment point so it can be discharged rather
     # than silently dropped.
-    if kind == "handoff" and tracker_hand_curated and root is not None:
+    # 2026-08-14 fix: widened from `kind == "handoff"` to also cover
+    # `kind == "spinoff"`. The prior gate mirrored d4's own handoff-only
+    # scope (d4/render-project-tracker never fires for a spinoff -- see
+    # `_build_directives`'s comment, "spinoff's own directive set already
+    # skips id d4 entirely"), but that narrowing was never a deliberate
+    # decision about THIS judgment point's own obligation: `git log -S
+    # 'j-tracker-hand-curated'` and the 2026-08-06 commit that introduced it
+    # only reason about d4's replacement on the handoff path, and no test
+    # asserted a spinoff must NOT receive it. The obligation still exists
+    # for a spinoff -- SKILL.md's own step 2 prose ("mark the fork in the
+    # source session's own task tracker") -- and was surviving only as that
+    # one sentence, queued for a size-reduction cut. See
+    # `_tracker_hand_curated_evidence`'s own kind-branch for why the
+    # question/evidence text differs by kind.
+    if kind in ("handoff", "spinoff") and tracker_hand_curated and root is not None:
+        if kind == "spinoff":
+            question = (
+                "This repo's docs/project-tracker.md is hand-curated -- has "
+                "this fork been marked in the SOURCE session's own tracker "
+                "by hand, per the /spinoff skill's step 2?"
+            )
+        else:
+            question = (
+                "This repo's docs/project-tracker.md is hand-curated (d4 "
+                "was not armed) -- did this session progress anything worth "
+                "recording in it, and if so, has it been updated by hand?"
+            )
         points.append(
             build_untrusted_gate_judgment_point(
                 id="j-tracker-hand-curated",
-                question="This repo's docs/project-tracker.md is hand-curated (d4 was not armed) -- did this session progress anything worth recording in it, and if so, has it been updated by hand?",
+                question=question,
                 dispositions=[
                     build_disposition("recorded", ["d1"]),
                     build_disposition("nothing-to-record", ["d1"]),
                 ],
-                evidence=_tracker_hand_curated_evidence(root),
+                evidence=_tracker_hand_curated_evidence(root, kind=kind),
                 reason="Judgment residue -- a hand-curated tracker has no renderer to discharge this; the EM must decide and act by hand.",
             )
         )
@@ -3777,8 +3860,8 @@ def _resolve_held_handoff_for_session(
     not an error: this used to hard-fail here as "ambiguous", permanently
     stranding whichever predecessor lost the coin flip at
     `deployment_state` non-terminal (see this module's own docstring's
-    "76/91 coordinator-claude" note). The FIRST (earliest-claimed) held handoff becomes the
-    PRIMARY predecessor -- coordinator-claude's `coordinator/skills/handoff/SKILL.md` §
+    "76/91 DoE" note). The FIRST (earliest-claimed) held handoff becomes the
+    PRIMARY predecessor -- DoE's `coordinator/skills/handoff/SKILL.md` §
     Predecessor identification defines the predecessor as "whatever handoff
     this session was opened with", which this extends rather than replaces
     for the N>1 case: the handoff the session was opened with is the one it
@@ -4011,7 +4094,7 @@ def _predecessor_carried_items_active(root: "Optional[Path]", predecessor: "Opti
     """True iff `predecessor` (a `lineage["predecessor"]` value -- either
     root-relative or absolute, per `resolve_lineage`'s own storage
     convention) names a file whose frontmatter carries a `carried_items:`
-    value that is itself a non-empty YAML list. Mirrors `coordinator-claude@HEAD:
+    value that is itself a non-empty YAML list. Mirrors `DoE-claude@HEAD:
     coordinator/hooks/scripts/handoff-segment-inject.py`'s
     `_carried_items_active` exactly, list-type check included
     (`isinstance(items, list) and len(items) > 0`) -- a `carried_items:`
@@ -4057,7 +4140,7 @@ def _resolve_handoff_residue_active_cases(
     root: "Optional[Path]",
 ) -> set[str]:
     """Resolve the active `case:` set for this `brief()` call, matched
-    signal-for-signal against `coordinator-claude@HEAD:coordinator/hooks/scripts/
+    signal-for-signal against `DoE-claude@HEAD:coordinator/hooks/scripts/
     handoff-segment-inject.py`'s `compute_active_cases` -- the consumer this
     `segments` key is meant to let retire its own copy of this computation.
     A drift here is not cosmetic: it silently changes what the consumer
@@ -4081,7 +4164,7 @@ def _resolve_handoff_residue_active_cases(
     whenever its own `_resolve_repo_root()` returns `None` (repo root
     undeterminable), and that function's docstring names the exact same
     choice ("callers degrade the `dirty-tree` case to inactive rather
-    than raising"). Verified directly against `coordinator-claude@HEAD:
+    than raising"). Verified directly against `DoE-claude@HEAD:
     coordinator/hooks/scripts/handoff-segment-inject.py` -- this is an
     equivalent degrade path on both sides, not a signal-fidelity gap.
     `carried-items`
@@ -4243,17 +4326,23 @@ def brief(
     if repo_root_was_cwd_derived and repo_identity_gate["verdict"] == "MISMATCH":
         raise TransportFailure(repo_identity_gate["message"])
 
-    # Break-glass predecessor excise (2026-08-05): `j-continuation-vs-fork`'s
-    # "excise" disposition (see `_build_judgment_points`) is read HERE,
-    # before `resolve_lineage`/`_build_directives` run, so the null-out
-    # below reaches both. Fail-loud, no partial computation, when "excise"
-    # carries no non-empty `decision_note` -- mirrors the `disposition_
-    # detail`-required shape the carried_items/plan-tasks carry gate uses
-    # for its own terminal states (schema_validate.py
-    # `_validate_disposition_carrying_items`): a predecessor removed with
-    # no recorded reason is exactly the silent-lineage-break `lineage[
-    # "standalone_no_predecessor_reason"]` exists to prevent, so this
-    # verb refuses to compute a brief that would carry that gap forward.
+    # Break-glass predecessor excise (2026-08-05, cascade reach added
+    # 2026-08-14): `j-continuation-vs-fork`'s "excise" disposition (see
+    # `_build_judgment_points`) is read HERE, before `resolve_lineage`/
+    # `_build_directives` run. The gate below is fail-loud, no partial
+    # computation, when "excise" carries no non-empty `decision_note` --
+    # mirrors the `disposition_detail`-required shape the carried_items/
+    # plan-tasks carry gate uses for its own terminal states
+    # (schema_validate.py `_validate_disposition_carrying_items`): a
+    # predecessor removed with no recorded reason is exactly the
+    # silent-lineage-break `lineage["standalone_no_predecessor_reason"]`
+    # exists to prevent, so this verb refuses to compute a brief that would
+    # carry that gap forward. `_excise_predecessor`/`_excise_decision_note`
+    # feed TWO downstream effects, not one: `excise_rung` below (threaded
+    # into `resolve_lineage`, reaching `resolve_deliverable_and_initiative`
+    # so a divergent rung can actually be waived) and the post-return
+    # null-out further down (which still only nulls `lineage["predecessor"]`
+    # / `["predecessor_id"]` for `_build_directives`'s benefit).
     _continuation_decision = decisions.get("j-continuation-vs-fork")
     _excise_predecessor = (
         isinstance(_continuation_decision, dict)
@@ -4271,6 +4360,20 @@ def brief(
                 "exists to prevent"
             )
         _excise_decision_note = _note
+
+    # Which rung the excise cuts (2026-08-14): captured BEFORE the
+    # self-resolution block below can overwrite `artifact_path`, so this
+    # reflects what the CALLER supplied, not what `brief` filled in on its
+    # behalf. Explicit `artifact_path` -> the operator named the predecessor
+    # -> cut `_plan_file` (the auto-discovered claimed-plan rung). Empty
+    # `artifact_path` -> the predecessor is about to be self-resolved from
+    # the claim ledger -> cut `_predecessor_file` instead, keeping the
+    # operator-named claimed plan. `None` for `kind == "spinoff"` or when no
+    # excise was requested; `resolve_lineage` ignores it for spinoff and
+    # no-ops on `None`.
+    _excise_rung: Optional[str] = None
+    if _excise_predecessor and kind == "handoff":
+        _excise_rung = "plan_file" if artifact_path else "predecessor_file"
 
     # Also asserts the shared operator-config resolution seam (B0) resolves
     # cleanly -- a corrupt settings_home/claude_klabauter_root/doe_root value fails
@@ -4318,6 +4421,7 @@ def brief(
         additional_predecessor_paths=additional_predecessor_paths,
         title=title,
         explicit_deliverable_id=explicit_deliverable_id,
+        excise_rung=_excise_rung,
     )
     lineage["standalone_no_predecessor_reason"] = standalone_no_predecessor_reason
     if _brief_ledger_degraded is not None:

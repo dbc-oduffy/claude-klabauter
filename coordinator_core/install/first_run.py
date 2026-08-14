@@ -1,6 +1,6 @@
 """
-coordinator_core.install.first_run -- Port of: the coordinator-claude-owned fresh-machine
-bootstrap entrypoint `coordinator/scripts/first-run.sh` (coordinator-claude c3322493,
+coordinator_core.install.first_run -- Port of: the DoE-owned fresh-machine
+bootstrap entrypoint `coordinator/scripts/first-run.sh` (DoE c3322493,
 2026-07-22) (BIG_PORT Wave C, id: first-run).
 
 Purpose: lands a freshly git-cloned coordinator-claude checkout on a new
@@ -46,13 +46,13 @@ see `docs/wiki/coordinator-installer-shape.md` "durable-substrate-to-
 settings-home"), so the old not-found guard fired on every machine lacking a
 separately-placed copy at that source-tree path. Doubly broken: even when a
 copy WAS found there, `platform-localize.sh` had itself already been ported
-(coordinator-claude side) to a `#!/usr/bin/env python3` trampoline over THIS repo's own
+(DoE side) to a `#!/usr/bin/env python3` trampoline over THIS repo's own
 `coordinator_core.hooks.platform_localize` -- so `bash <path>` fed Python
 source to bash as a shell script, which never worked. Step 4c below now
 calls `coordinator_core.hooks.platform_localize.main()` directly in-process,
 which sidesteps both the wrong-path bug and the stale bash spawn.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C12
 """
 
@@ -95,7 +95,7 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 #   3 -- DEDICATED transport-failure code for the TRAMPOLINE layer only (the
 #        claude-klabauter link/import failed before this module's own main() could
 #        run at all) -- never returned by this module itself, only by the
-#        coordinator-claude polyglot trampoline that imports it. Documented here so the two
+#        DoE polyglot trampoline that imports it. Documented here so the two
 #        files' contracts are readable together.
 # ---------------------------------------------------------------------------
 EXIT_OK = 0
@@ -335,7 +335,7 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     Discovery is an in-process call into
     ``coordinator_core.ops.discover_working_repos`` -- this repo's own
     native three-tier discovery port -- not a ``bash``-spawned subprocess.
-    The coordinator-claude-side ``discover-working-repos.sh`` this used to shell out to is
+    The DoE-side ``discover-working-repos.sh`` this used to shell out to is
     itself only a polyglot trampoline back onto that same claude-klabauter module (see
     that file's own header), so the subprocess hop was pure indirection with
     no logic on the other end to preserve; calling the module directly
@@ -343,7 +343,7 @@ def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     output. ``machine-local`` remains a real, separate CLI binary (not a
     claude-klabauter module) and is still invoked as a subprocess below -- but it now
     lives in claude-klabauter's own ``coordinator/bin/`` (the b644d5a9 executable-
-    surface relocation moved it out of the coordinator-claude ``CLAUDE_PLUGIN_ROOT``
+    surface relocation moved it out of the DoE-claude ``CLAUDE_PLUGIN_ROOT``
     entirely), so it is resolved off ``coordinator_claude_klabauter_root()``, never
     ``plugin_root``.
 
@@ -471,7 +471,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     # reimplemented native, not merely de-bashed). The trampoline's SOURCE
     # FILE has since moved: the b644d5a9 executable-surface relocation moved
     # coordinator/scripts/ (and coordinator/lib/, coordinator/bin/) out of the
-    # coordinator-claude CLAUDE_PLUGIN_ROOT entirely and into claude-klabauter's OWN checkout
+    # DoE-claude CLAUDE_PLUGIN_ROOT entirely and into claude-klabauter's OWN checkout
     # (this repo's `coordinator/` tree) -- so the walker's repo_root/lib_dir
     # env vars (mirroring the trampoline's own `main()`: repo_root =
     # <coordinator-tree-root>, lib_dir = <coordinator-tree-root>/scripts/lib,
@@ -553,7 +553,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     # Step 4c: platform-localize -- native in-process call (2026-07-21
     # pure-Python-shop cutover). `plugin_root/bin/platform-localize.sh` is
     # itself a python3-shebanged trampoline over this SAME engine's
-    # coordinator_core.hooks.platform_localize (coordinator-claude-owned file kept
+    # coordinator_core.hooks.platform_localize (DoE-owned file kept
     # `.sh`-suffixed for caller-path stability -- see that trampoline's own
     # header); the retired `bash <path>` spawn fed the trampoline's Python
     # source to bash as a script, which never worked -- reimplemented
@@ -692,7 +692,7 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         return EXIT_FAIL
 
     # unit1: PLUGIN_ROOT = parent of the resolved coordinator source tree.
-    # The trampoline resolves and passes this via env (see coordinator-claude-side file);
+    # The trampoline resolves and passes this via env (see DoE-side file);
     # fall back to this module's own package location for direct-import
     # callers/tests that don't go through the trampoline.
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
@@ -700,7 +700,7 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         plugin_root = Path(plugin_root_env)
     else:
         # coordinator_core/install/first_run.py has no reliable relative path
-        # to a coordinator-claude coordinator/ tree in the general case (they are separate
+        # to a DoE coordinator/ tree in the general case (they are separate
         # repos) — callers that need the toolchain-mutation flow to actually
         # locate `bin/`, `lib/`, `scripts/` MUST pass CLAUDE_PLUGIN_ROOT
         # (the trampoline always does — see its own header).

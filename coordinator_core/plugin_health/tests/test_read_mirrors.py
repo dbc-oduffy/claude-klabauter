@@ -5,13 +5,13 @@ coordinator_core.plugin_health.drift during the check-plugin-drift.sh port.
 
 The function itself already lives at coordinator_core/plugin_health/drift.py
 (landed as part of the drift-probe port, which absorbed the formerly-standalone
-Coordinator-claude coordinator/bin/lib/read-mirrors.sh — see that module's docstring).
+DoE-claude coordinator/bin/lib/read-mirrors.sh — see that module's docstring).
 This file closes a coverage gap: drift.py's existing test suite (test_drift.py)
 never exercised read_all_mirrors() directly. Parity verified against the live
 bash oracle (_read_all_mirrors in read-mirrors.sh) on matching fixtures during
 this port's parity gate.
 
-Port of: read-mirrors.sh::_read_all_mirrors (coordinator-claude 721a71f4, 2026-07-21)
+Port of: read-mirrors.sh::_read_all_mirrors (DoE 721a71f4, 2026-07-21)
 """
 
 from __future__ import annotations

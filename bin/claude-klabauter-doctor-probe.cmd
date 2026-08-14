@@ -13,7 +13,7 @@ REM     launcher -- the PowerShell binder eats a bare `--` before this script
 REM     ever sees argv, silently dropping it and everything meant to follow it.
 REM     Measured against pwsh 7.6.4 -- see coordinator_core/test_bin_launcher_
 REM     parity.py::test_argv_fidelity_matrix.
-REM Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C7
+REM Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C7
 REM
 REM Resolves a Python interpreter and runs the co-located entrypoint "claude-klabauter-doctor-probe.py"
 REM directly. install-substrate.py substitutes __PYTHON_BIN__ with the

@@ -45,12 +45,12 @@ Exit codes:
   4 — resolver lib missing at resolved path (fast-test skipped; RC_VALIDATE=lib-missing).
   5 — resolved fast-test command classifies Tier U (unscoped/full-suite shape) and the
        calling session holds no live Tier-U grant (RC_VALIDATE=tier-u-refused). R3+R4,
-       cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-ruling.md — this
+       cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-ruling.md — this
        gate only READS a Tier-U grant, it never writes/consumes-by-granting one.
 
-Port of: workday-complete-step1-validate.sh (coordinator-claude 091c0f3e, 2026-07-19).
+Port of: workday-complete-step1-validate.sh (DoE 091c0f3e, 2026-07-19).
 The fast-test resolver (bin/coordinator-resolve-validation-cmd.py, ported from
-lib/coordinator-resolve-validation-cmd.sh, coordinator-claude c187f5b9, 2026-07-21, in the
+lib/coordinator-resolve-validation-cmd.sh, DoE c187f5b9, 2026-07-21, in the
 2026-07-19 debash campaign's E3-e chunk) is now called in-process — no bash-lib
 bridge subprocess spawn. The resolved fast_test_cmd itself is executed via
 `shlex.split` + direct exec (no shell) as of the 2026-07-29 debash pass —
@@ -65,6 +65,7 @@ import shlex
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The resolver's on-disk filename is hyphenated (bin/-resident CLI, not an
@@ -97,6 +98,10 @@ from coordinator_core.diff_scoped_tests import (  # noqa: E402
     append_test_paths,
     diag,
     find_changed_test_files,
+)
+from coordinator_core.ops.test_red_record import (  # noqa: E402
+    parse_failing_nodeids,
+    write_test_red_record,
 )
 from coordinator_core.session.tier_u_gate import enforce_tier_u_gate  # noqa: E402
 from coordinator_core.testing import suite_mutex  # noqa: E402
@@ -457,6 +462,60 @@ def _classify_fast_test_output(output: str, rc: int) -> int:
     return 3
 
 
+def _git_head_sha() -> str:
+    """Best-effort ``git rev-parse HEAD`` against cwd. Any failure (detached
+    tooling, non-repo cwd, missing git) yields ``"unknown"`` -- this feeds
+    the test-red record's ``sha`` field, which is emitter-owned and
+    diagnostic only; it must never be allowed to raise into the caller.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **no_console_creationflags(),
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip() or "unknown"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _emit_test_red_record(ft_rc: int, ft_content: str, classify_rc: int) -> None:
+    """Write ``state/test-red/<machine>.yaml`` (tier ``fast``) from THIS run's
+    already-captured (rc, combined stdout+stderr) -- never a second pytest
+    invocation (coordinator_core.ops.test_red_record's own negative-spec).
+
+    Isolation boundary (AC2 of the wiring task): this function must NEVER be
+    able to change `main()`'s return value or raise past its own call site.
+    Every exception -- MutateAbort (stale-run monotonic guard, an expected
+    benign race under concurrent sessions), a locked/read-only state/ dir,
+    a YAML parse error on a hand-edited record, anything -- is caught here
+    and LOGGED to stderr (not silenced): this diagnostic stream already
+    carries non-blocking WARNs (see the suite-mutex WARN above), so one more
+    loud-but-non-blocking line matches the file's existing posture rather
+    than failing silently, which would leave a stale/missing record with no
+    trace of why.
+    """
+    try:
+        outcome = "green" if ft_rc == 0 else ("build-failure" if classify_rc == 2 else "test-failures")
+        runner, failing = parse_failing_nodeids(ft_content)
+        write_test_red_record(
+            repo_root=Path(_REPO_ROOT),
+            tier="fast",
+            sha=_git_head_sha(),
+            exit_code=ft_rc,
+            outcome=outcome,
+            runner=runner,
+            failing=failing,
+        )
+    except Exception as exc:  # noqa: BLE001 -- must never affect the validate verdict/exit code
+        _err(f"[workday-complete-step1] test-red record: write failed ({exc!r}) — continuing.")
+
+
 def main() -> int:
     # -----------------------------------------------------------------------
     # Gate 1 — UBT pending-record resolution — RETIRED 2026-08-06
@@ -538,7 +597,7 @@ def main() -> int:
         scoped_cmd = cmd
 
     # Classify the resolved command's SHAPE before running it (R3+R4:
-    # cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-
+    # cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-
     # ruling.md -- this resolve-and-execute-in-process CLI is the same
     # process-boundary shape as validate-fast-and-packageability.py's
     # `fast` subcommand). Refuse rather than execute when the shape is
@@ -605,10 +664,12 @@ def main() -> int:
     rc_validate = ft_rc
 
     if ft_rc == 0:
+        _emit_test_red_record(ft_rc, ft_content, 0)
         _emit(rc_ubt, rc_validate)
         return 0
 
     classify_rc = _classify_fast_test_output(ft_content, ft_rc)
+    _emit_test_red_record(ft_rc, ft_content, classify_rc)
     _emit(rc_ubt, rc_validate)
     return classify_rc
 

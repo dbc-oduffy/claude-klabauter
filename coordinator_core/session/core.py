@@ -1,6 +1,6 @@
 """
 coordinator_core.session.core — Python engine port of the retained-in-hub
-helpers from coordinator-session.sh (Port of: coordinator-claude e34f2484, 2026-07-22) —
+helpers from coordinator-session.sh (Port of: DoE e34f2484, 2026-07-22) —
 the functions T0-decompose could NOT bash-extract into
 ``coordinator/lib/session/*.sh``:
 git-root/session-dir resolution, clock helpers, PID/liveness primitives,
@@ -12,7 +12,7 @@ NOT-cached-across-calls constraint this preserves from the bash original.
 
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-t4a-coordinator-session-hub.md § core.py
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4a-g1
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 
 Negative-spec:
     - Do NOT call ``ps -p``/``kill -0``/``psutil.pid_exists`` on a stored
@@ -60,6 +60,12 @@ from coordinator_core.win_portability import no_console_creationflags
 # mechanism — Windows entirely, POSIX's stable_pid_alive Layer 1 since the
 # 2026-07-27 ps-to-psutil port). ``pid_alive`` on POSIX is the sole
 # surviving `os.kill` user; see that docstring / ``_win_create_time_epoch``.
+# Generator-provenance declaration (generator_provenance.py). update_meta_field/
+# update_meta_fields write only `<session_dir>/meta.json` under
+# `.git/coordinator-sessions/<sid>/` -- git-internal session-hub state, never a
+# tracked repo artifact.
+GENERATES = []
+
 _UNRESOLVED = object()
 psutil = _UNRESOLVED  # type: ignore[assignment]
 
@@ -393,8 +399,8 @@ def _win_create_time_epoch(pid_int: int) -> Optional[int]:
     no longer Windows-exclusive.
 
     Originally added for Windows (no ``ps`` binary there), then converged
-    onto by POSIX too in the 2026-07-27 ps-to-psutil port (coordinator-claude
-    cross-repo memo ``2026-07-27-coordinator-claude-em-ac6-ps-to-psutil-yes-oracle-
+    onto by POSIX too in the 2026-07-27 ps-to-psutil port (DoE
+    cross-repo memo ``2026-07-27-doe-claude-em-ac6-ps-to-psutil-yes-oracle-
     retired.md`` confirmed the bash ``_cs_stable_pid_alive`` parity oracle
     this POSIX arm preserved was itself retired 2026-07-22 — there is no
     remaining counterparty to diff against). ``create_time()`` is an
@@ -475,7 +481,7 @@ def stable_pid_alive(pid, stored_lstart: str = "", stored_start_epoch: str = "")
     claude session process) captured at ``init()`` time.
 
     PLATFORM SPLIT (psutil-everywhere; POSIX converged onto the Windows
-    ``create_time()`` path 2026-07-27 — the coordinator-claude bash ``_cs_stable_pid_alive``
+    ``create_time()`` path 2026-07-27 — the DoE bash ``_cs_stable_pid_alive``
     parity oracle this preserved was itself retired 2026-07-22, and there is
     no live counterparty left to diff against). The birth-instant fetch AND
     the tolerant epoch compare are ONE implementation shared by both
@@ -833,7 +839,7 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
     ~18 concurrent sessions sharing this worktree it names whichever
     session most recently initialized, not necessarily the caller's — see
     coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND its
-    sole writer (session-init.py, the coordinator-claude SessionStart hook) was
+    sole writer (session-init.py, the DoE-claude SessionStart hook) was
     deleted by PM directive 2026-07-15 — no production writer survives, so
     it could never be refreshed. ``cwd`` is retained for API compatibility
     with existing callers even though tiers 1-3 do not use it.
@@ -847,6 +853,83 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
         if sid:
             return sid
     return ""
+
+
+def _harness_process_comm(proc) -> str:
+    """Derive the name token compared against ``"claude"`` by
+    ``_is_harness_process`` for a given ``psutil.Process``.
+
+    Preferred field: the basename of ``argv[0]`` (``proc.cmdline()[0]``).
+    Measured live on this box (docs/research/
+    2026-08-14-harness-process-identity-problem-set.md § Q2/Q4):
+    ``psutil.Process.name()`` reports the version string (e.g.
+    ``"2.1.231"``) for the harness process, not ``"claude"`` — a moving
+    target that changes under a live process the instant the
+    ``~/.local/bin/claude`` symlink is repointed to a new version, with
+    nothing else about the process changing. ``cmdline()[0]``'s basename
+    (``"claude"``) is the one field measured that does not embed the
+    version.
+
+    Falls back to ``proc.name()`` (unchanged behaviour, ``.exe``-stripped
+    below like the ``cmdline()`` leg) when ``cmdline()`` raises
+    (``AccessDenied`` / ``ZombieProcess`` / ``NoSuchProcess`` / any other
+    error) or returns an empty list — a "field unreadable, use the older
+    field" degrade, NOT a second witness: it can only ever fall back to
+    what today's callers already accepted, never accept something today's
+    ``name()``-only check would have rejected. That fallback call is left
+    UNGUARDED here deliberately — its exceptions propagate to the caller's
+    own existing ``except`` block (``AccessDenied`` / ``ZombieProcess`` /
+    ``NoSuchProcess``), preserving each call site's pre-existing
+    skip-vs-miss handling around that exact call unchanged. This function
+    itself never raises past the ``cmdline()`` leg.
+
+    Honesty note: ``argv[0]`` is a value the process itself controls, not
+    a kernel-verified identity field — a hostile process could still spawn
+    with ``argv[0]`` set to ``"claude"``. This derivation defends against a
+    mis-derived ancestor or a future resolver bug landing the wrong PID in
+    ``stable_pid``, not against a deliberately spoofing local process; it
+    is not, and was never claimed to be, tamper-proof.
+
+    ``.exe``-stripped identically on both legs so a Windows caller need not
+    strip it again after calling this.
+    """
+    argv0 = ""
+    try:
+        cmdline = proc.cmdline()
+    except Exception:
+        cmdline = None
+    if cmdline:
+        argv0 = cmdline[0] or ""
+    if argv0:
+        # Split on BOTH separators regardless of the host running this
+        # code: a Windows psutil target always renders argv0 with
+        # backslashes, and this predicate is exercised on POSIX (via a
+        # process double / tests, and any future cross-platform caller)
+        # where ``os.path.basename`` would only split on ``/`` and leave a
+        # Windows-shaped path un-split.
+        base = re.split(r"[\\/]", argv0)[-1]
+    else:
+        base = proc.name() or ""  # unguarded — see docstring
+    return base[:-4] if base.lower().endswith(".exe") else base
+
+
+def _is_harness_process(name: str) -> bool:
+    """Decide whether an already-normalized process name is the harness's
+    own ``claude`` process.
+
+    Takes the name AFTER whatever normalization the caller applies —
+    ordinarily the result of ``_harness_process_comm(proc)`` (argv0-basename
+    preferred, ``name()``-based ``.exe``-stripped fallback; see that
+    function's docstring). This predicate does not itself derive or
+    normalize the name — it stays a pure exact-match comparison so the
+    derivation policy can be swapped (as it was, C2a -> C3) without
+    touching this function. Callers pass the derived result in. Exact-match
+    only — a byte-identical port of the three ``== "claude"`` /
+    ``!= "claude"`` comparisons this consolidates (Windows ancestor walk,
+    ``_resolve_claude_pid_from_env``, POSIX parent check). See
+    ``docs/plans/2026-08-13-session-identity-earns-its-keep.md`` § C2, § C3.
+    """
+    return name == "claude"
 
 
 def _find_windows_claude_ancestor(
@@ -929,7 +1012,7 @@ def _find_windows_claude_ancestor(
         except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
             return None, f"walk-miss:rung-unreadable:{type(exc).__name__}:{depth}"
         try:
-            name = proc.name() or ""
+            comm = _harness_process_comm(proc)
         except (_ps.AccessDenied, _ps.ZombieProcess) as exc:
             # The rung still exists (that is what these two exceptions
             # mean), so its .ppid() is a verified link even though its
@@ -951,8 +1034,7 @@ def _find_windows_claude_ancestor(
             continue
         except _ps.NoSuchProcess as exc:
             return None, f"walk-miss:rung-unreadable:{type(exc).__name__}:{depth}"
-        comm = name[:-4] if name.lower().endswith(".exe") else name
-        if comm == "claude":
+        if _is_harness_process(comm):
             suffix = "".join(f"+{s}" for s in skipped)
             try:
                 match = (pid, proc.create_time())
@@ -1034,11 +1116,10 @@ def _resolve_claude_pid_from_env() -> "tuple[Optional[tuple[int, float]], str]":
         return None, "psutil-absent"
     try:
         proc = _ps.Process(pid)
-        name = proc.name() or ""
+        comm = _harness_process_comm(proc)
     except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.ZombieProcess) as exc:
         return None, f"env-miss:{type(exc).__name__}"
-    comm = name[:-4] if name.lower().endswith(".exe") else name
-    if comm != "claude":
+    if not _is_harness_process(comm):
         return None, "env-miss:name-mismatch"
     try:
         return (pid, proc.create_time()), "env-hit"
@@ -1216,24 +1297,33 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
         # ``lstart_to_epoch`` remains load-bearing only on the legacy READ
         # path (``stable_pid_alive``'s pre-2026-07-27-meta fallback above).
         #
-        # ``psutil.Process.name()`` is the POSIX equivalent of the retired
-        # ``ps -o comm=`` column — both report the (potentially
-        # 15-char-truncated-on-Linux) executable/comm name, and "claude" (6
-        # chars) is short enough that the historical truncation risk this
-        # exact-match guard was written to dodge never applies. No `.exe`
-        # stripping is needed here (POSIX has no such suffix) — that step
-        # stays specific to the Windows branch above.
+        # ``_harness_process_comm`` — NOT ``psutil.Process.name()`` directly
+        # (C3, DR-302): on this build ``name()`` reports the version string
+        # (``2.1.231``), so it prefers the basename of ``cmdline()[0]``
+        # (``claude``) and falls back to ``name()`` only when ``cmdline()``
+        # is unreadable or empty. Read that function's docstring before
+        # reasoning about which field this line compares.
+        #
+        # The truncation note this comment used to carry applies to the
+        # FALLBACK leg only: ``name()`` is the POSIX equivalent of the
+        # retired ``ps -o comm=`` column, both reporting a potentially
+        # 15-char-truncated-on-Linux name, and "claude" (6 chars) is short
+        # enough that the risk the exact-match guard was written to dodge
+        # never applies. It says nothing about the preferred ``cmdline()``
+        # leg, which is a full argv path and not truncated. ``.exe``
+        # stripping is centralized inside ``_harness_process_comm`` and no
+        # longer duplicated per branch.
         _ps = _psutil()
         posix_capture_exc = None
         try:
             parent = _ps.Process(ppid)
-            ppid_comm = parent.name() or ""
+            ppid_comm = _harness_process_comm(parent)
             ppid_ct = parent.create_time()
         except (_ps.NoSuchProcess, _ps.AccessDenied, _ps.Error) as exc:
             ppid_comm, ppid_ct = "", None
             posix_capture_exc = exc
 
-        if ppid_comm == "claude" and ppid_ct is not None:
+        if _is_harness_process(ppid_comm) and ppid_ct is not None:
             stable_pid = str(ppid)
             epoch_i = int(ppid_ct)
             # `0` is lstart_to_epoch's historical "parse failed" sentinel;
@@ -1250,9 +1340,9 @@ def init(session_id: str, goal: str = "", cwd: Optional[str] = None) -> bool:
         try:
             if posix_capture_exc is not None:
                 stable_pid_capture = f"posix-parent-miss:{type(posix_capture_exc).__name__}"
-            elif ppid_comm == "claude" and ppid_ct is not None:
+            elif _is_harness_process(ppid_comm) and ppid_ct is not None:
                 stable_pid_capture = "posix-parent-hit"
-            elif ppid_comm != "claude":
+            elif not _is_harness_process(ppid_comm):
                 stable_pid_capture = "posix-parent-miss:name-mismatch"
             else:
                 stable_pid_capture = "posix-parent-miss:no-create-time"

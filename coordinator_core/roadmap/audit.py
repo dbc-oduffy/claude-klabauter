@@ -9,7 +9,7 @@ accumulates ALL failures before exiting (never short-circuits on the first
 failure) — mirrors the bash oracle's ``fail()``/``pass()`` accumulate-don't-abort
 posture.
 
-Port of: audit-roadmap.sh (coordinator-claude b5a4192c, 2026-07-20), 441 LoC, 5 audits.
+Port of: audit-roadmap.sh (DoE b5a4192c, 2026-07-20), 441 LoC, 5 audits.
 Spec backlink: docs/plans/2026-05-08-roadmap-skill-and-handoff-lifecycle.md § Phase 5
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3e
 

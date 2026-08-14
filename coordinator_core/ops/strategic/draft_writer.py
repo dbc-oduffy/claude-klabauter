@@ -27,6 +27,8 @@ Spec backlink: pln-claude-klabauter-generation-leg-machine--127c81 § C1 (stub) 
 
 from __future__ import annotations
 
+GENERATES = []  # writes state/strategic/self-description.draft.yaml (DRAFT_REL); git ls-files shows only self-description.yaml and self-description.draft.yaml.archived tracked -- the live draft itself is not a currently-tracked artifact
+
 from pathlib import Path
 
 import yaml

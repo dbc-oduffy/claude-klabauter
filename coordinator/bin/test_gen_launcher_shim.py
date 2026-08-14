@@ -5,7 +5,7 @@ Renamed from a `.test.py`-suffixed file; the body already used
 unittest.TestCase with genuine `test_*` methods (directly pytest-collectable)
 so no harness conversion was needed — this was a pure rename.
 
-Spec backlink: docs/plans/2026-07-21-macos-first-class-invocation.md § C1, C9.
+Spec backlink: DoE-claude:pln-macos-cross-platform-first-cla-ff6df6 § C1, C9.
 
 SCOPE: the whoami-bootstrap class, plus the .cmd/.ps1 interpreter-ladder
 invariants that are properties of the EMITTED BODY rather than of the on-disk

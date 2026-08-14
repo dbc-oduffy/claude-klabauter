@@ -301,7 +301,7 @@ Semantics rag should encode: "live" = present in the combined handoff index
 **Version-stability guarantee (skew-tolerant for reads).** `handoff.has_live_children` is a
 read-only query whose live-set computation is **version-stable**: a stale service and current
 source resolve the same lineage answer for the same on-disk frontmatter. Consumers MAY degrade a
-client-side version-skew abort to a warn-and-proceed on this op (as coordinator-claude's `--read-only-skew-degrade`
+client-side version-skew abort to a warn-and-proceed on this op (as DoE's `--read-only-skew-degrade`
 does for `--stamp-only`) without risking a wrong answer. This is a producer-side guarantee, not a
 consumer assumption: **claude-klabauter owns a change-detection obligation** — any future release that alters
 the live-set logic (edge-kind set, reverse-membership hop count, index-membership definition) MUST

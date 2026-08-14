@@ -2,12 +2,12 @@
 Tests for coordinator_core.ops.coordinator_render_rollup — direct-call render
 helper.
 
-Mirrors the five contract cases pinned by the coordinator-claude-side bash regression net,
+Mirrors the five contract cases pinned by the DoE-side bash regression net,
 plus the CLI-usage and handler-exception fail-open paths that only exist once
 the transport hop moves in-process.
 
-Port of: coordinator-render-rollup.sh (coordinator-claude b5a4192c, 2026-07-20)
-Oracle: test-render-rollup.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Port of: coordinator-render-rollup.sh (DoE b5a4192c, 2026-07-20)
+Oracle: test-render-rollup.sh (DoE 894d4bc6, 2026-07-22)
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ class TestArgParsing:
 
 
 class TestRenderContract:
-    """Mirrors the five cases in the coordinator-claude bash regression net (test-render-rollup.sh)."""
+    """Mirrors the five cases in the DoE bash regression net (test-render-rollup.sh)."""
 
     def test_empty_advances_initiatives_no_stdout(self, monkeypatch, tmp_path, capsys):
         _patch_common_dir(monkeypatch, tmp_path)

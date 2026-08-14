@@ -689,7 +689,7 @@ class TestRoadmapBatonExclusion:
     roadmap-baton` candidate carrying the same `deliverable_id` is the
     DESIGNED plan -> predecessor -> mint carry (`roadmap-planning/SKILL.md`
     § D1), not a duplicate -- `_scan_deliverable_collision` must exclude it
-    regardless of `deployment_state`, per coordinator-claude
+    regardless of `deployment_state`, per DoE-claude
     `coordinator/docs/wiki/coordinator-tripwires.md:1454`. Paired with a
     non-baton control to guard against an over-broad exclusion that would
     also swallow the genuine-detection case."""

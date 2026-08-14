@@ -4,7 +4,7 @@ Three-tier working-repo discovery for /setup Phase 2 Step 4: Tier A (~/.claude/p
 activity record), Tier A.5 (machine-local registry repos.* enumeration), Tier B (common
 dev-folder layouts). Prints discovered repo paths to stdout, one per line; empty stdout
 means no repos discovered and the caller falls through to Tier C (an interactive operator
-prompt, not implemented here). This file is a thin coordinator-claude-side (contract) trampoline per
+prompt, not implemented here). This file is a thin DoE-side (contract) trampoline per
 DR-047 — the discovery logic itself is ported to coordinator_core/ops/discover_working_repos.py.
 """
 # Review: code-reviewer -- Finding 2 (2026-07-17 BIG_PORT Wave C sidecar): the
@@ -26,8 +26,8 @@ DR-047 — the discovery logic itself is ported to coordinator_core/ops/discover
 # Tier A: ~/.claude/projects/ activity record; Tier A.5: machine-local registry
 # repos.* enumeration; Tier B: common dev-folder layouts) has been fully ported
 # to coordinator_core/ops/discover_working_repos.py in the claude-klabauter sibling repo.
-# This file is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter
-# (engine) module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
+# This file is now a thin DoE-side (contract) trampoline over that claude-klabauter
+# (engine) module, per DR-047 (DoE owns contract/generator, claude-klabauter owns engine).
 #
 # Contract preserved from the bash oracle: prints discovered repo paths to
 # stdout, one per line; empty stdout means no repos discovered (caller falls

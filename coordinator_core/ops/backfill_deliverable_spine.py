@@ -54,9 +54,9 @@ Idempotency:
     Artifacts already carrying ``deliverable_id:`` are reported as
     "already-threaded" and skipped (carry rule D1 — never re-mint).
 
-Port of: backfill-deliverable-spine.sh (coordinator-claude ca30f76c, 2026-07-17).
+Port of: backfill-deliverable-spine.sh (DoE ca30f76c, 2026-07-17).
 BIG_PORT wave, direct-import trampoline variant #1 — no
-``register_op``, no IPC; the coordinator-claude-side polyglot trampoline imports and calls
+``register_op``, no IPC; the DoE-side polyglot trampoline imports and calls
 ``main()`` in-process, exactly like coordinator_core.hooks.auto_push /
 coordinator_core.ops.handoff_gate_aging / coordinator_core.ops.backfill_initiative_fk.
 
@@ -67,12 +67,12 @@ Public API:
     main(argv, default_coordinator_root=None) -> int
         CLI entry point. ``argv`` is the trampoline's own ``sys.argv[1:]``.
         ``default_coordinator_root`` is used when ``--root`` is not passed on
-        the command line — the ``coordinator/bin/backfill-deliverable-spine``
-        trampoline resolves coordinator-claude's own ``coordinator/`` directory (via
+        the command line — the ``coordinator/bin/backfill-deliverable-spine.py``
+        trampoline resolves DoE-claude's own ``coordinator/`` directory (via
         the shared ``doe_root()`` registry helper, NOT its own ``__file__``
         location — this executable now lives in claude-klabauter while the
-        corpus it walks, coordinator-claude's ``coordinator/{state,docs,archive}``,
-        stayed in coordinator-claude) and passes it here. If BOTH ``--root`` and
+        corpus it walks, DoE-claude's ``coordinator/{state,docs,archive}``,
+        stayed in DoE-claude) and passes it here. If BOTH ``--root`` and
         ``default_coordinator_root`` are absent (e.g. ``doe_root()`` could
         not resolve on this machine either), this module fails loud
         (exit 1) rather than falling back to its own ``coordinator_core/ops/``
@@ -85,7 +85,7 @@ Exit-code contract (byte-parity with the bash oracle):
     2 — ambiguous groups detected (human review required before --write)
     (transport/import failure — CLAUDE_KLABAUTER_ROOT resolution or `coordinator_core`
     import failing before this module is even reached — is NOT a code this
-    function can return; it is handled by the coordinator-claude trampoline itself, which
+    function can return; it is handled by the DoE trampoline itself, which
     uses a DEDICATED exit code 3 for that case per the porter addendum §3b
     fail-loud-gate-script rule, since this tool is a mutating fail-loud CLI,
     not a best-effort/never-block one, and codes 0/1/2 are all live business
@@ -94,7 +94,7 @@ Exit-code contract (byte-parity with the bash oracle):
     `_stamp_file`/`_stamp_yaml_document` — LockTimeout, MutateAbort,
     FileNotFoundError, or UnicodeDecodeError) — codes 0-3 above keep their
     prior meanings; 4 is additive, never overloading an existing code, and is
-    distinct from 3 (which is the coordinator-claude trampoline's own transport-failure
+    distinct from 3 (which is the DoE trampoline's own transport-failure
     code, never returned by this function).
 
 Departure from the oracle (additive robustness, not a behavior change to any
@@ -173,7 +173,7 @@ Sizing corpus extension (C5, this module's second parser class):
     threaded).
 
     Backfilling the live `state/sizings/` corpus (an actual `--write` run
-    over it) WAS out of scope for an earlier plan (coordinator-claude asked for the
+    over it) WAS out of scope for an earlier plan (DoE asked for the
     capability, not the run, at that time) — a later plan
     (pln-spec-backlinks-cite-a-stable-d-451b3e § C2)
     explicitly re-scopes it back in: 148 of 266 sizings measured lacking a
@@ -237,6 +237,19 @@ from coordinator_core.frontmatter.baton_class import canonical_kind
 from coordinator_core.ops.mint_deliverable_id import mint as _mint
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id
+
+# Generator-provenance declaration (generator_provenance.py). _stamp_file()
+# stamps deliverable_id onto whichever mutable artifacts in the corpus
+# (state/handoffs/*.md, docs/plans/*.md, archive/specs/**, state/roadmap/**/
+# OVERVIEW.md -- see the module docstring's "Corpus" section) currently lack
+# the field -- a data-dependent set, declared MUTATES rather than a fixed
+# GENERATES artifact.
+MUTATES = [
+    "state/handoffs/*.md",
+    "docs/plans/*.md",
+    "archive/specs/**/*.md",
+    "state/roadmap/**/OVERVIEW.md",
+]
 
 _PROG = "backfill-deliverable-spine"
 _UNKNOWN_GROUP_KEY = "__UNKNOWN__"
@@ -657,7 +670,17 @@ def group_corpus(
         ) or _UNKNOWN_GROUP_KEY
         result.group_files.setdefault(ws_key, []).append(f)
 
-        if artifact_class == "plan":
+        # Review: coordinator:code-reviewer — was `artifact_class == "plan"`
+        # only, so an `archived-spec` file (grouped by the same `workstream:`
+        # key as a `plan`) never contributed a slug here, leaving two
+        # distinct archived specs (or an archived spec + a plan with a
+        # different real slug) sharing a `workstream:` key silently
+        # collapsed onto one `deliverable_id` with no ambiguity warning.
+        # `_PLAN_ID_CLASSES` (unit 4b) is already the class-agnostic
+        # "plan-shaped" predicate this needs — reused here so a future third
+        # plan-shaped class cannot reintroduce the same blindness by editing
+        # only one of the two sites.
+        if artifact_class in _PLAN_ID_CLASSES:
             plan_slug = _derive_plan_slug(f)
             slugs = result.group_plan_slugs.setdefault(ws_key, [])
             if plan_slug not in slugs:
@@ -900,7 +923,7 @@ def _validate_stamped_deliverable_id(parsed: dict) -> list:
     field missing'}, even though `deliverable_id` itself was well-formed.
 
     Deliberately does NOT call `coordinator_core.frontmatter.schema_validate`
-    — `schema_validate.py` is a hard external dependency (coordinator-claude imports
+    — `schema_validate.py` is a hard external dependency (DoE imports
     `validate_frontmatter_obj` by path) and its leniency is contract;
     narrowing that shared path would be a global behaviour change under
     one caller's remit. This function is local to THIS op and checks
@@ -1117,6 +1140,7 @@ def run_plan_id_leg(
     mode: str,
     out: IO[str],
     err: IO[str],
+    only_kind: Optional[List[str]] = None,
 ) -> _PlanIdLegResult:
     """Mint-where-absent `plan_id` onto `docs/plans/`/`archive/specs/` records.
 
@@ -1124,11 +1148,25 @@ def run_plan_id_leg(
     carrying a real `plan_id` is skipped before anything else runs. No
     grouping/ambiguity concept applies here — `plan_id` is per-file identity,
     not shared across a workstream group.
+
+    `only_kind` is accepted ONLY to print the asymmetry loudly (Review:
+    coordinator:code-reviewer) — this leg does NOT filter on it. A caller
+    reasoning from `--only-kind`'s name alone could otherwise be surprised
+    that a scoped run still mints/writes `plan_id` onto every unthreaded
+    `docs/plans/*.md`/`archive/specs/**` record. See the module's `--only-kind`
+    help text for the same disclosure.
     """
     result = _PlanIdLegResult()
     print("", file=out)
     print("-" * 60, file=out)
     print("PLAN_ID LEG (C2, fourth leg)", file=out)
+    if only_kind:
+        print(
+            "  NOTE: this leg is unconditional and NOT scoped by --only-kind "
+            f"({', '.join(only_kind)}) — it will still mint/write plan_id onto "
+            "every unthreaded docs/plans/*.md and archive/specs/** record.",
+            file=out,
+        )
     print("-" * 60, file=out)
 
     for f in corpus:
@@ -1426,9 +1464,9 @@ def main(
     elif default_coordinator_root:
         coordinator_root = default_coordinator_root
     else:
-        # No --root, and the caller (the coordinator/bin/backfill-deliverable-spine
+        # No --root, and the caller (the coordinator/bin/backfill-deliverable-spine.py
         # trampoline) could not resolve a default either (e.g. DOE_ROOT /
-        # repos.example_doctrine_repo unresolvable on this machine). Do NOT fall back to
+        # repos.doe_claude unresolvable on this machine). Do NOT fall back to
         # this module's OWN directory (coordinator_core/ops/) — that is a
         # nonsense corpus root (no state/handoffs, docs/plans, etc. live there)
         # and would silently enumerate an empty corpus instead of failing loud.
@@ -1436,7 +1474,7 @@ def main(
         # "corpus root unreadable" contract.
         print(
             "ERROR: no corpus root available — pass --root <path> explicitly, "
-            "or resolve DOE_ROOT / repos.example_doctrine_repo in the machine-local "
+            "or resolve DOE_ROOT / repos.doe_claude in the machine-local "
             "registry so the trampoline can derive a default.",
             file=err,
         )
@@ -1462,13 +1500,21 @@ def main(
     total_ambiguous = len(ambiguous_keys) + len(ambiguous_sizing_refs)
     write_failed = 0
 
-    if mode == "write":
-        if total_ambiguous:
-            print("", file=err)
-            print("ERROR: Cannot --write while ambiguous groups exist.", file=err)
-            print(f"       Resolve the {total_ambiguous} ambiguous group(s) above first.", file=err)
-            return 2
-
+    # Review: coordinator:code-reviewer — the deliverable_id leg's ambiguity
+    # gate used to be an early `return 2` here, which also blocked
+    # `run_plan_id_leg` below (unreachable code after a `return`) even though
+    # the plan_id leg is per-file and has no grouping/ambiguity concept of
+    # its own (see its docstring). One unrelated ambiguous deliverable_id
+    # group therefore silently withheld plan_id stamping corpus-wide. The
+    # deliverable_id write pass is now skipped in place (`elif`) rather than
+    # returning, so the two legs' write passes are genuinely independent; the
+    # `return 2` semantics for the deliverable_id leg are preserved below,
+    # after both legs have run.
+    if mode == "write" and total_ambiguous:
+        print("", file=err)
+        print("ERROR: Cannot --write while ambiguous groups exist.", file=err)
+        print(f"       Resolve the {total_ambiguous} ambiguous group(s) above first.", file=err)
+    elif mode == "write":
         print("", file=out)
         print("-" * 60, file=out)
         print("WRITE PASS — stamping deliverable_ids", file=out)
@@ -1705,7 +1751,7 @@ def main(
     # concept, reported as its OWN separate count (never summed with the
     # deliverable_id populations above — a sizing/plan/archived-spec are
     # different lifecycles per AC2).
-    plan_id_leg = run_plan_id_leg(corpus, coordinator_root, mode, out, err)
+    plan_id_leg = run_plan_id_leg(corpus, coordinator_root, mode, out, err, only_kind)
 
     if write_failed or plan_id_leg.write_failed:
         return 4

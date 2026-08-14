@@ -1,7 +1,7 @@
 """coordinator_core.write_guards.check_claude_md_size — hard-deny SIZE leg
-ported from coordinator-claude ``coordinator/hooks/scripts/check-claude-md-size.py``.
+ported from DoE-claude ``coordinator/hooks/scripts/check-claude-md-size.py``.
 
-Purpose: that coordinator-claude hook carries TWO INDEPENDENT checks against a governed
+Purpose: that DoE hook carries TWO INDEPENDENT checks against a governed
 (fleet-loaded) CLAUDE.md-class target -- a byte-size budget (soft exit-1
 warning, hard exit-2 block) and a wholly separate C7 admission-gate check
 against a per-heading-section disposition ledger. Only the byte-budget
@@ -9,19 +9,19 @@ check's HARD (exit-2) half folds into this engine. Two EM-ratified decisions
 this module deliberately does NOT reopen (see
 ``docs/plans/2026-07-29-hook-fan-in-write-path.md`` § C8):
 
-  - The C7 admission-gate ledger check stays coordinator-claude-resident, permanently.
-    Porting it would require this engine to resolve the coordinator-claude repo root and
-    read coordinator-claude working-data (``state/audits/2026-07-27-doctrine-envelope-
+  - The C7 admission-gate ledger check stays DoE-resident, permanently.
+    Porting it would require this engine to resolve the DoE repo root and
+    read DoE working-data (``state/audits/2026-07-27-doctrine-envelope-
     classification.md``) at hook time -- inverting the coordinator-claude
     depends-on-claude-klabauter direction the tri-plane split establishes.
   - The byte budget's SOFT (exit-1) half does NOT port and does NOT become
     a model-facing advisory. It stays exactly as-is -- stderr to the user
-    terminal only -- in the residual coordinator-claude hook. This engine surfaces at most
+    terminal only -- in the residual DoE hook. This engine surfaces at most
     ONE advisory per payload; a warning firing on nearly every governed
     CLAUDE.md-class edit would routinely occupy that slot and suppress
     whichever other advisory would otherwise have fired.
 
-So the coordinator-claude hook's post-fold responsibility narrows to: the admission-gate
+So the DoE hook's post-fold responsibility narrows to: the admission-gate
 ledger check, and the soft-limit warning. Both continue to run there,
 unchanged, exactly as before this port.
 
@@ -54,7 +54,7 @@ Negative-spec -- do NOT "complete" this port while reading it:
     "Purpose" above for why that was an EM-ratified decision, not an
     oversight.
   - Do NOT add the C7 per-heading admission-gate ledger check here. It has
-    no coordinator-claude-repo access from this engine and is not in scope for this module.
+    no DoE-repo access from this engine and is not in scope for this module.
   - Do NOT widen ``MATCHERS`` to include ``NotebookEdit``. The source hook
     registers on ``Write|Edit|MultiEdit`` only (hooks.json, entry #2) --
     confirmed against ``docs/plans/2026-07-29-hook-fan-in-write-path.md``'s
@@ -64,10 +64,10 @@ Negative-spec -- do NOT "complete" this port while reading it:
 C7b addendum (``docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md``
 § C7b): this leg now ALSO enforces the AC4 per-surface ratchet watermark
 (``coordinator_core.claude_md_budget.parse_watermark`` / ``ratchet_check``),
-read from the SAME repo-local ledger file convention the (still coordinator-claude-resident,
+read from the SAME repo-local ledger file convention the (still DoE-resident,
 still out of scope here) admission gate uses -- ``state/audits/<surface-
 slug>-classification.md`` under the SAME working tree the edit targets. This
-is not the cross-repo "resolve the coordinator-claude repo root" read the negative-spec
+is not the cross-repo "resolve the DoE repo root" read the negative-spec
 above rules out: it is a plain repo-local file read against whatever repo
 ``abs_file_path`` already lives in, exactly like the byte-size check below
 already reads that same file's own bytes. Repo root is resolved by directory
@@ -97,7 +97,7 @@ and silently drop this guard's message. This module still carries no
 `COORDINATOR_OVERRIDE_*` key -- unchanged by the flip, per
 docs/wiki/write-guard-priority-bands.md.
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C8;
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C8;
   docs/plans/2026-08-06-apply-guard-class-census.md (chunk C2);
   docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md;
   CLASS/MATCHERS/PRIORITY convention per
@@ -106,8 +106,8 @@ Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C8;
   map.md, named a file that was never written);
   ratchet watermark per docs/plans/2026-07-30-boot-doctrine-cut-and-refill-
   gate.md § C7b.
-Reference (coordinator-claude source, SIZE leg only -- the per-heading admission-gate leg
-  and the soft warning remain there): coordinator-claude
+Reference (DoE source, SIZE leg only -- the per-heading admission-gate leg
+  and the soft warning remain there): DoE-claude
   coordinator/hooks/scripts/check-claude-md-size.py.
 """
 
@@ -227,7 +227,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # C7b (AC4): the per-surface ratchet watermark -- unarmed (no ledger, no
     # "## Watermark" section) is a silent no-op. A malformed ("armed but
-    # broken") watermark fails loud, same as the coordinator-claude-resident admission gate.
+    # broken") watermark fails loud, same as the DoE-resident admission gate.
     if repo_root:
         surface = os.path.relpath(abs_file_path, repo_root).replace(os.sep, "/")
         ledger_path = resolve_ledger_path(repo_root, surface)

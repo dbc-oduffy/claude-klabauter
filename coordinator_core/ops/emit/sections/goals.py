@@ -31,7 +31,7 @@ unread by ``envelope.py``), a scan failure on ``central_state_root`` itself — 
 plain empty/absent directory — cannot be silently reported through that channel; see
 ``GoalsStateRootUnreadable`` below.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 6, Goals.
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 6, Goals.
   Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P06
 """
@@ -162,7 +162,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         # A dict item that is individually MISSING a required sub-field (e.g. ``kind``)
         # is NOT quarantined here — it is intentionally defaulted to ``""``, matching the
         # upstream producer's contract (``_flush_kr()``, Port of: emit-goal-from-artifact.sh,
-        # coordinator-claude 3d785330, 2026-07-21), which emits ``{id,text,kind,status}`` via ``jq --arg``
+        # DoE 3d785330, 2026-07-21), which emits ``{id,text,kind,status}`` via ``jq --arg``
         # with ``""`` for any individually-missing sub-field and only fail-loud-warns when
         # ALL four are empty). Quarantining
         # such items here would diverge from that producer contract and silently drop real

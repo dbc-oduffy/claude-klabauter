@@ -18,7 +18,7 @@ into checked-in prose is wrong on EVERY host, including the one that wrote
 it, because it names one operator's machine as if it were universal.
 
 Scope is deliberately unrestricted by file type -- `.md` is explicitly IN
-scope, unlike coordinator-claude's older `coordinator/tests/test_no_absolute_path_
+scope, unlike DoE-claude's older `coordinator/tests/test_no_absolute_path_
 literals.py` (Rule A/B), which carried a documented decision to exclude
 markdown as "documentary". That decision is what this incident falsifies:
 a documentary-looking line in a doctrine file is exactly the kind of
@@ -120,7 +120,7 @@ as the placeholder check above.
 
 `dead-registry-rung` -- scope-limited, and mention-aware within that scope
 ----------------------------------------------------------------------------
-Ported from coordinator-claude's older `coordinator/tests/test_no_absolute_path_
+Ported from DoE-claude's older `coordinator/tests/test_no_absolute_path_
 literals.py` (its former Rule B) when that gate was rewritten to consume
 this shared module -- the rewrite widened scope but silently dropped this
 rule's coverage for one review cycle before it was ported back in, WITH the
@@ -151,7 +151,7 @@ construction. `_DEAD_RUNG_STRUCTURED_EXTENSIONS` (`.json`/`.toml`/`.yaml`/
 config is machine-parsed data, not documentary prose, so a match there is
 also plausibly a live read. An early revision of this scope excluded the
 structured-data extensions entirely: a corpus reconciliation against
-Coordinator-claude found every `.json`/`.yaml` hit under a naive whole-file scan
+DoE-claude found every `.json`/`.yaml` hit under a naive whole-file scan
 was a NARRATIVE RECORD that happens to use a structured serialization
 format -- a bug-backlog entry, a lesson, a review-sidecar finding, a task
 flight-recorder dump -- with the citation living in a free-text field
@@ -275,6 +275,118 @@ match, not a prefix, so this can never silently widen into "any fixture"
 the way a bare `/fixtures/` directory match once did in this fleet's own
 `.sh`/`.bats` exclusion history.
 
+Capture-data exemption -- a FORMAT-scoped class, not a directory allowlist
+----------------------------------------------------------------------------
+A sibling repo (DoE-claude) asked for `state/audits/data/` and
+`state/recovery/` to be added to `_EVIDENCE_ARTIFACT_PATH_PREFIXES` above.
+That literal ask is REJECTED as written: both directories mix
+machine-generated capture data with hand-authored `.md` prose and `.py`
+scripts, and a blanket prefix would silently exempt real, hand-authored
+citations sitting right next to the capture data it's meant to cover.
+
+The discriminator that makes the two directories above safe to exempt
+whole is not "where the file lives" -- it's ARTIFACT STRUCTURE (a frozen
+transcript, a quoted finding). Neither directory here has that property
+uniformly: `state/recovery/` in THIS repo alone carries 121 hand-written
+`.py` probes and `.md` findings that are ordinary corpus debt, not
+transcripts of anything. So this class narrows the discriminator one step
+further: FILE FORMAT. `.md` and `.py` both have comment syntax, so a
+hand-authored file in either format keeps the `abs-path-ok:` escape hatch
+and stays fully in scope, marker required, exactly like anywhere else in
+the corpus -- being under `state/audits/data/` or `state/recovery/` earns
+it NOTHING. A serialized capture format (`.json`, `.jsonl`, `.patch`,
+`.diff`) has no comment syntax at all, so the escape hatch is
+syntactically unusable there in exactly the way it's unusable for the
+exact-file conformance-fixture class above -- that shared unusability is
+the actual justification, not the directory name. See
+`_CAPTURE_DATA_PATH_PREFIXES` for the prefix/extension pairing; this is
+deliberately narrower than the ask that prompted it -- do not widen the
+prefix list to cover a hand-authored surface just because a capture file
+happens to sit in the same directory.
+
+Comment-syntax-free formats -- format WITHOUT a prefix
+----------------------------------------------------------------------------
+Once file format is the discriminator, the prefix pairing is redundant for
+any format that has no comment syntax ANYWHERE. `.json` and `.jsonl` have
+none at any path, so pairing them with two directories left the rule
+firing, outside those directories, on lines that can never carry the
+`abs-path-ok:` remedy -- an undischargeable red, which is the defect this
+guard's own escape hatch exists to prevent. `_COMMENT_SYNTAX_FREE_EXTENSIONS`
+exempts them prefix-independently.
+
+Measured before shipping, over every tracked file in this repo: all 61
+`.json`/`.jsonl` files that were firing are machine-emitted state
+(`state/cockpit-emission.json`, `state/ceremony/wsc/*`,
+`state/memo-outbox/sent-ledger.jsonl`, golden fixtures). Zero
+hand-authored JSON carrying a concrete path was in the firing set, so the
+coverage this drops is coverage that had no discharge to begin with.
+
+Position-scoped exemptions -- classes 2 and 3, a content-model parse
+----------------------------------------------------------------------------
+`abs-path-ok:` is a LINE COMMENT. Everything above this section shares one
+justification for exempting content: the remedy is syntactically unusable
+at that position. `.json`/`.jsonl` (the class above) earn that unusability
+from their FILE FORMAT -- no position in a JSON file has comment syntax, so
+an extension test is a sound proxy for "the hatch cannot work here". `.yaml`
+and `.md` are different in kind: both formats DO have comment syntax, so the
+unusability is POSITIONAL, not format-wide -- it depends on WHERE in the
+file a match lands, and no extension test can express that. The governing
+question for these two classes is therefore not "where does this file
+live" or "what is this file's format" but "can THIS LINE carry the
+remedy" -- answered by a content-model parse, not a prefix or extension
+check.
+
+  - Class 2 -- YAML **block scalars only** (`style` in `"|"`, `">"`), in a
+    `.yaml`/`.yml` file body. Corrected from an earlier line-granular
+    revision of this class that exempted EVERY YAML scalar style (plain,
+    single-quoted, double-quoted, AND block) -- measured against a spike
+    (`docs/research/spike-verdicts/2026-08-14-positional-parse-for-abs-
+    path-ok-discharge.md`) and found wrong: a trailing `# abs-path-ok:
+    <reason>` after a plain or quoted scalar is LEGAL YAML and leaves the
+    parsed value byte-identical (`yaml.safe_load("note: at /path  #
+    abs-path-ok: r")["note"] == "at /path"`), so the hatch is fully usable
+    there and those two styles must stay IN SCOPE, marker required, same
+    as anywhere else. Only a block scalar (`|`/`>`) genuinely corrupts the
+    value -- inside one, the `#` becomes literal value content rather than
+    a comment. Markdown YAML frontmatter is explicitly NOT covered by this
+    class either, for the identical reason: a frontmatter value is a YAML
+    scalar like any other, so a plain/quoted frontmatter value keeps the
+    working hatch and stays in scope; only a block-scalar frontmatter
+    value would qualify, and frontmatter bodies in this fleet's corpus
+    don't use block scalars, so this class is scoped to `.yaml`/`.yml`
+    files only.
+    `_yaml_block_scalar_spans` implements this: `yaml.compose_all` gives a
+    node graph with exact `start_mark`/`end_mark` character offsets
+    (`.index`), so the check is a character-offset SPAN membership test,
+    not a line-granularity approximation -- the earlier line-granular
+    model over-exempted a `<path>: value` mapping line where the path was
+    the KEY and only the value scalar should have been protected (see the
+    spike verdict's premise-correction section); offset spans close that
+    hole structurally rather than patching around it. Any exception while
+    composing (malformed YAML, tabs where YAML forbids them, etc.) yields
+    NO protected spans at all -- keep-firing, matching this module's
+    uncertainty-resolves-to-keep-firing invariant.
+  - Class 3 -- markdown code blocks. A match inside a fenced block
+    (``` `…` ``` or `~~~…~~~`) or a 4-space/tab-indented block in a `.md`
+    file is not a citation: an HTML comment would render as literal text
+    inside the quoted transcript, so the hatch is unusable there for the
+    same "corrupts what it annotates" reason, not because the block lacks
+    comment syntax in the abstract. `_markdown_code_block_lines` implements
+    this. An UNTERMINATED fence (no matching close before EOF) does not
+    open an exempt span at all -- the alternative (treating the rest of
+    the file as code because a stray triple-backtick appeared) would
+    silently swallow real prose citations behind it, an under-firing
+    failure in exactly the direction this module's own docstring warns is
+    silent and ships.
+
+Both classes are prose-preserving, not blanket per-file carve-outs: ordinary
+markdown prose, YAML comments, and code outside these positions stay fully
+in scope, marker required, exactly as before. `.patch`/`.diff` are
+deliberately NOT generalized into either class -- they stay prefix-paired in
+`_CAPTURE_DATA_PATH_PREFIXES`/`_CAPTURE_DATA_EXTENSIONS` above, because a
+diff transcribes lines from files that DO have comment syntax, which is a
+different (weaker) unusability argument than either class here relies on.
+
 Detect-only
 -----------
 This module never rewrites a file -- it returns structured `Finding`
@@ -292,9 +404,11 @@ cap on individual files, and each file opened at most once.
 from __future__ import annotations
 
 import ast
+import io
 import os
 import re
 import subprocess
+import yaml
 from coordinator_core.win_portability import no_console_creationflags
 from collections import Counter
 from dataclasses import dataclass
@@ -343,7 +457,25 @@ _POSIX_HOME_RE = re.compile(
 # is valid on every Windows host). Calibrated against a real false-positive:
 # this shape recurs throughout this fleet's own Windows-compat doctrine, the
 # openssh-agent-forwarding named-pipe path.  # abs-path-ok: documentary mention of the false-positive shape this fix excludes
-_UNC_RE = re.compile(r"(?<!\\)\\\\(?![.?]\\)[A-Za-z0-9_.\-]+\\[A-Za-z0-9_.\-]+")
+#
+# Third load-bearing subtlety, matching `_path_shape_regexes.WIN_DRIVE_RE`'s
+# 2026-07-31 fix for the same JSON/Python string-escape false positive: a
+# backslash-letter escape sequence (`\n`, `\r`, ...) inside an escaped JSON
+# string supplies a bare backslash immediately followed by a single escape
+# letter, which can phantom-match as the SHARE segment of a UNC path when a
+# HOST segment happens to precede it on the same line (`\\sizing\n` -- exactly
+# 2 leading backslashes; host segment "sizing", share segment "n" -- the
+# escaped newline's own backslash masquerading as the UNC share separator).
+# Review: coordinator:code-reviewer -- prior wording named a "share" segment
+# reading "share", which does not occur in this example and misled the
+# companion regression test's backslash count.
+# The trailing negative lookahead on the share segment
+# excludes a bare escape-letter/digit standing alone as the WHOLE share
+# segment, same alphabet and same "whole segment, not merely starting with
+# it" discrimination as `WIN_DRIVE_RE`'s own lookahead.
+_UNC_RE = re.compile(
+    r"(?<!\\)\\\\(?![.?]\\)[A-Za-z0-9_.\-]+\\(?![ntrbfv0](?![A-Za-z0-9_\-]))[A-Za-z0-9_.\-]+"
+)
 
 # The three anchors that open a "path token" candidate for the
 # mixed-separator check -- a concrete drive letter, a UNC share, or a POSIX
@@ -355,6 +487,17 @@ _ANCHOR_RES = (WIN_DRIVE_RE, _UNC_RE, _POSIX_HOME_RE)
 # A contiguous non-whitespace, non-quote run starting at an anchor match --
 # the "token" a mixed-separator check inspects for both slash kinds.
 _TOKEN_RE = re.compile(r"[^\s\"'`]+")
+
+# Truncates a `mixed-separators` candidate token at the first GATED
+# string-escape pair -- see the comment at its use site in `detect_in_text`
+# for the full rationale (same JSON/Python escape-letter false positive
+# `WIN_DRIVE_RE`/`_UNC_RE` gate, applied here as a token-prefix cut rather
+# than a match-position exclusion since this rule is not itself a regex).
+# The lookahead is load-bearing: it requires the escape letter to be the
+# WHOLE remaining segment (not a real segment merely starting with one of
+# these letters), so a genuine path like `C:\test\project/sub\file` is never
+# cut mid-segment.
+_ESCAPE_CUT = re.compile(r"\\[ntrbfv0](?![A-Za-z0-9_\-])")
 
 # `user` is deliberately ABSENT while `username` stays. `User` is a real,
 # common Windows default-account segment, so exempting the bare word
@@ -483,7 +626,7 @@ def _py_documentary_lines(text: str) -> Optional[Set[int]]:
 # Corpus-checked, not guessed: `body`, `summary`, `description`,
 # `suggested_fix`, `how_to_apply`, `one_liner`, `title`, `decomposition`,
 # `filled`, `scout_evidence` are every distinct key this rule's own
-# coordinator-claude corpus scan found carrying a `dead-registry-rung` shape
+# DoE-claude corpus scan found carrying a `dead-registry-rung` shape
 # (bug-backlog/lesson/review-sidecar/task-flight-recorder/sizing-scout
 # entries narrating a defect or an observation, never live-reading a
 # path). `rationale`, `notes`, `text`, `evidence` are included on the same
@@ -555,6 +698,205 @@ def _structured_data_documentary_lines(text: str) -> Set[int]:
         else:
             in_prose = False
     return lines_out
+
+
+# --- position-scoped content model -- YAML scalars, markdown code blocks --
+# (classes 2 and 3 -- see the module docstring's "Position-scoped
+# exemptions" section for the full rationale.)
+
+
+def _walk_yaml_value_nodes(
+    node: "yaml.nodes.Node", is_value: bool, spans: List[Tuple[int, int]]
+) -> None:
+    """Recurse a `yaml.compose_all` node graph, tracking which nodes are a
+    VALUE position (as opposed to a mapping KEY) -- keys never protect a
+    citation even when key-shaped text happens to look like one, matching
+    the module docstring's "mapping KEYS of any style" negative-spec item.
+    A `ScalarNode` that is a value AND whose `.style` is `"|"` or `">"`
+    (PyYAML normalizes every folded-scalar chomping/indicator spelling --
+    `>`, `>-`, `>+`, `>1`, ... -- down to the single style character `">"`,
+    same for `|`) gets its exact character-offset span recorded via
+    `start_mark.index`/`end_mark.index`, which PyYAML's `Mark` already
+    computes as an absolute offset into the composed stream -- no separate
+    line-start table is needed to get there."""
+    if isinstance(node, yaml.MappingNode):
+        for key_node, value_node in node.value:
+            _walk_yaml_value_nodes(key_node, False, spans)
+            _walk_yaml_value_nodes(value_node, True, spans)
+    elif isinstance(node, yaml.SequenceNode):
+        for item_node in node.value:
+            _walk_yaml_value_nodes(item_node, is_value, spans)
+    elif isinstance(node, yaml.ScalarNode):
+        if is_value and node.style in ("|", ">"):
+            spans.append((node.start_mark.index, node.end_mark.index))
+
+
+def _yaml_block_scalar_spans(text: str) -> List[Tuple[int, int]]:
+    """Character-offset spans (into `text`) covering every YAML block
+    scalar (`|`/`>`) VALUE in `text`, across every document in a possibly
+    multi-document stream. `[]` on ANY compose failure (malformed YAML,
+    tabs where YAML forbids them, ...) -- the caller then protects nothing,
+    which keeps every citation firing rather than guessing at a boundary
+    in text that didn't even parse. See the module docstring's "Position-
+    scoped exemptions" section, class 2, for the corrected (block-scalar-
+    only, not every scalar style) model this implements."""
+    spans: List[Tuple[int, int]] = []
+    try:
+        for doc_node in yaml.compose_all(io.StringIO(text)):
+            if doc_node is not None:
+                _walk_yaml_value_nodes(doc_node, True, spans)
+    except Exception:
+        return []
+    return spans
+
+
+# Recognizes a YAML frontmatter OPENING delimiter -- ONLY when `---` is
+# literally the first line of the file. A `---` appearing anywhere else in
+# a `.md` file is a markdown horizontal rule, not a frontmatter fence, and
+# must not be mistaken for one -- this is the sole discriminator, matching
+# the convention every frontmatter-consuming tool in this fleet already
+# relies on.
+_FRONTMATTER_DELIM_RE = re.compile(r"^-{3,}[ \t]*$")
+
+
+def _frontmatter_range(doc_lines: List[str]) -> Optional[Tuple[int, int]]:
+    """`(first_content_line, last_content_line)`, 1-based and inclusive, for
+    the YAML content strictly BETWEEN a leading `---` delimiter and its
+    matching close -- `None` if the file doesn't open with one, or if no
+    closing delimiter exists before EOF. The unterminated case deliberately
+    returns `None` rather than treating the rest of the file as
+    frontmatter: an opening `---` with no close is not a frontmatter block
+    at all, and swallowing everything after it would be exactly the
+    silent-under-firing failure this module's own docstring warns against."""
+    if not doc_lines or not _FRONTMATTER_DELIM_RE.match(doc_lines[0]):
+        return None
+    for idx in range(1, len(doc_lines)):
+        if _FRONTMATTER_DELIM_RE.match(doc_lines[idx]):
+            if idx == 1:
+                return None  # empty frontmatter -- no content lines
+            return (2, idx)  # 1-based, between the two delimiter lines
+    return None
+
+
+# A fenced code block's opening line: up to 3 leading spaces (CommonMark's
+# own indentation allowance before a fence still counts as "not indented
+# code"), then 3-or-more backticks or tildes. The captured run's character
+# and length are what the closing fence must match or exceed.
+_FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+
+# A 4-space or tab-indented, non-blank line -- CommonMark's indented code
+# block shape.
+_INDENTED_CODE_RE = re.compile(r"^(?: {4,}|\t)")
+
+# A list-item marker at ANY indent. The capture groups give the marker's own
+# indent and its width, which together fix the item's content indent -- the
+# baseline an indented code block inside that item must clear by a FURTHER
+# four columns.
+#
+# The indent is deliberately uncapped. Capping it at CommonMark's top-level
+# 0-3 looks right and is not: at three levels of nesting the markers
+# themselves sit past column 3, so a capped pattern stops matching, the
+# threshold freezes at the last recognised level, and the deep item's own
+# paragraph text starts clearing a stale-low bar and is silently exempted as
+# code. Reaching this branch already proves the line is NOT code -- the
+# threshold test runs first -- so an uncapped indent cannot swallow a real
+# indented block.
+_LIST_MARKER_RE = re.compile(r"^( *)(?:[-*+]|\d{1,9}[.)])( +)(?=\S)")
+
+
+def _line_indent(line: str) -> int:
+    """Visual indent, tabs expanded to CommonMark's 4-column tab stops."""
+    width = 0
+    for ch in line:
+        if ch == " ":
+            width += 1
+        elif ch == "\t":
+            width += 4 - (width % 4)
+        else:
+            break
+    return width
+
+
+def _markdown_code_block_lines(doc_lines: List[str], start: int = 1) -> Set[int]:
+    """Line numbers (1-based) inside a fenced (``` or `~~~`) or 4-space/
+    tab-indented code block in markdown text, scanning from `start` (1-
+    based, inclusive) onward -- `start` defaults to 1 but a caller passes
+    the first line AFTER a leading frontmatter block so a fence-like
+    coincidence inside frontmatter is never mistaken for a code fence
+    (frontmatter content is never emitted as a protected span either way,
+    since class 2 no longer covers `.md` frontmatter at all -- see the
+    module docstring's "Position-scoped exemptions" section). An
+    UNTERMINATED fence (no matching close before EOF) opens NO exempt span
+    at all -- see that same section for why the alternative (treating the
+    remainder of the file as code) is the wrong direction to fail in."""
+    out: Set[int] = set()
+    n = len(doc_lines)
+    i = start - 1
+    in_indented_block = False
+    list_content_indent: Optional[int] = None
+    while i < n:
+        line = doc_lines[i]
+        m = _FENCE_OPEN_RE.match(line)
+        if m:
+            in_indented_block = False
+            fence_char = m.group(1)[0]
+            fence_len = len(m.group(1))
+            close_re = re.compile(
+                r"^[ \t]{0,3}" + re.escape(fence_char) + "{" + str(fence_len) + ",}[ \t]*$"
+            )
+            close_idx = None
+            for j in range(i + 1, n):
+                if close_re.match(doc_lines[j]):
+                    close_idx = j
+                    break
+            if close_idx is not None:
+                for k in range(i, close_idx + 1):
+                    out.add(k + 1)
+                i = close_idx + 1
+                continue
+            i += 1
+            continue
+        if not line.strip():
+            # A blank line ends an in-progress indented-code run (its next
+            # non-blank successor must itself be preceded-by-blank to
+            # start a NEW one) but a blank line is never itself emitted.
+            in_indented_block = False
+            i += 1
+            continue
+        # The threshold test runs FIRST, before the list-marker match. A line
+        # deep enough to be code is code even when it looks like a list
+        # marker, and running this first is what lets the marker pattern
+        # accept any indent without ever swallowing a real indented block.
+        indent = _line_indent(line)
+        threshold = 4 if list_content_indent is None else list_content_indent + 4
+        prev_blank = i > 0 and not doc_lines[i - 1].strip()
+        if (
+            _INDENTED_CODE_RE.match(line)
+            and indent >= threshold
+            and (in_indented_block or prev_blank)
+        ):
+            # A genuine indented code block: it clears the threshold set by
+            # any list item still open, and it either opens after a blank
+            # line or continues a run with no intervening blank.
+            out.add(i + 1)
+            in_indented_block = True
+            i += 1
+            continue
+        in_indented_block = False
+        marker = _LIST_MARKER_RE.match(line)
+        if marker:
+            # Opening a list item rebases the threshold: content sits at the
+            # marker's indent plus its width, and only FOUR columns beyond
+            # THAT is code. Inside an item, a merely-4-space line is the
+            # item's own paragraph -- a CommonMark LAZY CONTINUATION, not
+            # code, and it must stay in scope.
+            list_content_indent = len(marker.group(0))
+        elif indent == 0:
+            # A non-blank line at the margin closes any open list item, so
+            # the threshold drops back to the document's own.
+            list_content_indent = None
+        i += 1
+    return out
 
 
 # Two spellings, both honored. `foreign-path-ok:` is the older token from the
@@ -796,11 +1138,49 @@ _EVIDENCE_ARTIFACT_EXACT_FILES = frozenset(
     }
 )
 
+# A FOURTH evidence-artifact class, FORMAT-scoped rather than directory-
+# scoped -- see the module docstring's "Capture-data exemption" section for
+# the full rationale. Deliberately narrower than the ask that prompted it:
+# `state/audits/data/` and `state/recovery/` both mix machine-generated
+# capture data with hand-authored `.md`/`.py` content, so only a file BOTH
+# under one of these prefixes AND in one of these extensions is exempt --
+# a `.md` or `.py` file under the same prefix is untouched by this
+# constant and stays fully in scope, marker required. The extension set is
+# every serialized capture format in the corpus that lacks comment syntax
+# (so the `abs-path-ok:` escape hatch is syntactically unusable there, the
+# same property the exact-file conformance-fixture class above relies on)
+# -- `.json`/`.jsonl` for structured capture dumps, `.patch`/`.diff` for
+# frozen capture-time diffs.
+_CAPTURE_DATA_PATH_PREFIXES: Tuple[str, ...] = (
+    "state/audits/data/",
+    "state/recovery/",
+)
+_CAPTURE_DATA_EXTENSIONS: Tuple[str, ...] = (".json", ".jsonl", ".patch", ".diff")
+
+# The subset of `_CAPTURE_DATA_EXTENSIONS` whose no-comment-syntax property
+# holds for the WHOLE file regardless of where it lives, so the prefix
+# pairing above buys nothing and only produces undischargeable reds outside
+# the two directories -- see the module docstring's "Comment-syntax-free
+# formats" section. `.patch`/`.diff` stay prefix-paired: a diff body
+# transcribes lines from files that DO have comment syntax, so its
+# unusability argument is weaker and no caller has asked for it.
+_COMMENT_SYNTAX_FREE_EXTENSIONS: Tuple[str, ...] = (".json", ".jsonl")
+
 
 def _is_evidence_artifact(filename: str) -> bool:
-    return filename.startswith(
-        _EVIDENCE_ARTIFACT_PATH_PREFIXES
-    ) or filename in _EVIDENCE_ARTIFACT_EXACT_FILES
+    if not filename:
+        return False
+    if filename.startswith(_EVIDENCE_ARTIFACT_PATH_PREFIXES):
+        return True
+    if filename in _EVIDENCE_ARTIFACT_EXACT_FILES:
+        return True
+    if filename.lower().endswith(_COMMENT_SYNTAX_FREE_EXTENSIONS):
+        return True
+    if filename.startswith(_CAPTURE_DATA_PATH_PREFIXES) and filename.lower().endswith(
+        _CAPTURE_DATA_EXTENSIONS
+    ):
+        return True
+    return False
 
 
 def detect_in_text(text: str, filename: str = "") -> List[Finding]:
@@ -810,11 +1190,26 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
     (for all four rules); a bare `abs-path-ok:` with no reason is NOT an
     exemption and the line is scanned normally.
 
-    A `filename` matching `_EVIDENCE_ARTIFACT_PATH_PREFIXES` short-circuits
-    to no findings at all -- see the module docstring's "Evidence-artifact
-    exemption" section. An empty `filename` (the default, and what a caller
-    with no repo-relative path to hand in passes) can never match a prefix,
-    so this is a no-op for any caller that doesn't supply one.
+    A `filename` matching `_EVIDENCE_ARTIFACT_PATH_PREFIXES`, an exact file
+    in `_EVIDENCE_ARTIFACT_EXACT_FILES`, or the format-scoped capture-data
+    class (`_CAPTURE_DATA_PATH_PREFIXES` + `_CAPTURE_DATA_EXTENSIONS`)
+    short-circuits to no findings at all -- see the module docstring's
+    "Evidence-artifact exemption" and "Capture-data exemption" sections. An
+    empty `filename` (the default, and what a caller with no repo-relative
+    path to hand in passes) can never match any of the three, so this is a
+    no-op for any caller that doesn't supply one.
+
+    A `.yaml`/`.yml` file also exempts a match sitting inside a YAML BLOCK
+    SCALAR (`|`/`>`) value (class 2, char-offset-span-scoped -- NOT plain
+    or quoted scalars, and NOT markdown frontmatter, both of which stay
+    fully in scope because the hatch is lossless there); a `.md` file also
+    exempts a match inside a fenced or 4-space/tab-indented code block
+    (class 3, line-scoped) -- both positional, computed from `filename`'s
+    extension, and both apply only to the four rules that scan the whole
+    corpus (not `dead-registry-rung`, which keeps its own, separately-
+    scoped mention-awareness). See the module docstring's "Position-scoped
+    exemptions" section. An empty `filename` matches neither extension, so
+    this is likewise a no-op without one.
     """
     if _is_evidence_artifact(filename):
         return []
@@ -855,63 +1250,136 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
     if _dead_rung_hinted and filename.endswith((".json", ".yaml", ".yml", ".toml")):
         structured_doc_lines = _structured_data_documentary_lines(text)
 
+    # Classes 2/3 -- position-scoped content model, computed once per file
+    # (never per-match) and only for files whose extension can even carry
+    # either position. See the module docstring's "Position-scoped
+    # exemptions" section. `class2_spans` stays `[]` and `class3_lines`
+    # stays empty for every file outside these two extensions, so the
+    # membership checks below are a no-op.
+    #
+    # Class 2 is CHARACTER-OFFSET-span-scoped, not line-scoped -- a
+    # `.yaml`/`.yml` file's block-scalar (`|`/`>`) VALUE spans, computed
+    # once via `_yaml_block_scalar_spans`. `.md` frontmatter is
+    # deliberately NOT fed into class 2 at all (see the module docstring):
+    # a frontmatter value is a YAML scalar like any other, and only a
+    # block-scalar frontmatter value would ever qualify, which this
+    # fleet's corpus doesn't use.
+    lower_filename = filename.lower()
+    class2_spans: List[Tuple[int, int]] = []
+    class3_lines: Set[int] = set()
+    line_offsets: List[int] = []
+    if lower_filename.endswith((".yaml", ".yml")):
+        class2_spans = _yaml_block_scalar_spans(text)
+        if class2_spans:
+            cum = 0
+            for lw in text.splitlines(keepends=True):
+                line_offsets.append(cum)
+                cum += len(lw)
+    elif lower_filename.endswith(".md"):
+        doc_lines = text.splitlines()
+        fm_range = _frontmatter_range(doc_lines)
+        body_start = fm_range[1] + 2 if fm_range is not None else 1
+        class3_lines = _markdown_code_block_lines(doc_lines, start=body_start)
+
+    def _yaml_protected(line_start_offset: int, m_start: int, m_end: int) -> bool:
+        if not class2_spans:
+            return False
+        abs_start = line_start_offset + m_start
+        abs_end = line_start_offset + m_end
+        return _inside_any_span(abs_start, abs_end, class2_spans)
+
     for lineno, line in enumerate(text.splitlines(), start=1):
         if _line_has_marker_with_reason(line):
             continue
 
-        for m in _POSIX_HOME_RE.finditer(line):
-            if not _is_placeholder_segment(m.group(1)):
-                findings.append(Finding(filename, lineno, "posix-home", m.group(0)))
+        line_start_offset = line_offsets[lineno - 1] if line_offsets else 0
 
-        for m in WIN_DRIVE_RE.finditer(line):
-            token = _extract_token(line, m.start())
-            root_len = m.end() - m.start()
-            # A BARE drive root is deliberately NOT exempt. `/Users/` is
-            # universal -- every macOS host has it -- which is why the posix
-            # rule tests only the segment after it. `X:\` is one operator's
-            # drive mapping and exists on no other machine, so prose like
-            # "assets that don't belong on X:\" is itself the machine-specific
-            # assertion this guard exists to catch. Root-concreteness and
-            # segment-concreteness are different tests; the drive rule applies
-            # both.
-            if _is_win_drive_root_exempt(token, root_len) or _has_ellipsis_segment(
-                token, root_len
-            ):
-                continue
-            findings.append(Finding(filename, lineno, "drive-letter", token))
-
-        for m in _UNC_RE.finditer(line):
-            # Same segment test the other two rules apply. A UNC host is no
-            # more "concrete by construction" than a drive letter was: the
-            # canonical way to WRITE a UNC path in documentation uses a
-            # placeholder hostname, so flagging that shape makes every correct
-            # explanation of UNC syntax a finding -- including this comment,
-            # which this guard refused to let be written until the marker
-            # below was added.  abs-path-ok: naming the placeholder host forms
-            # this branch exempts; they are the documentation shape, not a
-            # machine
-            host = m.group(0).lstrip("\\").split("\\")[0]
-            if _is_placeholder_segment(host):
-                continue
-            findings.append(
-                Finding(filename, lineno, "unc", _extract_token(line, m.start()))
-            )
-
-        for rx in _ANCHOR_RES:
-            for m in rx.finditer(line):
-                token = _extract_token(line, m.start())
-                if "/" not in token or "\\" not in token:
+        # A match sitting inside a YAML block-scalar span (class 2) or a
+        # markdown code block (class 3) is not a citation -- the
+        # `abs-path-ok:` remedy is syntactically unusable at that position.
+        # Scoped to exactly these four rules: `dead-registry-rung` keeps its
+        # own, separately-scoped mention-awareness layer below, untouched.
+        if lineno not in class3_lines:
+            for m in _POSIX_HOME_RE.finditer(line):
+                if _yaml_protected(line_start_offset, m.start(), m.end()):
                     continue
-                # No placeholder/well-known-root/ellipsis exemption here, for
-                # ANY of the three anchors -- matching the module docstring's
-                # invariant that mixed-separators fires "independent of
-                # whether its root segment is a placeholder". A token mixing
-                # `/` and `\` cannot be correct on any platform regardless of
-                # what its first segment says; a `WIN_DRIVE_RE` anchor used
-                # to silently reuse `drive-letter`'s exemption here, which
-                # contradicted this exact sentence for any placeholder-shaped
-                # first segment (`C:\test\project/sub\file` went undetected).
-                findings.append(Finding(filename, lineno, "mixed-separators", token))
+                if not _is_placeholder_segment(m.group(1)):
+                    findings.append(Finding(filename, lineno, "posix-home", m.group(0)))
+
+            for m in WIN_DRIVE_RE.finditer(line):
+                token = _extract_token(line, m.start())
+                root_len = m.end() - m.start()
+                # A BARE drive root is deliberately NOT exempt. `/Users/` is
+                # universal -- every macOS host has it -- which is why the posix
+                # rule tests only the segment after it. `X:\` is one operator's
+                # drive mapping and exists on no other machine, so prose like
+                # "assets that don't belong on X:\" is itself the machine-specific
+                # assertion this guard exists to catch. Root-concreteness and
+                # segment-concreteness are different tests; the drive rule applies
+                # both.
+                if _is_win_drive_root_exempt(token, root_len) or _has_ellipsis_segment(
+                    token, root_len
+                ):
+                    continue
+                if _yaml_protected(line_start_offset, m.start(), m.start() + len(token)):
+                    continue
+                findings.append(Finding(filename, lineno, "drive-letter", token))
+
+            for m in _UNC_RE.finditer(line):
+                # Same segment test the other two rules apply. A UNC host is no
+                # more "concrete by construction" than a drive letter was: the
+                # canonical way to WRITE a UNC path in documentation uses a
+                # placeholder hostname, so flagging that shape makes every correct
+                # explanation of UNC syntax a finding -- including this comment,
+                # which this guard refused to let be written until the marker
+                # below was added.  abs-path-ok: naming the placeholder host forms
+                # this branch exempts; they are the documentation shape, not a
+                # machine
+                host = m.group(0).lstrip("\\").split("\\")[0]
+                if _is_placeholder_segment(host):
+                    continue
+                unc_token = _extract_token(line, m.start())
+                if _yaml_protected(line_start_offset, m.start(), m.start() + len(unc_token)):
+                    continue
+                findings.append(Finding(filename, lineno, "unc", unc_token))
+
+            for rx in _ANCHOR_RES:
+                for m in rx.finditer(line):
+                    token = _extract_token(line, m.start())
+                    # Truncate at the first GATED escape pair before the both-
+                    # separator test -- same JSON/Python string-escape false
+                    # positive `WIN_DRIVE_RE` and `_UNC_RE` both defend against:
+                    # a backslash-letter escape (`\n`, `\r`, ...) inside an
+                    # escaped string supplies a bare backslash that, followed
+                    # later on the same token by a `/`, phantom-matches as
+                    # "mixes both separators" with no real path present
+                    # (`X:/DoE-claude/.../SKILL.md\r\n` -- the trailing `\r\n`
+                    # is the sole source of the backslash). The lookahead gate
+                    # is load-bearing, not a simplification: an UNGATED cut
+                    # (`\\[ntrbfv0]` alone) would also cut a REAL path at a real
+                    # segment merely STARTING with an escape letter --
+                    # `C:\test\project/sub\file` would truncate at `\t` in
+                    # "test" and lose the genuine `/` further down the token,
+                    # turning a real mixed-separator citation into a false
+                    # negative. The gate (`(?![A-Za-z0-9_\-])`) requires the
+                    # escape letter to be the WHOLE segment, exactly the
+                    # discrimination `WIN_DRIVE_RE`/`_UNC_RE` already apply.
+                    cut = _ESCAPE_CUT.search(token)
+                    probe = token[: cut.start()] if cut else token
+                    if "/" not in probe or "\\" not in probe:
+                        continue
+                    if _yaml_protected(line_start_offset, m.start(), m.start() + len(probe)):
+                        continue
+                    # No placeholder/well-known-root/ellipsis exemption here, for
+                    # ANY of the three anchors -- matching the module docstring's
+                    # invariant that mixed-separators fires "independent of
+                    # whether its root segment is a placeholder". A token mixing
+                    # `/` and `\` cannot be correct on any platform regardless of
+                    # what its first segment says; a `WIN_DRIVE_RE` anchor used
+                    # to silently reuse `drive-letter`'s exemption here, which
+                    # contradicted this exact sentence for any placeholder-shaped
+                    # first segment (`C:\test\project/sub\file` went undetected).
+                    findings.append(Finding(filename, lineno, "mixed-separators", probe))
 
         if not _dead_rung_hinted:
             continue
@@ -995,7 +1463,7 @@ def _maybe_relevant(text: str) -> bool:
 
 def scan_repo(root: Path) -> List[Finding]:
     """Scan every tracked file under `root` (any git repo -- this module is
-    not coordinator-claude-specific) and return all `Finding`s. Never raises on a
+    not DoE-claude-specific) and return all `Finding`s. Never raises on a
     per-file read failure; that file is simply skipped."""
     findings: List[Finding] = []
     for rel in _tracked_files(root):

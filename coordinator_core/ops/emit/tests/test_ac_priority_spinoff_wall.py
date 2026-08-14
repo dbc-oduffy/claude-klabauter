@@ -19,7 +19,7 @@ Fixture/style conventions mirror ``test_priority_resolve.py``'s
 ``_write_node``/``_ledger`` helpers exactly (see that module for the
 canonical shape).
 
-Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § AC5, § AC10.
+Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § AC5, § AC10.
 """
 
 from __future__ import annotations

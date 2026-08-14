@@ -1,6 +1,6 @@
 """
 Branch — a single ref observation, keyed on `(repo, branch_name, tip_sha)`.
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/branch.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/branch.ts`
 (Zod source).
 
 Branch-fact data-quality defenses (the Data Science Reviewer P1-D5, github-connector corpus):
@@ -22,7 +22,7 @@ present in the emitted payload, carrying `null` when uncomputed (e.g.
 `ahead_by: null` before the REST compare runs). Omitting the key entirely
 fails validation. See DECISIONS.md § D9.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

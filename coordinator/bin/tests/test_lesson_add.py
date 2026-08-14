@@ -16,7 +16,7 @@ Converted from a hand-rolled unittest runner to collectable pytest functions.
 
 Run: python3 -m pytest coordinator/bin/tests/test_lesson_add.py
 
-Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C3
+Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C3
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
-_CLI_PATH = _BIN_DIR / "coordinator-lesson-add"
+_CLI_PATH = _BIN_DIR / "coordinator-lesson-add.py"
 
 # Load the CLI as a Python module for unit testing.
 # The sh/python trampoline header (''''exec...) is inert when imported as Python.

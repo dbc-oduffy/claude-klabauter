@@ -1,13 +1,13 @@
 """Parity tests for coordinator_core.text.normalize_snippet.normalize_snippet.
 
-Ports the 7 hand-picked cases from coordinator-claude-side test-normalize-snippet.sh (bash
+Ports the 7 hand-picked cases from DoE-side test-normalize-snippet.sh (bash
 oracle, retired on cutover) plus a differential fuzz pass against the
-original bash `normalize()` function when the coordinator-claude sibling repo is
+original bash `normalize()` function when the DoE sibling repo is
 discoverable on disk.
 
-Port of: normalize-snippet.sh (coordinator-claude 67202df6, 2026-07-16)
-Test oracle: test-normalize-snippet.sh (coordinator-claude 67202df6, 2026-07-16)
-Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-normalize-snippet.md § 6
+Port of: normalize-snippet.sh (DoE 67202df6, 2026-07-16)
+Test oracle: test-normalize-snippet.sh (DoE 67202df6, 2026-07-16)
+Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-normalize-snippet.md § 6
 """
 from __future__ import annotations
 
@@ -72,14 +72,14 @@ def test_g_clean_content_unchanged():
 
 # ---------------------------------------------------------------------------
 # Differential fuzz — byte-equality against the bash oracle. Skips if the
-# coordinator-claude sibling repo (holding coordinator/lib/normalize-snippet.sh) is not
+# DoE sibling repo (holding coordinator/lib/normalize-snippet.sh) is not
 # discoverable, or if `bash` is unavailable — this is a cross-repo parity
 # proof, not a hard dependency of the claude-klabauter test suite.
 # ---------------------------------------------------------------------------
 
 
 def _find_doe_normalize_lib() -> str | None:
-    # coordinator-claude sibling repo, resolved via the shared registry-first ladder
+    # DoE sibling repo, resolved via the shared registry-first ladder
     # (coordinator_core.testing.doe_root.resolve_doe_root, which already
     # layers the CLAUDE_KLABAUTER_TEST_DOE_ROOT override on top) rather than a
     # __file__-anchored checkout-depth guess.
@@ -119,7 +119,7 @@ def _random_snippet(rng: random.Random) -> str:
 
 @pytest.mark.skipif(
     shutil.which("bash") is None or _find_doe_normalize_lib() is None,
-    reason="bash or coordinator-claude sibling repo (coordinator/lib/normalize-snippet.sh) not available",
+    reason="bash or DoE sibling repo (coordinator/lib/normalize-snippet.sh) not available",
 )
 def test_differential_fuzz_matches_bash_oracle():
     lib_path = _find_doe_normalize_lib()

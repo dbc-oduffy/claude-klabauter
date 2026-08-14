@@ -96,6 +96,7 @@ import yaml
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
+    read_fm_field_unquoted,
     read_fm_nested_field,
     rebuild,
     replace_fm_field,
@@ -244,10 +245,43 @@ _SUMMARY_MAX_CHARS = 140
 # Matches the bare block-scalar indicator token read_fm_field returns for a
 # `summary: |` / `summary: >` line (optionally with chomping `+`/`-` and/or an
 # explicit indentation-indicator digit, e.g. `|-`, `>+`, `|2`, `|2-`) — never a
-# real single-line value.  Copied verbatim from memo_transition.py's own
+# real single-line value.  Based on memo_transition.py's own
 # `_BLOCK_SCALAR_INDICATOR_RE` (same shape, different module — no shared
-# import to avoid an ops-module-to-ops-module dependency).
-_BLOCK_SCALAR_INDICATOR_RE = re.compile(r'^[|>][+\-0-9]*$')
+# import to avoid an ops-module-to-ops-module dependency), widened here to
+# also match a legal trailing `# comment` on the indicator line itself.
+# Review: code-reviewer (P3) — `read_fm_field` returns the indicator line
+# verbatim (only outer whitespace trimmed, comment NOT stripped), so
+# `summary: |-  # comment` used to fail this anchored-to-end-of-string match,
+# fall through to the plain-scalar `else` branch, and be measured/truncated
+# as the literal 13-character string `|-  # comment` instead of being
+# recognized as a block scalar at all.
+_BLOCK_SCALAR_INDICATOR_RE = re.compile(r'^[|>][+\-0-9]*(?:[ \t]+#.*)?$')
+
+# Placeholder-shaped `summary:` values a scaffolder emits when the operator
+# never hand-edits the field. A placeholder is PRESENT (not absent) and under
+# the 140-char cap, so the pre-existing "backfill only when absent" branch
+# below silently carried it forever — the record ends up committed to
+# `state/` with the literal placeholder text as its summary. Treating a
+# literal match as absent routes it through the existing H1-derivation
+# backfill instead of inventing a second normalization path.
+#
+# Literal is duplicated (not imported) from
+# `coordinator/bin/coordinator-doc-new.py::_scaffold_spinoff`'s
+# `placeholder_summary` local by necessity, not convenience: `coordinator/bin/`
+# scripts import FROM `coordinator_core` (the engine), never the reverse — see
+# `coordinator_core/data_root.py`'s docstring on the same asymmetry for
+# `coordinator/bin/lib/`. `coordinator-doc-new.py` is also outside this
+# module's writable scope for this change (docs/plans/2026-08-14-placeholder-
+# summaries-and-the-drift-guards-uncounted-callers.md § C1 `writes:`), so
+# hoisting a shared constant either direction is not available at this call
+# site; if a scaffolder ever adds a second placeholder-summary kind, add its
+# literal here too rather than generalizing to a "looks unfilled" heuristic
+# (see the plan's Anti-scope).
+_PLACEHOLDER_SUMMARIES = frozenset(
+    {
+        "PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)",
+    }
+)
 
 
 def _replace_block_scalar_span(fm_text: str, key: str, new_line: str) -> Optional[str]:
@@ -263,7 +297,13 @@ def _replace_block_scalar_span(fm_text: str, key: str, new_line: str) -> Optiona
     """
     text = fm_text if fm_text.endswith('\n') else fm_text + '\n'
     pattern = re.compile(
-        r'^' + re.escape(key) + r':(?=[ \t]|\r?$)[ \t]*[|>][+\-0-9]*[ \t]*\r?\n'
+        # Review: code-reviewer (P3) — the indicator line may carry a legal
+        # trailing `# comment` (e.g. `summary: |-  # note`); the optional
+        # `(?:#.*)?` tail mirrors the widened `_BLOCK_SCALAR_INDICATOR_RE`
+        # match above so a comment-bearing indicator line is still located
+        # (and replaced — including its comment) rather than silently
+        # leaving the span unfound.
+        r'^' + re.escape(key) + r':(?=[ \t]|\r?$)[ \t]*[|>][+\-0-9]*[ \t]*(?:#.*)?\r?\n'
         r'(?:(?:[ \t]+.*)?\r?\n)*',
         re.MULTILINE,
     )
@@ -275,8 +315,14 @@ def _replace_block_scalar_span(fm_text: str, key: str, new_line: str) -> Optiona
     return text[: m.start()] + new_line + text[m.end():]
 
 
-def _normalize_block_scalar_summary(fm_text: str, file_path: Path) -> str:
+def _normalize_block_scalar_summary(
+    fm_text: str, file_path: Path, *, label: str = "handoff.normalize"
+) -> str:
     """Truncate an over-cap block-scalar ``summary: |`` / ``summary: >`` field.
+
+    ``label`` names the calling seam in the stderr warning so a reader can tell a
+    ``handoff.normalize`` sweep from a ``handoff.transition`` claim-time truncation;
+    it changes nothing else.
 
     Exact port of `memo_transition._normalize_block_scalar_summary`, capped to
     this module's `_SUMMARY_MAX_CHARS` (140, not the memo side's 120).  Decodes
@@ -313,13 +359,87 @@ def _normalize_block_scalar_summary(fm_text: str, file_path: Path) -> str:
     flattened = " ".join(value.split())
     truncated = flattened[: _SUMMARY_MAX_CHARS - 1] + "…"
     print(
-        f"handoff.normalize: WARNING — {file_path}: summary: (block scalar) exceeded "
+        f"{label}: WARNING — {file_path}: summary: (block scalar) exceeded "
         f"{_SUMMARY_MAX_CHARS} chars (was {original_len}); flattened and truncated to fit the cap",
         file=sys.stderr,
     )
     new_line = f"summary: {serialize_yaml_scalar(truncated, numeric_quoting=True)}\n"
     replaced = _replace_block_scalar_span(fm_text, "summary", new_line)
     return replaced if replaced is not None else fm_text
+
+
+def normalize_present_summary(
+    fm_text: str, file_path: Path, *, label: str = "handoff.normalize"
+) -> tuple[str, Optional[str]]:
+    """Truncate a PRESENT, over-cap ``summary:`` to the 140-char cap, ahead of any gate.
+
+    The one shared implementation of the handoff-side summary-cap normalization,
+    used by both writer seams that need it: ``_normalize_one_text``'s step 4 and
+    ``handoff_transition._claim``'s pre-validation pass. Extracted rather than
+    re-inlined because the 2026-08-13 plan's anti-scope names a third truncation
+    variant as the failure mode ("Do not hand-roll a second truncation shape").
+
+    Handles both on-disk shapes: a block-scalar ``summary: |`` / ``summary: >``
+    (routed to ``_normalize_block_scalar_summary``) and a plain scalar, which is
+    measured on the ``yaml.safe_load``-decoded value — the same value
+    ``schema_validate._cf_summary_length_cap`` measures — and rewritten as
+    ``value[:_SUMMARY_MAX_CHARS - 1] + "…"``. The trailing ``…`` is the visible
+    marker that a reader can tell truncation happened; it matches
+    ``memo_transition._normalize_oversize_summary`` byte-for-byte.
+
+    Returns ``(fm_text, change)``: ``change`` is a human-readable drift line when a
+    truncation occurred, ``None`` when nothing was touched. Idempotent — an
+    at-or-under-cap or absent ``summary:`` returns the input byte-identical with
+    ``None``, so a second pass emits neither drift nor a warning.
+
+    Negative-spec: does NOT backfill an ABSENT ``summary:`` (that is
+    ``_normalize_one_text``'s H1-derivation branch, which is a normalize-sweep
+    concern, not a gate-adjacent one). Does NOT relax
+    ``schema_validate._cf_summary_length_cap`` or any other cross-field rule —
+    every caller runs this AHEAD of the gate and the gate stays strict.
+    """
+    summary_raw = read_fm_field(fm_text, 'summary')
+    if summary_raw is None:
+        return fm_text, None
+
+    if _BLOCK_SCALAR_INDICATOR_RE.match(summary_raw):
+        new_fm_text = _normalize_block_scalar_summary(fm_text, file_path, label=label)
+        if new_fm_text == fm_text:
+            return fm_text, None
+        return new_fm_text, 'summary: (block scalar) truncated to fit 140-char cap'
+
+    # Review: code-reviewer (P1, break-class) — measure the SAME decoded value
+    # `schema_validate._cf_summary_length_cap` measures (`len(str(summary))` on
+    # the `yaml.safe_load`-decoded value), not the raw on-disk text.
+    # `unquote_yaml_scalar(read_fm_field(...))` diverges from that decoded value
+    # in two ways: it does not strip a trailing `# comment` (only
+    # `read_fm_field_unquoted` does that), so a comment tail was counted toward —
+    # and could be sliced into — the measured/truncated value; and its own
+    # negative-spec says it does not process double-quoted backslash escapes, so
+    # a `\n`/`\"` sequence is measured at its longer raw-literal length rather
+    # than its decoded length. Either divergence could falsely trip (or miss) the
+    # >140 branch, or slice mid-escape. `yaml.safe_load` — the same decode the
+    # sibling block-scalar path already uses — is the one source of truth for
+    # what the gate sees.
+    try:
+        parsed_summary = yaml.safe_load(fm_text).get('summary')
+    except Exception:  # noqa: BLE001
+        parsed_summary = None
+    summary_val = None if parsed_summary is None else str(parsed_summary)
+    if summary_val is None or len(summary_val) <= _SUMMARY_MAX_CHARS:
+        return fm_text, None
+
+    original_len = len(summary_val)
+    truncated = summary_val[: _SUMMARY_MAX_CHARS - 1] + '…'
+    print(
+        f"{label}: WARNING — {file_path}: summary: exceeded "
+        f"{_SUMMARY_MAX_CHARS} chars (was {original_len}); truncated to fit the cap",
+        file=sys.stderr,
+    )
+    return (
+        replace_fm_field(fm_text, 'summary', truncated, numeric_quoting=True),
+        f'summary: truncated (was {original_len} chars) to fit {_SUMMARY_MAX_CHARS}-char cap',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -459,14 +579,26 @@ def _normalize_one_text(
     # both this present-value path and the backfill path below — the prior
     # `[:137] + '...'` three-ASCII-dot shape is retired.
     summary_raw = read_fm_field(fm_text, 'summary')
-    if summary_raw is None:
+    summary_is_placeholder = (
+        summary_raw is not None
+        and unquote_yaml_scalar(summary_raw) in _PLACEHOLDER_SUMMARIES
+    )
+    if summary_raw is None or summary_is_placeholder:
         # Extract text from the first H1 in the body; fall back to `title:` field.
         summary_text = ''
         h1_match = re.search(r'^#\s+(.+)$', split.body_with_leading_newline, re.MULTILINE)
         if h1_match:
             summary_text = h1_match.group(1).strip()
         else:
-            summary_text = read_fm_field(fm_text, 'title') or ''
+            # Latent-bug fix (in-scope, this branch): `read_fm_field` returns the
+            # value VERBATIM including any YAML quote characters — correct for a
+            # presence-test or verbatim-rewrite caller, wrong here since this value
+            # is composed into a NEW `summary:` field. A quoted `title:` (every
+            # `coordinator-doc-new`-scaffolded record — see `_yaml_quote(title)`
+            # in `_scaffold_spinoff`) used to backfill `summary` with the literal
+            # quote characters still embedded. `read_fm_field_unquoted` is the
+            # documented comparison/rewrite-safe sibling; see its docstring.
+            summary_text = read_fm_field_unquoted(fm_text, 'title') or ''
         # Strip inline markdown (bold, code, links) — mirrors JS strip chain.
         summary_text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', summary_text)   # [text](url) → text
         summary_text = re.sub(r'`([^`]+)`', r'\1', summary_text)               # `code` → code
@@ -476,30 +608,21 @@ def _normalize_one_text(
         if len(summary_text) > _SUMMARY_MAX_CHARS:
             summary_text = summary_text[: _SUMMARY_MAX_CHARS - 1] + '…'
         if summary_text:
-            fm_text = insert_fm_field(fm_text, 'summary', summary_text)
+            if summary_is_placeholder:
+                fm_text = replace_fm_field(fm_text, 'summary', summary_text)
+            else:
+                fm_text = insert_fm_field(fm_text, 'summary', summary_text)
             short = summary_text[:60]
             ellipsis = '…' if len(summary_text) > 60 else ''
-            changes.append(f'summary: (absent) → "{short}{ellipsis}"')
-    elif _BLOCK_SCALAR_INDICATOR_RE.match(summary_raw):
-        new_fm_text = _normalize_block_scalar_summary(fm_text, file_path)
-        if new_fm_text != fm_text:
-            fm_text = new_fm_text
-            changes.append('summary: (block scalar) truncated to fit 140-char cap')
+            origin = '(placeholder)' if summary_is_placeholder else '(absent)'
+            changes.append(f'summary: {origin} → "{short}{ellipsis}"')
     else:
-        summary_val = unquote_yaml_scalar(summary_raw)
-        if summary_val is not None and len(summary_val) > _SUMMARY_MAX_CHARS:
-            original_len = len(summary_val)
-            truncated = summary_val[: _SUMMARY_MAX_CHARS - 1] + '…'
-            fm_text = replace_fm_field(fm_text, 'summary', truncated, numeric_quoting=True)
-            changes.append(
-                f'summary: truncated (was {original_len} chars) to fit {_SUMMARY_MAX_CHARS}-char cap'
-            )
-            print(
-                f"handoff.normalize: WARNING — {file_path}: summary: exceeded "
-                f"{_SUMMARY_MAX_CHARS} chars (was {original_len}); truncated to fit the cap",
-                file=sys.stderr,
-            )
+        # Present value (plain or block scalar): the shared cap normalizer, which
+        # `handoff_transition._claim` also calls ahead of its own validation gate.
         # At-or-under-cap present value: carry unchanged — no drift, no warning.
+        fm_text, summary_change = normalize_present_summary(fm_text, file_path)
+        if summary_change is not None:
+            changes.append(summary_change)
 
     # ── 5. deliverable_id: carry if present; mint if absent (D1 carry rule) ──
     # Carry rule (D1): never re-mint an id that already exists — carrying preserves

@@ -3,7 +3,7 @@ from __future__ import annotations
 test_harvest_idempotency_env_override.py — regression test for the
 scan-root/write-root env-precedence mismatch in coordinator-harvest-deferrals.
 
-Spec backlink: docs/plans/2026-07-09-plan-full-coverage-and-deferred-harvest.md § C7
+Spec backlink: DoE-claude:pln-full-coverage-planning-posture-bca96f § C7
 (idempotency-guarantee fix, dispatched as a same-day follow-up fix chunk)
 
 Defect (confirmed, reproduced): coordinator-harvest-deferrals'
@@ -43,7 +43,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_THIS_DIR)  # coordinator/bin
 _COORDINATOR_DIR = os.path.dirname(_BIN_DIR)  # coordinator/
 
-_HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals")
+_HARVEST_CLI = os.path.join(_BIN_DIR, "coordinator-harvest-deferrals.py")
 _FIXTURES_DIR = os.path.join(_THIS_DIR, "fixtures", "plan-tasks-spine")
 _FIXTURE_VALID = os.path.join(_FIXTURES_DIR, "valid-spine-with-deferrals.md")
 

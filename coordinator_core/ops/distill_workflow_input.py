@@ -10,7 +10,7 @@ repoRoot the producer never emits). Before this op, an EM hand-wrote this
 adapter mid-run — five of five fields disagreed between the two sides, and
 only wiki_slugs_as_dict() (distill_scope.py) had a shipped converter for even
 one of them. This op is the single seam both the producer (distill.scope) and
-the consumer (coordinator-claude's distill-harvest.workflow.js) can pin against, so neither
+the consumer (DoE's distill-harvest.workflow.js) can pin against, so neither
 side's next edit silently reopens the hand-adapter.
 
 Integrity counts (2026-08-06 example-retrieval-repo-em incident —
@@ -30,7 +30,7 @@ translated whole.
 Negative-spec: performs no scan, no cohort computation, no disk read/write of
 its own (pure dict-in/dict-out translation over a caller-supplied manifest),
 no LLM call, and does NOT add the consumer-side integrity assertion itself —
-that assertion is coordinator-claude's distill-harvest.workflow.js's own change to make
+that assertion is DoE's distill-harvest.workflow.js's own change to make
 against this op's batch_count/total_file_count fields; this op only makes the
 declared counts available to be checked against.
 

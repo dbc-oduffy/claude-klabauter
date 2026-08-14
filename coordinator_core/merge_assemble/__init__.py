@@ -14,8 +14,8 @@ naming an existing atomic CLI; `merge_assemble.apply` (the mutating half)
 recomputes this brief in-process and dispatches through
 `coordinator_core.contract.apply_base`'s shared directive-execution engine.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C6
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C6
 
 `brief()` routes every construction through the shipped
 `coordinator_core.contract.decision_object.envelope.build_envelope` /
@@ -640,6 +640,12 @@ def main(argv: list[str]) -> int:
 
     if not argv:
         return _usage("merge-assemble")
+
+    if argv[0] in ("--help", "-h"):
+        print("usage: merge-assemble brief [--tag-prefix <prefix>]")
+        print("       merge-assemble apply [--session-id <id>] [--force] [--decisions <json>]")
+        return EXIT_OK
+
     subcmd, rest = argv[0], argv[1:]
 
     if subcmd == "apply":

@@ -2,5 +2,5 @@
 `orient-assemble` computed-skill engine (cadence matrix, round-trip
 parity, envelope conformance, read-only assertion).
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C3
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
 """

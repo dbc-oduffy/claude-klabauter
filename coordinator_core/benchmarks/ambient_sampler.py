@@ -146,24 +146,24 @@ def _windows_process_and_memory_sample() -> "tuple[Optional[int], Optional[float
 
 
 def _non_windows_process_sample() -> "tuple[Optional[int], Optional[float], Optional[float], Optional[float]]":
-    """Best-effort claude-process count via `ps` on POSIX; CPU/RAM left null.
+    """Best-effort claude-process count via `psutil` on POSIX; CPU/RAM left null.
 
     This box is Windows (repo doctrine notes it explicitly), so this branch is
-    a graceful fallback only — not the primary tested path.
+    a graceful fallback only — not the primary tested path. Uses `psutil`
+    in-process (a hard dependency of this repo — see `pyproject.toml`) rather
+    than shelling out to `ps`: no coreutils dependency, and no `kill -0` /
+    raw-PID liveness probe (see module docstring) since `psutil.process_iter`
+    reads process names directly, not via a liveness signal.
     """
     claude_procs: Optional[int] = None
     try:
-        out = subprocess.run(
-            ["ps", "-eo", "comm"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=_NO_CONSOLE,
+        import psutil
+
+        claude_procs = sum(
+            1
+            for proc in psutil.process_iter(["name"])
+            if "claude" in (proc.info.get("name") or "").lower()
         )
-        if out.returncode == 0:
-            claude_procs = sum(
-                1 for line in out.stdout.splitlines() if "claude" in line.lower()
-            )
     except Exception:
         claude_procs = None
     return claude_procs, None, None, None

@@ -426,6 +426,102 @@ def test_an_apply_stage_claim_is_never_takeable_from_a_live_holder(
     assert (cdir / "session_id").read_text(encoding="utf-8").strip() == "sid-peer"
 
 
+def test_unclean_prior_holder_fires_on_a_dead_stale_apply_claim(
+    tmp_path, holder_reads_live
+):
+    """`gates.claim_grant.unclean_prior_holder` (pickup/SKILL.md's recovery-
+    banner producer): a claims dir naming a not-live holder, past the
+    settling window, with no clean `drop()` — the only on-disk shape this
+    module can witness as an unclean exit, since `drop()` always removes
+    the claims dir on a deliberate release."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(
+        repo,
+        "handoff",
+        "h1.md",
+        "sid-dead",
+        stage="apply",
+        age_minutes=pa.CLAIM_STALE_AFTER_MINUTES + 5,
+    )
+    holder_reads_live(False)
+
+    grant = pa.compute_claim_grant(
+        repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
+    )
+
+    assert grant["verdict"] == "granted-with-warning"
+    assert grant["unclean_prior_holder"] is True
+    assert grant["holder"] == "sid-dead"
+    assert grant["claim_age_minutes"] >= pa.CLAIM_STALE_AFTER_MINUTES
+
+
+def test_unclean_prior_holder_is_false_on_a_clean_pickup(tmp_path):
+    """Negative-spec: no competing claim dir at all (the shape left behind by
+    a deliberate `drop()`, and the shape of a never-claimed artifact) reads
+    `unclean_prior_holder: False`, never a guess."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+
+    grant = pa.compute_claim_grant(
+        repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
+    )
+
+    assert grant["verdict"] == "granted"
+    assert grant["unclean_prior_holder"] is False
+
+
+def test_unclean_prior_holder_is_false_within_the_settling_window(
+    tmp_path, holder_reads_live
+):
+    """Negative-spec: a not-live holder still inside the settling window is
+    an inconclusive liveness read (`liveness.py`'s INDETERMINATE contract),
+    not evidence of death — `denied`, and `unclean_prior_holder` stays
+    `False`."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(
+        repo, "handoff", "h1.md", "sid-peer", stage="apply", age_minutes=5
+    )
+    holder_reads_live(False)
+
+    grant = pa.compute_claim_grant(
+        repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
+    )
+
+    assert grant["verdict"] == "denied"
+    assert grant["unclean_prior_holder"] is False
+
+
+def test_unclean_prior_holder_is_false_when_holder_reads_live(
+    tmp_path, holder_reads_live
+):
+    """Negative-spec: a live holder (however old the claim) is not a death —
+    row 3's `denied` stays `unclean_prior_holder: False`."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(
+        repo,
+        "handoff",
+        "h1.md",
+        "sid-peer",
+        stage="apply",
+        age_minutes=pa.CLAIM_STALE_AFTER_MINUTES + 600,
+    )
+    holder_reads_live(True)
+
+    grant = pa.compute_claim_grant(
+        repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
+    )
+
+    assert grant["verdict"] == "denied"
+    assert grant["unclean_prior_holder"] is False
+
+
 def test_a_stageless_claim_dir_reads_as_apply_stage(tmp_path, holder_reads_live):
     """Back-compat: every claim dir written before the split has no `stage`
     file and must keep its historical, lease-free semantics."""

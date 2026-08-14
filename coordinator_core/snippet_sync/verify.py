@@ -1,6 +1,6 @@
 """coordinator_core.snippet_sync.verify — the shared verify/--fix/--list engine.
 
-CONSOLIDATION of 7 coordinator-claude-side `coordinator/bin/verify-<name>-sync.sh` scripts
+CONSOLIDATION of 7 DoE-side `coordinator/bin/verify-<name>-sync.sh` scripts
 (~1489 LoC total, ~85-95% byte-identical) into one parameterized engine.
 Per-snippet behavioral divergence is DATA read from `snippets/registry.toml`
 metadata (`snippet_sync.registry.get_snippet_meta`), not per-script code
@@ -84,7 +84,7 @@ neither are reported (never auto-repaired — see `_eligible_glob_report`)
 alongside the orphan scan, against the same `effective_content_root` every other
 tree-walking surface here reads.
 
-Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
+Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
 """
 from __future__ import annotations
 
@@ -103,6 +103,12 @@ from coordinator_core.snippet_sync import registry as _registry
 from coordinator_core.text.normalize_snippet import normalize_snippet
 
 logger = logging.getLogger(__name__)
+
+# Generator-provenance declaration (generator_provenance.py). run()/--fix rewrites
+# whichever tracked markdown/text files resolve as a snippet's registered or
+# scan-discovered consumers (registry.toml-driven, data-dependent per snippet/run)
+# -- a corpus mutator over the tracked doc/prompt corpus, not a fixed artifact set.
+MUTATES = ["**/*.md"]
 
 _VALID_MODES = ("verify", "--fix", "--list", "--check")
 
@@ -362,7 +368,7 @@ def _assert_no_residual_comment_fragments(body: str, snippet_name: str) -> None:
     instead tests a property of the extracted body itself, independent of
     the header_style dialect that produced it, so it covers every
     snippet — not just comment-block ones — and would have caught the
-    2026-07-25 coordinator-claude incident (three orphaned prose lines + a dangling
+    2026-07-25 DoE incident (three orphaned prose lines + a dangling
     `-->` leaked into five consumers) at extraction time, before any
     consumer file was ever touched.
 
@@ -478,8 +484,8 @@ def _grep_scan(search_root: Path, sentinels: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# ORPHAN-SENTINEL DETECTION (2026-07-25 coordinator-claude incident, memo
-# cross-repo/archive/2026-07-25-coordinator-claude-em-orient-assemble-phantom-verbs.md § P1)
+# ORPHAN-SENTINEL DETECTION (2026-07-25 DoE incident, memo
+# cross-repo/archive/2026-07-25-doe-claude-em-orient-assemble-phantom-verbs.md § P1)
 #
 # `parallel-review-synthesizer.md` carried `reviewer-calibration` sentinels while
 # appearing in neither `consumers` nor `contract_blocks`. It was not merely stale:
@@ -786,7 +792,7 @@ def _orphan_report(
     if is_inject:
         out.append("  (A) The agent genuinely needs this block → wire it as an INJECTION,")
         out.append(f"      not a paste: add the subagent_type to contract_blocks: for '{name}'")
-        out.append("      in subagent-sandbox-policy.yaml (coordinator-claude-owned), then delete the pasted")
+        out.append("      in subagent-sandbox-policy.yaml (DoE-owned), then delete the pasted")
         out.append(f"      copy. Adding it to [snippet.{name}].consumers is NOT the fix — that")
         out.append("      list is a documentation set on an inject row and nothing pastes from")
         out.append("      it, so the block would stay orphaned with the warning silenced.")
@@ -843,7 +849,7 @@ def _eligible_glob_report(
     if delivery == "inject":
         out.append(f"  (A) It should carry '{name}' → wire it as an INJECTION: add its")
         out.append("      subagent_type to contract_blocks: in subagent-sandbox-policy.yaml")
-        out.append(f"      (coordinator-claude-owned) and mirror it in [snippet.{name}].consumers, which on an")
+        out.append(f"      (DoE-owned) and mirror it in [snippet.{name}].consumers, which on an")
         out.append("      inject row is the logical/documentation set, not a paste-target list.")
     else:
         out.append(f"  (A) It should carry '{name}' → add it to [snippet.{name}].consumers in")
@@ -933,7 +939,7 @@ def _insert_block(path: Path, name: str, begin: str, end: str, body: str) -> Non
     line found in the file; else before an Examples heading or a
     done-preamble BEGIN sentinel; else EOF. Byte-parity port of
     verify-quota-self-detect-sync.sh::insert_block
-    (coordinator-claude 432e3285, 2026-07-22)."""
+    (DoE 432e3285, 2026-07-22)."""
     block_body = body if body.endswith("\n") else body + "\n"
     block = begin + "\n" + block_body + end + "\n"
 
@@ -964,7 +970,7 @@ def _claim_if_session(path: str, *, cs_lib: Optional[Path] = None) -> None:
 
     Calls `coordinator_core.session.claims.self_claim` in-process (2026-07-21
     de-bash cutover — see git log; was previously a `bash -c 'source ...;
-    cs_self_claim'` subprocess shim to the coordinator-claude-side coordinator-session.sh).
+    cs_self_claim'` subprocess shim to the DoE-side coordinator-session.sh).
     `cs_lib` is accepted-but-unused for call-site compatibility — the native
     port needs no lib file to source. Best-effort: `self_claim` itself is
     fail-open (always returns True; internal errors are swallowed), matching
@@ -1140,7 +1146,7 @@ def run(
     orphan_lines: list[str] = []
     orphan_found = False
     if consumer_source == "registry":  # constraint 4 — "scan" is exempt by construction
-        # `delivery` (registry schema_version 3, coordinator-claude 7ff1cb75e) decides WHAT counts
+        # `delivery` (registry schema_version 3, DoE 7ff1cb75e) decides WHAT counts
         # as registered here, and the two cases are genuinely different:
         #
         #   paste  — the plain `consumers` list IS the paste-target set, so a
@@ -1177,7 +1183,7 @@ def run(
             )
 
     # ------------------------------------------------------------------
-    # eligible_glob completeness (registry schema_version 4, coordinator-claude 355255cc3).
+    # eligible_glob completeness (registry schema_version 4, DoE 355255cc3).
     #
     # Placed beside the orphan scan and BEFORE the zero-consumers early return
     # for the same reason that scan is: a row can declare an eligible_glob while

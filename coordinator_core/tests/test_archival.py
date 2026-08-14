@@ -7,7 +7,7 @@ archive-resident and/or terminal-status (consumed/superseded/abandoned)
 children. A consumed parent whose only reverse-membership edge points at such
 a child was reported as referenced=True forever, so it never archived — a
 faithfully-ported bash bug (Port of: handoff-has-live-children.sh
-(coordinator-claude 50ec0809, 2026-07-19) scanned both --type handoff and --type
+(DoE 50ec0809, 2026-07-19) scanned both --type handoff and --type
 handoff-archived into one undifferentiated set).
 
 Fix: reverse_membership now excludes archive-resident and terminal-status

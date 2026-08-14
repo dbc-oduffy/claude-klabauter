@@ -11,10 +11,10 @@ routing table living as prose in the skill body (the "deterministic if/else
 in a markdown fence at the logic level" defect `invisible-doctrine.md`
 realization #6 forbids).
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-DR-090 (coordinator-claude docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
-Spec backlink: coordinator-claude docs/plans/2026-07-24-sizing-lobby-core.md, chunk C7 (Design D4/D5)
-Input shape: coordinator-claude coordinator/schemas/sizing-object.schema.json (C1)
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+DR-090 (DoE-claude docs/decisions/DR-090-the-unit-of-extraction-is-the-mechanical-step.md)
+Spec backlink: DoE-claude DoE-claude:pln-sizing-skill-sizing-object-art-3eb413, chunk C7 (Design D4/D5)
+Input shape: DoE-claude coordinator/schemas/sizing-object.schema.json (C1)
 Registration seam: this module ships no bash veneer and needs none — it is
 consumed directly by the `coordinator/bin/sizing-assemble` trampoline (mirrors
 `coordinator/bin/pickup-assemble`'s direct-import template-variant #1).
@@ -110,10 +110,10 @@ before ANY detent computation runs, so `premise_unproven` /
 `premise_not_applicable` never fire on that path regardless of
 `premise_provenance` — that is correct by size (D3), not an oversight to
 "fix" by adding the detent to the short-circuit (cross-repo memo
-2026-08-05-coordinator-claude-em-premise-provenance-detent-sizing-assemble.md).
+2026-08-05-doe-claude-em-premise-provenance-detent-sizing-assemble.md).
 
 Premise provenance (advisory detent, warn-never-block — DR-068 precedent;
-cross-repo memo 2026-08-05-coordinator-claude-em-premise-provenance-detent-sizing-
+cross-repo memo 2026-08-05-doe-claude-em-premise-provenance-detent-sizing-
 assemble.md): `premise_provenance` is one of `executed` | `read` |
 `not-applicable` | `unrecorded` | None, validated unconditionally by
 `_validate_premise_provenance` (same unconditional-validation property as
@@ -122,7 +122,7 @@ provenance is `read` AND the RESIZED t-shirt is in `_PREMISE_DETENT_TSHIRTS`
 (M/L/XL/XXL), the `premise_unproven` detent fires; when provenance is
 `not-applicable` under the same size gate, `premise_not_applicable` fires
 instead. Both land in the same `DETENT_ENUM` widen (never staggered — the
-Coordinator-claude-side schema parity test asserts symmetric set equality against this
+DoE-side schema parity test asserts symmetric set equality against this
 tuple). The gate keys on resized SIZE, not resolved ROUTE, so it fires
 identically on `plan`-, `shape`-, `pm-decision`-, and `goal-setting`-routed
 M/L/XL/XXL — routing away from `plan` does not reduce the premise-truth-
@@ -139,12 +139,12 @@ producing a spike-result artifact (a structural-in-mechanism,
 never-in-ceremony design per the memo's PM ruling 2).
 
 Boundary-in-notch (advisory detent, warn-never-block — same shape as premise
-provenance above; cross-repo memo 2026-08-10-coordinator-claude-em-sizing-guard-
+provenance above; cross-repo memo 2026-08-10-doe-claude-em-sizing-guard-
 flags.md): `boundary_in_notch` is one of `yes` | `no` | None, validated
 unconditionally by `_validate_boundary_in_notch`. A `yes` answers "a
 cross-repo boundary, memo, relay, or assent gate contributed to this notch"
 and fires `boundary_counted_in_notch`. The rule it makes checkable is
-already written — coordinator-claude `coordinator/skills/sizing/SKILL.md` § *A cross-team
+already written — DoE `coordinator/skills/sizing/SKILL.md` § *A cross-team
 dependency is a gate, not a size*: a MEMO (one ask, the sibling implements
 on their own surface) does not move the notch; NEGOTIATED CO-DESIGN, where
 the shared contract itself is the unknown, does. The engine cannot tell
@@ -254,19 +254,19 @@ DETENT_ENUM = (
     "xxl_unprobed",
     "goal_setting_pm_gated",
     # APPENDED AT THE END, in this order, never re-sorted — enum ORDER is
-    # load-bearing against coordinator-claude's EQUAL_VERSION_SHAPE_DRIFT gate, and the
+    # load-bearing against DoE's EQUAL_VERSION_SHAPE_DRIFT gate, and the
     # vendored schema's `detents.items.enum` must carry these two values in
-    # exactly this position (cross-repo memo 2026-08-10-coordinator-claude-em-sizing-
+    # exactly this position (cross-repo memo 2026-08-10-doe-claude-em-sizing-
     # guard-flags.md; same append discipline as the XXL notch's widen).
     "boundary_counted_in_notch",
     "scout_evidence_mention_count",
     # Same append-at-the-end discipline as the two above (2026-08-11
-    # routine-ask-sized-XL incident). Order is load-bearing against coordinator-claude's
+    # routine-ask-sized-XL incident). Order is load-bearing against DoE's
     # EQUAL_VERSION_SHAPE_DRIFT gate — never re-sort.
     "intent_em_elaborated",
     "precedent_shipped_before",
     "probe_raise_on_substrate_condition",
-    # Appended by coordinator-claude-em's counter (cross-repo memo 2026-08-11-doe-
+    # Appended by doe-claude-em's counter (cross-repo memo 2026-08-11-doe-
     # claude-em-sizing-intent-landed-1-11-0-and-one-counter.md), stamped
     # 1.12.0. Closes an honesty gradient the three above opened:
     # `substrate-condition` costs the EM the raise while `ask-scope` cost
@@ -274,9 +274,9 @@ DETENT_ENUM = (
     # answer the free, unmarked one. Now both answers leave a mark and only
     # one moves the size.
     "probe_raise_ask_scope_asserted",
-    # Appended per the breadth arm (cross-repo memo 2026-08-12-coordinator-claude-em-
+    # Appended per the breadth arm (cross-repo memo 2026-08-12-doe-claude-em-
     # sizing-breadth-arm.md, adopted). Same append-at-the-end discipline as
-    # every widen above — never re-sort; order is load-bearing against coordinator-claude's
+    # every widen above — never re-sort; order is load-bearing against DoE's
     # EQUAL_VERSION_SHAPE_DRIFT gate.
     "probe_raise_on_breadth",
 )
@@ -322,8 +322,8 @@ PRECEDENT_ENUM = ("shipped-before", "novel")
 # incident every one of four scout_evidence items described the mirror's
 # health (orphaned tests, a stray allowlist row, an uncommitted backlog) and
 # none described the ask, which remained "commit and push". `breadth` is the
-# third claim (cross-repo memo 2026-08-12-coordinator-claude-em-sizing-breadth-arm.md,
-# adopted into coordinator-claude's sizing SKILL.md § *A touchpoint count is not a depth
+# third claim (cross-repo memo 2026-08-12-doe-claude-em-sizing-breadth-arm.md,
+# adopted into DoE's sizing SKILL.md § *A touchpoint count is not a depth
 # read*): a raise resting solely on "there are many sites" is a dispatch
 # SHAPE, not a size signal, and moving the notch on it is as untrue as
 # `substrate-condition` is. `breadth` is a typed claim of UNIFORM breadth —
@@ -429,7 +429,7 @@ _POST_SIZE_PROMPT_TSHIRTS = ("M", "L", "XL", "XXL")
 # jtbd_unclear sizing from `plan` to `shape` — a routing regression nobody
 # asked for. Do not merge these two constants back together; the detent
 # needs M, the route gate must not have it (cross-repo memo
-# 2026-08-08-coordinator-claude-em-premise-detent-m-sized-plans.md).
+# 2026-08-08-doe-claude-em-premise-detent-m-sized-plans.md).
 _PREMISE_DETENT_TSHIRTS = ("M", "L", "XL", "XXL")
 
 
@@ -733,15 +733,15 @@ def route(
         detents.append("goal_setting_pm_gated")
 
     # `xxl_unprobed` (same plan, C2 item 2, Key-decision section — the
-    # ACCEPTED counter-proposal to coordinator-claude's originally specced
+    # ACCEPTED counter-proposal to DoE's originally specced
     # `probe_signal is None and not scout_evidence`, inbound memo
-    # `2026-08-07-coordinator-claude-em-xxl-notch-four-answers.md` item 1). Testing
+    # `2026-08-07-doe-claude-em-xxl-notch-four-answers.md` item 1). Testing
     # `probe_signal is None` reads "a probe ran, therefore the size is
     # trustworthy" — but `--probe-signal raise` is a caller ASSERTION, not
     # evidence, and `_step_tshirt`'s clamp (see its own comment) means a
     # raise probe reaches XXL from either `--tshirt XL` (promotion) or
     # `--tshirt XXL` (no-op clamp) — both are the exact false-HIGH this
-    # advisory exists to catch, and coordinator-claude's original predicate exempts both.
+    # advisory exists to catch, and DoE's original predicate exempts both.
     # This predicate tests `scout_evidence` EMPTINESS only, never its
     # contents (module docstring's negative-spec).
     if resized_tshirt == "XXL" and not scout_evidence:
@@ -1119,6 +1119,9 @@ def main(argv: list[str]) -> int:
     i = 0
     while i < len(argv):
         tok = argv[i]
+        if tok in ("--help", "-h"):
+            _usage(prog)
+            return EXIT_OK
         if tok == "--appetite" and i + 1 < len(argv):
             appetite = argv[i + 1]
             i += 2

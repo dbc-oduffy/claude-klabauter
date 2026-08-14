@@ -4,7 +4,7 @@ Tests for coordinator_core.orient_assemble.readers_handoff_triage's
 caps that bound `_read_ready`/`_read_awaiting_gate`'s otherwise-unbounded
 captured-stdout text.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md,
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420,
 chunk C2b; state/bug-backlog/2026-08-13-session-brief-byte-budget-assertion
 -is-r-8733361330d6.yaml (the incident these caps were added to fix).
 

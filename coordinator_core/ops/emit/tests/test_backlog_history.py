@@ -122,7 +122,7 @@ class TestD9DefaultProvenanceNonNull:
     def test_provenance_uses_canonical_contract_enums(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Block-level provenance MUST use canonical ProvenanceEnvelope enum values.
 
-        Regression guard for the drift the coordinator-claude cockpit-contract live-emit round-trip caught:
+        Regression guard for the drift the DoE cockpit-contract live-emit round-trip caught:
         ``source_kind`` was emitted as the non-canonical internal label ``local_file`` (correct:
         ``local_fs``) and ``derivation`` as ``derived`` (correct: ``parsed``). Every sibling
         emit section (cross_repo_memos, health, backlogs, …) uses ``local_fs``/``parsed``;

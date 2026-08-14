@@ -32,7 +32,7 @@ THE TWO LAYERS
 — the registry ladder's rung-1 override, honoured identically by the
 ``machine-local`` CLI and by ``machine_resolver.registry_dir()`` — at a per-test
 directory SEEDED WITH A COPY of the live registry files. The copy matters: these
-tests legitimately READ the registry (the scaffold resolves ``repos.example_doctrine_repo``
+tests legitimately READ the registry (the scaffold resolves ``repos.doe_claude``
 through it), so a bare empty directory would convert a pollution bug into a
 resolution failure. Reads see identical bytes; writes land in the copy and are
 discarded with the tmp dir.

@@ -1,6 +1,6 @@
 """
 coordinator_core.frontmatter.tests.test_schema_cli_parity — conformance suite
-for coordinator_core.frontmatter.schema_cli, ported from coordinator-claude's own
+for coordinator_core.frontmatter.schema_cli, ported from DoE-claude's own
 oracle test suite (coordinator/bin/tests/test-schema-cli.bats).
 
 Purpose: verify byte-identical argv/output/exit-code parity between this
@@ -9,7 +9,7 @@ Claude-klabauter-local parity subtleties called out in the chunk spec (each its 
 named test, not collapsed into one "contract fixture" assertion).
 
 Negative-spec: does NOT run bats or spawn `node schema-cli.js` — this suite
-ports the coordinator-claude bats *expectations* into pytest assertions against the local
+ports the DoE bats *expectations* into pytest assertions against the local
 Python CLI (main()) directly, invoked in-process (no subprocess spawn) via
 capsys/monkeypatch of sys.argv/stdin, matching how other coordinator_core CLI
 modules are tested. Does not test the "schema.describe"/"schema.validate"

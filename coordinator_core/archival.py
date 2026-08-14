@@ -176,10 +176,10 @@ def _is_terminal_or_archived_child(path: str) -> bool:
         # fleet.archive_completed_handoffs' Check 3 (this module's
         # reverse_membership) while the child still names it as
         # predecessor/additional_predecessors/forked_from.  This is the interim
-        # forward-compatible subset of the fuller coordinator-claude lvv-04/C3 archive-safe
+        # forward-compatible subset of the fuller DoE lvv-04/C3 archive-safe
         # predicate (lifecycle-vocab roadmap) — just the in_flight hard exclusion,
         # mirroring archive_handoffs.py's Check A2 negative-spec: DR-084 renamed
-        # status consumed->claimed (dual-tolerant read window); if coordinator-claude lvv-04/C3
+        # status consumed->claimed (dual-tolerant read window); if DoE lvv-04/C3
         # introduces additional non-terminal deployment_state values that can
         # co-occur with status:consumed/claimed, this exclusion must be extended
         # in lockstep — or inverted to a terminal-state allowlist — or this

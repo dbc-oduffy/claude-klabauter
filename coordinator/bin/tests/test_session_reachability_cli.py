@@ -19,7 +19,7 @@ identically to "reachable" -- neither is special-cased.
 Loaded by file path (`importlib.machinery.SourceFileLoader`) --
 same load idiom as test_session_liveness_cli.py's `_load_cli_module`.
 
-Spec backlink: cross-repo/inbox/2026-08-13-coordinator-claude-em-peer-roster-
+Spec backlink: cross-repo/inbox/2026-08-13-doe-claude-em-peer-roster-
 doctrine-reply.md § Counter 1, state/handoffs/2026-08-13-session-owner-
 reachability-registry.md.
 """
@@ -214,7 +214,12 @@ def test_peer_roster_repo_flag_missing_value_exits_2(stub_import_modules):
 
 def test_artifact_owner_happy_path(stub_import_modules, capsys):
     owner_result = _resolve_result("reachable", session_id="owner-sid", address="owner-repo-ab12 [abcdef]")
-    owner_record = types.SimpleNamespace(session_id="owner-sid", source_field="claimed_by")
+    owner_record = types.SimpleNamespace(
+        session_id="owner-sid",
+        source_field="claimed_by",
+        claim_live=None,
+        claim_stage=None,
+    )
     owner_resolution = types.SimpleNamespace(owner=owner_record, result=owner_result)
     artifact_result = types.SimpleNamespace(
         artifact_path="state/handoffs/example.md", owners=[owner_resolution], file_error=None

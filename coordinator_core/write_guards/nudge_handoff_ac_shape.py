@@ -9,7 +9,7 @@ docs/plans/2026-08-13-handoff-ac-shape-template-rule-and-write-time-offer.md:
 `- [ ]`/`- [x]` checkboxes under a handoff's `## Acceptance criteria`
 heading and reports `verdict: indeterminate` when it finds the heading with
 zero of them — but the checkbox convention is stated only in
-`coordinator-claude coordinator/skills/plan/SKILL.md`, never in the spinoff or
+`DoE-claude coordinator/skills/plan/SKILL.md`, never in the spinoff or
 handoff skills, and `coordinator/templates/handoffs/` holds no body
 template at all. An author following the skills they were actually given
 can write prose bullets instead, satisfying every instruction they read

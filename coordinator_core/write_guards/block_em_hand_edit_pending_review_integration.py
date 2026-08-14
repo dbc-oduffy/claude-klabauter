@@ -1,7 +1,7 @@
 """coordinator_core.write_guards.block_em_hand_edit_pending_review_integration
 — advisory guard.
 
-Mechanizes the "reviewer findings — apply, don't ratify" rule (coordinator-claude
+Mechanizes the "reviewer findings — apply, don't ratify" rule (DoE-claude
 ``global-doctrine/CLAUDE.md`` § Flag Severity: "Tradeoff-free correctness
 fixes ... fold in silently via the review-integrator") and its EM-channel
 restatement (``coordinator/snippets/em-operating-doctrine.md`` §
@@ -31,7 +31,7 @@ checking for the integrator run without adding a second cross-referenced
 state surface.
 
 Not a blind absolute: an integrator genuinely unavailable has a named
-exit, cited by the advisory itself — coordinator-claude
+exit, cited by the advisory itself — DoE-claude
 ``coordinator/docs/wiki/review-integration-doctrine.md`` §
 "Integrator unavailable — the named exit" (re-dispatch once; if not
 break-class, park with an owner; if break-class, hand-apply after the
@@ -102,9 +102,9 @@ Negative-spec:
     write_guards module's fail-open-on-error discipline
     (``write_guards/INTERFACE.md`` fidelity rule 6).
 
-Spec backlink: coordinator-claude docs/plans/2026-07-27-claude-md-altitude-triage.md
+Spec backlink: DoE-claude DoE-claude:pln-claude-md-altitude-triage-earn-31f32e
   § C14 (chunk id `REVIEW-INTEGRATOR-REQUIRED-GUARD`)
-Audited-but-unbuilt precedent this closes: coordinator-claude
+Audited-but-unbuilt precedent this closes: DoE-claude
   ``state/audits/2026-07-27-doctrine-envelope-classification.md``
   (``inventory-coordinator.md`` row, "After every review, dispatch
   review-integrator").

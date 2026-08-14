@@ -54,7 +54,7 @@ Negative-spec:
   - Does NOT hardcode CLAUDE_KLABAUTER_ROOT -- resolves via cc_invoke's
     _resolve_claude_klabauter_root() (env var -> settings-home pointer -> bash resolver).
   - Does NOT hard-error or nag when the op is unregistered/claude-klabauter absent --
-    degrades to a fully silent skip (exit 0, no output). Coordinator-claude is a consumer;
+    degrades to a fully silent skip (exit 0, no output). DoE is a consumer;
     it must never nag about claude-klabauter's activation state.
   - Does NOT re-implement the invoke transport -- imports and calls cc_invoke().
 """

@@ -25,7 +25,7 @@ import unittest
 from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
-_CLI_PATH = _BIN_DIR / "coordinator-doc-new"
+_CLI_PATH = _BIN_DIR / "coordinator-doc-new.py"
 
 
 def _load_cli_module():

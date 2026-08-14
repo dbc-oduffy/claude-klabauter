@@ -43,7 +43,7 @@ from coordinator_core.win_portability import no_console_creationflags
 # ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
-_CLI_PATH = _BIN_DIR / "coordinator-lesson-add"
+_CLI_PATH = _BIN_DIR / "coordinator-lesson-add.py"
 
 # Load the CLI as a Python module for unit testing.
 # The sh/python trampoline header (''''exec...) is inert when imported as Python.

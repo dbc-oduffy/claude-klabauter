@@ -1,6 +1,6 @@
 """
 RoadmapDagNode — a single stub-node in a roadmap dependency graph. Pydantic
-port of coordinator-claude `coordinator/cockpit-contract/src/entities/roadmap-dag-node.ts`
+port of DoE `coordinator/cockpit-contract/src/entities/roadmap-dag-node.ts`
 (Zod source).
 
 Represents one stub's position within a roadmap DAG as emitted by claude-klabauter's

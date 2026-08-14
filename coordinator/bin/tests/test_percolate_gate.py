@@ -2,7 +2,7 @@
 
 Covers the three ported gate-logic subcommands (branch0-gate, scan-secrets,
 inverse-drift) against the contract documented in percolate-gate.py's module
-docstring, itself a direct port of the fences in coordinator-claude
+docstring, itself a direct port of the fences in DoE-claude
 coordinator/skills/percolate/SKILL.md (Branch 0, Step 2c, Step 2d). The
 former `run-pre-ci-hooks` subcommand (Step 5a) was removed 2026-07-24 once
 the declarative engine-side pre-ci guard (`publish.py`'s
@@ -164,6 +164,47 @@ def test_scan_secrets_medium_hit_does_not_block(tmp_path):
     assert "MEDIUM" in out
     assert "~/.claude/tasks/foo" in out
     assert "HIGH" in out and "(none)" in out
+
+
+def test_tier_medium_python_decorator_not_classified_as_email(tmp_path):
+    """A Python decorator line (`@pytest.mark.parametrize(`) has no local
+    part before `@` — only leading whitespace — so it must not collide with
+    the email-shape alternative, while a real email-shaped identity string
+    on another line still does."""
+    target_file = tmp_path / "test_something.py"
+    target_file.write_text(
+        "@pytest.mark.parametrize(\"x\", [1, 2])\n"
+        "def test_x(x):\n"
+        "    pass\n"
+        "\n"
+        "# contact: real.person@some-real-domain.io\n",
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    assert "@pytest.mark.parametrize" not in out
+    assert "real.person@some-real-domain.io" in out
+
+
+def test_tier_medium_reserved_test_domain_exempted(tmp_path):
+    """An RFC 2606 reserved test domain (`example.com`) in a fixture is not
+    flagged, but a structurally identical real-shaped domain still is."""
+    target_file = tmp_path / "test_fixture.py"
+    target_file.write_text(
+        '_git(repo, "config", "user.email", "test@example.com")\n'
+        '_git(repo, "config", "user.email", "test@notexempt-domain.io")\n',
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    assert "test@example.com" not in out
+    assert "test@notexempt-domain.io" in out
 
 
 def test_scan_secrets_clean(tmp_path):

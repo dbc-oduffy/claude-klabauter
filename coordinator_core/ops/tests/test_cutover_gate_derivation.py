@@ -234,8 +234,9 @@ def test_symlinked_subdir_escaping_root_is_not_walked(repo_tree: Path) -> None:
 
 def test_extensionless_python_shebang_file_is_derived(repo_tree: Path) -> None:
     """FIX-D — the named house trap: a Python file with NO extension (like
-    the plan's own worked example, coordinator/bin/archive-stamp-cli) must
-    still be reachable by the collector, via its shebang, not its suffix."""
+    the plan's own worked example, coordinator/bin/archive-stamp-cli prior to
+    its C6 rename) must still be reachable by the collector, via its
+    shebang, not its suffix."""
     shebang_file = repo_tree / "coordinator" / "lib" / "some-cli"
     shebang_file.write_text(
         "#!/usr/bin/env python3\nx = 'closed'\n", encoding="utf-8"

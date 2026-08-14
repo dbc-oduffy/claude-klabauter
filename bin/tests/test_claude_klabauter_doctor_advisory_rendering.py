@@ -213,7 +213,7 @@ def _manifest_vendor_drift_row() -> dict:
 class TestVendorDriftRemediationDischarge:
     """The F3 regression guard.
 
-    The previous remediation said "copy coordinator-claude's <name>.schema.json in verbatim". Following
+    The previous remediation said "copy DoE's <name>.schema.json in verbatim". Following
     it literally turns this probe green while breaking the pinned-SHA tamper-check,
     because the two compare against different references. Prose that hands the operator
     half the job discharges nothing (CLAUDE.md § North star).
@@ -248,7 +248,7 @@ class TestVendorDriftRemediationDischarge:
         fake = types.ModuleType("coordinator_core.frontmatter.schema_drift_watch")
         fake.scan_vendored_schema_drift = lambda: {  # type: ignore[attr-defined]
             "status": "DRIFT",
-            "summary": "3 of 13 vendored schemas behind coordinator-claude HEAD",
+            "summary": "3 of 13 vendored schemas behind DoE HEAD",
             "doe_repo_path": "/x",
             "checked": 13,
             "drifted": [{"schema": "review-findings.schema.json", "direction": "WE_ARE_BEHIND"}],
@@ -273,7 +273,7 @@ class TestVendorDriftRemediationDischarge:
 class TestSentinelShapeUnaffected:
     def test_seven_original_keys_plus_vendor_drift(self, tmp_path: Path) -> None:
         """Rendering changes must not reach the sentinel — it has external consumers
-        in coordinator-claude (see _write_doctor_sentinel's ADDITIVE-KEY POLICY)."""
+        in DoE (see _write_doctor_sentinel's ADDITIVE-KEY POLICY)."""
         results = [_result("claude-klabauter.schema.vendor_drift", "DEGRADED", required=False)]
         envelope = _mod._build_enriched_envelope(results, None, {})
         _mod._write_doctor_sentinel(envelope, tmp_path)

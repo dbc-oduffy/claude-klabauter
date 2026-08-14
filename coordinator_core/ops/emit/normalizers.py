@@ -2,7 +2,7 @@
 coordinator_core.ops.emit.normalizers — shared AC5-PROVENANCE normalization utilities.
 
 Purpose: typed sentinels and the ``_normalize`` helper shared by the strang-01 parity
-tests (``test_emit_parity``) and the strang-02 coordinator-claude-HEAD conformance drift-check
+tests (``test_emit_parity``) and the strang-02 DoE-HEAD conformance drift-check
 (``test_doe_drift``).  Extracted from the test leaf so both modules import from a
 stable production location rather than cross-importing between test files — avoiding
 pytest collection-isolation breakage and making the surface available for future
@@ -13,10 +13,10 @@ run and a later Python emission on the SAME machine.  We canonicalize (replace t
 value) rather than delete so structural presence is still asserted.  Applied
 recursively so provenance-nested and watermark-nested copies are hit.
 
-Oracle: coordinator-claude emission-conformance-contract.md § AC5-PROVENANCE (three distinct sentinels).
-strang-02 cross-repo conformance comparison normalizes to these same values on the coordinator-claude
+Oracle: DoE emission-conformance-contract.md § AC5-PROVENANCE (three distinct sentinels).
+strang-02 cross-repo conformance comparison normalizes to these same values on the DoE
 side; using a single ``<NORMALIZED>`` for all field types would cause every
-timestamp/SHA field to compare unequal when coordinator-claude normalizes to epoch-zero / zero-SHA.
+timestamp/SHA field to compare unequal when DoE normalizes to epoch-zero / zero-SHA.
 
 Spec backlink: state/handoffs/2026-07-04_201949_roadmap-strang-02.md (strang-02)
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C1
@@ -29,7 +29,7 @@ import re as _re
 # Typed sentinels
 # ---------------------------------------------------------------------------
 # Review: code-reviewer — F1: typed sentinels per AC5-PROVENANCE oracle.
-# Oracle: coordinator-claude emission-conformance-contract.md § AC5-PROVENANCE (three distinct sentinels).
+# Oracle: DoE emission-conformance-contract.md § AC5-PROVENANCE (three distinct sentinels).
 _TS_SENTINEL = "1970-01-01T00:00:00Z"                      # epoch-zero for all timestamp fields
 _SHA_SENTINEL = "0000000000000000000000000000000000000000"  # zero SHA for git commit SHA fields
 _ID_SENTINEL = "__NORMALIZED__"                             # string-ID sentinel: branch/repo/REPO_NAME
@@ -155,7 +155,7 @@ _SECTION_DROP_KEYS = frozenset(
 
 # Attribution slug — normalized per contract (REPO_NAME) to tolerate remote/machine variance.
 # REPO_NAME is a hardcoded string field in the bash emitter
-# (Port of: emit-cockpit-snapshot.sh, coordinator-claude 07eedcfb, 2026-07-19); included here so
+# (Port of: emit-cockpit-snapshot.sh, DoE 07eedcfb, 2026-07-19); included here so
 # assert_full_parity is deterministic when comparing Python vs bash output
 # (AC5-PROVENANCE field 7, emission-conformance-contract.md § AC5-PROVENANCE).
 _REPO_KEYS = frozenset({"repo", "REPO_NAME"})
@@ -278,11 +278,11 @@ def _relativize_abs_fixture_path(value: str) -> str:
 def _normalize(value):
     """Recursively normalize volatile AC5-PROVENANCE fields to typed sentinels.
 
-    Applies to any dict/list value in a cockpit emission or coordinator-claude conformance fixture.
+    Applies to any dict/list value in a cockpit emission or DoE conformance fixture.
     Typed sentinels: _TS_SENTINEL (timestamps), _SHA_SENTINEL (git SHAs), _ID_SENTINEL
     (branch / repo / REPO_NAME / machine-identity strings).
 
-    Oracle: coordinator-claude emission-conformance-contract.md § AC5-PROVENANCE.
+    Oracle: DoE emission-conformance-contract.md § AC5-PROVENANCE.
     """
     if isinstance(value, dict):
         out = {}

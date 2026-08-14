@@ -298,7 +298,7 @@ def test_special_character_value_round_trips_byte_exact(tmp_path):
 
     tricky_value = (
         "\"dlv-narrow-the-write-confinement-bump-a-publish-af3aa9\"  "
-        "# minted here; deliberately NOT coordinator-claude's dlv-...-276e8d — reusing it would "
+        "# minted here; deliberately NOT DoE's dlv-...-276e8d — reusing it would "
         "join our chunk evidence onto their deliverable"
     )
 

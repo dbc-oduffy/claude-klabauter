@@ -9,7 +9,7 @@ prove comma/colon-bearing deliverable text round-trips through the vendored
 schema validator and `schema_validate.parse_yaml`, and pin the newline-in-item
 rejection contract for all three flags.
 
-Spec backlink: docs/plans/2026-07-30-workstream-store-writer-and-parser.md § C2
+Spec backlink: DoE-claude:pln-workstream-store-make-the-sanc-546afa § C2
 
 Mirrors: coordinator/tests/test_workstream_store_collision.py (same
 importlib.machinery.SourceFileLoader idiom for the extensionless CLI script,
@@ -29,7 +29,7 @@ from coordinator_core.frontmatter import schema_validate
 
 pytestmark = pytest.mark.cadence
 
-_QUEUE_APPEND_SCRIPT = Path(__file__).resolve().parent / "coordinator-queue-append"
+_QUEUE_APPEND_SCRIPT = Path(__file__).resolve().parent / "coordinator-queue-append.py"
 
 
 def _load_queue_append():

@@ -1,7 +1,7 @@
 """Tests for coordinator_core.bash_guards._write_bump_marker -- the
 write-confinement speed bump's session-scoped clear-once marker.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md, chunk C3.
+Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567, chunk C3.
 Covers AC6 (marker honoured for the whole session), AC7 (subagent inherits
 its EM's marker), AC15 (the advertised clear line works verbatim), plus the
 `.git`-as-a-FILE worktree/submodule cases and the unwritable-gitdir
@@ -379,7 +379,7 @@ def test_sweep_stale_markers_does_not_remove_prefix_matched_stray_suffix(tmp_pat
 
 
 def test_sweep_stale_markers_does_not_unlink_live_marker_when_ended_id_is_its_prefix(tmp_path):
-    """coordinator-claude finding #7, AC8. `_SESSION_ID_FORMAT_RE` permits `abc` as a valid
+    """DoE finding #7, AC8. `_SESSION_ID_FORMAT_RE` permits `abc` as a valid
     session id and also permits `abcdef` -- a string-prefix of one another.
     An ended session `abc` must never unlink live session `abcdef`'s marker
     via a prefix match on the delete path."""

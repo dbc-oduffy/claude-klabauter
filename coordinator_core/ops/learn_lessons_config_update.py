@@ -16,8 +16,8 @@ Otherwise print a one-line hint to stderr advising registration via
 machine-local. NEVER mutates a tracked file. Always returns 0 (idempotent;
 safe as a Phase 0 call).
 
-Port of: learn-lessons-config-update.sh (coordinator-claude b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Port of: learn-lessons-config-update.sh (DoE b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 
 Negative-spec:
     - Does NOT write/mutate any tracked file — advisory stderr hint only.

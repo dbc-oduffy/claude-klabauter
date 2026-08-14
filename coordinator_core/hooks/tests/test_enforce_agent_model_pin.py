@@ -212,7 +212,7 @@ def test_enumerated_type_with_violating_model_denies_via_composed_pin_reason(mon
 
 
 def test_resolve_model_pins_reads_model_and_effort_from_frontmatter(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     _write_agent_md(doe_root, "executor", model="sonnet", effort="low")
     _write_agent_md(doe_root, "code-reviewer", model="haiku")
     _write_agent_md(doe_root, "unpinned-agent")
@@ -227,7 +227,7 @@ def test_resolve_model_pins_reads_model_and_effort_from_frontmatter(tmp_path: Pa
 
 
 def test_resolve_model_pins_fails_closed_on_missing_agents_dir(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     pins, reason = unenumerated_mod.resolve_model_pins(doe_root=str(doe_root))
     assert pins is None
     assert reason is not None
@@ -261,7 +261,7 @@ def _write_plugin_agent_md(home: Path, rel_path: str, name: str, *, model: str =
 
 
 def test_plugin_keyed_pin_via_full_resolve_model_pins(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     home = tmp_path / "home"
     _write_agent_md(doe_root, "executor", model="sonnet")
     _write_plugin_agent_md(home, "game-dev/agents/staff-game-dev.md", "staff-game-dev", model="sonnet")
@@ -292,7 +292,7 @@ def test_plugin_keyed_pin_via_full_resolve_model_pins(tmp_path: Path) -> None:
 
 
 def test_plugin_leg_model_inherit_declared_is_not_a_pin(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     home = tmp_path / "home"
     _write_agent_md(doe_root, "executor")
     _write_plugin_agent_md(home, "game-dev/agents/inherits.md", "inherits", model="inherit")
@@ -304,7 +304,7 @@ def test_plugin_leg_model_inherit_declared_is_not_a_pin(tmp_path: Path) -> None:
 
 
 def test_plugin_leg_unorderable_declared_model_is_not_a_pin(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     home = tmp_path / "home"
     _write_agent_md(doe_root, "executor")
     _write_plugin_agent_md(home, "game-dev/agents/typo.md", "typo", model="gpt4")
@@ -316,7 +316,7 @@ def test_plugin_leg_unorderable_declared_model_is_not_a_pin(tmp_path: Path) -> N
 
 
 def test_plugin_leg_empty_declared_value_is_not_a_pin(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     home = tmp_path / "home"
     _write_agent_md(doe_root, "executor")
     path = home / ".claude" / "plugins" / "game-dev" / "agents" / "blank.md"
@@ -330,7 +330,7 @@ def test_plugin_leg_empty_declared_value_is_not_a_pin(tmp_path: Path) -> None:
 
 
 def test_plugin_pin_under_pre_refresh_snapshots_not_resolved(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     home = tmp_path / "home"
     _write_agent_md(doe_root, "executor")
     _write_plugin_agent_md(
@@ -347,7 +347,7 @@ def test_plugin_pin_under_pre_refresh_snapshots_not_resolved(tmp_path: Path) -> 
 
 
 def test_unreadable_absent_plugins_dir_leaves_leg_b_pins_intact(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     home = tmp_path / "home-with-no-claude-dir"
     _write_agent_md(doe_root, "executor", model="sonnet")
 
@@ -358,7 +358,7 @@ def test_unreadable_absent_plugins_dir_leaves_leg_b_pins_intact(tmp_path: Path) 
 
 
 def test_resolve_roster_unaffected_by_agents_roster_refactor(tmp_path: Path) -> None:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     _write_agent_md(doe_root, "executor", model="sonnet")
     policy_dir = doe_root / "coordinator"
     policy_dir.mkdir(parents=True, exist_ok=True)

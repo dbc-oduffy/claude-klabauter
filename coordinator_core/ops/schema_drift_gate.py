@@ -15,7 +15,7 @@ advisory's own contract.
 
 Op-key / contract:
     schema.drift_gate
-    params:   {} (no params; scan resolves the coordinator-claude clone and vendored dir itself,
+    params:   {} (no params; scan resolves the DoE clone and vendored dir itself,
                same as the advisory probe)
     response: {ok: bool, status: str, drifted: list[dict], message: str|None}
 
@@ -25,8 +25,8 @@ Gating semantics — ok is False ONLY on a confirmed STATUS_DRIFT verdict:
     INDETERMINATE -> ok=True,  message notes the check could not run (a release
                      gate blocking on "could not verify" would fail a merge for a
                      reason unrelated to the schemas themselves — e.g. an
-                     unreadable coordinator-claude clone on the merging machine).
-    UNRESOLVED    -> ok=True,  message notes no coordinator-claude clone was resolved on this
+                     unreadable DoE clone on the merging machine).
+    UNRESOLVED    -> ok=True,  message notes no DoE clone was resolved on this
                      machine (not applicable, same reasoning as INDETERMINATE).
 Only a POSITIVELY OBSERVED divergence blocks the gate; inability to check never
 does. This mirrors scan_vendored_schema_drift's own status precedence (DRIFT
@@ -34,7 +34,7 @@ outranks INDETERMINATE outranks MATCH) and the advisory's "indeterminate is not
 evidence of drift" rule — that rule cuts both ways: it is also not evidence
 worth blocking a merge over.
 
-Idempotency: read-only comparison against coordinator-claude HEAD + the vendored tree on disk;
+Idempotency: read-only comparison against DoE HEAD + the vendored tree on disk;
 identical inputs yield the identical verdict, no mutation performed.
 
 Negative-spec:
@@ -63,7 +63,7 @@ from coordinator_core.ipc import register_op
 def evaluate() -> dict:
     """Reduce scan_vendored_schema_drift()'s report to a {ok, status, drifted,
     message} gating verdict. Pure reduction — no params, no repo_root; the scan
-    resolves the coordinator-claude clone / vendored dir itself, same as the advisory probe.
+    resolves the DoE clone / vendored dir itself, same as the advisory probe.
     """
     report = scan_vendored_schema_drift()
     status = str(report.get("status") or "")
@@ -78,7 +78,7 @@ def evaluate() -> dict:
             "status": status,
             "drifted": drifted,
             "message": (
-                f"{len(drifted)} vendored schema(s) diverge from coordinator-claude HEAD: {named}. "
+                f"{len(drifted)} vendored schema(s) diverge from DoE HEAD: {named}. "
                 "Re-vendor before merging (see coordinator_core/frontmatter/schema_drift_watch.py)."
             ),
         }
@@ -87,7 +87,7 @@ def evaluate() -> dict:
     if status == "INDETERMINATE":
         message = str(report.get("summary") or "vendored-schema drift check could not run")
     elif status == "UNRESOLVED":
-        message = str(report.get("summary") or "no coordinator-claude clone resolved; drift not determinable")
+        message = str(report.get("summary") or "no DoE clone resolved; drift not determinable")
 
     return {"ok": True, "status": status, "drifted": drifted, "message": message}
 

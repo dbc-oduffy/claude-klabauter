@@ -169,6 +169,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+MUTATES = ["coordinator/bin/*.cmd", "coordinator/bin/*.ps1"]
+
 PYTHON_BIN_TOKEN = "__PYTHON_BIN__"
 
 # Repo root, derived from this file's own location (coordinator/bin/<here>) so
@@ -192,7 +194,7 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # RAW-CMDLINE-PRESERVATION ENTRYPOINTS (2026-08-08, caret-eating .cmd shim defect)
 #
 # state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml
-# (coordinator-claude): populating a .cmd launcher's %1..%9/%* batch parameters
+# (DoE-claude): populating a .cmd launcher's %1..%9/%* batch parameters
 # silently strips any literal `^` from each argument BEFORE the launcher
 # body ever runs — this happens during cmd.exe's OWN command-line parse,
 # ahead of anything the generated launcher body could do about it (measured:
@@ -214,7 +216,7 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # surfaces per that module's own docstring (a hyphenated-filename generator
 # module has no ordinary `import` form). `scoped-git-commit` and
 # `cross-repo-memo` were added to `_RAW_CMDLINE_TARGETS` per
-# cross-repo/inbox/2026-08-07-coordinator-claude-em-cmd-forwarder-drops-everything-
+# cross-repo/inbox/2026-08-07-doe-claude-em-cmd-forwarder-drops-everything-
 # after-a-newline.md (both take multi-line arguments as a matter of course —
 # commit messages, memo bodies) but this set was NOT updated at the time,
 # leaving the install path that renders launchers via THIS generator
@@ -226,7 +228,7 @@ _RAW_CMDLINE_ENTRYPOINTS = frozenset(
     {
         "coordinator/bin/coordinator-write-review-trail.py",
         "coordinator/bin/scoped-git-commit",
-        "coordinator/bin/cross-repo-memo",
+        "coordinator/bin/cross-repo-memo.py",
     }
 )
 
@@ -315,7 +317,7 @@ def _ps1_backlink_block(spec_backlink: str | None) -> str:
 
 
 def _cmd_raw_cmdline_block(preserve_raw_cmdline: bool) -> str:
-    """The `_LAUNCHER_RAW_CMDLINE` export line, or the empty string when unset.
+    """The `_LAUNCHER_RAW_CMDLINE` export block, or the empty string when unset.
 
     Empty-by-default for the same reason as `_cmd_backlink_block`: the ~410
     launchers not named in `_RAW_CMDLINE_ENTRYPOINTS` render byte-identical
@@ -323,19 +325,82 @@ def _cmd_raw_cmdline_block(preserve_raw_cmdline: bool) -> str:
     builtin — this block has no PowerShell counterpart; `render_ps1` never
     loses the caret in the first place (measured), so only the .cmd dialect
     needs this recovery hook.
+
+    2026-08-14 fix (Raymond Chen-grounded finding, folded in mid-baton): a
+    bare `%RANDOM%%RANDOM%.tmp` name is NOT collision-safe across
+    invocations, and the collision is cross-session, not cross-second.
+    `%RANDOM%` is seeded once per `cmd.exe` process via `srand(time(NULL))`
+    -- one-second resolution -- so two launcher invocations starting in the
+    SAME second are the SAME `cmd.exe` seed, and draw the IDENTICAL
+    `%RANDOM%%RANDOM%` sequence in the identical call order, landing on the
+    identical file path. At this machine's 50-70 concurrent-session norm,
+    same-second launcher invocations are routine, not a corner case --
+    without this fix, one session can silently recover ANOTHER session's
+    command line as its own argv (the token-count fallback in
+    `raw_cmdline_recovery.recover_windows_argv` does not catch a
+    same-shaped colliding invocation), or have its own capture file deleted
+    out from under it by whichever process's `os.remove` wins the race.
+
+    Fixed by using `mkdir` as the collision primitive instead of a bare
+    filename: Windows' `CreateDirectory` is atomic (a second `mkdir` of the
+    same name fails outright, no separate exists-check race window), so a
+    `goto`-based retry loop that keeps drawing fresh names until `mkdir`
+    actually succeeds is genuinely collision-free -- unlike a
+    check-then-write pattern (`if exist ... else echo >file`), which still
+    has a TOCTOU race between the check and the write. No spawned process
+    (`wmic`, `powershell`) is used to fetch a PID or GUID -- that would
+    itself add a process hop to the very launcher this mechanism exists to
+    keep thin. Three `%RANDOM%` draws (not two) only widens the per-attempt
+    namespace; the retry loop, not the draw count, is what actually
+    guarantees uniqueness. The capture file lives inside the freshly-made
+    directory so ordinary `echo >` (not itself atomic) never needs to be.
+    Not simplified back to a bare filename -- see the incident this
+    docstring records.
+
+    NOT `set "_X=%CMDCMDLINE%"` -- measured: cmd.exe's `set` re-strips any
+    literal `^` from its own right-hand-side expansion, same as `%*`
+    population (a SECOND, independent instance of the caret-eating defect
+    this mechanism exists to work around). `echo %CMDCMDLINE%` redirected
+    to a file is the one capture form measured to preserve the caret; the
+    env var therefore names a FILE PATH (itself caret-free, so an ordinary
+    `set` is safe here), not the raw text directly.
+
+    Review: staff-eng (Finding 0) -- the retry loop above was originally an
+    unbounded `goto`, which spins forever (silently, stderr swallowed by
+    `2>nul`) if `%TEMP%` is full/read-only/ACL-denied, hanging the launcher
+    BEFORE Python ever starts on the single hottest path in the system.
+    Capture is best-effort everywhere else in this mechanism (a missing/
+    unreadable capture file just falls back to the possibly-mangled argv,
+    see raw_cmdline_recovery.py) -- only the launcher was treating capture
+    as mandatory-or-hang. Bounded to three unrolled attempts behind distinct
+    labels (not a counter + `enabledelayedexpansion`, which the block above
+    this one deliberately avoids -- see render_cmd's own comment on why).
+    On all three `mkdir` attempts failing, control falls through to
+    `:_coordinator_raw_cmdline_giveup` WITHOUT setting
+    `_LAUNCHER_RAW_CMDLINE_FILE` -- the entrypoint's own
+    `recover_windows_argv` already treats a missing env var as a no-op
+    fallback to `argv`, so this degrades to best-effort exactly like every
+    other failure mode of this mechanism, never a hang.
     """
     if not preserve_raw_cmdline:
         return ""
-    # NOT `set "_X=%CMDCMDLINE%"` -- measured: cmd.exe's `set` re-strips any
-    # literal `^` from its own right-hand-side expansion, same as `%*`
-    # population (a SECOND, independent instance of the caret-eating defect
-    # this mechanism exists to work around). `echo %CMDCMDLINE%` redirected
-    # to a file is the one capture form measured to preserve the caret; the
-    # env var therefore names a FILE PATH (itself caret-free, so an ordinary
-    # `set` is safe here), not the raw text directly.
     return (
-        'set "_LAUNCHER_RAW_CMDLINE_FILE=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%.tmp"\n'
+        ":_coordinator_raw_cmdline_attempt1\n"
+        'set "_LAUNCHER_RAW_CMDLINE_DIR=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%%RANDOM%"\n'
+        '2>nul mkdir "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
+        "if not errorlevel 1 goto :_coordinator_raw_cmdline_captured\n"
+        ":_coordinator_raw_cmdline_attempt2\n"
+        'set "_LAUNCHER_RAW_CMDLINE_DIR=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%%RANDOM%"\n'
+        '2>nul mkdir "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
+        "if not errorlevel 1 goto :_coordinator_raw_cmdline_captured\n"
+        ":_coordinator_raw_cmdline_attempt3\n"
+        'set "_LAUNCHER_RAW_CMDLINE_DIR=%TEMP%\\_coordinator_launcher_%RANDOM%%RANDOM%%RANDOM%"\n'
+        '2>nul mkdir "%_LAUNCHER_RAW_CMDLINE_DIR%"\n'
+        "if errorlevel 1 goto :_coordinator_raw_cmdline_giveup\n"
+        ":_coordinator_raw_cmdline_captured\n"
+        'set "_LAUNCHER_RAW_CMDLINE_FILE=%_LAUNCHER_RAW_CMDLINE_DIR%\\cmdline.tmp"\n'
         'echo %CMDCMDLINE%>"%_LAUNCHER_RAW_CMDLINE_FILE%"\n'
+        ":_coordinator_raw_cmdline_giveup\n"
     )
 
 
@@ -362,6 +427,16 @@ def render_cmd(
     tag = launcher_basename(name)
     backlink_block = _cmd_backlink_block(spec_backlink)
     raw_cmdline_block = _cmd_raw_cmdline_block(preserve_raw_cmdline)
+    # Review: staff-eng (Finding 2) -- on every path where Python never runs
+    # (interpreter-cascade exit /b 127, or the child's own exit code), the
+    # freshly `mkdir`-ed raw-cmdline capture dir would otherwise leak under
+    # %TEMP% forever: previously a stray .tmp file a `del *.tmp` sweep could
+    # clear, now a directory. Cleaned up (best-effort, builtin, no added
+    # process) before every exit point -- empty string for launchers not
+    # named in _RAW_CMDLINE_ENTRYPOINTS, so their body stays byte-identical.
+    raw_cmdline_cleanup = (
+        '2>nul rd /s /q "%_LAUNCHER_RAW_CMDLINE_DIR%"\n' if preserve_raw_cmdline else ""
+    )
     return f"""@echo off
 setlocal
 REM Windows launcher for {entry} — python-direct (NO bash re-exec).
@@ -416,15 +491,15 @@ if not errorlevel 1 goto :run_py3
 
 echo [{tag}] ERROR: no Python interpreter found (python.exe / py -3). 1>&2
 echo [{tag}] Install Python: https://www.python.org/downloads/windows/ 1>&2
-exit /b 127
+{raw_cmdline_cleanup}exit /b 127
 
 :run_baked
 "%_py%" "%~dp0{entry}" %*
-exit /b %ERRORLEVEL%
+{raw_cmdline_cleanup}exit /b %ERRORLEVEL%
 
 :run_py3
 py -3 "%~dp0{entry}" %*
-exit /b %ERRORLEVEL%
+{raw_cmdline_cleanup}exit /b %ERRORLEVEL%
 """
 
 

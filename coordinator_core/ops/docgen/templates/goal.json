@@ -19,7 +19,7 @@
       {"kind": "value", "key": "created", "field": "created", "quote": false},
       {"kind": "literal", "line": "# owner: PLACEHOLDER  # optional — EM or workstream identifier"},
       {"kind": "literal", "line": "period: week  # required by emitter — day | week | repo | quarter | year"},
-      {"kind": "literal", "line": "period_value: \"PLACEHOLDER\"  # required: e.g. 2026-W28 (week), 2026-07-07 (day), coordinator-claude-2026 (repo), Q3-2026 (quarter), 2026 (year)"},
+      {"kind": "literal", "line": "period_value: \"PLACEHOLDER\"  # required: e.g. 2026-W28 (week), 2026-07-07 (day), DoE-2026 (repo), Q3-2026 (quarter), 2026 (year)"},
       {"kind": "literal", "line": "# weekly_perceptible: true  # optional — TOP-LEVEL goal-scope flag, distinct from the per-KR field above"},
       {"kind": "literal", "line": "# parent_goal_id: null  # optional — FK to a parent quarter/repo OKR goal_id, or null"},
       {"kind": "literal", "line": "# goal_id: {goal_id_quoted}  # optional — deterministic sha1(repo|root|period|period_value|text); this is the structured-records (C15) facet key, DISTINCT from the wire goal_id (append-goal-event.py derives its own hash from id-prefixed text and currently ignores --goal-id); populate once period/period_value/objective are final"}

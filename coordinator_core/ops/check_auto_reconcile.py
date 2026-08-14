@@ -1,5 +1,5 @@
 """
-coordinator_core.ops.check_auto_reconcile -- in-process dispatch step for coordinator-claude's
+coordinator_core.ops.check_auto_reconcile -- in-process dispatch step for DoE's
 check-auto-reconcile.sh trampoline (fleet /workday-start Morning Briefing probe).
 
 Purpose: resolve the INVOKING repo's root (via process cwd -- see
@@ -9,10 +9,10 @@ via coordinator_core.invoke.dispatch.dispatch_message -- the same in-process
 JSON-RPC path `python -m coordinator_core.invoke handoff.reconcile_open` used as
 a subprocess before this port, minus the extra process hop. No dry_run flag is
 ever passed here -- the op's own dry_run=true default governs (observation-only
-daily probe; forcing a live reconcile is coordinator-claude's call, not this module's).
+daily probe; forcing a live reconcile is DoE's call, not this module's).
 
 Deliberately DOES NOT parse the response envelope or render output -- envelope
-parsing and rendering stay entirely on the coordinator-claude side (coordinator/bin/
+parsing and rendering stay entirely on the DoE side (coordinator/bin/
 check-auto-reconcile.sh) so that trampoline's COORDINATOR_AUTO_RECONCILE_JSON
 test seam never needs a claude-klabauter checkout to exercise the rendering contract; this
 module would be irrelevant to that seam.
@@ -23,17 +23,17 @@ direct-import trampoline shape, template-variant #1). The op it dispatches
 (handoff.reconcile_open) is already registered elsewhere; this module adds no
 new registry entries.
 
-Spec backlink: docs/plans/2026-07-13-doe-auto-reconcile-adopt.md (C1) +
+Spec backlink: DoE-claude:pln-doe-side-adoption-of-claude-klabauter-au-284ced (C1) +
 cross-repo/inbox/2026-07-13-claude-klabauter-em-claude-klabauter-auto-reconcile-wire-surfaces.md
 
 Negative-spec:
     - Does NOT pass a dry_run flag, forced or otherwise.
-    - Does NOT parse result.surfaced[] or render any output -- see coordinator-claude-side
+    - Does NOT parse result.surfaced[] or render any output -- see DoE-side
       check-auto-reconcile.sh for that slice.
     - Does NOT register a new op or touch the four shared registry files --
       handoff.reconcile_open is already fully registered.
     - Does NOT raise on infrastructure failure (not-a-git-repo, dispatch
-      exception) -- get_response() returns None, mirroring the coordinator-claude
+      exception) -- get_response() returns None, mirroring the DoE
       consumer's silent-skip contract.
     - Does NOT resolve the repo root from this module's own on-disk
       location -- that always resolved to claude-klabauter's checkout regardless of
@@ -65,7 +65,7 @@ def _resolve_own_repo_root() -> Optional[Path]:
     handoff_gate_aging.py) takes repo_root as an explicit argument sourced
     from the invoking process's cwd; this module has no such argument
     (get_response() takes none), so cwd is the only correct source here --
-    it is NOT a fallback, it is the fleet convention: the coordinator-claude/sibling-repo
+    it is NOT a fallback, it is the fleet convention: the DoE/sibling-repo
     trampoline (coordinator/bin/check-auto-reconcile.py) and the in-process
     orient-assemble reader (orient_assemble/readers_branch_reconcile.py)
     both run with cwd already set to the repo under reconciliation.
@@ -75,7 +75,7 @@ def _resolve_own_repo_root() -> Optional[Path]:
     location), regardless of which repo actually invoked it, so every
     caller reconciled (and, once dry_run is armed, would have WRITTEN to)
     claude-klabauter's own state/handoffs/ corpus instead of its own. See
-    coordinator-claude docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md
+    DoE-claude docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md
     (AC26c).
     """
     from coordinator_core.lifecycle import find_repo_root
@@ -121,7 +121,7 @@ def get_response() -> Optional[Dict[str, Any]]:
 
 def main(argv: List[str]) -> int:
     """Standalone CLI entrypoint (`python -m coordinator_core.ops.check_auto_reconcile`)
-    -- prints the raw JSON-RPC response envelope for manual debugging. The coordinator-claude
+    -- prints the raw JSON-RPC response envelope for manual debugging. The DoE
     trampoline does NOT invoke this CLI form; it calls get_response() directly."""
     response = get_response()
     if response is None:

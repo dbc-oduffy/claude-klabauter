@@ -21,7 +21,7 @@ two legitimate ones:
     (``_matches_declared_fast_test_cmd``) rather than the gate's exact-
     string one.
 
-Spec backlink: DR-088 R6/R7 -- cross-repo/archive/2026-07-25-coordinator-claude-em-
+Spec backlink: DR-088 R6/R7 -- cross-repo/archive/2026-07-25-doe-claude-em-
 dr088-marker-scope-ruling.md.
 
 Why this is its own module rather than a helper inside ``tier_u_gate``:

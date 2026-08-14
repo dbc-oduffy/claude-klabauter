@@ -73,9 +73,9 @@ is the safety net. A configured command that fails to invoke returns non-zero
 and surfaces as a normal Validation failure.
 
 Consumers:
-  - coordinator-claude coordinator/skills/validate/SKILL.md (single owner of FAST-tier
+  - DoE-claude coordinator/skills/validate/SKILL.md (single owner of FAST-tier
     resolver invocation, via the settings-home forwarder — this bin/ CLI)
-  - coordinator-claude coordinator/commands/bug-blitz.md (single owner of FULL-tier
+  - DoE-claude coordinator/commands/bug-blitz.md (single owner of FULL-tier
     resolver invocation, Phase 0.7, via the settings-home forwarder)
   - coordinator/bin/coordinator-ceremony-hook.py (read_local_md_key — per-repo
     ceremony post-command key lookup, imported in-process by file path —

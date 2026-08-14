@@ -1,7 +1,7 @@
 """Table-driven parity tests for coordinator_core.artifact_subject, mirroring
 the bash oracle case-for-case.
 
-Port of: coordinator-artifact-subject.test.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Port of: coordinator-artifact-subject.test.sh (DoE 6fb5fb37, 2026-07-22)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 """
 from __future__ import annotations

@@ -58,9 +58,9 @@ code" shape rather than a Python exception flow (the caller, `commit_pipeline`
 C4, decides how to surface a failed gate to the op's result envelope).
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C3 (AC10).
-Provenance: ported from `coordinator-claude:coordinator/bin/check-workstream-complete-deletion-blocks.sh`
-  and `coordinator-claude:coordinator/bin/dirty-tree-gate.sh` (both still present on disk at
-  `/Users/example-operator/X/coordinator-claude/coordinator/bin/` at port time -- not yet deleted
+Provenance: ported from `DoE:coordinator/bin/check-workstream-complete-deletion-blocks.sh`
+  and `DoE:coordinator/bin/dirty-tree-gate.sh` (both still present on disk at
+  `/Users/example-operator/X/DoE-claude/coordinator/bin/` at port time -- not yet deleted
   by the kill list at the time this chunk was authored).
 
 Negative-spec (hard-won, preserved from the bash originals):
@@ -574,7 +574,7 @@ def _diff_name_only_worktree(cwd: Union[str, Path], paths: Sequence[str]) -> Git
     can never CLEAR phantom-dirty state -- only a real lock-taking write
     does. Adding it here would leave every phantom permanently dirty and
     re-filtered on each ceremony (the flapping-count symptom in
-    coordinator-claude's bash-on-windows-gotchas.md § 11) -- this omission is
+    DoE-claude's bash-on-windows-gotchas.md § 11) -- this omission is
     deliberate, not an oversight; do not "fix" it back in to match the
     house read-wrapper idiom.
 

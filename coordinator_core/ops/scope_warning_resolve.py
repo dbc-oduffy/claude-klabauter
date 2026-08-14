@@ -11,8 +11,8 @@ Log format (written by the scope-guard commit hook):
 After resolution:
     <ISO-ts> | <session_id> | foreign-staged | <file> | owner:<owner> | legitimate-mine
 
-Port source: coordinator/bin/scope-warning-resolve (coordinator-claude)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, chunk B3
+Port source: coordinator/bin/scope-warning-resolve (DoE-claude)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292, chunk B3
 See also: docs/pretooluse-deny-contract.md, docs/wiki/scoped-safety-commits.md § Phase 5
 
 Negative-spec:
@@ -27,7 +27,10 @@ Negative-spec:
     - Edit is via write-then-os.replace (atomic), never in-place seek/truncate.
 """
 
+
 from __future__ import annotations
+
+GENERATES = []  # writes only .git/coordinator-sessions/<session_id>/scope-warnings.log inside the worktree's own .git directory
 
 import os
 import re

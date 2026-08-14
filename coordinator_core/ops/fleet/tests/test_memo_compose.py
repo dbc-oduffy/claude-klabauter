@@ -517,3 +517,53 @@ class TestCarriedDraftFields:
         fm = self._compose_and_reparse(tmp_path)
         for key in ("scoped_to", "in_reply_to", "space", "supersedes"):
             assert key not in fm
+
+    def test_sent_by_not_carried_through_compose(self, tmp_path):
+        """C7 ruling (docs/plans/2026-08-13-session-identity-earns-its-keep.md
+        § C7): sent_by is resolved at SEND time, deliberately NOT a
+        draft-staged field — draft time is not send time. A draft rewritten
+        through _memo_compose must neither ACQUIRE sent_by (it is never in
+        `_CARRIED_DRAFT_FIELDS`, so a draft without it stays without it —
+        same as every other uncarried field, see
+        test_absent_fields_are_not_invented above) NOR LOSE one a caller
+        hand-injected onto the draft file directly (compose re-composes the
+        WHOLE frontmatter via compose_draft_frontmatter, which has no
+        sent_by parameter at all — the field simply cannot round-trip
+        through this path, by design, not by omission)."""
+        from coordinator_core.frontmatter.primitives import split_frontmatter
+        from coordinator_core.frontmatter.schema_validate import parse_yaml
+
+        sender = _draft_first(tmp_path, topic="sent-by-not-carried")
+        draft_path = sender / "state" / "memo-outbox" / "sent-by-not-carried.md"
+
+        # Simulate a draft that somehow carries a sent_by line (e.g. hand-
+        # edited, or a future regression) — hand-inject it directly onto
+        # disk since compose_draft_frontmatter has no sent_by parameter to
+        # write one through memo.draft itself.
+        original = draft_path.read_text(encoding="utf-8")
+        split = split_frontmatter(original)
+        fm_text, body = split.fm_text, split.body_with_leading_newline
+        assert "sent_by" not in fm_text  # confirms memo.draft itself never wrote one
+        injected = fm_text.rstrip("\n") + '\nsent_by: "should-not-survive"\n'
+        draft_path.write_text(f"---\n{injected}---{body}", encoding="utf-8")
+
+        parsed_before = parse_yaml(injected)
+        assert parsed_before["sent_by"] == "should-not-survive"
+
+        result = _run(_memo_compose(
+            {
+                "dry_run": False,
+                "topic": "sent-by-not-carried",
+                "body": "A real prose body sentence.\n",
+            },
+            repo_root=sender / ".git",
+        ))
+        assert result["exit_code"] == 0, result
+
+        rewritten = draft_path.read_text(encoding="utf-8")
+        rewritten_fm = split_frontmatter(rewritten).fm_text
+        assert "sent_by" not in rewritten_fm, (
+            "sent_by must not survive a memo.compose rewrite — it is "
+            "deliberately excluded from _CARRIED_DRAFT_FIELDS (send-time "
+            "field, not a draft-staged one)"
+        )

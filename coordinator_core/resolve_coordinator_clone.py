@@ -1,14 +1,14 @@
 """
-coordinator_core.resolve_coordinator_clone — native peer of coordinator-claude's
+coordinator_core.resolve_coordinator_clone — native peer of DoE's
 ``coordinator/lib/resolve-coordinator-clone.sh`` (the unified coordinator
 install-root resolver), CLI-invocation-mode only.
 
-Purpose: the shared coordinator-claude-oracle resolver that C11's 13 call sites (this plan's
+Purpose: the shared DoE-oracle resolver that C11's 13 call sites (this plan's
 narrowed surface) fold into rather than each re-deriving its own
 ``bash resolve-coordinator-clone.sh --clone-root|--content-root`` subshell.
 Companion to the already-native ``coordinator_core.state_root``
 (``coordinator_state_root`` peer) — together the two modules retire every
-"shell out to a coordinator-claude resolver lib" bridge in C11's surface.
+"shell out to a DoE resolver lib" bridge in C11's surface.
 
 Scope note — CLI mode only, not sourced mode: all of this plan's call sites
 invoke the bash oracle as a standalone subprocess (``bash script.sh
@@ -22,7 +22,7 @@ plan's surface sources the oracle, so that branch has no native consumer to
 port for; a future caller that needs sourced-mode semantics ports that branch
 separately rather than overloading this module's contract.
 
-Port of: resolve-coordinator-clone.sh (coordinator-claude 290997c7, 2026-07-22), 804 lines.
+Port of: resolve-coordinator-clone.sh (DoE 290997c7, 2026-07-22), 804 lines.
 This is the Python-native mirror for claude-klabauter-resident callers, exactly as
 ``coordinator_core.state_root`` and ``coordinator_core.ops.coordinator_doe_root``
 are for their oracles.
@@ -67,12 +67,12 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
       previously implemented only the LEGACY rung, which was stale relative
       to the durable-then-legacy bash oracle and would have silently
       mis-resolved on a migrated machine; it has since been updated to the
-      full DR-071 order (registry `repos.example_doctrine_repo` -> durable
+      full DR-071 order (registry `repos.doe_claude` -> durable
       `<settings-home>/machine-local/.doe-root` -> legacy
       `${CLAUDE_HOME:-$HOME}/.claude/.doe-root`), so delegating here is now
       correct and deletes what would otherwise be a second, drift-prone copy
       of the same read order.
-    - `_registry_example_doctrine_repo` reads the registry canonical key via
+    - `_registry_doe_claude` reads the registry canonical key via
       ``coordinator_core.machine_resolver.registry_get`` — a direct-tomllib
       read, not the ``machine-local`` CLI — for the same reset-safety reason
       documented on ``registry_get`` and ``doe_root_pointer``: the CLI's
@@ -88,8 +88,8 @@ Negative-spec (faithfully reproduced — do NOT "fix" mid-port):
       values. This port instead reads the same key via ``registry_get``
       (direct tomllib, no subprocess) first and only shells out to
       ``machine-local get plugin.mirrors.coordinator-claude.live_path`` when
-      that fails to resolve — same two-rung shape ``_registry_example_doctrine_repo``
-      above already uses for `repos.example_doctrine_repo`, not a second convention.
+      that fails to resolve — same two-rung shape ``_registry_doe_claude``
+      above already uses for `repos.doe_claude`, not a second convention.
       (Originally ported as CLI-only; that was a hot-path spawn defect fixed
       2026-07-28 — see `_registry_live_path`'s own docstring.)
     - Versioned-cache newest-wins comparison is numeric major.minor.patch
@@ -159,8 +159,8 @@ def _machine_local_get(key: str) -> Optional[str]:
     return resolved or None
 
 
-def _registry_example_doctrine_repo() -> Optional[str]:
-    """Canonical registry key (DR-071) — mirrors `_rcc_registry_example_doctrine_repo`.
+def _registry_doe_claude() -> Optional[str]:
+    """Canonical registry key (DR-071) — mirrors `_rcc_registry_doe_claude`.
 
     Reads via ``machine_resolver.registry_get`` (direct tomllib) first, for
     the reset-safety reason documented on that function and on this module's
@@ -169,10 +169,10 @@ def _registry_example_doctrine_repo() -> Optional[str]:
     registry itself is unresolvable. The CLI subprocess is retained as a
     fallback rung only.
     """
-    value = registry_get("repos.example_doctrine_repo")
+    value = registry_get("repos.doe_claude")
     if value:
         return value
-    return _machine_local_get("repos.example_doctrine_repo")
+    return _machine_local_get("repos.doe_claude")
 
 
 def _registry_live_path() -> Optional[str]:
@@ -180,7 +180,7 @@ def _registry_live_path() -> Optional[str]:
     negative-spec for the direct-CLI-read simplification).
 
     Reads via ``machine_resolver.registry_get`` (direct tomllib) first, same
-    reset-safety + no-subprocess reasoning as `_registry_example_doctrine_repo` above —
+    reset-safety + no-subprocess reasoning as `_registry_doe_claude` above —
     this key was previously CLI-only, which meant every `resolve_content_root`
     call on a machine with `machine-local` on PATH spawned a ~80ms subprocess
     on this rung even though it sits on the COMMON path (rung 3 of 7, not a
@@ -290,7 +290,7 @@ def _resolve_source_mode(verb: str) -> str:
     flat = os.path.join(claude_home, "plugins", "coordinator-claude") if claude_home else None
     oss_present = bool(flat) and os.path.isfile(os.path.join(flat, ".claude-plugin", "plugin.json"))
 
-    # DR-071: registry `repos.example_doctrine_repo` (canonical) ranks above the
+    # DR-071: registry `repos.doe_claude` (canonical) ranks above the
     # `.doe-root` pointer file mirror — inverted 2026-07-22 from the prior
     # pointer-first order. The flat marketplace-clone layout is added as a
     # last-resort candidate rung (not just consulted via `oss_present` below)
@@ -314,7 +314,7 @@ def _resolve_source_mode(verb: str) -> str:
     # marketplace marker; this rung uses `.git`/manifest since the
     # motivating scenario is a raw git checkout with no marketplace marker).
     candidate = (
-        _registry_example_doctrine_repo()
+        _registry_doe_claude()
         or _registry_live_path()
         or _read_doe_root_pointer()
         or (flat if flat and not oss_present and _flat_evidences_coordinator_tree(flat) else "")
@@ -364,7 +364,7 @@ def resolve_clone_root() -> str:
 
     dev / passthrough mode, in order:
       1. COORDINATOR_CLONE env var (must have `.git/`, else fail loud)
-      2. registry: repos.example_doctrine_repo (canonical) then
+      2. registry: repos.doe_claude (canonical) then
          plugin.mirrors.coordinator-claude.live_path (fallback) — gated on
          `.git/`; present-but-not-git-backed falls through, not a hard stop
       3. `.doe-root` pointer (durable-then-legacy) -> that root itself,
@@ -397,7 +397,7 @@ def resolve_clone_root() -> str:
             "it has no .git directory"
         )
 
-    live = _registry_example_doctrine_repo() or _registry_live_path()
+    live = _registry_doe_claude() or _registry_live_path()
     if live and os.path.isdir(os.path.join(live, ".git")):
         return live
 
@@ -410,7 +410,7 @@ def resolve_clone_root() -> str:
 
     raise ResolveCoordinatorCloneError(
         "resolve-coordinator-clone --for-git-ops: no git-backed coordinator clone found.\n"
-        "  Tried: COORDINATOR_CLONE env, registry repos.example_doctrine_repo (canonical),\n"
+        "  Tried: COORDINATOR_CLONE env, registry repos.doe_claude (canonical),\n"
         "         registry plugin.mirrors.coordinator-claude.live_path (fallback),\n"
         "         ~/.claude/.doe-root pointer, flat ~/.claude/plugins/coordinator-claude\n"
         "  (no .git in any tried location)\n"

@@ -352,13 +352,13 @@ def _load_frozen_schema():
     doe_root = resolve_doe_root()
     if not doe_root:
         pytest.skip(
-            "No coordinator-claude sibling checkout resolvable (env override / machine-local "
+            "No DoE-claude sibling checkout resolvable (env override / machine-local "
             "registry / .doe-root pointer all empty) — AC5 structural schema-subset "
             "validation requires the frozen schema from that checkout; skipping."
         )
     if not _FROZEN_SCHEMA_PATH.exists():
         pytest.skip(
-            f"coordinator-claude root resolved to {doe_root!r} but frozen schema absent at "
+            f"DoE-claude root resolved to {doe_root!r} but frozen schema absent at "
             f"{_FROZEN_SCHEMA_PATH} — cross-repo file may be absent/relocated; skipping."
         )
     return json.loads(_FROZEN_SCHEMA_PATH.read_text(encoding="utf-8"))

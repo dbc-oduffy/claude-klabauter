@@ -4,7 +4,7 @@ coordinator_core.test_pickup_assemble_reply_closure — co-located pytest for
 defect fix in `coordinator_core.pickup_assemble`).
 
 Regression backstop for the defect documented at that module's "Reply-closure
-check (2026-07-25 defect)" section: `cross-repo/archive/2026-07-25-coordinator-claude-
+check (2026-07-25 defect)" section: `cross-repo/archive/2026-07-25-doe-claude-
 em-test-red-record-contract-consult.md` was `status: actioned` with the reply
 written into claude-klabauter's own archived copy — invisible to the sender — and
 `brief()` reported `coast=clear`/"Nothing further to do" on both terminal-memo
@@ -589,18 +589,18 @@ class TestLinkageMatching:
         segment elided by a literal `…`, leaving only the tail stem. A
         whole-basename match misses this; the tail stem exists precisely
         for it."""
-        # Deliberately NOT `self._setup` — `coordinator-claude-em` resolves through
+        # Deliberately NOT `self._setup` — `doe-claude-em` resolves through
         # `receiver_em_to_repo_key`'s convention path (strip `-em`, dashes to
-        # underscores) to `repos.example_doctrine_repo`, a different registry key than
+        # underscores) to `repos.doe_claude`, a different registry key than
         # the shared helper's `repos.sender`.
         repo = tmp_path / "repo"
         repo.mkdir()
         sender_root = tmp_path / "sender-repo"
         sender_root.mkdir()
         settings_home = tmp_path / "settings-home"
-        _register_sender(settings_home, "example_doctrine_repo", sender_root)
+        _register_sender(settings_home, "doe_claude", sender_root)
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
-        inbound_basename = "2026-07-25-coordinator-claude-em-test-red-record-contract-consult.md"
+        inbound_basename = "2026-07-25-doe-claude-em-test-red-record-contract-consult.md"
         _seed_sender_reply(
             sender_root,
             "cross-repo/inbox",
@@ -610,7 +610,7 @@ class TestLinkageMatching:
         )
 
         closure = pa.compute_reply_closure(
-            {"kind": "consult", "from": "coordinator-claude-em", "created": "2026-07-25"},
+            {"kind": "consult", "from": "doe-claude-em", "created": "2026-07-25"},
             inbound_basename,
             repo,
         )
@@ -729,9 +729,9 @@ class TestMinLinkStemLengthFloor:
         sender_root = tmp_path / "sender-repo"
         sender_root.mkdir()
         settings_home = tmp_path / "settings-home"
-        _register_sender(settings_home, "example_doctrine_repo", sender_root)
+        _register_sender(settings_home, "doe_claude", sender_root)
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
-        inbound_basename = "2026-07-25-coordinator-claude-em-m.md"
+        inbound_basename = "2026-07-25-doe-claude-em-m.md"
         for i in range(2):
             _seed_sender_reply(
                 sender_root,
@@ -742,7 +742,7 @@ class TestMinLinkStemLengthFloor:
             )
 
         closure = pa.compute_reply_closure(
-            {"kind": "consult", "from": "coordinator-claude-em", "created": "2026-07-25"},
+            {"kind": "consult", "from": "doe-claude-em", "created": "2026-07-25"},
             inbound_basename,
             repo,
         )

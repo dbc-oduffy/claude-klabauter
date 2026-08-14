@@ -10,7 +10,7 @@ directive handler — those are monkeypatched; `coordinator_core.contract.
 test_apply_base` already covers the generic directive-execution engine this
 module composes.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C8
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C8
 """
 from __future__ import annotations
 
@@ -198,7 +198,7 @@ class TestBrief:
 
     def test_inspection_gather_is_one_show_spawn_for_all_commits(self, monkeypatch, tmp_path):
         """The gather is `count × 1` git spawns, not `count × 1` per commit --
-        a git spawn is ~100ms on Windows (coordinator-claude spawn-cost memo, 2026-08-08)."""
+        a git spawn is ~100ms on Windows (DoE spawn-cost memo, 2026-08-08)."""
         calls = []
         run_git = self._stub(
             monkeypatch,

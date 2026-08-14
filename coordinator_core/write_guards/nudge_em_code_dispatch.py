@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.nudge_em_code_dispatch — advisory guard.
 
-Fan-in port of the retired coordinator-claude PreToolUse(Write|Edit|MultiEdit) shim
+Fan-in port of the retired DoE PreToolUse(Write|Edit|MultiEdit) shim
 `coordinator/hooks/scripts/nudge-em-code-dispatch.py`, which was itself a
 thin stdin->stdout trampoline over this same module's `op()` function
 (`coordinator_core.hooks.nudge_em_code_dispatch`). Per the porting contract
@@ -36,7 +36,7 @@ This is the correct shape for an advisory guard (fidelity rule 6) — it does
 not convert a fail-closed guard into fail-open, because this guard was never
 fail-closed to begin with.
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C9
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C9
 Source: coordinator/hooks/scripts/nudge-em-code-dispatch.py
 """
 

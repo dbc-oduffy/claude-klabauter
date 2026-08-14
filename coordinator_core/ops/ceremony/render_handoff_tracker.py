@@ -34,13 +34,13 @@ Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b/C9
 Ask backlink: cross-repo/inbox/2026-07-22-claude-central-em-c9-handoff-tracker-render-op-wiring.md
 
 Port source (CLI/dispatch layer only — rendering itself is C8b's, not re-derived
-here): coordinator/bin/render-handoff-tracker.js (coordinator-claude) `main()` (:595-664),
+here): coordinator/bin/render-handoff-tracker.js (DoE-claude) `main()` (:595-664),
 `resolvePerRepoStateRoot()` (:83-126).
 
 Negative-spec:
   - Does NOT re-implement ``render_repo_section`` or any of its table/grouping
     helpers — always calls C8b's port, unchanged.
-  - Does NOT support a fleet-aggregate ``--all-repos`` mode. That mode (coordinator-claude-
+  - Does NOT support a fleet-aggregate ``--all-repos`` mode. That mode (DoE-
     aggregate render across every machine-local-registered ``repos.*`` repo,
     writing ``state/doe-handoff-tracker.md`` under the central root) was
     REMOVED 2026-07-23 (PM-ratified) after example-cockpit-repo-em confirmed it has

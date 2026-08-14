@@ -2440,7 +2440,7 @@ class TestRealOwnershipScopeWiring:
         still happens to deny for the wrong reason; this closes that gap.
 
         Liveness-honesty amendment (2026-08-07, cross-repo memo
-        `2026-08-07-coordinator-claude-em-scoped-commit-refusal-asserts-live-without-
+        `2026-08-07-doe-claude-em-scoped-commit-refusal-asserts-live-without-
         checking.md`): `_classify_denied_path` no longer asserts the word
         "live" from an ownership-only reason -- it resolves the liveness
         oracle and names the real verdict. Negative spec: do NOT relax this

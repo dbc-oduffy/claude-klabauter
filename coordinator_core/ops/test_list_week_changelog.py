@@ -1,7 +1,7 @@
 """Tests for coordinator_core.ops.list_week_changelog.
 
 Golden oracle snapshotted 2026-07-16
-(Port of: list-week-changelog.sh, coordinator-claude b5a4192c, 2026-07-20):
+(Port of: list-week-changelog.sh, DoE b5a4192c, 2026-07-20):
 
     real state/week-changelog/ (this repo, on-disk, no commit-shaped lines)
         -> per-file "lines=N  commit-lines=0" line, THEN a bare "0" line

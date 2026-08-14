@@ -2,9 +2,9 @@
 coordinator_core.session.js_bridge_cli — subprocess CLI bridge for Node callers.
 
 Port of the PUBLIC API surface of ``coordinator/lib/coordinator_session.js``
-(coordinator-claude, 192 lines): ``resolveLiveSessionIds``, ``claimPath``, ``selfClaim``.
+(DoE-claude, 192 lines): ``resolveLiveSessionIds``, ``claimPath``, ``selfClaim``.
 That JS shim shelled out to ``coordinator/lib/coordinator-session.sh`` (the
-bash session hub; coordinator-claude e34f2484, 2026-07-22 — since retired) via
+bash session hub; DoE e34f2484, 2026-07-22 — since retired) via
 ``child_process.execFileSync('bash', ...)`` so Node writers
 (e.g. ``coordinator/bin/refresh-queries.js``) could self-claim touched paths
 without reimplementing the atomic-dedup-append logic. Both
@@ -65,8 +65,8 @@ Negative-spec:
       "claimPath()/selfClaim() NEVER throw or cause a non-zero exit" contract
       (coordinator_session.js:13-18 docstring).
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-Port source: coordinator-claude coordinator/lib/coordinator_session.js as it stood
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Port source: DoE-claude coordinator/lib/coordinator_session.js as it stood
 at port time (retired 2026-07-27; no caller ever repointed to this module
 before the JS shim was deleted).
 """

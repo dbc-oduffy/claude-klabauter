@@ -1,8 +1,8 @@
 """coordinator_core.write_guards.block_dev_side_mirror_wiki — advisory guard.
 
-Originally a Python engine-ification of coordinator-claude's retired
+Originally a Python engine-ification of DoE's retired
 ``coordinator/hooks/scripts/block-dev-side-mirror-wiki.sh`` PreToolUse
-(Write|Edit|NotebookEdit) hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``), per
+(Write|Edit|NotebookEdit) hook (deleted 2026-07-16, DoE ``2f8b8450``), per
 the naked-Python hook migration (write_guards/INTERFACE.md).
 
 Purpose (ported verbatim from the reference hook, deny/flag condition
@@ -33,8 +33,8 @@ prefix match (against plain ``$HOME``, deliberately NOT ``CLAUDE_HOME`` — see
 negative-spec), and the reason text verbatim — only the envelope shape
 (advisory, not deny) and the lead-in sentence changed.
 
-Ported from the retired coordinator-claude bash guard ``block-dev-side-mirror-wiki.sh``
-  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
+Ported from the retired DoE bash guard ``block-dev-side-mirror-wiki.sh``
+  (deleted 2026-07-16, DoE ``2f8b8450``).
 
 Negative-spec:
   - Does NOT vary the dev-wiki prefix by ``CLAUDE_HOME`` — the reference hook

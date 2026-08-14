@@ -1,4 +1,4 @@
-"""BX-13 (coordinator-claude docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md):
+"""BX-13 (DoE docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md):
 verify no hard-deny guard registered in ``dispatch.py``'s ``guard_chain`` is
 bypassable by a ``cd``-prefix -- or any other shape that could plausibly reach
 a rewriting guard first -- **against the real dispatcher entry point**,

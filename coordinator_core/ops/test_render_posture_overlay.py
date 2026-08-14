@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.test_render_posture_overlay — behavior-parity tests for
-the naked-Python port of the coordinator-claude-owned bash script.
+the naked-Python port of the DoE-owned bash script.
 
-Port of: render-posture-overlay.sh (coordinator-claude a1a568d2, 2026-07-22).
+Port of: render-posture-overlay.sh (DoE a1a568d2, 2026-07-22).
 
 Tests assert:
   - insert path (no managed block yet) appends the block, leaving the rest
@@ -29,7 +29,7 @@ Tests assert:
     target's prior mode bits) — CLAUDE.md is non-executable, so this is a
     faithful-oracle-repro, not a regression (see module negative-spec).
 
-Spec backlink: docs/plans/2026-07-30-posture-overlay-em-channel-retarget.md
+Spec backlink: DoE-claude:pln-posture-overlay-lands-in-the-e-adc58c
 """
 
 from __future__ import annotations

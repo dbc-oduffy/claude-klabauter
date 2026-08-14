@@ -5,7 +5,7 @@ coordinator_core.workday_complete.cockpit_contract_freshness, the
 .brief` emits on EVERY run in EVERY repo.
 
 Covers:
-  - unresolvable coordinator-claude root -> UNKNOWN, ZERO subprocess/ls-remote calls (the
+  - unresolvable DoE root -> UNKNOWN, ZERO subprocess/ls-remote calls (the
     fleet-wide cost guard: this is the common consumer-machine path and must
     never shell out).
   - ls-remote timeout -> UNKNOWN, no raise.
@@ -19,9 +19,9 @@ Covers:
 No network: every subprocess/git seam is monkeypatched at the module-function
 level (`_resolve_doe_root_local`, `_ls_remote_release_tag`, `_peel_to_commit`,
 `_candidate_sha`, `_contract_version_at`, `_is_ancestor`) rather than exercised
-against a real coordinator-claude clone or origin.
+against a real DoE clone or origin.
 
-Spec backlink: coordinator-claude ceremony Step 10 Final Summary line (2026-07-25 ask)
+Spec backlink: DoE-claude ceremony Step 10 Final Summary line (2026-07-25 ask)
 
 Run: cd /Users/example-operator/X/claude-klabauter && python3 -m pytest coordinator_core/test_cockpit_contract_freshness.py -q
 """
@@ -70,11 +70,11 @@ def _init_real_repo(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _assume_doe_clone_is_readable(monkeypatch):
-    """Neutralize the coordinator-claude-clone readability gate for every test that stubs the
+    """Neutralize the DoE-clone readability gate for every test that stubs the
     git seams rather than materialising a real clone.
 
     `_compute` gates the whole probe on `_doe_clone_unusable_reason` so that an
-    unreachable — or environment-retargeted — coordinator-claude clone degrades to UNKNOWN
+    unreachable — or environment-retargeted — DoE clone degrades to UNKNOWN
     instead of emitting a confident FRESH/STALE/DIVERGED computed against the
     LOCAL repo (see the module's git-scoping negative-spec). Every test here
     points `_resolve_doe_root_local` at the synthetic `_FAKE_ROOT`, which is
@@ -90,12 +90,12 @@ def _assume_doe_clone_is_readable(monkeypatch):
 
 
 def test_unreadable_doe_clone_is_unknown_and_never_a_diverged_claim(monkeypatch, tmp_path):
-    """A coordinator-claude clone that cannot be read AS a git repository is INDETERMINATE.
+    """A DoE clone that cannot be read AS a git repository is INDETERMINATE.
 
     Regression for the 2026-08-03 class: `git -C <doe_root>` scopes only the
     working directory, so an inherited GIT_DIR (git exports one to every hook it
     runs) silently retargets every hop below at the LOCAL repo while the emitted
-    entry still names coordinator-claude's path. Unguarded, that path emits DIVERGED — "a human
+    entry still names DoE's path. Unguarded, that path emits DIVERGED — "a human
     must reconcile" — about a history this process never read. Could-not-check
     must be its own outcome and must never be phrased as staleness or
     divergence.
@@ -107,7 +107,7 @@ def test_unreadable_doe_clone_is_unknown_and_never_a_diverged_claim(monkeypatch,
 
     def _must_not_run(*_args, **_kwargs):
         raise AssertionError(
-            "no git hop may run against a coordinator-claude clone that failed the readability "
+            "no git hop may run against a DoE clone that failed the readability "
             "gate — every answer would be about the wrong repository"
         )
 
@@ -122,7 +122,7 @@ def test_unreadable_doe_clone_is_unknown_and_never_a_diverged_claim(monkeypatch,
     assert "could not be read as a git repository" in entry["reason"]
     assert "NOT a claim" in entry["reason"], (
         "the third state must disclaim itself explicitly, or a reader takes it "
-        "as a finding about coordinator-claude"
+        "as a finding about DoE"
     )
 
 
@@ -131,10 +131,10 @@ def test_git_dir_poison_does_not_produce_a_verdict_about_the_wrong_repo(
 ):
     """End-to-end poisoned-environment regression.
 
-    A real repo standing in for the coordinator-claude clone, plus a real repo standing in for
-    ours, plus GIT_DIR pointing at ours: the probe must still read coordinator-claude's own
+    A real repo standing in for the DoE clone, plus a real repo standing in for
+    ours, plus GIT_DIR pointing at ours: the probe must still read DoE's own
     object database. Before the fix, `_candidate_sha` and `_is_ancestor`
-    answered from the poisoned target and the emitted entry named coordinator-claude.
+    answered from the poisoned target and the emitted entry named DoE.
     """
     doe = _init_real_repo(tmp_path)
     (doe / "coordinator" / "cockpit-contract" / "schema").mkdir(parents=True)
@@ -177,14 +177,14 @@ def test_unresolvable_root_is_unknown_and_makes_zero_network_calls(monkeypatch):
 
     def _spy(*args, **kwargs):
         calls.append(args)
-        raise AssertionError("ls-remote seam must never be invoked when coordinator-claude root is unresolvable")
+        raise AssertionError("ls-remote seam must never be invoked when DoE root is unresolvable")
 
     monkeypatch.setattr(ccf, "_ls_remote_release_tag", _spy)
 
     entry = ccf.compute_cockpit_contract_freshness()
 
     assert entry["verdict"] == "UNKNOWN"
-    assert "no coordinator-claude clone" in entry["reason"]
+    assert "no DoE clone" in entry["reason"]
     assert entry["remediation"] is None
     assert entry["published"] == {"ref": ccf._RELEASE_REF, "peel": None, "contract_version": None}
     assert entry["candidate"] == {
@@ -313,7 +313,7 @@ def test_ref_absent_on_origin_is_unknown(monkeypatch):
     monkeypatch.setattr(ccf, "_resolve_doe_root_local", lambda: _FAKE_ROOT)
 
     def _absent(root):
-        raise ccf._FreshnessProbeError(f"'{ccf._RELEASE_REF}' is not published yet on the coordinator-claude origin")
+        raise ccf._FreshnessProbeError(f"'{ccf._RELEASE_REF}' is not published yet on the DoE origin")
 
     monkeypatch.setattr(ccf, "_ls_remote_release_tag", _absent)
 
@@ -339,11 +339,11 @@ def test_unexpected_exception_anywhere_degrades_to_unknown_never_raises(monkeypa
 
 def test_env_root_ladder_nonexistent_doe_root_fails_hard_registry_never_consulted(monkeypatch, tmp_path):
     """An explicit DOE_ROOT that does not exist is a directive, not a hint —
-    resolution fails (UNKNOWN) rather than falling through to REPO_EXAMPLE_DOCTRINE_REPO
+    resolution fails (UNKNOWN) rather than falling through to REPO_DOE_CLAUDE
     or the machine-local registry."""
     bad_path = str(tmp_path / "does-not-exist")
     monkeypatch.setenv("DOE_ROOT", bad_path)
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
     def _registry_spy():
         raise AssertionError("registry must never be consulted when DOE_ROOT is set but invalid")
@@ -359,35 +359,35 @@ def test_env_root_ladder_nonexistent_doe_root_fails_hard_registry_never_consulte
 
 def test_env_root_ladder_doe_root_valid_dir_wins(monkeypatch, tmp_path):
     monkeypatch.setenv("DOE_ROOT", str(tmp_path))
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
     resolved = ccf._resolve_doe_root_local()
 
     assert resolved == tmp_path
 
 
-def test_env_root_ladder_doe_root_unset_repo_example_doctrine_repo_nonexistent_fails_hard(monkeypatch, tmp_path):
+def test_env_root_ladder_doe_root_unset_repo_doe_claude_nonexistent_fails_hard(monkeypatch, tmp_path):
     bad_path = str(tmp_path / "also-does-not-exist")
     monkeypatch.delenv("DOE_ROOT", raising=False)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", bad_path)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", bad_path)
 
     def _registry_spy():
-        raise AssertionError("registry must never be consulted when REPO_EXAMPLE_DOCTRINE_REPO is set but invalid")
+        raise AssertionError("registry must never be consulted when REPO_DOE_CLAUDE is set but invalid")
 
     monkeypatch.setattr(ccf.doe_drift, "resolve_doe_clone", _registry_spy)
 
     entry = ccf.compute_cockpit_contract_freshness()
 
     assert entry["verdict"] == "UNKNOWN"
-    assert "REPO_EXAMPLE_DOCTRINE_REPO" in entry["reason"]
+    assert "REPO_DOE_CLAUDE" in entry["reason"]
     assert bad_path in entry["reason"]
 
 
 def test_env_root_ladder_empty_doe_root_is_treated_as_unset(monkeypatch, tmp_path):
-    """An empty-string DOE_ROOT is UNSET, not a directive — REPO_EXAMPLE_DOCTRINE_REPO
+    """An empty-string DOE_ROOT is UNSET, not a directive — REPO_DOE_CLAUDE
     still gets to win."""
     monkeypatch.setenv("DOE_ROOT", "")
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(tmp_path))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path))
 
     resolved = ccf._resolve_doe_root_local()
 
@@ -396,7 +396,7 @@ def test_env_root_ladder_empty_doe_root_is_treated_as_unset(monkeypatch, tmp_pat
 
 def test_env_root_ladder_both_unset_consults_registry(monkeypatch, tmp_path):
     monkeypatch.delenv("DOE_ROOT", raising=False)
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
     calls = []
 
@@ -414,7 +414,7 @@ def test_env_root_ladder_both_unset_consults_registry(monkeypatch, tmp_path):
 
 def test_brief_carries_the_gate_and_never_raises(monkeypatch):
     """workday_complete.brief() itself must return normally with the gate
-    entry present under the common zero-coordinator-claude-clone path (the never-raise
+    entry present under the common zero-DoE-clone path (the never-raise
     contract for internal probe failures is proven directly against
     compute_cockpit_contract_freshness() above)."""
     monkeypatch.setattr(workday_brief, "resolve_operator_config", lambda **_: {})

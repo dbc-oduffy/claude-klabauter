@@ -1,5 +1,5 @@
 """
-RoadmapDagEdge — pydantic port of coordinator-claude
+RoadmapDagEdge — pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/roadmap-dag-edge.ts` (Zod source).
 A directed dependency edge in a roadmap DAG.
 

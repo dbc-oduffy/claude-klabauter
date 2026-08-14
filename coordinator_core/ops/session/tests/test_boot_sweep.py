@@ -19,10 +19,10 @@ Coverage:
   (c) shipped_in stamp — when scope path has a real commit, shipped_in is stamped
       in the archived handoff frontmatter (best-effort scope-path git log, AC2).
   (d) WARN marker — tasks/orphan-sweep-notes.md created with a marker line after
-      a consumed handoff is successfully archived (AC2 / mirrors the deleted session-init.sh, coordinator-claude 2f8b8450).
+      a consumed handoff is successfully archived (AC2 / mirrors the deleted session-init.sh, DoE 2f8b8450).
   (e) Recency floor — claimed_at within last 30 min → skipped with reason
       "consumed_at within 30min recency floor" (writer literal, old-name tolerance);
-      file NOT moved (AC2 / mirrors the deleted session-init.sh, coordinator-claude 2f8b8450,
+      file NOT moved (AC2 / mirrors the deleted session-init.sh, DoE 2f8b8450,
       bias-to-life for just-consumed handoffs).
   (f) Idempotent replay — second handler run on same repo finds no new candidates;
       exit_code:0; HEAD does not advance (DR-211 D2(i) commutative / idempotent).
@@ -584,7 +584,7 @@ def test_warn_marker_appended_for_archived_consumed_handoff(boot_repo):
 
     /workday-start Step 0.8 reads this file to surface orphaned workstream handoffs
     archived without closure ceremony.  The marker is written ONLY after successful
-    archival (acted[]), not for skipped or failed items (AC2 / mirrors the deleted session-init.sh, coordinator-claude 2f8b8450).
+    archival (acted[]), not for skipped or failed items (AC2 / mirrors the deleted session-init.sh, DoE 2f8b8450).
 
     2026-07-22 (DR-084 stop-gap): a candidate seeded WITH deployment_state:
     in_flight is now skip-and-surfaced rather than archived (see the (b)
@@ -729,7 +729,7 @@ def test_recency_floor_skips_recent_consumed_handoff(boot_repo):
 
     Bias-to-life guard: the consuming session is almost certainly still live even if
     resolve_live_session_ids returned False (heartbeat lag, session dir not yet present
-    on this machine).  Mirrors the deleted session-init.sh (coordinator-claude 2f8b8450, 2026-07-16).
+    on this machine).  Mirrors the deleted session-init.sh (DoE 2f8b8450, 2026-07-16).
     """
     # claimed_at = 5 minutes ago (within the 30-min recency floor).
     now = datetime.now(tz=timezone.utc)
@@ -1562,7 +1562,7 @@ def test_two_repo_shipped_in_stamp_uses_git_root(tmp_path):
     git_root_worktree (not state_worktree) as the git log cwd.  Handoff scope_paths
     are GIT_ROOT-relative code paths; running git log in state_worktree returns an
     empty SHA for any GIT_ROOT-scoped handoff, silently leaving shipped_in absent
-    (mirrors the deleted session-init.sh, coordinator-claude 2f8b8450, which ran git-log against GIT_ROOT).
+    (mirrors the deleted session-init.sh, DoE 2f8b8450, which ran git-log against GIT_ROOT).
 
     This test FAILS without fix #1 (the cwd correction): git log runs in STATE repo,
     finds no commit for the GIT_ROOT scope file, sha is empty, shipped_in is not
@@ -1872,7 +1872,7 @@ def test_unintegrated_findings_reap_wired_into_boot_sweep(boot_repo):
         "young marker-absent sidecar must NOT be reaped (not yet aged)"
     )
     assert aged_present.exists(), (
-        "aged marker-present sidecar must NOT be reaped (integrated — coordinator-claude's leg (a))"
+        "aged marker-present sidecar must NOT be reaped (integrated — DoE's leg (a))"
     )
 
     assert result["unintegrated_findings"]["failed"] == [], (

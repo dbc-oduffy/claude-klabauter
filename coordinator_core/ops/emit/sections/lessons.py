@@ -16,7 +16,7 @@ logic away from its single source of truth.
 Quarantine: the lessons producer degrades-but-counts (parse_status="partial"), it never
 quarantines — so the malformed bucket is always empty (golden malformed_records.lessons=[]).
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.5,
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 8.5,
   LessonSummary. Byte/semantic parity port.
 Producer: bin/lib/emit-lesson-summaries.py (§ C3 producer, frozen).
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P09

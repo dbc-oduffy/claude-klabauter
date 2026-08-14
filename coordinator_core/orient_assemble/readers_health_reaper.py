@@ -45,7 +45,7 @@ Purpose, per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md`
    tunes which sentinel is consulted and at what severity, never a branch
    into three independently-implemented checks.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C2d
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C2d
 
 Negative-spec:
     - Does NOT call `observer-sidecar-scan` — not one of the three

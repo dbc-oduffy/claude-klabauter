@@ -7,7 +7,7 @@ tmp_path repo layout, monkeypatches `_resolve_git_root` rather than
 exercising a real `git init`, and asserts advisory/allow shape plus
 advisory-text content (route-first, design-as-offers).
 
-Spec backlink: docs/plans/2026-07-25-cutover-state-machine.md (chunk C4d);
+Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 (chunk C4d);
 CLASS/PRIORITY flip: docs/plans/2026-08-06-apply-guard-class-census.md (C3)
 """
 

@@ -4,7 +4,7 @@ the ``.dispatch-nudge-ok`` suppression sentinel, keyed by session id.
 
 This sentinel has exactly ONE home: the platform temp directory, resolved via
 ``tempfile.gettempdir()``. Nothing in either repo (claude-klabauter or
-Coordinator-claude) writes any other home — verified by census, not assumed. The
+DoE-claude) writes any other home — verified by census, not assumed. The
 reader ``nudge_em_code_dispatch.py`` historically carried a second, git-tree
 candidate location (``<repo_root>/coordinator-sessions/<sid>/.dispatch-nudge-ok``)
 that nothing ever wrote; C2 deletes it as part of this plan.

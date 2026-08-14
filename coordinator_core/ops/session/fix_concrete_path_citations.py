@@ -8,7 +8,7 @@ fixes it, so an operator who hits the deny has a next action rather than
 having to hand-invent the same sweep every time.
 
 Origin: ported from a one-off scratch tool (`sweep.py` + `path_map.json`,
-Coordinator-claude `scratch/abs-path-sweep/`) that took one repo's corpus from 4,254
+DoE-claude `scratch/abs-path-sweep/`) that took one repo's corpus from 4,254
 findings to 0. That script proved the approach; this module is its
 permanent, cross-platform, engine-resident successor — the enforcement
 (the guard) is permanent, so the remedy must be too.
@@ -126,7 +126,22 @@ This module's own scan additionally needs the *token* around each match
 path), so it reimplements the anchor-scan loop rather than consuming
 `detect_in_text` directly — see `_raw_hits_in_text`.
 """
+
+
 from __future__ import annotations
+
+MUTATES = [
+    "**/*.py",
+    "**/*.sh",
+    "**/*.bats",
+    "**/*.js",
+    "**/*.ts",
+    "**/*.json",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.md",
+]  # --apply rewrites any tracked file (_CODE_EXTENSIONS plus markdown) carrying a mapped concrete-path finding; data-dependent set
 
 import argparse
 import os
@@ -264,7 +279,7 @@ def _is_live_doctrine(rel: str) -> bool:
 class Family:
     id: str
     category: str  # "repo" | "publish_mirror" | "config"
-    match_name: str  # folder-name segment to look for in a token, e.g. "coordinator-claude"
+    match_name: str  # folder-name segment to look for in a token, e.g. "DoE-claude"
     short_name: str  # citation prefix, "" for a config family (canonical is fixed text)
     canonical: Optional[str] = None  # fixed replacement text, config families only
 
@@ -306,7 +321,7 @@ def discover_families(
 ) -> List[Family]:
     """Build the family list from the machine-local registry, plus the two
     universal config families. `call` is injectable for tests -- it takes
-    the argv tail (e.g. `["keys"]`, `["get", "repos.example_doctrine_repo"]`) and
+    the argv tail (e.g. `["keys"]`, `["get", "repos.doe_claude"]`) and
     returns raw stdout or None, mirroring `machine-local`'s own contract."""
     families: List[Family] = []
     keys_out = call(["keys"]) or ""

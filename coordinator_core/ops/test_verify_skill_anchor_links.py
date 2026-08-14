@@ -5,7 +5,7 @@ names), the optional doctrine-surface manifest, and the 0/1/2 exit-code split
 between "checked, clean", "checked, dead anchors" and "could not check".
 
 Spec backlink: coordinator/commands/update-docs.md § Phase 11h
-Origin: verify-skill-anchor-links.sh (coordinator-claude b5a4192c, 2026-07-20)
+Origin: verify-skill-anchor-links.sh (DoE b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ GLOBAL_DOCTRINE = """## Engineering Defaults
 
 
 def _make_tree(tmp_path: Path, skill_md_body: str) -> Path:
-    """Build a repo-root/plugin-root pair mirroring coordinator-claude's real layout.
+    """Build a repo-root/plugin-root pair mirroring DoE's real layout.
 
     repo_root/
       coordinator/                 <- plugin_root
@@ -186,7 +186,7 @@ def test_formerly_annotation_is_historical_not_dead(tmp_path):
 
 
 def test_carried_citation_missing_on_a_global_line_is_qualified_not_dead(tmp_path):
-    """coordinator-claude prose puts the file AFTER the section as often as before it."""
+    """DoE prose puts the file AFTER the section as often as before it."""
     root = _make_tree(
         tmp_path,
         "_See `coordinator/snippets/doctrine-a.md` § How to Decide and "
@@ -480,13 +480,13 @@ def test_plugin_root_claude_plugin_root_env_wins_verbatim(monkeypatch):
 
 def test_plugin_root_unset_resolves_via_doe_root(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/scratch/coordinator-claude")
-    assert _plugin_root() == os.path.join("/scratch/coordinator-claude", "coordinator")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/scratch/DoE-claude")
+    assert _plugin_root() == os.path.join("/scratch/DoE-claude", "coordinator")
 
 
 def test_plugin_root_unset_and_unresolvable_exits_2(monkeypatch, capsys):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "")
     monkeypatch.setattr(
         "coordinator_core.ops.verify_skill_anchor_links.coordinator_doe_root",
         lambda: None,

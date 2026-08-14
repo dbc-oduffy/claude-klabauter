@@ -1,9 +1,9 @@
 """Tests for coordinator_core.trusted_root_guard — parity checks against the
 documented trust-core + mode tails.
 
-Port of: coordinator-trusted-root-guard.sh (coordinator-claude bd8cc0e9, 2026-07-22)
+Port of: coordinator-trusted-root-guard.sh (DoE bd8cc0e9, 2026-07-22)
 Bash-parity fixture backlink: Port of: test-trusted-root-guard.sh
-  (coordinator-claude bd8cc0e9, 2026-07-22)
+  (DoE bd8cc0e9, 2026-07-22)
 """
 
 from __future__ import annotations
@@ -48,9 +48,9 @@ def test_untrusted_outside_any_anchor():
 def test_trusted_under_doe_root_sentinel(tmp_path, monkeypatch):
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "coordinator-claude") + "\n")
+    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "\n")
     env = {"HOME": str(home)}
-    assert is_trusted(str(tmp_path / "coordinator-claude" / "coordinator"), env=env)
+    assert is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
 
 
 def test_doe_root_trailing_slash_normalized(tmp_path):
@@ -58,9 +58,9 @@ def test_doe_root_trailing_slash_normalized(tmp_path):
     (home / ".claude").mkdir()
     # Hand-edited sentinel with a trailing slash should not cause a `//`
     # false-reject against the checked root.
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "coordinator-claude") + "/\n")
+    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "/\n")
     env = {"HOME": str(home)}
-    assert is_trusted(str(tmp_path / "coordinator-claude" / "coordinator"), env=env)
+    assert is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
 
 
 @pytest.mark.skipif(
@@ -81,29 +81,29 @@ def test_doe_root_only_single_trailing_slash_stripped(tmp_path):
     # over-normalizing it away.
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "coordinator-claude") + "//\n")
+    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "//\n")
     env = {"HOME": str(home)}
-    # A single-trailing-slash strip leaves ".../coordinator-claude/" as doe_root, so
+    # A single-trailing-slash strip leaves ".../DoE-claude/" as doe_root, so
     # the prefix check requires a DOUBLE slash -- a normally-formed child
     # path (single slash) does NOT match, reproducing the oracle's quirk.
-    assert not is_trusted(str(tmp_path / "coordinator-claude" / "coordinator"), env=env)
+    assert not is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
     # The double-slash-prefixed form does match.
-    assert is_trusted(str(tmp_path / "coordinator-claude") + "//coordinator", env=env)
+    assert is_trusted(str(tmp_path / "DoE-claude") + "//coordinator", env=env)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
 def test_windows_separator_and_case_normalization(tmp_path):
-    """Regression: the coordinator-claude-clone trust anchor was dead on Windows.
+    """Regression: the DoE-clone trust anchor was dead on Windows.
 
-    `.doe-root` is written with forward slashes (`X:/coordinator-claude`) while
+    `.doe-root` is written with forward slashes (`X:/DoE-claude`) while
     CLAUDE_PLUGIN_ROOT arrives from the harness with backslashes
-    (`X:\\coordinator-claude\\coordinator`), so the textual prefix match never fired and
+    (`X:\\DoE-claude\\coordinator`), so the textual prefix match never fired and
     the guard fail-loud-rejected a legitimately-trusted dev clone — which
     blocked the documented cold-bootstrap install entirely.
     """
     home = tmp_path
     (home / ".claude").mkdir()
-    doe = tmp_path / "coordinator-claude"
+    doe = tmp_path / "DoE-claude"
     # Sentinel spelled with forward slashes, as the pointer generator writes it.
     (home / ".claude" / ".doe-root").write_text(str(doe).replace("\\", "/") + "\n")
     env = {"HOME": str(home)}
@@ -113,7 +113,7 @@ def test_windows_separator_and_case_normalization(tmp_path):
     # Drive-letter / path case must not matter on a case-insensitive filesystem.
     assert is_trusted(str(doe / "coordinator").upper(), env=env)
     # A sibling that merely shares a name prefix must NOT be trusted.
-    assert not is_trusted(str(tmp_path / "coordinator-claude-evil" / "coordinator"), env=env)
+    assert not is_trusted(str(tmp_path / "DoE-claude-evil" / "coordinator"), env=env)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
@@ -129,11 +129,11 @@ def test_windows_backslash_traversal_is_rejected(tmp_path):
 
 def test_missing_doe_root_sentinel_is_not_an_error(tmp_path):
     env = {"HOME": str(tmp_path)}
-    assert not is_trusted(str(tmp_path / "coordinator-claude"), env=env)
+    assert not is_trusted(str(tmp_path / "DoE-claude"), env=env)
 
 
-def test_registry_repos_example_doctrine_repo_ranks_above_doe_root_file_mirrors(tmp_path):
-    """DR-071: the settings-home registry `repos.example_doctrine_repo` key is the
+def test_registry_repos_doe_claude_ranks_above_doe_root_file_mirrors(tmp_path):
+    """DR-071: the settings-home registry `repos.doe_claude` key is the
     canonical anchor and must outrank BOTH the durable file mirror and the
     legacy `.doe-root` file — all three deliberately hold DIFFERENT values so
     a false pass (any anchor happening to match) is impossible."""
@@ -141,7 +141,7 @@ def test_registry_repos_example_doctrine_repo_ranks_above_doe_root_file_mirrors(
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f'"repos.example_doctrine_repo" = "{registry_root}"\n'
+        f'"repos.doe_claude" = "{registry_root}"\n'
     )
     durable_root = tmp_path / "from-durable"
     (settings_home_dir / "machine-local" / ".doe-root").write_text(str(durable_root) + "\n")
@@ -161,7 +161,7 @@ def test_registry_repos_example_doctrine_repo_ranks_above_doe_root_file_mirrors(
 def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
     """The claude-klabauter repo's own root — where the trust-check call sites
     themselves now live — must be trusted via the registry-resolved
-    `repos.claude_klabauter` key, mirroring the `repos.example_doctrine_repo` anchor."""
+    `repos.claude_klabauter` key, mirroring the `repos.doe_claude` anchor."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
@@ -283,7 +283,7 @@ def test_doe_root_durable_rung_resolves_with_only_userprofile_set(tmp_path):
     `is_trusted` reject a legitimately trusted clone."""
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "DoE-claude"
     (settings_home_dir / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
     env = {"USERPROFILE": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
 
@@ -346,13 +346,13 @@ def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys, tmp
     unconditional first-choice fix when an anchor resolved empty."""
     env = {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings-home")}
     with pytest.raises(UntrustedRootError):
-        coordinator_trusted_root_guard(mode="fail-loud", root=str(tmp_path / "coordinator-claude" / "coordinator"), env=env)
+        coordinator_trusted_root_guard(mode="fail-loud", root=str(tmp_path / "DoE-claude" / "coordinator"), env=env)
     err = capsys.readouterr().err
     assert "EMPTY" in err
     assert "home:" in err
     assert "doe_root resolved to:" in err
     assert "claude_klabauter_root resolved to:" in err
-    assert "registry repos.example_doctrine_repo" in err
+    assert "registry repos.doe_claude" in err
     assert "ONLY after confirming every anchor" in err
 
 
@@ -366,7 +366,7 @@ def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_pa
     (home / ".claude").mkdir(parents=True)
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "DoE-claude"
     (settings_home_dir / "machine-local" / ".doe-root").write_text(str(doe_root) + "\n")
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (settings_home_dir / "machine-local" / ".claude-klabauter-root").write_text(str(claude_klabauter_root) + "\n")
@@ -375,7 +375,7 @@ def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_pa
     with pytest.raises(UntrustedRootError):
         coordinator_trusted_root_guard(mode="fail-loud", root="/tmp/evil", env=env)
     err = capsys.readouterr().err
-    assert "coordinator-claude" in err
+    assert "DoE-claude" in err
     assert "at least one anchor above resolved EMPTY" not in err
 
 

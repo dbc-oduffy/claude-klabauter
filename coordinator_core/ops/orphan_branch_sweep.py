@@ -37,7 +37,7 @@ Exit codes:
   0 — normal completion (including: not inside a git repo, `gh` unavailable, `--help`)
   1 — unrecognized CLI argument (usage error)
 
-Port of: orphan-branch-sweep.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: orphan-branch-sweep.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: archive/specs/2026-05-01-orphan-branch-prevention.md § 1.1
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 

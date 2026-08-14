@@ -45,7 +45,7 @@ Does NOT cover:
     the call) — this scanner proves literal reaching-paths only, the same
     documented tradeoff `test_no_node_schema_shellout.py` accepts for
     the node+oracle-script pair it looks for.
-  - Any writer OUTSIDE `coordinator_core/` (e.g. a coordinator-claude-side bash oracle, or
+  - Any writer OUTSIDE `coordinator_core/` (e.g. a DoE-side bash oracle, or
     `coordinator/bin/append-goal-event.py` itself, which is the sanctioned
     CLI trampoline into this same op and lives outside the scanned root).
 """

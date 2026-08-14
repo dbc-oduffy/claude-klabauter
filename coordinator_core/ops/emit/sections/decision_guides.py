@@ -10,7 +10,7 @@ field (title / created / status) or carrying a status outside the enum quarantin
 
 Composite natural key: (repo, coordinator_root_path, path).
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.11,
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 8.11,
   DecisionGuideSummary. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P15
   (upstream: docs/plans/2026-06-27-cockpit-emission-decision-guide-4th-type.md § Cn).

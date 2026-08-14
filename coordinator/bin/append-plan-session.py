@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """append-plan-session.py — plan.append_session native trampoline (DR-216, strang-10).
 
@@ -37,7 +36,7 @@ Code releases without that env var. When unresolved, session_id is sent as JSON
 null and the op falls back to its own CLAUDE_CODE_SESSION_ID env read
 (completion_ops.py:591-592) — a no-op in that case since tier 3 already tried it.
 
-Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-doe-land-d-slice.md
+Spec backlink: DoE-claude:pln-ceremony-as-pipeline-2-land-th-aa5ace
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave 1b)
 
 Usage (unchanged from the bash facade — zero caller-arg repoints):

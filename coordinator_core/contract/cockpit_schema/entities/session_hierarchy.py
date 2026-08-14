@@ -1,5 +1,5 @@
 """
-SessionHierarchy — pydantic port of coordinator-claude
+SessionHierarchy — pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/session-hierarchy.ts` (Zod source).
 Cockpit emission entity for a single session/workstream node in the
 per-machine session hierarchy projection (ccos-5).

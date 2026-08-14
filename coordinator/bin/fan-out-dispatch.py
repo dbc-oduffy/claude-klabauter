@@ -15,7 +15,7 @@ byte-for-byte preserved from the bash oracle.
 Spec backlink: docs/plans/2026-05-27-fan-out-default-doctrine.md §Chunk 1
 Spec backlink (organic-ramp): docs/plans/2026-05-30-organic-ramp-concurrency-doctrine.md §C2
 Spec backlink (invariant observers): docs/plans/2026-06-22-invariant-verification-observers.md §C2
-Spec backlink (run-report subsume): docs/plans/2026-07-13-subagent-run-report-subsume.md §C5/DEC-6
+Spec backlink (run-report subsume): DoE-claude:pln-universal-subagent-run-report--4250e3 §C5/DEC-6
 
 Input format (TSV, one row per chunk):
   <chunk-id>TAB<brief-one-liner-or-@filepath>TAB<comma-separated-file-paths>
@@ -82,7 +82,7 @@ from coordinator_data_root import data_root  # noqa: E402
 def _resolve_plugin_root() -> str:
     """Resolve the coordinator root sibling DATA dirs (snippets/, subagent-sandbox-
     policy.yaml) live under — CLAUDE_PLUGIN_ROOT override always wins; otherwise the
-    parent of the resolved snippets/ data dir (co-located or coordinator-claude-resident per
+    parent of the resolved snippets/ data dir (co-located or DoE-resident per
     `coordinator_data_root.data_root()`), since that parent IS the coordinator root
     under either layout. Mirrors `snippet-registry`'s `_resolve_plugin_root()`.
     """
@@ -93,7 +93,7 @@ def _resolve_plugin_root() -> str:
 
 
 # Historical: PLUGIN_ROOT used to be a bare `os.path.dirname(SCRIPT_DIR)` walk, which
-# broke once the 2026-07-22 executable-surface migration split snippets/ (coordinator-claude-resident)
+# broke once the 2026-07-22 executable-surface migration split snippets/ (DoE-resident)
 # away from this script (claude-klabauter-resident) — see coordinator_data_root.py's
 # module docstring. Resolved via the shared two-rung resolver instead of reimplementing
 # the DOE_ROOT chain here (negative-spec in that module).

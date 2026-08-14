@@ -1,7 +1,7 @@
 """Characterization + parity tests for coordinator_core.ops.backfill_initiative_fk.
 
-Port of: backfill-initiative-fk.sh (coordinator-claude 432e3285, 2026-07-22)
-Mirrors the oracle's own six test cases (test-backfill-initiative-fk.sh, coordinator-claude 432e3285,
+Port of: backfill-initiative-fk.sh (DoE 432e3285, 2026-07-22)
+Mirrors the oracle's own six test cases (test-backfill-initiative-fk.sh, DoE 432e3285,
 2026-07-22) plus unit coverage of the lock primitives and platform-portability additions.
 """
 from __future__ import annotations
@@ -35,9 +35,9 @@ def _make_fake_coordinator_initiative(bin_dir: Path, known_ids: set) -> Path:
     closely enough to exercise this module's subprocess call + exit-code handling.
 
     Python, not bash: the real `coordinator-initiative` was ported to python3
-    (coordinator-claude commit 6fb5fb37) and this module invokes it via `sys.executable`
+    (DoE-claude commit 6fb5fb37) and this module invokes it via `sys.executable`
     directly, so the fixture must be python source for that invocation to succeed."""
-    script = bin_dir / "coordinator-initiative"
+    script = bin_dir / "coordinator-initiative.py"
     known_ids_repr = repr(sorted(known_ids))
     script.write_text(
         "#!/usr/bin/env python3\n"
@@ -335,7 +335,7 @@ def test_attach_timeout_counted_as_error_and_batch_continues(tmp_path, monkeypat
 
     monkeypatch.setattr(mod.subprocess, "run", _raise_timeout_for_timeout_artifact)
 
-    coordinator_initiative_path = os.path.join(str(bin_dir), "coordinator-initiative")
+    coordinator_initiative_path = os.path.join(str(bin_dir), "coordinator-initiative.py")
     lines = [
         f"{timeout_artifact}\ttimeout-id\n",
         f"{ok_artifact}\tgood-id\n",

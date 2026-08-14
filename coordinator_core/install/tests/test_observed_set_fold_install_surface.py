@@ -54,9 +54,9 @@ dispatch brief and this module's own report): this test spawns real git and
 python3 subprocesses and therefore genuinely exercises Tier 1
 (filesystem/process) install-surface behavior, but it does NOT install onto
 a fresh ``CLAUDE_HOME`` / registry-driven target the way
-coordinator_core/install/sandbox_check.py exercises the coordinator-claude/coordinator-
+coordinator_core/install/sandbox_check.py exercises the DoE/coordinator-
 claude install chain (gen-settings-hooks, .doe-root, claude-doe-shim, etc.)
--- that harness validates a DIFFERENT install surface (the coordinator-claude-side plugin
+-- that harness validates a DIFFERENT install surface (the DoE-side plugin
 install), has no reachable seam for a `state/sovereign-tracker/`-gated
 tracker_store op (claude-klabauter's own consuming-repo state), and is not extended
 here for that reason. Tier 2 (running-in-Claude-Code, i.e. this wiring

@@ -16,7 +16,7 @@ Covers:
   (e) bonus: a ceremony-hot-path surface (not an entry point) does not promote,
       even if passing and fresh — proves the entry-point-only scope.
 
-Spec backlink: docs/plans/2026-07-20-tested-platforms-teeth-windows-honest.md § C3a1
+Spec backlink: DoE-claude:pln-platform-verified-is-a-distinc-a076aa § C3a1
 
 Run with: python test_generate_tested_platforms.py
 """
@@ -33,7 +33,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_GENERATOR = os.path.join(_THIS_DIR, "generate-tested-platforms")
+_GENERATOR = os.path.join(_THIS_DIR, "generate-tested-platforms.py")
 
 TESTS_PASSED = 0
 TESTS_FAILED = 0

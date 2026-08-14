@@ -33,7 +33,7 @@ not, and must never become, a check inside emit() itself. See
 docs/wiki/cockpit-contract-revendor.md § Reader-first for the full reconciliation.
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C2
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — setup/guards, Section 9 envelope.
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — setup/guards, Section 9 envelope.
 
 Dual-purpose note (deliberate, not incidental): this module also hosts the
 ``check-shipped-on-main.sh`` port (``main()``, ``_CHECK_SHIPPED_HELP``, ``resolve_ref``,
@@ -407,7 +407,7 @@ def _stamp_docs_staleness(envelope: dict, ctx: EmitContext) -> None:
     docstring) — not once per record — so the per-doc git shell-outs the
     detector performs are bounded by the repo's declared doc count, not by
     envelope size. Bounded is not cheap, though: measured ~0.37s of a 3.5s
-    emit on the coordinator-claude corpus, which is why the detector now runs only on
+    emit on the DoE-claude corpus, which is why the detector now runs only on
     the full-enrichment tier (``ctx.full_enrichment``). On the cheap tier the
     field is satisfied from the previously-emitted value, falling back to the
     contract-sanctioned ``null`` — the SAME state the never-fail degrade path
@@ -422,7 +422,7 @@ def _stamp_docs_staleness(envelope: dict, ctx: EmitContext) -> None:
     module docstring therefore holds at BOTH gated stages, not just at
     ``file_attributions``.
 
-    Spec backlink: docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C6
+    Spec backlink: DoE-claude:pln-human-facing-doc-staleness-det-d9c047 § C6
     Perf backlink: emit() cost-lever work, 2026-07-29 (Lever 2).
     """
     records = envelope.get("exec_summaries")
@@ -532,7 +532,7 @@ def _empty_skeleton(schema_version: str, emitted_at: str, emitted_by_machine: st
     Negative-spec: emits NO top-level ``coordinator_root_path`` scalar. A 2026-07-07 AC12
     revision briefly added one (sibling of ``emitted_by_machine``, value ``str(ctx.repo_root)``),
     but it had ZERO readers and was removed 2026-07-21: example-retrieval-repo ingests the top-level
-    ``emitted_at`` but never a top-level ``coordinator_root_path`` (rag/coordinator-claude only read the schema'd
+    ``emitted_at`` but never a top-level ``coordinator_root_path`` (rag/DoE only read the schema'd
     PER-RECORD ``coordinator_root_path`` composite-key component), it is absent from the vendored
     SnapshotEnvelope schema, and that schema's top-level ``additionalProperties: false`` makes the
     extra scalar a whole-envelope validation failure. The per-row ``coordinator_root_path`` ('.')
@@ -830,7 +830,7 @@ def _commit_age_label(repo_root: Path, sha: str) -> str:
 def main(argv: list[str]) -> int:
     """CLI entry — port of ``check-shipped-on-main.sh`` (git merge-base ancestor gate).
 
-    Port of: check-shipped-on-main.sh (coordinator-claude b5a4192c, 2026-07-20).
+    Port of: check-shipped-on-main.sh (DoE b5a4192c, 2026-07-20).
     Reuses ``sha_on_origin_main`` / ``check_origin_main_reachable`` / ``fetch_origin_main``,
     the same amortised-fetch ancestor-check helpers ``_stamp_shipped_sha`` already exercises.
 
@@ -1224,7 +1224,7 @@ def build(ctx: EmitContext, *, sections: "Optional[dict[str, _RegisteredSection]
     #     post-collect enrichment) and pops the staging key unconditionally.
     _stamp_initiative_goals(envelope["initiatives"], envelope["goals_current"])
 
-    # 5. backlog_history block (C5 — snake_case per contract v2.7.0, coordinator-claude+PM convention call +
+    # 5. backlog_history block (C5 — snake_case per contract v2.7.0, DoE+PM convention call +
     #    the Director of Engineering review; 2026-07-06 cross-repo memo; D9 default until contract declares the block;
     #    gate is contract-presence not a version sentinel — amended D6 premise, plan § D6
     #    as amended by docs/plans/2026-07-05-backlog-history-emit-gate-decouple.md § Option C).
@@ -1294,7 +1294,7 @@ def emit(ctx: EmitContext, out: Optional[str | Path] = None) -> dict:
 def _resolve_central_state_root(coordinator_root: Path, cwd: Path) -> Path:
     """Resolve ``coordinator_state_root --central`` natively (no bash spawn).
 
-    Oracle: ``lib/coordinator-state-root.sh`` (coordinator-claude 6fb5fb37, 2026-07-22)'s
+    Oracle: ``lib/coordinator-state-root.sh`` (DoE 6fb5fb37, 2026-07-22)'s
     ``coordinator_state_root --central`` with
     no ``--subject``/``--artifact`` — Rule 4 (backward-compat default): resolves to
     ``$(_csr_claude_klabauter_root)/state``. The bash lib's own ``_csr_claude_klabauter_root`` is itself
@@ -1337,7 +1337,7 @@ def _resolve_central_state_root(coordinator_root: Path, cwd: Path) -> Path:
             stacklevel=2,
         )
     # pre-W4.2 assumption: coordinator_root was always 4 levels below ~/.claude; post-W4.2
-    # it is the coordinator-claude clone at an arbitrary depth so .parent.parent.parent lands in the wrong
+    # it is the DoE clone at an arbitrary depth so .parent.parent.parent lands in the wrong
     # place. Derive from CLAUDE_HOME directly, same as resolve_context() does.
     return Path(os.environ.get("CLAUDE_HOME", str(Path.home()))) / ".claude" / "state"
 
@@ -1348,7 +1348,7 @@ def _registry_coordinator_root() -> Optional[Path]:
     (``registry.local.toml`` wins, tracked ``registry.toml`` fills gaps —
     matches ``machine_resolver.registry_get``; the ``.local``-only read
     predated that pattern), key-major rung order preserved (``live_path``
-    before ``repos.example_doctrine_repo``). Direct file reads only — bootstrap-safety
+    before ``repos.doe_claude``). Direct file reads only — bootstrap-safety
     invariant, no CLI/subprocess (see ``resolve_coordinator_root``'s
     docstring)."""
     reg_dir = machine_local_dir()
@@ -1378,7 +1378,7 @@ def _registry_coordinator_root() -> Optional[Path]:
 
     for key_path, suffix in (
         (["plugin", "mirrors", "coordinator-claude", "live_path"], ""),
-        (["repos", "example_doctrine_repo"], "/coordinator"),
+        (["repos", "doe_claude"], "/coordinator"),
     ):
         flat_key = ".".join(key_path)
         for data, text in files:
@@ -1425,11 +1425,11 @@ def resolve_coordinator_root() -> Path:
     Purpose: locate the coordinator clone whose ``bin/query-records.py`` exists so section
     porters that read from it find the real records reader.  The W4.2 cutover relocated the
     coordinator SOURCE out of ``~/.claude/plugins/coordinator/`` into the
-    coordinator-claude clone at ``<doe-root>/coordinator``; the legacy plugin dir is now stale/empty.  The
+    DoE clone at ``<doe-root>/coordinator``; the legacy plugin dir is now stale/empty.  The
     2026-07-22 de-node cutover then retired ``bin/query-records.js`` fleet-wide (claude-klabauter's own
     production dependency on it dropped to zero -- see
     ``cross-repo/archive/2026-07-22-claude-klabauter-em-query-records-positive-clearance-de-node-cutover-landed.md``
-    -- and coordinator-claude/coordinator/bin now carries neither the ``.js`` oracle nor a ``.py``
+    -- and DoE-claude/coordinator/bin now carries neither the ``.js`` oracle nor a ``.py``
     port), so ``bin/query-records.py`` (claude-klabauter's own native, de-node-durable reader) is now
     the sentinel, not the deleted ``.js`` file.  Section porters that read from
     ``ctx.coordinator_root / "bin" / "query-records.py"`` would silently fall back to ``[]``
@@ -1442,17 +1442,17 @@ def resolve_coordinator_root() -> Path:
       1. ENV ``COORDINATOR_ROOT`` — set in CI or by the coordinator plugin loader.
       2. Co-located ``<claude-klabauter-repo-root>/coordinator`` (2026-07-22 executable-surface
          migration, commits b644d5a9/8a28a6ca): the coordinator bin/lib/scripts tree now
-         lives INSIDE this repo, not the coordinator-claude clone — coordinator-claude/coordinator/bin is
+         lives INSIDE this repo, not the DoE-claude clone — DoE-claude/coordinator/bin is
          empty post-migration (PM ruling: coordinator scripts must not execute out of
          ``~/.claude``). Checked first because it is now the canonical, common case and
          needs no registry/subprocess round-trip. Mirrors ``data_root.py``'s
          ``_colocated_root()`` (same repo-root-relative ``/ "coordinator"`` landing spot).
       3. Machine-local registry key ``plugin.mirrors.coordinator-claude.live_path``
          (pre-migration W4.2 cutover path; kept for machines/fixtures whose registry
-         still points at a valid coordinator-claude mirror). Per-key file precedence:
+         still points at a valid DoE mirror). Per-key file precedence:
          ``registry.local.toml`` wins, tracked ``registry.toml`` fills gaps
          (``machine_resolver.registry_get`` semantics; see ``_registry_coordinator_root``).
-      4. Machine-local registry key ``repos.example_doctrine_repo`` + ``/coordinator`` suffix
+      4. Machine-local registry key ``repos.doe_claude`` + ``/coordinator`` suffix
          (same two-file per-key precedence).
       5. ``resolve-coordinator-clone --for-content`` subprocess (survivor CLI at
          ``~/.claude/bin/resolve-coordinator-clone``) — replaces the pre-repoint legacy
@@ -1488,7 +1488,7 @@ def resolve_coordinator_root() -> Path:
             f"COORDINATOR_ROOT is set to {str(p)!r} but "
             f"{str(p / 'bin' / 'query-records.py')!r} is absent; "
             "the explicit override was ignored. Update COORDINATOR_ROOT to the coordinator "
-            "plugin root or add a machine-local registry entry pointing at the coordinator-claude clone.",
+            "plugin root or add a machine-local registry entry pointing at the DoE clone.",
             stacklevel=2,
         )
 
@@ -1536,7 +1536,7 @@ def resolve_coordinator_root() -> Path:
             f"resolve-coordinator-clone --for-content returned {legacy} but "
             f"query-records.py not found at {legacy / 'bin' / 'query-records.py'}; "
             "this is a stale/partial checkout. Add a machine-local registry entry "
-            "pointing at the coordinator-claude clone, or set COORDINATOR_ROOT to the coordinator plugin root."
+            "pointing at the DoE clone, or set COORDINATOR_ROOT to the coordinator plugin root."
         )
     raise RuntimeError(
         "coordinator root not found: checked COORDINATOR_ROOT env, the co-located "

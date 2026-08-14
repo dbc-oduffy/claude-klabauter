@@ -28,7 +28,7 @@ from coordinator_core.ceremony_common import apply_halt
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
 
 # Real git spawn is load-bearing: terminal-status coverage tests read the
-# coordinator-claude repo's real HEAD `plan.schema.json` via `git show` to pin the
+# DoE-claude repo's real HEAD `plan.schema.json` via `git show` to pin the
 # schema enum against the actual on-disk oracle, and the no-commit-row guard
 # builds real per-test commit history — no mock stands in for either.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -231,7 +231,7 @@ _BRIGHTLINE_DIRECTIVE_IDS = frozenset(
 
 
 def test_every_disposition_computes_some_brightline_gate_directive(monkeypatch, tmp_path):
-    """The invariant the 2026-08-03 coordinator-claude-em memo found violated: a
+    """The invariant the 2026-08-03 doe-claude-em memo found violated: a
     chain-terminal close skipped the session-scoped brightline gate (right
     scope call) and substituted nothing, leaving the close that caps an
     entire lineage's diff as the ONLY one with no brightline gate at all.
@@ -997,7 +997,7 @@ def test_brief_reading_persisted_verdict_still_mutates_nothing(monkeypatch, tmp_
 # (`scope.archive()`) is a once-per-SESSION-END operation. Emitting the
 # archive directive here archived a still-live session mid-session,
 # destroying once-per-session sentinels and the dispatch-evidence file.
-# Archival is now wired to session END (a SessionEnd hook, coordinator-claude repo),
+# Archival is now wired to session END (a SessionEnd hook, DoE-claude repo),
 # not this assembly. `d-emit-cadence` previously depended on the removed
 # directive; it must still have a satisfiable dependency after the removal.
 # ---------------------------------------------------------------------------
@@ -1494,9 +1494,9 @@ def test_consumed_handoff_completeness_leg_a_indeterminate_when_heading_present_
 
 
 # ---------------------------------------------------------------------------
-# Leg A, kind: session-handoff — cross-repo/inbox/2026-08-03-coordinator-claude-em-
+# Leg A, kind: session-handoff — cross-repo/inbox/2026-08-03-doe-claude-em-
 # wsc-leg-a-session-handoff-kind-blind.md: that kind never carries its own
-# `## Acceptance criteria` (0/34 in coordinator-claude's corpus, 0/22 in claude-klabauter's),
+# `## Acceptance criteria` (0/34 in DoE-claude's corpus, 0/22 in claude-klabauter's),
 # so leg A joins its `deliverable_id` frontmatter to the governing plan's own
 # `deliverable_id` instead — the retired `plan:` frontmatter pointer's
 # replacement, per PM ruling R2 (docs/plans/2026-08-04-terminal-state-
@@ -1538,8 +1538,8 @@ def _write_session_handoff_plan(
 @functools.lru_cache()
 def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     """Mirrors `test_leg_a_terminal_plan_status_covers_every_terminal_member_
-    of_the_schema_enum`'s own schema-fetch mechanism (coordinator-claude HEAD `git show`,
-    `None` on an unregistered/missing coordinator-claude repo -- the caller turns that into
+    of_the_schema_enum`'s own schema-fetch mechanism (DoE HEAD `git show`,
+    `None` on an unregistered/missing DoE repo -- the caller turns that into
     a `pytest.skip`), but for the complement set: every `plan.schema.json`
     `status` enum member NOT in `_LEG_A_TERMINAL_PLAN_STATUS`. Enum-pinned
     so a future schema change that reclassified e.g. `landed` cannot pass
@@ -1558,9 +1558,9 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
         timeout=30,
     )
     # Review: coordinator:code-reviewer -- mirror the terminal-arm test's
-    # hard failure on a git-show error against a *present* coordinator-claude checkout;
-    # only "no coordinator-claude repo" collapses to None/skip, not a broken checkout.
-    assert result.returncode == 0, f"Cannot read coordinator-claude HEAD plan.schema.json: {result.stderr.strip()}"
+    # hard failure on a git-show error against a *present* DoE checkout;
+    # only "no DoE repo" collapses to None/skip, not a broken checkout.
+    assert result.returncode == 0, f"Cannot read DoE HEAD plan.schema.json: {result.stderr.strip()}"
     doe_plan_schema = json.loads(result.stdout)
     schema_enum = set(doe_plan_schema["properties"]["status"]["enum"])
     return sorted(schema_enum - wsc._LEG_A_TERMINAL_PLAN_STATUS)
@@ -1580,7 +1580,7 @@ def pytest_generate_tests(metafunc):
     metafunc.parametrize(
         "status",
         statuses
-        or [pytest.param("draft", marks=pytest.mark.skip(reason="coordinator-claude repo not registered/found on this machine"))],
+        or [pytest.param("draft", marks=pytest.mark.skip(reason="DoE-claude repo not registered/found on this machine"))],
     )
 
 
@@ -1838,10 +1838,10 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
     mechanically from `enum`."""
     doe_root = resolve_doe_root()
     if not doe_root:
-        pytest.skip("coordinator-claude repo not registered on this machine")
+        pytest.skip("DoE-claude repo not registered on this machine")
     doe_repo = Path(doe_root)
     if not doe_repo.exists():
-        pytest.skip(f"coordinator-claude repo not found at {doe_repo}")
+        pytest.skip(f"DoE repo not found at {doe_repo}")
 
     result = subprocess.run(
         ["git", "-C", str(doe_repo), "show", "HEAD:coordinator/schemas/plan.schema.json"],
@@ -1850,7 +1850,7 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
         encoding="utf-8",
         timeout=30,
     )
-    assert result.returncode == 0, f"Cannot read coordinator-claude HEAD plan.schema.json: {result.stderr.strip()}"
+    assert result.returncode == 0, f"Cannot read DoE HEAD plan.schema.json: {result.stderr.strip()}"
     doe_plan_schema = json.loads(result.stdout)
     schema_enum = set(doe_plan_schema["properties"]["status"]["enum"])
 
@@ -3695,8 +3695,8 @@ def test_decisions_template_lands_under_preflight_never_a_9th_envelope_key(monke
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-30 coordinator-claude-em cross-repo memo (`cross-repo/archive/2026-07-30-
-# coordinator-claude-em-wsc-review-trail-passthrough-and-memo-attribution.md`), item
+# 2026-07-30 doe-claude-em cross-repo memo (`cross-repo/archive/2026-07-30-
+# doe-claude-em-wsc-review-trail-passthrough-and-memo-attribution.md`), item
 # 1 -- directives_memo_lifecycle.compute_memo_resolution_attribution's three
 # signals (picked_up_by / realized_by / archive_rename) and their union, plus
 # judgments.build_memo_resolution_attribution_judgment_point's move from
@@ -3843,7 +3843,7 @@ def test_memo_resolution_attribution_judgment_point_recommends_resolved_with_sig
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-30 coordinator-claude-em cross-repo memo, item 2 -- an unrecognized flat
+# 2026-07-30 doe-claude-em cross-repo memo, item 2 -- an unrecognized flat
 # `review_*` key on `decisions` now gets a loud stderr diagnostic instead of
 # a silent drop; a legitimately absent `review` dict stays quiet.
 # ---------------------------------------------------------------------------
@@ -3894,7 +3894,7 @@ def test_build_close_tail_args_directive_no_diagnostic_when_review_present_corre
 
 
 # ---------------------------------------------------------------------------
-# 2026-08-03 coordinator-claude-em-wsc-tail-review-metadata-dropped -- the transport
+# 2026-08-03 doe-claude-em-wsc-tail-review-metadata-dropped -- the transport
 # hole: `build_wsc_tail_directive` documented that `depends_on=
 # "d-close-tail-args"` spliced the producer's stdout into this directive's
 # argv, but no token ever expressed that splice. `apply._resolve_arg_tokens`'s
@@ -4016,7 +4016,7 @@ def test_build_close_tail_args_directive_list_review_emits_one_slice_per_qualify
 
 
 def test_build_close_tail_args_directive_forwards_reviewer_evidence_scalar():
-    """Regression (coordinator-claude memo 2026-08-13 § 2): `reviewer_evidence` was
+    """Regression (DoE-claude memo 2026-08-13 § 2): `reviewer_evidence` was
     accepted in `decisions["review"]`, never emitted here, and the op-side gate
     (`review_trail_write._verify_reviewer_evidence`) then warned that the field
     was missing — the correlation it checks was severed one layer above it."""
@@ -4073,7 +4073,7 @@ def test_build_close_tail_args_directive_forwards_reviewer_evidence_per_slice():
 
 
 def _lesson_add_cli_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-lesson-add"
+    return Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-lesson-add.py"
 
 
 def _cli_optional_value_flags(source: str) -> set[str]:
@@ -4236,7 +4236,7 @@ def test_open_spine_row_gate_fires_and_names_every_open_row_with_five_exits(monk
     named in `warn_text`, the five exits stated verbatim (the two
     PM-gated ones marked, plus the runnable `plan-tasks-resolve`
     command) per the five-exits ruling
-    (cross-repo/inbox/2026-08-05-coordinator-claude-em-plan-tasks-five-exits-
+    (cross-repo/inbox/2026-08-05-doe-claude-em-plan-tasks-five-exits-
     ruling.md)."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     _write_plan_with_spine(
@@ -4404,6 +4404,156 @@ def test_open_spine_row_gate_free_value_keys_appear_in_decisions_template(monkey
     assert set(_dc_spine_worklist.FREE_VALUE_KEYS).issubset(template.keys())
     for key in _dc_spine_worklist.FREE_VALUE_KEYS:
         assert template[key] is None
+
+
+# ---------------------------------------------------------------------------
+# gates.landed_reconciliation — C3, pln-landed-fires-at-spine-resoluti-ac7e89
+# ---------------------------------------------------------------------------
+
+
+def _write_plan_landed_with_acs(tmp_path: Path, slug: str, ac_lines: str) -> None:
+    plan_path = tmp_path / "docs" / "plans" / f"{slug}.md"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nstatus: landed\n---\n\n"
+        "# a plan\n\n## Acceptance Criteria\n\n" + ac_lines + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_landed_reconciliation_gate_fires_on_landed_plan_with_open_acs(monkeypatch, tmp_path):
+    """AC9: a governing plan at `status: landed` with at least one unticked
+    AC -> `applies` true, `warn_text` populated, leads with the action
+    (reconcile-and-stamp) rather than a scold, and names no override key."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_landed_with_acs(
+        tmp_path,
+        "landed-plan",
+        "- [x] AC1 — done\n- [ ] AC2 — still open\n",
+    )
+
+    decision_object = wsc.brief(decisions={"governing_plan_slug": "landed-plan"}, repo_root=tmp_path)
+    gate = decision_object["gates"]["landed_reconciliation"]
+
+    assert gate["applies"] is True
+    assert gate["verdict"] == "applicable"
+    assert gate["open_count"] == 1
+    assert gate["total_count"] == 2
+    assert gate["warn_text"] is not None
+    assert "landed-plan" in gate["warn_text"]
+    assert "Reconcile and stamp now" in gate["warn_text"]
+    assert "landed" in gate["warn_text"]
+    assert gate["summary_line"]
+    # Register (docs/wiki/guard-messaging.md § Register): no override key,
+    # no self-legitimacy, no apology, no reassurance wrapper.
+    lowered = gate["warn_text"].lower()
+    for banned in ("bypass", "override", "sorry", "no need to", "harmless", "not a refusal"):
+        assert banned not in lowered
+
+
+def test_landed_reconciliation_gate_silent_on_landed_and_reconciled_plan(monkeypatch, tmp_path):
+    """AC9: a `status: landed` plan whose every AC is ticked is a clean
+    close -- silent, not-applicable, never a WARN."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_landed_with_acs(
+        tmp_path,
+        "reconciled-plan",
+        "- [x] AC1 — done\n- [x] AC2 — also done\n",
+    )
+
+    decision_object = wsc.brief(decisions={"governing_plan_slug": "reconciled-plan"}, repo_root=tmp_path)
+    gate = decision_object["gates"]["landed_reconciliation"]
+
+    assert gate["applies"] is False
+    assert gate["warn_text"] is None
+    assert gate["verdict"] == "not-applicable"
+    assert gate["summary_line"]
+
+
+def test_landed_reconciliation_gate_silent_on_non_landed_plan(monkeypatch, tmp_path):
+    """A plan with open ACs but a non-`landed` status (e.g. still `draft`)
+    is out of this gate's scope entirely -- not-applicable, not indeterminate."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    _write_plan_with_spine(
+        tmp_path,
+        "draft-plan",
+        "- id: C1\n  title: Open row\n  disposition: open\n",
+    )
+
+    decision_object = wsc.brief(decisions={"governing_plan_slug": "draft-plan"}, repo_root=tmp_path)
+    gate = decision_object["gates"]["landed_reconciliation"]
+
+    assert gate["applies"] is False
+    assert gate["warn_text"] is None
+    assert gate["verdict"] == "not-applicable"
+
+
+def test_landed_reconciliation_gate_indeterminate_when_no_governing_plan(monkeypatch, tmp_path):
+    """No governing plan resolved for this session -> indeterminate, not
+    a false-clean not-applicable (mirrors the open-spine-row gate's own
+    verdict split)."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    gate = decision_object["gates"]["landed_reconciliation"]
+
+    assert gate["applies"] is False
+    assert gate["warn_text"] is None
+    assert gate["verdict"] == "indeterminate"
+    assert "INDETERMINATE" in gate["summary_line"]
+
+
+def test_landed_reconciliation_gate_indeterminate_on_landed_plan_with_no_ac_heading(monkeypatch, tmp_path):
+    """A `status: landed` plan with no `## Acceptance Criteria` heading at
+    all has nothing to reconcile against -- indeterminate, never raises."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    plan_path = tmp_path / "docs" / "plans" / "headless-plan.md"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(
+        "---\ntitle: \"a plan\"\nstatus: landed\n---\n\n# a plan\n\nno AC section here.\n",
+        encoding="utf-8",
+    )
+
+    decision_object = wsc.brief(decisions={"governing_plan_slug": "headless-plan"}, repo_root=tmp_path)
+    gate = decision_object["gates"]["landed_reconciliation"]
+
+    assert gate["applies"] is False
+    assert gate["verdict"] == "indeterminate"
+
+
+def test_landed_reconciliation_gate_never_blocks_even_while_firing(monkeypatch, tmp_path):
+    """AC9's binding constraint: a firing gate contributes no blocking
+    judgment point, and the rest of the envelope is byte-identical to a
+    run where the gate is silent -- proven the same way the sibling
+    open-spine-row gate's own non-blocking test is proven (toggle the
+    governing plan's own content between two `brief()` calls, diff
+    everything except this one gate key)."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decisions = {"governing_plan_slug": "toggle-landed-plan", "subject": "x"}
+
+    _write_plan_landed_with_acs(tmp_path, "toggle-landed-plan", "- [ ] AC1 — still open\n")
+    firing = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    assert firing["gates"]["landed_reconciliation"]["applies"] is True
+
+    _write_plan_landed_with_acs(tmp_path, "toggle-landed-plan", "- [x] AC1 — now done\n")
+    silent = wsc.brief(decisions=decisions, repo_root=tmp_path)
+    assert silent["gates"]["landed_reconciliation"]["applies"] is False
+
+    def _strip(decision_object):
+        gates = dict(decision_object["gates"])
+        gates.pop("landed_reconciliation")
+        return {
+            "gates": gates,
+            "preflight": decision_object["preflight"],
+            "directives": decision_object["directives"],
+            "judgment_points": decision_object["judgment_points"],
+            "narration": decision_object["narration"],
+            "next_move": decision_object["next_move"],
+        }
+
+    assert _strip(firing) == _strip(silent)
+    jp_ids = {jp["id"] for jp in firing["judgment_points"]}
+    assert not any("landed" in jp_id for jp_id in jp_ids)
 
 
 # ---------------------------------------------------------------------------

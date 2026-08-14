@@ -4,7 +4,7 @@ WHY THIS EXISTS
 ---------------
 `state/lessons/` is read by `/learn-lessons`, the central-mode strip-local pull-pass,
 and the PM-invoked `/workstream-start` ceremony (it is NOT a Tier-0 boot read; see
-Coordinator-claude's coordinator/docs/wiki/tiered-context-loading.md § 2. The Five Tiers,
+the coordinator doctrine repo's coordinator/docs/wiki/tiered-context-loading.md § 2. The Five Tiers,
 negative spec "`state/lessons/` is NOT Tier 0" — coordinator/CLAUDE.md § Session
 Orientation retired 2026-07-27). It is a capture queue: local-mode
 `/learn-lessons` folds recent lessons to wikis but historically had no step that

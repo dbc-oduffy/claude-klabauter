@@ -8,8 +8,8 @@ parity with the golden-oracle behavior captured from the retired bash script
 during the port (see module docstring "Negative-spec" for the two documented
 pre-existing bash-oracle behaviors reproduced verbatim, NOT "fixed").
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: migrate-branch-canonical-case.sh (coordinator-claude b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Port of: migrate-branch-canonical-case.sh (DoE b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ is declared and its target is importable.
 
 Purpose: coordinator_core.invoke is claude-klabauter's generic in-process op dispatcher
 (coordinator_core/invoke/__main__.py). A downstream caller outside a claude-klabauter
-checkout (e.g. Coordinator-claude's cc_invoke) must be able to reach it by spawning a
+checkout (e.g. DoE's cc_invoke) must be able to reach it by spawning a
 command, never by resolving claude-klabauter's interpreter and importing its
 internals (DR-215 — command-type, spawn-per-call engine, no resident
 daemon). This test covers the two things collectable from inside a checkout:

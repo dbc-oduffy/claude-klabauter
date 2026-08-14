@@ -18,7 +18,7 @@ aging § Thresholds) into a single fail-loud tool call.
 
 RETIREMENT OF THE STANDALONE BATCH NAG (2026-07-27, docs/plans/2026-07-26-
 gate-resolution-widen-and-migrate.md § C16): `workday-start.md` Step 1.2 no
-longer force-invokes this module as a daily batch nag. Evidence: coordinator-claude
+longer force-invokes this module as a daily batch nag. Evidence: DoE-claude
 `state/audits/2026-07-27-gate-resolver-dry-run.md` (run label "post-C12c
 re-run") shows `coordinator_core.reconcile.gate_eval` already surfaces every
 `awaiting_gate` handoff that needs a human look on EVERY resolver pass,
@@ -69,8 +69,8 @@ for any direct/ad-hoc CLI run):
 `evidence-resolved`/`review-due`/`merely-aged`; else rc 2 if any signals
 `parse-error`; else rc 0. Never reached without the flag.
 
-Port of: handoff-gate-aging.sh (coordinator-claude 67202df6, 2026-07-16)
-Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C5c
+Port of: handoff-gate-aging.sh (DoE 67202df6, 2026-07-16)
+Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C5c
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md, chunk B3
 
 Negative-spec (STALE predicate, `check_one`/`scan`/`main` — pre-existing, unchanged):
@@ -113,7 +113,7 @@ second evaluator here would be the plan's named anti-scope failure mode.
 
 C6 SCOPE BOUNDARY (AC4, landed) — `gate_evidence` IS now auto-read off
 frontmatter by `scan_triage`, once both blockers commit `6aa14244` stubbed
-this against are discharged: the coordinator-claude-ratified `gate_evidence:` schema shape
+this against are discharged: the DoE-ratified `gate_evidence:` schema shape
 was ratified in `3c5e048d`, and `coordinator_core.dag`'s truncating
 `_parse_yaml_list_block` (a sequence-of-mappings value read as an opaque
 scalar, dropping every more-indented continuation line) is never used here —
@@ -435,6 +435,10 @@ def main(argv: List[str]) -> int:
     if not argv:
         print(f"{_PROG}: missing argument: <handoff-path-or-directory>", file=sys.stderr)
         return 2
+
+    if argv[0] in ("--help", "-h"):
+        print(f"usage: {_PROG} <handoff-path-or-directory> [--triage]")
+        return 0
 
     args = list(argv)
     triage = "--triage" in args

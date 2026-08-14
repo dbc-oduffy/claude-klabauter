@@ -31,6 +31,11 @@ from typing import Optional
 
 _log = logging.getLogger(__name__)
 
+# Generator-provenance declaration (generator_provenance.py). write_tokens
+# writes token/token.ro under <repo>/.git/coordinator-service/ -- inside
+# .git, never a tracked repo artifact.
+GENERATES = []
+
 # Token file names (relative to the sentinel directory)
 _TOKEN_RW = "token"
 _TOKEN_RO = "token.ro"

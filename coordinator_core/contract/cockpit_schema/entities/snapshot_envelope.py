@@ -1,6 +1,6 @@
 """
 SnapshotEnvelope — the top-level shape of every emitted cockpit snapshot.
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/snapshot-envelope.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/snapshot-envelope.ts`
 (Zod source).
 
 Spec backlink: state/roadmap/cockpit-contract-ext-2026-06-22/COORDINATOR-RESOLUTIONS.md
@@ -28,7 +28,7 @@ Nullability discipline: D9 — present-as-null for singular slots
 required and default to `[]`, never null. All other required arrays are
 similarly never null (default to []).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 
@@ -222,17 +222,17 @@ class SnapshotEnvelope(BaseModel):
     # Roadmap DAG nodes — one record per stub per roadmap across the fleet.
     # Present-but-empty until claude-klabauter wires the DAG emit section at Gate B
     # (D9).
-    # Spec backlink: docs/plans/2026-07-06-cockpit-contract-v260-initiative-status-widen-roadmap-dag.md § AC3
+    # Spec backlink: DoE-claude:pln-cockpit-contract-v2-6-0-initia-75ac93 § AC3
     roadmap_dag_nodes: list[RoadmapDagNode]
     # Roadmap DAG edges — directed "blocks" relationships between stubs.
     # Present-but-empty until claude-klabauter wires the DAG emit section at Gate B
     # (D9).
-    # Spec backlink: docs/plans/2026-07-06-cockpit-contract-v260-initiative-status-widen-roadmap-dag.md § AC3
+    # Spec backlink: DoE-claude:pln-cockpit-contract-v2-6-0-initia-75ac93 § AC3
     roadmap_dag_edges: list[RoadmapDagEdge]
     # Backlog-trend time series (cockpit panel). Required non-null block;
     # claude-klabauter's presence probe reads
     # $defs['snapshot-envelope']['properties']['backlog_history'] and
-    # self-activates on this concrete shape. Coordinator-claude emits a stub
+    # self-activates on this concrete shape. DoE emits a stub
     # (generated_at:null, series:[]); claude-klabauter populates real series
     # post-parity (D19 pattern).
     # No MalformedRecords bucket — singleton object block, not an

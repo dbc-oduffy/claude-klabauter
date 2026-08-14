@@ -1,6 +1,6 @@
 """cc_invoke — Python-side transport for coordinator_core.invoke.
 
-Port of: coordinator-core-invoke.sh (coordinator-claude c6d97219, 2026-07-22) — the bash transport's
+Port of: coordinator-core-invoke.sh (DoE c6d97219, 2026-07-22) — the bash transport's
 fail-closed timeout/nonzero-exit/empty-stdout ladder and DEC-1..3 op-timeout budget
 logic are mirrored here deliberately; several comments below note specific behavioral
 parity points the port preserved.
@@ -57,9 +57,9 @@ Public API:
         a non-empty string 'error' with exit_code absent/0 — the engine repo's op-level refusals
         live INSIDE the result payload with no top-level 'error' key at the ENVELOPE level,
         so bare route() would return them unraised. Python sibling of the shell transport's
-        strangle_route_mutation (Port of: strangler-facade.sh, coordinator-claude c6d97219, 2026-07-22).
+        strangle_route_mutation (Port of: strangler-facade.sh, DoE c6d97219, 2026-07-22).
 
-Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C1
+Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C1
 DR-215 ref: coordinator_core/invoke/__main__.py's default (non---bare) response IS the
             {jsonrpc,id,result} envelope this module's cc_invoke() parses (--bare is
             opt-in server-side) — the envelope-parse convention is verified against the
@@ -89,6 +89,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+GENERATES = []  # writes only a tempfile.mkstemp() params file for subprocess argv-passing; no tracked artifact
+
 
 class StructuralPinError(RuntimeError):
     """Marks a non-self-healing structural contract-pin failure (engine rc=2 /
@@ -113,7 +115,7 @@ class StructuralPinError(RuntimeError):
 # stdlib-only (importlib.util, json, os, subprocess, sys, tempfile, typing) —
 # no coordinator_core import sits above this line; every coordinator_core
 # import in this module is function-local.
-# Spec backlink: docs/plans/2026-07-21-retire-coordinator-venv-system-python.md § C8
+# Spec backlink: DoE-claude:pln-decouple-coordinator-s-own-bin-42d50a § C8
 #
 # WHY A `sys` ATTRIBUTE AND NOT `os.environ` (2026-07-28). This used to be
 # `os.environ.setdefault(_LAZY_OPS_ENV_KEY, "1")` — a PROCESS-environment
@@ -403,7 +405,7 @@ def _resolve_claude_klabauter_root() -> str:
     # fallback state, not an error — falls through to the bash resolver below.
     #
     # Settings-home precedence mirrors _machine_local.py::_settings_home()
-    # (Port of: settings-home.sh's _coordinator_settings_home, coordinator-claude b644d5a9,
+    # (Port of: settings-home.sh's _coordinator_settings_home, DoE b644d5a9,
     # 2026-07-22) inline (kept inline here for the same single-file-module
     # reason _machine_local.py documents — no cross-file import hack across
     # the source/install-tree split):
@@ -869,9 +871,9 @@ def _op_error_detail(stdout_text: str) -> str:
     unknown method — reached the operator as a bare
     ``invoke process exited 1 (op=X) — op or dispatch error`` followed by an
     empty ``stderr:`` line, with the reason nowhere: it was sitting on stdout,
-    discarded unread. That is how ``ceremony.wsc_tail`` failed on coordinator-claude-em's
+    discarded unread. That is how ``ceremony.wsc_tail`` failed on doe-claude-em's
     Windows box with no recoverable diagnosis
-    (``cross-repo/inbox/2026-08-07-coordinator-claude-em-windows-ceremony-cli-coordinator-core-import-break.md``),
+    (``cross-repo/inbox/2026-08-07-doe-claude-em-windows-ceremony-cli-coordinator-core-import-break.md``),
     and why that one item's symptom looked unlike its two siblings' — those died
     in the trampoline process itself and printed a real traceback, while this one
     died behind the transport's blind side.
@@ -1171,7 +1173,7 @@ def _timeout_exceeded_message(op: str, timeout: int) -> str:
     raises that budget. An operator who read only the FLOOR sentence set
     CC_INVOKE_TIMEOUT_SECS=300, watched the same 30s-derived timeout recur, and had to
     read ipc.py to find the real knob — see
-    `cross-repo/inbox/2026-08-10-coordinator-claude-em-wsc-tail-exceeds-the-30s-dispatch-budget.md`.
+    `cross-repo/inbox/2026-08-10-doe-claude-em-wsc-tail-exceeds-the-30s-dispatch-budget.md`.
     This function now names both knobs and which side of the wait each governs whenever
     the engine-budget derivation is known; the degraded branch (dump unavailable) still
     names both but does not assert a budget number it could not read.

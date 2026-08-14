@@ -3,7 +3,7 @@ coordinator_core.ops.workday_complete_step2_5_dirty_tree — Step 2.5 dirty-tree
 auto-disposition.
 
 Spec backlink: commands/workday-complete.md § Step 2.5
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 PM ruling:     cross-repo/inbox/2026-06-16-workday-complete-dirty-tree-autonomy.md
 
 Purpose: classifies every dirty path in the cwd's git repo (via `git status
@@ -89,7 +89,7 @@ module has none on hand. Two candidates were named at dispatch time:
 `coordinator_core.session.core.resolve_session_id(repo_root)` in-process.
 DECIDED: (b). `main()`'s own argv contract (`--dry-run` only) is
 UNCHANGED — no new flag. This matters beyond this module's own CLI: the
-Coordinator-claude-side trampoline's invocation of this module's import/`main()`, AND
+DoE-side trampoline's invocation of this module's import/`main()`, AND
 this repo's own in-process caller
 (`coordinator_core.workday_complete.brief._compute_dirty_tree_verdict`,
 which calls `_step2_5_dirty_tree_main(["--dry-run"])` with no session
@@ -110,7 +110,7 @@ today's pre-C6 behavior, never a wider commit (see `_resolve_claim_context`).
 
 Exit codes (`main()`) — these are business codes only; this module never
 raises or resolves CLAUDE_KLABAUTER_ROOT, so it has no transport-failure concept.
-The coordinator-claude-side trampoline wraps this module's import/invocation and uses a
+The DoE-side trampoline wraps this module's import/invocation and uses a
 SEPARATE dedicated rc=3
 for transport failure (CLAUDE_KLABAUTER_ROOT resolution / import), per code-review
 Finding 2 (A3b) — it never reuses these business codes for that purpose:
@@ -173,6 +173,8 @@ Negative-spec (faithful bash-oracle reproduction, not silently "fixed"):
 """
 
 from __future__ import annotations
+
+MUTATES = [".gitignore", "cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/**", "state/memos/**", "state/lessons-outbox/**", "state/improvement-queue/**", "state/debt-backlog/**", "state/bug-backlog/**", "tasks/learn-lessons-**", "tasks/audits/**", "tasks/daily-review-scratch/**", "archive/**", "docs/plans/*-check.md"]
 
 import fnmatch
 import os

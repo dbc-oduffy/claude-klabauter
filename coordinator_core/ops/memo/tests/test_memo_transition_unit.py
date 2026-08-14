@@ -126,7 +126,7 @@ created: 2026-06-01
 
         The memo is committed at setup because that is the only state a
         transition verb ever observes in production:
-        `coordinator/bin/cross-repo-memo`'s `_commit_delivered_memo` stages and
+        `coordinator/bin/cross-repo-memo.py`'s `_commit_delivered_memo` stages and
         commits the delivered memo in the receiver repo before any verb runs
         against it. An untracked fixture describes a state delivery cannot
         produce, and the commit path (`git_native.commit_authored_content`)

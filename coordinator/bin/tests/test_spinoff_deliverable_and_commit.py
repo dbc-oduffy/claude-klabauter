@@ -1,7 +1,7 @@
 """test_spinoff_deliverable_and_commit — pytest coverage for
 spinoff-deliverable-and-commit.py.
 
-Purpose: exercises the three concerns ported out of coordinator-claude
+Purpose: exercises the three concerns ported out of DoE-claude
 coordinator/skills/spinoff/SKILL.md into coordinator/bin/spinoff-deliverable-and-commit.py:
   1. resolve-deliverable — D1 carry-not-remint cascade (single parent artifact,
      fail-loud empty-slug guard).
@@ -11,7 +11,7 @@ coordinator/skills/spinoff/SKILL.md into coordinator/bin/spinoff-deliverable-and
 
 Spec backlink: coordinator/skills/spinoff/SKILL.md § "Deliverable-spine threading
                (D1 carry-not-remint)" (C3d block), § "origin_handoff_id:" (C2 block),
-               § "Step 4: Commit" — coordinator-claude
+               § "Step 4: Commit" — DoE-claude
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """test_sweep_terminal_plans.py — self-contained test suite for sweep-terminal-plans.py.
 
-Port of: coordinator/hooks/scripts/tests/test-sweep-terminal-plans.sh (coordinator-claude e34f2484,
+Port of: coordinator/hooks/scripts/tests/test-sweep-terminal-plans.sh (DoE e34f2484,
 2026-07-22) — P9/P10 cases only (the deleted native-path leg); P1-P8 continue to exercise
 cs_sweep_terminal_plans, which is still live bash and out of scope here. Retargets the
 two-call dry/act dispatch shape onto the Python trampoline: route() (not route_mutation())
@@ -10,7 +10,7 @@ on an op-level exit_code==2 partial refusal.
 Runs bash-free: `python3 test_sweep_terminal_plans.py` (or via the coordinator test runner).
 Exit 0 = all tests pass; non-zero = at least one failure.
 
-Spec backlink: docs/plans/2026-07-06-dr215-fleet-ops-ceremony-wiring.md § C3 / KD-2 / KD-3
+Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 § C3 / KD-2 / KD-3
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 """
 from __future__ import annotations

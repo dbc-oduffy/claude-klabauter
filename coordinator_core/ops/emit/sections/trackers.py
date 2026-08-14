@@ -7,7 +7,7 @@ path). ``created`` is truncated to date-only (schema IsoDate rejects a full date
 missing a required field or carrying an off-enum status quarantine to
 ``malformed_records.trackers``.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) § SECTION 8.9 —
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) § SECTION 8.9 —
   TrackerSummary. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P13
 

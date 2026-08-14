@@ -4,7 +4,7 @@
   "x-schema-name": "workstream",
   "x-schema-version": "1.0.0",
   "applies_to": "state/workstreams/*.yaml",
-  "description": "Workstream definition — one per-entry file per strategic workstream in the render-from-queue project-tracker store. Rewritten atomically (write-temp + rename, single writer, low-contention assumption); status/deliverable-completion mutations are field-scoped events (see workstream-event.schema.json), never in-place definition edits. Spec backlink: docs/plans/2026-07-08-project-tracker-render-from-queue.md § Approach / § Substrate (definitions) / § Chunks C2.",
+  "description": "Workstream definition — one per-entry file per strategic workstream in the render-from-queue project-tracker store. Rewritten atomically (write-temp + rename, single writer, low-contention assumption); status/deliverable-completion mutations are field-scoped events (see workstream-event.schema.json), never in-place definition edits. Spec backlink: DoE-claude:pln-project-tracker-render-from-qu-41e413 § Approach / § Substrate (definitions) / § Chunks C2.",
   "type": "object",
   "required": ["workstream_id", "title", "created", "coordinator_root_path"],
   "properties": {

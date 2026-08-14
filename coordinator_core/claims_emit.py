@@ -78,6 +78,12 @@ EXIT_OK = 0
 EXIT_PRODUCER_FAILURE = 1
 EXIT_INVALID_INVOCATION = 2
 
+#: Generator-provenance declaration: emit_claims() writes to `<out_stem>.
+#: claims.json` / `<out_stem>.claims.meta.json`, where out_stem is a
+#: producer-supplied path — never a fixed repo location. No tracked artifact
+#: is emitted by this module itself.
+GENERATES: list = []
+
 
 def _parse_rfc3339_tz_aware(ran_at: str) -> datetime | None:
     """Parses `ran_at` as an RFC3339 timezone-aware datetime, or returns None

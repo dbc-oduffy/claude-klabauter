@@ -15,10 +15,10 @@ independently re-implementing "classify, check a grant, refuse" is the
 "two classifiers that disagree" failure the ruling memo warns against --
 see the module-level negative spec below.
 
-Spec backlink: cross-repo/archive/2026-07-25-coordinator-claude-em-validate-tier-u-
+Spec backlink: cross-repo/archive/2026-07-25-doe-claude-em-validate-tier-u-
 shape-ruling.md (R3, R4) -- amendment to
 docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md.
-R6/R7 amendment: cross-repo/archive/2026-07-25-coordinator-claude-em-dr088-marker-
+R6/R7 amendment: cross-repo/archive/2026-07-25-doe-claude-em-dr088-marker-
 scope-ruling.md.
 
 R3 -- the process-boundary bypass (a resolver materializing a command
@@ -135,7 +135,7 @@ Negative-spec:
     routine gate.
   - Does NOT implement tie-detection between ``fast_test_cmd`` and
     ``full_test_cmd`` (string identity is not the discriminator -- see the
-    ruling memo's "do not detect a tie" section: coordinator-claude legitimately
+    ruling memo's "do not detect a tie" section: DoE-claude legitimately
     declares the identical *scoped* string under both keys, and a
     tie-detector would false-positive-refuse that repo). Classification is
     delegated entirely to ``classify_command``'s shape-based classifier,

@@ -2,7 +2,7 @@
 coordinator_core.ops.agent_worktree_sweep — find and (optionally) reap
 agent-isolation git worktrees.
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Background: Claude Code 2.1.x auto-creates per-dispatch git worktrees under
 <repo>/.claude/worktrees/agent-<hash>/ for backgrounded Agent dispatches.

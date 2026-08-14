@@ -1,5 +1,5 @@
 """coordinator_core.bash_guards.block_dev_repo_sentinel_removal --
-PreToolUse (Bash) guard protecting `.coordinator-dev-repo` (the coordinator-claude
+PreToolUse (Bash) guard protecting `.coordinator-dev-repo` (the DoE-claude
 repo-root dev-vs-OSS discriminant) from Bash-level removal or relocation.
 
 WHY THIS EXISTS. `.coordinator-dev-repo`'s mere PRESENCE at the repo root is
@@ -68,7 +68,7 @@ every later guard in the chain, so an entry surfacing `cd <dir> && rm
 .coordinator-dev-repo` (or `cd <dir> && git rm .coordinator-dev-repo`)
 must sit ahead of it too.
 
-Spec: `.coordinator-dev-repo` removal guard (coordinator-claude dispatch,
+Spec: `.coordinator-dev-repo` removal guard (DoE-claude dispatch,
 2026-07-31; deny-to-advisory conversion 2026-08-06).
 """
 

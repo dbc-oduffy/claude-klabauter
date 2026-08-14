@@ -1,7 +1,7 @@
 """Tests for the DR-130 KR-suggestion reader half of ``coordinator_core.goals.reassess_krs``.
 
 Pins each invariant of the generalized optional suggestion-source contract
-(``coordinator-claude:coordinator/schemas/kr-suggestion.schema.json``, ``DR-130``) against
+(``doe-claude:coordinator/schemas/kr-suggestion.schema.json``, ``DR-130``) against
 this repo's reader: ``state/kr-suggestions/*.yaml`` resolution by goal-level `id:`
 and `key_results[].id` (never a path/slug, never an index), unresolved-anchor
 reporting, staleness detection, the append-only write path, per-file degrade-to-

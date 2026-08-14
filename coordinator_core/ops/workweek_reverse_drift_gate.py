@@ -10,7 +10,7 @@ from "reader error" (anything else). This module is the EXECUTION half: it
 consumes that 3-way rc, and — only on the clean rc==0 path — cd's into each
 row's source_path and runs its reverse_drift_cmd as a blocking merge gate,
 folding per-command pass/fail into one aggregate exit code. Previously
-inlined bash in `/workweek-complete` Step 4g (coordinator-claude
+inlined bash in `/workweek-complete` Step 4g (DoE-claude
 coordinator/commands/workweek-complete.md); ported here so the ceremony step
 becomes a single CLI invocation.
 
@@ -42,7 +42,7 @@ model already treats a non-zero exit as failure without needing `-e` to say
 so, and there is no pipeline of shell built-ins left to reorder once the
 value has been refused as non-argv-shaped.
 
-Port source: coordinator/commands/workweek-complete.md § Step 4g (coordinator-claude),
+Port source: coordinator/commands/workweek-complete.md § Step 4g (DoE-claude),
 the per-plugin execution loop with 3-way rc branching (bash lines ~1730-1765).
 Discovery half (list-reverse-drift-cmds) was already ported; this module
 covers ONLY the previously-still-bash execution loop.

@@ -703,16 +703,6 @@ LAUNCHER_PARITY_ROOTS: tuple[str, ...] = tuple(r.rel for r in SCAN_ROOTS)
 # the bar is a defect that regeneration would destroy information about, not
 # "regenerating it is inconvenient".
 LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
-    # -- Pre-existing content drift, reserved for a separate decision --------
-    # Body is an older generator vintage whose comment block was reflowed by
-    # hand (the entrypoint name wrapped onto its own line). Regenerating is
-    # almost certainly right, but it is a hand-edit to a generated file and
-    # the reflow may have been deliberate, so it is not swept into the
-    # existence-gate regeneration pass. Decide, then delete this entry.
-    "coordinator/bin/staff-session-assemble.cmd": (
-        "hand-reflowed comment block in an older generator vintage; "
-        "pending a deliberate regenerate-or-keep call"
-    ),
     # -- Line-ending drift, not body drift ----------------------------------
     # These three are byte-identical to the PRE-fix generator body except
     # that they are stored LF in the git index despite `.gitattributes`
@@ -728,9 +718,6 @@ LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
     "coordinator/bin/install-claude-klabauter-precommit-hook.cmd": (
         "LF in the index under an eol=crlf attr; awaiting a renormalize pass"
     ),
-    "coordinator/bin/review-exec-auth-stamp.cmd": (
-        "LF in the index under an eol=crlf attr; awaiting a renormalize pass"
-    ),
     # -- Orphaned launcher --------------------------------------------------
     # Targets `coordinator/bin/tests/run-fast-tests.py`, which does not exist
     # (the tests/ directory ships `run-full-tests.py` only). Regenerating
@@ -742,15 +729,16 @@ LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
         "needs deletion or repointing, not regeneration"
     ),
     # -- Not generator output at all ----------------------------------------
-    # A hand-authored bare-name forwarder to the installed CLAUDE_HOME-aware
-    # resolver (`<CLAUDE_HOME>\.claude\bin\coordinator-settings-home.ps1`),
-    # not a python-direct launcher: it has no interpreter ladder and no
-    # `%~dp0`/`Join-Path $_here` entrypoint invocation to derive an entry
-    # name from. See its own header for the install-chain contract it serves.
-    # This one is permanent unless the forwarder itself becomes generated.
-    "coordinator/bin/coordinator-settings-home.ps1": (
-        "hand-authored settings-home forwarder, never generator output"
-    ),
+    # (2026-08-14, plan pln-windows-first-class-the-gate-m-c64274 C5) The
+    # `coordinator/bin/coordinator-settings-home.ps1` row lived here, marked
+    # "permanent unless the forwarder itself becomes generated". The forwarder
+    # did not become generated -- it was deleted, along with its `.cmd` twin and
+    # the three bare-name forwarders the whole family fronted, because
+    # `coordinator/bin` is not on PATH, `_AGENT_HELPER_RESERVED_NAMES` excludes
+    # all three from the install-derived target map, and every `which()` call
+    # site resolves the settings-home copies instead. `test_no_parity_exemption_is_stale`
+    # is what caught the row outliving its file -- the same staleness discipline
+    # AC13 generalises to the POSIX-exec register.
     # -- Not generator output at all: the widened roots (2026-08-03) ---------
     # The 2026-08-03 sweep over `bin/`, `coordinator/lib/`,
     # `coordinator/scripts/` and `scripts/` regenerated all 47 files that were
@@ -1055,6 +1043,30 @@ def test_raw_cmdline_entrypoints_matches_substrate_targets():
         f"gen-launcher-shim.py's _RAW_CMDLINE_ENTRYPOINTS (basenames: "
         f"{sorted(gen_basenames)}) and substrate.py's _RAW_CMDLINE_TARGETS "
         f"({sorted(_RAW_CMDLINE_TARGETS)}) have drifted -- extend both sets "
+        "together."
+    )
+
+
+def test_raw_cmdline_block_bodies_match_between_generators():
+    """Both `_cmd_raw_cmdline_block` and `_agent_cmd_raw_cmdline_block` claim
+    (in their own docstrings) that their rendered bodies are mirrored line
+    for line -- but `test_raw_cmdline_entrypoints_matches_substrate_targets`
+    only compares the ALLOWLIST SETS, never the rendered text, so a hand-edit
+    to one function's block that forgot the other would go undetected.
+
+    Review: staff-eng (Finding 4). Renders both for a shared target name and
+    asserts byte equality, so the claim the docstrings make is actually
+    enforced rather than merely stated.
+    """
+    gen = _load_gen_launcher_shim()
+    from coordinator_core.install.substrate import _agent_cmd_raw_cmdline_block
+
+    gen_block = gen._cmd_raw_cmdline_block(True)
+    substrate_block = _agent_cmd_raw_cmdline_block("scoped-git-commit")
+    assert gen_block == substrate_block, (
+        "gen-launcher-shim.py::_cmd_raw_cmdline_block and substrate.py::"
+        "_agent_cmd_raw_cmdline_block have drifted in rendered body -- both "
+        "docstrings claim they are mirrored line for line; extend both "
         "together."
     )
 

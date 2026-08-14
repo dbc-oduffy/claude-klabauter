@@ -8,9 +8,9 @@ PreToolUse guard breaks everyone else's unrelated commands. On 2026-07-30
 the window between "the import block was stripped" and "the call sites were
 removed" was live-fire for a peer repo's session: `guard_grep_via_bash`
 raised `NameError: name 'operator_override_note' is not defined`, the
-dispatcher routed the crash to `_crash_deny`, and a coordinator-claude session had
+dispatcher routed the crash to `_crash_deny`, and a DoE-claude session had
 its `grep` invocations denied by a defect in an uncommitted file it did not
-own (`cross-repo/inbox/2026-07-30-coordinator-claude-em-guard-grep-via-bash-
+own (`cross-repo/inbox/2026-07-30-doe-claude-em-guard-grep-via-bash-
 nameerror.md`).
 
 **A plain import -- or `compileall` -- cannot catch this.** The module

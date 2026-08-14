@@ -1159,7 +1159,7 @@ class TestWriteSurfaceDeclaration:
 
 # ---------------------------------------------------------------------------
 # _whoami_importable_under / _ensure_whoami_under_general_pin --
-# the general-pin install leg (source memo: coordinator-claude-em,
+# the general-pin install leg (source memo: doe-claude-em,
 # "general pin is self-sufficient here, fresh install is not")
 # ---------------------------------------------------------------------------
 

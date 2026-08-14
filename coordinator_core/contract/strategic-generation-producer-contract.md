@@ -5,38 +5,38 @@
 > the inputs-to-fields mapping per derivation track, the draft-artifact consumption seam (path,
 > shape, consumer), and the non-clobber invariant that makes generation safe to run against a repo
 > that already carries a human-ratified canonical instance.
-> claude-klabauter *derives and writes the draft*; the human ceremony (coordinator-claude's refresh skill) *reconciles and
+> claude-klabauter *derives and writes the draft*; the human ceremony (DoE's refresh skill) *reconciles and
 > ratifies* the canonical `self-description.yaml`.
 >
-> **Who consumes this.** coordinator-claude's C4 refresh skill (`coordinator:strategic-self-description-refresh`),
+> **Who consumes this.** DoE's C4 refresh skill (`coordinator:strategic-self-description-refresh`),
 > which reads the draft artifact this op writes and reconciles it against the repo's canonical
 > `self-description.yaml` under human review — it never auto-commits over curated content. A
 > secondary reader is any operator inspecting `state/strategic/self-description.draft.yaml`
 > directly.
 >
 > **What this is NOT.** This is the *producer contract* for the draft artifact's shape and
-> provenance — not coordinator-claude's refresh-skill reconciliation logic, not the frozen
+> provenance — not DoE's refresh-skill reconciliation logic, not the frozen
 > `strategic-self-description.schema.json` itself (that schema is the joint authority both sides
 > build against; this doc only describes the generatable-subset the op emits), and not the
 > human-curated fields (`relationship`, prose framing, anything marked `provenance: curated` or
 > `provenance: asserted`) that only a human ceremony may author. See § 6 "Out of scope" for the
 > full exclusion list.
 >
-> **Status: PROPOSED.** The strategic-self-description schema froze 2026-07-12 (coordinator-claude 017da24b);
+> **Status: PROPOSED.** The strategic-self-description schema froze 2026-07-12 (DoE 017da24b);
 > `strategic.generate` ships this session against that frozen schema. This contract moves to
 > FROZEN once the op has shipped, AC5 (draft validates against the frozen generatable-subset) is
 > green, and AC7 (dogfood — claude-klabauter's own draft generated end-to-end) passes.
 >
 > **Changelog:**
 > - **2026-07-12 (PROPOSED):** initial authoring — op shipping this session against the
->   2026-07-12-frozen schema (coordinator-claude 017da24b); Track A / Track B input mapping, draft seam, and
+>   2026-07-12-frozen schema (DoE 017da24b); Track A / Track B input mapping, draft seam, and
 >   non-clobber invariant documented ahead of/alongside the op landing.
 >
 > **Spec backlinks.**
 > - Plan (source of truth): `docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md`
-> - Frozen schema: `coordinator-claude:coordinator/schemas/strategic-self-description.schema.json`
->   (x-schema-version 1.0.0, frozen coordinator-claude 017da24b)
-> - Upstream standard (coordinator-claude-owned): `coordinator-claude:coordinator/docs/plans/2026-07-11-strategic-self-description-standard.md`
+> - Frozen schema: `DoE-claude:coordinator/schemas/strategic-self-description.schema.json`
+>   (x-schema-version 1.0.0, frozen DoE 017da24b)
+> - Upstream standard (DoE-owned): `DoE-claude:coordinator/docs/plans/2026-07-11-strategic-self-description-standard.md`
 > - Consumer refresh skill: `coordinator:strategic-self-description-refresh`
 > - Sibling contract (model): `coordinator_core/contract/deliverable-rollup-producer-contract.md`
 
@@ -55,7 +55,7 @@ not perform it.
 - **claude-klabauter** — derives `version_highlights[]` (Track A) and `competitors[]` (Track B) from
   evidence already on disk or provided by an upstream owner; owns this contract; writes only the
   draft path.
-- **coordinator-claude (coordinator-claude)** — owns the frozen schema (joint authority), the refresh-ceremony
+- **DoE (coordinator-claude)** — owns the frozen schema (joint authority), the refresh-ceremony
   skill that reconciles the draft against the canonical instance under human review, and the
   `workweek-complete` nudge that surfaces the refresh ceremony to the PM.
 - **example-market-data-repo-team / repo-setup** — upstream *providers* of Track B raw signal (market-
@@ -155,7 +155,7 @@ tag-less today, so Track A's *primary* path in practice is the changelog, not ta
 field is **human-curated only** — classifying a peer's relationship to this project is a judgment
 call, not a derivation. `strategic.generate` MUST NOT emit `relationship` under any code path; the
 draft's `competitors[]` entries are the narrower 3-field shape above, not the full schema shape.
-Coordinator-claude's refresh ceremony is where a human adds `relationship` when promoting a draft entry into the
+DoE's refresh ceremony is where a human adds `relationship` when promoting a draft entry into the
 canonical file.
 
 **When Track B has no usable signal** (no market-intel snapshot diff and/or no peer identity
@@ -170,8 +170,8 @@ marking available for the target repo), `competitors[]` is emitted as an empty a
 |---|---|
 | Path | `<target_root>/state/strategic/self-description.draft.yaml` |
 | Shape | The frozen `strategic-self-description.schema.json`'s **generatable-subset only** — `version_highlights[]` and `competitors[]` (narrowed, no `relationship`) as specified in § 2. The draft is NOT a full canonical instance; it does not carry the fields only a human curates. |
-| Trigger | **Present-triggers-consume.** The draft's existence is the signal; there is no separate "ready" flag or lock file. Coordinator-claude's refresh skill checks for the draft's presence and, when found, offers reconciliation. |
-| Consumer | coordinator-claude's C4 refresh skill (`coordinator:strategic-self-description-refresh`) — the only reader of this path in the fleet today. |
+| Trigger | **Present-triggers-consume.** The draft's existence is the signal; there is no separate "ready" flag or lock file. DoE's refresh skill checks for the draft's presence and, when found, offers reconciliation. |
+| Consumer | DoE's C4 refresh skill (`coordinator:strategic-self-description-refresh`) — the only reader of this path in the fleet today. |
 | Write discipline | **Idempotent overwrite.** Every `strategic.generate` run replaces the draft wholesale; it never appends to or merges with a prior draft. A stale draft from a previous run is simply superseded, not accumulated. |
 
 ---
@@ -216,7 +216,7 @@ best-effort guard: the writer has no code path that references the canonical fil
   file until a human runs the refresh ceremony and ratifies one.
 
 **Generation seeds curation; it does not perform it.** The draft is raw material for a human
-decision, never a substitute for one. Promotion from draft → canonical is exclusively coordinator-claude's
+decision, never a substitute for one. Promotion from draft → canonical is exclusively DoE's
 refresh-skill ceremony, which is the sole path by which `curated`/`asserted` fields, the
 `relationship` enum, and any other human-only content enter the canonical file.
 
@@ -224,16 +224,16 @@ refresh-skill ceremony, which is the sole path by which `curated`/`asserted` fie
 
 ## 6. Out of scope — not our surface
 
-- **coordinator-claude's refresh-skill reconciliation logic** — how the draft is diffed against the canonical
-  file, what UI/prompt the human sees, and the ratification/commit flow. Coordinator-claude's own design surface.
+- **DoE's refresh-skill reconciliation logic** — how the draft is diffed against the canonical
+  file, what UI/prompt the human sees, and the ratification/commit flow. DoE's own design surface.
 - **The frozen schema's full shape** — fields outside the generatable-subset (anything requiring
   `curated`/`asserted` provenance, `relationship`, and any canonical-only field) are not authored
-  or validated by this op; they are coordinator-claude-schema-owned and human-ceremony-populated.
+  or validated by this op; they are DoE-schema-owned and human-ceremony-populated.
 - **Sourcing Track B's raw signal** — producing the market-intel snapshot diff is
   example-market-data-repo-team-owned; producing the peer identity marking is repo-setup-owned. This op
   consumes both as inputs; it does not generate them.
 - **Cadence/scheduling** — `strategic.generate` is invokable on demand and nudged (never
-  cron-scheduled) ahead of the coordinator-claude-owned refresh ceremony (DEC-5). The nudge surface itself
+  cron-scheduled) ahead of the DoE-owned refresh ceremony (DEC-5). The nudge surface itself
   (doctor probe / workday-start marker) is documented in
   `docs/plans/2026-07-11-claude-klabauter-strategic-self-description-generation-leg.md` § C5(b); this
   contract covers only the artifact this op produces, not the nudge machinery.
@@ -243,5 +243,5 @@ refresh-skill ceremony, which is the sole path by which `curated`/`asserted` fie
 
 ---
 
-<!-- producer-contract: claude-klabauter strategic.generate op — draft artifact for coordinator-claude's refresh ceremony.
-     PROPOSED (2026-07-12) — schema frozen (coordinator-claude 017da24b); op shipping this session. -->
+<!-- producer-contract: claude-klabauter strategic.generate op — draft artifact for DoE's refresh ceremony.
+     PROPOSED (2026-07-12) — schema frozen (DoE 017da24b); op shipping this session. -->

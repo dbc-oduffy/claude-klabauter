@@ -1,7 +1,7 @@
 """
 DayRollup and WeekRollup — deterministic aggregation is the SSOT; narrative is
 a regenerable VIEW over the deterministic numbers (the Data Science Reviewer P1-D4).
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/rollup.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/rollup.ts`
 (Zod source).
 
 Rule: deterministic aggregation (GROUP-BY over the completion-log `chain` key)
@@ -15,7 +15,7 @@ already synthesised from the completion log) dedupe to this grain to avoid
 double-counting in week rollups. tc-3 emission owns the dedupe; this contract
 pins the shape.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

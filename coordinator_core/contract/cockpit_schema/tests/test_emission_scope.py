@@ -1,7 +1,7 @@
 """
 test_emission_scope — parse/reject tests for ScopedEmission (v2.14.0).
 
-Pytest port of coordinator-claude `coordinator/cockpit-contract/test/emission-scope.test.ts`.
+Pytest port of DoE `coordinator/cockpit-contract/test/emission-scope.test.ts`.
 Asserts each of the three scope cases parses with its required envelope, and
 that a record missing its scope-required envelope key, or carrying the wrong
 envelope for its declared scope, is rejected.
@@ -18,7 +18,7 @@ from coordinator_core.contract.cockpit_schema.tests.conftest import (
 
 PROV = {
     "source_kind": "coordinator_artifact",
-    "repo": "dbc-oduffy/coordinator-claude",
+    "repo": "dbc-oduffy/DoE-claude",
     "ref": None,
     "path": "state/example.md",
     "observed_at": "2026-07-13T12:00:00Z",
@@ -34,12 +34,12 @@ CONTENT_HASH = {
 
 AUTHORITY = {
     "emitter": "machine-b",
-    "emitter_repo": "dbc-oduffy/coordinator-claude",
+    "emitter_repo": "dbc-oduffy/DoE-claude",
 }
 
 
 def test_valid_per_repo_parses():
-    zod_parse(ScopedEmission, {"scope": "per-repo", "repo": "dbc-oduffy/coordinator-claude", "provenance": PROV})
+    zod_parse(ScopedEmission, {"scope": "per-repo", "repo": "dbc-oduffy/DoE-claude", "provenance": PROV})
 
 
 def test_valid_fleet_derived_parses():
@@ -58,7 +58,7 @@ def test_rejects_per_repo_missing_repo():
 
 def test_rejects_per_repo_missing_provenance():
     assert not zod_safe_parse_ok(
-        ScopedEmission, {"scope": "per-repo", "repo": "dbc-oduffy/coordinator-claude"}
+        ScopedEmission, {"scope": "per-repo", "repo": "dbc-oduffy/DoE-claude"}
     )
 
 
@@ -73,7 +73,7 @@ def test_rejects_fleet_authored_missing_authority():
 def test_rejects_unknown_scope_value():
     assert not zod_safe_parse_ok(
         ScopedEmission,
-        {"scope": "global", "repo": "dbc-oduffy/coordinator-claude", "provenance": PROV},
+        {"scope": "global", "repo": "dbc-oduffy/DoE-claude", "provenance": PROV},
     )
 
 
@@ -102,7 +102,7 @@ def test_rejects_per_repo_record_with_extra_content_hash_key():
         ScopedEmission,
         {
             "scope": "per-repo",
-            "repo": "dbc-oduffy/coordinator-claude",
+            "repo": "dbc-oduffy/DoE-claude",
             "provenance": PROV,
             "content_hash": CONTENT_HASH,
         },

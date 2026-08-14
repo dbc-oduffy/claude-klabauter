@@ -1,10 +1,10 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""wsc-tail.py — ceremony.wsc_tail native trampoline (coordinator-claude/claude-klabauter wsc_tail cutover).
+"""wsc-tail.py — ceremony.wsc_tail native trampoline (DoE/claude-klabauter wsc_tail cutover).
 
 Purpose: fronts the claude-klabauter op `ceremony.wsc_tail` — the ONE call that replaces
 the /workstream-complete mechanical cluster (consumed-handoff resolution,
 commit, post-commit stamp-and-ship, origin-stub close, receipt emission).
-This module owns transport + the coordinator-claude-side exit ladder only; every ceremony
+This module owns transport + the DoE-side exit ladder only; every ceremony
 decision (which handoffs resolve, whether the stub-close is soft-fail, what
 the commit trailers are) is engine-internal claude-klabauter judgment this trampoline
 does not second-guess or re-derive.
@@ -93,25 +93,25 @@ flag for one only when a caller actually does.
 
 completion_title — ACCEPT-AND-IGNORE, transitional (2026-07-23 wsc-tail-slim-down
 plan, C4 Phase 1; `docs/plans/2026-07-23-wsc-tail-slim-down.md` § Param Disposition).
-Until 2026-07-23 this flag was HARD-REQUIRED on the coordinator-claude side specifically because
+Until 2026-07-23 this flag was HARD-REQUIRED on the DoE side specifically because
 the op silently omits Step 2.6's completion-entry scaffold when it's absent (the
 op does not error) — the memo named that silent-omission failure mode "the single
 most likely way the cutover goes subtly wrong," and refusing to dispatch without
 the flag was the corrective. That corrective is now SUPERSEDED by a bilateral
 landing-order decision: C4's own disposition moves the completion-entry scaffold
-OUT of this op entirely and into a coordinator-claude-side WSC skill Step 2.6 re-expansion
+OUT of this op entirely and into a DoE-side WSC skill Step 2.6 re-expansion
 (direct `coordinator-complete-entry.py` invocation), so the flag's hard-required
 posture would otherwise hard-fail every ceremony in the skew window between
-Claude-klabauter landing this change and coordinator-claude landing its re-expansion (see the plan's
+Claude-klabauter landing this change and DoE landing its re-expansion (see the plan's
 § Landing Order and Skew Tolerance — "every claude-klabauter-side shed chunk must tolerate
-the pre-coordinator-claude-landing state, accept-and-ignore params rather than hard-failing").
+the pre-DoE-landing state, accept-and-ignore params rather than hard-failing").
 Phase 1 (this change): `--completion-title` is `required=False`; supplying it
 or omitting it both dispatch cleanly, no warning, no error either way. The op's
 own scaffold behaviour is UNCHANGED in this phase — if the flag IS supplied, the
 value is still genuinely forwarded and still feeds Step 2.6's completion-entry
 scaffold (see `_run_precommit_tail`'s `if completion_title:` branch,
 `coordinator_core/ops/ceremony/wsc_tail.py`) — this is a requiredness change, not
-a behaviour change. Phase 2 (coordinator-claude, tracked separately, not this repo): the skill
+a behaviour change. Phase 2 (DoE, tracked separately, not this repo): the skill
 re-expansion lands and stops passing this flag. Phase 3 (later, separate change):
 the flag is removed from this trampoline once no consumer passes it — never in
 the same wave as Phase 1 or 2. Do NOT re-add `required=True` to this flag, and
@@ -123,7 +123,7 @@ and inspects the returned payload's exit_code itself, rather than
 route_mutation(). route_mutation() raises RouteMutationError on ANY non-zero
 exit_code, which would turn claude-klabauter's exit-2 soft-fail (a landed commit with a
 recoverable tail-item issue — e.g. an unclosed origin stub) into an uncaught
-Coordinator-claude hard failure. The memo's exit-2 semantics ("recoverable, not a breach")
+DoE hard failure. The memo's exit-2 semantics ("recoverable, not a breach")
 are a normal, expected, print-diagnostics-and-continue outcome here, not a
 mutation refusal shape route_mutation is built to catch. Distinguishing
 "exit 1 hard failure" from "exit 2 landed-but-flagged" requires reading the
@@ -131,7 +131,7 @@ payload before deciding whether to fail loud — route() applied that
 discrimination inline is cleaner than catching-and-inspecting a raised
 RouteMutationError for the same purpose.
 
-Coordinator-claude-side exit ladder (this module's contract, distinct from the op's internal
+DoE-side exit ladder (this module's contract, distinct from the op's internal
 exit_code semantics which this module reads, not re-emits verbatim):
     0 -> success, no tail-item concerns.
     2 -> commit landed but a tail item needs attention (op exit_code 2 —
@@ -153,7 +153,7 @@ Negative-spec (what this module does NOT do):
       2026-07-23) — a future reader must not "clean up" this param by making it
       required again or dropping it early; see the flag's own help text and
       the module docstring's `completion_title` paragraph above for the full
-      Phase 1/2/3 landing-order rationale. Phase 2 (coordinator-claude) and Phase 3 (later,
+      Phase 1/2/3 landing-order rationale. Phase 2 (DoE) and Phase 3 (later,
       separate removal) are NOT this change.
     - No business logic: does not decide which handoffs are consumed, does not
       compute trailers, does not decide stub-close severity — all engine-internal.
@@ -232,7 +232,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "it or omitting it both dispatch cleanly. When SUPPLIED, the value is "
         "still genuinely forwarded to the op and still feeds Step 2.6's "
         "completion-entry scaffold today — this flag is not yet a no-op, only "
-        "no longer mandatory. Phase 2 (coordinator-claude-side WSC skill re-expansion) moves "
+        "no longer mandatory. Phase 2 (DoE-side WSC skill re-expansion) moves "
         "the scaffold invocation to a direct CLI call and stops passing this "
         "flag here; Phase 3 (separate, later change) removes the flag once no "
         "consumer passes it. Do not re-add required=True to this flag — see "
@@ -850,7 +850,7 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    # Silent-exit-0 fix (cross-repo/inbox/2026-08-10-coordinator-claude-em-wsc-tail-
+    # Silent-exit-0 fix (cross-repo/inbox/2026-08-10-doe-claude-em-wsc-tail-
     # silent-noop-and-gate-rewalk.md finding 1): this branch used to `return 0`
     # with NOTHING printed, on every genuinely-clean pass AND on a pass that
     # landed a commit without a terminal flip alike -- exit 0 with empty

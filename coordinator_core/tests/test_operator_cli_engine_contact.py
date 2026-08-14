@@ -100,7 +100,7 @@ def _imports_an_op_in_process(source: str) -> bool:
 
     A PRIVATE import from that package is not an op reach, and crediting it as
     one made this gate unfixable at three of its four live findings. The
-    specimens: `coordinator/bin/cross-repo-memo` imports
+    specimens: `coordinator/bin/cross-repo-memo.py` imports
     `ops.fleet._outbox_frontmatter_rules.validate_outbox_frontmatter`,
     `handoff-reconcile-close-terminal.py` imports
     `ops.fleet._common.handoff_archive_dest`, and

@@ -3,7 +3,7 @@ coordinator_core.reconcile.ac27_differential_oracle -- differential verdict orac
 comparing gate_eval's pre-widening and post-widening evaluators across the live+
 archived handoff corpus of all five fleet repos (COMPUTE_ONLY, read-only).
 
-Purpose: C4-C7 (docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md, coordinator-claude)
+Purpose: C4-C7 (docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md, DoE-claude)
 widened gate_eval.evaluate_gate's structured-path eligibility, chased `continued_into`
 to a terminus, added an external-gate evidence class, and gave dangling `blocked_by`
 refs a disposition. The expected first-pass flip count across the live corpus is
@@ -12,7 +12,7 @@ over-clears something it should not -- a fixture only ever catches a failure mod
 someone already imagined. This module is the oracle for that gap (AC27/C12 GATE): it
 loads gate_eval.py exactly as it existed immediately before C4 and immediately after
 C7 landed, runs BOTH over the IDENTICAL live+archived data for every `awaiting_gate`
-baton in coordinator-claude, claude-klabauter, example-cockpit-repo, example-retrieval-repo, and
+baton in DoE-claude, claude-klabauter, example-cockpit-repo, example-retrieval-repo, and
 Example-market-data-repo, and reports every verdict delta for human attribution against
 the four named widenings.
 
@@ -98,7 +98,7 @@ from coordinator_core.ops.handoff_reconcile import (  # noqa: E402
 #: (registry key, human label) for the five fleet repos this oracle spans. Order
 #: is report-display order only -- not load-bearing.
 REPO_KEYS: Tuple[Tuple[str, str], ...] = (
-    ("repos.example_doctrine_repo", "coordinator-claude"),
+    ("repos.doe_claude", "DoE-claude"),
     ("repos.claude_klabauter", "claude-klabauter"),
     ("repos.example_cockpit_repo", "example-cockpit-repo"),
     ("repos.example_retrieval_repo", "example-retrieval-repo"),
@@ -123,7 +123,7 @@ PRE_C4_SHA = "578c47d3"
 POST_C7_SHA = "7e69ecc1"
 
 #: 2026-08-05 provenance note: DR-266 (docs/plans/2026-07-26-gate-resolution-widen-
-#: and-migrate.md's follow-on, coordinator-claude) adds a `contradiction` key to
+#: and-migrate.md's follow-on, DoE-claude) adds a `contradiction` key to
 #: `evaluate_gate`'s prose-dominance return dict when `staleness_evidence` is not
 #: None, and re-routes `evaluate_gate_triage`'s review-due path -- both landing
 #: strictly AFTER POST_C7_SHA. This oracle's evaluator axis loads `gate_eval.py`

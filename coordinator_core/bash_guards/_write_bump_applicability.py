@@ -3,7 +3,7 @@ point all three write-confinement bump guards (`bump_foreign_repo_write.py`
 [C4], `bump_outside_repo_write.py` [C5], `write_guards.bump_out_of_repo_tool_write`
 [C7]) consult before deciding whether to bump at all.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md [coordinator-claude
+Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 [DoE-claude
 repo], chunk C2, "Applicability -- anchor on a value agents cannot move,
 resolve the two no-bump conditions".
 
@@ -75,7 +75,7 @@ RESOLUTION PRIMITIVES -- REUSED, NEVER REIMPLEMENTED.
     carries, including its Windows-without-`HOME`-set fix) rather than a
     literal `os.path.join(os.environ["HOME"], ".claude")`. This module does
     NOT call `trusted_root_guard.is_trusted()` -- that predicate also trusts
-    the coordinator-claude and claude-klabauter anchors, which would wrongly hand the
+    the DoE-claude and claude-klabauter anchors, which would wrongly hand the
     fleet-recovery hatch to every session launched in either of THIS
     plan's own two working repos. Only the home-resolution helper is
     reused; the trust decision itself is this module's own, narrower one.
@@ -83,7 +83,7 @@ RESOLUTION PRIMITIVES -- REUSED, NEVER REIMPLEMENTED.
     `machine_resolver._load_toml` / `_flatten` over EVERY `repos.*` entry
     in the machine-local registry (`registry.local.toml` takes precedence
     over `registry.toml`, matching every other reader in this package) --
-    not the two named keys (`repos.example_doctrine_repo`, `repos.claude_klabauter`)
+    not the two named keys (`repos.doe_claude`, `repos.claude_klabauter`)
     `trusted_root_guard.py` reads. Those two are a fixed pair for a fixed
     trust decision; this module's job is "is the target ANY repo the
     operator has registered", which needs the full, open-ended set.
@@ -184,9 +184,15 @@ from coordinator_core.write_guards._case_fold_path import (
 # reaches `is_agent_memory_store_path`) never pays that cost.
 
 #: Prefix every enumerated registry key must carry to be treated as a
-#: registered-repo entry -- mirrors `repos.example_doctrine_repo` / `repos.claude_klabauter`
+#: registered-repo entry -- mirrors `repos.doe_claude` / `repos.claude_klabauter`
 #: shape but widened, per this module's docstring, to ALL `repos.*` keys
 #: rather than those two named ones.
+# Generator-provenance declaration (generator_provenance.py).
+# record_applicability_event appends to session_dir(...)/write_bump_
+# applicability_log, under .git/coordinator-sessions/ -- untracked
+# session-scoped state, never a tracked repo artifact.
+GENERATES = []
+
 _REGISTRY_REPOS_PREFIX = "repos."
 
 #: Prefix every enumerated registry key must carry to be treated as a
@@ -213,7 +219,7 @@ _PUBLISH_OWNER_SUFFIX = ".owner"
 _APPLICABILITY_LOG_FILENAME = "write_bump_applicability_log"
 
 
-#: AC11 / merged-in coordinator-claude source numbering C9 (see plan's § "Substrate
+#: AC11 / merged-in DoE source numbering C9 (see plan's § "Substrate
 #: re-verification" and drift D9) landed the extended-length-prefix strip
 #: as a private helper scoped to THIS module's own comparison only ("not a
 #: repo-wide sweep ... that sweep is the sibling anchor plan's own proposed

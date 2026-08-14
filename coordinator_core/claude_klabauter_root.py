@@ -1,12 +1,12 @@
 """
 coordinator_core.claude_klabauter_root — ported from coordinator/lib/coordinator-claude-klabauter-root.sh
-(coordinator-claude clean-slate migration, sourced-lib variant — coordinator-claude .sh is left untouched; its ~60
+(DoE clean-slate migration, sourced-lib variant — DoE .sh is left untouched; its ~60
 `source coordinator-claude-klabauter-root.sh` callers switch to `import coordinator_core.claude_klabauter_root`
 in a later gated wave, per port-template variant "SOURCED LIB").
 
 Purpose: resolves the claude-klabauter sibling-repo root, analogous to how CLAUDE_HOME->~/.claude
 works for the coordinator meta-repo. Mirror-image of `coordinator_core.ops.gen_doe_root_pointer`
-(which resolves DOE_ROOT from inside a coordinator-claude-clone-relative context) — this module resolves
+(which resolves DOE_ROOT from inside a DoE-clone-relative context) — this module resolves
 CLAUDE_KLABAUTER_ROOT for callers already running inside the claude-klabauter engine.
 
 Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C1 / AC1
@@ -45,7 +45,7 @@ Negative-spec:
       the shell's idempotency-gate behavior opt in explicitly.
       Review: code-reviewer — this note previously recorded a deliberate
       ASYMMETRY against `coordinator_core.ops.coordinator_doe_root`, which did
-      export `REPO_EXAMPLE_DOCTRINE_REPO` to os.environ on every successful resolution to
+      export `REPO_DOE_CLAUDE` to os.environ on every successful resolution to
       mirror ITS bash oracle's `export`. That asymmetry was retired on
       2026-07-21: the export leaked interpreter-global state across tests and
       into every subprocess child's inherited env, and `coordinator_doe_root` is

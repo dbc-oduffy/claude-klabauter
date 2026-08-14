@@ -388,3 +388,155 @@ def test_batch_sweep_never_stamps_minted_by_on_unrelated_handoffs(tmp_path, monk
             f"{path} was stamped with minted_by by the batch sweep -- "
             f"the two-door hazard has regressed:\n{content}"
         )
+
+
+# ---------------------------------------------------------------------------
+# C1 -- placeholder-shaped summary treated as absent
+# (docs/plans/2026-08-14-placeholder-summaries-and-the-drift-guards-uncounted-
+# callers.md § C1, AC1/AC2/AC3)
+# ---------------------------------------------------------------------------
+
+_SPINOFF_PLACEHOLDER_SUMMARY = (
+    "PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)"
+)
+
+# Exact shape `coordinator-doc-new.py::_scaffold_spinoff` emits: a quoted
+# `title:`, the literal placeholder `summary:`, and NO H1 in the body (the
+# scaffold's canonical section grammar starts at `## What this covers`) --
+# the fallback-to-title branch is load-bearing for this shape, not the
+# H1-derivation branch.
+_SPINOFF_NO_H1 = f"""\
+---
+title: "test placeholder repro"
+created: 2026-08-14
+branch: "work/machine-b/2026-08-12"
+status: open
+predecessor: none
+kind: spinoff
+deployment_state: ready_to_fire
+category: infra
+summary: "{_SPINOFF_PLACEHOLDER_SUMMARY}"
+pickup_ready: true
+authoring_session: PLACEHOLDER
+workstream: PLACEHOLDER
+deliverable_id: dlv-test-placeholder-repro-abc123
+initiative: null
+---
+
+## What this covers
+
+<!-- One paragraph. -->
+"""
+
+
+def test_placeholder_summary_survives_untouched_before_the_fix_is_the_red():
+    """AC1 (reproduction, pinned): a scaffolder-shaped placeholder `summary:`
+    is PRESENT and under the 140-char cap, so absent the fix it is carried
+    byte-identical -- the defect this chunk closes. This test asserts the
+    FIXED behaviour (drift is now detected); its docstring records the red
+    this chunk reproduced live before the fix landed: `_normalize_one_text`
+    returned `None` (already "clean") and `summary:` stayed the literal
+    placeholder string. See the executor's dispatch report for the verbatim
+    repro transcript.
+    """
+    result = _normalize_one_text(_SPINOFF_NO_H1, Path("state/handoffs/x.md"))
+
+    assert result is not None
+    assert any("summary" in c and "placeholder" in c for c in result["changes"])
+
+
+def test_placeholder_summary_falls_back_to_unquoted_title_when_no_h1():
+    """AC2: a placeholder-shaped `summary:` is treated as absent, and (this
+    scaffold shape having no H1) the backfill falls through to the `title:`
+    field -- which must land UNQUOTED (latent-bug fix: `read_fm_field`
+    returns the raw quoted text verbatim; a naive backfill would have
+    embedded the literal quote characters into the new summary)."""
+    result = _normalize_one_text(_SPINOFF_NO_H1, Path("state/handoffs/x.md"))
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    assert (
+        handoff_normalize.read_fm_field(fm_text, "summary")
+        == "test placeholder repro"
+    )
+
+
+def test_placeholder_summary_prefers_h1_over_title_when_both_present():
+    """AC2, sibling shape: when the body DOES carry an H1 (a hand-started
+    spinoff, or any other handoff kind that happens to carry this literal),
+    the existing H1-derivation branch still wins over the title fallback --
+    the placeholder classification only widens what counts as "absent", it
+    does not reorder the existing derivation preference."""
+    content = _SPINOFF_NO_H1.replace(
+        "## What this covers", "# From the H1 instead\n\n## What this covers"
+    )
+
+    result = _normalize_one_text(content, Path("state/handoffs/x.md"))
+
+    assert result is not None
+    fm_text = handoff_normalize.split_frontmatter(result["rebuilt"]).fm_text
+    assert (
+        handoff_normalize.read_fm_field(fm_text, "summary")
+        == "From the H1 instead"
+    )
+
+
+def test_present_nonplaceholder_summary_still_untouched():
+    """Negative-spec guard: a present, non-placeholder, under-cap summary is
+    NOT reclassified as absent -- the literal-match discipline (Anti-scope:
+    no "looks unfilled" heuristic) leaves every other present summary,
+    including a short or terse one, byte-identical."""
+    result = _normalize_one_text(_MINIMAL_HANDOFF, Path("state/handoffs/x.md"))
+
+    # _MINIMAL_HANDOFF's summary ("A summary already present.") is not the
+    # placeholder literal, so with no other drift this is fully clean.
+    assert result is None
+
+
+def test_batch_sweep_backfills_placeholder_summary_on_a_committed_record(
+    tmp_path, monkeypatch
+):
+    """AC3 (load-bearing): the batch-sweep caller (`handoff.normalize`,
+    write=True) run over a corpus containing an ALREADY-COMMITTED record that
+    carries the scaffolder's literal placeholder summary. This is the
+    corpus-pass case AC3 exists to catch -- "it works on my freshly-
+    scaffolded test file" is not sufficient evidence on its own.
+
+    Finding (see dispatch report): no opt-out is wired for the batch caller.
+    The placeholder classification is a literal string match (not a
+    heuristic), and a corpus-committed record carrying this exact literal is
+    exactly as broken as a freshly-scaffolded one -- the AC2 fix backfilling
+    it via the pre-existing H1/title derivation on a batch pass is the
+    correct, intended within-scope behaviour, not an accidental corpus-wide
+    rewrite. A grep of `state/handoffs/*.md` for this literal (see dispatch
+    report) found zero pre-existing matches in this repo's live corpus today
+    -- this test is coverage for the shape, not evidence it currently fires.
+    """
+    monkeypatch.setattr(
+        core, "sessions_dir", lambda cwd=None: str(tmp_path / "repo" / ".git" / "coordinator-sessions")
+    )
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-placeholder-sweep")
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    placeholder_path = repo / "state" / "handoffs" / "2026-08-14-placeholder-spinoff.md"
+    placeholder_path.parent.mkdir(parents=True, exist_ok=True)
+    placeholder_path.write_text(_SPINOFF_NO_H1, encoding="utf-8")
+    clean_path = _write_unrelated_handoff(repo, "2026-08-14-clean-unrelated")
+    clean_before = clean_path.read_text(encoding="utf-8")
+
+    result = asyncio.run(_handler({"write": True}, repo_root=repo / ".git"))
+
+    assert result["errors"] == []
+    placeholder_after = placeholder_path.read_text(encoding="utf-8")
+    assert (
+        handoff_normalize.read_fm_field(placeholder_after, "summary")
+        == "test placeholder repro"
+    )
+    changed_files = {entry["file"] for entry in result["changed"]}
+    assert any(str(placeholder_path.name) in f for f in changed_files)
+    # The unrelated clean-shaped file's own drift (category/summary/etc.
+    # backfill from ITS OWN H1) is expected -- what this asserts is that the
+    # placeholder fix does not touch a file that carries no placeholder text.
+    assert (
+        handoff_normalize.read_fm_field(clean_before, "summary") is None
+    )  # sanity: was absent, not placeholder, before the sweep

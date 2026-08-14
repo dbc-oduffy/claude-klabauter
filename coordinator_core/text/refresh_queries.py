@@ -14,11 +14,11 @@ from the oracle, see "Negative-spec" below.
 Port source: coordinator/bin/refresh-queries.js (432 lines)
 Spec backlink: archive/specs/2026-05-01-portable-ideas-from-obsidian-research.md
 §W2 (Refresh Helper)
-Port recipe: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/
+Port recipe: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-normalize-snippet.md (byte-parity port discipline)
 
 query-records.js dependency — RESOLVED, native (2026-07-22):
-    The oracle imports two coordinator-claude-side sibling modules: coordinator/bin/lib/
+    The oracle imports two DoE-side sibling modules: coordinator/bin/lib/
     sentinel-blocks.js (ported — coordinator_core.text.sentinel_blocks,
     reused directly below) and coordinator/bin/query-records.js (1924
     lines — its queryRecords()/formatRecords() pair). This module used to
@@ -157,6 +157,12 @@ from coordinator_core.text.sentinel_blocks import replace_block
 from coordinator_core.text.query_record_display import format_records
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.records_query import _sort_records
+
+# Generator-provenance declaration (generator_provenance.py). process_file rewrites
+# whichever tracked `*.md` files under the repo (found via walk_md/resolve_files_opt)
+# contain `<!-- BEGIN query: ... -->` callouts -- a data-dependent set of markdown
+# files across the doc corpus, not a fixed artifact.
+MUTATES = ["**/*.md"]
 
 BEGIN_PREFIX = "<!-- BEGIN query:"
 END_MARKER = "<!-- END query -->"

@@ -11,8 +11,8 @@ Same CLI contract, same exit-code contract, pure
 Python entry (`python coordinator-write-review-trail.py ...`), no
 `#!/bin/sh` polyglot header, no bash re-wrap.
 
-Spec backlink: docs/plans/2026-07-06-dr215-fleet-ops-ceremony-wiring.md (strang-10 C5)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T2 (AC4)
+Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 (strang-10 C5)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T2 (AC4)
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave 1b, shape-(b))
 
 Usage (unchanged from the bash facade — zero caller-contract drift):
@@ -204,7 +204,7 @@ def _plan_scope_kind_already_recorded(sha_range: str, repo_root: str) -> bool:
 
 def _validate_reviewer_verdict_coherence(reviewer: str, verdict: str) -> None:
     """Cross-field coherence gate (docs/plans/2026-08-05-coverage-gate-planning-
-    artifact-class.md § C14, folded from the coordinator-claude-em memo): `reviewer` and
+    artifact-class.md § C14, folded from the doe-claude-em memo): `reviewer` and
     `verdict` agree on whether this record is waived, or neither field alone tells
     the truth. The incident record —
     `{"reviewer":"waived","verdict":"pending",...}` — reads as BOTH "no reviewer is
@@ -230,95 +230,31 @@ def _validate_reviewer_verdict_coherence(reviewer: str, verdict: str) -> None:
         )
 
 
-#: Env var the .cmd launcher exports (gen-launcher-shim.py's
-#: `_RAW_CMDLINE_ENTRYPOINTS`, opt-in per state/bug-backlog/2026-08-08-cmd-
-#: exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml) — names a temp
-#: FILE holding the raw, un-mangled `%CMDCMDLINE%` text captured BEFORE
-#: cmd.exe's own %* population strips any literal `^` from this process's
-#: actual `sys.argv`. A file, not the text directly in an env var: measured,
-#: `set "_X=%CMDCMDLINE%"` ALSO strips the caret (a second, independent
-#: instance of the same cmd.exe defect) — only `echo %CMDCMDLINE%>file`
-#: preserves it, so the launcher redirects to a file and hands us the path
-#: (itself caret-free, safe for an ordinary `set`) instead.
-_RAW_CMDLINE_FILE_ENV = "_LAUNCHER_RAW_CMDLINE_FILE"
-
 #: The .cmd launcher's own basename — used to locate where our arguments
-#: begin within the raw cmdline text (see `_recover_windows_argv`).
+#: begin within the raw cmdline text (see `raw_cmdline_recovery.
+#: recover_windows_argv`, the shared implementation this module and
+#: `scoped-git-commit` both call — the caret-eating defect and its
+#: temp-file capture/recovery mechanism are identical between the two
+#: `_RAW_CMDLINE_ENTRYPOINTS` members; only this launcher basename differs).
 _LAUNCHER_CMD_NAME = "coordinator-write-review-trail.cmd"
 
 
 def _recover_windows_argv(argv: list[str]) -> list[str]:
     """Recover un-mangled argv from the raw invoking cmdline on Windows.
 
-    cmd.exe silently strips any literal ``^`` from an argument while
-    populating a .cmd launcher's ``%1..%9``/``%*`` batch parameters — this
-    happens during cmd.exe's OWN command-line parse, before the launcher
-    body (or this script) ever runs, and is lost regardless of caller
-    (PowerShell, a Python ``subprocess.run`` list-form call, or cmd.exe
-    itself — measured, not a caller-side quoting bug). The exact shape this
-    breaks: ``--sha-range "<sha>^..<sha>"``, the per-commit parent-range form
-    a concurrent shared branch requires, arrives here as ``<sha>..<sha>`` —
-    an EMPTY git range — with the CLI still exiting 0 and the review-trail
-    writer persisting a record that discharges nothing (the silent-failure
-    half this module's caller-side fix addresses; the writer-side half is
-    ``review_trail_write.py``'s empty-range rejection).
-
-    ``%CMDCMDLINE%``, captured verbatim by the launcher into a temp file
-    named by ``_LAUNCHER_RAW_CMDLINE_FILE`` before invoking this script,
-    still carries the original, unmangled text (measured) — this recovers
-    argv from THAT text instead of trusting the already-mangled ``sys.argv``
-    the interpreter received.
-
-    Best-effort and fail-safe: any parse mismatch (missing env var,
-    non-Windows, the recovered token count disagreeing with the mangled
-    ``argv``) falls back to ``argv`` unchanged — recovery must never crash,
-    nor silently drop or reorder an argument the caller actually passed.
+    Thin wrapper over the shared ``raw_cmdline_recovery.recover_windows_argv``
+    — see that module's docstring for the full recovery contract. The exact
+    shape this fixes for this CLI: ``--sha-range "<sha>^..<sha>"``, the
+    per-commit parent-range form a concurrent shared branch requires, would
+    otherwise arrive here as ``<sha>..<sha>`` — an EMPTY git range — with the
+    CLI still exiting 0 and the review-trail writer persisting a record that
+    discharges nothing (the silent-failure half this module's caller-side
+    fix addresses; the writer-side half is ``review_trail_write.py``'s
+    empty-range rejection).
     """
-    if os.name != "nt":
-        return argv
-    raw_file = os.environ.get(_RAW_CMDLINE_FILE_ENV)
-    if not raw_file:
-        return argv
-    try:
-        raw = Path(raw_file).read_text(encoding="utf-8", errors="replace").rstrip("\r\n")
-    except OSError:
-        return argv
-    finally:
-        try:
-            os.remove(raw_file)
-        except OSError:
-            pass  # best-effort cleanup — a leaked temp file is not fatal
-    if not raw:
-        return argv
-    idx = raw.lower().find(_LAUNCHER_CMD_NAME.lower())
-    if idx == -1:
-        return argv
-    tail = raw[idx + len(_LAUNCHER_CMD_NAME):]
-    if tail.startswith('"'):
-        tail = tail[1:]
-    tail = tail.strip()
-    # The whole %CMDCMDLINE% text is itself one outer-quoted `cmd /c "..."`
-    # blob (Windows' own .cmd CreateProcess convention) — strip the single
-    # trailing quote that closes it, if present and unbalanced within tail.
-    if tail.endswith('"') and tail.count('"') % 2 == 1:
-        tail = tail[:-1].strip()
-    try:
-        import shlex
+    from raw_cmdline_recovery import recover_windows_argv
 
-        recovered = shlex.split(tail, posix=False)
-    except ValueError:
-        return argv
-    cleaned = [
-        tok[1:-1] if len(tok) >= 2 and tok[0] == tok[-1] == '"' else tok
-        for tok in recovered
-    ]
-    if len(cleaned) != len(argv):
-        # Token-count disagreement means our text-slicing assumption about
-        # where the launcher name ends and args begin didn't hold for this
-        # invocation — bail to the safe, known (if caret-mangled) argv
-        # rather than risk silently misaligning arguments.
-        return argv
-    return cleaned
+    return recover_windows_argv(argv, _LAUNCHER_CMD_NAME)
 
 
 def _no_fallback() -> None:

@@ -1,5 +1,5 @@
 """
-EmissionScope — pydantic port of coordinator-claude `coordinator/cockpit-contract/src/emission-scope.ts`
+EmissionScope — pydantic port of DoE `coordinator/cockpit-contract/src/emission-scope.ts`
 (Zod source). The scope discriminator every ingestable cockpit emission entity
 declares, and the per-case envelope invariant it forces (DECISIONS.md § D25).
 
@@ -8,7 +8,7 @@ matching envelope, not on each producer happening to carry a `repo` field.
 
 Spec backlink: DECISIONS.md § D25
 Spec backlink: cross-repo/inbox/2026-07-13-claude-klabauter-em-emission-scope-envelope-invariant.md
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

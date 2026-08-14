@@ -3,7 +3,7 @@ coordinator_core.session.tests.test_core — parity tests for
 coordinator_core.session.core, the Python engine port of the
 retained-in-hub helpers.
 
-Port of: coordinator-session.sh (coordinator-claude e34f2484, 2026-07-22).
+Port of: coordinator-session.sh (DoE e34f2484, 2026-07-22).
 
 Q20 (golden-diff): stable_pid_alive MUST golden-diff against REAL on-disk
 meta.json, not synthetic fixtures alone — see the corpus-backed tests below.

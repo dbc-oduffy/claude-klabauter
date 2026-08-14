@@ -77,7 +77,7 @@ subagent-reachable and defeat the ban for the exact caller class this
 guard's identity-gated sibling already covers (precedent:
 `block_subagent_destructive_action.py`'s own "OVERRIDE-WITHHOLDING,
 deliberate" section). The PM/EM override for the fleet-wide ban as a whole
-lives in a repo-root sentinel checked by coordinator-claude-side hooks, not here -- this
+lives in a repo-root sentinel checked by DoE-side hooks, not here -- this
 guard's deny message deliberately does not name that sentinel (design-as-
 offers: lead with the alternative, not the bypass).
 
@@ -97,12 +97,12 @@ Observed live 2026-07-29 -- a dispatched reviewer's findings heredoc, which
 named this file by filename and quoted a `git worktree add` example, was
 denied while persisting via the sanctioned Bash-redirect path. See
 `state/bug-backlog/2026-07-29-worktree-guard-false-denies-documents-naming-
-guard-files.yaml` (coordinator-claude) for the incident. Anti-bypass: an interpreter
+guard-files.yaml` (DoE-claude) for the incident. Anti-bypass: an interpreter
 FED by a heredoc (`bash <<'EOF' ... EOF`) is untouched by this strip -- the
 residual `bash <<'EOF'` line survives stripping and a real `git worktree
 add` invocation outside the heredoc body still denies exactly as before.
 
-Spec: fleet-wide structural git-worktree ban, main-loop leg (coordinator-claude
+Spec: fleet-wide structural git-worktree ban, main-loop leg (DoE-claude
 dispatch, 2026-07-28) -- companion to `block_subagent_destructive_action.py`'s
 pre-existing identity-gated `git worktree add` denial.
 """
@@ -373,7 +373,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # and the guard misreads document prose as a real invocation (observed
     # live, 2026-07-29: a reviewer's findings heredoc denied on exactly this
     # shape -- see `state/bug-backlog/2026-07-29-worktree-guard-false-
-    # denies-documents-naming-guard-files.yaml` in coordinator-claude). Anti-bypass:
+    # denies-documents-naming-guard-files.yaml` in DoE-claude). Anti-bypass:
     # an interpreter FED by a heredoc (`bash <<'EOF' ... EOF`) is untouched
     # by this strip -- the residual `bash <<'EOF'` line survives and, if it
     # independently contains a real `git worktree add` invocation outside

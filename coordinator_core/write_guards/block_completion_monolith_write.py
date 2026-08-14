@@ -1,8 +1,8 @@
 """coordinator_core.write_guards.block_completion_monolith_write — advisory guard.
 
-Originally a Python engine-ification of coordinator-claude's retired
+Originally a Python engine-ification of DoE's retired
 ``coordinator/hooks/scripts/block-completion-monolith-write.sh`` PreToolUse
-(Write|Edit|NotebookEdit|MultiEdit) hook (deleted 2026-07-16, coordinator-claude
+(Write|Edit|NotebookEdit|MultiEdit) hook (deleted 2026-07-16, DoE
 ``2f8b8450``), per the naked-Python hook migration (write_guards/INTERFACE.md).
 
 Purpose (ported verbatim from the reference hook, deny condition unchanged):
@@ -33,8 +33,8 @@ fix), the ``archive/completed/<YYYY-MM>.md`` tail match (never matching
 reason text verbatim — only the envelope shape (advisory, not deny) and the
 lead-in sentence changed.
 
-Ported from the retired coordinator-claude bash guard ``block-completion-monolith-write.sh``
-  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
+Ported from the retired DoE bash guard ``block-completion-monolith-write.sh``
+  (deleted 2026-07-16, DoE ``2f8b8450``).
 
 Negative-spec:
   - Does NOT block writes under ``archive/completed/legacy/`` (post-migration

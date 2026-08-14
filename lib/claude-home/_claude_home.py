@@ -121,7 +121,7 @@ def _warn_machine_local_divergence_once(message: str) -> None:
     Silenced after the first call so repeated divergence checks do not flood
     stderr.
 
-    Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+    Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
     """
     global _legacy_machine_local_divergence_warned
     if not _legacy_machine_local_divergence_warned:
@@ -137,7 +137,7 @@ def _warn_machine_local_deprecated_once(message: str) -> None:
     Silenced after the first call so repeated machine_local_dir() lookups
     do not flood stderr.
 
-    Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+    Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
     """
     global _legacy_machine_local_deprecated_warned
     if not _legacy_machine_local_deprecated_warned:
@@ -256,7 +256,7 @@ def settings_home() -> Path:
         sibling-to-~/.claude semantics are deliberate — see design doc).
       - Does NOT read any file from the settings home (pure location lookup).
 
-    Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+    Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
     """
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override is not None:
@@ -295,7 +295,7 @@ def machine_local_dir() -> Path:
 
     Use settings_home() for the settings-home root itself.
 
-    Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+    Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
     """
     new = settings_home() / "machine-local"
     legacy = claude_home_dir() / "machine-local"
@@ -406,7 +406,7 @@ def _check_machine_local_divergence() -> None:
     symlink at ~/.claude/machine-local → <settings-home>/machine-local resolves
     to the SAME realpath and MUST NOT trigger a warning.
 
-    Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+    Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
     """
     legacy = claude_home_dir() / "machine-local"
     new = settings_home() / "machine-local"

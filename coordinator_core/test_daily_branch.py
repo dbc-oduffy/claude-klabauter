@@ -1,7 +1,7 @@
 """
 test_daily_branch.py — pytest coverage for coordinator_core.daily_branch.
 
-Port of: coordinator-daily-branch.sh (coordinator-claude 2fbe0e77, 2026-07-19)
+Port of: coordinator-daily-branch.sh (DoE 2fbe0e77, 2026-07-19)
 Covers branch-shape cases + sanitization edge cases (spaces, unicode,
 path-injection chars).
 """

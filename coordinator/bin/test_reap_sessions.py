@@ -1,7 +1,7 @@
 """test_reap_sessions.py — self-contained test suite for reap-sessions.py.
 
 Native-Python successor to the retired coordinator/bin/tests/test-reap-sessions-wrapper.sh
-and test-coordinator-reap-sessions.sh (coordinator-claude f703efad, 2026-07-21; de-bash-coordinator
+and test-coordinator-reap-sessions.sh (DoE f703efad, 2026-07-21; de-bash-coordinator
 campaign, Wave F1, facade collapse). Retargets the bash oracles' contract assertions onto the Python trampoline: session.reap
 dispatch shape (params == {}, never `force`), the negative-spec no-stdout-on-success
 invariant, and the best-effort exit-0-always ceremony even when the transport seam raises.
@@ -9,7 +9,7 @@ invariant, and the best-effort exit-0-always ceremony even when the transport se
 Runs bash-free: `python3 test_reap_sessions.py` (or via the coordinator test runner).
 Exit 0 = all tests pass; non-zero = at least one failure.
 
-Spec backlink: docs/plans/2026-07-06-session-init-op-absorption-repoint.md § C1
+Spec backlink: DoE-claude:pln-session-init-sh-boot-sweep-rea-fff7cc § C1
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 """
 from __future__ import annotations

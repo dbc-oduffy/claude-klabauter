@@ -8,8 +8,8 @@ paths — `brief(cadence)` tunes severity/depth knobs (day = red-and-stale +
 reap; session = red-only + warn; week = lighter) over ONE shared compute,
 per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md` § Approach.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C1
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C1
 Registration seam: this module ships no bash veneer — it is consumed
 directly by the `coordinator/bin/orient-assemble` trampoline, mirroring
 `coordinator_core.pickup_assemble`'s template-variant #1 shape.
@@ -91,7 +91,7 @@ CADENCES: tuple[str, ...] = ("session", "day", "week")
 #: `extend_exit_codes` docstring).
 OrientExitCode = extend_exit_codes("OrientExitCode", USAGE=2, TRANSPORT_FAIL=3)
 
-#: coordinator-claude schema-of-record (`decision-object.schema.json`) constraint: when a
+#: DoE schema-of-record (`decision-object.schema.json`) constraint: when a
 #: judgment point's `recommendation` is `null`, `reason` MUST be one of
 #: these two enum values — free text is only schema-legal when `recommendation`
 #: is non-null. Every reader family here builds its no-verdict judgment
@@ -209,6 +209,10 @@ def _usage() -> int:
 
 def main(argv: list[str]) -> int:
     """`orient-assemble brief --cadence {session|day|week}` CLI entrypoint."""
+    if argv[:1] and argv[0] in ("--help", "-h"):
+        print("usage: orient-assemble brief --cadence {session|day|week}")
+        return int(OrientExitCode.SUCCESS)
+
     if not argv or argv[0] != "brief":
         return _usage()
 

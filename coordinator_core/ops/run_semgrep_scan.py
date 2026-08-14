@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.run_semgrep_scan — JSON-RPC "ci.run_semgrep_scan" operation.
 
-Purpose: replaces the coordinator-claude security-audit-worker fence (agents/security-audit-worker.md)
+Purpose: replaces the DoE security-audit-worker fence (agents/security-audit-worker.md)
 that shelled out to `semgrep --config=auto --json` over a diff scope. This is the
 Tier-1 (preferred) scanner in that fence's documented severity-mapping / fallback-tier
 strategy: run semgrep over the files a branch actually changed (relative to
@@ -58,7 +58,7 @@ as a side-effect. Registration across the other three surfaces (_EAGER_OP_MODULE
 _OP_KEY_SCOPE / _registry_map.py) lands in the separate EM-serial registration pass.
 
 Spec backlink: pln-coordinator-ops-buildout-from--903224 § Wave 2
-Port source: coordinator-claude agents/security-audit-worker.md:53 (bash fence)
+Port source: DoE-claude agents/security-audit-worker.md:53 (bash fence)
 
 Negative-spec:
     - Does NOT scan the whole tree — always diff-scoped against `diff_base`.

@@ -10,7 +10,7 @@ Coverage targets (per task spec):
     additional_predecessors integrity, deliverable_id prefix, initiative non-empty
   - handoff-archived schema: no cross-field rules applied
   - schema_version fail-loud: raises SchemaVersionError on incompatible version
-  - drift check: passes when matching coordinator-claude HEAD; raises SchemaDriftError on divergence
+  - drift check: passes when matching DoE HEAD; raises SchemaDriftError on divergence
   - round-trip: mutation via primitives → yaml parse → validate_frontmatter
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ import pytest
 import yaml
 
 # Real-git spawn is load-bearing: the drift-check coverage (module docstring
-# above) validates against a real coordinator-claude HEAD comparison -- a mocked git cannot
+# above) validates against a real DoE HEAD comparison -- a mocked git cannot
 # exhibit true divergence/match against actual repo state. Per-test
 # isolation for the fixtures that build throwaway repos.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -85,7 +85,7 @@ from coordinator_core.testing.doe_root import resolve_doe_root
 # byte-parity, de-node Gate A straggler conversion) were retired 2026-07-24 (D1 of
 # docs/plans/2026-07-24-python-ize-claude-klabauter-bin-oracles-doe-forwards-to.md) alongside
 # the oracles themselves — coordinator/bin/lib/schema.js and coordinator/bin/schema-cli.js
-# no longer exist anywhere in this repo or coordinator-claude, so there is nothing left to diff
+# no longer exist anywhere in this repo or DoE-claude, so there is nothing left to diff
 # against, frozen golden or otherwise. schema_validate.py's/schema_cli.py's remaining
 # standalone coverage (describe/validate behavioral cases, legacy-YAML-dialect field
 # validator, cross-field rules, drift checks below) is unaffected — none of it depended
@@ -103,7 +103,7 @@ _SIZING_OBJECT_SCHEMA = _SCHEMAS_DIR / 'sizing-object.schema.json'
 _RESEARCH_SYNTHESIS_SCHEMA = _SCHEMAS_DIR / 'research-synthesis.schema.json'
 # Resolved via the canonical coordinator_core.testing.doe_root pointer-file
 # resolver — NOT a relative-sibling-checkout guess. A hardcoded
-# parents[N]/'coordinator-claude' walk hardcodes both a checkout depth and a literal
+# parents[N]/'DoE-claude' walk hardcodes both a checkout depth and a literal
 # directory name; it resolves on exactly one machine/clone-layout and
 # silently fails (or resolves the WRONG tree) on any other. May be None when
 # the machine is unregistered — callers guard with
@@ -579,7 +579,7 @@ class TestEnumValidation:
         spinoff-roadmap/spinoff-goal/spinoff-roadmap-creator spellings and previously had no
         positive coverage here.
 
-        Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § D1
+        Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1
         """
         for kind in ['session-handoff', 'spinoff', 'roadmap-baton', 'goal-seed', 'roadmap-seed', 'recovery']:
             if kind in ('spinoff', 'goal-seed', 'roadmap-seed'):
@@ -814,13 +814,13 @@ class TestReadyToFireIfThenSchemaLevel:
     History: C1's schema-hardening sub-step
     (docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C1) originally added
     this if/then construct as a claude-klabauter-local addition, later dropped and re-added
-    upstream by coordinator-claude at bfbaac70 as a top-level `if`/`then` pair. DR-084's P4 narrow
+    upstream by DoE at bfbaac70 as a top-level `if`/`then` pair. DR-084's P4 narrow
     (d652253c) restructured it into one of four conditionals nested under a new
     top-level `allOf` array (alongside closed=>closed_reason, continued=>continued_into,
     claimed+claimed_at=>claimed_by). `_validate_json_schema_node` — a dependency-free
-    subset port of coordinator-claude's schema.js — did not recurse into `allOf` until the
+    subset port of DoE-claude's schema.js — did not recurse into `allOf` until the
     schema-validator-keyword-gap fix
-    (cross-repo/inbox/2026-07-25-coordinator-claude-em-schema-validator-keyword-gap.md), so none
+    (cross-repo/inbox/2026-07-25-doe-claude-em-schema-validator-keyword-gap.md), so none
     of the four allOf-nested conditionals fired at the schema-shape layer for a window.
     That gap is now closed: `allOf` is a dispatched keyword, so this construct fires
     again at the shape layer, same as it did before the DR-084 P4 restructuring — this
@@ -844,7 +844,7 @@ class TestReadyToFireIfThenSchemaLevel:
         )
         assert 'allOf' in schema and isinstance(schema['allOf'], list) and len(schema['allOf']) >= 1, (
             'handoff.schema.json no longer nests its conditionals under allOf — '
-            'this test\'s premise (coordinator-claude\'s P4 narrow, d652253c) may be stale, revisit'
+            'this test\'s premise (DoE\'s P4 narrow, d652253c) may be stale, revisit'
         )
         assert any('if' in clause and 'then' in clause for clause in schema['allOf']), (
             'no allOf clause carries an if/then pair — the ready_to_fire conditional '
@@ -881,17 +881,17 @@ class TestReadyToFireIfThenSchemaLevel:
 
 class TestLastGateRecheckSchemaDeclaration:
     """last_gate_recheck IS declared as a schema property again, upstream-owned by
-    coordinator-claude rather than claude-klabauter-local.
+    DoE rather than claude-klabauter-local.
 
     History: C1's schema-hardening sub-step
     (docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C1) originally added
     a JSON-Schema-level (type: string, format: date) declaration as a claude-klabauter-local
-    addition. The DR-084 P0 dual-vocabulary re-vendor (03b8a127, from coordinator-claude HEAD
+    addition. The DR-084 P0 dual-vocabulary re-vendor (03b8a127, from DoE HEAD
     6082a287) replaced the vendored file wholesale and dropped it — a straight
-    re-vendor, not a merge. Claude-klabauter memo'd coordinator-claude asking for the property to be re-added
-    upstream; coordinator-claude landed it at bfbaac70 ("schema: re-add last_gate_recheck property +
+    re-vendor, not a merge. Claude-klabauter memo'd DoE asking for the property to be re-added
+    upstream; DoE landed it at bfbaac70 ("schema: re-add last_gate_recheck property +
     ready_to_fire if/then dropped by DR-084 P0 widen (claude-klabauter memo)"). This re-vendor
-    (pulling in bfbaac70) restores the declaration, now as an upstream-owned coordinator-claude
+    (pulling in bfbaac70) restores the declaration, now as an upstream-owned DoE
     property rather than claude-klabauter-local drift. last_gate_recheck remains a real,
     actively-written field (see coordinator_core/ops/handoff_transition.py,
     coordinator_core/ops/handoff_gate_aging.py) and is once again schema-validated
@@ -910,7 +910,7 @@ class TestLastGateRecheckSchemaDeclaration:
                              last_gate_recheck='not-a-date')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'last_gate_recheck' for e in errors), (
-            'expected a schema-level format rejection post-coordinator-claude-readd (property '
+            'expected a schema-level format rejection post-DoE-readd (property '
             'declared with format: date); got no last_gate_recheck error'
         )
 
@@ -918,7 +918,7 @@ class TestLastGateRecheckSchemaDeclaration:
         schema = json.loads(_HANDOFF_SCHEMA.read_text(encoding='utf-8'))
         assert 'last_gate_recheck' in schema['properties'], (
             'handoff.schema.json no longer declares last_gate_recheck — this test\'s '
-            'premise (coordinator-claude re-added the property at bfbaac70) may be stale, revisit'
+            'premise (DoE re-added the property at bfbaac70) may be stale, revisit'
         )
 
 
@@ -1125,7 +1125,7 @@ class TestGraphFieldsKindGate:
 
 class TestHandoffPhaseKindGate:
     """`handoff_phase` is admitted on kind: session-handoff AND canonical
-    kind: roadmap-baton (coordinator-claude DR-126; schema description `feef6527f`).
+    kind: roadmap-baton (DoE-claude DR-126; schema description `feef6527f`).
 
     The retired-alias case is the load-bearing one: real roadmap batons on disk
     carry `kind: spinoff-roadmap`, so a gate written against the canonical name
@@ -1293,8 +1293,8 @@ class TestForkKindsPredecessorNoneGate:
 # ---------------------------------------------------------------------------
 # Cross-field rules — origin-axis (Rules C2-1 through C2-5)
 #
-# Port of coordinator-claude coordinator/bin/lib/schema.js:1283-1553 origin_* cross-field
-# rules; test vectors mirrored from coordinator-claude's schema.test.js (commit 70f16d4/0eef1a5).
+# Port of DoE-claude coordinator/bin/lib/schema.js:1283-1553 origin_* cross-field
+# rules; test vectors mirrored from DoE's schema.test.js (commit 70f16d4/0eef1a5).
 # ---------------------------------------------------------------------------
 
 def _base_spinoff_with_origin(**overrides) -> dict:
@@ -2006,7 +2006,7 @@ class TestSizingObjectDeliverableSpineFields:
         assert not errors, errors
 
     def test_x_schema_version_at_least_1_8_0(self):
-        # Review: coordinator:code-reviewer c841277a — coordinator-claude's cross-repo
+        # Review: coordinator:code-reviewer c841277a — DoE's cross-repo
         # parity gate compares shapes ONLY when both sides' x-schema-version
         # are equal; an unequal-version divergence compares nothing and is
         # silent, which is how the deliverable-spine defect went unnoticed.
@@ -2255,7 +2255,7 @@ class TestPlanTasksDispositionShape:
         assert any(e['field'] == 'disposition' and 'disposition_ref' in e['error'] for e in errors)
 
     def test_spun_off_no_longer_requires_pm_approved(self):
-        """coordinator-claude's 2026-08-05 ruling relaxed spun_off's pm_approved gate: moving
+        """DoE's 2026-08-05 ruling relaxed spun_off's pm_approved gate: moving
         a row to another plan drops no work, so there is no scope cut for the
         PM to ratify — the EM self-issues it now."""
         row = _valid_plan_task_row(
@@ -2338,7 +2338,7 @@ class TestPlanTasksDispositionShape:
 
 
 class TestPlanTasksCaseAgainstShape:
-    """Hard-rejection leg for the cross-repo coordinator-claude memo (2026-08-06, leg 1):
+    """Hard-rejection leg for the cross-repo DoE memo (2026-08-06, leg 1):
     a closed scope-cut row (backlogged/wont_do) needs a non-empty
     case_against. Homed in `_cf_plan_tasks_disposition_shape`, NOT the
     shared `_cf_disposition_shape` — see that function's docstring for why
@@ -2399,7 +2399,7 @@ class TestPlanTasksCaseAgainstShape:
 
     def test_spun_off_never_requires_case_against(self):
         """spun_off is deliberately excluded — nothing leaves the corpus on
-        a spinoff, so there is no scope cut to argue against (coordinator-claude
+        a spinoff, so there is no scope cut to argue against (DoE
         2026-08-05 ruling)."""
         row = _valid_plan_task_row(
             disposition='spun_off',
@@ -2552,13 +2552,13 @@ class TestPlanTasksOrdering:
         assert check_plan_tasks_ordering(source) is None
 
     def test_open_row_after_coded_row_rejected_again(self):
-        """Re-tightened at the 2026-07-29 coordinator-claude sub-order ask, one commit
+        """Re-tightened at the 2026-07-29 DoE sub-order ask, one commit
         after this same test asserted the opposite.
 
         The 2026-07-29 grouping widening moved `coded` from the old
         two-group closed band into `do` alongside `open`, and for one
         commit this test asserted that ordering WITHIN `do` was free — so
-        open-after-coded read as valid. Coordinator-claude flagged that as a silent
+        open-after-coded read as valid. DoE flagged that as a silent
         regression: under the retired two-group rule `coded` counted as
         closed, so open-after-coded was already rejected, and dropping that
         lint was widening the rule further than the band merge required.
@@ -2936,16 +2936,16 @@ class TestTreeWalkArchiveGlobCollection:
         assert 'archive/handoffs/2026-07/foo.md' in repo_rels
 
     def test_vendored_glob_now_matches_override(self, tmp_path):
-        """Schema 2.1.0 widened the vendored (coordinator-claude-owned SSOT) applies_to
+        """Schema 2.1.0 widened the vendored (DoE-owned SSOT) applies_to
         glob for handoff-archived from single-star to
         'archive/handoffs/**/*.md', closing the nested-month-dir gap
         _GLOB_OVERRIDES['handoff-archived'] was originally added to
-        compensate for. Coordinator-claude declined to retire the override (it is also a
+        compensate for. DoE declined to retire the override (it is also a
         query-records.js parity port, mirrored in
         coordinator_core/ops/records_query.py's _TYPE_TO_GLOB), so it is
         retained deliberately as belt-and-braces rather than an active
         compensation. This test pins that the SSOT and the override now
-        AGREE — it fails loud if coordinator-claude ever re-narrows applies_to back to
+        AGREE — it fails loud if DoE ever re-narrows applies_to back to
         single-star, which would silently restore the nested-month-dir gap
         the override alone would then be silently compensating for again."""
         vendored = json.loads(_HANDOFF_ARCHIVED_SCHEMA.read_text(encoding='utf-8'))
@@ -3034,13 +3034,13 @@ class TestSchemaVersionGate:
 
 class TestDriftCheck:
     def test_handoff_schema_matches_doe_head_after_dr084_revendor(self):
-        """Vendored handoff.schema.json is byte-parity with coordinator-claude HEAD again, and both
-        sides carry last_gate_recheck + the if/then construct as upstream-owned coordinator-claude
+        """Vendored handoff.schema.json is byte-parity with DoE HEAD again, and both
+        sides carry last_gate_recheck + the if/then construct as upstream-owned DoE
         constructs.
 
         The `pending_fix` mark this test carried from 2026-08-06 to 2026-08-13 is
         GONE, and the two halves it was gated on both cleared upstream in a single
-        coordinator-claude commit (`3e6da5ce4e40`), re-vendored here at `8.0.0`:
+        DoE commit (`3e6da5ce4e40`), re-vendored here at `8.0.0`:
 
         1. `properties.additional_predecessors.description` — claude-klabauter's local
            "ENGINE-DERIVED, not PM-directed" correction (roadmap stub sedge-02) is
@@ -3050,12 +3050,12 @@ class TestDriftCheck:
            description-level fork is invisible to the obvious re-vendor move, which
            is exactly how the clobber at `1825e7771` came to exist.
 
-        2. `x-schema-version` `7.1.0 -> 8.0.0`, `x-bump-class` `major` — coordinator-claude's
+        2. `x-schema-version` `7.1.0 -> 8.0.0`, `x-bump-class` `major` — DoE's
            `711ea128f` had removed `hand-authored` from
            `x-producer-typed-command.mapping` (a validation-SHAPE change) under an
            UNMOVED `7.1.0` that claude-klabauter had already vendored, deadlocking both trees:
            `test_vendored_schema_shape_bump_parity` here refuses a shape move at an
-           unmoved version, and coordinator-claude's `test_vendored_schema_matches_doe_source`
+           unmoved version, and DoE's `test_vendored_schema_matches_doe_source`
            asserts version equality hard, so neither side could clear it alone. The
            version move was theirs and they made it. Byte-parity, not reachability,
            is what both gates read — deliberately: whether a consumer COULD have held
@@ -3064,7 +3064,7 @@ class TestDriftCheck:
 
         Negative-spec for a future re-vendor: do NOT re-add `pending_fix` here to
         park a fresh divergence. This gate is live again; a new red means the
-        vendored copy actually drifted from coordinator-claude HEAD and wants a re-vendor or a memo,
+        vendored copy actually drifted from DoE HEAD and wants a re-vendor or a memo,
         not a mark.
 
         Formerly `test_handoff_schema_diverges_from_doe_head_intentionally`: C1's
@@ -3072,17 +3072,17 @@ class TestDriftCheck:
         § C1) had added last_gate_recheck (property declaration) and a JSON-Schema-level
         if/then belt-and-suspenders mirror of the ready_to_fire->gate_dependency-forbidden
         Python cross-field rule as claude-klabauter-local hardening on top of the vendored file,
-        intentionally diverging from coordinator-claude HEAD.
+        intentionally diverging from DoE HEAD.
 
         The DR-084 P0 dual-vocabulary re-vendor (03b8a127, status enum += open/claimed,
         deployment_state enum += continued/closed, new nullable claimed_at/claimed_by/
         continued_into/closed_reason fields) replaced the vendored file wholesale from
-        coordinator-claude HEAD 6082a287, which did not carry the C1 local hardening forward — a
+        DoE HEAD 6082a287, which did not carry the C1 local hardening forward — a
         straight re-vendor, not a merge, so both constructs were dropped. Claude-klabauter
-        memo'd coordinator-claude asking for them to be re-added upstream; coordinator-claude landed the re-add at
+        memo'd DoE asking for them to be re-added upstream; DoE landed the re-add at
         bfbaac70 ("schema: re-add last_gate_recheck property + ready_to_fire if/then
         dropped by DR-084 P0 widen (claude-klabauter memo)"). This re-vendor pulls in bfbaac70,
-        so both constructs are back — now as upstream-owned coordinator-claude constructs, not
+        so both constructs are back — now as upstream-owned DoE constructs, not
         claude-klabauter-local drift.
 
         This asserts the current invariant: check_schema_drift must NOT raise for
@@ -3093,7 +3093,7 @@ class TestDriftCheck:
         a future re-vendor that silently drops either.
         """
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(_HANDOFF_SCHEMA, _DOE_REPO)  # should not raise
 
         vendored = json.loads(_HANDOFF_SCHEMA.read_text(encoding='utf-8'))
@@ -3105,18 +3105,18 @@ class TestDriftCheck:
             timeout=30,
         )
         assert doe_result.returncode == 0, (
-            f'Cannot read coordinator-claude HEAD handoff.schema.json: {doe_result.stderr.strip()}'
+            f'Cannot read DoE HEAD handoff.schema.json: {doe_result.stderr.strip()}'
         )
         doe_schema = json.loads(doe_result.stdout)
 
         # The former C1 local hardening is now upstream-owned, present on BOTH sides.
         assert 'last_gate_recheck' in vendored['properties'], (
             'vendored handoff.schema.json no longer declares last_gate_recheck — '
-            'this test\'s premise (coordinator-claude re-added it at bfbaac70) may be stale, revisit'
+            'this test\'s premise (DoE re-added it at bfbaac70) may be stale, revisit'
         )
         assert 'last_gate_recheck' in doe_schema.get('properties', {}), (
-            'coordinator-claude HEAD no longer declares last_gate_recheck — re-verify against current '
-            'coordinator-claude HEAD, this test\'s premise may be stale'
+            'DoE HEAD no longer declares last_gate_recheck — re-verify against current '
+            'DoE HEAD, this test\'s premise may be stale'
         )
 
         def _has_if_then_construct(schema: dict) -> bool:
@@ -3129,24 +3129,24 @@ class TestDriftCheck:
 
         assert _has_if_then_construct(vendored), (
             'vendored handoff.schema.json no longer declares an if/then construct '
-            '(top-level or allOf-nested) — this test\'s premise (coordinator-claude re-added it at '
+            '(top-level or allOf-nested) — this test\'s premise (DoE re-added it at '
             'bfbaac70, restructured under allOf at d652253c) may be stale, revisit'
         )
         assert _has_if_then_construct(doe_schema), (
-            'coordinator-claude HEAD no longer declares an if/then construct (top-level or allOf-nested) — '
-            're-verify against current coordinator-claude HEAD, this test\'s premise may be stale'
+            'DoE HEAD no longer declares an if/then construct (top-level or allOf-nested) — '
+            're-verify against current DoE HEAD, this test\'s premise may be stale'
         )
 
     def test_handoff_archived_schema_matches_doe_head(self):
-        """Vendored handoff-archived.schema.json must match coordinator-claude HEAD."""
+        """Vendored handoff-archived.schema.json must match DoE HEAD."""
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(_HANDOFF_ARCHIVED_SCHEMA, _DOE_REPO)  # should not raise
 
     def test_drift_detected_on_modified_schema(self, tmp_path):
-        """SchemaDriftError raised when vendored schema content differs from coordinator-claude HEAD."""
+        """SchemaDriftError raised when vendored schema content differs from DoE HEAD."""
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         # Create a modified copy of the schema
         original = _HANDOFF_SCHEMA.read_text()
         modified = original + '\n// extra line that makes it diverge\n'
@@ -3163,22 +3163,22 @@ class TestDriftCheck:
             check_schema_drift(_HANDOFF_SCHEMA, not_a_repo)
 
     def test_plan_tasks_schema_matches_doe_head(self):
-        """Vendored plan-tasks.schema.json is byte-parity with coordinator-claude HEAD — no
+        """Vendored plan-tasks.schema.json is byte-parity with DoE HEAD — no
         divergence, ratified or otherwise.
 
         SUPERSEDES `test_plan_tasks_schema_matches_doe_head_net_of_ratified_split`,
         which stripped `grouping_approvals` (+ its `$defs` block) before comparing
-        because claude-klabauter declared that contract here while coordinator-claude declared it on
+        because claude-klabauter declared that contract here while DoE declared it on
         plan.schema.json. That divergence is GONE as of the 2026-08-06 re-vendor:
         claude-klabauter now vendors plan.schema.json too (see the sibling test below), and
-        plan-tasks.schema.json is a clean copy of coordinator-claude HEAD.
+        plan-tasks.schema.json is a clean copy of DoE HEAD.
 
-        The strip-then-compare shape encoded coordinator-claude's **2026-07-29** ruling ("I am not
+        The strip-then-compare shape encoded DoE's **2026-07-29** ruling ("I am not
         asking you to move yours ... assert parity on the `grouping_approvals` shape
         sub-object, not on the declaring filename" —
-        cross-repo/archive/2026-07-29-coordinator-claude-em-grouping-discriminator-correction.md).
-        coordinator-claude **superseded** that on 2026-07-31
-        (cross-repo/archive/2026-07-31-coordinator-claude-em-grouping-approval-vendor-home.md:
+        cross-repo/archive/2026-07-29-doe-claude-em-grouping-discriminator-correction.md).
+        DoE **superseded** that on 2026-07-31
+        (cross-repo/archive/2026-07-31-doe-claude-em-grouping-approval-vendor-home.md:
         "Add plan.schema.json to your vendored set ... Drop the block from your
         vendored plan-tasks.schema.json and re-vendor that file clean from our
         HEAD"), and re-asked on 2026-08-06 when their parity gate went
@@ -3194,14 +3194,14 @@ class TestDriftCheck:
         frontmatter dict, never a schema file.
         """
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(_PLAN_TASKS_SCHEMA, _DOE_REPO)  # should not raise
 
         vendored = json.loads(_PLAN_TASKS_SCHEMA.read_text(encoding='utf-8'))
         assert 'grouping_approvals' not in vendored.get('properties', {}), (
             'grouping_approvals is back on plan-tasks.schema.json -- the 2026-07-31 '
             'relocation to plan.schema.json has been undone, most likely by a '
-            'hand-edit of a vendored artifact (the exact failure mode coordinator-claude raised). '
+            'hand-edit of a vendored artifact (the exact failure mode DoE raised). '
             'Re-vendor via bin/claude-klabauter-revendor-schema.py plan-tasks.'
         )
         assert 'grouping_approval_block' not in vendored.get('$defs', {}), (
@@ -3212,17 +3212,17 @@ class TestDriftCheck:
         assert 'depends_on' in vendored.get('properties', {}), (
             'plan-tasks.schema.json no longer declares depends_on -- the 1.5.0 '
             'task-spine-dependency-declaration field was dropped by a re-vendor '
-            'against an older coordinator-claude ref. docs/wiki/writing-plans.md instructs authors '
+            'against an older DoE ref. docs/wiki/writing-plans.md instructs authors '
             'to write it, so dropping it re-opens the schema/wiki contradiction '
-            'coordinator-claude 1.5.0 closed.'
+            'DoE 1.5.0 closed.'
         )
 
     def test_plan_schema_matches_doe_head_and_homes_grouping_approvals(self):
-        """Vendored plan.schema.json is byte-parity with coordinator-claude HEAD, and is the home
+        """Vendored plan.schema.json is byte-parity with DoE HEAD, and is the home
         of the grouping-approval contract.
 
         REPLACES `test_plan_tasks_schema_grouping_approvals_shape_parity`, which
-        compared claude-klabauter's plan-tasks-declared block against coordinator-claude's
+        compared claude-klabauter's plan-tasks-declared block against DoE's
         plan.schema.json-declared one with prose stripped. That cross-file,
         shape-only comparison existed precisely BECAUSE the two sides declared the
         contract in different files; now that claude-klabauter vendors plan.schema.json
@@ -3235,7 +3235,7 @@ class TestDriftCheck:
         that guard.
         """
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(_PLAN_SCHEMA, _DOE_REPO)  # should not raise
 
         vendored = json.loads(_PLAN_SCHEMA.read_text(encoding='utf-8'))
@@ -3252,9 +3252,9 @@ class TestDriftCheck:
         )
 
     def test_plan_tasks_drift_detected_on_modified_schema(self, tmp_path):
-        """SchemaDriftError raised when vendored plan-tasks schema content differs from coordinator-claude HEAD."""
+        """SchemaDriftError raised when vendored plan-tasks schema content differs from DoE HEAD."""
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         original = _PLAN_TASKS_SCHEMA.read_text()
         modified = original + '\n// extra line that makes it diverge\n'
         modified_path = tmp_path / 'plan-tasks.schema.json'
@@ -3267,20 +3267,20 @@ class TestDriftCheck:
 # Pinned-SHA tamper-check: the 8 queue schemas, pinned per-schema
 # ---------------------------------------------------------------------------
 
-# Pins are per-schema, not a single shared scalar, because coordinator-claude advances
+# Pins are per-schema, not a single shared scalar, because DoE advances
 # individual queue schemas independently — a shared pin forces an
 # all-or-nothing re-vendor of all 8 schemas even when only one has moved.
 #
-# _C1_LANDING_SHA is the original C1 landing SHA, verified an ancestor of coordinator-claude
+# _C1_LANDING_SHA is the original C1 landing SHA, verified an ancestor of DoE
 # origin/main at vendor-time. It still pins the seven schemas that have not
 # diverged since C1.
 #
 # improvement-queue's pin, b1e1643afe8ca0ec1ac379f8a8dbaa170323ada3, is NOT an
-# ancestor of coordinator-claude origin/main. It currently lives only on coordinator-claude's
+# ancestor of DoE origin/main. It currently lives only on DoE's
 # work/machine-a/2026-07-21 (pushed to origin/work/machine-a/2026-07-21) — it is
 # fetch-reachable but not yet merged. This matches the same-day precedent set
 # by the handoff.schema.json re-vendor at 6082a287, which was also cut from
-# that unmerged branch. Residual risk is explicit: if coordinator-claude rebases or drops
+# that unmerged branch. Residual risk is explicit: if DoE rebases or drops
 # that branch, this pin becomes unresolvable and the tamper-check fails loud
 # — that is the correct, intended failure mode, not a silent pass.
 #
@@ -3295,81 +3295,156 @@ _C1_LANDING_SHA = "758de78b11d70b4914cb5592f96648172037332c"
 # frontmatter-unification follow-up) now emits the same frontmatter shape
 # as provision_report.py's provisioned path. Same not-yet-merged-branch
 # precedent as improvement-queue's pin above: this SHA currently lives only
-# on coordinator-claude's work/machine-a/2026-07-21 (fetch-reachable, not yet merged to
+# on DoE's work/machine-a/2026-07-21 (fetch-reachable, not yet merged to
 # origin/main).
 #
 # cross-repo-commitment's pin, 472774939940d4372886359778bc0a174c102c26, re-vendors
 # v1.1.0 — an optional top-level `declaration` object carrying the DR-097
 # sibling-notification-duty fields. Same not-yet-merged-branch precedent as the
-# two pins above: this SHA currently lives only on coordinator-claude's
+# two pins above: this SHA currently lives only on DoE's
 # work/machine-b/2026-07-21to26 (fetch-reachable, not yet merged to origin/main).
 # Note the class: an optional top-level *object*, so it is NOT the
 # top-level-array-additive class claude-klabauter's structural-tolerance ratification
 # covers — this pin moved by re-vendor, not by a tolerance carve-out.
 _QUEUE_SCHEMA_PINS = {
-    'bug-backlog': _C1_LANDING_SHA,
+    # Pin moved 2026-08-14 to 13f3307000d4685243d60220145fc494383a0839 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   C7 (4b8e485c6) rewrote cross-repo citations to repo-qualified ids
+    #   across 458 files and swept 16 vendored schemas as collateral, breaking
+    #   the byte-identity the vendored contract rests on. Restoring mirror
+    #   parity: the id-form convention is DoE-ratified (they committed it at
+    #   fa72d1642) but belongs applied upstream in their tree, not patched
+    #   into claude-klabauter's mirrors. Also takes DoE's additive predecessor_handoff
+    #   nullable widening in plan.schema.json.
+    # Pin moved 2026-08-14 to 0f97800e53a0d0b8b5352b384c13974edd24de76 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   C7 (4b8e485c6) swept these vendored mirrors as collateral in a
+    #   458-file citation rewrite, breaking byte-identity. Restoring mirror
+    #   parity; the id-form is DoE-ratified (fa72d1642) and belongs applied
+    #   upstream in their tree. Also closes the pin/bytes split that 8e86e361c
+    #   opened by committing the pin moves without these bytes.
+    'bug-backlog': "0f97800e53a0d0b8b5352b384c13974edd24de76",
     'cross-repo-commitment': "472774939940d4372886359778bc0a174c102c26",
-    'debt-backlog': _C1_LANDING_SHA,
-    # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (coordinator-claude
+    # Pin moved 2026-08-14 to 13f3307000d4685243d60220145fc494383a0839 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   C7 (4b8e485c6) rewrote cross-repo citations to repo-qualified ids
+    #   across 458 files and swept 16 vendored schemas as collateral, breaking
+    #   the byte-identity the vendored contract rests on. Restoring mirror
+    #   parity: the id-form convention is DoE-ratified (they committed it at
+    #   fa72d1642) but belongs applied upstream in their tree, not patched
+    #   into claude-klabauter's mirrors. Also takes DoE's additive predecessor_handoff
+    #   nullable widening in plan.schema.json.
+    # Pin moved 2026-08-14 to 0f97800e53a0d0b8b5352b384c13974edd24de76 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   C7 (4b8e485c6) swept these vendored mirrors as collateral in a
+    #   458-file citation rewrite, breaking byte-identity. Restoring mirror
+    #   parity; the id-form is DoE-ratified (fa72d1642) and belongs applied
+    #   upstream in their tree. Also closes the pin/bytes split that 8e86e361c
+    #   opened by committing the pin moves without these bytes.
+    'debt-backlog': "0f97800e53a0d0b8b5352b384c13974edd24de76",
+    # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
-    #   coordinator-claude 1239761c1 added the 'verification' member; b142e8dc re-vendored
+    #   DoE 1239761c1 added the 'verification' member; b142e8dc re-vendored
     #   plan-tasks and admitted it to the harvest routing set but left the
     #   improvement-queue write target rejecting it
-    # Pin moved 2026-07-29 to a7723f2c26d855000db36e0c77cbf75ce7b8b01b (coordinator-claude
+    # Pin moved 2026-07-29 to a7723f2c26d855000db36e0c77cbf75ce7b8b01b (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
-    #   config-edit was authorable in coordinator-claude's enum but absent from claude-klabauter's
+    #   config-edit was authorable in DoE's enum but absent from claude-klabauter's
     #   vendored copy, so plan.tasks.mutate refused every row on any plan
     #   using it, blocking delivery recording for a fully-executed plan. PM-
     #   authorized 2026-07-29. plan-tasks re-vendored in the same pass to
     #   replace a hand-edit with byte-identical content.
-    # Pin moved 2026-08-06 to 8a1f74c52a1c90faa744269bbde300bf1edd36e4 (coordinator-claude
+    # Pin moved 2026-08-06 to 8a1f74c52a1c90faa744269bbde300bf1edd36e4 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
-    #   coordinator-claude 1.0.0 -> 1.1.0 change_kind enum widen (verification, config-edit);
+    #   DoE 1.0.0 -> 1.1.0 change_kind enum widen (verification, config-edit);
     #   claude-klabauter's copy already carried both members, so this takes the version
     #   string and bump metadata only. Verified version-string-only by diff
-    #   before running. Coordinator-claude held merge-to-main on this confirmation (handoff
+    #   before running. DoE held merge-to-main on this confirmation (handoff
     #   2026-08-03-vendored-schema-re-vendor-round item 3).
-    # Pin moved 2026-08-06 to 942745f317a5194e2b349166046c5dec1392f37e (coordinator-claude
+    # Pin moved 2026-08-06 to 942745f317a5194e2b349166046c5dec1392f37e (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
-    #   coordinator-claude 3cfaef61e: case_against on the task row (required on
+    #   DoE 3cfaef61e: case_against on the task row (required on
     #   backlogged/wont_do) and optional on the improvement-queue entry —
     #   plan-tasks 1.5.0->1.6.0, improvement-queue 1.1.0->1.2.0, both nested-
-    #   field-additive. Asked by coordinator-claude-em, cross-
-    #   repo/inbox/2026-08-06-coordinator-claude-em-deferrals-both-sides-landed-
+    #   field-additive. Asked by doe-claude-em, cross-
+    #   repo/inbox/2026-08-06-doe-claude-em-deferrals-both-sides-landed-
     #   revendor-and-a-resolve-ergonomics-bug.md
-    # Pin moved 2026-08-06 to 9b5a08fd2e0cebe22a8133a630304b1c253deabe (coordinator-claude
+    # Pin moved 2026-08-06 to 9b5a08fd2e0cebe22a8133a630304b1c253deabe (DoE
     # 9b5a08fd2) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   Equal-version (1.2.0) content drift on case_against.description:
     #   claude-klabauter carried the pre-697b7d451 'not yet populated by the harvest
-    #   CLI' prose, coordinator-claude 9b5a08fd2 carries the post-carry-through reading
+    #   CLI' prose, DoE 9b5a08fd2 carries the post-carry-through reading
     #   (omit-vs-empty-string rationale). Semantics unchanged — optional
-    #   either way. Re-vendor per coordinator-claude-em memo 2026-08-06-coordinator-claude-em-
+    #   either way. Re-vendor per doe-claude-em memo 2026-08-06-doe-claude-em-
     #   improvement-queue-revendor-equal-version-drift; neither side's gate
     #   catches equal-version content drift, which is the residual worth
     #   noting.
-    'improvement-queue': "9b5a08fd2e0cebe22a8133a630304b1c253deabe",
+    # Pin moved 2026-08-14 to 13f3307000d4685243d60220145fc494383a0839 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   C7 (4b8e485c6) rewrote cross-repo citations to repo-qualified ids
+    #   across 458 files and swept 16 vendored schemas as collateral, breaking
+    #   the byte-identity the vendored contract rests on. Restoring mirror
+    #   parity: the id-form convention is DoE-ratified (they committed it at
+    #   fa72d1642) but belongs applied upstream in their tree, not patched
+    #   into claude-klabauter's mirrors. Also takes DoE's additive predecessor_handoff
+    #   nullable widening in plan.schema.json.
+    # Pin moved 2026-08-14 to 0f97800e53a0d0b8b5352b384c13974edd24de76 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   C7 (4b8e485c6) swept these vendored mirrors as collateral in a
+    #   458-file citation rewrite, breaking byte-identity. Restoring mirror
+    #   parity; the id-form is DoE-ratified (fa72d1642) and belongs applied
+    #   upstream in their tree. Also closes the pin/bytes split that 8e86e361c
+    #   opened by committing the pin moves without these bytes.
+    'improvement-queue': "0f97800e53a0d0b8b5352b384c13974edd24de76",
     'lesson-entry': _C1_LANDING_SHA,
     'lessons-outbox': _C1_LANDING_SHA,
-    # Pin moved 2026-08-13 to a88486a268af18ebc2b751339ec6f56d1ce1cb88 (coordinator-claude
+    # Pin moved 2026-08-13 to a88486a268af18ebc2b751339ec6f56d1ce1cb88 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
-    #   re-vendor: coordinator-claude bumped x-schema-version and changed shape
+    #   re-vendor: DoE bumped x-schema-version and changed shape
     #   (2.0.0->2.1.0, 1.0.0->1.1.0), adding optional reviewed_range array;
     #   confirmed divergence_kind=shape via schema_drift_watch
-    'review-findings': "a88486a268af18ebc2b751339ec6f56d1ce1cb88",
-    # Moved off _C1_LANDING_SHA 2026-07-27: coordinator-claude landed the optional
+    # Pin moved 2026-08-14 to fdaf4274ccff291b7223686975a52c8462b06e37 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   DoE 993891f5c widened reviewed_range items to admit ~<N> alongside ^
+    #   on the left endpoint, actioning claude-klabauter's 2026-08-14 reviewed-range-
+    #   pattern-and-direction-blind-parity-gate memo; and DR-161 adopted
+    #   reconcile_disposition / reconcile_disposition_reason upstream into the
+    #   handoff pair rather than declaring a fork. Corpus swept against the
+    #   widened pattern from the emitted 7.0.0 bundle (0ca980633) BEFORE
+    #   vendoring: 22 reviewed_range values, rejections 10 -> 4, and the
+    #   residual 4 are genuine symbolic-ref defects (..working-tree, ^..HEAD)
+    #   the pattern is built to catch, recorded not rewritten in
+    #   state/audits/2026-08-14-reviewed-range-pattern-corpus-sweep.md. Major
+    #   acked on that evidence, not on version arithmetic.
+    # Pin moved 2026-08-14 to f08e2984e0434eb3a0b79e895541b82a89dd138c (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   DoE 359e41da5 shipped reviewed_targets, the class-2 answer to claude-klabauter's
+    #   2026-08-14 reviewed-range-cannot-express-review-of-uncommitted-work
+    #   ask: an optional top-level array with a closed prefix set
+    #   (uncommitted:/untracked:/working-tree:/diff-artifact:), NOT a union
+    #   inside reviewed_range. run-report 2.1.0->2.2.0, review-findings
+    #   3.1.0->3.2.0, top-level-array-additive. Vendored AHEAD of any local
+    #   reviewer emitting the field, per DoE's bilateral-sequencing ask: the
+    #   additive carve-out is non-holding absent a DECLARED consumer
+    #   structural tolerance, and none was on record for claude-klabauter.
+    #   reviewed_range is byte-unchanged in this bump and independently re-
+    #   verified so: the six honest attestations, the ..HEAD hybrid and the --
+    #   placeholder all still reject against it.
+    'review-findings': "f08e2984e0434eb3a0b79e895541b82a89dd138c",
+    # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
-    # this pin is a byte-identity pin on coordinator-claude's file, distinct from coordinator-claude's own
+    # this pin is a byte-identity pin on DoE's file, distinct from DoE's own
     # canonical-shape content hash in schema-version-pins.json.
-    # Pin moved 2026-08-10 to 840491558109540f7416e6f09c78148f336873ec (coordinator-claude
+    # Pin moved 2026-08-10 to 840491558109540f7416e6f09c78148f336873ec (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
-    #   coordinator-claude vendored claude-klabauter's 1.2.0 scope_kind enum at 6baac04a3; the ahead-
+    #   DoE vendored claude-klabauter's 1.2.0 scope_kind enum at 6baac04a3; the ahead-
     #   pin's own remedy path says remove it and restore an ordinary byte-pin
     #   at the new shared SHA
-    # Pin moved 2026-08-13 to 6466d871410baa349c1836286d5a8a1f1b5b5bcb (coordinator-claude
+    # Pin moved 2026-08-13 to 6466d871410baa349c1836286d5a8a1f1b5b5bcb (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
-    #   coordinator-claude 1.3.0 adds optional execution_basis; parity gate red per memo
-    #   2026-08-13-coordinator-claude-em-bump-class-deliberately-absent.md
+    #   DoE 1.3.0 adds optional execution_basis; parity gate red per memo
+    #   2026-08-13-doe-claude-em-bump-class-deliberately-absent.md
     'review-trail': "6466d871410baa349c1836286d5a8a1f1b5b5bcb",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
@@ -3377,9 +3452,9 @@ _QUEUE_SCHEMA_PINS = {
     # script): priority-ledger.schema.json is the SOLE path-traversal
     # defense on the priority.set write path (target_id -> filename), and
     # the docstrings' own "may not exist yet" premise for the prior
-    # live-coordinator-claude-tree read expired 2026-07-27 when this schema landed in coordinator-claude.
+    # live-DoE-tree read expired 2026-07-27 when this schema landed in DoE.
     # Pinned to 577a710c7 (x-schema-version 1.1.0), the ref confirmed clean
-    # and present in coordinator-claude at vendor-time.
+    # and present in DoE-claude at vendor-time.
     # docs/plans/2026-08-06-vendor-priority-ledger-and-priority-inte.md § C1
     'priority-ledger': "577a710c7c07cbeb0b061ebcc131dc09d2975654",
     # Vendored 2026-08-06, same wave as priority-ledger above — see that
@@ -3393,16 +3468,16 @@ _QUEUE_SCHEMA_PINS = {
 }
 
 # Ahead-pin registry: entries here declare "claude-klabauter's vendored copy is
-# intentionally ahead of coordinator-claude's, awaiting coordinator-claude's own upward vendor" — the
+# intentionally ahead of DoE's, awaiting DoE's own upward vendor" — the
 # check_schema_ahead_of_doe counterpart to _QUEUE_SCHEMA_PINS's byte-identity
 # tamper-pin (check_schema_drift). A name present here is checked via
 # check_schema_ahead_of_doe instead of check_schema_drift, even though its
 # entry also still exists in _QUEUE_SCHEMA_PINS above (kept as the historical
-# byte-pin value to restore once coordinator-claude catches up — see doe_ref below).
+# byte-pin value to restore once DoE catches up — see doe_ref below).
 #
 # Each entry's VALUE is a dict of check_schema_ahead_of_doe's keyword args:
-#   doe_ref (str, required)     — the coordinator-claude SHA this ahead-pin was derived against.
-#   reason (str, required)      — why claude-klabauter is allowed to lead coordinator-claude here.
+#   doe_ref (str, required)     — the DoE SHA this ahead-pin was derived against.
+#   reason (str, required)      — why claude-klabauter is allowed to lead DoE here.
 #   provenance (str, required)  — commit/memo/plan that authorized it.
 #   exempt_paths (frozenset, optional) — per-schema leaf-retention exemptions
 #     (consumer-specific paths — see _AHEAD_RETENTION_EXEMPT_PATHS's docstring
@@ -3421,27 +3496,27 @@ _QUEUE_SCHEMA_PINS = {
 # review-trail: claude-klabauter bumped to 1.2.0 (closing scope_kind from an
 # unconstrained string to the enum ["diff","plan","integration"]) to fix a
 # live crash — an out-of-set scope_kind value was taking down the whole
-# coverage gate with an AssertionError. Coordinator-claude is still at 1.1.0 and has not
+# coverage gate with an AssertionError. DoE is still at 1.1.0 and has not
 # moved "coordinator/schemas/review-trail.schema.json" since the pinned SHA
-# below (git diff <doe_ref> -- that path in coordinator-claude is empty). Claude-klabauter's
-# 1.2.0 is a structural superset of coordinator-claude's 1.1.0 except for scope_kind's
+# below (git diff <doe_ref> -- that path in DoE-claude is empty). Claude-klabauter's
+# 1.2.0 is a structural superset of DoE's 1.1.0 except for scope_kind's
 # description, deliberately rewritten because the 1.1.0 prose named "chunk"
 # as a valid example, which the 1.2.0 enum excludes.
 #
-# Once coordinator-claude vendors 1.2.0 (or later): delete this entry, and move
+# Once DoE vendors 1.2.0 (or later): delete this entry, and move
 # _QUEUE_SCHEMA_PINS['review-trail'] to the new shared SHA so
 # test_review_trail_matches_pinned_sha goes back to a plain check_schema_drift
 # byte-pin call below — that is the designed exit path, not a place to leave
 # this parked indefinitely.
-# Schemas where claude-klabauter deliberately leads coordinator-claude, awaiting their upward vendor.
+# Schemas where claude-klabauter deliberately leads DoE, awaiting their upward vendor.
 # EMPTY IS THE HEALTHY STATE — an entry here is a temporary divergence with a
 # named reason, not a resting place, and `check_schema_ahead_of_doe` fails the
-# moment coordinator-claude moves so the entry cannot quietly outlive its justification.
+# moment DoE moves so the entry cannot quietly outlive its justification.
 #
 # review-trail occupied this for a few hours on 2026-08-10 and is the worked
-# example: claude-klabauter closed `scope_kind` to an enum ahead of coordinator-claude to fix a live
+# example: claude-klabauter closed `scope_kind` to an enum ahead of DoE to fix a live
 # coverage-gate crash (55cbf4ede), the ahead-pin held the gate honest rather
-# than muting it, coordinator-claude vendored the same change themselves at their 6baac04a3,
+# than muting it, DoE vendored the same change themselves at their 6baac04a3,
 # the stale-ahead branch caught that unprompted, and the pair converged back to
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
@@ -3521,20 +3596,20 @@ def _advisory_git(repo: Path, *args: str) -> None:
 
 class TestAdvisoryLocalDoeVersions:
     """local_version/doe_version on check_schema_drift_advisory — the x-schema-version
-    read threaded through for the cross-repo ask (coordinator-claude wants both sides'
+    read threaded through for the cross-repo ask (DoE-claude wants both sides'
     version integers, not just a diverged/matched boolean).
 
-    Every fixture here is a throwaway tmp_path git repo, never the real coordinator-claude clone —
+    Every fixture here is a throwaway tmp_path git repo, never the real DoE clone —
     same discipline as coordinator_core/frontmatter/tests/test_schema_drift_watch.py.
 
-    Spec backlink: cross-repo/inbox/2026-07-26-coordinator-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
+    Spec backlink: cross-repo/inbox/2026-07-26-doe-claude-em-schema-drift-watch-seam-and-tolerance-ratification.md
     """
 
     @pytest.fixture()
     def fake_doe(self, tmp_path: Path) -> Path:
         if not _which_git():
             pytest.skip("git not available")
-        repo = tmp_path / "coordinator-claude-fake"
+        repo = tmp_path / "DoE-fake"
         schemas = repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text(
@@ -3586,7 +3661,7 @@ class TestAdvisoryLocalDoeVersions:
         self, fake_doe: Path, tmp_path: Path
     ) -> None:
         # Named "widget.schema.json" (matches fake_doe's ref) but never written to
-        # disk — the vendored-read must fail while the coordinator-claude-side read already
+        # disk — the vendored-read must fail while the DoE-side read already
         # succeeded, exercising the "doe_version populated, local_version None"
         # branch specifically.
         missing_vendored = tmp_path / "widget.schema.json"
@@ -3610,7 +3685,7 @@ class TestReadBumpClass:
     JSON parse happens exactly once per string via the shared
     _parse_schema_dict/_read_schema_string_key seam (see schema_validate.py).
 
-    Spec backlink: cross-repo/inbox/2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md
+    Spec backlink: cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md
     """
 
     def test_present_string_value(self) -> None:
@@ -3651,14 +3726,14 @@ class TestAdvisoryBumpClassPassthrough:
     doe_version. Upstream adoption of x-bump-class is deliberately partial (DR-097
     memo), so absence is an ordinary None here, never an error.
 
-    Spec backlink: cross-repo/inbox/2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md
+    Spec backlink: cross-repo/inbox/2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md
     """
 
     @pytest.fixture()
     def fake_doe(self, tmp_path: Path) -> Path:
         if not _which_git():
             pytest.skip("git not available")
-        repo = tmp_path / "coordinator-claude-fake"
+        repo = tmp_path / "DoE-fake"
         schemas = repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text(
@@ -3738,7 +3813,7 @@ class TestAdvisoryBumpClassPassthrough:
         keys are additive-only, never a shape/verdict change."""
         if not _which_git():
             pytest.skip("git not available")
-        repo = tmp_path / "coordinator-claude-fake-no-bump-class"
+        repo = tmp_path / "DoE-fake-no-bump-class"
         schemas = repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text(
@@ -3751,7 +3826,7 @@ class TestAdvisoryBumpClassPassthrough:
         _advisory_git(repo, "add", "-A")
         _advisory_git(repo, "commit", "-q", "-m", "seed widget schema, no bump class")
 
-        # Named "widget.schema.json" so the advisory finds it at coordinator-claude HEAD.
+        # Named "widget.schema.json" so the advisory finds it at DoE HEAD.
         vendored_named = tmp_path / "widget.schema.json"
         vendored_named.write_text(
             json.dumps({"x-schema-version": "1.0.0", "title": "widget"}, indent=2) + "\n",
@@ -3786,19 +3861,19 @@ class TestCanonicalDriftAdvisory:
     test per AC in that chunk's body, plus a direct AC4 assertion against the
     gating sibling `check_schema_drift`.
 
-    Every fixture here is a throwaway tmp_path git repo, never the real coordinator-claude
+    Every fixture here is a throwaway tmp_path git repo, never the real DoE
     clone — same discipline as TestAdvisoryLocalDoeVersions/
     TestAdvisoryBumpClassPassthrough above and test_schema_drift_watch.py's
-    fake-coordinator-claude-repo helpers.
+    fake-DoE-repo helpers.
 
-    Spec backlink: cross-repo/inbox/2026-08-03-coordinator-claude-em-drift-normalize-yes-but-comment-survives-canonicalization.md
+    Spec backlink: cross-repo/inbox/2026-08-03-doe-claude-em-drift-normalize-yes-but-comment-survives-canonicalization.md
     """
 
     @pytest.fixture()
     def fake_doe(self, tmp_path: Path) -> Path:
         if not _which_git():
             pytest.skip("git not available")
-        repo = tmp_path / "coordinator-claude-fake"
+        repo = tmp_path / "DoE-fake"
         schemas = repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text(
@@ -3895,7 +3970,7 @@ class TestCanonicalDriftAdvisory:
         base = dict(_CANONICAL_WIDGET)
         base["tags"] = ["$comment", "widget"]
 
-        doe_repo = tmp_path / "coordinator-claude-tagged"
+        doe_repo = tmp_path / "DoE-tagged"
         schemas = doe_repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text(
@@ -3938,7 +4013,7 @@ class TestCanonicalDriftAdvisory:
     def test_ac3_malformed_vendored_json_falls_back_to_byte_diverged(
         self, fake_doe: Path, tmp_path: Path
     ) -> None:
-        """AC3: vendored side fails to parse as JSON while coordinator-claude's side parses
+        """AC3: vendored side fails to parse as JSON while DoE's side parses
         fine -> falls back to the raw byte test and reports diverged=True,
         without raising. A malformed vendored schema must never be normalized
         into looking clean."""
@@ -3951,7 +4026,7 @@ class TestCanonicalDriftAdvisory:
     def test_ac3_malformed_doe_json_falls_back_to_byte_diverged(
         self, tmp_path: Path
     ) -> None:
-        """AC3, symmetric case: coordinator-claude HEAD's side fails to parse as JSON while
+        """AC3, symmetric case: DoE HEAD's side fails to parse as JSON while
         the vendored copy parses fine -> falls back to the raw byte test and
         reports diverged=True, without raising. AC3 and the docstring both say
         "either side" — this pins the side the existing vendored-malformed
@@ -3960,7 +4035,7 @@ class TestCanonicalDriftAdvisory:
         None` check would be caught here."""
         if not _which_git():
             pytest.skip("git not available")
-        doe_repo = tmp_path / "coordinator-claude-malformed"
+        doe_repo = tmp_path / "DoE-malformed"
         schemas = doe_repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text("not json at all {{{", encoding="utf-8")
@@ -3988,7 +4063,7 @@ class TestCanonicalDriftAdvisory:
         looking clean."""
         if not _which_git():
             pytest.skip("git not available")
-        doe_repo = tmp_path / "coordinator-claude-both-malformed"
+        doe_repo = tmp_path / "DoE-both-malformed"
         schemas = doe_repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text("not json at all {{{", encoding="utf-8")
@@ -4063,7 +4138,7 @@ class TestDivergenceKind:
     `direction` distinguishing a validation-SHAPE delta from a PROSE-only one
     (description/$comment/x-bump-note), via schema_shape.semantic_shape_hash.
 
-    Spec backlink: 2026-08-13 parity-tail exchange (coordinator-claude-EM: "'reconcile by hand'
+    Spec backlink: 2026-08-13 parity-tail exchange (DoE-EM: "'reconcile by hand'
     on a punctuation diff trains people to stop reading it" — 10 of 12
     then-drifted schemas carried DIRECTION_BOTH's reconcile-by-hand prose despite
     byte-identical validation shape).
@@ -4073,7 +4148,7 @@ class TestDivergenceKind:
     def fake_doe(self, tmp_path: Path) -> Path:
         if not _which_git():
             pytest.skip("git not available")
-        repo = tmp_path / "coordinator-claude-fake"
+        repo = tmp_path / "DoE-fake"
         schemas = repo / "coordinator" / "schemas"
         schemas.mkdir(parents=True)
         (schemas / "widget.schema.json").write_text(
@@ -4157,7 +4232,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_bug_backlog_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'bug-backlog.schema.json',
             _DOE_REPO,
@@ -4166,7 +4241,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_cross_repo_commitment_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'cross-repo-commitment.schema.json',
             _DOE_REPO,
@@ -4175,7 +4250,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_debt_backlog_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'debt-backlog.schema.json',
             _DOE_REPO,
@@ -4184,7 +4259,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_improvement_queue_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'improvement-queue.schema.json',
             _DOE_REPO,
@@ -4193,7 +4268,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_lesson_entry_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'lesson-entry.schema.json',
             _DOE_REPO,
@@ -4202,7 +4277,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_lessons_outbox_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'lessons-outbox.schema.json',
             _DOE_REPO,
@@ -4211,7 +4286,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_review_findings_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'review-findings.schema.json',
             _DOE_REPO,
@@ -4219,8 +4294,8 @@ class TestPinnedQueueSchemaDrift:
         )
 
     def test_review_trail_matches_pinned_sha(self):
-        # Was an ahead-pin for a few hours on 2026-08-10 while claude-klabauter led coordinator-claude
-        # on the scope_kind enum close. Coordinator-claude vendored it themselves at their
+        # Was an ahead-pin for a few hours on 2026-08-10 while claude-klabauter led DoE
+        # on the scope_kind enum close. DoE vendored it themselves at their
         # 6baac04a3 ("review-trail: adopt the scope_kind enum from the
         # vendored side"), which is exactly the condition
         # check_schema_ahead_of_doe's stale-ahead branch exists to detect --
@@ -4229,7 +4304,7 @@ class TestPinnedQueueSchemaDrift:
         # so this is an ordinary byte-pin again and the ahead-pin entry is
         # gone. Nothing about that is a special case worth preserving here.
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'review-trail.schema.json',
             _DOE_REPO,
@@ -4238,7 +4313,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_priority_ledger_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'priority-ledger.schema.json',
             _DOE_REPO,
@@ -4247,7 +4322,7 @@ class TestPinnedQueueSchemaDrift:
 
     def test_priority_intent_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(
             _SCHEMAS_DIR / 'priority-intent.schema.json',
             _DOE_REPO,
@@ -4257,7 +4332,7 @@ class TestPinnedQueueSchemaDrift:
 
 class TestAheadPinRegistryRouting:
     """The real consumer of `_QUEUE_SCHEMA_AHEAD_PINS` — routes every entry
-    through `check_schema_ahead_of_doe` against the live coordinator-claude clone. Trivially
+    through `check_schema_ahead_of_doe` against the live DoE clone. Trivially
     green while the registry is empty (the healthy resting state), but the
     moment an entry is added it is ACTUALLY exercised, closing the gap
     P1-3 identified: the registry used to be read by nothing, so an added
@@ -4268,7 +4343,7 @@ class TestAheadPinRegistryRouting:
 
     def test_every_ahead_pin_entry_is_routed_and_passes(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
-            pytest.skip(f'coordinator-claude repo not found at {_DOE_REPO}')
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         if not _QUEUE_SCHEMA_AHEAD_PINS:
             pytest.skip('ahead-pin registry is empty — the healthy resting state')
         for name, entry in _QUEUE_SCHEMA_AHEAD_PINS.items():
@@ -4314,7 +4389,7 @@ class TestCheckSchemaAheadOfDoe:
             pytest.skip("git not available")
 
         def _make(version: str = "1.0.0", extra: dict | None = None) -> Path:
-            repo = tmp_path / f"coordinator-claude-fake-{version.replace('.', '_')}"
+            repo = tmp_path / f"DoE-fake-{version.replace('.', '_')}"
             schemas = repo / "coordinator" / "schemas"
             schemas.mkdir(parents=True)
             body = {"x-schema-version": version, "title": "widget"}
@@ -4357,14 +4432,14 @@ class TestCheckSchemaAheadOfDoe:
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
-        # coordinator-claude moves after the pin was recorded.
+        # DoE moves after the pin was recorded.
         schemas = repo / "coordinator" / "schemas"
         (schemas / "widget.schema.json").write_text(
             json.dumps({"x-schema-version": "1.1.0", "title": "widget"}, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         _ahead_git(repo, "add", "-A")
-        _ahead_git(repo, "commit", "-q", "-m", "coordinator-claude moved")
+        _ahead_git(repo, "commit", "-q", "-m", "DoE moved")
         local = self._local(tmp_path, "1.1.0")
         with pytest.raises(SchemaDriftError, match="STALE"):
             check_schema_ahead_of_doe(
@@ -4372,7 +4447,7 @@ class TestCheckSchemaAheadOfDoe:
             )
 
     def test_stale_ahead_raises_when_doe_moved_on_a_different_branch(self, fake_doe, tmp_path: Path) -> None:
-        """Review: code-reviewer P3 -- prior coverage only moved coordinator-claude on the
+        """Review: code-reviewer P3 -- prior coverage only moved DoE on the
         SAME branch. Check 1 explicitly resolves against `git log --all`
         (any local ref), not `HEAD`; this exercises that a second branch
         moving the schema is caught too, not just more commits on the
@@ -4395,7 +4470,7 @@ class TestCheckSchemaAheadOfDoe:
         # "most recent" result ref-declaration-order-dependent rather than
         # deterministic, which would make this assertion flaky.
         _ahead_git(
-            repo, "commit", "-q", "-m", "coordinator-claude moved on another branch",
+            repo, "commit", "-q", "-m", "DoE moved on another branch",
             env={"GIT_AUTHOR_DATE": "2030-01-02T00:00:00", "GIT_COMMITTER_DATE": "2030-01-02T00:00:00"},
         )
         # Back on the original branch, which never saw this commit.
@@ -4452,7 +4527,7 @@ class TestCheckSchemaAheadOfDoe:
 
     def test_bump_note_narrowing_still_raises(self, fake_doe, tmp_path: Path) -> None:
         """The prose carve-out is append-only, not free-form rewrite tolerance:
-        a bump-note whose text is NOT a superstring of coordinator-claude's must still fail."""
+        a bump-note whose text is NOT a superstring of DoE's must still fail."""
         repo = fake_doe("1.0.0", extra={"x-bump-note": "added an optional field"})
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
@@ -4503,7 +4578,7 @@ class TestCheckSchemaAheadOfDoe:
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
-        # Uncommitted edit on the coordinator-claude side — must be refused, not read as "unmoved".
+        # Uncommitted edit on the DoE side — must be refused, not read as "unmoved".
         (repo / "coordinator" / "schemas" / "widget.schema.json").write_text(
             json.dumps({"x-schema-version": "1.0.0", "title": "widget (dirty)"}, indent=2) + "\n",
             encoding="utf-8",
@@ -4736,7 +4811,7 @@ class TestRoundTripValidation:
 # ---------------------------------------------------------------------------
 # Memo cross-field rules — validate_memo_cross_fields
 #
-# Port of CROSS_FIELD_RULES['cross-repo-memo'] from coordinator-claude coordinator/bin/lib/schema.js:1332-1522.
+# Port of CROSS_FIELD_RULES['cross-repo-memo'] from DoE-claude coordinator/bin/lib/schema.js:1332-1522.
 # ---------------------------------------------------------------------------
 
 
@@ -5210,8 +5285,8 @@ class TestParseYamlLegacyDialect:
         }
         assert parse_yaml(text) == expected
 
-    # Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-sizing-advisory-latch-
-    # all-three-taken.md — coordinator-claude-em reported the advisory inventing property names
+    # Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-sizing-advisory-latch-
+    # all-three-taken.md — doe-claude-em reported the advisory inventing property names
     # off a sizing-object that parses clean under yaml.safe_load. A block scalar opened
     # ON a list item's dash line had its body parsed as a sibling mapping, so any colon
     # in the body minted a key. Negative-spec: the body is a scalar, never a mapping —
@@ -5290,17 +5365,27 @@ class TestParseYamlLegacyDialect:
 
 
 class TestDescribeBehavioralCases:
-    """Two behavioral cases pinned by coordinator-claude's own consult, independent of the node
+    """Two behavioral cases pinned by DoE's own consult, independent of the node
     oracle: an empty optional list must be [] (not a missing key), and a schema
     with no applies_to must yield None (not a KeyError, not an absent key)."""
 
     def test_zero_optional_fields_is_empty_list_not_missing_key(self):
         # review-findings.schema.json v2.1.0 added the optional `reviewed_range`
-        # array (2026-08-13 re-vendor); every other declared property is
-        # still `required`.
+        # array (2026-08-13 re-vendor), and v3.2.0 added `reviewed_targets`
+        # (2026-08-14 re-vendor, DoE 359e41da5 — the non-committed review-target
+        # attestation, a SIBLING field deliberately rather than a union inside
+        # `reviewed_range`, so the pattern that must keep rejecting `..HEAD` and
+        # the one that must accept `uncommitted:` are not one edit apart). Every
+        # other declared property is still `required`.
+        #
+        # This list is asserted by equality on purpose: it is the behavioural pin
+        # DoE's consult asked for — an empty optional list must be [], not a
+        # missing key — so it has to notice a NEW optional field arriving, not
+        # just an emptied one. Extend it on a deliberate re-vendor; never relax
+        # it to a subset check, which would stop it noticing anything.
         result = describe('review-findings')
         assert 'optional' in result
-        assert result['optional'] == ['reviewed_range']
+        assert result['optional'] == ['reviewed_range', 'reviewed_targets']
 
     def test_no_applies_to_returns_none_not_missing_key(self):
         # percolate-store.schema.json declares no applies_to glob.
@@ -5388,7 +5473,7 @@ class TestValidateJsonSchemaBackedDispatch:
 class TestValidateEnumErrorShapeParity:
     """Named per task spec: a field value VALID per JSON-Schema `type` but that FAILS
     an `enum` constraint must produce the full {field, error, hint} error dict shape,
-    not merely a boolean reject — coordinator-claude's queue ops consume the shape, so shape drift
+    not merely a boolean reject — DoE's queue ops consume the shape, so shape drift
     is silent breakage."""
 
     def test_type_valid_enum_invalid_produces_full_error_dict_shape(self):
@@ -5438,7 +5523,7 @@ class TestJsonSchemaNodeEnumHintParity:
 # =============================================================================
 # allOf / oneOf / unevaluatedProperties (schema-validator-keyword-gap):
 #
-# cross-repo/inbox/2026-07-25-coordinator-claude-em-schema-validator-keyword-gap.md — the
+# cross-repo/inbox/2026-07-25-doe-claude-em-schema-validator-keyword-gap.md — the
 # retired JS oracle walked allOf/oneOf/unevaluatedProperties generically; the Python
 # port's _validate_json_schema_node did not, so schemas relying on those keywords were
 # SILENTLY UNDER-VALIDATED (a malformed fixture the schema author intended to reject
@@ -5469,7 +5554,7 @@ class TestAllOfKeyword:
         assert fields == {'a', 'b'}
 
     def test_previously_silently_passing_document_now_rejected(self):
-        # Mirrors the coordinator-claude memo's motivating case (strategic-self-description's
+        # Mirrors the DoE memo's motivating case (strategic-self-description's
         # coordinator-root-path-omitted.json): a constraint expressed ONLY inside an
         # allOf branch, with no top-level `required`. Before this fix, allOf was not a
         # dispatched keyword at all — _validate_json_schema_node returned [] for ANY
@@ -5943,7 +6028,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'example_doctrine_repo',
+                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'doe_claude',
                 'ref': 'docs/decisions/DR-100.md', 'expected': True,
                 'note': 'proves the decision record landed',
             }],
@@ -5966,7 +6051,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'example_doctrine_repo',
+                'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'doe_claude',
                 'ref': 'abc1234@refs/heads/main',
             }],
         })
@@ -6016,7 +6101,7 @@ class TestGateEvidenceLegsShape:
     def test_deadline_leg_with_repo_rejected(self):
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
-            'legs': [{'leg_id': 'l1', 'kind': 'deadline', 'ref': '2026-08-01', 'repo': 'example_doctrine_repo'}],
+            'legs': [{'leg_id': 'l1', 'kind': 'deadline', 'ref': '2026-08-01', 'repo': 'doe_claude'}],
         })
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(
@@ -6036,7 +6121,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'example_doctrine_repo',
+                'leg_id': 'l1', 'kind': 'file-exists', 'repo': 'doe_claude',
                 'ref': 'docs/decisions/DR-100.md', 'expected': True,
             }],
         })
@@ -6059,7 +6144,7 @@ class TestGateEvidenceLegsShape:
         mandatory repo: rule exists to prevent — ref must name both ends."""
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
-            'legs': [{'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'example_doctrine_repo', 'ref': 'abc1234'}],
+            'legs': [{'leg_id': 'l1', 'kind': 'commit-ancestor', 'repo': 'doe_claude', 'ref': 'abc1234'}],
         })
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].ref' for e in errors)
@@ -6069,7 +6154,7 @@ class TestGateEvidenceLegsShape:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
-                'leg_id': 'l1', 'kind': 'file_exists', 'repo': 'example_doctrine_repo',
+                'leg_id': 'l1', 'kind': 'file_exists', 'repo': 'doe_claude',
                 'ref': 'docs/decisions/DR-100.md', 'expected': True, 'note': 'n',
             }],
         })

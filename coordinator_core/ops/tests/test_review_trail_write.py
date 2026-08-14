@@ -4,7 +4,7 @@ coordinator_core.ops.tests.test_review_trail_write — direct-op tests for revie
 Purpose: Exercise ``write_review_trail_entry`` / ``_build_json_record`` directly — JSON
 content and key order, validation rules, filename derivation, session-id/workstream
 resolution, and atomic-write semantics. This is the strangler invariant (C3 / DR-216 D3):
-if the JSON record bytes drift, the coordinator-claude facade routing will silently produce different
+if the JSON record bytes drift, the DoE facade routing will silently produce different
 on-disk review-trail entries.
 
 Coverage:
@@ -27,7 +27,7 @@ Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C3
 DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2/D3
 
 Negative-spec:
-    - The byte-parity harness against ``coordinator-write-review-trail.sh`` (the coordinator-claude shell
+    - The byte-parity harness against ``coordinator-write-review-trail.sh`` (the DoE shell
       oracle this suite once ran as a spawned child process) was RETIRED 2026-07-22 —
       deleted, not repointed at its ``.py`` replacement (``coordinator-write-review-trail.py``, a pure
       ``cc_invoke.route_mutation()`` trampoline into this repo's OWN ``review_trail_write``
@@ -36,8 +36,8 @@ Negative-spec:
       is folded into ``TestJsonContentStructure::test_full_record_bytes_for_all_scope_kinds``
       below (exact full-content equality against a locally-constructed expected string,
       parametrized over every scope_kind × workstream combination) — same assertive power,
-      no external process, no coordinator-claude-checkout dependency. Do NOT reintroduce an oracle path or
-      a ``pytest.skip``/``skipif`` gated on a missing coordinator-claude artifact; that shape is exactly the
+      no external process, no DoE-checkout dependency. Do NOT reintroduce an oracle path or
+      a ``pytest.skip``/``skipif`` gated on a missing DoE artifact; that shape is exactly the
       hazard this retirement removes. See
       state/review-trail/findings/2026-07-22-parity-retire-fold-plan.md § 4.2 and
       state/review-trail/findings/2026-07-22-parity-test-circularity-audit.md § 2.6/§5.
@@ -1159,7 +1159,7 @@ class TestWriteTimeSymbolicRefResolution:
         """sha_range='<sha>..HEAD' is persisted as '<sha>..<concrete-sha>',
         not the literal string 'HEAD'.
 
-        This is the exact defect shape observed live in coordinator-claude
+        This is the exact defect shape observed live in DoE-claude
         (state/review-trail/*.json, 8+ records citing '..HEAD').
         """
         monkeypatch.delenv("REVIEW_TRAIL_OUTPUT_ROOT", raising=False)
@@ -1537,7 +1537,7 @@ class TestForeignSessionScopeGuard:
     def test_single_commit_case3_does_not_advise_impossible_narrowing(
         self, tmp_path
     ) -> None:
-        """DEFECT 2 repro (2026-08-07 coordinator-claude-em memos: case3-remedy-is-
+        """DEFECT 2 repro (2026-08-07 doe-claude-em memos: case3-remedy-is-
         not-performable / review-trail-guard-remedy-unreachable). A sha_range
         that is ALREADY a single commit lands in Case 3 when that commit is
         untrailered and unplaceable — but there is no narrower range than one
@@ -2392,6 +2392,27 @@ class TestExecutionBasisSidecarDerivation:
         result = self._write(tmp_path, monkeypatch, reviewer_evidence=rel)
         assert result["execution_basis"] == "read-only"
 
+    def test_read_only_fallback_survives_the_reviewer_explaining_itself(self, tmp_path, monkeypatch):
+        """A reviewer that appends WHY it was read-only still derives read-only.
+
+        Regression: the match was string equality, so any elaboration after the
+        fallback sentence fell through to the ``executed`` default — recording
+        that a review executed when its own sidecar said it had not. The failure
+        direction is what makes this break-class rather than cosmetic: the trail
+        is an integrity record, and the silent outcome was an over-claim of
+        verification. Observed live on a coordinator:code-reviewer sidecar whose
+        section read '... reading only (Bash confined to read-only allowlist;
+        brief did not ask for execution).'
+        """
+        rel = self._sidecar(
+            tmp_path,
+            "## Execution capability\n\nnone — this verdict rests on reading only "
+            "(Bash confined to read-only allowlist; brief did not ask for execution).\n\n"
+            "## Divergence\n",
+        )
+        result = self._write(tmp_path, monkeypatch, reviewer_evidence=rel)
+        assert result["execution_basis"] == "read-only"
+
     def test_sidecar_present_section_absent_omits_key_and_succeeds(self, tmp_path, monkeypatch):
         """Rule 4: sidecar exists but has no '## Execution capability'
         section at all — omit the key, do not refuse the write."""
@@ -2541,4 +2562,195 @@ class TestDispatchIdResolvable:
         assert not _dispatch_id_resolvable(
             "anything@session-missing", tmp_path, "missing-session"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: Deliverable-Id recovery fallback for an absent Session-Id trailer
+# (approved 2026-08-14, in-session PM ruling;
+# state/bug-backlog/2026-08-14-a-prepare-commit-msg-outage-permanently-
+# 07d3a77f3d56.yaml). Condition 1 (Session-Id ABSENT, never present-and-
+# different) is the whole safety property — the regression test that matters
+# most (test_present_foreign_session_id_still_refused_even_with_matching_
+# deliverable_id) pins that a matching Deliverable-Id NEVER rescues a commit
+# whose own Session-Id trailer names a different session.
+# ---------------------------------------------------------------------------
+
+_RECOVERY_DELIVERABLE_ID = "dlv-claim-release-is-unreachable-for-dispatc-a0973d"
+_RECOVERY_OTHER_DELIVERABLE_ID = "dlv-some-other-deliverable-111111"
+
+
+def _make_commit_with_trailers(
+    repo: Path, path: str, message: str, *, session_id: Optional[str] = None,
+    deliverable_id: Optional[str] = None,
+) -> str:
+    """Like `_make_commit_touching`, but lets the caller independently
+    control the `Session-Id:` and `Deliverable-Id:` trailers (real commit
+    trailers can carry either, both, or neither — the prepare-commit-msg
+    outage this fallback recovers from is exactly a commit with the second
+    but not the first)."""
+    file_path = repo / path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(message, encoding="utf-8")
+    _git(["add", path], repo)
+    trailer_lines = []
+    if session_id is not None:
+        trailer_lines.append(f"Session-Id: {session_id}")
+    if deliverable_id is not None:
+        trailer_lines.append(f"Deliverable-Id: {deliverable_id}")
+    trailers = ("\n\n" + "\n".join(trailer_lines)) if trailer_lines else ""
+    _git(["commit", "-m", f"{message}{trailers}"], repo)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo),
+        capture_output=True, encoding="utf-8", check=True,
+    ).stdout.strip()
+
+
+class TestDeliverableIdRecoveryFallback:
+    def _guard(self, repo: Path, sha_range: str, monkeypatch, *, resolved_id: str) -> None:
+        import coordinator_core.ops.review_trail_write as rtw
+
+        monkeypatch.setattr(
+            rtw, "_own_deliverable_id_for_recovery", lambda *a, **k: resolved_id,
+        )
+        rtw._guard_foreign_session_range(sha_range, _GUARD_OWN_SESSION, repo)
+
+    def test_absent_session_id_matching_deliverable_id_in_range_is_permitted(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The new behaviour: an untrailered commit whose Deliverable-Id
+        exactly matches this write's own resolved deliverable is no longer
+        ambiguous — the guard proceeds (no raise)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_with_trailers(
+            repo, "one.py", "outage commit",
+            deliverable_id=_RECOVERY_DELIVERABLE_ID,
+        )
+
+        # Must not raise.
+        self._guard(
+            repo, f"{base_sha}..HEAD", monkeypatch, resolved_id=_RECOVERY_DELIVERABLE_ID,
+        )
+
+    def test_absent_session_id_non_matching_deliverable_id_still_refused(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_with_trailers(
+            repo, "one.py", "outage commit",
+            deliverable_id=_RECOVERY_OTHER_DELIVERABLE_ID,
+        )
+
+        with pytest.raises(ForeignSessionRangeRefused):
+            self._guard(
+                repo, f"{base_sha}..HEAD", monkeypatch,
+                resolved_id=_RECOVERY_DELIVERABLE_ID,
+            )
+
+    def test_absent_session_id_no_deliverable_id_still_refused(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_with_trailers(repo, "one.py", "outage commit")
+
+        with pytest.raises(ForeignSessionRangeRefused):
+            self._guard(
+                repo, f"{base_sha}..HEAD", monkeypatch,
+                resolved_id=_RECOVERY_DELIVERABLE_ID,
+            )
+
+    def test_present_foreign_session_id_still_refused_even_with_matching_deliverable_id(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """THE regression test that matters most: a commit whose OWN
+        Session-Id trailer names a DIFFERENT session is refused exactly as
+        today, unconditionally — a matching Deliverable-Id must never rescue
+        it. If this test ever goes red, the guard has stopped being a
+        guard."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_with_trailers(
+            repo, "one.py", "peer work",
+            session_id=_GUARD_FOREIGN_SESSION,
+            deliverable_id=_RECOVERY_DELIVERABLE_ID,
+        )
+
+        with pytest.raises(ForeignSessionRangeRefused, match="names a different session") as exc:
+            self._guard(
+                repo, f"{base_sha}..HEAD", monkeypatch,
+                resolved_id=_RECOVERY_DELIVERABLE_ID,
+            )
+        assert foreign_sha in str(exc.value)
+
+    def test_present_foreign_session_id_on_merge_commit_still_refused_even_with_matching_deliverable_id(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Pins defence-in-depth, not unreachability: `trailer_foreign_shas`
+        (case 1's feeder) runs `git log --no-merges`, so a MERGE commit
+        carrying a foreign Session-Id trailer is invisible to case 1 and
+        reaches `unplaced_or_foreign` (whose feeder, `detect_foreign_commits`,
+        deliberately walks merges). It is refused anyway only because
+        `_deliverable_id_matched_untrailered_shas` independently re-checks
+        Session-Id absence on every candidate before matching Deliverable-Id
+        -- this test is what makes that re-check non-removable."""
+        # Both real branch commits carry THIS session's own Session-Id, so
+        # they are never classified foreign by anything -- the ONLY foreign
+        # signal in the whole range lives on the merge commit's own trailers,
+        # isolating the assertion to that one mechanism.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base", session_id=_GUARD_OWN_SESSION)
+        _git(["checkout", "-b", "side"], repo)
+        side_sha = _make_commit(repo, "side work", session_id=_GUARD_OWN_SESSION)
+        _git(["checkout", "main"], repo)
+        _make_commit(repo, "main work", session_id=_GUARD_OWN_SESSION)
+        _git(
+            [
+                "merge", "--no-ff", "-m",
+                f"merge\n\nSession-Id: {_GUARD_FOREIGN_SESSION}\n"
+                f"Deliverable-Id: {_RECOVERY_DELIVERABLE_ID}",
+                side_sha,
+            ],
+            repo,
+        )
+        merge_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo),
+            capture_output=True, encoding="utf-8", check=True,
+        ).stdout.strip()
+
+        with pytest.raises(ForeignSessionRangeRefused):
+            self._guard(
+                repo, f"{base_sha}..{merge_sha}", monkeypatch,
+                resolved_id=_RECOVERY_DELIVERABLE_ID,
+            )
+
+    def test_present_own_session_id_still_permitted_unchanged(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A commit whose own Session-Id trailer names THIS session is
+        permitted exactly as before — the fallback is a no-op on the
+        already-attributed path."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_with_trailers(
+            repo, "one.py", "own work", session_id=_GUARD_OWN_SESSION,
+        )
+
+        # Must not raise, and the deliverable-id resolver need not even be
+        # consulted for this to hold — but stub it anyway to keep this test
+        # isolated from real session-shape resolution.
+        self._guard(repo, f"{base_sha}..HEAD", monkeypatch, resolved_id="")
 

@@ -1,9 +1,9 @@
 """Behavioral tests for
 coordinator_core.write_guards.validate_frontmatter_schema_advisory — the
-warn-mode (default) leg of the fan-in split of coordinator-claude's
+warn-mode (default) leg of the fan-in split of DoE's
 validate-frontmatter-schema.py PreToolUse hook.
 
-Requires the sibling coordinator-claude checkout (for coordinator/schemas/ and the
+Requires the sibling DoE-claude checkout (for coordinator/schemas/ and the
 registry manifest) — skipped entirely when absent, per the
 coordinator_core.testing.doe_root convention (parity-oracle tests that need
 real schema content, not a synthetic stand-in, follow this same pattern
@@ -11,11 +11,11 @@ elsewhere in this tree; see orient_assemble/tests/test_envelope_schema_
 conformance.py).
 
 `coordinator_doe_root` is monkeypatched to the resolved sibling root for
-every test (rather than relying on REPO_EXAMPLE_DOCTRINE_REPO / machine-local at test
+every test (rather than relying on REPO_DOE_CLAUDE / machine-local at test
 time) so the suite is deterministic regardless of this machine's registry
 state.
 
-Covers: non-write-tool/non-dict-tool_input passthrough, coordinator-claude-root-unresolvable
+Covers: non-write-tool/non-dict-tool_input passthrough, DoE-root-unresolvable
 fail-open, the four warn-by-default payloads (schema-validation warning,
 mislocated-memo offer, routing-mismatch offer, scaffold offer) firing in
 default (non-strict) mode and going silent (None) under
@@ -25,12 +25,13 @@ exclusively the deny sibling's territory) even though a schema-valid memo
 would otherwise warn, a fully schema-conformant handoff/memo write passing
 through silently, and the module contract (CLASS/MATCHERS/PRIORITY).
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C11
-Source: coordinator-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C11
+Source: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,7 @@ _doe_root, _doe_present = doe_root_and_present()
 @pytest.fixture(autouse=True)
 def _pin_doe_root(monkeypatch):
     if not _doe_present:
-        pytest.skip("sibling coordinator-claude checkout not found")
+        pytest.skip("sibling DoE-claude checkout not found")
     monkeypatch.setattr(guard, "coordinator_doe_root", lambda: _doe_root)
 
 
@@ -85,7 +86,7 @@ class TestGateOnToolAndPayloadShape:
     def test_doe_root_unresolvable_still_warns_via_vendored_schemas(self, tmp_path, monkeypatch):
         # Pre-repoint this fully fail-opened (registry unresolvable -> zero
         # enforcement). Post-repoint (AC2), schema-shape advisories no
-        # longer depend on the coordinator-claude sibling at all -- the corpus is vendored
+        # longer depend on the DoE sibling at all -- the corpus is vendored
         # in-repo, so a title-only handoff still warns even with the
         # sibling unreachable. Manifest-derived behaviour (scaffold offers,
         # which need the offerable-doc-types map) still degrades silently,
@@ -105,8 +106,8 @@ class TestGateOnToolAndPayloadShape:
 class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
     """AC2 twin (docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
     corpus.md): the advisory guard still validates against the schema
-    corpus with the coordinator-claude sibling completely unreachable, because the corpus
-    is vendored in-repo now instead of read from coordinator-claude's live working
+    corpus with the DoE sibling completely unreachable, because the corpus
+    is vendored in-repo now instead of read from DoE-claude's live working
     tree. Only manifest-DERIVED behaviour (memo routing, scaffold offers)
     is expected to degrade.
     """
@@ -166,7 +167,7 @@ class TestSchemaCorpusSourcePinned:
         assert guard._VENDORED_SCHEMAS_DIR.is_dir()
 
     def test_resolved_schemas_dir_does_not_move_when_doe_root_changes(self, tmp_path, monkeypatch):
-        fake_doe_root = str(tmp_path / "not-a-real-coordinator-claude-checkout")
+        fake_doe_root = str(tmp_path / "not-a-real-doe-claude-checkout")
         monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_doe_root)
         # _VENDORED_SCHEMAS_DIR is a module-level constant -- re-pointing
         # coordinator_doe_root() cannot move it, unlike the old
@@ -184,7 +185,7 @@ class TestSchemaCorpusSourcePinned:
 
 
 class TestTornWriteRetry:
-    """coordinator-claude's schema corpus and registry manifest are read from the sibling
+    """DoE's schema corpus and registry manifest are read from the sibling
     checkout's LIVE working tree on every check() — a concurrent session can
     leave a torn/partial JSON file mid-write. `_retry_on_transient_read_failure`
     narrows that race without changing the guard's fail-open contract once
@@ -300,7 +301,7 @@ class TestTornWriteRetry:
         # (an absent manifest path is never retried) still holds.
         sleep_calls = {"n": 0}
         monkeypatch.setattr(guard.time, "sleep", lambda secs: sleep_calls.__setitem__("n", sleep_calls["n"] + 1))
-        fake_root = str(tmp_path / "nonexistent-coordinator-claude-root")
+        fake_root = str(tmp_path / "nonexistent-doe-claude-root")
         monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_root)
         result = guard.check(
             _payload("Write", "/tmp/state/handoffs/x.md", "/tmp", content="---\ntitle: t\n---\nbody")
@@ -422,14 +423,14 @@ class TestOwnInboxIsDenySiblingTerritory:
     """
 
     def test_own_inbox_misplacement_yields_none(self):
-        # Uses the real coordinator-claude checkout as both cwd (repo root) and the
-        # REPO_EXAMPLE_DOCTRINE_REPO-resolved central path, so the guard's
+        # Uses the real DoE-claude checkout as both cwd (repo root) and the
+        # REPO_DOE_CLAUDE-resolved central path, so the guard's
         # this-repo-is-central branch engages. No file is ever opened for a
         # Write payload's own content (see _memo_guards_decision), so this
         # never touches disk.
         fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-own-inbox-test.md"
         memo_content = (
-            "---\nfrom: coordinator-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: doe-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
         result = guard.check(_payload("Write", fp, _doe_root, content=memo_content))
@@ -438,7 +439,7 @@ class TestOwnInboxIsDenySiblingTerritory:
     def test_correct_inbound_memo_passes_through_silent(self):
         fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-correct-inbound-test.md"
         memo_content = (
-            "---\nfrom: example-game-repo-em\nto: coordinator-claude-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: example-game-repo-em\nto: doe-claude-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
         result = guard.check(_payload("Write", fp, _doe_root, content=memo_content))
@@ -679,9 +680,9 @@ class TestPlanTasksSpineWarn:
             "  disposition_detail: PM said no, out of scope\n"
             # Required by plan-tasks 1.6.0's allOf conditional on the two scope-cut
             # dispositions. Present so the ONLY variable this test isolates stays the
-            # pm_approved-required branch. NOTE: this fixture tracks coordinator-claude's LIVE tree,
+            # pm_approved-required branch. NOTE: this fixture tracks DoE's LIVE tree,
             # not claude-klabauter's vendored copy -- these guards resolve schemas_dir from
-            # coordinator_doe_root(), so a coordinator-claude-side bump reaches them with no re-vendor.
+            # coordinator_doe_root(), so a DoE-side bump reaches them with no re-vendor.
             "  case_against: Superseded by the C4 rewrite; carrying it forward would\n"
             "    duplicate that surface.\n"
         )
@@ -710,3 +711,258 @@ class TestPlanTasksSpineWarn:
             "a governed, approved plan's closed row without pm_approved must not "
             f"warn at the schema layer: {result}"
         )
+
+
+class TestReviewedRangeOffer:
+    """docs/plans/2026-08-14-the-write-time-offer-for-reviewed-range.md — the
+    write-time offer for `reviewed_range` on the two schemas that carry it
+    (`run-report`, `review-findings`). Covers AC1-AC7.
+    """
+
+    def _sidecar_path(self, tmp_path):
+        d = tmp_path / "state" / "subagent-share" / "sess1"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "report.md"
+
+    def _content(self, reviewed_range_value):
+        return (
+            "---\nstatus: complete\nreviewed_range:\n"
+            f"  - {reviewed_range_value}\n---\n\n## Observations\nnotes\n"
+        )
+
+    def _write_and_check(self, tmp_path, reviewed_range_value):
+        fp = self._sidecar_path(tmp_path)
+        old = "---\nstatus: complete\n---\n\n## Observations\nold\n"
+        fp.write_text(old, encoding="utf-8")
+        new = self._content(reviewed_range_value)
+        return guard.check(
+            _payload("Edit", str(fp), str(tmp_path), old_string=old, new_string=new)
+        )
+
+    def test_ac1_symbolic_endpoint_offers_resolved_40_hex_range(self, tmp_path, monkeypatch):
+        import coordinator_core.ops.review_trail_write as review_trail_write
+
+        left_sha = "a" * 40
+        right_sha = "b" * 40
+
+        def fake_resolve(token, cwd):
+            if token == "a65e39850^":
+                return left_sha
+            if token == "HEAD":
+                return right_sha
+            raise ValueError(f"unexpected token {token!r}")
+
+        monkeypatch.setattr(review_trail_write, "_resolve_ref_to_sha", fake_resolve)
+
+        result = self._write_and_check(tmp_path, "a65e39850^..HEAD")
+        assert result is not None
+        text = _advisory_text(result)
+        assert f"{left_sha}..{right_sha}" in text
+
+    def test_ac2_bare_sha_offers_tilde_one_form(self, tmp_path):
+        sha = "c" * 40
+        result = self._write_and_check(tmp_path, sha)
+        assert result is not None
+        text = _advisory_text(result)
+        assert f"{sha}~1..{sha}" in text
+
+    def test_ac3_unresolvable_value_states_plainly_and_offers_no_substitute(self, tmp_path):
+        # Genuinely no `reviewed_targets` destination derivable (C3):
+        # no ratified prefix, not a bare .diff/.patch path.
+        value = "notes.txt"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" not in text
+        assert "~1.." not in text
+
+    def test_ac4_every_branch_is_an_advisory_never_a_deny_or_mutation(self, tmp_path, monkeypatch):
+        import coordinator_core.ops.review_trail_write as review_trail_write
+
+        monkeypatch.setattr(
+            review_trail_write, "_resolve_ref_to_sha", lambda token, cwd: "d" * 40
+        )
+        for value in ("a65e39850^..HEAD", "e" * 40, "working-tree:some/path"):
+            fp = self._sidecar_path(tmp_path)
+            old = "---\nstatus: complete\n---\n\n## Observations\nold\n"
+            fp.write_text(old, encoding="utf-8")
+            new = self._content(value)
+            payload = _payload(
+                "Edit", str(fp), str(tmp_path), old_string=old, new_string=new
+            )
+            tool_input_before = dict(payload["tool_input"])
+            result = guard.check(payload)
+            assert result is not None
+            assert "permissionDecision" not in result["hookSpecificOutput"]
+            assert payload["tool_input"] == tool_input_before
+
+    def test_ac5_already_valid_reviewed_range_produces_no_advisory(self, tmp_path):
+        result = self._write_and_check(tmp_path, ("f" * 40) + "^.." + ("1" * 40))
+        assert result is None
+
+    def test_ac6_resolver_failure_degrades_to_pre_existing_advisory_text(
+        self, tmp_path, monkeypatch
+    ):
+        import coordinator_core.ops.review_trail_write as review_trail_write
+
+        def broken_resolve(token, cwd):
+            raise RuntimeError("git binary not found")
+
+        monkeypatch.setattr(review_trail_write, "_resolve_ref_to_sha", broken_resolve)
+
+        result = self._write_and_check(tmp_path, "a65e39850^..HEAD")
+        assert result is not None
+        text = _advisory_text(result)
+        assert "[frontmatter-schema warning]" in text
+        assert "required shape: Value must match pattern:" in text
+        assert "The write will proceed." in text
+
+    def test_ac7_review_trail_write_not_imported_at_module_scope(self):
+        # Parses the module with `ast` rather than matching text prefixes —
+        # the invariant under test is "no module-scope import of
+        # review_trail_write by any spelling" (e.g. also catching an
+        # unindented `import coordinator_core.ops.review_trail_write as
+        # rtw`, which a literal-prefix check would miss).
+        source = Path(guard.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=guard.__file__)
+        for node in tree.body:  # module-level statements only
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if "review_trail_write" in alias.name:
+                        raise AssertionError(
+                            f"review_trail_write imported at module scope: {ast.dump(node)}"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if "review_trail_write" in module or any(
+                    "review_trail_write" in alias.name for alias in node.names
+                ):
+                    raise AssertionError(
+                        f"review_trail_write imported at module scope: {ast.dump(node)}"
+                    )
+
+    def test_double_separator_splits_on_first_and_malformed_right_falls_to_no_range(
+        self, tmp_path
+    ):
+        # Pins by hand-tracing (no bug found): `_RANGE_SEPARATOR_RE` is
+        # non-greedy on the left, so `a..b..c` splits `left="a"`,
+        # `right="b..c"`; `right` is not a real ref, so `_resolve_ref_to_sha`
+        # rejects it and the value falls to the "names no commit range"
+        # branch rather than silently accepting a truncated range.
+        result = self._write_and_check(tmp_path, "a..b..c")
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" not in text
+
+    # -- C3: branch (c) names reviewed_targets instead of naming nothing --
+    # docs/plans/2026-08-14-the-write-time-offer-for-reviewed-range.md § C3.
+
+    def test_c3_already_valid_reviewed_targets_form_offered_unchanged(self, tmp_path):
+        value = "uncommitted:coordinator_core/archive_stamp.py"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" in text
+        assert f'"{value}"' in text
+        assert "reviewed_targets" in text
+
+    def test_c3_bare_diff_path_offers_diff_artifact_prefix(self, tmp_path):
+        value = "state/review-trail/diffs/wsc-E.diff"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" in text
+        assert f'"diff-artifact:{value}"' in text
+        assert "reviewed_targets" in text
+
+    def test_c3_bare_patch_path_offers_diff_artifact_prefix(self, tmp_path):
+        value = "state/review-trail/diffs/wsc-E.patch"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert f'"diff-artifact:{value}"' in text
+
+    def test_c3_packed_comma_separated_prefix_offers_one_target_per_path(self, tmp_path):
+        value = (
+            "working-tree: coordinator_core/archive_stamp.py, "
+            "coordinator_core/pickup_assemble/apply.py"
+        )
+        # YAML-quoted in the fixture only — `value: ...` unquoted parses as a
+        # mapping key inside the list item, not the string this test targets.
+        result = self._write_and_check(tmp_path, f'"{value}"')
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" in text
+        assert '"working-tree:coordinator_core/archive_stamp.py"' in text
+        assert '"working-tree:coordinator_core/pickup_assemble/apply.py"' in text
+        assert "reviewed_targets" in text
+
+    def test_c3_hybrid_range_endpoint_unresolvable_still_offers_nothing(self, tmp_path):
+        # Negative case (mandatory per C3 body): a hybrid `<40hex>..working-tree`
+        # value re-resolves on every read via its right endpoint — the same
+        # `..HEAD` hazard in other clothes — and must NOT be split across
+        # reviewed_range/reviewed_targets even though `working-tree:` alone
+        # would otherwise be offerable.
+        value = ("a" * 40) + "..working-tree"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" not in text
+        assert "reviewed_targets" not in text
+
+    def test_c3_uncorrelated_value_still_offers_nothing(self, tmp_path):
+        value = "design.py"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" not in text
+        assert "reviewed_targets" not in text
+
+    def test_c3_ratified_prefix_single_path_with_incidental_whitespace_recovers(
+        self, tmp_path
+    ):
+        # A space after the colon, no comma -- should still strip/recover to
+        # a pattern-satisfying offer, unlike the whitespace-inside-path case
+        # below.
+        value = "working-tree: single/path.py"
+        result = self._write_and_check(tmp_path, f'"{value}"')
+        assert result is not None
+        text = _advisory_text(result)
+        assert "required shape:" in text
+        assert '"working-tree:single/path.py"' in text
+
+    def test_c3_ratified_prefix_single_path_with_internal_whitespace_offers_nothing(
+        self, tmp_path
+    ):
+        # Whitespace INSIDE the path (not around it) must keep offering
+        # nothing -- offering it would itself fail the vendored item
+        # pattern.
+        value = "working-tree:a b.py"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" not in text
+        assert "reviewed_targets" not in text
+
+    def test_c3_working_tree_prefixed_already_valid_form_offered_unchanged(
+        self, tmp_path
+    ):
+        # The commit's own claim: a `working-tree:`-prefixed value against
+        # the already-valid item-regex branch, using the original AC3
+        # fixture value.
+        value = "working-tree:state/review-trail/diffs/wsc-E.diff"
+        result = self._write_and_check(tmp_path, value)
+        assert result is not None
+        text = _advisory_text(result)
+        assert "names no commit range" in text
+        assert "required shape:" in text
+        assert f'"{value}"' in text
+        assert "reviewed_targets" in text

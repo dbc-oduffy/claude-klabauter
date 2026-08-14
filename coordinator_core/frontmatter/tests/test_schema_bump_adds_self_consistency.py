@@ -8,7 +8,7 @@ no longer claim an addition its committed bytes do not contain.
 
 Exercised entirely against SYNTHETIC in-test schema dicts — never a real
 vendored schema file. `x-bump-adds` must not appear in any file under
-coordinator_core/frontmatter/schemas/: coordinator-claude's shape-parity gate strips only a
+coordinator_core/frontmatter/schemas/: DoE's shape-parity gate strips only a
 named allowlist of authoring annotations (`_AUTHORING_ANNOTATION_KEYWORDS`),
 does not yet include `x-bump-adds`, and the key becoming shape-visible on a
 real vendored schema reds 15-17 vendored pairs at once. See

@@ -1,35 +1,35 @@
 """
 coordinator_core.ops.coordinator_doe_root — Port of:
-coordinator-doe-root.sh (coordinator-claude 09e5e5f9, 2026-07-19, sourced-lib shape, DOE-PORT R2-R6 wave).
+coordinator-doe-root.sh (DoE 09e5e5f9, 2026-07-19, sourced-lib shape, DOE-PORT R2-R6 wave).
 
-Purpose: resolves the coordinator-claude sibling-repo root, analogous to how CLAUDE_KLABAUTER_ROOT
+Purpose: resolves the DoE-claude sibling-repo root, analogous to how CLAUDE_KLABAUTER_ROOT
 works for the claude-klabauter plane. The bash oracle exposes a single public shell function,
 `coordinator_doe_root`, meant to be `source`d by other bash scripts. This module
 provides the same resolution chain as a plain Python function so any coordinator_core
 caller can import it directly without shelling back out to bash.
 
-NOTE — the coordinator-claude-side `.sh` is a SOURCED LIB, not an executable: nothing can `source` a
+NOTE — the DoE-side `.sh` is a SOURCED LIB, not an executable: nothing can `source` a
 `.py` file, so `coordinator-doe-root.sh` is left UNCHANGED by this port (its bash
 callers keep sourcing it as-is). This module is authored so that a *future* Python
 caller (or a bash→Python cutover of one of its callers, e.g.
 `coordinator-state-root.sh`) has a drop-in equivalent to import instead of source.
 
 Resolution chain (mirrors the bash oracle's header comment verbatim, rung-for-rung):
-  1. REPO_EXAMPLE_DOCTRINE_REPO env var — if already set (non-empty), return it unchanged.
-  2. `machine-local get repos.example_doctrine_repo` (CANONICAL, DR-071) — the machine-local
+  1. REPO_DOE_CLAUDE env var — if already set (non-empty), return it unchanged.
+  2. `machine-local get repos.doe_claude` (CANONICAL, DR-071) — the machine-local
      registry's own four-rung discovery ladder runs inside that CLI; not
      reimplemented here.
   2.5. Fallback: `machine-local get plugin.mirrors.coordinator-claude.live_path`
-     — only fires when rung 2 (repos.example_doctrine_repo) returned nothing. Covers a machine
+     — only fires when rung 2 (repos.doe_claude) returned nothing. Covers a machine
      that registered the coordinator-specific mirror key but never set the general
-     repos.example_doctrine_repo key.
+     repos.doe_claude key.
   2.75. Codename-free rung ladder (added 2026-08-07, C1B; reordered below rungs
      2/2.5 by the B2 review fix, 2026-08-08 — DR-071 ratifies the registry
-     `repos.example_doctrine_repo` key as the canonical, authoritative anchor and explicitly
+     `repos.doe_claude` key as the canonical, authoritative anchor and explicitly
      demotes `.doe-root`; this ladder must not let a stale marketplace install or
      pointer file outrank that registry entry on a private dev box). Only fires
      when rungs 2 and 2.5 both returned nothing. On the published mirror, the
-     registry never carries `repos.example_doctrine_repo` nor its scrubbed successor
+     registry never carries `repos.doe_claude` nor its scrubbed successor
      `repos.example_doctrine_repo`, so on a genuine OSS box rungs 2/2.5 are always
      dead and this ladder remains fully load-bearing at its new position (executed
      proof: `coordinator_doe_root()` returns `None` from the mirror with registry
@@ -74,10 +74,10 @@ Resolution chain (mirrors the bash oracle's header comment verbatim, rung-for-ru
      (see `main()` below for the CLI-shaped stderr contract, faithfully reproduced).
 
 Pure resolver — does NOT mutate `os.environ` (REVERSED 2026-07-21; see below).
-Rung 1 still READS `REPO_EXAMPLE_DOCTRINE_REPO` as an operator override; nothing here writes it.
+Rung 1 still READS `REPO_DOE_CLAUDE` as an operator override; nothing here writes it.
 
 DECISION REVERSAL (2026-07-21) — this module previously exported
-`os.environ["REPO_EXAMPLE_DOCTRINE_REPO"]` on rungs 2/2.5/3, mirroring the bash oracle's
+`os.environ["REPO_DOE_CLAUDE"]` on rungs 2/2.5/3, mirroring the bash oracle's
 `export`, and its docstring defended that as deliberate bash parity against
 `coordinator_core.claude_klabauter_root`'s opposite choice. That parity argument was wrong,
 and the asymmetry is now retired: an `export` in a spawn-per-call shell script dies
@@ -97,7 +97,7 @@ No caller depended on the export: every importer (`state_root`,
 is now carried explicitly by a module-scope memo plus a `_reset_doe_root_cache()`
 test seam (mirroring `coordinator_core.liveness._reset_live_ids_cache`) — the
 idempotency without the interpreter-global side effect. Callers that genuinely need
-`REPO_EXAMPLE_DOCTRINE_REPO` in a CHILD process's environment pass it explicitly via `env=`
+`REPO_DOE_CLAUDE` in a CHILD process's environment pass it explicitly via `env=`
 (as `install.maximalist` and `install.sandbox_check` already do).
 
 Review: code-reviewer — `coordinator_core.claude_klabauter_root`'s negative-spec cites this
@@ -141,7 +141,7 @@ from coordinator_core.doe_root_pointer import read_doe_root_pointer_file as _cf_
 
 _SUBPROCESS_TIMEOUT_SECS = 15
 
-# Published-manifest relpath (OSS flat layout). The private coordinator-claude-repo layout
+# Published-manifest relpath (OSS flat layout). The private DoE-repo layout
 # nests the same relpath under `coordinator/`. Shared by the codename-free
 # rung ladder's acceptance gate below.
 _CF_MANIFEST_RELPATH = os.path.join("schemas", "coordinator-registry.manifest.json")
@@ -175,7 +175,7 @@ def _machine_local_get(key: str) -> Optional[str]:
 def _cf_manifest_present(root: str) -> bool:
     """True if `root` contains either published manifest layout: OSS flat
     (`<root>/schemas/coordinator-registry.manifest.json`) or the private
-    coordinator-claude-repo shape (`<root>/coordinator/schemas/coordinator-registry.manifest.json`).
+    DoE-repo shape (`<root>/coordinator/schemas/coordinator-registry.manifest.json`).
     Gates each codename-free rung so a resolved-but-empty/unrelated directory
     is not accepted over a later, correct rung.
 
@@ -230,7 +230,7 @@ def repo_root_from_plugin_root_candidate(
         Windows, case-sensitive on POSIX) vs "casefold" (coordinator_
         registry.py — case-insensitive on every platform). See the same
         "Known cross-copy divergence" note.
-      manifest_relpath_fallback: this module's B5 fix (a private coordinator-claude repo
+      manifest_relpath_fallback: this module's B5 fix (a private DoE repo
         root without the marketplace marker still normalizes via the
         manifest-relpath shape). coordinator_registry.py's copy does not
         carry this fallback — pass False to reproduce its behaviour.
@@ -241,7 +241,7 @@ def repo_root_from_plugin_root_candidate(
         os.path.isdir() happens to be true. This module's own call sites
         never vary this (always effectively True).
 
-    CLAUDE_PLUGIN_ROOT is a *content* root: in the private/dev coordinator-claude layout
+    CLAUDE_PLUGIN_ROOT is a *content* root: in the private/dev DoE layout
     this is `<repo_root>/coordinator`, one level below the repo root this
     module's docstring contracts to return. In the OSS flat layout the
     content root and the repo root coincide. Disambiguate the same way:
@@ -464,7 +464,7 @@ def _resolve_via_clone_root_script() -> Optional[str]:
         return None
 
 
-# Module-scope memo replacing the retired `os.environ["REPO_EXAMPLE_DOCTRINE_REPO"]` export as
+# Module-scope memo replacing the retired `os.environ["REPO_DOE_CLAUDE"]` export as
 # the same-process re-resolution guard (see module docstring § DECISION REVERSAL).
 # `_DOE_ROOT_RESOLVED` distinguishes "not yet attempted" from "attempted, resolved to
 # None" so a hard failure is not re-shelled once per call either.
@@ -486,7 +486,7 @@ def _reset_doe_root_cache() -> None:
 
 
 def coordinator_doe_root() -> Optional[str]:
-    """Resolve the coordinator-claude sibling-repo root via the documented rung chain.
+    """Resolve the DoE-claude sibling-repo root via the documented rung chain.
 
     Returns the resolved absolute path, or None on hard failure (rung 4) -- the
     caller is responsible for printing the remediation message (see `main()`),
@@ -494,17 +494,17 @@ def coordinator_doe_root() -> Optional[str]:
     "report" (stderr side-effect the caller sees only via the function's own
     output, in this Python port split out for testability).
 
-    PURE with respect to ``os.environ`` -- rung 1 reads ``REPO_EXAMPLE_DOCTRINE_REPO`` as an
+    PURE with respect to ``os.environ`` -- rung 1 reads ``REPO_DOE_CLAUDE`` as an
     operator override, but no rung writes it (see module docstring § DECISION
     REVERSAL). Rung 1 is evaluated BEFORE the memo so an override set after a
     prior resolution still wins, which the old export-based guard could not do.
     """
     global _RESOLVED_DOE_ROOT, _DOE_ROOT_RESOLVED
 
-    # Rung 1: REPO_EXAMPLE_DOCTRINE_REPO already set in environment (operator override).
+    # Rung 1: REPO_DOE_CLAUDE already set in environment (operator override).
     # Checked ahead of the memo: the env var is the authoritative override, and a
     # cached value must never shadow it.
-    existing = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "")
+    existing = os.environ.get("REPO_DOE_CLAUDE", "")
     if existing:
         return existing
 
@@ -514,7 +514,7 @@ def coordinator_doe_root() -> Optional[str]:
     resolved_root: Optional[str] = None
 
     # Rung 2: machine-local registry (canonical, DR-071).
-    resolved = _machine_local_get("repos.example_doctrine_repo")
+    resolved = _machine_local_get("repos.doe_claude")
     if resolved:
         resolved_root = resolved
     else:
@@ -527,7 +527,7 @@ def coordinator_doe_root() -> Optional[str]:
             # Review: B2 (MAJOR, 2026-08-08) -- this ladder was previously
             # placed AHEAD of rungs 2/2.5, so a stale marketplace install or
             # pointer file could outrank DR-071's canonical registry anchor
-            # on a private dev box. DR-071 ratifies repos.example_doctrine_repo as the
+            # on a private dev box. DR-071 ratifies repos.doe_claude as the
             # authoritative anchor and explicitly demotes .doe-root beneath
             # it; nothing in DR-071 blesses placing this ladder ahead of the
             # registry rungs. Moved below 2/2.5 -- still fully load-bearing
@@ -544,11 +544,11 @@ def coordinator_doe_root() -> Optional[str]:
 
 
 _REMEDIATION = (
-    "coordinator_doe_root: cannot resolve REPO_EXAMPLE_DOCTRINE_REPO — repos.example_doctrine_repo is not set.\n"
-    "  The machine-local registry has no 'repos.example_doctrine_repo' entry (canonical) or\n"
+    "coordinator_doe_root: cannot resolve REPO_DOE_CLAUDE — repos.doe_claude is not set.\n"
+    "  The machine-local registry has no 'repos.doe_claude' entry (canonical) or\n"
     "  'plugin.mirrors.coordinator-claude.live_path' entry (fallback) on this machine.\n"
     "  Remediate (choose one):\n"
-    "    machine-local set repos.example_doctrine_repo /path/to/coordinator-claude\n"
+    "    machine-local set repos.doe_claude /path/to/DoE-claude\n"
     "    Re-run /coordinator:install to populate the repos.* registry entries.\n"
     "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c\n"
 )

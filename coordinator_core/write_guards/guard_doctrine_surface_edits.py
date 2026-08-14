@@ -2,10 +2,10 @@
 always-loaded doctrine surfaces unless a PM-created approval sentinel is
 present and unexpired.
 
-Ported from coordinator-claude
+Ported from DoE-claude
 `coordinator/hooks/scripts/guard-doctrine-surface-edits.py` (faithful port —
 see `write_guards/INTERFACE.md`). CLASS is hard-deny and fail-closed; this
-is the one guard in the coordinator-claude source tree that deliberately differs from every
+is the one guard in the DoE source tree that deliberately differs from every
 sibling guard's fail-open posture — see "Fail-closed is DELIBERATE" below,
 carried over verbatim from the source docstring.
 
@@ -138,7 +138,7 @@ site clears no DR-277 carve-out, so the verdict is recorded and never
 consulted by the allow/deny decision below, on MISMATCH or any other
 verdict. Do not "finish the job" by wiring a refusal off it.
 
-Spec backlink: coordinator-claude
+Spec backlink: DoE-claude
   coordinator/hooks/scripts/guard-doctrine-surface-edits.py
 Spec backlink (C4 addendum): pln-a-ceremony-must-not-be-able-to-5e9421
 """
@@ -163,6 +163,12 @@ from coordinator_core.write_guards._sentinel_write_guard import (
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 127
+
+#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
+#: This module's only write is _write_repo_identity_advisory_log()'s best-effort
+#: append to <repo_root>/.git/coordinator-sessions/<session_id>/repo-identity-gate.log
+#: -- inside .git/, never a tracked repo artifact (see DR-277, read-only/advisory).
+GENERATES = []
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
@@ -233,7 +239,7 @@ def _sentinel_state(repo_root: "str | None") -> str:
     posture -- see module docstring).
 
     A DIRECTORY at the sentinel path is treated identically to an ABSENT
-    sentinel (2026-07-30 forge-closure fix, ported from the coordinator-claude-side
+    sentinel (2026-07-30 forge-closure fix, ported from the DoE-side
     source). `os.path.getmtime` succeeds on a directory exactly as it does
     on a regular file, so `mkdir <sentinel>` used to read as a real,
     honoured approval -- this guard's read side never actually checked

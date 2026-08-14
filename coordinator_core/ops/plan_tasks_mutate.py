@@ -8,7 +8,7 @@ verbs `add-task` (append a chunk row, fail-loud on duplicate `id`), `stamp`
 (write a row's `disposition`/`disposition_ref`/`disposition_detail` atomically,
 refusing an ungated closed disposition — D4). Zero-spawn hot-path: validates
 rows in-process against the vendored `_PLAN_TASKS_SCHEMA`
-(coordinator_core.frontmatter.schema_validate) — no runtime shell-out to coordinator-claude's
+(coordinator_core.frontmatter.schema_validate) — no runtime shell-out to DoE's
 schema-cli.js.
 
 Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
@@ -63,7 +63,7 @@ Verb contracts:
     authorization signal clears — mirrors
     `coordinator_core.ops.handoff_carry_gate`'s refuse-on-ungated-state
     pattern (D4). `spun_off` does NOT enter this gate in EITHER mode, as
-    of coordinator-claude's 2026-08-05 ruling ("the EM self-issues it now" — no
+    of DoE's 2026-08-05 ruling ("the EM self-issues it now" — no
     governed-plan carve-out in the ruling's text): moving a row to another
     plan drops no work, so there is no scope cut for the PM to ratify
     (AC2). It also occupies its own grouping as of C3 (split out of
@@ -100,7 +100,7 @@ Verb contracts:
     would satisfy it (e.g. "stamp pm_approved: true first"), which is the
     write guard's own key printed back at whoever hit the gate — see the
     retired `_PM_APPROVAL_OFFER` banner below for the full excision. The
-    LEGACY refusal DOES name `pm_approved`, and must (coordinator-claude ruling 2026-08-12,
+    LEGACY refusal DOES name `pm_approved`, and must (DoE ruling 2026-08-12,
     exit 1): the excision's reasoning holds only where the impossibility
     claim is true, and on a per-row boolean the same agent can stamp it
     never was — see `_LEGACY_PM_APPROVAL_HINT`'s own banner for why naming
@@ -483,7 +483,7 @@ def _validate_row(row: dict, *, governed: bool = False) -> list:
     repo-wide (one test only), and the write guards each inline their own
     copy of this same shape-then-cross-field sequence instead of calling it.
     Nor can they: `check_plan_tasks_source` hardcodes claude-klabauter's own vendored
-    schema, while the write guards deliberately resolve coordinator-claude's vendored
+    schema, while the write guards deliberately resolve DoE's vendored
     corpus copy (which its own docstring notes has drifted from claude-klabauter's),
     and it short-circuits on the first error where the guards need every
     row's errors. So this is genuinely THREE independent copies of
@@ -644,6 +644,15 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     batch names disposition/disposition_ref/disposition_detail, the WHOLE
     batch is refused before locked_rmw is even invoked — worded as an offer
     naming the alternative (`--verb resolve`), not a bare denial.
+
+    The offer names the VERB and stops there (2026-08-14, consult memo
+    cross-repo/archive/2026-08-14-doe-claude-em-stamp-reserved-field-refusal-carries-retired-pm-approval-offer.md).
+    It used to trail "needs pm_approved: true stamped on the row first" —
+    the retired `_PM_APPROVAL_OFFER` shape (see its banner below `resolve`)
+    printed by the one verb that sets that field, so the refusal supplied
+    the key to its own door. `_LEGACY_PM_APPROVAL_HINT`'s naming of the
+    field is not a precedent here: that is resolve's honesty layer on a
+    branch the caller has already reached, not stamp's exit offer.
     """
     try:
         path = _resolve_path(plan_path, worktree)
@@ -662,9 +671,10 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
             fields = ", ".join(sorted(reserved_present))
             return _err(
                 f"stamp: update entry {u.get('id')!r} carries reserved field(s) "
-                f"{fields} — use --verb resolve instead; a closed disposition "
-                "(spun_off/backlogged/wont_do) needs pm_approved: true stamped "
-                "on the row first. Refusing the whole batch — no writes applied."
+                f"{fields} — disposition is resolve's surface: use --verb "
+                "resolve. A closed disposition (spun_off/backlogged/wont_do) "
+                "records that the PM ratified this cut, so it waits on their "
+                "ruling. Refusing the whole batch — no writes applied."
             )
 
     _state: dict = {"applied": False, "message": ""}
@@ -759,7 +769,7 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 # well-meaning EM to satisfy the field, which reproduces this exact defect
 # one layer up.
 #
-# Contract: cross-repo/archive/2026-07-29-coordinator-claude-em-grouping-approval-contract.md
+# Contract: cross-repo/archive/2026-07-29-doe-claude-em-grouping-approval-contract.md
 # (actioned; moved from inbox/ to archive/) § "And a hard requirement on your
 # refusal messages."
 
@@ -768,8 +778,8 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
 # above describes machinery that does not exist on the plan this branch
 # fires for (Review: code-reviewer Finding 4).
 #
-# REWRITTEN 2026-08-12 (coordinator-claude ruling, exit 1 —
-# cross-repo/inbox/2026-08-12-coordinator-claude-em-legacy-refusal-honesty-ruling.md;
+# REWRITTEN 2026-08-12 (DoE ruling, exit 1 —
+# cross-repo/inbox/2026-08-12-doe-claude-em-legacy-refusal-honesty-ruling.md;
 # tripwire A-REFUSAL-MAY-NOT-CLAIM-IMPOSSIBILITY-IT-CANNOT-ENFORCE). The
 # prior text carried the governed branch's impossibility claim ("there is
 # deliberately no command that satisfies this from inside the session") onto
@@ -814,7 +824,7 @@ _LEGACY_PM_APPROVAL_HINT = (
 # never of THIS write path, which is the one that actually decides whether
 # resolve's write proceeds.
 #
-# Shape choice (spec backlink: docs/plans/2026-07-27-plan-line-item-resolution-model.md,
+# Shape choice (spec backlink: DoE-claude:pln-plan-line-item-resolution-mode-16787c,
 # Defect 2 dispatch brief): a synthesised detail (e.g. "routed to <ref>")
 # would only restate disposition_ref, adding no information a reader doesn't
 # already have — so this requires the caller to supply real prose rather
@@ -859,7 +869,7 @@ _CASE_AGAINST_OFFER = (
 # coordinator_core.workday_complete.apply._CLI_SCRIPT_ROOT's established
 # in-process-CLI-load convention (never a brief/param-derived import target).
 _HARVEST_CLI_PATH = (
-    Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-harvest-deferrals"
+    Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-harvest-deferrals.py"
 )
 
 _HARVEST_MODULE: Optional[ModuleType] = None
@@ -950,7 +960,7 @@ def _to_repo_relative(path: str, worktree: Path) -> str:
     (DR-096: a single repo-relative path, enforced by
     `_cf_plan_tasks_disposition_shape`'s `_is_single_repo_relative_path`
     check). Falls back to `path` unchanged when it is not under `worktree`
-    — a central-scope (claude-klabauter) or lessons-outbox (coordinator-claude) write can legitimately
+    — a central-scope (claude-klabauter) or lessons-outbox (DoE) write can legitimately
     land in a different repo than the plan's own; an absolute cross-repo path
     is still a single, unambiguous referent, just not one relative to THIS
     plan's own worktree.
@@ -975,7 +985,7 @@ def _dispatch_spun_off(task_id: str, disposition_ref: Optional[str], worktree: P
     This does NOT create the spinoff artifact itself — that write lands
     separately, before `resolve` is ever called for this row (the `/spinoff`
     authoring surface; see `coordinator/bin/spinoff-deliverable-and-commit.py`
-    in coordinator-claude). What this function computes is the VERIFIED, canonical
+    in DoE-claude). What this function computes is the VERIFIED, canonical
     repo-relative form of the ref: it resolves the caller-supplied path
     against `worktree`, confirms a real file exists there, and re-derives the
     ref via `_to_repo_relative` rather than trusting the literal string —
@@ -1238,7 +1248,7 @@ def _resolve(
             return _err(f"resolve: duplicate task id in batch: {rid!r}")
         seen_ids.add(rid)
 
-    _state: dict = {"applied": False, "message": ""}
+    _state: dict = {"applied": False, "message": "", "all_resolved": False}
 
     def mutate(old_text: str) -> str:
         result = locate_fenced_block(old_text)
@@ -1331,7 +1341,7 @@ def _resolve(
         # grouping touched, even when several rows in the batch land in the
         # same grouping (or the batch spans more than one grouping).
         #
-        # Narrowed 2026-08-05 (coordinator-claude ruling) to `backlogged`/`wont_do` only,
+        # Narrowed 2026-08-05 (DoE ruling) to `backlogged`/`wont_do` only,
         # in BOTH governed and legacy mode — `spun_off` no longer requires
         # any PM ratification at all: "the EM self-issues it now," with no
         # governed-plan carve-out in the ruling's own text. `spun_off` also
@@ -1541,6 +1551,17 @@ def _resolve(
         start, end = result.span
         new_text = old_text[:start] + body_yaml + old_text[end:]
 
+        # Spine-resolution derivation (C1, 2026-08-14): "no row left open"
+        # is knowable ONLY here — the sole site where a row's `disposition`
+        # can move off `open` — so this is where the derived-landed check
+        # is computed, against the SAME `rows` just validated and about to
+        # be written, not a re-read of the (stale, pre-write) `old_text`.
+        _state["all_resolved"] = all(
+            _plan_tasks_row_disposition(row) != "open"
+            for row in rows
+            if isinstance(row, dict)
+        )
+
         _state["applied"] = True
         if len(resolved_ids) == 1:
             _state["message"] = (
@@ -1559,7 +1580,45 @@ def _resolve(
     except MutateAbort as exc:
         return _err(exc.args[0] if exc.args else "resolve: mutation aborted")
 
-    return _ok(_state["applied"], _state["message"])
+    result = _ok(_state["applied"], _state["message"])
+
+    # C1 (2026-08-14, "landed fires at spine resolution"): the resolve
+    # transaction above just committed. If it left no row `open`, derive
+    # `status: landed` via the EXISTING sole writer
+    # (`execute_plan_assemble.close_out_and_stamp._stamp_plan_landed`) —
+    # this call site never writes `status:` itself and never reimplements
+    # that function's terminal-status/idempotency guards (see the plan's
+    # § Key decision: one writer, two callers). Imported lazily to avoid
+    # loading `execute_plan_assemble`'s module graph on every resolve call
+    # that doesn't need it.
+    #
+    # A stamp failure must not fail the row resolution the caller asked
+    # for (AC3-adjacent: the caller's resolve already applied) — reported
+    # in the result dict, never raised.
+    #
+    # Review: code-reviewer (P3 #3) -- `_stamp_plan_landed` is a leading-
+    # underscore "private" symbol imported across a module boundary. That
+    # is deliberate, not an oversight: the plan's one-writer decision (§
+    # Key decision above) requires calling this EXACT existing primitive
+    # rather than adding a public wrapper or a second implementation, so
+    # the cross-module privacy violation is knowingly accepted here.
+    if _state["applied"] and _state["all_resolved"]:
+        try:
+            from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
+                _stamp_plan_landed,
+            )
+
+            stamp_rc = _stamp_plan_landed(str(path))
+            result["landed_stamp"] = "ok" if stamp_rc == 0 else "error"
+        except Exception as exc:  # noqa: BLE001 — a derived side effect must never fail resolve
+            _LOG.warning(
+                "plan.tasks.mutate resolve: landed-stamp attempt failed for %s: %s",
+                path,
+                exc,
+            )
+            result["landed_stamp"] = f"error: {exc}"
+
+    return result
 
 
 # ---------------------------------------------------------------------------

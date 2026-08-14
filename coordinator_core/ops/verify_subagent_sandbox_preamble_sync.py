@@ -34,7 +34,7 @@ Sentinel pair (exact strings):
     <!-- END subagent-sandbox-preamble -->
 
 Exit codes (fail-loud drift-gate script — a claude-klabauter-link/transport failure is
-handled entirely by the coordinator-claude-side trampoline BEFORE this module is reached,
+handled entirely by the DoE-side trampoline BEFORE this module is reached,
 and uses a dedicated code, 3, that collides with none of the codes below —
 see the trampoline's own comment block):
     0 — clean (verify/fix mode: no MISSING/MISMATCH/MISSING_END/MISSING_FILE
@@ -46,12 +46,12 @@ see the trampoline's own comment block):
         not-on-PATH case retired with the node subprocess — see negative-spec
         below).
 
-Port of: verify-subagent-sandbox-preamble-sync.sh (coordinator-claude b5a4192c, 2026-07-20;
+Port of: verify-subagent-sandbox-preamble-sync.sh (DoE b5a4192c, 2026-07-20;
          255 lines)
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
-import from the coordinator-claude-side polyglot trampoline (template-variant #1, mirrors
+import from the DoE-side polyglot trampoline (template-variant #1, mirrors
 coordinator-auto-push / handoff-gate-aging / verify_templates_bin_sync).
 
 Negative-spec (deliberate divergences / faithfully-reproduced oracle shape):
@@ -89,7 +89,7 @@ Negative-spec (deliberate divergences / faithfully-reproduced oracle shape):
       sequence are byte-parity ports of the bash/awk/python-heredoc
       original.
     - PLUGIN_ROOT / SCRIPT_DIR resolution (CLAUDE_PLUGIN_ROOT env override,
-      else the trampoline's own parent directory) is coordinator-claude-repo topology
+      else the trampoline's own parent directory) is DoE-repo topology
       knowledge the trampoline resolves and passes in as this module's
       first two positional args — mirrors verify_templates_bin_sync.py's
       plugin_root-as-argv[0] precedent. COORDINATOR_CONTENT_ROOT is a plain
@@ -98,6 +98,8 @@ Negative-spec (deliberate divergences / faithfully-reproduced oracle shape):
 """
 
 from __future__ import annotations
+
+GENERATES = []  # writes into a fixed list of DoE-claude coordinator/agents/*.md consumer files under coord_root (COORDINATOR_CONTENT_ROOT) -- a different repo, never a path inside claude-klabauter's own tree
 
 import os
 import re
@@ -237,7 +239,7 @@ def extract_block(file_path: str) -> Tuple[int, str, str]:
     negative-spec). Delegates the actual marker-slice logic to
     `coordinator_core.text.sentinel_blocks.extract_block`, itself a
     byte-parity port of `coordinator/bin/lib/sentinel-blocks.js`'s
-    `extractBlock` (coordinator-claude `coordinator/bin/lib/sentinel-blocks.js:80-89`,
+    `extractBlock` (DoE-claude `coordinator/bin/lib/sentinel-blocks.js:80-89`,
     `findMarkers` at :28-68) — same exact-substring marker lookup and
     line-boundary consumption, no regex.
 
@@ -446,7 +448,7 @@ def run(
 def main(argv: List[str]) -> int:
     """CLI entry: argv[0]=plugin_root, argv[1]=script_dir, argv[2] (optional)=mode.
 
-    plugin_root/script_dir are coordinator-claude-repo topology the trampoline resolves (mirrors
+    plugin_root/script_dir are DoE-repo topology the trampoline resolves (mirrors
     verify_templates_bin_sync.py's plugin_root-as-argv[0] precedent); mode defaults to
     "--check", matching the oracle's `MODE="${1:---check}"`.
     """

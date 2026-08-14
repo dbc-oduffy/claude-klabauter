@@ -1,10 +1,10 @@
 """coordinator_core.write_guards — PreToolUse Write/Edit guard engines.
 
-Python engine-ification of coordinator-claude's per-edit bash guard fan-out
+Python engine-ification of DoE's per-edit bash guard fan-out
 (coordinator/hooks/scripts/block-*.sh, nudge-*.sh on the Write|Edit matcher),
 per the DR-047 contract-vs-engine split and the naked-Python hook migration.
 
-Coordinator-claude owns the thin plumbing (a single python3 PreToolUse dispatcher that imports
+DoE owns the thin plumbing (a single python3 PreToolUse dispatcher that imports
 this package in-process); claude-klabauter owns these performant engines. One Python
 interpreter start collapses the former ~10 bash.exe cold-starts (200-500ms each
 on Windows) into in-process logic — zero bash, zero subprocess per edit.

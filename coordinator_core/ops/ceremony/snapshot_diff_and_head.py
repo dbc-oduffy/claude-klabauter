@@ -42,6 +42,12 @@ Negative-spec:
 
 from __future__ import annotations
 
+# Generator-provenance declaration: this op writes diff.patch/head.sha under
+# a caller-supplied findings_dir ("this op only chooses the sub-directory
+# name under it" -- module docstring negative-spec), never a path this
+# module defaults into the tracked repo tree.
+GENERATES = []
+
 from pathlib import Path
 from typing import Optional
 

@@ -1,7 +1,7 @@
 """
 coordinator_core.plugin_health.tests.test_release_currency
 
-Pytest port of coordinator-claude coordinator/lib/release-currency.sh's
+Pytest port of DoE-claude coordinator/lib/release-currency.sh's
 `release_currency_probe` (bash oracle, retired on cutover — see git log) and of
 sentinel.py's `probe_p19` result->ProbeNote rewire. Exercises every status string
 (source_is_live/current/behind/behind-clone/differs/offline), the three surviving
@@ -14,7 +14,7 @@ RELEASE_CURRENCY_FORCE_OFFLINE shim, and the ImportError/unexpected-exception ->
 _absent ProbeNote remap (the Staff Engineer F6).
 
 Spec backlink: pln-retire-claude-klabauter-s-doe-bash-bridg-5ab742 § Port C.
-Port of: release-currency.sh (coordinator-claude 5aa75f3b, 2026-07-21)
+Port of: release-currency.sh (DoE 5aa75f3b, 2026-07-21)
 """
 
 from __future__ import annotations

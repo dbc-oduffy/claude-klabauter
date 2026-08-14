@@ -13,7 +13,7 @@ presence for the op key.
 All handlers are async; asyncio.run() is used directly in sync test functions — no
 pytest-asyncio dependency, matching coordinator_core/tests/test_hooks_bookkeeping.py.
 
-Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-engine-op-contract.md
+Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-engine-op-contract.md
 """
 
 from __future__ import annotations

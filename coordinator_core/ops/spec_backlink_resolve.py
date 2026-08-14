@@ -12,11 +12,15 @@ needs healing when `fleet.archive_completed_plans` moves the file.
 
 Index build: one-shot pass per invocation over `docs/plans/*.md` and
 `archive/specs/*/*.md` frontmatter (plus `state/sizings/*.yaml`, whole-document
-YAML with no frontmatter fence), building two maps: `plan_id -> path` and
-`deliverable_id -> [path, ...]`. The list-valued deliverable_id map is what
-makes the AMBIGUITY outcome (N>1 paths for one id) representable — arity is
-undefined at resolution time, not just at authoring time (spine
-group-stamping can mint one `deliverable_id` onto multiple records). A
+YAML with no frontmatter fence), building two maps: `plan_id -> [path, ...]`
+and `deliverable_id -> [path, ...]`. Both list-valued (Review: code-reviewer
+P3 — `plan_id` was previously a single str with last-write-wins on
+collision, asymmetric with `deliverable_id`'s typed AMBIGUITY) — this is what
+makes the AMBIGUITY outcome (N>1 paths for one id) representable for either
+id kind — arity is undefined at resolution time, not just at authoring time
+(spine group-stamping can mint one `deliverable_id` onto multiple records,
+and a copy-pasted `plan_id` is a corpus defect this resolver refuses to
+paper over rather than a case it can rule out). A
 per-citation filesystem scan is NOT an option here — that is the "glob over
 586 plans" shape the plan's anti-scope names as the naive form that stalls on
 the real corpus; this module builds the index exactly once per invocation and
@@ -61,7 +65,7 @@ Negative-spec (hard-won):
     typed MISS until C2/C5 close that gap — never a guessed path.
   - Does NOT glob per-citation. The index is built exactly once per invocation
     (module-level `_build_index` call per handler invocation, not per lookup).
-  - Does NOT eagerly build the peer-repo (coordinator-claude) index. Only a `<repo>:`-prefixed
+  - Does NOT eagerly build the peer-repo (DoE-claude) index. Only a `<repo>:`-prefixed
     query triggers it.
   - Does NOT treat literal YAML `null` or an absent key as a real id — both count as
     "record lacks an id" (mirrors AC2's definition) and are excluded from the index.
@@ -77,12 +81,22 @@ from typing import Dict, List, Optional
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.deliverable_rollup import (
+    RESOLVABLE_ARTIFACT_ROOTS,
+    SIZINGS_ONLY_ROOT,
+)
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 logger = logging.getLogger(__name__)
 
 _PLN_PREFIX = "pln-"
 _DLV_PREFIX = "dlv-"
+
+# Review: code-reviewer P2 — the only <repo>: qualifier resolve() accepts.
+# Mirrors rewrite_spec_backlinks._PEER_REPO_NAME, the fixed literal the emit
+# side ever produces; a queried_id carrying any OTHER qualifier is refused
+# as a typed miss rather than silently routed to the DoE-claude peer index.
+_RECOGNIZED_PEER_REPO = "DoE-claude"
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +108,11 @@ def _hit(path: str, queried_id: str) -> dict:
     return {"outcome": "hit", "queried_id": queried_id, "path": path}
 
 
-def _miss(queried_id: str) -> dict:
-    return {"outcome": "miss", "queried_id": queried_id, "path": None}
+def _miss(queried_id: str, reason: Optional[str] = None) -> dict:
+    outcome = {"outcome": "miss", "queried_id": queried_id, "path": None}
+    if reason is not None:
+        outcome["reason"] = reason
+    return outcome
 
 
 def _ambiguity(paths: List[str], queried_id: str) -> dict:
@@ -164,10 +181,10 @@ class _BacklinkIndex:
     own "build once per invocation" requirement — not "once per process").
     """
 
-    __slots__ = ("plan_id_to_path", "deliverable_id_to_paths", "path_to_ids", "basename_to_paths")
+    __slots__ = ("plan_id_to_paths", "deliverable_id_to_paths", "path_to_ids", "basename_to_paths")
 
     def __init__(self) -> None:
-        self.plan_id_to_path: Dict[str, str] = {}
+        self.plan_id_to_paths: Dict[str, List[str]] = {}
         self.deliverable_id_to_paths: Dict[str, List[str]] = {}
         # Inverse of the two maps above: path -> {"plan_id": ..., "deliverable_id": ...}.
         # Only populated for records carrying at least one real id — this is
@@ -190,10 +207,14 @@ class _BacklinkIndex:
 
     def _add(self, plan_id: Optional[str], deliverable_id: Optional[str], path: str) -> None:
         if plan_id is not None:
-            # A collision here (two records sharing one plan_id) is not part
-            # of this plan's measured corpus; last-write-wins is acceptable
-            # since plan_id is documented as per-file identity, never shared.
-            self.plan_id_to_path[plan_id] = path
+            # Review: code-reviewer P3 — list-valued like deliverable_id_to_paths,
+            # not a single str with last-write-wins. plan_id is documented as
+            # per-file identity, never shared, but a genuine duplicate/copy-
+            # pasted plan_id must surface as a typed AMBIGUITY in resolve_id(),
+            # not silently resolve to whichever path an unordered directory
+            # traversal happens to visit last — refuse rather than guess,
+            # matching deliverable_id's own collision handling.
+            self.plan_id_to_paths.setdefault(plan_id, []).append(path)
         if deliverable_id is not None:
             self.deliverable_id_to_paths.setdefault(deliverable_id, []).append(path)
         if plan_id is not None or deliverable_id is not None:
@@ -275,20 +296,39 @@ def _index_sizings_dir(index: _BacklinkIndex, base_dir: Path) -> None:
 def build_index(worktree_root: Path) -> _BacklinkIndex:
     """Build the local (this-repo) id -> path index, one shot.
 
-    Scans docs/plans/*.md (flat), archive/specs/*/*.md (recursive), and
-    state/sizings/*.yaml (flat, whole-document YAML). Building the index
-    once per invocation — never per citation lookup — is the requirement
-    the plan's own anti-scope names explicitly.
+    Scans the shared `RESOLVABLE_ARTIFACT_ROOTS` five-root surface (C10b,
+    docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md) —
+    docs/plans/*.md (flat), state/handoffs/*.md (flat),
+    archive/handoffs/**/*.md (recursive), archive/specs/**/*.md (recursive),
+    state/sizings/*.yaml (flat, whole-document YAML, `SIZINGS_ONLY_ROOT`) —
+    imported from `coordinator_core.ops.deliverable_rollup` rather than
+    hard-coded here a second time. `RESOLVABLE_ARTIFACT_ROOTS` already
+    includes `SIZINGS_ONLY_ROOT` as its 5th entry, so the flat-root loop
+    below dispatches to `_index_sizings_dir` for that one root by identity
+    (mirroring `deliverable_rollup._scan_artifacts_by_deliverable_id`'s
+    `is_sizings_root` branch) rather than scanning it a second time via a
+    standalone call — a prior version of this function did both, which
+    silently double-scanned state/sizings/ (harmless only because
+    `_index_markdown_dir` filters to `.md` and sizings are `.yaml`).
+    Building the index once per invocation — never per citation lookup — is
+    the requirement the plan's own anti-scope names explicitly.
     """
     index = _BacklinkIndex()
-    _index_markdown_dir(index, worktree_root / "docs" / "plans")
-    _index_markdown_tree(index, worktree_root / "archive" / "specs")
-    _index_sizings_dir(index, worktree_root / "state" / "sizings")
+    sizings_parts, _sizings_kind = SIZINGS_ONLY_ROOT
+    sizings_dir = worktree_root.joinpath(*sizings_parts)
+    for parts, kind in RESOLVABLE_ARTIFACT_ROOTS:
+        base_dir = worktree_root.joinpath(*parts)
+        if kind != "flat":
+            _index_markdown_tree(index, base_dir)
+        elif base_dir == sizings_dir:
+            _index_sizings_dir(index, base_dir)
+        else:
+            _index_markdown_dir(index, base_dir)
     return index
 
 
 def _doe_root_path() -> Optional[Path]:
-    """Resolve the coordinator-claude peer repo root via the canonical resolver.
+    """Resolve the DoE-claude peer repo root via the canonical resolver.
 
     Reuses coordinator/bin/lib/coordinator_registry.py::doe_root() rather
     than re-deriving a ladder — see this module's docstring for why
@@ -323,10 +363,12 @@ def resolve_id(index: _BacklinkIndex, queried_id: str) -> dict:
     AMBIGUITY. Never raises on an unknown id.
     """
     if queried_id.startswith(_PLN_PREFIX):
-        path = index.plan_id_to_path.get(queried_id)
-        if path is None:
+        paths = index.plan_id_to_paths.get(queried_id)
+        if not paths:
             return _miss(queried_id)
-        return _hit(path, queried_id)
+        if len(paths) > 1:
+            return _ambiguity(list(paths), queried_id)
+        return _hit(paths[0], queried_id)
     if queried_id.startswith(_DLV_PREFIX):
         paths = index.deliverable_id_to_paths.get(queried_id)
         if not paths:
@@ -427,13 +469,22 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
     triggers a lazy peer-repo index build rooted at doe_root() instead of
     scanning worktree_root — the peer index is never built for a local-only
     query.
+
+    The `<repo>:` qualifier is validated against `_RECOGNIZED_PEER_REPO`
+    (Review: code-reviewer P2): an unrecognized qualifier (typo, wrong case,
+    a repo this resolver has no peer index for) is a typed miss carrying
+    `reason="unrecognized_repo_qualifier"`, never silently routed to the
+    DoE-claude peer index — refuse rather than guess, matching the emit
+    side, which only ever produces the fixed `"DoE-claude:"` literal.
     """
     queried_id = (queried_id or "").strip()
     if not queried_id:
         return _miss(queried_id)
 
     if ":" in queried_id:
-        _repo, _sep, bare_id = queried_id.partition(":")
+        repo, _sep, bare_id = queried_id.partition(":")
+        if repo != _RECOGNIZED_PEER_REPO:
+            return _miss(queried_id, reason="unrecognized_repo_qualifier")
         peer_root = _doe_root_path()
         if peer_root is None or not peer_root.is_dir():
             return _miss(queried_id)
@@ -459,7 +510,7 @@ def _resolve_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params:
         id (str) — a `pln-<slug>-<hash>` or `dlv-<slug>-<hash>` id, optionally
-                   `<repo>:`-qualified for a named peer repo (e.g. Coordinator-claude).
+                   `<repo>:`-qualified for a named peer repo (e.g. DoE-claude).
 
     Returns one of three typed outcome shapes:
         {"outcome": "hit",       "queried_id": ..., "path": "<str>"}

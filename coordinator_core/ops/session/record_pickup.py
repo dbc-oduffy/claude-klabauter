@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.session.record_pickup — session.record_pickup op (Class B).
 
-Purpose: port the `pickup` field write out of coordinator-claude bash's generic
+Purpose: port the `pickup` field write out of DoE bash's generic
 `cs_session_shape_set` merge-writer into a dedicated, performant Python op,
 and make the write **append-only/versioned** — a `pickup_history[]` ledger
 sits alongside the existing flat `pickup` object — so a mid-session pivot
@@ -19,7 +19,7 @@ the write-side TOCTOU root so a repoint is recorded, not merely worked around.
 
 Lock protocol (LOAD-BEARING — see Negative-spec): this op acquires the SAME
 mkdir-based lock convention bash's `cs_session_shape_set` uses
-(`<sdir>/session-shape.lock/`, `coordinator-session.sh`, coordinator-claude e34f2484), NOT
+(`<sdir>/session-shape.lock/`, `coordinator-session.sh`, DoE e34f2484), NOT
 `coordinator_core.locked_write.locked_rmw`'s fcntl sidecar. Two of
 `cs_session_shape_set`'s three call sites (plan-claim, actioned-memos) remain
 on bash and target the SAME `session-shape.json` file; fcntl and a bash
@@ -27,19 +27,19 @@ mkdir-lock do not mutually exclude one another, so using `locked_rmw` here
 would silently reopen the exact write-race class this op exists to close.
 
 Schema note: `pickup_history[]` is an ADDITIVE field not yet declared in the
-Coordinator-claude-owned schema (`coordinator-claude/coordinator/schemas/session-shape.schema.json`,
+DoE-owned schema (`DoE-claude/coordinator/schemas/session-shape.schema.json`,
 `additionalProperties:false` on the document's top level). This op does not
 edit that schema — see the dispatch report's "schema-ownership finding" for
-the coordinator-claude-side follow-up. Old readers that only know `pickup` are unaffected;
+the DoE-side follow-up. Old readers that only know `pickup` are unaffected;
 strict-schema validation against the *current* (unpatched) schema would
-reject the new top-level key until coordinator-claude lands the additive change.
+reject the new top-level key until DoE lands the additive change.
 
 Same posture applies to the optional `pickup.deliverable_id` /
 `pickup_history[].deliverable_id` sibling field added alongside
-`happened`/`handoff` (coordinator-claude handoff.schema.json's own `deliverable_id`,
+`happened`/`handoff` (DoE handoff.schema.json's own `deliverable_id`,
 threaded through by `coordinator_core.archive_stamp._record_pickup_best_effort`
 at claim time) — additive, `additionalProperties:false`-incompatible with the
-CURRENT unpatched `session-shape.schema.json`'s `pickup` sub-object until coordinator-claude
+CURRENT unpatched `session-shape.schema.json`'s `pickup` sub-object until DoE
 lands the matching schema update.
 
 Self-registration: importing this module calls
@@ -52,7 +52,7 @@ Spec backlinks:
   - Ship-drift RCA / read-side fix: docs/plans/2026-07-14-wsc-chain-terminal-ship-drift-fix.md
   - Read-side consumer (MUST stay wire-compatible): coordinator_core/ops/ceremony/branch_resolution.py
     `_read_session_shape`, `pickup_field = session_shape.get("pickup")`
-  - Bash write source (port origin): coordinator-session.sh (coordinator-claude e34f2484, 2026-07-22)
+  - Bash write source (port origin): coordinator-session.sh (DoE e34f2484, 2026-07-22)
     `cs_session_shape_set`, `_cs_shape_lock_live` — mkdir-lock + 30s staleness
     convention replicated below.
 
@@ -64,8 +64,8 @@ Negative-spec:
   - Does NOT mutate the flat `pickup` object's own field names/shape — `happened`/`handoff`
     stay exactly as branch_resolution's reader expects; only a new SIBLING key
     (`pickup_history`) is added. Never rename or remove `pickup` for backward-compat.
-  - Does NOT edit session-shape.schema.json — that file is coordinator-claude-owned
-    (coordinator-claude/coordinator/schemas/session-shape.schema.json); the additive
+  - Does NOT edit session-shape.schema.json — that file is DoE-owned
+    (DoE-claude/coordinator/schemas/session-shape.schema.json); the additive
     `pickup_history` schema change rides the veneer memo, not this op.
   - Does NOT implement the generic `cs_session_shape_set` field-level deep-merge writer
     (actioned_memos append / plan replace / base-wins identity fields) — this op is
@@ -76,6 +76,9 @@ Negative-spec:
 """
 
 from __future__ import annotations
+
+GENERATES = []  # writes session-shape.json under <git_common_dir>/coordinator-sessions/<sid>/, session state living under .git/, never a tracked repo artifact
+
 import sys
 
 import asyncio
@@ -260,7 +263,7 @@ def _record_pickup_sync(
         string — a handoff with no `deliverable_id` records nothing for this
         field, mirroring the Session-Id/Deliverable-Id trailer's
         omit-rather-than-guess discipline (coordinator-prepare-commit-msg).
-        Additive sibling field — NOT yet declared in the coordinator-claude-owned
+        Additive sibling field — NOT yet declared in the DoE-owned
         session-shape.schema.json (same posture as `pickup_history` itself,
         see module docstring "Schema note").
 

@@ -5,7 +5,7 @@ scanned to answer "which oracles currently exist", and how the live
 oracle-name set is derived from them.
 
 Both `fleet_reachability.py` (supply side of its delete-safety diff:
-Coordinator-claude-cited demand minus live claude-klabauter oracles) and `bin_inventory_gate.py`
+DoE-cited demand minus live claude-klabauter oracles) and `bin_inventory_gate.py`
 (live side of its disappearance diff: tracked inventory minus live claude-klabauter
 oracles) ask the identical question -- "which oracle names currently exist
 on this checkout" -- over the identical fixed, finite three-directory
@@ -17,7 +17,7 @@ and `coordinator/lib/`, but `docs/install/bin-inventory.json` (seeded by
 from `coordinator/bin/` alone. That divergence is exactly how
 `claude-klabauter-doctor-probe.py` (a real, `.cmd`-twinned oracle living in
 repo-root `bin/`) ended up invisible to BOTH gates at once: unqualified in
-Coordinator-claude's own citation (blind to `fleet_reachability`) AND absent from an
+DoE's own citation (blind to `fleet_reachability`) AND absent from an
 inventory that had never scanned the directory it lives in (blind to
 `bin_inventory_gate`) -- see commit `f622297b`'s own "FOLLOW-UP FOUND
 WHILE VERIFYING THAT TRADE" note, which named the fix as "the surface

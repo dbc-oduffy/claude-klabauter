@@ -67,7 +67,7 @@ section's collect(). It is authored here so the wiring chunk can import a pinned
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C1
 Perf-fix backlink: emit.cadence O(corpus) git-spawn-per-path fix, 2026-07-17.
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — Section 1 LMA, Sections 8.6 / 8.8.
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — Section 1 LMA, Sections 8.6 / 8.8.
 """
 
 from __future__ import annotations
@@ -186,14 +186,14 @@ def batch_last_modified_at_grouped(
 
     PERF (2026-07-29): ``envelope._stamp_lma`` used to call ``batch_last_modified_at`` once
     per record group (handoffs, plans, roadmaps) — three separate full ``git log --cc
-    --name-only`` spawns over the SAME history. Measured on the coordinator-claude corpus (8264
+    --name-only`` spawns over the SAME history. Measured on the DoE-claude corpus (8264
     commits): each individual walk already costs close to a full-history read whenever its
     group contains even one rarely-touched (or never-committed) path, since the early exit
     only fires once ``remaining`` is fully empty — so three sequential walks cost roughly
     3x a single full walk instead of 1x. This function walks the UNION of every group's
     paths exactly once and slices the results back out per group, so the wall-clock cost
     is bounded by ``max`` of the group costs rather than their ``sum`` (measured ~2.3x
-    speedup on coordinator-claude, ~2x on this repo's own corpus — see spec backlink).
+    speedup on DoE-claude, ~2x on this repo's own corpus — see spec backlink).
 
     Each returned list preserves ITS OWN group's input order — positional alignment per
     group is unchanged from ``batch_last_modified_at`` (bash hazard 5.11 — the ``fleet.$i``

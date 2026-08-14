@@ -3,8 +3,8 @@ coordinator_core.tests.test_chain_ancestry_waiver_relative_source_handoff —
 regression test for `record_chain_ancestry_waiver` persisting a
 machine-absolute `source_handoff` into a committed cross-machine artifact.
 
-Reported by coordinator-claude-em (cross-repo/inbox/
-2026-08-06-coordinator-claude-em-chain-ancestry-waiver-absolute-path.md): waiver
+Reported by doe-claude-em (cross-repo/inbox/
+2026-08-06-doe-claude-em-chain-ancestry-waiver-absolute-path.md): waiver
 records under `state/review-trail/chain-ancestry-waivers/<chain-id>/<sha>.json`
 are committed into a consumer repo's tree, so a machine-absolute
 `source_handoff` (correct as an in-process parameter at the coverage_gate
@@ -14,7 +14,7 @@ filename/sha and never parses `source_handoff`, so normalizing it to
 repo-relative is semantics-preserving.
 
 Spec backlink: cross-repo/inbox/
-2026-08-06-coordinator-claude-em-chain-ancestry-waiver-absolute-path.md
+2026-08-06-doe-claude-em-chain-ancestry-waiver-absolute-path.md
 """
 
 from __future__ import annotations

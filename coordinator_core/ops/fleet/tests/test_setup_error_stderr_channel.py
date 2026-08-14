@@ -10,7 +10,7 @@ ONLY on that process's stderr (_common._setup_error). Any consumer wanting the
 reason must read the spawned process's stderr on the rc==0 path.
 
 These tests assert both halves of that contract across a REAL
-`python -m coordinator_core.invoke` spawn — the transport coordinator-claude's
+`python -m coordinator_core.invoke` spawn — the transport DoE's
 coordinator/bin/lib/cc_invoke.py uses — because an in-process call to the op
 cannot observe the process-exit-status half at all.
 

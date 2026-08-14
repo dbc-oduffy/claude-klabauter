@@ -9,7 +9,7 @@ to collectable pytest functions with plain `assert`.
 
 Run: python3 -m pytest coordinator/bin/tests/test_coordinator_registry.py
 
-Spec backlink: docs/plans/2026-07-05-central-identity-flip-completion.md § C1/C2
+Spec backlink: DoE-claude:pln-complete-the-claude-central-em-e9000c § C1/C2
 """
 from __future__ import annotations
 
@@ -34,22 +34,22 @@ import coordinator_registry as reg  # noqa: E402
 # of truth). Reconciled 2026-07-25: this pin had drifted silently because the
 # hand-rolled fail_test() helper (fixed in 23f65fce) let these assertions run
 # to completion without ever raising, so three real upstream manifest edits
-# in coordinator-claude never got mirrored here:
-#   - "flight-recorder" REMOVED — coordinator-claude commit 3aa9a79f ("C8(subsume): retire
+# in DoE-claude never got mirrored here:
+#   - "flight-recorder" REMOVED — DoE commit 3aa9a79f ("C8(subsume): retire
 #     flight-recorder — rm schema, repoint registry+artifact-shape to
 #     run-report") deleted the flight-recorder schema and repointed the
 #     registry to run-report; the type was subsumed, not merely renamed.
 #   - "run-report" ADDED — the same 3aa9a79f repoint.
-#   - "tier-u-grant" ADDED — coordinator-claude commit 58cdc600 ("Tier-U grant token schema +
+#   - "tier-u-grant" ADDED — DoE commit 58cdc600 ("Tier-U grant token schema +
 #     manifest registration").
-#   - "sizing-object" ADDED — coordinator-claude commit adf618d5 ("register sizing-object
+#   - "sizing-object" ADDED — DoE commit adf618d5 ("register sizing-object
 #     doc-type — manifest row + drift-guard fixture").
 #   - "subagent-sidecar" ADDED — manifest registration closing AC-10's unmet
 #     half (agent-side decision-object container scaffolder, schemaName null
 #     — schema-of-record is schemas/decision-object.schema.json $defs/
 #     subagent_sidecar, not a standalone file); retires the coordinator-doc-
 #     new / type_enum.py local shims that pre-dated this manifest row.
-# Reconciled 2026-08-02 (stale-test cleanup, triage-F): coordinator-claude commit 410eae0d1
+# Reconciled 2026-08-02 (stale-test cleanup, triage-F): DoE commit 410eae0d1
 # ("manifest + skills: --type and kind now agree", deliverable
 # dlv-baton-kind-vocabulary-one-axis-per-field-1be219) renamed the docTypes
 # entries so the --type flag agrees with the kind value each scaffolds:
@@ -132,9 +132,9 @@ def test_receiver_em_aliases():
 
 
 def test_central_receiver_ids():
-    # Includes coordinator-claude-em as forgiving alias (C1).
+    # Includes doe-claude-em as forgiving alias (C1).
     assert reg.CENTRAL_RECEIVER_IDS == frozenset(
-        {"claude-central-em", "central-em", "central", "coordinator-claude-em"}
+        {"claude-central-em", "central-em", "central", "doe-claude-em"}
     )
 
 
@@ -156,20 +156,20 @@ def test_sidecar_suffixes():
 # ---------------------------------------------------------------------------
 # AC-9: repo_key_to_em_id — central anchor and normal cases (C1)
 #
-# repos.example_doctrine_repo resolves to the manifest-derived canonical central identity
-# (identity.centralReceiverIds[0] == "coordinator-claude-em"), NOT the retired
+# repos.doe_claude resolves to the manifest-derived canonical central identity
+# (identity.centralReceiverIds[0] == "doe-claude-em"), NOT the retired
 # "claude-central-em" literal — see _central_canonical_id() in
 # coordinator_registry.py. "claude-central-em" remains a valid receiver alias
 # (see CENTRAL_RECEIVER_IDS) but is no longer the canonical return here.
 # ---------------------------------------------------------------------------
 
 
-def test_repo_key_to_em_id_example_doctrine_repo_canonical():
-    assert reg.repo_key_to_em_id("repos.example_doctrine_repo") == "coordinator-claude-em"
+def test_repo_key_to_em_id_doe_claude_canonical():
+    assert reg.repo_key_to_em_id("repos.doe_claude") == "doe-claude-em"
 
 
 def test_central_canonical_id():
-    assert reg._central_canonical_id() == "coordinator-claude-em"
+    assert reg._central_canonical_id() == "doe-claude-em"
 
 
 def test_repo_key_to_em_id_example_retrieval_repo():
@@ -183,20 +183,20 @@ def test_repo_key_to_em_id_example_game_repo_alias():
 # ---------------------------------------------------------------------------
 # AC-10: em_id_for_root — central, unregistered, None cases (C1)
 #
-# Uses the actual coordinator-claude repo root derived from __file__ as the repos.example_doctrine_repo path.
+# Uses the actual DoE-claude repo root derived from __file__ as the repos.doe_claude path.
 # ---------------------------------------------------------------------------
-_EXAMPLE_DOCTRINE_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_DOE_CLAUDE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def test_em_id_for_root_example_doctrine_repo_canonical():
+def test_em_id_for_root_doe_claude_canonical():
     assert reg.em_id_for_root(
-        _EXAMPLE_DOCTRINE_REPO_ROOT, {"repos.example_doctrine_repo": _EXAMPLE_DOCTRINE_REPO_ROOT}
-    ) == "coordinator-claude-em"
+        _DOE_CLAUDE_ROOT, {"repos.doe_claude": _DOE_CLAUDE_ROOT}
+    ) == "doe-claude-em"
 
 
 def test_em_id_for_root_none():
     assert reg.em_id_for_root(
-        None, {"repos.example_doctrine_repo": _EXAMPLE_DOCTRINE_REPO_ROOT}
+        None, {"repos.doe_claude": _DOE_CLAUDE_ROOT}
     ) == "unknown-sender-em"
 
 
@@ -216,19 +216,19 @@ def test_em_id_for_root_registered_non_central_loop_step_3():
     ) == "example-game-repo-em"
 
 
-def test_example_doctrine_repo_em_alias_in_central_receiver_ids():
-    assert "coordinator-claude-em" in reg.CENTRAL_RECEIVER_IDS
+def test_doe_claude_em_alias_in_central_receiver_ids():
+    assert "doe-claude-em" in reg.CENTRAL_RECEIVER_IDS
 
 
 # ---------------------------------------------------------------------------
 # C1: codename-free manifest-bootstrap rung ladder — by import, not by reading.
 #
 # The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (DOE_ROOT,
-# REPO_EXAMPLE_DOCTRINE_REPO, repos.example_doctrine_repo) into names no machine has ever set,
+# REPO_DOE_CLAUDE, repos.doe_claude) into names no machine has ever set,
 # leaving the split-repo layout's manifest bootstrap with zero live rungs and
 # an import-time FileNotFoundError. These tests exercise the module in a
 # fresh subprocess (import-time behavior can't be observed by re-importing an
-# already-imported module) with DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO unset, covering both
+# already-imported module) with DOE_ROOT/REPO_DOE_CLAUDE unset, covering both
 # the pointer-present and pointer-unreachable cases.
 #
 # Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1
@@ -257,12 +257,12 @@ def _run_import_subprocess(env: dict) -> subprocess.CompletedProcess:
 
 
 def test_bootstrap_import_succeeds_with_pointer_present():
-    """Case (a): DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO unset, real ambient pointer/registry
+    """Case (a): DOE_ROOT/REPO_DOE_CLAUDE unset, real ambient pointer/registry
     state left intact — import must succeed via a codename-free rung (or the
     co-located rung, if this checkout happens to be co-located)."""
     env = dict(os.environ)
     env.pop("DOE_ROOT", None)
-    env.pop("REPO_EXAMPLE_DOCTRINE_REPO", None)
+    env.pop("REPO_DOE_CLAUDE", None)
     result = _run_import_subprocess(env)
     assert result.returncode == 0, (
         f"expected import to succeed with pointer/registry state present; "
@@ -272,7 +272,7 @@ def test_bootstrap_import_succeeds_with_pointer_present():
 
 
 def test_bootstrap_import_fails_loud_with_pointer_unreachable():
-    """Case (b): DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO unset AND HOME/CLAUDE_HOME/
+    """Case (b): DOE_ROOT/REPO_DOE_CLAUDE unset AND HOME/CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no rung can
     resolve, proving the file rungs are load-bearing (not merely present)
     rather than accidentally passing on ambient state. Must NOT delete or
@@ -280,7 +280,7 @@ def test_bootstrap_import_fails_loud_with_pointer_unreachable():
     with tempfile.TemporaryDirectory() as _empty_home:
         env = dict(os.environ)
         env.pop("DOE_ROOT", None)
-        env.pop("REPO_EXAMPLE_DOCTRINE_REPO", None)
+        env.pop("REPO_DOE_CLAUDE", None)
         env.pop("CLAUDE_PLUGIN_ROOT", None)
         env["HOME"] = _empty_home
         env["CLAUDE_HOME"] = _empty_home
@@ -357,7 +357,7 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     ) as _fh:
         _fh.write(
             '{"docTypes": [], "queueTypes": [], '
-            '"identity": {"repoAliases": [], "centralReceiverIds": ["coordinator-claude-em"]}}'
+            '"identity": {"repoAliases": [], "centralReceiverIds": ["doe-claude-em"]}}'
         )
 
     return payload_lib_dir, claude_home_dir
@@ -411,7 +411,7 @@ def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment(
 # C1D: doe_root() gets the same codename-free rung ladder, in-process via
 # monkeypatch (not a subprocess — doe_root() runs at CALL time, not import
 # time, so isolating just its own rungs from the ambient machine's real
-# DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO/registry state is enough; the module import at the
+# DOE_ROOT/REPO_DOE_CLAUDE/registry state is enough; the module import at the
 # top of this file already proved import-time behavior above).
 #
 # Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
@@ -426,7 +426,7 @@ def _clear_doe_root_env(monkeypatch):
     codename rungs' pointer/marketplace-cache/registry helpers to '' / None,
     so a test can install exactly the one rung under test.
 
-    Review: staff-eng MAJOR-4 — DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO now run FIRST in
+    Review: staff-eng MAJOR-4 — DOE_ROOT/REPO_DOE_CLAUDE now run FIRST in
     doe_root(), ahead of the codename-free rungs, so they must be cleared
     here too (this function already did) for the codename-rung tests below
     to observe their own rung rather than short-circuiting on the reordered
@@ -437,7 +437,7 @@ def _clear_doe_root_env(monkeypatch):
     install; stub it like every other rung so isolation holds.
     """
     monkeypatch.delenv("DOE_ROOT", raising=False)
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: "")
     monkeypatch.setattr(reg, "_mp_marketplace_cache_rung", lambda: "")
@@ -447,7 +447,7 @@ def _clear_doe_root_env(monkeypatch):
 
 def test_doe_root_resolves_via_doe_root_pointer_rung(monkeypatch):
     """Pointer rung: coordinator_read_doe_root_pointer() already returns the
-    coordinator-claude REPO root directly — used as-is, no conversion, no state/ gate (the
+    DoE REPO root directly — used as-is, no conversion, no state/ gate (the
     pointer file's own contract already promises a repo root)."""
     with _tempfile.TemporaryDirectory() as _fake_root:
         _clear_doe_root_env(monkeypatch)
@@ -492,7 +492,7 @@ def test_doe_root_flat_layout_rejected_without_state_dir(monkeypatch):
 def test_doe_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
     """Private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
     (`<repo_root>/coordinator`), one level below the repo root doe_root()
-    must return — the plugin-root-vs-coordinator-claude-root distinction this chunk exists
+    must return — the plugin-root-vs-DoE-root distinction this chunk exists
     to close. The marker lives beside the repo root, not beside the content
     root, so the normalizer must climb one level. Gated (Review: staff-eng
     BLOCKER-2) on `<repo_root>/state` being a directory."""
@@ -578,13 +578,13 @@ def test_doe_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable
     """The private-tree chain survives untouched when none of the
     codename-free rungs resolve."""
     _clear_doe_root_env(monkeypatch)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/fake/coordinator-claude")
-    assert reg.doe_root() == "/fake/coordinator-claude"
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/fake/doe-claude")
+    assert reg.doe_root() == "/fake/doe-claude"
 
 
 def test_doe_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
     """Review: staff-eng MAJOR-4, executed shape from the findings — with a
-    live `.doe-root` pointer AND an explicit DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO
+    live `.doe-root` pointer AND an explicit DOE_ROOT/REPO_DOE_CLAUDE
     override both present, the explicit override must win (it is an
     operator's stated intent and cannot be present by accident); ambient
     pointer-file state must not outrank it."""
@@ -592,7 +592,7 @@ def test_doe_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch)
         _clear_doe_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_doe_root_pointer_rung", lambda: _pointer_root)
         monkeypatch.setenv("DOE_ROOT", _override_root)
-        monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", _override_root)
+        monkeypatch.setenv("REPO_DOE_CLAUDE", _override_root)
         assert reg.doe_root() == _override_root
 
 
@@ -671,7 +671,7 @@ def test_plugin_root_candidate_basename_casefold_case_insensitive_on_any_platfor
 
 def test_plugin_root_candidate_no_manifest_relpath_fallback(tmp_path):
     """This call site does NOT carry the engine copy's B5 manifest-relpath
-    fallback: a private coordinator-claude repo root with no marketplace marker anywhere
+    fallback: a private DoE repo root with no marketplace marker anywhere
     must fall through unnormalized, unlike
     coordinator_core.ops.coordinator_doe_root's B5-fixed copy."""
     repo_root = tmp_path / "doe-repo"

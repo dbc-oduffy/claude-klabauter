@@ -2,7 +2,7 @@
 coordinator_core.ops.install_claude_doe_wrapper — install the `claude-doe`
 persistent launch wrapper onto `${CLAUDE_HOME:-$HOME}/.local/bin/claude-doe`.
 
-Port source: coordinator/commands/install.md (coordinator-claude repo) Step 3.5b, the
+Port source: coordinator/commands/install.md (DoE-claude repo) Step 3.5b, the
 literal bash fence at line 892 of the source doc. Ported verbatim (not
 re-derived from the more generic `coordinator_core.install.wrapper_onto_path`
 op): that op's target-dir resolver (`_default_wrapper_bin_dir`) does NOT
@@ -15,7 +15,7 @@ separate op that preserves the doc block's own `${CLAUDE_HOME:-$HOME}`
 precedence exactly, rather than repointing the shared generic op (unknown
 blast radius on its other callers) to gain that behavior.
 
-Contract: emits the exact `claude_doe_wrapper: <status>` stdout row the coordinator-claude
+Contract: emits the exact `claude_doe_wrapper: <status>` stdout row the DoE
 Phase 7 status table expects on every exit path, folding install.md's former
 if/echo wrapper into this module (M3/D9 pattern,
 docs/plans/2026-07-23-skills-carry-no-code-extirpation.md).
@@ -80,7 +80,7 @@ def main(argv: List[str]) -> int:
             i += 1
 
     if not wrapper_src:
-        print(f"{_PROG}: --wrapper-src is required (path to coordinator/bin/claude-doe)", file=sys.stderr)
+        print(f"{_PROG}: --wrapper-src is required (path to coordinator/bin/claude-doe.py)", file=sys.stderr)
         print("claude_doe_wrapper: failed (--wrapper-src not supplied)")
         return 1
 

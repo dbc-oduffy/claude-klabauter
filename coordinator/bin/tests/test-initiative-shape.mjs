@@ -9,7 +9,7 @@
  * Run with: node coordinator/bin/tests/test-initiative-shape.mjs
  * Exits 0 on all-pass, 1 on any failure.
  *
- * Spec backlink: docs/plans/2026-07-04-initiative-govern-sweep-prioritize-doe-d.md § C1 (AC1, AC2)
+ * Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C1 (AC1, AC2)
  *
  * Negative-spec: schema.js is a CommonJS module; import via createRequire (not static ESM import).
  */
@@ -65,7 +65,7 @@ async function test(label, fn) {
 const VALID_BURN_DOWN = {
   id: "coordinator-schema-discipline",
   label: "Coordinator Schema Discipline",
-  owner: "coordinator-claude-em",
+  owner: "doe-claude-em",
   status: "active",
   target_date: null
 };
@@ -74,7 +74,7 @@ const VALID_BURN_DOWN = {
 const VALID_COMPLETION = {
   id: "example-fleet-pro-launch",
   label: "Example-Fleet Pro Launch",
-  owner: "coordinator-claude-em",
+  owner: "doe-claude-em",
   status: "active",
   target_date: "2026-09-30"
 };

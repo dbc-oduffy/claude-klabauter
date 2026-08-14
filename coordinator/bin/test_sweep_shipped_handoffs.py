@@ -1,6 +1,6 @@
 """test_sweep_shipped_handoffs.py — self-contained test suite for sweep-shipped-handoffs.py.
 
-Port of: test-sweep-shipped-handoffs.sh (coordinator-claude f703efad, 2026-07-21). Retargets the bash
+Port of: test-sweep-shipped-handoffs.sh (DoE f703efad, 2026-07-21). Retargets the bash
 oracle's contract assertions onto the Python trampoline: frontmatter-driven selection (shipped /
 abandoned / superseded), the shipped-subclass SHA-resolvability gate, the mtime staleness
 WARNING, and dispatch shape via cc_invoke.route.

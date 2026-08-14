@@ -16,7 +16,7 @@ helpers below are used ONLY by ``check_offer_git_c`` and each other):
 ``check_runaway_find``, which stays behind), and the package's shared
 tokenizer (``tokenize_full_command``/``token_matches_binary``).
 
-Spec backlink: docs/plans/2026-07-29-bash-guard-merged-execution-shape.md M1
+Spec backlink: DoE-claude:pln-bash-guard-merged-execution-shape-a71e05 M1
 """
 
 from __future__ import annotations

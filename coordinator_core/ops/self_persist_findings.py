@@ -60,7 +60,7 @@ Spec backlink: pln-coordinator-ops-buildout-from--903224
 § Wave 1 C1a; state/audits/2026-07-22-command-payload-inventory/op-classification.tsv
 row "self-persist-findings-fallback"; distinct-ops-new.tsv same row (fence sites:
 agents/coverage-auditor.md:29, snippets/findings-self-persist-bash.md:26/32/40 —
-Coordinator-claude-owned, out of this repo's write scope).
+coordinator-claude-owned, out of this repo's write scope).
 
 Negative-spec:
   - Does NOT itself mkdir target_path's parent — but locked_rmw's write step

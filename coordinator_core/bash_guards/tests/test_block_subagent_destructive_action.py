@@ -596,7 +596,7 @@ def test_indirection_wrapper_probe_does_not_over_block_plain_commands():
 @pytest.mark.parametrize("operator", [";", "&&", "||", "|"])
 def test_indirection_operator_inside_quoted_value_allows(operator):
     payload = _payload(
-        'python3 coordinator/bin/cross-repo-memo --to sibling '
+        'python3 coordinator/bin/cross-repo-memo.py --to sibling '
         f'--title "some title{operator} with an operator" --summary "s"',
         agent_type="coordinator:executor",
     )
@@ -629,7 +629,7 @@ def test_indirection_semicolon_inside_quotes_directly_on_evaluator():
     # exact repro: a cross-repo-memo invocation with a semicolon inside a
     # quoted --title value must classify as non-wrapper.
     cmd = (
-        'python3 coordinator/bin/cross-repo-memo --to sibling '
+        'python3 coordinator/bin/cross-repo-memo.py --to sibling '
         '--title "some title; with a semicolon" --summary "s"'
     )
     assert guard._evaluate_wrapper_indirection(cmd) is None
@@ -645,9 +645,9 @@ def test_indirection_prose_fix_is_flag_name_agnostic():
     # operator both sit inside quoted prose here, on three different flag
     # names across two different CLIs.
     cases = [
-        'python3 coordinator/bin/cross-repo-memo --to sibling --title x '
+        'python3 coordinator/bin/cross-repo-memo.py --to sibling --title x '
         '--summary "finished the bash migration; no more shell scripts"',
-        'python3 coordinator/bin/cross-repo-memo --to sibling --body-file - '
+        'python3 coordinator/bin/cross-repo-memo.py --to sibling --body-file - '
         '--title "note: bash && migration done"',
         'some-other-cli --note "the bash || sh migration is done" --run',
     ]
@@ -662,7 +662,7 @@ def test_indirection_prose_trigger_word_does_not_mask_real_indirection_elsewhere
     # a semicolon) in prose -- the prose match must not short-circuit or
     # otherwise suppress the genuine deny.
     cmd = (
-        "echo start ; bash malicious.sh ; python3 coordinator/bin/cross-repo-memo "
+        "echo start ; bash malicious.sh ; python3 coordinator/bin/cross-repo-memo.py "
         '--to sibling --title "finished the bash migration; no more shell scripts" '
         "--kind fyi"
     )
@@ -2664,7 +2664,7 @@ def test_settings_home_bin_env_wrapped_other_variable_still_advises():
 
 
 # ---------------------------------------------------------------------------
-# 2026-07-28 `git mv` CARVE-OUT DECLINED (coordinator-claude memo 2026-07-25 P2) -- the
+# 2026-07-28 `git mv` CARVE-OUT DECLINED (DoE memo 2026-07-25 P2) -- the
 # verdict is unchanged (still denied); what changed is that `mv` is now
 # classified by name so the deny message can offer the `mv`-plus-report
 # forward path instead of the generic unrecognized-verb text. These tests
@@ -2763,7 +2763,7 @@ def test_unrecognized_git_verb_still_default_denies_generically():
 
 
 def test_git_show_sha_path_allows():
-    # coordinator-claude memo's second P2 ask (read-only `git show <sha>:<path>` for a
+    # DoE memo's second P2 ask (read-only `git show <sha>:<path>` for a
     # before/after diff) needed no change -- `show` was already safe-listed.
     # Pinned so a future allowlist edit cannot silently retract it.
     payload = _payload(
@@ -3175,7 +3175,7 @@ def test_fail_open_logging_failure_does_not_raise_or_change_verdict(monkeypatch)
 
 def test_machine_local_set_denies_executor():
     payload = _payload(
-        "machine-local set repos.example_doctrine_repo /evil", agent_type="coordinator:executor"
+        "machine-local set repos.doe_claude /evil", agent_type="coordinator:executor"
     )
     result = guard.check(payload)
     assert result is not None
@@ -3186,7 +3186,7 @@ def test_machine_local_set_denies_executor():
 
 def test_machine_local_set_denies_code_reviewer():
     payload = _payload(
-        "machine-local set repos.example_doctrine_repo /evil", agent_type="coordinator:code-reviewer"
+        "machine-local set repos.doe_claude /evil", agent_type="coordinator:code-reviewer"
     )
     result = guard.check(payload)
     assert result is not None
@@ -3203,7 +3203,7 @@ def test_machine_local_set_denies_unresolved_unknown_subagent_type(monkeypatch):
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: "")
-    payload = _payload("machine-local set repos.example_doctrine_repo /evil", agent_type=None)
+    payload = _payload("machine-local set repos.doe_claude /evil", agent_type=None)
     payload["agent_id"] = "deadbeef0123"
     result = guard.check(payload)
     assert result is not None
@@ -3228,8 +3228,8 @@ def test_machine_local_other_write_subcommands_deny(cmd):
 @pytest.mark.parametrize(
     "cmd",
     [
-        "machine-local get repos.example_doctrine_repo",
-        "machine-local has repos.example_doctrine_repo",
+        "machine-local get repos.doe_claude",
+        "machine-local has repos.doe_claude",
         "machine-local keys --prefix repos",
         "machine-local path",
         "machine-local dir",
@@ -3242,7 +3242,7 @@ def test_machine_local_read_subcommands_allow(cmd):
 
 def test_machine_local_path_prefixed_spelling_denies():
     payload = _payload(
-        "/usr/local/bin/machine-local set repos.example_doctrine_repo /evil",
+        "/usr/local/bin/machine-local set repos.doe_claude /evil",
         agent_type="coordinator:executor",
     )
     result = guard.check(payload)
@@ -3252,7 +3252,7 @@ def test_machine_local_path_prefixed_spelling_denies():
 
 def test_machine_local_windows_cmd_twin_spelling_denies():
     payload = _payload(
-        "machine-local.cmd set repos.example_doctrine_repo /evil", agent_type="coordinator:executor"
+        "machine-local.cmd set repos.doe_claude /evil", agent_type="coordinator:executor"
     )
     result = guard.check(payload)
     assert result is not None
@@ -3261,7 +3261,7 @@ def test_machine_local_windows_cmd_twin_spelling_denies():
 
 def test_machine_local_chained_segment_denies():
     payload = _payload(
-        "ls -la ; machine-local set repos.example_doctrine_repo /evil",
+        "ls -la ; machine-local set repos.doe_claude /evil",
         agent_type="coordinator:executor",
     )
     result = guard.check(payload)
@@ -3274,7 +3274,7 @@ def test_machine_local_set_em_main_loop_unaffected():
     # identity-resolution cost is paid.
     payload = {
         "tool_name": "Bash",
-        "tool_input": {"command": "machine-local set repos.example_doctrine_repo /evil"},
+        "tool_input": {"command": "machine-local set repos.doe_claude /evil"},
         "session_id": "sess1",
     }
     assert guard.check(payload) is None
@@ -3286,7 +3286,7 @@ def test_machine_local_set_mutation_check_matcher_removed_flips_to_allow(monkeyp
     # exact same payload from deny to allow.
     monkeypatch.setattr(guard, "_MACHINE_LOCAL_WRITE_SUBCOMMANDS", frozenset())
     payload = _payload(
-        "machine-local set repos.example_doctrine_repo /evil", agent_type="coordinator:executor"
+        "machine-local set repos.doe_claude /evil", agent_type="coordinator:executor"
     )
     assert guard.check(payload) is None
 

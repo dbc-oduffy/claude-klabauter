@@ -44,7 +44,7 @@ round-trip to a real CLI), autouse-stub `resolve_operator_config`. Covers:
       branch ONCE; a simulated mid-loop branch flip HALTS the wave rather
       than committing the remaining items.
 
-Spec backlink: coordinator-claude docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Spec backlink: DoE-claude docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
 chunk C1 (depends on nothing; C3/C3a-C3e/C4 depend on this test stabilizing
 green -- see D-5, AC21, and the file-overlap/executable-shape sections).
 
@@ -941,7 +941,7 @@ class TestCleanupFailureChainsRatherThanMasksOriginal:
 #
 # `main_apply` does not parse `--wave-path`/`--granularity`/`--message` yet
 # -- this section is the SPEC for that CLI surface, not a report of
-# something already built. See coordinator-claude
+# something already built. See DoE-claude
 # docs/plans/2026-07-26-backlog-grind-computed-frontage.md's follow-on
 # chunk E1/E2: E1 (this section) plants the red tests; E2 makes them green
 # by extending `main_apply`'s own argv loop. Do NOT weaken an assertion
@@ -1781,7 +1781,7 @@ def _write_mise_inventory_record(
 
     `record_run_id=False` writes the SAME record with its `run_id:`
     frontmatter line omitted -- the pre-contract shape a Phase-1 scout
-    writes today, before coordinator-claude agrees to produce the field. The two
+    writes today, before DoE-claude agrees to produce the field. The two
     spellings are what the inert-until-produced cases below compare."""
     inventory_dir = state_root / "mise-inventory"
     inventory_dir.mkdir(parents=True, exist_ok=True)
@@ -1807,7 +1807,7 @@ def _fake_git(*, commits: int, numstat_rows: list[tuple[int, int, str]], seen=No
 
     There is deliberately no `merge-base --is-ancestor` arm and no ancestry
     model any more (2026-08-04 carrier ratification, `cross-repo/inbox/
-    2026-08-04-coordinator-claude-em-mise-run-id-carrier-env-breaks-windows.md`): the
+    2026-08-04-doe-claude-em-mise-run-id-carrier-env-breaks-windows.md`): the
     record is NAMED by the caller's `--run-id`, so nothing is selected by
     walking history. Any other git command reaching this stub returns `None`,
     which surfaces as the unresolved judgment point -- so a reinstated probe
@@ -2138,14 +2138,14 @@ class TestMisePhase6ReviewScaleVerdict:
 
 class TestMiseRunIdIsReadNeverInferred:
     """The consumer half of the run-identity carrier, ratified 2026-08-04
-    (`cross-repo/inbox/2026-08-04-coordinator-claude-em-mise-run-id-carrier-env-
+    (`cross-repo/inbox/2026-08-04-doe-claude-em-mise-run-id-carrier-env-
     breaks-windows.md`): `backlog-grind-assemble brief mise-en-place
     --run-id <run-id>` NAMES which `state/mise-inventory/<run-id>.md` record
     is the run asking, and the reader READS it.
 
     Three predicates preceded this flag and each picked a record nothing had
     named -- newest-mtime, one-record-else-halt, and start-SHA ancestry. The
-    last was deleted rather than demoted to a fallback, on coordinator-claude's own
+    last was deleted rather than demoted to a fallback, on DoE's own
     reasoning: a fallback "quietly reactivates on any caller that forgets the
     flag", which is precisely the caller who most needs the loud failure. So
     the properties under test here are: the named record is the one measured,
@@ -2482,7 +2482,7 @@ class TestMiseRunIdentityInferenceIsDeletedNotDormant:
 
     def test_the_reader_reads_no_environment_or_session_state_for_a_run_id(self):
         """The second-carrier refusal, pinned. `MISE_RUN_ID` as an env
-        fallback was ruled out on 2026-08-04 (PM call, coordinator-claude concurring):
+        fallback was ruled out on 2026-08-04 (PM call, DoE-claude concurring):
         a second carrier is a second way to be wrong, an inline
         `VAR=value command` prefix is not a line `cmd.exe` parses on the
         Windows launcher path, and each EM Bash call is a fresh shell so an
@@ -3225,7 +3225,7 @@ class TestBriefContractUnchangedAC6:
 
 
 # ---------------------------------------------------------------------------
-# (l) `coordinator/bin/backlog-grind-assemble` trampoline dispatch routing --
+# (l) `coordinator/bin/backlog-grind-assemble.py` trampoline dispatch routing --
 # regression net for the mint-run-id fallthrough bug
 # (docs/plans/2026-08-04-engine-minted-mise-run-identity.md, AC8): the
 # trampoline's `main()` carries an allowlist (`if subcommand not in (...)`)
@@ -3238,11 +3238,11 @@ class TestBriefContractUnchangedAC6:
 # above), and never a subprocess round-trip.
 # ---------------------------------------------------------------------------
 
-_TRAMPOLINE_PATH = _REPO_ROOT / "coordinator" / "bin" / "backlog-grind-assemble"
+_TRAMPOLINE_PATH = _REPO_ROOT / "coordinator" / "bin" / "backlog-grind-assemble.py"
 
 
 def _load_trampoline():
-    """Import `coordinator/bin/backlog-grind-assemble` as a module.
+    """Import `coordinator/bin/backlog-grind-assemble.py` as a module.
 
     SourceFileLoader dance because the filename is hyphenated and carries no
     importable extension -- same idiom as

@@ -22,8 +22,8 @@ any consumer-specific mutating primitive (`_run_git`, archive-stamp
 calls, etc. — `scoped_commit` takes a `run_git` callable, never shells
 out itself).
 
-Contract: coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C2
+Contract: DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C2
 
 DR-092 (ACCEPTED): un-defers this module once a second real apply/dispatch
 half exists — B4's `baton_assemble` is that named trigger. `apply_base` is

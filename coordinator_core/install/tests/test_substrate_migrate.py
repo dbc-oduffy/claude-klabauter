@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.install import substrate_migrate as sm
+from coordinator_core.testing import symlink_capability
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +475,7 @@ def test_full_migration_dry_run_reports_compat_pointer_stale_when_files_already_
 # ---------------------------------------------------------------------------
 
 
+@symlink_capability.requires_symlink_capability
 def test_is_pointer_true_for_posix_symlink(tmp_path):
     from coordinator_core.install._shared import is_pointer
 

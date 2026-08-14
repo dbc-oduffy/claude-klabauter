@@ -2,19 +2,19 @@
 coordinator_core.install.test_sandbox_check — parity tests for
 coordinator_core.install.sandbox_check.
 
-Port of: install-sandbox-check.sh (coordinator-claude b5a4192c, 2026-07-20).
+Port of: install-sandbox-check.sh (DoE b5a4192c, 2026-07-20).
 
 Independently re-derives expected behavior (Reporter counting semantics,
-subprocess timeout/stdin-guard behavior, coordinator-claude-clone resolution precedence,
+subprocess timeout/stdin-guard behavior, DoE-clone resolution precedence,
 transport-vs-business exit-code contract) from the bash oracle's own
 documented contract rather than re-asserting this port's own transcription.
 Also drives a full :func:`run_all` pass against a hand-built minimal fake
-Coordinator-claude clone (NOT the real sibling coordinator-claude checkout — this validator's own
+DoE clone (NOT the real sibling DoE-claude checkout — this validator's own
 job is to exercise *other* install scripts via subprocess, so a synthetic
 fixture with a stub ``claude-doe`` is the honest independent oracle here,
 not a copy of the real coordinator/bin/ tree).
 
-Spec backlink: docs/plans/2026-07-04-doe-maximalist-execution-plugin-dir.md § W4.1
+Spec backlink: DoE-claude:pln-doe-maximalist-execution-plugi-6d808d § W4.1
 Port backlink: docs/plans/2026-07-16-clean-slate-residual-migration.md
     (BIG_PORT Wave C, item install-sandbox-check)
 """
@@ -83,19 +83,19 @@ def test_run_missing_executable_converts_to_synthetic_rc_127_not_an_exception():
 
 
 # ---------------------------------------------------------------------------
-# resolve_doe_clone — REPO_EXAMPLE_DOCTRINE_REPO precedence over machine-local
+# resolve_doe_clone — REPO_DOE_CLAUDE precedence over machine-local
 # ---------------------------------------------------------------------------
 
 
 def test_resolve_doe_clone_prefers_env_var(monkeypatch):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/tmp/fake-doe-clone")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/tmp/fake-doe-clone")
     clone, resolved = resolve_doe_clone()
     assert resolved is True
     assert clone == "/tmp/fake-doe-clone"
 
 
 def test_resolve_doe_clone_returns_unresolved_when_nothing_available(monkeypatch):
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir-xyz")
     clone, resolved = resolve_doe_clone()
     assert resolved is False
@@ -131,13 +131,13 @@ def test_main_help_exits_zero(capsys):
 
 
 def test_main_unknown_argument_exits_transport_code(monkeypatch):
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     rc = main(["--totally-unknown-flag"])
     assert rc == 3
 
 
 # ---------------------------------------------------------------------------
-# run_all -- graceful degrade when coordinator-claude clone is unresolved (FAMILY-I contract)
+# run_all -- graceful degrade when DoE clone is unresolved (FAMILY-I contract)
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +145,7 @@ def test_run_all_never_raises_when_doe_clone_unresolved(monkeypatch):
     """Mirrors the bash oracle's own graceful-skip design (lines 79-98):
     an unresolved clone must degrade every clone-dependent check to SKIP,
     never crash the harness. The single expected FAIL is the oracle's own
-    'repos.example_doctrine_repo not resolved' assertion -- everything downstream must
+    'repos.doe_claude not resolved' assertion -- everything downstream must
     still complete without an uncaught exception."""
     monkeypatch.setattr(
         "coordinator_core.install.sandbox_check.resolve_doe_clone", lambda: ("", False)
@@ -153,7 +153,7 @@ def test_run_all_never_raises_when_doe_clone_unresolved(monkeypatch):
     r, sandbox = run_all()
     assert not os.path.isdir(sandbox)  # cleaned up (default keep_sandbox=False)
     assert r.fail_count >= 1  # the "not resolved" assertion itself
-    assert any("repos.example_doctrine_repo not resolved" in line for line in r.lines)
+    assert any("repos.doe_claude not resolved" in line for line in r.lines)
 
 
 def test_run_all_keep_sandbox_preserves_directory(monkeypatch):
@@ -170,7 +170,7 @@ def test_run_all_keep_sandbox_preserves_directory(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# run_all -- full pass against a synthetic fake coordinator-claude clone (independent fixture)
+# run_all -- full pass against a synthetic fake DoE clone (independent fixture)
 # ---------------------------------------------------------------------------
 
 
@@ -181,12 +181,12 @@ def _write_executable(path: Path, body: str) -> None:
 
 @pytest.fixture
 def fake_doe_clone(tmp_path: Path) -> Path:
-    """A minimal synthetic coordinator-claude-clone shape: .git dir, coordinator/ dir, a
+    """A minimal synthetic DoE-clone shape: .git dir, coordinator/ dir, a
     stub claude-doe wrapper that emits the exact contract line the
     validator's own checks 7/7b assert on, and a stub shim template (the
     one on-disk artifact ``gen_claude_doe_shim`` still requires, since it
     has no default template path of its own -- see that module's
-    docstring). The coordinator-claude-side ``.sh`` bridges themselves (gen-doe-root-
+    docstring). The DoE-side ``.sh`` bridges themselves (gen-doe-root-
     pointer.sh, gen-claude-doe-shim.sh, gen-settings-hooks.sh,
     resolve-coordinator-clone.sh) are deliberately ABSENT -- the port no
     longer reads any of them (native in-process calls replace the former
@@ -202,13 +202,13 @@ def fake_doe_clone(tmp_path: Path) -> Path:
     (clone / "coordinator" / "hooks" / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
     (clone / "coordinator" / "templates" / "shell").mkdir(parents=True)
     (clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl").write_text(
-        # Minimal stand-in for the real coordinator-claude template: exports REPO_EXAMPLE_DOCTRINE_REPO
+        # Minimal stand-in for the real DoE template: exports REPO_DOE_CLAUDE
         # from the .doe-root pointer at SOURCE time (not inside the function
         # body -- checks 9/AC2 source this file directly and read the env var
         # back without ever calling claude()) and defines a claude() function,
         # using variable expansion only (no hardcoded $HOME/machine path).
         'if [ -f "${CLAUDE_HOME:-$HOME}/.claude/.doe-root" ]; then\n'
-        '  export REPO_EXAMPLE_DOCTRINE_REPO="$(cat "${CLAUDE_HOME:-$HOME}/.claude/.doe-root")"\n'
+        '  export REPO_DOE_CLAUDE="$(cat "${CLAUDE_HOME:-$HOME}/.claude/.doe-root")"\n'
         "fi\n"
         "\n"
         "claude() {\n"
@@ -218,11 +218,11 @@ def fake_doe_clone(tmp_path: Path) -> Path:
     )
 
     # Python, not sh: the real claude-doe was ported from bash to python3
-    # (coordinator-claude commit), and sandbox_check.py invokes it via
+    # (DoE-claude commit), and sandbox_check.py invokes it via
     # ``[sys.executable, wrapper_path, ...]`` directly (not shebang-exec
     # through a shell), so this fixture must be python source for that
     # invocation to succeed.
-    wrapper = clone / "coordinator" / "bin" / "claude-doe"
+    wrapper = clone / "coordinator" / "bin" / "claude-doe.py"
     _write_executable(
         wrapper,
         "#!/usr/bin/env python3\n"
@@ -237,7 +237,7 @@ def fake_doe_clone(tmp_path: Path) -> Path:
 
 
 def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone: Path, monkeypatch):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(fake_doe_clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
     coordinator_root = str(fake_doe_clone / "coordinator")
 
     r, sandbox = run_all(coordinator_root_override=coordinator_root)
@@ -252,10 +252,10 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
         "claude-doe --dry-run exec line references clone's coordinator dir" in line for line in r.lines
     )
     # Native in-process pointer/shim/resolver calls must succeed even though
-    # the coordinator-claude .sh bridges are absent from this fixture (the whole point of
+    # the DoE .sh bridges are absent from this fixture (the whole point of
     # the port -- no dependency on those files existing).
     assert any("gen_doe_root_pointer.main() exited 0 against sandbox" in line for line in r.lines)
-    assert any(".doe-root content matches registry repos.example_doctrine_repo" in line for line in r.lines)
+    assert any(".doe-root content matches registry repos.doe_claude" in line for line in r.lines)
     assert any("gen_claude_doe_shim.main() exited 0 against sandbox" in line for line in r.lines)
     assert any("claude-doe-shim.sh defines a claude() function" in line for line in r.lines)
     assert any(

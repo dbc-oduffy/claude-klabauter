@@ -2,9 +2,9 @@
 (snippets/, schemas/, templates/, docs/) across the split-repo layout.
 
 The 2026-07-22 executable-surface migration moved ~1100 executables from
-Coordinator-claude/coordinator/{bin,lib,scripts,tests} into the engine repo's coordinator/,
+DoE-claude/coordinator/{bin,lib,scripts,tests} into the engine repo's coordinator/,
 but their sibling DATA dirs — schemas/, snippets/, templates/, docs/, hooks/ —
-correctly stayed in coordinator-claude (DR-047: contract/data lives with coordinator-claude, engine
+correctly stayed in DoE-claude (DR-047: contract/data lives with DoE, engine
 with the engine repo). Any migrated script that resolved a sibling data dir via a bare
 `__file__`-relative walk (the old `bin/../<data-dir>` shape) is now broken: that
 walk lands inside the engine repo, where the data dir no longer exists.
@@ -18,10 +18,10 @@ copies of the resolution chain is exactly the drift that caused this bug.
 
 Two live layouts:
   1. Co-located    — the data dir sits beside bin/ under the same coordinator
-                     root (the pre-migration coordinator-claude layout, and any OSS install
+                     root (the pre-migration DoE layout, and any OSS install
                      that ships both halves together). Free, no registration.
   2. Split-repo    — this code lives in the engine repo while the data dir
-                     stayed in coordinator-claude. Resolve the coordinator-claude root the same way
+                     stayed in DoE-claude. Resolve the DoE root the same way
                      every other doctrine CLI does (coordinator_registry.doe_root()).
 
 Rung 1 first so the co-located case costs nothing and needs no registration.
@@ -30,8 +30,8 @@ Rung 1.5 — codename-free ladder (added 2026-08-07, C2). `coordinator_registry.
 doe_root()` (rung 2 below) has NO codename-free rung of its own — unlike this
 module's sibling bootstrap in `coordinator_registry.py`'s own `_MANIFEST_PATH`
 resolution (`git show 067da377c1b0`, C1), which gained one, `doe_root()` the
-FUNCTION still only tries DOE_ROOT env -> REPO_EXAMPLE_DOCTRINE_REPO env -> machine-local
-`repos.example_doctrine_repo` -> raise — every one of those needs a private codename this
+FUNCTION still only tries DOE_ROOT env -> REPO_DOE_CLAUDE env -> machine-local
+`repos.doe_claude` -> raise — every one of those needs a private codename this
 module's callers running from the published mirror cannot supply. So this
 module adds its OWN rung 1.5, ahead of the `doe_root()` call, mirroring the
 shape `coordinator_core.ops.coordinator_doe_root` added at its own rung 1.5
@@ -61,7 +61,7 @@ still true — see `coordinator_registry.doe_root()`'s own docstring for its
 current (post-C1D, post-MAJOR-4-reorder) ladder.
 
 Negative-spec: this module does NOT reimplement the DOE_ROOT resolution chain
-(env DOE_ROOT -> machine-local repos.example_doctrine_repo -> raise). That chain lives in
+(env DOE_ROOT -> machine-local repos.doe_claude -> raise). That chain lives in
 exactly one place, `coordinator_registry.doe_root()`, and this module calls it
 rather than duplicating it. A caller that hand-rolls its own DOE_ROOT lookup
 instead of importing `data_root()` from here re-introduces the six-copies-of-
@@ -97,7 +97,7 @@ Public API:
 
 Spec backlink: cross-repo/archive/2026-07-22-claude-central-em-executable-surface-migrated-and-76-op-ask.md
                (the originating memo; in cross-repo/inbox/ until the boot sweep moves it)
-DR backlink:   docs/decisions/DR-047-coordinator-claude-klabauter-boundary-redraw-contract-vs-e.md (coordinator-claude-side)
+DR backlink:   docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md (DoE-side)
 Reference fix: coordinator/bin/lib/coordinator_registry.py `_MANIFEST_PATH` bootstrap
                (commit 4f74656c, "coordinator_registry: resolve the schemas manifest
                across the repo split")
@@ -148,7 +148,7 @@ _CDR_COORDINATOR_LIB_DIR_FLAT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(_THIS_DIR))), "lib"
 )
 
-# Published-manifest relpath (OSS flat layout). The private coordinator-claude-repo layout
+# Published-manifest relpath (OSS flat layout). The private DoE-repo layout
 # nests the same relpath under `coordinator/`. Shared by the rung-1.5
 # codename-free ladder's acceptance gate below — see module docstring.
 _CDR_MANIFEST_RELPATH = os.path.join("schemas", "coordinator-registry.manifest.json")
@@ -157,7 +157,7 @@ _CDR_MANIFEST_RELPATH = os.path.join("schemas", "coordinator-registry.manifest.j
 def _cdr_manifest_present(root: str) -> bool:
     """True if `root` contains either published manifest layout: OSS flat
     (`<root>/schemas/coordinator-registry.manifest.json`) or the private
-    coordinator-claude-repo shape (`<root>/coordinator/schemas/coordinator-registry.manifest.json`).
+    DoE-repo shape (`<root>/coordinator/schemas/coordinator-registry.manifest.json`).
     Gates each rung-1.5 candidate so a resolved-but-unrelated directory is
     never accepted over a later, correct rung.
 
@@ -214,7 +214,7 @@ def _cdr_repo_root_from_plugin_root_candidate(candidate: str) -> str:
     coordinator_registry.py::_mp_repo_root_from_plugin_root_candidate(); do
     NOT edit that module, see chunk C1E task notes).
 
-    CLAUDE_PLUGIN_ROOT is a *content* root: in the private/dev coordinator-claude layout
+    CLAUDE_PLUGIN_ROOT is a *content* root: in the private/dev DoE layout
     this is `<repo_root>/coordinator`, one level below the repo root
     `data_root()` needs (it appends `"coordinator" / dir_name` itself below
     — feeding it a content root double-nests to
@@ -378,7 +378,7 @@ def data_root(dir_name: str) -> Path:
     """Resolve `dir_name` (e.g. "snippets", "schemas", "templates", "docs") to
     its absolute, existing directory Path.
 
-    Resolution chain (co-located -> codename-free ladder -> coordinator-claude-resident):
+    Resolution chain (co-located -> codename-free ladder -> DoE-resident):
       1. Co-located — `<coordinator-root>/<dir_name>` beside this module's own
          bin/lib, where `<coordinator-root>` is computed identically to
          `coordinator_registry.py`'s manifest-path bootstrap. Free, no
@@ -386,14 +386,14 @@ def data_root(dir_name: str) -> Path:
       1.5. Codename-free ladder (C2) — `.doe-root` pointer file, flat
          marketplace-clone layout, `CLAUDE_PLUGIN_ROOT`, registry
          `live_path`; see `_cdr_codename_free_root()` and module docstring.
-      2. Coordinator-claude-resident — `<doe_root()>/coordinator/<dir_name>` (private layout),
+      2. DoE-resident — `<doe_root()>/coordinator/<dir_name>` (private layout),
          falling back to `<doe_root()>/<dir_name>` (OSS-flat layout, F2 fix
          2026-08-08 -- see below), delegating the DOE_ROOT/machine-local
          resolution to `coordinator_registry.doe_root()` (never reimplemented
          here — see module negative-spec).
 
     Raises RuntimeError, naming `dir_name` and both candidate paths tried
-    (or the coordinator-claude-resolution failure reason), if neither rung resolves to an
+    (or the DoE-resolution failure reason), if neither rung resolves to an
     existing directory. Never returns a path that doesn't exist.
     """
     colocated = _colocated_root() / dir_name
@@ -414,12 +414,12 @@ def data_root(dir_name: str) -> Path:
             raise RuntimeError(
                 f"coordinator_data_root: cannot resolve data dir {dir_name!r}. "
                 f"Rung 1 (co-located) tried: {colocated} (not found). "
-                f"Rung 2 (coordinator-claude-resident) failed: {exc}"
+                f"Rung 2 (DoE-resident) failed: {exc}"
             ) from exc
 
     # F2 fix (2026-08-08, hermetic-ac-reverify) -- the codename-free ladder's
     # gate (`_cdr_manifest_present`/`_mp_candidate_manifest_path`) accepts
-    # EITHER published manifest layout: private coordinator-claude-repo shape
+    # EITHER published manifest layout: private DoE-repo shape
     # (`<root>/coordinator/schemas/...`) AND OSS-flat shape
     # (`<root>/schemas/...`, no `coordinator/` segment). This terminal join
     # previously ALWAYS inserted `coordinator/`, so a correctly-resolved
@@ -441,6 +441,6 @@ def data_root(dir_name: str) -> Path:
     raise RuntimeError(
         f"coordinator_data_root: cannot resolve data dir {dir_name!r}. "
         f"Rung 1 (co-located) tried: {colocated} (not found). "
-        f"Rung 2 (coordinator-claude-resident) tried: {private_candidate} (private layout, not found), "
+        f"Rung 2 (DoE-resident) tried: {private_candidate} (private layout, not found), "
         f"{flat_candidate} (OSS-flat layout, not found)."
     )

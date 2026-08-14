@@ -45,7 +45,7 @@ Add this module to coordinator_core/ops/__init__.py (C5) to trigger registration
 
 Spec backlinks:
   - Plan: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C4
-  - Port of: coordinator-session.sh (coordinator-claude e34f2484, 2026-07-22)
+  - Port of: coordinator-session.sh (DoE e34f2484, 2026-07-22)
     cs_reap_stale, cs_reap_agents, cs_reap_stale_claims
   - session-state-contract.md § Negative-Spec: mkdir/flock decision (long-lived vs. ms-scope)
 
@@ -517,7 +517,7 @@ def _reap_orphaned_claims(
 #   - Does NOT enumerate working-repos.yaml — claude-klabauter has no fleet census here.
 #   - Does NOT walk/rm-rf into any sibling repo the caller did not explicitly name
 #     via target_root/target_roots. Fleet-level fan-out over this primitive across
-#     the full working-repos.yaml census is the META-REPO's job (paired coordinator-claude
+#     the full working-repos.yaml census is the META-REPO's job (paired DoE
 #     return-memo commitment), not built in this plan.
 #   - Does NOT re-implement the reaper predicate — delegates to
 #     _reap_orphaned_claims (same TOCTOU double-check + fail-closed-to-keep

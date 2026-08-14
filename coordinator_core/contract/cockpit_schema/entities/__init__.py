@@ -1,7 +1,7 @@
 """
 entities — the 24 cockpit-contract entity modules, aggregated.
 
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/index.ts`'s import +
+Pydantic port of DoE `coordinator/cockpit-contract/src/index.ts`'s import +
 re-export block (everything in that file EXCEPT the `ENTITY_SCHEMAS` map and
 `CONTRACT_VERSION`, which live one level up at
 `coordinator_core/contract/cockpit_schema/__init__.py` — the package-level
@@ -16,7 +16,7 @@ here too, matching `index.ts`'s `export * from "./entities/deliverable-spine.js"
 — it carries no `ENTITY_SCHEMAS` entry (shared enums only, not an emittable
 entity), same as the TS source.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 Negative-spec: no `ENTITY_SCHEMAS` / `CONTRACT_VERSION` here — those are
 package-level (see above), not entities-level, to match where `emit_schema.py`
 looks them up.

@@ -2,7 +2,7 @@
 test_workweek_complete_reverse_drift_gate.py — pytest unit tests for
 coordinator_core.ops.workweek_reverse_drift_gate.
 
-Port source: coordinator/commands/workweek-complete.md § Step 4g (coordinator-claude),
+Port source: coordinator/commands/workweek-complete.md § Step 4g (DoE-claude),
 the per-plugin execution loop with 3-way rc branching — reauthored here as
 direct in-process calls against the ported Python module's run_gate()/main(),
 monkeypatching the discovery half (_run) so these tests exercise ONLY the

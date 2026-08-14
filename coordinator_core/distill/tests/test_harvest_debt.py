@@ -15,7 +15,7 @@ Coverage:
         disposition|fate, ASCII "->") plus a seeded archive/specs tree, asserting the
         exact harvest_debt basename list
     (d) DISTILLED and PROMOTE both count as harvested; EPHEMERAL/SKIP/PRESERVE do not
-    (d2) action-table vocabulary (coordinator-claude schema-header `date | action | path | ...` format,
+    (d2) action-table vocabulary (DoE schema-header `date | action | path | ...` format,
         lowercase `harvested`/`deleted` — the format sibling repos' live logs carry):
         counted as harvested; unrecognized actions (`skipped`, `consolidated`) do not
         count; uppercase variants do NOT match (exact-token, no case-folding); a mixed
@@ -171,7 +171,7 @@ def test_comm_minus_23_semantics_excludes_only_harvested_basenames(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# action-table vocabulary (coordinator-claude schema-header format: date | action | path | ...)
+# action-table vocabulary (DoE schema-header format: date | action | path | ...)
 # ---------------------------------------------------------------------------
 
 ACTION_TABLE_LOG_FIXTURE = """\

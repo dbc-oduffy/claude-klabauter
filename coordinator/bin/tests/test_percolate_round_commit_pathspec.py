@@ -50,7 +50,7 @@ def test_extract_change_lines_parses_rename_tag_separately():
         ("UPDATE", "coordinator_core/other.py"),
         ("NEW", "coordinator_core/brand_new.py"),
     ]
-    assert renames == [(_OLD, _NEW)]
+    assert renames == [(_OLD, _NEW, "file")]
 
 
 def test_pathspec_contains_post_transform_name_not_pre_transform(tmp_path):
@@ -59,7 +59,7 @@ def test_pathspec_contains_post_transform_name_not_pre_transform(tmp_path):
     dest = tmp_path / "dest"
     dest.mkdir()
     change_lines = [("REMOVE", _OLD)]
-    rename_pairs = [(_OLD, _NEW)]
+    rename_pairs = [(_OLD, _NEW, "file")]
 
     pathspec = _mod._build_commit_pathspec(str(dest), change_lines, rename_pairs)
 
@@ -104,7 +104,7 @@ def test_rename_target_already_a_change_line_not_duplicated(tmp_path):
     dest = tmp_path / "dest"
     dest.mkdir()
     change_lines = [("REMOVE", _OLD), ("NEW", _NEW)]
-    rename_pairs = [(_OLD, _NEW)]
+    rename_pairs = [(_OLD, _NEW, "file")]
 
     pathspec = _mod._build_commit_pathspec(str(dest), change_lines, rename_pairs)
 
@@ -116,7 +116,7 @@ def test_dotdot_path_rejected_after_rename_resolution(tmp_path):
     dest = tmp_path / "dest"
     dest.mkdir()
     change_lines = [("REMOVE", "safe/inside.py")]
-    rename_pairs = [("safe/inside.py", "../../outside.py")]
+    rename_pairs = [("safe/inside.py", "../../outside.py", "file")]
 
     pathspec = _mod._build_commit_pathspec(str(dest), change_lines, rename_pairs)
 
@@ -196,7 +196,7 @@ def test_block_prefix_rename_applied_to_already_prefixed_path():
     changes, _renames = _mod._extract_change_lines(stdout_text)
     assert changes == [("UPDATE", "authz/classification.py")]
 
-    rename_pairs = [("authz/classification.py", "authz/authz_classification.py")]
+    rename_pairs = [("authz/classification.py", "authz/authz_classification.py", "file")]
     dest = "/repo/dest"
     pathspec = _mod._build_commit_pathspec(dest, changes, rename_pairs)
     assert pathspec == [str(Path(dest) / "authz/authz_classification.py")]
@@ -284,6 +284,100 @@ def test_row_attribution_mutation_check_pinning_fallback_dest_goes_red(tmp_path)
     assert str(dest_b / "bootstrap_discovery.py") not in mutated_pathspec
 
 
+def test_extract_change_lines_parses_directory_rename_tag():
+    """publish.py `_report_rename_manifest` (2026-08-14 fix) tags a
+    directory-kind RENAME line with a `RENAME[directory]:` PREFIX marker
+    (not a trailing suffix on the path -- a suffix is a position a real
+    `new_path` could occupy); `_extract_change_lines` must surface that as
+    `kind='directory'` so `_build_commit_pathspec` can resolve it via
+    `RenameManifest.resolve()` (prefix match), not an exact-key lookup."""
+    stdout_text = "  RENAME[directory]: resolve-claude-klabauter -> resolve-claude-klabauter\n"
+    _changes, renames = _mod._extract_change_lines(stdout_text)
+    assert renames == [("resolve-claude-klabauter", "resolve-claude-klabauter", "directory")]
+
+
+def test_extract_change_lines_does_not_misparse_path_ending_in_bracket_tag_text():
+    """Review: coordinator:code-reviewer P2(a) -- a file-kind rename whose
+    `new_path` literally ends with the substring ` [directory]` must NOT be
+    misparsed as a directory-kind entry now that the tag is a prefix on the
+    keyword, not a suffix on the path (the failure mode the trailing-suffix
+    wire format was vulnerable to)."""
+    stdout_text = "  RENAME: old/thing -> new/thing [directory]\n"
+    _changes, renames = _mod._extract_change_lines(stdout_text)
+    assert renames == [("old/thing", "new/thing [directory]", "file")]
+
+
+def test_directory_rename_resolves_every_path_beneath_it(tmp_path):
+    """AC1 (docs/plans/2026-08-14-publishing-runs-itself.md § C1): a
+    directory rename in the rename manifest resolves every change-line path
+    beneath it to its post-rename target -- the defect that made
+    `declined_paths` permanently non-empty on every klabauter round. Uses
+    `RenameManifest.resolve()` under the hood, never a hand-rolled
+    single-pass prefix resolver."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    change_lines = [
+        ("UPDATE", "resolve-claude-klabauter/a.py"),
+        ("NEW", "resolve-claude-klabauter/nested/b.py"),
+        ("REMOVE", "resolve-claude-klabauter"),
+    ]
+    rename_pairs = [("resolve-claude-klabauter", "resolve-claude-klabauter", "directory")]
+
+    pathspec = _mod._build_commit_pathspec(str(dest), change_lines, rename_pairs)
+
+    assert str(dest / "resolve-claude-klabauter/a.py") in pathspec
+    assert str(dest / "resolve-claude-klabauter/nested/b.py") in pathspec
+    assert str(dest / "resolve-claude-klabauter") in pathspec
+    # None of the pre-rename paths survive resolution.
+    assert str(dest / "resolve-claude-klabauter/a.py") not in pathspec
+    assert str(dest / "resolve-claude-klabauter/nested/b.py") not in pathspec
+    assert str(dest / "resolve-claude-klabauter") not in pathspec
+
+
+def test_directory_rename_composed_with_file_rename(tmp_path):
+    """`RenameManifest.resolve()`'s own reason for existing (§ that method's
+    docstring): a file whose containing directory is renamed AND whose own
+    basename is renamed needs BOTH records applied in sequence. A
+    single-pass prefix resolver would return a path with the new directory
+    but the stale basename -- exactly the declined-path symptom this chunk
+    exists to eliminate in the composed case."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    change_lines = [("UPDATE", "resolve-claude-klabauter/claude_klabauter_root.py")]
+    rename_pairs = [
+        ("resolve-claude-klabauter", "resolve-claude-klabauter", "directory"),
+        (
+            "resolve-claude-klabauter/claude_klabauter_root.py",
+            "resolve-claude-klabauter/claude_klabauter_root.py",
+            "file",
+        ),
+    ]
+
+    pathspec = _mod._build_commit_pathspec(str(dest), change_lines, rename_pairs)
+
+    assert (
+        str(dest / "resolve-claude-klabauter/claude_klabauter_root.py") in pathspec
+    )
+    assert str(dest / "resolve-claude-klabauter/claude_klabauter_root.py") not in pathspec
+    assert (
+        str(dest / "resolve-claude-klabauter/claude_klabauter_root.py") not in pathspec
+    )
+
+
+def test_rename_cycle_surfaces_loudly_not_as_declined_path():
+    """docs debt 2026-08-14-renamemanifest-resolve-resolves-a-rename: an
+    A->B / B->A rename cycle must make `_build_commit_pathspec` raise
+    `RenameCycleError`, never silently drop the entry into the containment
+    check's "dropped from commit pathspec" path (which is reserved for a
+    legitimately-resolved path that lands outside `dest`)."""
+    dest = "/repo/dest"
+    change_lines = [("UPDATE", "a.py")]
+    rename_pairs = [("a.py", "b.py", "file"), ("b.py", "a.py", "file")]
+
+    with pytest.raises(_mod._RenameCycleError):
+        _mod._build_commit_pathspec(dest, change_lines, rename_pairs)
+
+
 def test_no_pathspec_element_names_a_directory():
     """AC7: every entry `_build_commit_pathspec` emits names a specific
     file, never a directory — the function trusts its inputs to already be
@@ -295,7 +389,7 @@ def test_no_pathspec_element_names_a_directory():
         ("NEW", "a.py"),
         ("REMOVE", _OLD),
     ]
-    rename_pairs = [(_OLD, _NEW)]
+    rename_pairs = [(_OLD, _NEW, "file")]
 
     pathspec = _mod._build_commit_pathspec(dest, change_lines, rename_pairs)
 

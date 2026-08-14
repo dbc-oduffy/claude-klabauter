@@ -1,7 +1,7 @@
 """
 daily_branch.py — the pure branch-shape / slug-sanitization core.
 
-Port of: coordinator-daily-branch.sh (coordinator-claude 2fbe0e77, 2026-07-19)
+Port of: coordinator-daily-branch.sh (DoE 2fbe0e77, 2026-07-19)
 Spec backlink: docs/plans/2026-05-07-daily-branch-doctrine-rethink.md (Phase 1)
 De-bash campaign: kill bash on the Windows critical path — this is the Wave-2
 "daily-branch" native op (import-only module, mirror-shape of daily_day.py).
@@ -10,7 +10,7 @@ Purpose: the daily-branch discipline oracles. These police branch *shape*, not
 branch *date* — there is no notion of "today's daily" here, only "is this branch
 an allowed workstream branch?" The canonical policy oracle is is_allowed_branch.
 
-Scope note (why this port is pure string/regex): the coordinator-claude original also carried
+Scope note (why this port is pure string/regex): the DoE original also carried
 cs_compute_machine / cs_compute_contributor resolvers, which shell out to the
 machine-local registry, hostname, and `git config`. Those are external-primitive
 resolvers, NOT branch-shape logic, and migrate as a separate machine-local

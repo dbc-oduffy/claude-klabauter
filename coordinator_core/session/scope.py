@@ -2,7 +2,7 @@
 coordinator_core.session.scope — the session touch-tracking + scoped-
 staging-set computation module of the coordinator session hub.
 
-Port of: scope.sh (coordinator-claude e34f2484, 2026-07-22).
+Port of: scope.sh (DoE e34f2484, 2026-07-22).
 
 Purpose: track which repo-relative files a session has touched, and compute
 the per-session scoped staging set — see :func:`compute_scope`'s own
@@ -13,9 +13,9 @@ out of sync with the function docstring.
 
 so that concurrent EM sessions sharing one working tree can each commit only
 *their* files. ``touch()`` is the HOT path (fired from PreToolUse hooks on
-every file write); ``compute_scope()`` is called at commit time by coordinator-claude's
+every file write); ``compute_scope()`` is called at commit time by DoE's
 ``coordinator-safe-commit`` (Python port, in-process import of this module —
-repointed 2026-07-22 per coordinator-claude plan
+repointed 2026-07-22 per DoE plan
 2026-07-22-coordinator-session-family-repoint-and-delete). ``archive()``
 moves a finished session dir under ``.archive/`` after its final commit.
 
@@ -26,7 +26,7 @@ optional ``cwd``).
 
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
 recipe-t4a-coordinator-session-hub.md § scope.py
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4a-g1
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 
 Negative-spec:
     - ``compute_scope`` MUST use TWO git commands (``git diff --name-only
@@ -69,6 +69,12 @@ from coordinator_core.win_portability import no_console_creationflags
 #: Matches a path bash treats as absolute: POSIX ``/…`` or a Windows/Git-Bash
 #: drive-qualified ``C:…`` form. Mirrors the bash glob test
 #: ``[[ "$fpath" == /* || "$fpath" == [A-Za-z]:* ]]``.
+# Generator-provenance declaration (generator_provenance.py). touch/normalize_
+# touch_path/archive write/append/move only session-hub artifacts under
+# `.git/coordinator-sessions/` (touched.txt event log, session-dir archival) --
+# all inside `.git/`, never a tracked repo path.
+GENERATES = []
+
 _ABSOLUTE_RE = re.compile(r"^(?:/|[A-Za-z]:)")
 
 #: Windows extended-length path prefixes — the local ``\\?\`` form and its
@@ -521,7 +527,7 @@ def _relpath_failure_is_benign(exc: Exception, fpath: str, root: str) -> bool:
     (e.g. ``X:``). It is not evidence of anything unexpected and must not
     arm :func:`_emit_normalize_diagnostic`'s latch — mirrors
     :func:`_ls_files_failure_is_benign`'s discrimination for the ``ls-files``
-    arm (2026-08-07 finding: independently reported by coordinator-claude and
+    arm (2026-08-07 finding: independently reported by DoE-claude and
     carried as an undiagnosed item on a live handoff in this tree, both
     traced to the same false premise — that relpath failure is non-routine
     on every platform, which holds on POSIX but not on Windows).
@@ -708,7 +714,7 @@ def normalize_touch_path(
     ``coordinator_core.session.claims.self_claim``'s
     ``atomic_dedup_append`` call) shares ONE normalization dialect —
     two writers with two dialects is how the absolute-path-in-touched.txt
-    defect (240 corroborated on-disk entries, coordinator-claude security-audit
+    defect (240 corroborated on-disk entries, DoE security-audit
     2026-07-31) happened in the first place. Do NOT re-inline a second
     copy of this normalization at a new call site; import and call this.
 
@@ -1356,7 +1362,7 @@ def format_touch_event(verb: str, path: str, when: Optional[datetime] = None) ->
     would assert UTC about a value that may be local time or anything else,
     the exact asymmetry `parse_touch_event` was built to reject on the read
     side rather than let a tz-mixing TypeError escape into the projection.
-    Space-delimited, never tab (coordinator-claude's schema-contract test asserts
+    Space-delimited, never tab (DoE's schema-contract test asserts
     `assertNotIn("\\t", lines[0])`). Path last, unescaped — a path
     containing a literal space is legal here because the READER splits with
     split(None, 2), not on structure requiring the path be escaped.
@@ -1372,7 +1378,7 @@ def format_touch_event(verb: str, path: str, when: Optional[datetime] = None) ->
         ts = ts.astimezone(timezone.utc)
     # NOT `ts.isoformat()`: it renders the offset as '+00:00' rather than the
     # 'Z' § The frozen record format specifies, and it omits the microsecond
-    # field entirely when it happens to be zero. Both matter — coordinator-claude re-pins a
+    # field entirely when it happens to be zero. Both matter — DoE re-pins a
     # schema-contract test against these exact bytes, and the projection's
     # mtime comparison is `>=` precisely because sub-second resolution is what
     # separates a peer's post-release write from a co-toucher's.
@@ -3999,7 +4005,7 @@ def compute_scope(
     # agent-race non-candidate shape, and in doing so widened `skipped`'s
     # documented meaning — see this function's own Step 4 docstring
     # paragraph (d)/(e) and `ScopeResult.skipped`'s docstring — to include
-    # paths that were never candidates at all; coordinator-claude's coordinator-safe-commit
+    # paths that were never candidates at all; DoE's coordinator-safe-commit
     # renders `skipped` as "skipping <path> — owned by session <owner>", so
     # an operator saw a skipping line for a file they never touched). A
     # single call-level flag instead: non-empty `unreadable_other_sessions`
@@ -4037,7 +4043,7 @@ def archive(sid: str, cwd: Optional[str] = None) -> bool:
 
     Also clears the write-confinement bump's settings-home anchor record for
     ``sid`` (docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md
-    AC12) — this is the live seam coordinator-claude's real ``SessionEnd`` hook actually calls
+    AC12) — this is the live seam DoE's real ``SessionEnd`` hook actually calls
     (via ``coordinator/bin/wsc-close.py archive-session``), so the settings-home
     anchor's session-ephemera cleanup is anchored here rather than in
     ``sweep_stale_markers``, which has no production caller. Exact-``sid``

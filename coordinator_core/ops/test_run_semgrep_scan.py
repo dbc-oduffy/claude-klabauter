@@ -3,7 +3,7 @@ coordinator_core.ops.test_run_semgrep_scan
 
 Characterization tests for the "ci.run_semgrep_scan" op
 (coordinator_core.ops.run_semgrep_scan) — the diff-scoped semgrep wrapper replacing
-the coordinator-claude security-audit-worker fence.
+the DoE security-audit-worker fence.
 
 Coverage:
   (a) registered under exactly "ci.run_semgrep_scan" on import

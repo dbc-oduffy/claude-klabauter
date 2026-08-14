@@ -20,7 +20,7 @@ Loaded by file path (`importlib.machinery.SourceFileLoader`) since the CLI
 module has a `.py` extension but is not on `sys.path` as an importable
 package member — same load idiom used across coordinator/bin/tests/.
 
-Spec backlink: M3/HO-3 extirpation-plan port of coordinator-claude
+Spec backlink: M3/HO-3 extirpation-plan port of DoE-claude
 coordinator/skills/handoff/SKILL.md §§ "Chain archival — presume the sweep
 wins" / "Park-with-links on supersession".
 

@@ -4,7 +4,7 @@ completion.reconcile_commits and plan.append_session.
 
 Purpose: Assert the Python ops produce byte-identical file-write output to their legacy
 bash oracles for the same inputs. This is the strangler invariant (strang-10 C2): if the
-byte output drifts, the coordinator-claude facade routing will silently produce different on-disk content.
+byte output drifts, the DoE facade routing will silently produce different on-disk content.
 
 Coverage:
   (a) completion.reconcile_commits — byte-parity: empty commits: [] expanded with new SHAs
@@ -16,12 +16,12 @@ Coverage:
 
 Oracle skip semantics: when the oracle CLI (or its dependency, bash) is absent, tests are
 skipped with a clear diagnostic — NOT silently passed. Oracle skips are expected in CI
-environments that don't have the coordinator-claude sibling repo.
+environments that don't have the DoE-claude sibling repo.
 
 Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C2
 Oracles:
-  [coordinator-claude] coordinator/bin/reconcile-completion-commits.py (--append mode)
-  [coordinator-claude] coordinator/bin/append-plan-session.py
+  [DoE-claude] coordinator/bin/reconcile-completion-commits.py (--append mode)
+  [DoE-claude] coordinator/bin/append-plan-session.py
 DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2
 """
 
@@ -61,7 +61,7 @@ from coordinator_core.ops.completion_ops import (
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
-# Oracle / coordinator-claude-root path resolution
+# Oracle / DoE-root path resolution
 # ---------------------------------------------------------------------------
 
 _DOE_ROOT_SENTINEL = Path.home() / ".claude" / ".doe-root"
@@ -117,7 +117,7 @@ _NODE_PATH = shutil.which("node")
 _requires_query_records_js = pytest.mark.skipif(
     not _QUERY_RECORDS_JS_AVAILABLE or not _NODE_PATH,
     reason=(
-        "query-records.js absent (coordinator-claude not at .doe-root) or node not on PATH "
+        "query-records.js absent (DoE-claude not at .doe-root) or node not on PATH "
         f"(query_records_js={_QUERY_RECORDS_JS_AVAILABLE}, node={bool(_NODE_PATH)})"
     ),
 )
@@ -732,7 +732,7 @@ class TestReconcileCommitsInternalLogic:
 
 # ---------------------------------------------------------------------------
 # Tests: completion.reconcile_commits × query-completions round-trip
-# (oracle: coordinator-claude coordinator/bin/query-records.js, --type completion)
+# (oracle: DoE-claude coordinator/bin/query-records.js, --type completion)
 # ---------------------------------------------------------------------------
 #
 # Purpose: the flow-style corruption bug (cross-repo memo 2026-07-22,

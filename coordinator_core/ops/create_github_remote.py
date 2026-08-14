@@ -52,7 +52,7 @@ Op contract (C0a manifest row `create-and-push-github-remote`):
 
 Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § A3
                docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
-Fence source: skills/new-project/SKILL.md:127 (coordinator-claude)
+Fence source: skills/new-project/SKILL.md:127 (DoE-claude)
 """
 
 from __future__ import annotations

@@ -1,18 +1,18 @@
 """Behavioral tests for
 coordinator_core.write_guards.validate_frontmatter_schema_deny — the
-CLASS=hard-deny leg of the fan-in split of coordinator-claude's
+CLASS=hard-deny leg of the fan-in split of DoE's
 validate-frontmatter-schema.py PreToolUse hook.
 
-Requires the sibling coordinator-claude checkout (for coordinator/schemas/ and the
+Requires the sibling DoE-claude checkout (for coordinator/schemas/ and the
 registry manifest) — skipped entirely when absent, mirroring the advisory
 sibling's suite and the coordinator_core.testing.doe_root convention.
 
 `coordinator_doe_root` is monkeypatched to the resolved sibling root for
-every test (rather than relying on REPO_EXAMPLE_DOCTRINE_REPO / machine-local at test
+every test (rather than relying on REPO_DOE_CLAUDE / machine-local at test
 time) so the suite is deterministic regardless of this machine's registry
 state.
 
-Covers: non-write-tool/non-dict-tool_input passthrough, coordinator-claude-root-unresolvable
+Covers: non-write-tool/non-dict-tool_input passthrough, DoE-root-unresolvable
 fail-open, the four UNCONDITIONAL denies (own-inbox misplacement, lineage-
 reachability hard-reject, grouping-approval scope-cut, D3 out-of-enum
 handoff `kind`) firing regardless of COORDINATOR_SCHEMA_STRICT, every
@@ -26,8 +26,8 @@ for that same finding, a mutual-exclusivity smoke test against the advisory
 sibling across a representative payload set, and the module contract
 (CLASS/MATCHERS/PRIORITY).
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C10
-Source: coordinator-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C10
+Source: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 @pytest.fixture(autouse=True)
 def _pin_doe_root(monkeypatch):
     if not _doe_present:
-        pytest.skip("sibling coordinator-claude checkout not found")
+        pytest.skip("sibling DoE-claude checkout not found")
     monkeypatch.setattr(guard, "coordinator_doe_root", lambda: _doe_root)
     monkeypatch.setattr(advisory_guard, "coordinator_doe_root", lambda: _doe_root)
 
@@ -123,10 +123,10 @@ class TestGateOnToolAndPayloadShape:
 
 class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
     """AC2 (docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-corpus.md):
-    the deny guard still validates against the schema corpus with the coordinator-claude
+    the deny guard still validates against the schema corpus with the DoE
     sibling completely unreachable — closing the fail-open-on-missing-
     sibling hole the plan's Problem section names, because the schema
-    corpus now ships in-repo (vendored) rather than being read from coordinator-claude-
+    corpus now ships in-repo (vendored) rather than being read from DoE-
     claude's live working tree. Only manifest-DERIVED behaviour (memo
     routing, scaffold offers) is expected to degrade when the sibling is
     absent — schema-shape validation, lineage-reachability, and the other
@@ -187,7 +187,7 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
 
 class TestSchemaCorpusSourcePinned:
     """AC3: pins the resolution SOURCE, not just behaviour — a behavioural
-    test alone would silently pass again the moment coordinator-claude's live corpus and
+    test alone would silently pass again the moment DoE's live corpus and
     claude-klabauter's vendored copy happen to agree, exactly the trap the plan names.
     Asserts the guard's resolved schemas directory is the in-repo vendored
     path and is never derived from `coordinator_doe_root()`.
@@ -206,7 +206,7 @@ class TestSchemaCorpusSourcePinned:
         # A re-point at ANY doe_root value (real, fake, or absent) must never
         # change the resolved schema corpus -- pinning the SOURCE, not merely
         # today's behavioural agreement between the two corpora.
-        fake_doe_root = str(tmp_path / "not-a-real-coordinator-claude-checkout")
+        fake_doe_root = str(tmp_path / "not-a-real-doe-claude-checkout")
         monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_doe_root)
         ctx = guard._load_context()
         assert ctx is not None
@@ -217,7 +217,7 @@ class TestSchemaCorpusSourcePinned:
         ctx = guard._load_context()
         assert ctx is not None
         # The vendored corpus lives under claude-klabauter's own frontmatter/ tree,
-        # never under the coordinator-claude sibling's coordinator/schemas/.
+        # never under the DoE-claude sibling's coordinator/schemas/.
         assert str(ctx.schemas_dir) != str(Path(_doe_root) / "coordinator" / "schemas")
         assert ctx.schemas_dir.resolve().is_relative_to(
             Path(guard.__file__).resolve().parents[1]
@@ -225,7 +225,7 @@ class TestSchemaCorpusSourcePinned:
 
 
 class TestTornWriteRetry:
-    """coordinator-claude's schema corpus and registry manifest are read from the sibling
+    """DoE's schema corpus and registry manifest are read from the sibling
     checkout's LIVE working tree on every check() — a concurrent session can
     leave a torn/partial JSON file mid-write. `_retry_on_transient_read_failure`
     narrows that race without changing the guard's fail-open contract once
@@ -361,7 +361,7 @@ class TestTornWriteRetry:
         cannot afford dead sleep on a steady-state absent path."""
         sleep_calls = {"n": 0}
         monkeypatch.setattr(guard.time, "sleep", lambda secs: sleep_calls.__setitem__("n", sleep_calls["n"] + 1))
-        fake_root = str(tmp_path / "nonexistent-coordinator-claude-root")
+        fake_root = str(tmp_path / "nonexistent-doe-claude-root")
         monkeypatch.setattr(guard, "coordinator_doe_root", lambda: fake_root)
         result = guard.check(
             _payload("Write", "/tmp/state/handoffs/x.md", "/tmp", content="---\ntitle: t\n---\nbody")
@@ -378,7 +378,7 @@ class TestOwnInboxUnconditionalDeny:
 
     def _memo_content(self):
         return (
-            "---\nfrom: coordinator-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: doe-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
 
@@ -413,7 +413,7 @@ class TestOwnInboxUnconditionalDeny:
     def test_correct_inbound_memo_passes_through_silent(self):
         fp = f"{_doe_root}/cross-repo/inbox/2099-01-01-fake-correct-inbound-test.md"
         memo_content = (
-            "---\nfrom: example-game-repo-em\nto: coordinator-claude-em\ntopic: test\ntitle: t\n"
+            "---\nfrom: example-game-repo-em\nto: doe-claude-em\ntopic: test\ntitle: t\n"
             "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
         )
         result = guard.check(_payload("Write", fp, _doe_root, content=memo_content))
@@ -573,10 +573,10 @@ class TestDenyForensicsCapture:
         assert record["deny_reason"] == reason
         assert record["matched_schema_name"] == "handoff"
         assert record["doe_root"] == _doe_root
-        # Repointed at the vendored corpus (AC1/AC3) -- no longer coordinator-claude's live
+        # Repointed at the vendored corpus (AC1/AC3) -- no longer DoE's live
         # working tree -- so the forensics capture must reflect that too.
         assert record["schema_corpus_path"] == str(guard._VENDORED_SCHEMAS_DIR)
-        # plan-tasks.schema.json exists in the real coordinator-claude checkout this suite
+        # plan-tasks.schema.json exists in the real DoE checkout this suite
         # requires (see module docstring's skip-if-absent condition), and
         # this deny's own walk reached the schema-corpus load (it fires
         # AFTER that load, from `_reachability_and_schema_step`) -- so the
@@ -635,7 +635,7 @@ class TestDenyForensicsCapture:
         inbox_dir.mkdir(parents=True, exist_ok=True)
         fp = inbox_dir / "2099-01-01-fake-own-inbox-forensics-test.md"
 
-        # tmp_path is not the central coordinator-claude checkout, so its EM id is derived
+        # tmp_path is not the central DoE checkout, so its EM id is derived
         # from its own basename -- compute it the same way the guard does.
         ctx = guard._load_context()
         this_em_id = guard._em_id_for_basename(ctx, tmp_path.name)
@@ -690,7 +690,7 @@ class TestDenyForensicsCapture:
         assert not self._forensics_dir(tmp_path).exists()
 
     def test_capture_does_not_fire_on_absent_doe_root_steady_state(self, tmp_path, monkeypatch):
-        """An unresolvable coordinator-claude root is the ABSENT steady state this module's
+        """An unresolvable DoE root is the ABSENT steady state this module's
         docstring calls out (partial install, no sibling checkout) — NOT a
         failure, and potentially true on EVERY guarded write on such a
         machine. It must never trigger a forensics write, or this capture
@@ -993,9 +993,9 @@ class TestPlanTasksSpineDeny:
             "  disposition_detail: PM said no, out of scope\n"
             # Required by plan-tasks 1.6.0's allOf conditional on the two scope-cut
             # dispositions. Present so the ONLY variable this test isolates stays the
-            # pm_approved-required branch. NOTE: this fixture tracks coordinator-claude's LIVE tree,
+            # pm_approved-required branch. NOTE: this fixture tracks DoE's LIVE tree,
             # not claude-klabauter's vendored copy -- these guards resolve schemas_dir from
-            # coordinator_doe_root(), so a coordinator-claude-side bump reaches them with no re-vendor.
+            # coordinator_doe_root(), so a DoE-side bump reaches them with no re-vendor.
             "  case_against: Superseded by the C4 rewrite; carrying it forward would\n"
             "    duplicate that surface.\n"
         )
@@ -1031,7 +1031,7 @@ class TestPlanTasksSpineDeny:
             # needs on this test's ONE failure — a raw `result` dict makes them
             # decode envelope shape first. If this ever fires, also check
             # state/scratch/write-guard-forensics/ for a
-            # validate_frontmatter_schema_deny-*.json capture (coordinator-claude root, schema
+            # validate_frontmatter_schema_deny-*.json capture (DoE root, schema
             # corpus path, plan-tasks schema content hash, sibling-tree dirty
             # flag at capture time) written by `_capture_deny_forensics`.
             pytest.fail(
@@ -1084,7 +1084,7 @@ class TestEveryFiringResultIsDenyOrAdvisoryShaped:
                      old_string="old", new_string="new"),
             _payload("Write", f"{_doe_root}/cross-repo/inbox/2099-01-01-shape-test.md", _doe_root,
                       content=(
-                          "---\nfrom: coordinator-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+                          "---\nfrom: doe-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
                           "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
                       )),
         ]
@@ -1165,7 +1165,7 @@ class TestMutualExclusivityWithAdvisorySibling:
         # A GOVERNED plan closing a row whose `defer` grouping is still
         # pending: deny must fire, advisory must stand down.
         #
-        # Uses `backlogged` rather than `spun_off` (2026-08-05): coordinator-claude's ruling
+        # Uses `backlogged` rather than `spun_off` (2026-08-05): DoE's ruling
         # gave `spun_off` its own ungated grouping
         # (`_PLAN_TASKS_GROUPING_BY_DISPOSITION` maps it to `'spun_off'`, not
         # `'defer'`), so a `spun_off` row here would never touch the
@@ -1232,7 +1232,7 @@ class TestMutualExclusivityWithAdvisorySibling:
             "own_inbox_misplacement": _payload(
                 "Write", f"{_doe_root}/cross-repo/inbox/2099-01-01-mutex-test.md", _doe_root,
                 content=(
-                    "---\nfrom: coordinator-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
+                    "---\nfrom: doe-claude-em\nto: example-game-repo-em\ntopic: test\ntitle: t\n"
                     "created: 2026-07-29\nstatus: open\ndelivery_mode: receiver-repo\n---\nbody"
                 )),
             "cross_repo_routing": _payload(

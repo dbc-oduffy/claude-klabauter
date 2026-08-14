@@ -3,7 +3,7 @@ coordinator_core.ops.session.resolve_chain_terminal_disposition —
 session.resolve_chain_terminal_disposition op.
 
 Purpose: native rewrite of the workstream-complete Step 0 session-shape
-detection fence (coordinator-claude `coordinator/skills/workstream-complete/SKILL.md` Step 0,
+detection fence (DoE `coordinator/skills/workstream-complete/SKILL.md` Step 0,
 the largest fence in the C0a corpus): resolve the calling session's id via the
 5-way superset chain, then classify whether the session is chain-terminal
 (it consumed a predecessor handoff) or single-session, via the dual-detector
@@ -66,7 +66,7 @@ the wire param as the direct-override tier):
       under <common_dir>/coordinator-sessions/. Unsound under concurrency
       (last-writer-wins across concurrent sessions sharing one worktree —
       see coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND
-      its sole writer (session-init.py, the coordinator-claude SessionStart hook)
+      its sole writer (session-init.py, the DoE-claude SessionStart hook)
       was deleted by PM directive 2026-07-15 — no production writer
       survives. Falls through to P6 directly now.
   P6: REMOVED (KS-5, 2026-08-07) — was a last-6-digits-of-epoch fallback
@@ -86,7 +86,7 @@ Scope keying: _OP_KEY_SCOPE = "common_dir" (B4 settlement, ratified —
 `handoff.match_candidates` / `session.boot_sweep` precedent): reads
 state/handoffs/ + archive/handoffs/ + git-provenance under the CALLER's repo
 git_common_dir; a missing entry would classify claude-klabauter's own handoffs instead
-of the caller's when invoked cross-repo from a coordinator-claude fence.
+of the caller's when invoked cross-repo from a DoE fence.
 
 Idempotency (DEC-7 note, AC7): INHERENT — pure classification/read op; writes
 nothing, spawns only read-only `git merge-base` / `git log` (list-argv, CC-1),
@@ -104,8 +104,8 @@ Spec backlinks:
   - Parent plan: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § Wave 3
   - Manifest row: state/audits/2026-07-22-command-payload-inventory/op-classification.tsv
     (op-key session.resolve_chain_terminal_disposition)
-  - Fence source: coordinator-claude coordinator/skills/workstream-complete/SKILL.md Step 0 (~L55-176)
-  - Vocabulary: coordinator-claude docs/decisions/DR-084-handoff-lifecycle-vocabulary-overhaul-open-claimed-continued-closed.md
+  - Fence source: DoE coordinator/skills/workstream-complete/SKILL.md Step 0 (~L55-176)
+  - Vocabulary: DoE docs/decisions/DR-084-handoff-lifecycle-vocabulary-overhaul-open-claimed-continued-closed.md
   - Accessor: coordinator_core/claim_state.py::resolve_claim_state (ledger-first,
     C5 migration site — see docs/plans/2026-08-07-claim-state-ledger-first-authoritative-read.md)
 

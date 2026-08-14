@@ -1,6 +1,6 @@
 """Cockpit-emission stack.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19).
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19).
 
 Package marker. The spine (EmitContext, validate) lands in context.py / validate.py
 (authored by C1); section porters land under sections/<name>.py; the parity harness

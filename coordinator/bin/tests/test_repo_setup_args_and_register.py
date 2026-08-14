@@ -1,6 +1,6 @@
 """test_repo_setup_args_and_register.py — unit coverage for
 `coordinator/bin/repo-setup-args-and-register.py`, the naked-Python port of
-the residual bash logic previously embedded in coordinator-claude's
+the residual bash logic previously embedded in DoE-claude's
 `coordinator/skills/repo-setup/SKILL.md` (2026-07-23 debash campaign,
 chunk C-REPOSETUP).
 

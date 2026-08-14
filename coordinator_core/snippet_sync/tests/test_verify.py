@@ -3,13 +3,13 @@ verify/--fix/--list engine replacing 7 retired
 `coordinator/bin/verify-<name>-sync.sh` scripts.
 
 Golden-diff parity against the 7 retired bash scripts (run against the live
-Coordinator-claude-side registry.toml + snippets/) is verified separately at build time
+DoE-side registry.toml + snippets/) is verified separately at build time
 (see recipe-t3a-g3.md § 6 build notes) — these tests isolate each of the 4
 header-extraction dialects, the allow_insert DR-6 placement logic, and the
 --list canonical-universe (Q15) semantics against synthetic fixtures so they
-don't depend on the sibling coordinator-claude checkout's exact file layout.
+don't depend on the sibling DoE checkout's exact file layout.
 
-Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
+Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
 """
 from __future__ import annotations
 
@@ -615,7 +615,7 @@ def test_residual_comment_fragment_fires_on_unclosed_opener():
 
 
 def test_residual_comment_fragment_would_have_caught_doe_incident():
-    """Demonstrates the coordinator-claude 2026-07-25 incident shape directly: reconstruct
+    """Demonstrates the DoE 2026-07-25 incident shape directly: reconstruct
     what the PRE-FIX single-line-only strip would have produced from a
     multi-line leading header (dropping only the opening line, leaking the
     continuation prose and the dangling '-->' into the body), and show the
@@ -702,12 +702,12 @@ def test_extract_snippet_body_still_matches_existing_dialects(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# ORPHAN-SENTINEL DETECTION (2026-07-25 coordinator-claude incident — see the
+# ORPHAN-SENTINEL DETECTION (2026-07-25 DoE incident — see the
 # "ORPHAN-SENTINEL DETECTION" block in verify.py for the four constraints).
 #
 # Fixtures reconstruct the real incident: `parallel-review-synthesizer.md`
 # carried `reviewer-calibration` sentinels with a DRIFTED begin marker (no
-# `(synced from ...)` clause, which is why coordinator-claude's exact-match grep missed it),
+# `(synced from ...)` clause, which is why DoE's exact-match grep missed it),
 # while the snippet's own `consumers` list was EMPTY.
 # ---------------------------------------------------------------------------
 
@@ -927,8 +927,8 @@ def test_dependent_prose_match_is_word_boundary_anchored(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# delivery = "inject" enforcement (registry schema_version 3, coordinator-claude 7ff1cb75e;
-# answer memo cross-repo/inbox/2026-07-28-coordinator-claude-em-delivery-field-answer.md).
+# delivery = "inject" enforcement (registry schema_version 3, DoE 7ff1cb75e;
+# answer memo cross-repo/inbox/2026-07-28-doe-claude-em-delivery-field-answer.md).
 #
 # On an inject row the block reaches consumers via contract_blocks: assembly and
 # is pasted by NOTHING, so a pasted sentinel is an orphan BY CONSTRUCTION — even
@@ -1096,7 +1096,7 @@ def test_zero_consumer_message_still_advises_fix_on_a_paste_row(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# eligible_glob completeness (registry schema_version 4, coordinator-claude 355255cc3)
+# eligible_glob completeness (registry schema_version 4, DoE 355255cc3)
 #
 # The verifier leg: `registry.eligible_glob_gaps` computes the gap set (unit-
 # tested in test_registry.py); these cover that `run()` actually REPORTS it,

@@ -3,12 +3,12 @@ consistency verifier.
 
 **2026-07-22 — four-script leg retired.** This module was originally a
 byte-parity port of verify-snippet-registry-consistency.sh
-(coordinator-claude 93887f6f, 2026-07-17, bash, 721 LoC), which cross-checked
+(DoE 93887f6f, 2026-07-17, bash, 721 LoC), which cross-checked
 `snippets/registry.toml` against 4
 HARDCODED-shape `coordinator/bin/verify-<X>-sync.sh` scripts
 (reviewer-calibration, docs-checker-consumption,
 plan-coverage-check-consumption, prior-art-check-consumption). Those four
-scripts are retired everywhere — deleted from coordinator-claude's `coordinator/bin` at
+scripts are retired everywhere — deleted from DoE's `coordinator/bin` at
 `b644d5a9`, never migrated here — their function was consolidated into the
 registry-driven `verify-snippet-sync` / `snippet-registry` entrypoints. The
 hardcoded `VERIFY_SCRIPTS` existence gate this module carried was therefore
@@ -46,12 +46,12 @@ shape.
 
 Op registered? NO — plain module, direct import (template-variant #1, see
 `docs/plans/2026-07-16-clean-slate-recon/r1-doe-port-template.md` § 1).
-Consumed by coordinator-claude-side `coordinator/bin/verify-snippet-registry-consistency`
+Consumed by DoE-side `coordinator/bin/verify-snippet-registry-consistency`
 polyglot trampoline.
 
 Spec backlinks:
-  - coordinator-claude docs/plans/2026-06-15-snippet-sync-consumer-registry.md § Dispatch Ledger C4, C8
-  - coordinator-claude docs/decisions/2026-06-15-snippet-registry-shape.md § Schema amendments — the Staff Engineer C2
+  - DoE docs/plans/2026-06-15-snippet-sync-consumer-registry.md § Dispatch Ledger C4, C8
+  - DoE docs/decisions/2026-06-15-snippet-registry-shape.md § Schema amendments — the Staff Engineer C2
   - cross-repo/archive/2026-07-22-claude-central-em-snippet-registry-consistency-fix-locus.md
 """
 from __future__ import annotations
@@ -150,7 +150,7 @@ def list_checks() -> list[str]:
 
 
 def run(plugin_root: Path) -> ConsistencyOutcome:
-    """Run all checks against `plugin_root` (the coordinator-claude coordinator plugin root
+    """Run all checks against `plugin_root` (the DoE coordinator plugin root
     — the directory containing `snippets/`)."""
     registry_toml = plugin_root / "snippets" / "registry.toml"
 
@@ -189,7 +189,7 @@ _USAGE = (
 
 def main(argv: list[str]) -> int:
     """CLI entrypoint. `argv[0]` MUST be the resolved plugin_root (absolute
-    path string) — injected by the coordinator-claude trampoline, which computes it exactly
+    path string) — injected by the DoE trampoline, which computes it exactly
     as the bash oracle did (CLAUDE_PLUGIN_ROOT env var, else its own
     script-directory-relative fallback). `argv[1:]` are the original
     user-facing CLI args (`[]` or `["--list"]`).

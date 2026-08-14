@@ -1,5 +1,5 @@
 """
-Regression pin for coordinator-claude tripwire CLAIMS-SIDECAR-STAYS-OUT-OF-THE-CLAIMS-GLOB.
+Regression pin for DoE tripwire CLAIMS-SIDECAR-STAYS-OUT-OF-THE-CLAIMS-GLOB.
 
 Spec backlink:
   archive/specs/2026-08/2026-08-06-claims-emit-writer-atomic-pair.md — chunk C4, AC11.

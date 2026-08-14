@@ -2,10 +2,10 @@
 PreToolUse (Bash) hard-deny guard that makes the git-worktree ban's override
 sentinel un-creatable by any agent -- Bash-level, EM included.
 
-WHY THIS EXISTS. The fleet-wide git-worktree ban (coordinator-claude-side
+WHY THIS EXISTS. The fleet-wide git-worktree ban (DoE-side
 `block-worktree-tool.py` / `strip-worktree-isolation.py`) is gated open by a
 single repo-root sentinel file, `.coordinator-override-worktree-guard`.
-Both of those coordinator-claude hooks deliberately omit an env-var override leg -- a
+Both of those DoE hooks deliberately omit an env-var override leg -- a
 subagent can set an env var on itself before its own tool call runs, which
 would defeat a guard that must bind subagents exactly as it binds the main
 session (see either hook's own module docstring). But the sentinel FILE
@@ -19,7 +19,7 @@ approval sentinel.
 
 This guard closes the Bash-level leg for the worktree sentinel. The
 file-write leg (Write/Edit/MultiEdit/NotebookEdit) is closed separately in
-Coordinator-claude's `coordinator/hooks/scripts/guard-worktree-sentinel-write.py`.
+DoE-claude's `coordinator/hooks/scripts/guard-worktree-sentinel-write.py`.
 
 NOT IDENTITY-GATED -- fires for every caller, EM included, same posture as
 `block_approval_sentinel_creation.py` and `block_worktree_creation.py`: the
@@ -61,8 +61,8 @@ message discipline). Leads with the sanctioned alternative (scoped-parallel
 dispatch into the same tree), then names PM permission as the path to
 genuine branch-level isolation.
 
-Spec: git-worktree-ban sentinel un-creatable-by-agent guard (coordinator-claude
-dispatch, 2026-07-28) -- companion to the sibling coordinator-claude-side hooks that read
+Spec: git-worktree-ban sentinel un-creatable-by-agent guard (DoE-claude
+dispatch, 2026-07-28) -- companion to the sibling DoE-side hooks that read
 this sentinel to gate the worktree ban's override.
 """
 
@@ -87,7 +87,7 @@ PRIORITY = 41
 #: The exact basename this guard protects. Never relaxed to a substring/
 #: prefix match -- an unrelated file that merely CONTAINS this string in a
 #: longer name is a DIFFERENT file and is not the worktree-ban override
-#: sentinel the sibling coordinator-claude hooks read.
+#: sentinel the sibling DoE hooks read.
 _TARGET_BASENAME = ".coordinator-override-worktree-guard"
 
 #: Shared detection engine -- see `_sentinel_creation_guard.py` module

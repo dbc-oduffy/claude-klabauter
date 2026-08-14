@@ -20,9 +20,9 @@ session_id, or unexpected exception yields empty stdout and exit 0 --
 this module must never brick a spawn.
 
 Additive second seam (canonical spec
-state/subagent-share/conductor/seam-adjudication.md § 2.3, coordinator-claude):
+state/subagent-share/conductor/seam-adjudication.md § 2.3, DoE-claude):
 when the stdin payload carries a ``contract_blocks`` JSON list of
-``coordinator/snippets/<name>.md`` block names (resolved coordinator-claude-side from
+``coordinator/snippets/<name>.md`` block names (resolved DoE-side from
 ``subagent-sandbox-policy.yaml`` -- this module never re-reads that
 policy file itself), ``assemble_contract_blocks_for_payload`` assembles
 their ``header_style``-aware extracted, placeholder-resolved bodies into a
@@ -277,7 +277,7 @@ def _build_staff_eng_review_doc_text(
     """``--type staff-eng-review``: verdict + rationale + per-finding slots.
 
     ``## Findings`` is the canonical heading for review output across every
-    consumer (coordinator-claude ruling, 2026-08-10 memo): a type whose name promises
+    consumer (DoE-claude ruling, 2026-08-10 memo): a type whose name promises
     review output must emit a sidecar
     ``ops.append_integrator_dispositions.append_dispositions`` can write into.
     A verdict is not a finding, so ``## Verdict``/``## Rationale`` stay and the
@@ -344,7 +344,7 @@ def _build_doc_text(
 
 #: header_style dialects the assembler knows how to extract, mirroring
 #: coordinator_core.snippet_sync.verify._extract_snippet_body's taxonomy
-#: (that function is coordinator-claude-consumer-facing verification tooling and stays
+#: (that function is DoE-consumer-facing verification tooling and stays
 #: import-independent from this spawn-time seam; this module owns its own
 #: copy of the same four-dialect switch against the shared registry reader
 #: + sentinel_blocks primitive).
@@ -440,7 +440,7 @@ def _assemble_contract_blocks(
 
     Bodies are extracted ``header_style``-aware off
     ``coordinator/snippets/<name>.md`` under ``git_root`` (never off the
-    coordinator-claude policy file -- this module never re-reads
+    DoE policy file -- this module never re-reads
     ``subagent-sandbox-policy.yaml`` for the block-name list itself, only
     the already-resolved list the caller supplies), then have the closed
     three-placeholder set resolved. No wrapper/header/delimiter text is

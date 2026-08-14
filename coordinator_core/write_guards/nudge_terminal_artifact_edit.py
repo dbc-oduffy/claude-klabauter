@@ -12,7 +12,7 @@ moment such a write is attempted, per the discharge test in this repo's own
 CLAUDE.md (§ North star): "for every rule, what artifact discharges it? 'The
 operator remembers' is not an answer."
 
-This is a NEW guard, not a port of a coordinator-claude reference ``.sh`` hook — there is no
+This is a NEW guard, not a port of a DoE reference ``.sh`` hook — there is no
 ``nudge-terminal-artifact-edit.sh`` in the retired bash-hook corpus.
 
 CLASS is "advisory", deliberately — never a hard-deny. Recording

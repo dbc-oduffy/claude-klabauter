@@ -81,6 +81,14 @@ from typing import List, Optional
 
 from coordinator_core import py_probe_sh as _py_probe_sh
 from coordinator_core.session.declared_writes import declare_write
+# Cross-package import of the SSOT doc-pointer display string (same
+# precedent write_guards already uses for operator_override_note itself) --
+# emitted hook-body remediation text points readers at the doc that
+# enumerates these keys, never names a key inline (B6/B8, see
+# docs/wiki/guard-messaging.md § Register).
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
+
+GENERATES = []  # writes only own .git/hooks/pre-commit, never tracked
 
 _PROG = "install-claude-klabauter-precommit-hook"
 
@@ -261,10 +269,10 @@ def _gate_block(gate: _Gate) -> List[str]:
     def _cannot_proceed_branch(reason: str, remediation: str) -> List[str]:
         return [
             f"  if {override_test}; then",
-            f'    echo "pre-commit: gate [{gate.label}] ({gate.marker}) SKIPPED -- {reason} ({gate.override_env}=1 set)." >&2',
+            f'    echo "pre-commit: gate [{gate.label}] ({gate.marker}) SKIPPED -- {reason} (override set)." >&2',
             "  else",
             f'    echo "pre-commit: BLOCKED -- gate [{gate.label}] ({gate.marker}) cannot proceed: {reason}." >&2',
-            f'    echo "pre-commit: remediation: {remediation}, or set {gate.override_env}=1 to bypass (PM-authorized only)." >&2',
+            f'    echo "pre-commit: remediation: {remediation}. See {OVERRIDE_KEYS_DOC_DISPLAY} for override options." >&2',
             "    exit 1",
             "  fi",
         ]

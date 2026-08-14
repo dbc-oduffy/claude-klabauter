@@ -6,7 +6,7 @@ pydantic, asyncio, ipc, or `cockpit_schema` imports anywhere below this point,
 so importing it stays cheap on the brief-path (see the W0-1 import-cost win
 this subpackage was carved out to protect).
 
-The envelope shape (8 top-level keys) conforms to the coordinator-claude-side schema-of-record
+The envelope shape (8 top-level keys) conforms to the DoE-side schema-of-record
 `schemas/decision-object.schema.json` (DR-047) -- that file is the contract of
 truth; this package encodes its key set as `ENVELOPE_KEYS` in `envelope.py`
 rather than coupling to the cross-repo path.

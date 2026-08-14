@@ -16,7 +16,7 @@ all?) and pin-enforcement (does a KNOWN type's dispatch respect its OWN
 pin?) are different questions with different failure shapes --
 `block_unenumerated_agent_type`'s docstring is already at its limit. See
 that module's own docstring, "COMPOSITION WITH `enforce_agent_model_pin`",
-for how the two compose into the one coordinator-claude-registered `PreToolUse(Agent)`
+for how the two compose into the one DoE-registered `PreToolUse(Agent)`
 seam.
 
 INPUT TRUST. `subagent_type`, `model`, `effort` are read from `tool_input`
@@ -83,7 +83,7 @@ FAIL-CLOSED ON PIN-RESOLUTION FAILURE. `resolve_model_pins()` inherits
 `resolve_roster()`'s fail-closed contract (same `coordinator/agents/*.md`
 walk, see that function's own docstring) -- an unreadable/missing
 `coordinator/agents/` directory denies here too, rather than silently
-treating every dispatch as unpinned. In the composed, coordinator-claude-registered path
+treating every dispatch as unpinned. In the composed, DoE-registered path
 (`block_unenumerated_agent_type.check()` delegating to this module) this
 leg is normally unreachable in practice: the caller only delegates after
 ITS OWN roster resolution already succeeded against the identical
@@ -95,7 +95,7 @@ rather than assumed away.
 Two entrypoints, matching the sibling module's own convention:
     check(payload) -- pure function, `Dict[str, Any] -> Optional[Dict]`.
     main()          -- stdin-JSON / stdout-JSON / exit-0 standalone script,
-        for direct `hooks.json` registration (coordinator-claude-side; out of scope here,
+        for direct `hooks.json` registration (DoE-side; out of scope here,
         and unused in practice since `block_unenumerated_agent_type`'s own
         seam already delegates in-process).
 

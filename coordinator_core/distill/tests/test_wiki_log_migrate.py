@@ -51,9 +51,9 @@ Tracks which `archive/specs/**` plans have been harvested into `docs/wiki/` (or 
 
 > Some blockquote prose that must never be parsed as a data row.
 
-## Harvested-upstream — pre-July example-doctrine-mirror-repo cohort (reclaimed to coordinator-claude, pruned 2026-07-08)
+## Harvested-upstream — pre-July example-doctrine-mirror-repo cohort (reclaimed to DoE, pruned 2026-07-08)
 
-archive/specs/2026-03..06/** → harvested-upstream (distilled in coordinator-claude; see coordinator-claude `state/distillation-log.md`) — reclaimed to coordinator-claude, pruned from claude-klabauter per DR `2026-07-08-reclaim-pre-july-history-from-claude-klabauter`
+archive/specs/2026-03..06/** → harvested-upstream (distilled in DoE; see DoE `state/distillation-log.md`) — reclaimed to DoE, pruned from claude-klabauter per DR `2026-07-08-reclaim-pre-july-history-from-claude-klabauter`
 
 ## Harvested — 2026-07 claude-klabauter cohort (run 2026-07-08-pass1)
 

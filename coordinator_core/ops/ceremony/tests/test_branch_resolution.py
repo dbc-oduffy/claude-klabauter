@@ -2407,7 +2407,7 @@ def test_session_shape_handoff_path_peer_misattribution_rejected(repo):
     it.  The session's real predecessor handoff (consumed_by: sid) lives
     elsewhere on disk and must be found via the recovery scan instead.
 
-    Originating incident: coordinator-claude 2026-07-09 — a /workstream-complete
+    Originating incident: DoE-claude 2026-07-09 — a /workstream-complete
     nearly stamped a live peer workstream's handoff as shipped because the
     session-shape.json pickup.handoff pointed at the peer's handoff.
     """

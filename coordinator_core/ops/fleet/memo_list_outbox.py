@@ -2,7 +2,7 @@
 coordinator_core.ops.fleet.memo_list_outbox — memo.list_outbox COMPUTE_ONLY UDS op handler.
 
 Purpose: Enumerate the CALLING repo's own `state/memo-outbox/*.md` draft
-memos — the claude-klabauter-native port of the coordinator-claude `cross-repo-memo` CLI's `list`
+memos — the claude-klabauter-native port of the DoE `cross-repo-memo` CLI's `list`
 verb, which today owns this enumeration logic locally. Moving it into the
 engine lets the CLI verb become pure invocation (dispatch + format), matching
 the DR-210 Option-A boundary move already applied to memo.draft/memo.compose/
@@ -17,7 +17,7 @@ and the `common_dir` `_OP_KEY_SCOPE` entry are wired alongside this file.
 Spec backlink:
     docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md (DR-210 Option-A
     full-ownership move; this op closes the remaining CLI-local `list` verb).
-    Parity source: coordinator-claude coordinator/bin/cross-repo-memo `_cmd_list`
+    Parity source: DoE coordinator/bin/cross-repo-memo.py `_cmd_list`
     ("Enumerates state/memo-outbox/*.md in the sender repo").
     Outbox write path (must match exactly): coordinator_core/ops/fleet/memo_draft.py
     `_OUTBOX_DIRNAME = ("state", "memo-outbox")`, `caller_worktree.joinpath(*_OUTBOX_DIRNAME)`.

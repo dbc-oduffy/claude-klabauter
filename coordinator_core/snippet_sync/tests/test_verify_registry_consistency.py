@@ -1,7 +1,7 @@
 """Tests for coordinator_core.snippet_sync.verify_registry_consistency.
 
 The four-script (`verify-<X>-sync.sh`) leg this module once ported from the
-retired `coordinator/bin` bash oracle (721 LoC, deleted at coordinator-claude's `93887f6f`
+retired `coordinator/bin` bash oracle (721 LoC, deleted at DoE's `93887f6f`
 de-bash cutover) was retired 2026-07-22 — see the module docstring and the
 actioned inbound memo
 `cross-repo/inbox/2026-07-22-claude-central-em-snippet-registry-consistency-fix-locus.md`.
@@ -9,7 +9,7 @@ Remaining coverage below exercises only the surviving consistency checks:
 registry-exists, TOML-parse, schema_version gate, and per-snippet
 `[snippet.<name>]` enrollment.
 
-Spec backlink: coordinator-claude docs/plans/2026-06-15-snippet-sync-consumer-registry.md § Dispatch Ledger C4, C8
+Spec backlink: DoE docs/plans/2026-06-15-snippet-sync-consumer-registry.md § Dispatch Ledger C4, C8
 """
 from __future__ import annotations
 

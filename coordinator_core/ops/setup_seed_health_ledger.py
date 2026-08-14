@@ -21,8 +21,8 @@ Schema source: docs/wiki/daily-summary-procedure.md § "Health Ledger Entry
 Schema" — two audit clocks above a per-system table; all system grades start
 at "?".
 
-Port of: setup-seed-health-ledger.sh (coordinator-claude 6fb5fb37, 2026-07-22)
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Port of: setup-seed-health-ledger.sh (DoE 6fb5fb37, 2026-07-22)
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 State-root seam: the bash original routes a meta-repo REPO_ROOT through the
 Claude-klabauter state seam (C4/stop-the-rot) via `command -v coordinator_is_meta_repo`
@@ -30,7 +30,7 @@ guards — a check that is only ever true when the calling shell had already
 sourced coordinator-is-meta-repo.sh/coordinator-claude-klabauter-root.sh, which never
 happens for THIS script's actual invocation (skills/repo-setup/SKILL.md always
 runs it as a bare `bash <path>` subprocess — confirmed via grep, no
-`export -f` of either function exists anywhere in the coordinator-claude tree). This port
+`export -f` of either function exists anywhere in the DoE tree). This port
 performs the equivalent redirection unconditionally instead of gating on a
 shell-function-existence probe that has no Python analogue — same intent,
 strictly more correct than the always-false bash gate. Local
@@ -55,6 +55,8 @@ Negative-spec:
 """
 
 from __future__ import annotations
+
+GENERATES = []  # writes <repo_root>/state/health-ledger.md for a caller-supplied REPO_ROOT (any target repo /repo-setup runs against), not scoped to claude-klabauter's own tree
 
 import os
 import sys

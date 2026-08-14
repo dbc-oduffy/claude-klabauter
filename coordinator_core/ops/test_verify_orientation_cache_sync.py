@@ -176,7 +176,7 @@ def test_architecture_atlas_and_fast_test_and_audits_are_schema_legal(tmp_path):
         "## Fast test\n"
         "- fast test: `python3 -m pytest -q`\n\n"
         "## Audits & censuses\n"
-        "- `state/audits/` — existing investigation records; recent: 2026-07-28-something\n\n"
+        "- `state/audits/` — existing investigation records\n\n"
         "## Pinboard\n",
     )
     cache_path = _write(tmp_path, body)
@@ -199,8 +199,9 @@ def test_engine_output_passes_its_own_verifier(tmp_path):
         "",
         ["- `docs/wiki/` — doctrine/reference material; browse before assuming absence."],
         ["- `docs/architecture/systems/` — per-subsystem architecture pages: engine"],
+        [],
         ["- fast test: `python3 -m pytest -q`"],
-        ["- `state/audits/` — existing investigation records; recent: 2026-07-28-something"],
+        ["- `state/audits/` — existing investigation records"],
         [],
         "",
     )

@@ -11,7 +11,7 @@ rather than only grepping the hook text for marker substrings, because
 substring presence is exactly what the previous "gates are present but dead
 after a stray `exit 0`" bug would still pass.
 
-Port of: install-meta-repo-precommit-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: install-meta-repo-precommit-hook.sh (DoE b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 """
 from __future__ import annotations
@@ -317,13 +317,16 @@ def test_missing_python_interpreter_blocks_loudly(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_missing_gate_script_blocked_message_names_its_override():
-    """The BLOCKED banner's remediation text must name the exact override
-    spelling — an operator reading the block needs the escape hatch in front
-    of them, not a pointer to go find it."""
+    """The gate's own shell `[ "$VAR" = "1" ]` test still reads the exact
+    override spelling (load-bearing for the bypass mechanism itself), but
+    the BLOCKED banner's rendered remediation text no longer names the key
+    inline — it points at the override-key doc instead (B6/B8, see
+    docs/wiki/guard-messaging.md § Register)."""
     for gate in _GATE_REGISTRY:
         block = "\n".join(_mod._gate_block(gate, Path("/fake/bin")))
         assert gate.override_env in block
-        assert f"{gate.override_env}=1" in block
+        assert f"{gate.override_env}=1" not in block
+        assert _mod.OVERRIDE_KEYS_DOC_DISPLAY in block
 
 
 def test_missing_gate_script_override_bypasses_the_block(tmp_path, monkeypatch):

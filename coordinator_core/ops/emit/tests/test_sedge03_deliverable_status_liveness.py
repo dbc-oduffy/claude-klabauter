@@ -320,7 +320,7 @@ class TestStampThreadsBridgedIds:
 class TestAC5RetirementMarker:
     """AC5: a named retirement AC exists on this cluster — asserted here as a
     concretely-checkable-today marker (bridged_ids), not a someday-maybe comment. Once
-    coordinator-claude lands a dedicated DeliverableStatus member for this case, this test's expected
+    DoE lands a dedicated DeliverableStatus member for this case, this test's expected
     value (and the emitted value at the production call site) must switch off
     "in-progress" onto it; until then, this is the follow-on AC's anchor point."""
 

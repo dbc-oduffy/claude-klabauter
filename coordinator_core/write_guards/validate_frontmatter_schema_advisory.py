@@ -1,5 +1,5 @@
 """coordinator_core.write_guards.validate_frontmatter_schema_advisory — advisory
-leg of the fan-in split of coordinator-claude's
+leg of the fan-in split of DoE's
 ``coordinator/hooks/scripts/validate-frontmatter-schema.py`` PreToolUse
 (Write|Edit|MultiEdit) hook, per the write-guard fan-in
 (write_guards/INTERFACE.md) and the wave map's C11 slot.
@@ -58,7 +58,7 @@ reference hook's warn-mode payload builders (``build_violation_payload``,
 ``build_scaffold_offer_payload``). Every escape-hatch env var
 (``COORDINATOR_SCHEMA_STRICT``, ``COORDINATOR_OVERRIDE_OWN_INBOX``,
 ``COORDINATOR_OVERRIDE_MEMO_REDIRECT``) is read exactly as the reference
-hook reads it. Fail-open narrowing (missing/unresolvable coordinator-claude root, manifest,
+hook reads it. Fail-open narrowing (missing/unresolvable DoE root, manifest,
 schemas, or DAG helper) always returns ``None`` — never fabricates an
 advisory from partial state, mirroring the reference hook's "skip
 validation, never block" posture (which degrades identically for a warn
@@ -66,32 +66,32 @@ outcome: no advisory rather than a wrong one).
 
 In-process schema/manifest/DAG resolution
 -------------------------------------------
-The reference hook lives in coordinator-claude and must resolve INTO claude-klabauter
+The reference hook lives in DoE-claude and must resolve INTO claude-klabauter
 for schema validation, DAG lineage-walk, and the two claude-klabauter-generated memo
 schemas — hence its ``_claude_klabauter_root``/``sys.path`` seam (D1a). This module
 lives IN claude-klabauter already, so those three imports
 (``coordinator_core.frontmatter.schema_validate``, ``coordinator_core.dag``,
 ``coordinator_core.contract``) are direct, in-tree imports — no seam, no
 ``sys.path`` manipulation needed. The DIRECTION this module still needs to
-resolve is the reverse one: the coordinator-claude sibling checkout, for
-``coordinator/schemas/`` (the schema corpus, contract-owned by coordinator-claude, not
+resolve is the reverse one: the DoE-claude sibling checkout, for
+``coordinator/schemas/`` (the schema corpus, contract-owned by DoE, not
 Claude-klabauter) and ``coordinator/schemas/coordinator-registry.manifest.json`` (the
 registry manifest). That resolution goes through
 ``coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`` — the
-same ratified "resolve the coordinator-claude sibling root" ladder the reference
-hook's own coordinator-claude-side callers use elsewhere, now called natively in-process
-rather than via the ``machine-local get repos.example_doctrine_repo`` subprocess the
+same ratified "resolve the DoE-claude sibling root" ladder the reference
+hook's own DoE-side callers use elsewhere, now called natively in-process
+rather than via the ``machine-local get repos.doe_claude`` subprocess the
 reference hook shells out to. Same target, same effective resolution (that
 subprocess call is rung 2 of this very ladder), no behavior change.
 
-Import-safety: per INTERFACE.md rule 7, no resolution work (coordinator-claude-root
+Import-safety: per INTERFACE.md rule 7, no resolution work (DoE-root
 lookup, manifest load, schema load, git-root subprocess) happens at import
 time — regex/module-level constants only. All of it happens inside
 ``check()``, matching the reference hook's own per-invocation (spawn-per-
 call) freshness.
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md § C11
-Source: coordinator-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C11
+Source: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
 """
 
 from __future__ import annotations
@@ -132,20 +132,20 @@ PRIORITY = 100
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
 _MEMO_SCHEMA_NAMES = ("cross-repo-memo", "archived-memo")
-_EXAMPLE_DOCTRINE_REPO_REGISTRY_KEY = "repos.example_doctrine_repo"
+_DOE_CLAUDE_REGISTRY_KEY = "repos.doe_claude"
 
 # The vendored, version-pinned schema corpus this module now validates
 # against — see module docstring § In-process schema/manifest/DAG
 # resolution and docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
 # corpus.md. Resolved relative to this file's own on-disk location (this
-# module runs INSIDE claude-klabauter already), never from coordinator-claude's live working
-# tree. The registry MANIFEST (`_load_doe_registry`) stays on coordinator-claude's tree —
+# module runs INSIDE claude-klabauter already), never from DoE-claude's live working
+# tree. The registry MANIFEST (`_load_doe_registry`) stays on DoE's tree —
 # it is routing/scaffold logic, not a schema, and is out of scope for this
 # repoint (plan AC4 + Out of scope).
 _VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "frontmatter" / "schemas"
 
 # ---------------------------------------------------------------------------
-# Torn-write retry — coordinator-claude's schema corpus and registry manifest are resolved
+# Torn-write retry — DoE's schema corpus and registry manifest are resolved
 # from the LIVE working tree of a sibling repo checkout (see module docstring
 # § In-process schema/manifest/DAG resolution), which concurrent sessions
 # edit continuously. A `check()` call can land mid-write and see a torn/
@@ -463,17 +463,17 @@ def build_scaffold_offer_payload_advisory(
 
 
 def _load_doe_registry() -> dict:
-    """Resolve the coordinator-claude sibling root and load
+    """Resolve the DoE-claude sibling root and load
     coordinator-registry.manifest.json, best-effort. NEVER returns ``None``
     any more — that was exactly the fail-open-on-missing-sibling hole AC2
     closes (see docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-
     corpus.md): the schema corpus this module validates against is now
     claude-klabauter's own vendored copy, independent of this manifest read entirely,
-    so an unresolvable/absent coordinator-claude root or a malformed manifest must not
+    so an unresolvable/absent DoE root or a malformed manifest must not
     black out schema-shape advisories too. Only the manifest-DERIVED fields
     (memo routing / scaffold-offer maps, central-EM identity) degrade to
     empty defaults on any resolution or parse failure — those remain
-    genuinely coordinator-claude-owned routing data (plan AC4 + Out of scope), so their
+    genuinely DoE-owned routing data (plan AC4 + Out of scope), so their
     absence narrows only the memo-guard/scaffold-offer steps, never the
     schema-validation ones.
     """
@@ -538,7 +538,7 @@ def _load_doe_registry() -> dict:
     }
 
 
-def _example_doctrine_repo_realpath(doe_root: Optional[str]) -> Optional[str]:
+def _doe_claude_realpath(doe_root: Optional[str]) -> Optional[str]:
     if not doe_root:
         return None
     try:
@@ -627,7 +627,7 @@ def _memo_guards_decision(
     abs_file_path: str,
     repo_rel: str,
     registry: dict,
-    example_doctrine_repo_realpath: Optional[str],
+    doe_claude_realpath: Optional[str],
 ) -> Optional[tuple]:
     if tool_name not in ("Write", "Edit", "MultiEdit"):
         return None
@@ -641,7 +641,7 @@ def _memo_guards_decision(
 
     repo_root_stripped = repo_root.rstrip("/\\")
     repo_root_realpath: Optional[str] = None
-    if example_doctrine_repo_realpath is not None:
+    if doe_claude_realpath is not None:
         try:
             repo_root_realpath = str(Path(repo_root_stripped).resolve())
         except OSError:
@@ -655,8 +655,8 @@ def _memo_guards_decision(
         # identity check, never for I/O — safe to fold both sides.
         this_repo_is_central = (
             repo_root_realpath is not None
-            and example_doctrine_repo_realpath is not None
-            and casefold_path(repo_root_realpath) == casefold_path(example_doctrine_repo_realpath)
+            and doe_claude_realpath is not None
+            and casefold_path(repo_root_realpath) == casefold_path(doe_claude_realpath)
         )
         if this_repo_is_central:
             this_em_id = registry["central_canonical_id"]
@@ -726,8 +726,8 @@ def _memo_guards_decision(
                 # Comparison-only fold: see `this_repo_is_central` above.
                 landing_repo_is_central = (
                     repo_root_realpath is not None
-                    and example_doctrine_repo_realpath is not None
-                    and casefold_path(repo_root_realpath) == casefold_path(example_doctrine_repo_realpath)
+                    and doe_claude_realpath is not None
+                    and casefold_path(repo_root_realpath) == casefold_path(doe_claude_realpath)
                 )
                 if landing_repo_is_central:
                     landing_em_id = registry["central_canonical_id"]
@@ -739,7 +739,7 @@ def _memo_guards_decision(
                 to_repo_field_raw = extract_yaml_to_repo_field(memo_check_content)
                 if to_repo_field_raw is not None:
                     this_repo_registry_key = (
-                        _EXAMPLE_DOCTRINE_REPO_REGISTRY_KEY
+                        _DOE_CLAUDE_REGISTRY_KEY
                         if landing_repo_is_central
                         else registry_key_for_basename(landing_basename, registry["manifest"])
                     )
@@ -757,14 +757,14 @@ def _memo_guards_decision(
                     landing_is_central = landing_em_id == registry["central_canonical_id"]
                     if to_is_central and landing_is_central:
                         pass
-                    # Fail open when the coordinator-claude root is unresolvable. Deliberately does NOT also test
+                    # Fail open when the DoE root is unresolvable. Deliberately does NOT also test
                     # `to_is_central`: `central_em_ids` only populates once that root HAS resolved,
-                    # so `to_is_central and example_doctrine_repo_realpath is None` was unsatisfiable by
+                    # so `to_is_central and doe_claude_realpath is None` was unsatisfiable by
                     # construction and the regex fallback below fired unconditionally on any
                     # `-em`-suffixed `to:`. Root unresolvable means we cannot tell whether `to:` is
                     # central, so emit nothing rather than guess. Mirrors the same fix in the deny
                     # sibling; the two modules are mutually exclusive and must agree here.
-                    elif example_doctrine_repo_realpath is None:
+                    elif doe_claude_realpath is None:
                         pass
                     else:
                         to_em_id = to_field_raw.strip()
@@ -858,7 +858,7 @@ def _plan_tasks_spine_errors(
       - MALFORMED (>1 fence, or a heading with no fence in its section) —
         plan-coverage-checker's fail-loud, not duplicated here.
 
-    Reference: coordinator-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
+    Reference: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
     (`_plan_tasks_spine_errors`) — kept as an honest parity copy there, but
     inert (that hook is no longer registered in hooks.json); this module is
     the live enforcement.
@@ -925,6 +925,156 @@ def _plan_tasks_spine_errors(
     return errors
 
 
+_REVIEWED_RANGE_SCHEMA_NAMES = ("review-findings", "run-report")
+_REVIEWED_RANGE_FIELD_RE = re.compile(r"^reviewed_range\[(\d+)\]$")
+_BARE_HEX_RE = re.compile(r"^[0-9a-f]{4,64}$")
+_RANGE_SEPARATOR_RE = re.compile(r"^(.+?)(\.{2,3})(.+)$")
+
+# reviewed_targets closed prefix set (review-findings 3.2.0 / run-report
+# 2.2.0, vendored at coordinator_core/frontmatter/schemas/) — see plan-tasks
+# row C3, docs/plans/2026-08-14-the-write-time-offer-for-reviewed-range.md.
+_REVIEWED_TARGETS_ITEM_RE = re.compile(
+    r"^(?:uncommitted|untracked|working-tree|diff-artifact):[^\s,]+$"
+)
+_RATIFIED_PREFIX_RE = re.compile(r"^(uncommitted|untracked|working-tree|diff-artifact):(.*)$")
+_DIFF_ARTIFACT_SUFFIX_RE = re.compile(r"\.(?:diff|patch)$")
+
+
+def _reviewed_targets_hint(value: str) -> Optional[str]:
+    """Branch (c) sub-offer: name the ``reviewed_targets`` form a value
+    naming no commit range should have used, when one is derivable. Returns
+    ``None`` (offer nothing, unchanged behaviour) when no destination is
+    derivable — see plan-tasks row C3 branch table. Never called for the
+    hybrid-range case (a `..`/`...` value whose endpoint fails to resolve);
+    that class keeps offering nothing regardless of this helper.
+    """
+    if _REVIEWED_TARGETS_ITEM_RE.match(value):
+        return f'reviewed_targets: "{value}"'
+
+    prefix_match = _RATIFIED_PREFIX_RE.match(value)
+    if prefix_match:
+        rest = prefix_match.group(2)
+        prefix = prefix_match.group(1)
+        if "," in rest:
+            paths = [p.strip() for p in rest.split(",") if p.strip()]
+            if paths:
+                targets = ", ".join(f'"{prefix}:{p}"' for p in paths)
+                return f"one reviewed_targets entry per path: {targets}"
+            return None
+        stripped = rest.strip()
+        if stripped and not any(ch.isspace() for ch in stripped):
+            return f'reviewed_targets: "{prefix}:{stripped}"'
+        return None
+
+    if _DIFF_ARTIFACT_SUFFIX_RE.search(value):
+        return f'add to reviewed_targets: "diff-artifact:{value}"'
+
+    return None
+
+
+def _reviewed_range_offer(
+    errors: list[dict],
+    frontmatter: Optional[dict],
+    git_root: Optional[str],
+) -> None:
+    """Rewrite ``reviewed_range`` validation errors IN PLACE with the
+    resolved-range offer a reviewing subagent's own value should have been —
+    or a plain statement that the value names no commit range when none
+    exists. Never adds or removes an error, never touches ``tool_input``,
+    never returns anything (mutation-only, mirrors the deny sibling's own
+    error-list idiom). Offer, not a writer: DR-156, the reviewing subagent
+    still types the value.
+
+    Branch table (docs/plans/2026-08-14-the-write-time-offer-for-reviewed-
+    range.md — plan-tasks row id C1):
+      (a) has a `..`/`...` separator -> resolve each endpoint via
+          `_resolve_ref_to_sha`; on success rewrite `hint` to the resolved
+          `A..B`.
+      (b) no separator, bare hex SHA -> rewrite `hint` to `<value>~1..<value>`
+          (never resolved or lengthened — a hex token already passes through
+          `_resolve_ref_to_sha` unchanged).
+      (c) a separator endpoint `_resolve_ref_to_sha` cannot resolve, or no
+          separator and not hex (a `.diff` path, `working-tree:<path>`,
+          `uncommitted:<path>`) -> rewrite `error` to state plainly that the
+          value names no commit range.
+
+          For the NO-SEPARATOR sub-case only (never the hybrid-range
+          sub-case above — its right endpoint re-resolves on every read,
+          the same `..HEAD` hazard in other clothes, and must keep offering
+          nothing), also look for a `reviewed_targets` destination via
+          `_reviewed_targets_hint` (plan-tasks row C3):
+            - value already satisfies the `reviewed_targets` item pattern
+              -> say it belongs there, unchanged.
+            - bare `.diff`/`.patch` path -> offer `diff-artifact:<path>`.
+            - ratified prefix packing several comma-separated paths into
+              one string -> offer one `reviewed_targets` entry per path.
+            - anything else -> no `reviewed_targets` hint; `hint` stays
+              deleted so the renderer emits no `required shape:` clause.
+
+    Fail-open: any exception here (git failure, import failure, or any
+    exception type from a future `_resolve_ref_to_sha` implementation, not
+    just `ValueError`) leaves `errors` exactly as it arrived — a guard never
+    blocks on infra, and a mid-loop failure must never leave earlier entries
+    mutated while later ones aren't. Rewrites are staged into a local list
+    and applied to `errors` only after the whole loop completes without
+    exception, so the outer `except` below genuinely restores `errors` to
+    its as-arrived state rather than an already-partially-mutated one.
+    """
+    try:
+        if not isinstance(frontmatter, dict) or not git_root:
+            return
+        values = frontmatter.get("reviewed_range")
+        if not isinstance(values, list):
+            return
+        if not any(_REVIEWED_RANGE_FIELD_RE.match(e.get("field") or "") for e in errors):
+            return
+
+        from coordinator_core.ops.review_trail_write import _resolve_ref_to_sha
+
+        rewrites: list[tuple[dict, Optional[str], Optional[str]]] = []
+        for err in errors:
+            match = _REVIEWED_RANGE_FIELD_RE.match(err.get("field") or "")
+            if not match:
+                continue
+            idx = int(match.group(1))
+            if idx >= len(values) or not isinstance(values[idx], str):
+                continue
+            value = values[idx]
+
+            sep_match = _RANGE_SEPARATOR_RE.match(value)
+            if sep_match:
+                left, _sep, right = sep_match.groups()
+                try:
+                    resolved_left = _resolve_ref_to_sha(left, Path(git_root))
+                    resolved_right = _resolve_ref_to_sha(right, Path(git_root))
+                except ValueError:
+                    rewrites.append((err, f'value "{value}" names no commit range', None))
+                    continue
+                rewrites.append((err, None, f"{resolved_left}..{resolved_right}"))
+                continue
+
+            if _BARE_HEX_RE.match(value):
+                rewrites.append((err, None, f"{value}~1..{value}"))
+                continue
+
+            targets_hint = _reviewed_targets_hint(value)
+            new_error = f'value "{value}" names no commit range'
+            if targets_hint is not None:
+                rewrites.append((err, new_error, targets_hint))
+            else:
+                rewrites.append((err, new_error, None))
+
+        for err, new_error, new_hint in rewrites:
+            if new_error is not None:
+                err["error"] = new_error
+            if new_hint is not None:
+                err["hint"] = new_hint
+            elif new_error is not None:
+                err.pop("hint", None)
+    except Exception:  # noqa: BLE001 — fail-open, never block on infra
+        return
+
+
 def _evaluate_schema_validation_advisory(
     schema_name: str,
     schema: dict,
@@ -987,6 +1137,9 @@ def _evaluate_schema_validation_advisory(
 
     if schema_name == "plan":
         errors.extend(_plan_tasks_spine_errors(prospective_content, schemas, frontmatter))
+
+    if schema_name in _REVIEWED_RANGE_SCHEMA_NAMES and errors:
+        _reviewed_range_offer(errors, frontmatter, git_root)
 
     if not errors:
         return None
@@ -1134,10 +1287,10 @@ def check(payload: dict) -> Optional[dict]:
         return None
 
     registry = _load_doe_registry()
-    example_doctrine_repo_realpath = _example_doctrine_repo_realpath(registry["doe_root"])
+    doe_claude_realpath = _doe_claude_realpath(registry["doe_root"])
 
     decision = _memo_guards_decision(
-        tool_name, tool_input, repo_root, abs_file_path, repo_rel, registry, example_doctrine_repo_realpath
+        tool_name, tool_input, repo_root, abs_file_path, repo_rel, registry, doe_claude_realpath
     )
     if decision is not None:
         kind, envelope = decision

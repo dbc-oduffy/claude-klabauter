@@ -5,7 +5,7 @@ Purpose: the single entry point every caller in the canonical-resolution-engine
 migration binds to for the two structurally-distinct resolution shapes the
 coordinator engine performs:
 
-    - operator-authored config (settings home, claude-klabauter root/bin, coordinator-claude root) —
+    - operator-authored config (settings home, claude-klabauter root/bin, DoE root) —
       corruption-checked only, never trust-checked. See
       ``coordinator_core.resolution.facade.resolve_operator_config``.
     - harness-supplied plugin roots (``CLAUDE_PLUGIN_ROOT``) — trust-checked

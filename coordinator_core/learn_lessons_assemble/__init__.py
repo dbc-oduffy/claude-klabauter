@@ -46,7 +46,7 @@ the candidates themselves are the entire product. This is the first
 assembler in the family whose `directives[]` is unconditionally empty --
 not a case that matches an existing empty-directives sibling.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
 
 Negative-spec:
     - Do NOT add a mutating code path or an `apply.py` module here -- this
@@ -432,6 +432,13 @@ def main(argv: list[str]) -> int:
 
     if not argv:
         return _usage("learn-lessons-reconcile-candidates")
+
+    if argv[0] in ("--help", "-h"):
+        print(
+            "usage: learn-lessons-reconcile-candidates <target-wiki-path> <incoming-text> "
+            "| <target-wiki-path> --text-file <path>"
+        )
+        return EXIT_OK
 
     target_path = argv[0]
     tail = argv[1:]

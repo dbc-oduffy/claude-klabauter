@@ -32,7 +32,7 @@ Exit codes:
     0 — always (best-effort; transport/op failures are logged to stderr,
         never propagated as a non-zero exit).
 
-Spec backlink: docs/plans/2026-07-06-dr215-fleet-ops-ceremony-wiring.md § C3 / KD-2 / KD-3
+Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 § C3 / KD-2 / KD-3
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 
 Negative-spec: does NOT invoke bash, sh, or any shell — subprocess spawning

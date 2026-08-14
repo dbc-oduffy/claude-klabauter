@@ -12,7 +12,7 @@ token-to-action mapping that previously lived as prose inside autonomous.md's
 calling surface hands it a raw token (or none) and gets back an action, never
 walks the branch itself.
 
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md § C7
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54 § C7
 
 Negative-spec:
     - Does NOT reimplement sentinel enable/disable — every mutating call shells

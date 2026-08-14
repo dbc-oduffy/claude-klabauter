@@ -11,8 +11,14 @@ detector) doesn't hand-copy it a third time into the module whose entire job
 is catching copies that drift from their source.
 
 `Verdict` is the shared vocabulary — STALE, FRESH, UNSTAMPED, UNDECLARED,
-INDETERMINATE — so callers import the enum rather than each spelling the
-strings themselves.
+WRITE_TARGET_UNRESOLVED, INDETERMINATE, MUTATES_DECLARED — so callers import
+the enum rather than each spelling the strings themselves. UNDECLARED
+asserts a resolved repo-artifact write with no declaration;
+WRITE_TARGET_UNRESOLVED covers a discovered generator that writes through a
+path expression the sweep could not resolve, so whether it emits a repo
+artifact is unknown; MUTATES_DECLARED covers a module that declares a
+`MUTATES` pathspec — a corpus mutator with a data-dependent output set and
+no fixed artifact, so it carries no staleness contract at all.
 
 `commits_touching_since` is the AC9 seam: one comparison function taking
 `(repo_root, sources, since_point)`, where `since_point` is EITHER an
@@ -89,7 +95,9 @@ class Verdict(str, Enum):
     FRESH = "FRESH"
     UNSTAMPED = "UNSTAMPED"
     UNDECLARED = "UNDECLARED"
+    WRITE_TARGET_UNRESOLVED = "WRITE_TARGET_UNRESOLVED"
     INDETERMINATE = "INDETERMINATE"
+    MUTATES_DECLARED = "MUTATES_DECLARED"
 
 
 def git_root(cwd: Optional[str] = None) -> Optional[Path]:
@@ -135,7 +143,10 @@ def _is_commit_ish(repo_root: Path, token: str) -> bool:
     return result.returncode == 0
 
 
-def _run_git_log(repo_root: Path, args: list[str]) -> Optional[list[str]]:
+def _run_git_log(repo_root: Path, args: list[str]) -> tuple[Optional[list[str]], str]:
+    """Returns `(commits, stderr_detail)`. On success `stderr_detail` is
+    empty; on failure `commits` is None and `stderr_detail` carries the
+    failed command's stderr for the caller's `SinceRange.detail`."""
     try:
         result = subprocess.run(
             ["git", "log", "--format=%H", *args],
@@ -145,29 +156,42 @@ def _run_git_log(repo_root: Path, args: list[str]) -> Optional[list[str]]:
             **no_console_creationflags(),
         )
     except OSError:
-        print(f"skip: _run_git_log: subprocess.run failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
+        detail = str(sys.exc_info()[1])
+        print(f"skip: _run_git_log: subprocess.run failed: {detail}", file=sys.stderr)
+        return None, detail
     if result.returncode != 0:
-        return None
+        detail = result.stderr.strip()
+        print(f"skip: _run_git_log: git log failed: {detail}", file=sys.stderr)
+        return None, detail
     stripped = result.stdout.strip()
-    return stripped.splitlines() if stripped else []
+    return (stripped.splitlines() if stripped else []), ""
 
 
-def _touches_artifact(repo_root: Path, commit: str, artifact_path: str) -> Optional[bool]:
+def _touches_artifact(repo_root: Path, commit: str, artifact_path: str) -> tuple[Optional[bool], str]:
+    """Returns `(touches, stderr_detail)`. On success `stderr_detail` is
+    empty; on failure `touches` is None and `stderr_detail` carries the
+    failed command's stderr for the caller's `SinceRange.detail`."""
     try:
         result = subprocess.run(
-            ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", commit, "--", artifact_path],
+            # --root: without it, a parentless (root) commit diffs against
+            # nothing rather than the empty tree, so a root commit that
+            # touches artifact_path would silently read as not-touching it
+            # and escape this exclusion filter — Review: coordinator:code-reviewer
+            ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", commit, "--", artifact_path],
             capture_output=True,
             text=True,
             cwd=str(repo_root),
             **no_console_creationflags(),
         )
     except OSError:
-        print(f"skip: _touches_artifact: subprocess.run failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return None
+        detail = str(sys.exc_info()[1])
+        print(f"skip: _touches_artifact: subprocess.run failed: {detail}", file=sys.stderr)
+        return None, detail
     if result.returncode != 0:
-        return None
-    return bool(result.stdout.strip())
+        detail = result.stderr.strip()
+        print(f"skip: _touches_artifact: git diff-tree failed for {commit!r}: {detail}", file=sys.stderr)
+        return None, detail
+    return bool(result.stdout.strip()), ""
 
 
 def commits_touching_since(
@@ -212,19 +236,25 @@ def commits_touching_since(
             detail=f"since_point is neither a resolvable commit-ish nor a parseable timestamp: {since_point!r}",
         )
 
-    commits = _run_git_log(repo_root, range_args)
+    commits, log_error = _run_git_log(repo_root, range_args)
     if commits is None:
-        return SinceRange(commits=(), indeterminate=True, detail=f"git log query failed for since_point={since_point!r}")
+        detail = f"git log query failed for since_point={since_point!r}"
+        if log_error:
+            detail = f"{detail}: {log_error}"
+        return SinceRange(commits=(), indeterminate=True, detail=detail)
 
     if artifact_path:
         filtered: list[str] = []
         for commit in commits:
-            touches = _touches_artifact(repo_root, commit, artifact_path)
+            touches, touch_error = _touches_artifact(repo_root, commit, artifact_path)
             if touches is None:
+                detail = f"git diff-tree query failed for commit {commit!r}"
+                if touch_error:
+                    detail = f"{detail}: {touch_error}"
                 return SinceRange(
                     commits=(),
                     indeterminate=True,
-                    detail=f"git diff-tree query failed for commit {commit!r}",
+                    detail=detail,
                 )
             if not touches:
                 filtered.append(commit)

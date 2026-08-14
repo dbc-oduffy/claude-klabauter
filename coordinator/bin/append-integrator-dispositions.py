@@ -1,7 +1,7 @@
 """append-integrator-dispositions.py — CLI trampoline over claude-klabauter's
 coordinator_core.ops.append_integrator_dispositions.
 
-Gives coordinator:review-integrator (coordinator-claude coordinator/agents/review-integrator.md)
+Gives coordinator:review-integrator (DoE-claude coordinator/agents/review-integrator.md)
 a single call to perform its ONE sanctioned sidecar write (§ Sidecar Disposition
 Annotation) — the bulk `## Integrator Dispositions` block appended to the
 reviewer findings sidecar — instead of hand-authoring the YAML block via Edit.

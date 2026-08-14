@@ -1,8 +1,8 @@
 """
 Tests for coordinator_core.ops.promote_shipped_in_flight_stubs.
 
-Port of: promote-shipped-in-flight-stubs.sh (coordinator-claude b5a4192c, 2026-07-20), and its
-own test harness promote-shipped-in-flight-stubs.test.sh (coordinator-claude 3a561713,
+Port of: promote-shipped-in-flight-stubs.sh (DoE b5a4192c, 2026-07-20), and its
+own test harness promote-shipped-in-flight-stubs.test.sh (DoE 3a561713,
 2026-07-22, cases T1-T7). T1-T5/T7 are reproduced here functionally, against real git
 fixtures and the real "handoff.stamp"/"handoff.transition" op handlers (no
 mocking — these ops are pure local-filesystem mutations, no network). T6 (the
@@ -353,7 +353,7 @@ def test_t7_norc_advisory_count(git_fixture, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 # Regression — P4 SHA selection fails open on all-garbage commits[] (backlog
 # 2026-07-13-promote-shipped-in-flight-stubs-p4-sha-fails-open.yaml): the old
-# coordinator-claude bash did `|| echo 0` (fail-open) rather than `|| continue` (fail-closed)
+# DoE bash did `|| echo 0` (fail-open) rather than `|| continue` (fail-closed)
 # on an unresolvable commit; the ported _committer_timestamp/_select_best_sha
 # reproduced the same fail-open shape by using 0 as a failure sentinel
 # indistinguishable from a real timestamp. Fixed by using None as the
@@ -528,7 +528,7 @@ def test_t6_equivalent_aborts_when_shipped_in_fails_to_land(git_fixture, monkeyp
 
 def test_ac14_all_zero_counters_stays_quiet(git_fixture, monkeypatch, capsys):
     """promoted==0, norc_count==0, stamp_abort_count==0 -- nothing in_flight
-    to scan at all. This is the "zero candidates at all" case coordinator-claude's
+    to scan at all. This is the "zero candidates at all" case DoE's
     unconditional /workday-start invocation hits most mornings; must stay
     exit 0 or it is a false alarm on a day nothing is wrong.
     """

@@ -2,7 +2,7 @@
 coordinator_core.write_guards.nudge_new_sh_file_naked_python -- the
 new-.sh-file naked-Python advisory guard.
 
-Spec: coordinator-claude CLAUDE.md § Runtime conventions
+Spec: DoE-claude CLAUDE.md § Runtime conventions
 
 Covers: non-Write-tool/non-.sh-path passthrough, new-.sh-file Write fires
 (including a Windows-separator path form and a case-varied .SH extension),

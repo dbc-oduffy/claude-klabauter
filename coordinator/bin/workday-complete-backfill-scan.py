@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """workday-complete-backfill-scan.py — skipped-workday backfill detector.
 
-Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
+Thin DoE-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.workday_complete_backfill_scan. Scans for days with
 commits but no daily-summary record and emits TSV rows describing the gap.
 Feeds a nudge at `/workday-start` Step 1.85 and an auto-backfill fan-out at
@@ -15,8 +15,8 @@ Feeds a nudge at `/workday-start` Step 1.85 and an auto-backfill fan-out at
 # commit main-exclusion escape hatch, dangling-defer guard) has been fully
 # ported to coordinator_core/ops/workday_complete_backfill_scan.py (co-located
 # pytest: test_workday_complete_backfill_scan.py). This file is now a thin
-# coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
-# (coordinator-claude owns contract/generator, claude-klabauter owns engine).
+# DoE-side (contract) trampoline over that claude-klabauter (engine) module, per DR-047
+# (DoE owns contract/generator, claude-klabauter owns engine).
 #
 # Exit codes (this trampoline):
 #   0 — claude-klabauter-link (transport) failure: CLAUDE_KLABAUTER_ROOT unresolved or
@@ -32,7 +32,7 @@ Feeds a nudge at `/workday-start` Step 1.85 and an auto-backfill fan-out at
 #       including the healthy empty-output case; 1 = CLI usage error or cwd
 #       not a git repo with COORDINATOR_ROOT unset).
 #
-# Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+# Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 # Prior bash implementation: see git log (workday-complete-backfill-scan.py,
 # 391 lines, retired on this cutover)
 

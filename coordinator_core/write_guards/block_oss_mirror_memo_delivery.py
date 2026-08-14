@@ -4,15 +4,15 @@ Closes the direct-``Write`` leg of the OSS-mirror memo hole. Modelled closely
 on ``block_home_dir_memo_delivery.py`` — same structure, same fail-open
 discipline, same use of ``coordinator_core.ops._path_guard.contained_path``.
 
-Purpose: doctrine (coordinator-claude ``CLAUDE.md``) is unambiguous that
-``coordinator/`` percolates ONE-WAY, coordinator-claude→OSS mirror only — the OSS
+Purpose: doctrine (DoE-claude ``CLAUDE.md``) is unambiguous that
+``coordinator/`` percolates ONE-WAY, DoE→OSS mirror only — the OSS
 ``coordinator-claude`` repo (and any sibling publish-target mirror) is a
 publish DESTINATION, never a working tree, and it must NEVER receive a
 cross-repo memo: a memo delivered there sits unactioned, invisible to every
 ``/pickup`` and every inbox sweep, because no EM lives there to read it.
 
 The sanctioned ``cross-repo-memo`` CLI (``claude-klabauter
-coordinator/bin/cross-repo-memo``) already closes this for the CLI path —
+coordinator/bin/cross-repo-memo.py``) already closes this for the CLI path —
 ``_is_publish_target_em()`` / ``_publish_target_owner()`` /
 ``_publish_target_rejection_msg()`` / ``_redirect_kind()``, backed by
 machine-local ``publish.mirrors.<key>.owner`` enumeration plus the

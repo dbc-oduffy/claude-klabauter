@@ -1,11 +1,11 @@
 """
 FinancialMetricSummary — example-market-data-repo financial fact (Level-2 aggregate),
 sourced from example-market-data-repo's sc1-06 EDGAR XBRL quantitative-claim output.
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/financial-metric-summary.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/financial-metric-summary.ts`
 (Zod source), emitted as a third top-level peer array `financial_metrics[]`.
 
 v2.21.0 addition (D31 bilateral: emitter-ownership transfer makes this widen
-bilateral by construction — coordinator-claude ratifies the shape, claude-klabauter's emitter produces
+bilateral by construction — DoE ratifies the shape, claude-klabauter's emitter produces
 the bytes). This is an entity-anchored financial fact (a company, via
 provenance.entity_anchor): `repo` may legitimately be `""` with an
 entity_anchor set, mirroring the ProvenanceEnvelope entity-first carve-out

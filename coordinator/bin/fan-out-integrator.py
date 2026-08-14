@@ -1,17 +1,17 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""fan-out-integrator.py — coordinator-claude-side contract trampoline over the claude-klabauter
+"""fan-out-integrator.py — DoE-side contract trampoline over the claude-klabauter
 fan-out integrator compiler.
 
 Collapses the parallel-review-integrator dispatch ceremony into one call:
 given a slice-spec TSV (slice-id, reviewer-sidecar path, comma-separated file
 paths), validates each cited reviewer sidecar exists on disk, runs the
 file-overlap pass, and emits N paste-ready coordinator:review-integrator
-dispatch prompts, one per slice. Coordinator-claude owns the contract; claude-klabauter
+dispatch prompts, one per slice. DoE owns the contract; claude-klabauter
 (coordinator_core.ops.fan_out_integrator) owns the engine (DR-047).
 """
 # bin/fan-out-integrator.py — Fan-out integrator compiler: overlap pass + scoped
-# review-integrator prompts. Now a thin coordinator-claude-side (contract) trampoline over
-# claude-klabauter coordinator_core.ops.fan_out_integrator (DR-047: coordinator-claude owns contract,
+# review-integrator prompts. Now a thin DoE-side (contract) trampoline over
+# claude-klabauter coordinator_core.ops.fan_out_integrator (DR-047: DoE owns contract,
 # claude-klabauter owns engine).
 #
 # Purpose: Collapse the parallel-integrator dispatch ceremony into one EM-side call so
@@ -40,7 +40,7 @@ dispatch prompts, one per slice. Coordinator-claude owns the contract; claude-kl
 #   0 — success, N blocks emitted to stdout
 #   1 — content validation error (missing sidecar, file overlap, malformed row) — matches
 #       claude-klabauter op's own contract byte-for-byte, see coordinator_core/ops/fan_out_integrator.py
-#   2 — invocation error (usage, environment, missing spec file, coordinator-claude-side snippet resolution)
+#   2 — invocation error (usage, environment, missing spec file, DoE-side snippet resolution)
 #   3 — claude-klabauter-link failure: CLAUDE_KLABAUTER_ROOT resolution or coordinator_core.ops.fan_out_integrator
 #       import failed. NEW failure mode vs. the original bash script (which had no cross-repo
 #       dependency) — a DEDICATED code, distinct from BOTH business codes above, so a caller
@@ -51,9 +51,9 @@ dispatch prompts, one per slice. Coordinator-claude owns the contract; claude-kl
 #       silently degrade to 0 the way a best-effort/never-block script would).
 #
 # Environment: none required beyond a resolvable CLAUDE_KLABAUTER_ROOT (see cc_invoke). Snippet paths
-# resolve via coordinator_data_root.data_root("snippets") (co-located rung 1, coordinator-claude-resident
+# resolve via coordinator_data_root.data_root("snippets") (co-located rung 1, DoE-resident
 # rung 2 — see that module's docstring), NOT a bare __file__-relative walk: this script now
-# lives in claude-klabauter while snippets/ stayed in coordinator-claude (DR-047 split), so a naive
+# lives in claude-klabauter while snippets/ stayed in DoE-claude (DR-047 split), so a naive
 # `dirname(dirname(__file__))` walk lands inside claude-klabauter where snippets/ no longer
 # exists. CLAUDE_PLUGIN_ROOT is set from that resolved root before the claude-klabauter op is imported
 # (unless the caller already set CLAUDE_PLUGIN_ROOT, which wins unconditionally), so its own
@@ -86,7 +86,7 @@ def _import_run_op_main():
     """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import `run_op_main`.
 
     Also sets CLAUDE_PLUGIN_ROOT to this trampoline's own resolved plugin root —
-    `data_root("snippets").parent` (co-located or coordinator-claude-resident per the split-repo
+    `data_root("snippets").parent` (co-located or DoE-resident per the split-repo
     layout; see coordinator_data_root.py), or the caller's pre-existing
     CLAUDE_PLUGIN_ROOT env value if one was already set (never clobbered) — so
     the claude-klabauter op's own PLUGIN_ROOT resolver

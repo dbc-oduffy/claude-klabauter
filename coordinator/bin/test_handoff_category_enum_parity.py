@@ -10,7 +10,7 @@ comment:
 
   1. coordinator_core/frontmatter/schemas/handoff.schema.json — `category`
      property's `enum` array (schema authority)
-  2. coordinator/bin/coordinator-doc-new                       — `_HANDOFF_CATEGORY_ENUM`
+  2. coordinator/bin/coordinator-doc-new.py                       — `_HANDOFF_CATEGORY_ENUM`
      (scaffolder-side copy, consumed by `_validate_category` and every
      handoff-schema-family scaffolder's default)
 
@@ -41,7 +41,7 @@ def _repo_bin_dir() -> str:
 
 
 def _coordinator_doc_new_path() -> str:
-    return os.path.join(_repo_bin_dir(), "coordinator-doc-new")
+    return os.path.join(_repo_bin_dir(), "coordinator-doc-new.py")
 
 
 def _handoff_schema_path() -> str:

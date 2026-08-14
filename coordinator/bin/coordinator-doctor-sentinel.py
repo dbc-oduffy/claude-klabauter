@@ -35,10 +35,10 @@ import failure.
 
 Environment: CLAUDE_HOME, COORDINATOR_PLUGINS_ROOT, MACHINE_LOCAL_REGISTRY_DIR,
 COORDINATOR_PYTHON, DOCTOR_PROBES_MANIFEST, COORDINATOR_PREREQ_PROBE_LIB_DIR,
-COORDINATOR_BIN_ROOT (test isolation for the coordinator-claude-side sibling-script root).
+COORDINATOR_BIN_ROOT (test isolation for the DoE-side sibling-script root).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g2/T3b
-Port of: coordinator-doctor-sentinel.sh (coordinator-claude b5a4192c, 2026-07-20; 989-line bash oracle)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g2/T3b
+Port of: coordinator-doctor-sentinel.sh (DoE b5a4192c, 2026-07-20; 989-line bash oracle)
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _import_main():
     """Resolve CLAUDE_KLABAUTER_ROOT, put it on sys.path, and import the ported CLI entry.
 
     Also seeds COORDINATOR_BIN_ROOT (this script's own directory, i.e. THIS
-    coordinator/bin/) so sentinel.py's coordinator-claude-side sibling-script resolution
+    coordinator/bin/) so sentinel.py's DoE-side sibling-script resolution
     (P-9/P-11/P-12/P-13/P-15/P-17/P-18/P-19's still-bash dependency scripts)
     finds them relative to wherever this trampoline is actually installed,
     exactly mirroring the bash oracle's `_SCRIPT_DIR` (self-relative, not a

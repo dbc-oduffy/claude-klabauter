@@ -41,7 +41,7 @@ Exit codes (must match `main()`'s actual returns byte-for-byte — do not drift)
      the porter addendum's A3/A3b exit-code-collision rule.
 
 Sibling-script resolution: this op is claude-klabauter-resident but depends on one
-Coordinator-claude-resident sibling (`coordinator/bin/check-install-divergence.py`) that is
+DoE-resident sibling (`coordinator/bin/check-install-divergence.py`) that is
 NOT part of this port. The caller computes its own coordinator root and sets
 `COORDINATOR_ROOT` in the environment before invoking this module's
 `main()` — mirroring the rung-1
@@ -87,7 +87,7 @@ Negative-spec (faithful oracle-bug repro — do NOT "fix" mid-port):
 
 Spec backlink: docs/plans/2026-05-29-it-just-works-agentic-install-currency.md § Chunk 2
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md (BIG_PORT wave)
-Port of: bootstrap-repo.sh (coordinator-claude a1a568d2, 2026-07-22).
+Port of: bootstrap-repo.sh (DoE a1a568d2, 2026-07-22).
 """
 
 from __future__ import annotations
@@ -186,7 +186,7 @@ Exit codes:
 
 
 # ---------------------------------------------------------------------------
-# coordinator-claude sibling-root resolution (rung ladder mirrored from
+# DoE sibling-root resolution (rung ladder mirrored from
 # coordinator_core.ops.learn_lessons_roots._resolve_doe_content_root)
 # ---------------------------------------------------------------------------
 
@@ -206,7 +206,7 @@ def _claude_home() -> str:
 
 
 def _content_root_rungs_2_to_4(claude_home: str) -> str:
-    """Rungs 2-4 of the coordinator-claude coordinator content root ladder, factored out so
+    """Rungs 2-4 of the DoE coordinator content root ladder, factored out so
     `_resolve_scaffold_manifest_root` can re-run them without rung 1 (see
     that function's docstring for why rung 1 alone is unsound for the
     manifest lookup)."""
@@ -246,10 +246,10 @@ def _content_root_rungs_2_to_4(claude_home: str) -> str:
 
 
 def _resolve_doe_content_root(claude_home: str) -> str:
-    """Resolve the coordinator-claude coordinator content root (coordinator/bin, coordinator/lib).
+    """Resolve the DoE coordinator content root (coordinator/bin, coordinator/lib).
 
     Rungs (best-effort, non-fatal):
-      1. COORDINATOR_ROOT / CLAUDE_PLUGIN_ROOT env override (set by the coordinator-claude-side
+      1. COORDINATOR_ROOT / CLAUDE_PLUGIN_ROOT env override (set by the DoE-side
          trampoline before importing this module).
       2-4. See `_content_root_rungs_2_to_4` for the rest of the ladder (`.doe-root`
          pointer file, machine-local registry, unconditional plugins-dir fallback).
@@ -267,13 +267,13 @@ def _resolve_scaffold_manifest_root(claude_home: str, coordinator_root: str) -> 
     (`bin/check-install-divergence.py`'s home).
 
     The two used to be the same directory by construction: both were
-    coordinator-claude-resident, reached through the identical rung-1 `COORDINATOR_ROOT`
-    override. Coordinator-claude `b644d5a9b` ("migrate the executable surface + its tests
+    DoE-resident, reached through the identical rung-1 `COORDINATOR_ROOT`
+    override. DoE `b644d5a9b` ("migrate the executable surface + its tests
     to claude-klabauter") moved `check-install-divergence.py` here for good,
     and the trampoline (`coordinator/lib/bootstrap-repo.py`) now
     unconditionally points `COORDINATOR_ROOT` at claude-klabauter's OWN `coordinator/`
     tree so that move resolves -- but `canonical-structure.yaml` stays
-    coordinator-claude-owned and deliberately unvendored (`scaffold_structure.py` AC D5),
+    DoE-owned and deliberately unvendored (`scaffold_structure.py` AC D5),
     so that same override now points the manifest lookup at a directory that
     was never meant to carry it. No single directory satisfies both anymore.
 

@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.register_discovered_repos.
 
-Port of: register-discovered-repos.sh (coordinator-claude b644d5a9, 2026-07-22).
+Port of: register-discovered-repos.sh (DoE b644d5a9, 2026-07-22).
 Spec backlink: F16 (install discovers working repos but never registers them into
 the machine-local repos.* registry).
 

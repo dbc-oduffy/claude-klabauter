@@ -11,11 +11,11 @@ Import guard: coordinator_core.ops.session.guard_settings_integrity MUST be
 imported at module load time to fire the @register_op(...) side-effect
 (pcore-11 registry-completeness pattern) — done implicitly here via the
 direct `evaluate_settings_integrity` import, which is also the function under
-test (mirrors the coordinator-claude stub's own direct-import call shape, not the async IPC
+test (mirrors the DoE stub's own direct-import call shape, not the async IPC
 handler).
 
 Coverage (reconciliation lens only — the pre-existing clobber-lens tests
-live in the coordinator-claude-side pytest port, coordinator/tests/test_guard_settings_
+live in the DoE-side pytest port, coordinator/tests/test_guard_settings_
 integrity.py, which exercises this op indirectly through the hook script):
   - declared-true and installed (non-empty record) -> silent
   - declared-true and absent from installed_plugins.json -> banner naming
@@ -31,7 +31,7 @@ integrity.py, which exercises this op indirectly through the hook script):
 
 Negative-spec: does NOT re-test the clobber lens (restore-from-snapshot,
 restore-from-git-HEAD, inline-install clobber carve-out) — those are
-unchanged by this addition and already covered by the coordinator-claude-side hook tests.
+unchanged by this addition and already covered by the DoE-side hook tests.
 """
 
 from __future__ import annotations

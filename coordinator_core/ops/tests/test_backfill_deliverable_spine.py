@@ -693,3 +693,81 @@ def test_keyed_sizing_still_gets_group_derived_id_from_citing_plan(tmp_path):
         "a keyed sizing must inherit its citing plan's deliverable_id "
         f"unchanged, got {minted!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Reviewer findings (state/subagent-share/264c40f4-364d-4e65-a790-40140b1eb3e2/
+# coordinatorcode-reviewer-c67ef990.md, [P1] x2) — both control-flow defects
+# fixed together in main()/group_corpus.
+# ---------------------------------------------------------------------------
+
+
+def test_plan_id_leg_still_writes_while_deliverable_id_group_is_ambiguous(tmp_path):
+    """P1: `run_plan_id_leg` must stay reachable in --write mode even when an
+    UNRELATED deliverable_id workstream group is ambiguous — the plan_id leg
+    is per-file with no grouping/ambiguity concept of its own (its own
+    docstring). Before the fix, `main()`'s `if total_ambiguous: return 2`
+    fired before the loop ever reached `run_plan_id_leg`, corpus-wide."""
+    root = tmp_path
+    # Ambiguous deliverable_id group: two plans sharing a workstream key but
+    # carrying distinct slugs.
+    plan_a = root / "docs" / "plans" / "2026-08-13-fixture-ambig-a.md"
+    _write_frontmatter(plan_a, workstream="fixture-ambig-ws", slug="fixture-ambig-a")
+    plan_b = root / "docs" / "plans" / "2026-08-13-fixture-ambig-b.md"
+    _write_frontmatter(plan_b, workstream="fixture-ambig-ws", slug="fixture-ambig-b")
+
+    # An unrelated, ambiguity-free plan lacking a plan_id.
+    plan_c = root / "docs" / "plans" / "2026-08-13-fixture-unrelated-c.md"
+    _write_frontmatter(plan_c, slug="fixture-unrelated-c")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+    assert rc == 2, "an ambiguous deliverable_id group must still fail loud (exit 2)"
+
+    # The deliverable_id write pass must be withheld for the ambiguous group...
+    assert extract_deliverable_id(str(plan_a), "plan") == ""
+    assert extract_deliverable_id(str(plan_b), "plan") == ""
+    # ...but the plan_id leg (per-file, no grouping/ambiguity concept) must
+    # still have run and stamped all three plans, unrelated group included.
+    assert extract_plan_id(str(plan_a), "plan").startswith("pln-")
+    assert extract_plan_id(str(plan_b), "plan").startswith("pln-")
+    assert extract_plan_id(str(plan_c), "plan").startswith("pln-")
+
+
+def test_archived_spec_sharing_workstream_with_differently_slugged_plan_is_ambiguous(tmp_path):
+    """P1: an archived-spec sharing a workstream key with a differently-
+    slugged plan must trip the ambiguity guard, not be silently collapsed
+    onto one deliverable_id via `_find_group_id`'s single-mint-per-group
+    logic. Before the fix, `group_corpus` only fed `group_plan_slugs` from
+    `artifact_class == "plan"`, so an archived-spec never contributed a slug
+    and this pairing sailed through undetected."""
+    root = tmp_path
+    plan = root / "docs" / "plans" / "2026-08-13-fixture-shared-ws-plan.md"
+    _write_frontmatter(plan, workstream="fixture-shared-ws", slug="fixture-shared-ws-plan")
+    spec = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-shared-ws-spec.md"
+    _write_frontmatter(spec, workstream="fixture-shared-ws", slug="fixture-shared-ws-spec")
+
+    out = io.StringIO()
+    rc = backfill_main(["--write", "--root", str(root)], out=out, err=io.StringIO())
+
+    assert rc == 2, "archived-spec + differently-slugged plan sharing a workstream must be ambiguous"
+    assert "fixture-shared-ws" in out.getvalue()
+    # Neither file may have been silently stamped with a shared id.
+    assert extract_deliverable_id(str(plan), "plan") == ""
+    assert extract_deliverable_id(str(spec), "archived-spec") == ""
+
+
+def test_two_archived_specs_sharing_workstream_with_distinct_slugs_is_ambiguous(tmp_path):
+    """P1 sibling case: TWO archived specs (no plan involved at all) sharing
+    a workstream key with distinct slugs must also trip the ambiguity
+    guard."""
+    root = tmp_path
+    spec_a = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-two-spec-a.md"
+    _write_frontmatter(spec_a, workstream="fixture-two-spec-ws", slug="fixture-two-spec-a")
+    spec_b = root / "archive" / "specs" / "2026-08" / "2026-08-01-fixture-two-spec-b.md"
+    _write_frontmatter(spec_b, workstream="fixture-two-spec-ws", slug="fixture-two-spec-b")
+
+    rc = backfill_main(["--write", "--root", str(root)], out=io.StringIO(), err=io.StringIO())
+
+    assert rc == 2, "two archived specs sharing a workstream with distinct slugs must be ambiguous"
+    assert extract_deliverable_id(str(spec_a), "archived-spec") == ""
+    assert extract_deliverable_id(str(spec_b), "archived-spec") == ""

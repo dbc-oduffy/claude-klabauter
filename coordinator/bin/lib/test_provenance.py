@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_provenance.py — regression tests for the provenance resolver.
 
 Covers `get_provenance_completeness`:

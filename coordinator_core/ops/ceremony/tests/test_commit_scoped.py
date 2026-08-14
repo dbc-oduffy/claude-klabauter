@@ -332,7 +332,7 @@ def test_red_proof_committing_from_shared_index_absorbs_peer_file(tmp_path):
     """Red-proof for the above two tests: forcing a plain `git commit -F
     msg` (no pathspec, straight from the SHARED index -- what a broken
     `commit_scoped` might degrade to) on the same fixture absorbs the
-    peer's staged file into the commit -- the coordinator-claude 726925b2 incident
+    peer's staged file into the commit -- the DoE-claude 726925b2 incident
     shape -- confirming the peer-file-never-absorbed assertions above are
     real constraints, not vacuous ones.
     """

@@ -4,7 +4,7 @@ coordinator_core.ops.engine_drift — JSON-RPC "engine.drift" operation.
 Purpose: a read-only drift PROBE for the running coordinator_core engine — compares the
 engine SHA actually executing (resolve_engine_sha(), engine_version.py) against the
 committed known-good floor (MIN_KNOWN_GOOD_SHA) and reports which of THREE states apply.
-Mirrors the offers-not-nags shape of coordinator-claude's check-plugin-drift.sh (adapted, not
+Mirrors the offers-not-nags shape of DoE-claude's check-plugin-drift.sh (adapted, not
 re-derived): silent when clean, an offer naming the concrete refresh action when behind,
 and — the one genuine correctness gap this op closes relative to a naive two-state
 behind/clean check — a DISTINCT notice when freshness cannot be verified at all.

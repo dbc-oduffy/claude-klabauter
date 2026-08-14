@@ -10,6 +10,7 @@ full contract this guards.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import git_hook_install as ghi  # noqa: E402
 from git_hook_install import _append_block, _ml_get, _shim_body  # noqa: E402
 
 
@@ -84,6 +86,35 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     assert body.count("[coordinator] WARNING: hook installed but") == 2
     assert body.count("commits are NOT being auto-pushed / annotated by this hook") == 2
+
+
+# ---------------------------------------------------------------------------
+# _HOOK_GEN_STAMP <-> emitted body shape coupling (AC3, plan
+# 2026-08-14-hook-currency-stops-resting-on-a-comment.md). A checksum over
+# `_shim_body`'s output for a fixed input pins TODAY's shape — the whole
+# point of this test is that it goes RED the moment `_shim_body` grows a new
+# rung (or drops one, or reorders a line) without `_HOOK_GEN_STAMP` in
+# git_hook_install.py being bumped alongside it. The failure message says
+# what to do, not merely that a checksum moved: bump the stamp, then update
+# _EXPECTED_BODY_SHAPE_CHECKSUM here to match.
+# ---------------------------------------------------------------------------
+
+_EXPECTED_BODY_SHAPE_CHECKSUM = "8a0054ffd368be34748c80233ff8db65ee9e040ea17670144844a76522387e34"
+
+
+def test_hook_gen_stamp_bump_is_required_for_shape_changes():
+    body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
+    checksum = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    assert checksum == _EXPECTED_BODY_SHAPE_CHECKSUM, (
+        f"_shim_body's emitted body shape changed (new checksum {checksum}) without a "
+        "matching bump of _HOOK_GEN_STAMP in coordinator/bin/lib/git_hook_install.py. "
+        "Fix: bump _HOOK_GEN_STAMP there, then update _EXPECTED_BODY_SHAPE_CHECKSUM in "
+        "this test (coordinator/bin/lib/test_git_hook_install.py) to the new checksum."
+    )
+    # The stamp line itself must actually be present in what was hashed —
+    # otherwise this checksum could go stale silently alongside a _shim_body
+    # that stopped emitting the stamp at all.
+    assert ghi._hook_gen_stamp_line() in body
 
 
 # ---------------------------------------------------------------------------

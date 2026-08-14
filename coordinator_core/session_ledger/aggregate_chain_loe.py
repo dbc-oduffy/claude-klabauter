@@ -11,7 +11,7 @@ visited, deduplicates by ``session_id``, and emits summed
 t-shirt. Consumed by ``/workstream-complete`` Step 2.6 on the chain-terminal
 path.
 
-Port of: aggregate-chain-loe.sh (coordinator-claude b644d5a9, 2026-07-22, 709 LoC bash)
+Port of: aggregate-chain-loe.sh (DoE b644d5a9, 2026-07-22, 709 LoC bash)
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 4
 Spec backlink: docs/plans/2026-06-29-handoff-lineage-dag-fan-in-fan-out.md § C2
 
@@ -24,7 +24,7 @@ aggregation per DR-014 effort-isolation, exactly as the bash oracle excludes it.
 
 Two callers into this module:
   - The CLI trampoline (``coordinator/bin/aggregate-chain-loe.py``,
-    coordinator-claude) calls this module's own ``main()`` directly, in-process —
+    DoE-claude) calls this module's own ``main()`` directly, in-process —
     this is a cold ceremony-only caller, so there is no daemon-RPC overhead
     to justify (mirrors ``regenerate-orientation-cache``'s trampoline shape,
     NOT ``cc_invoke()``/``route()``). A former extensionless sibling
@@ -72,7 +72,6 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.wire_paths import rel_id
 from coordinator_core.loe_thresholds import DEFAULT_THRESHOLDS, compute_tshirt, load_thresholds
-from coordinator_core.pickup_assemble import compute_repo_identity_gate
 from coordinator_core.session import core as _session_core
 from coordinator_core.session_ledger import SESSION_LEDGER_HEADING_RE as _SESSION_LEDGER_HEADING_RE
 from coordinator_core.state_root import StateRootError, coordinator_state_root
@@ -183,10 +182,10 @@ def resolve_state_root(coordinator_root: Path, cwd: Path) -> Path:
 
     Calls ``coordinator_core.state_root.coordinator_state_root()`` (Rule 4/5
     default) in-process — the already-landed native peer of
-    coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22; aggregate-chain-loe.sh's
+    coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22; aggregate-chain-loe.sh's
     own ``source coordinator-state-root.sh; STATE_ROOT="$(coordinator_state_root)"``).
     *coordinator_root* is unused by the native seam (it derives the
-    coordinator-claude/claude-klabauter roots via its own resolvers) and is retained only for call-site
+    DoE/claude-klabauter roots via its own resolvers) and is retained only for call-site
     compatibility with existing callers of this function.
 
     Review: code-reviewer — *cwd* is threaded explicitly to
@@ -206,7 +205,7 @@ def resolve_state_root(coordinator_root: Path, cwd: Path) -> Path:
     only when the native seam raises ``StateRootError`` — never silently
     returns a wrong-repo path.
     """
-    del coordinator_root  # unused: native seam self-resolves coordinator-claude/claude-klabauter roots
+    del coordinator_root  # unused: native seam self-resolves DoE/claude-klabauter roots
     try:
         git_root = resolve_repo_root(cwd)
         out = coordinator_state_root(git_root=str(git_root))
@@ -966,10 +965,10 @@ def resolve_thresholds(thresholds_path: Optional[Union[str, Path]]) -> List[Dict
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point — consumed in-process by the coordinator-claude-side CLI trampoline
+# CLI entry point — consumed in-process by the DoE-side CLI trampoline
 # (coordinator/bin/aggregate-chain-loe.py). Byte-parity with the retired
 # bash oracle's own arg-parsing / help text / exit-code convention
-# (coordinator-claude b644d5a9, 2026-07-22).
+# (DoE b644d5a9, 2026-07-22).
 # ---------------------------------------------------------------------------
 
 _HELP_TEXT = """Usage: aggregate-chain-loe.sh --terminal-handoff <path> [OPTIONS]
@@ -1100,6 +1099,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # `chain_walk_terminated_early`-adjacent yaml/json `gates.repo_identity`
     # entry emitted below, never a silent pass. MATCH records the same way.
     sid = _session_core.resolve_session_id() or None
+    # Deferred: pickup_assemble <-> ops-eager-import forms a cycle when
+    # pickup_assemble is imported before ops walks this module, silently
+    # dropping this module's op registration (see ops/__init__.py's
+    # "FAILED to import" warning) — a module-level import here regresses
+    # that. Lazy, function-local import breaks the cycle at call time.
+    from coordinator_core.pickup_assemble import compute_repo_identity_gate
     repo_identity_gate = compute_repo_identity_gate(git_root, sid)
     if repo_identity_gate["verdict"] == "MISMATCH":
         print(f"Error: {repo_identity_gate['message']}", file=sys.stderr)

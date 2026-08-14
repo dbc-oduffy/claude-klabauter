@@ -1,13 +1,13 @@
 """
 coordinator_core.ops.query_completions — Port of: query-completions.sh
-(coordinator-claude b5a4192c, 2026-07-20) (DOE-PORT R1, variant #1 — direct-import trampoline, no registered op).
+(DoE b5a4192c, 2026-07-20) (DOE-PORT R1, variant #1 — direct-import trampoline, no registered op).
 
 Purpose: thin CLI wrapper over the native records-query seam
 (``coordinator_core.ops.ceremony.records_query.query_records``) with
 ``record_type="completion"`` pre-set.
 
 Node-subprocess retirement: this module originally shelled out to the co-located
-Coordinator-claude ``query-records.js`` (``subprocess.run([*resolve_launchable(...), "--type",
+DoE ``query-records.js`` (``subprocess.run([*resolve_launchable(...), "--type",
 "completion", *argv])``, inheriting stdout). It now calls ``ceremony.records_query
 .query_records`` in-process — no ``node`` binary, no subprocess spawn, no
 ``resolve_launchable``/``_script_dir`` co-location lookup. Only the flag surface

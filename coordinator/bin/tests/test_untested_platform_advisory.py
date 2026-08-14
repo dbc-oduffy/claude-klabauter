@@ -21,7 +21,7 @@ wiring (I/O + stdout + exit code) matches.
 
 Converted from a hand-rolled unittest runner to top-level pytest functions.
 
-Spec backlink: docs/plans/2026-07-20-tested-platforms-teeth-windows-honest.md § C4
+Spec backlink: DoE-claude:pln-platform-verified-is-a-distinc-a076aa § C4
 """
 from __future__ import annotations
 

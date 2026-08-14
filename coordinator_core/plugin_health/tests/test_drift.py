@@ -1,7 +1,7 @@
 """
 coordinator_core.plugin_health.tests.test_drift
 
-Pytest port of coordinator-claude coordinator/bin/check-plugin-drift.test.sh — the Leg-3
+Pytest port of DoE-claude coordinator/bin/check-plugin-drift.test.sh — the Leg-3
 working-tree-root regression net pinning fix d82ba601 + follow-up 9acb8ab9:
 `git -C <live_path> status` on a data-only live path NESTED inside a parent git
 repo (no nested .git, e.g. Example-retrieval-repo's ~/.claude/plugins/example-retrieval-repo) used to
@@ -25,8 +25,8 @@ behavior deltas from the port, not ports of existing bash coverage):
     falling through to a stale-ref comparison, while still returning the
     stale-ref-derived verdict rather than crashing.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g2
-Port of: check-plugin-drift.test.sh (coordinator-claude 15f58741, 2026-07-16)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g2
+Port of: check-plugin-drift.test.sh (DoE 15f58741, 2026-07-16)
 """
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """tests/test_handoff_has_live_children.py — Tests for bin/handoff-has-live-children.py.
 
 Native-Python successor to the retired test-handoff-has-live-children.bats harness

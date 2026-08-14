@@ -1,5 +1,5 @@
 """coordinator_core.bash_guards.dispatch -- naked-Python PreToolUse(Bash)
-dispatcher. Python port of coordinator-claude's ``coordinator/hooks/scripts/
+dispatcher. Python port of DoE's ``coordinator/hooks/scripts/
 preuse-bash-dispatch.sh``, per the W3a/W3b naked-Python hook migration recipe
 (scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md
 Sec(c)).
@@ -57,13 +57,13 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      confinement, which outrank a machine-load deny. Supersedes
      ``nudge_subagent_scoped_commit`` (formerly position 6, RETIRED here).
  5b. check_test_suite_invocation           (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-23 for coordinator-claude's DR-088 test-breadth ladder.
+     bash predecessor; added 2026-07-23 for DoE's DR-088 test-breadth ladder.
      It has no parity ordering to preserve, so it sits at the tail of the
      hard-deny run: every guard above it protects git history or an identity
      confinement, both of which outrank a machine-load deny when two would
      fire on the same command.
  5c. check_raw_pid_liveness                (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-27 (coordinator-claude C14/RAW-PID-LIVENESS-GUARD) to
+     bash predecessor; added 2026-07-27 (DoE C14/RAW-PID-LIVENESS-GUARD) to
      close the RAW-PID-LIVENESS tripwire's long-standing "forthcoming"
      mechanical-enforcement tier. Not identity-gated (unlike 5/5a/5b above,
      it fires on EVERY caller including the EM -- the raw-pid liveness
@@ -71,7 +71,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      ordering to preserve, so it sits at the very tail: nothing above it
      shares its detection surface.
  5d. block_worktree_creation                (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-28 (coordinator-claude, fleet-wide structural
+     bash predecessor; added 2026-07-28 (DoE-claude, fleet-wide structural
      git-worktree ban, main-loop leg). Not identity-gated, same posture as
      5c: `block_subagent_destructive_action` (5) already denies `git
      worktree add` but ONLY for a resolved subagent, leaving the main-loop
@@ -81,7 +81,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      `git worktree <subcommand>`, never on the destructive-action cohort's
      broader git/rm/chmod surfaces).
  5e. block_approval_sentinel_creation       (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-28 (coordinator-claude, doctrine-approval
+     bash predecessor; added 2026-07-28 (DoE-claude, doctrine-approval
      sentinel un-creatable-by-agent guard). Not identity-gated, same
      posture as 5c/5d -- the EM is exactly who this sentinel exists to
      constrain, so an EM exemption would defeat its own purpose. Registered
@@ -89,7 +89,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      short-circuit reason (see its own registration comment above and its
      module docstring "REGISTRATION ORDERING").
  5f. block_worktree_sentinel_creation       (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-28 (coordinator-claude, closing a confirmed
+     bash predecessor; added 2026-07-28 (DoE-claude, closing a confirmed
      security hole: the git-worktree ban's own override sentinel,
      `.coordinator-override-worktree-guard`, was creatable via Bash `touch`/
      redirection/etc, reintroducing the exact agent-self-grant that guard's
@@ -100,7 +100,7 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      `_sentinel_creation_guard.SentinelCreationDetector`, parameterized on a
      different target basename.
  5g. block_stash_destruction                (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-30 (coordinator-claude) as the main-loop leg of
+     bash predecessor; added 2026-07-30 (DoE-claude) as the main-loop leg of
      the `git stash drop`/`clear` ban. Entry 5 already classifies both verbs
      as a deny, but its identity gate fails OPEN when no subagent resolves,
      so an EM-typed `git stash drop` was allowed -- and the EM is the caller
@@ -205,7 +205,7 @@ a shared namespace) AND, within ``dispatch_checks.py``, by every
 ``dispatch_checks._override()``, called fresh at every site, never hoisted to
 module scope.
 
-Port of: preuse-bash-dispatch.sh (coordinator-claude 2f8b8450, 2026-07-16)
+Port of: preuse-bash-dispatch.sh (DoE 2f8b8450, 2026-07-16)
 Spec backlink: scratch/subagent-sandbox/bash-to-python-migration/
 W3a-preuse-bash-recipe.md Sec(c)
 """
@@ -554,8 +554,8 @@ _RESOLUTION_CLASS_PHRASES: Dict[str, str] = {
     "live-working-tree": "live working tree",
     "unresolved": "unresolved",
 }
-"""Human-readable phrases for coordinator-claude's opaque ``resolution_class`` strings, used
-ONLY to render the crash-deny envelope. The three keys are owned by coordinator-claude's
+"""Human-readable phrases for DoE's opaque ``resolution_class`` strings, used
+ONLY to render the crash-deny envelope. The three keys are owned by DoE's
 ``coordinator/hooks/scripts/preuse-bash-dispatch.py``/``_engine_root`` and
 are treated as opaque here -- nothing is imported from that repo, and any
 value absent from this mapping (``None`` included) renders no engine note at
@@ -652,7 +652,7 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
     is demonstrable per guard.
 
     ``resolution_class`` (cross-plane signal, 2026-08-05): the opaque engine-
-    resolution class coordinator-claude's ``preuse-bash-dispatch.py`` computes via its own
+    resolution class DoE's ``preuse-bash-dispatch.py`` computes via its own
     ``_engine_root.resolve_claude_klabauter_root_with_class()`` and feature-detects onto
     ``evaluate_payload_json`` -- see that function's own parameter. Threaded
     here so the deny envelope can name WHICH ENGINE crashed, which matters
@@ -663,7 +663,7 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
     ``live-working-tree`` is a legitimate, expected state on a co-development
     machine, not an error condition; naming it turns an invisible default
     into a visible, deliberate one. Unknown or absent values (``None``, or any
-    string this function does not recognize -- coordinator-claude's three values are treated
+    string this function does not recognize -- DoE's three values are treated
     as opaque and forward-compatible, never imported) degrade silently: the
     envelope reads EXACTLY as it did before this parameter existed, never a
     partial phrase like "engine: None".
@@ -846,7 +846,7 @@ def evaluate_payload_json(
     Mirrors the bash dispatcher stdin-read-once + `[ -z "$INPUT" ] && exit 0`
     + non-Bash-tool-name early exit + CRLF-normalize-once discipline.
 
-    ``policy_file`` (C5a/C6, 2026-07-27): the explicit path to coordinator-claude's
+    ``policy_file`` (C5a/C6, 2026-07-27): the explicit path to DoE's
     ``subagent-sandbox-policy.yaml``, computed by the calling
     ``preuse-bash-dispatch.py`` the same way ``enforce-agent-dispatch-
     mode.py`` already does for its own subprocess call
@@ -904,14 +904,14 @@ def evaluate_payload_json(
     commands no cohort-A guard even inspects today.
 
     ``resolution_class`` (cross-plane signal, 2026-08-05): opaque engine-
-    resolution class computed by coordinator-claude's ``coordinator/hooks/scripts/preuse-
+    resolution class computed by DoE's ``coordinator/hooks/scripts/preuse-
     bash-dispatch.py`` (its own ``_engine_root.resolve_claude_klabauter_root_with_
     class()``) and feature-detected onto this function via ``inspect.
     signature(evaluate_payload_json).parameters`` -- that caller passes it
     ONLY if this parameter is present in the signature, so its mere
     existence here is the contract, independent of what any caller actually
-    sends. One of three coordinator-claude-owned opaque strings (``"resolved-engine"``,
-    ``"live-working-tree"``, ``"unresolved"``); never imported from coordinator-claude's
+    sends. One of three DoE-owned opaque strings (``"resolved-engine"``,
+    ``"live-working-tree"``, ``"unresolved"``); never imported from DoE's
     repo, only compared against ``_RESOLUTION_CLASS_PHRASES``' keys.
     Forwarded ONLY to ``_crash_deny`` (via the fail-closed branch below), so
     it changes what a crash's deny envelope SAYS, never any allow/deny
@@ -1668,7 +1668,7 @@ def _build_guard_chain(
         # rewrite to be capable of shadowing it, it only needs to sit after
         # it in registration order.
         #
-        # C4, docs/plans/2026-08-02-write-confinement-guards.md (coordinator-claude
+        # C4, docs/plans/2026-08-02-write-confinement-guards.md (DoE-claude
         # repo) -- the Bash-surface CROSS-REPO write-confinement speed bump.
         # THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY (see that plan's
         # "Design posture -- passable by construction"); every attribute
@@ -1729,7 +1729,7 @@ def _build_guard_chain(
             # coverage gain.
             matchers=COMMAND_TOOL_NAMES,
         ),
-        # C5, docs/plans/2026-08-02-write-confinement-guards.md (coordinator-claude
+        # C5, docs/plans/2026-08-02-write-confinement-guards.md (DoE-claude
         # repo) -- the Bash-surface OUTSIDE-repo write-confinement speed
         # bump, C4's sibling: fires when a plain-bash write-sink TARGET
         # resolves under NO git root at all (C4 fires when it resolves
@@ -1841,16 +1841,16 @@ def _build_guard_chain(
         # 2. block-illegal-filename.sh (cohort 1, Bash leg, advisory).
         GuardEntry("block-illegal-filename", lambda: _check_illegal_filename(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_illegal_filename)),
         # 5b. check-test-suite-invocation -- no legacy bash predecessor (new
-        # 2026-07-23, coordinator-claude DR-088 layers 1/2/6). Positioned at the TAIL of the
+        # 2026-07-23, DoE DR-088 layers 1/2/6). Positioned at the TAIL of the
         # hard-deny cohort-1 run rather than interleaved: it has no parity
         # ordering to preserve, and every guard above it protects git history
         # or an identity confinement, which outrank a machine-load deny when
         # two would fire on the same command.
         # 5c. check-raw-pid-liveness -- no legacy bash predecessor (new
-        # 2026-07-27, coordinator-claude C14/RAW-PID-LIVENESS-GUARD). Not identity-gated
+        # 2026-07-27, DoE C14/RAW-PID-LIVENESS-GUARD). Not identity-gated
         # (fires on every caller, EM included -- see its module docstring);
         # has no parity ordering to preserve, so it sits at the very tail.
-        # BX-16 (coordinator-claude docs/plans/2026-07-29-windows-viability-stop-the-spawn-
+        # BX-16 (DoE docs/plans/2026-07-29-windows-viability-stop-the-spawn-
         # storms.md) -- generalises offer-git-c's rewrite seam from
         # cd-over-git to bash-over-op. Registered at the very TAIL,
         # deliberately after every hard-deny above (including the two
@@ -1871,7 +1871,7 @@ def _build_guard_chain(
         GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         # BX-7/BX-8's missing rewrite targets, closing the two-shape gap this
-        # dispatch was sent to close (coordinator-claude docs/plans/2026-07-29-windows-
+        # dispatch was sent to close (DoE docs/plans/2026-07-29-windows-
         # viability-stop-the-spawn-storms.md, row BX-16): MULTI_PROBE_BANNER
         # (40.1% of forks) and HEAD_TAIL_PLUMBING (25%) had no rewrite target
         # in this section until now. Registered at the tail, after every

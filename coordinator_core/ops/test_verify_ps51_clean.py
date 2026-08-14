@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.verify_ps51_clean.
 
-Port of: verify-ps51-clean.sh (coordinator-claude b5a4192c, 2026-07-20), DOE-PORT BIG_PORT
+Port of: verify-ps51-clean.sh (DoE b5a4192c, 2026-07-20), DOE-PORT BIG_PORT
 wave A. PS 5.1 engine invocation (`parse_with_ps51`) is monkeypatched in every
 test that needs a specific parse outcome — this suite runs identically on any
 platform, with or without a real `powershell.exe` on PATH.

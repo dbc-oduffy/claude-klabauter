@@ -36,7 +36,7 @@ registry.local.toml wins per key, tracked registry.toml fills gaps — replaces 
 first-FILE-wins read under which a plugin registered only in the tracked file was
 invisible whenever a registry.local.toml existed.
 
-Port of: list-reverse-drift-cmds.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: list-reverse-drift-cmds.sh (DoE b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 Spec backlink: docs/plans/2026-05-28-reverse-drift-gate-meta-repo-coverage.md §Chunk 3
 

@@ -2,7 +2,7 @@
 more than one ceremony-close computed-skill assembler (`workday_complete`,
 `workweek_complete`, and future siblings).
 
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C5
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54, chunk C5
 """
 
 from __future__ import annotations

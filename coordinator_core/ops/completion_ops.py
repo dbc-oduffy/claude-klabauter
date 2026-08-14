@@ -3,9 +3,9 @@ coordinator_core.ops.completion_ops — in-place mutators for completion-entry c
 reconciliation and plan session appending.
 
 Purpose: Port of two completion/plan ceremony writers:
-  completion.reconcile_commits ← reconcile-completion-commits.sh (coordinator-claude 432e3285, 2026-07-22)
+  completion.reconcile_commits ← reconcile-completion-commits.sh (DoE 432e3285, 2026-07-22)
                                   (--append mode write logic)
-  plan.append_session          ← append-plan-session.sh (coordinator-claude 2737ca3d, 2026-07-19)
+  plan.append_session          ← append-plan-session.sh (DoE 2737ca3d, 2026-07-19)
 
 Each mutates a caller-supplied entry in-place:
   - ``completion.reconcile_commits``: folds missing session SHAs into a completion entry's
@@ -24,9 +24,9 @@ existing plan content. Read-modify-write to a temp file + atomic ``os.replace`` 
 
 Byte-parity targets (``--append`` mode write logic only):
   completion.reconcile_commits:
-    ``reconcile-completion-commits.sh`` (coordinator-claude 432e3285, 2026-07-22, awk write pass)
+    ``reconcile-completion-commits.sh`` (DoE 432e3285, 2026-07-22, awk write pass)
   plan.append_session:
-    ``append-plan-session.sh`` (coordinator-claude 2737ca3d, 2026-07-19, mapfile/printf write pass)
+    ``append-plan-session.sh`` (DoE 2737ca3d, 2026-07-19, mapfile/printf write pass)
 
 MUTATING ops (DR-208 §2): write coordinator substrate directly — ``archive/completed/**/*.md``
 or ``docs/plans/*.md`` completion sections (see per-op noun table above). NEVER writes
@@ -122,6 +122,13 @@ DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carve
 """
 
 from __future__ import annotations
+
+# Generator-provenance declaration: completion.reconcile_commits /
+# plan.append_session mutate a caller-supplied entry in place under
+# archive/completed/**/*.md or docs/plans/*.md -- a data-dependent set of
+# already-tracked files matching a predicate (which completion entry /
+# which plan), not a fixed artifact.
+MUTATES = ["archive/completed/**/*.md", "docs/plans/*.md"]
 
 import asyncio
 import datetime
@@ -976,7 +983,7 @@ def reconcile_completion_commits(
         "provenance_warning": <str|None>}`` (oracle's ``delta=0 OK`` path — the
         id-provenance-mismatch probe fires here, never blocking).
 
-    dry_run (read-only mode, added to unblock coordinator-claude's detect-only facade branch —
+    dry_run (read-only mode, added to unblock DoE-claude's detect-only facade branch —
     docs/plans referenced in the op's producer notes): when True, every git-resolution
     and delta-computation step still runs in full (identical to the apply path), but the
     mutation region — ``_apply_commits_fold`` / ``tempfile.mkstemp`` / ``os.replace`` — is
@@ -1417,7 +1424,7 @@ async def _reconcile_commits_handler(
         dry_run (bool, optional) — DEFAULTS TO FALSE. This DIVERGES deliberately from
             handoff.reconcile_open's default-True dry_run: that op is an autonomous
             policy sweep, this op is caller-invoked with an explicit plan_path and
-            already has coordinator-claude-side callers (``--append``) that rely on writes happening
+            already has DoE-side callers (``--append``) that rely on writes happening
             by default — defaulting True here would silently stop every existing
             append caller from writing. When True, computes the full delta (identical
             git resolution to the apply path) but performs ZERO writes — no
@@ -1431,7 +1438,7 @@ async def _reconcile_commits_handler(
         REOPENED path, {merge_base_unresolved, provenance_warning, chain_session_ids,
         resolution_warnings}. ``delta_shorts`` is populated unconditionally (both
         dry-run and apply paths) so a dry-run caller can reproduce the apply path's
-        output contract (see coordinator-claude's reconcile-completion-commits.sh detect-only branch,
+        output contract (see DoE's reconcile-completion-commits.sh detect-only branch,
         which this dry_run mode exists to let that facade eventually collapse onto).
 
     ``repo_root`` is provided by the IPC engine (``_OP_KEY_SCOPE: common_dir``) and, since
@@ -1612,7 +1619,7 @@ async def _append_session_handler(
 # ---------------------------------------------------------------------------
 # completion.flip_to_released — per-entry release-tag resolution + frontmatter flip
 # ---------------------------------------------------------------------------
-# Byte-parity oracle: [coordinator-claude] coordinator/skills/merging-to-main/SKILL.md
+# Byte-parity oracle: [DoE-claude] coordinator/skills/merging-to-main/SKILL.md
 # § Step 1.65 item 3's python3 -<<'PYEOF' block. Contract provisional — see module docstring.
 # ---------------------------------------------------------------------------
 
@@ -2052,7 +2059,7 @@ _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: carrying this subject IN THIS TREE was produced by a SIBLING repo's engine
 #: committing across the tree boundary: claude-klabauter's own sends land in the
 #: receiver's tree, never here, so the sender slug is by construction foreign
-#: (empirically: claude-central-em, coordinator-claude-em, example-cockpit-repo-em,
+#: (empirically: claude-central-em, doe-claude-em, example-cockpit-repo-em,
 #: example-retrieval-repo-em, example-market-data-repo-em, example-retrieval-repo-ue-addon-em,
 #: example-game-repo-em, example-store-repo-em — never a claude-klabauter slug across all 602
 #: delivery commits in history).
@@ -2065,7 +2072,7 @@ _FOREIGN_DELIVERY_SUBJECT_RE = re.compile(r"^cross-repo: deliver .+ memo from \S
 _FOREIGN_DELIVERY_PATH_PREFIX = "cross-repo/inbox/"
 
 #: Registry key prefix under which the machine-local registry declares every
-#: fleet repo root it knows (``"repos.example_doctrine_repo" = '/Users/…/coordinator-claude'``).
+#: fleet repo root it knows (``"repos.doe_claude" = '/Users/…/DoE-claude'``).
 #: Read through ``machine_resolver`` — the sanctioned cross-repo path-resolution
 #: substrate — never a hardcoded sibling path or a ``__file__``-relative walk.
 _REGISTRY_REPO_KEY_PREFIX = "repos."
@@ -2119,8 +2126,8 @@ def _sibling_homed_session_ids(
     ``state/subagent-share/<session-id>/`` directory, a
     ``state/ceremony/<kind>/<session-id-prefix>-<stamp>.json`` record — in the
     repo it is homed in, i.e. the tree it was launched against. A session homed
-    in coordinator-claude that commits into claude-klabauter's tree therefore leaves those
-    artifacts in coordinator-claude's tree, not here. Since completion entries are single-repo
+    in DoE-claude that commits into claude-klabauter's tree therefore leaves those
+    artifacts in DoE's tree, not here. Since completion entries are single-repo
     by construction (``completion.reconcile_commits`` enumerates a session's
     commits via ``git log --grep`` against ``main_worktree_root(repo_root)``
     only, and an entry is written at the session's own workstream-complete in

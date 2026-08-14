@@ -15,7 +15,7 @@ target file (any shape) is never clobbered. Shares C1/C2's enumeration
 fixture substrate (same registry + manifest helpers) since D1 and D4 walk the
 same present-sibling list.
 
-Spec backlink: docs/plans/2026-07-16-seed-marketplace-enabledplugins-at-install.md
+Spec backlink: DoE-claude:pln-seed-marketplace-sibling-enabl-4806a8
   § C2 — AC1, AC2, AC3, AC4, AC5, AC8. § C7 — AC9.
 
 Tests:

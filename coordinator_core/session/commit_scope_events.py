@@ -53,7 +53,7 @@ Negative-spec:
     lock backend) is swallowed. An instrumentation bug must never become a
     commit outage.
   - Do NOT read, aggregate, or resurrect ``scope-warnings.log``'s
-    ``resolution`` column — coordinator-claude ruled it an inert placeholder (2026-08-04).
+    ``resolution`` column — DoE ruled it an inert placeholder (2026-08-04).
     This JSONL sits ALONGSIDE that log; neither reads nor modifies it.
   - Writes go ONLY under ``.git/coordinator-sessions/``. (``locked_rmw``'s
     own lock sidecar lives under the git common dir's ``coordinator-locks/``

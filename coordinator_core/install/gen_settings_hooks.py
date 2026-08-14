@@ -1,8 +1,8 @@
 """
 coordinator_core.install.gen_settings_hooks — settings.json hooks-block generator.
 
-Port of: ``coordinator/bin/gen-settings-hooks.sh`` (coordinator-claude a2078a9b, 2026-07-22)
-[coordinator-claude repo]. Purpose (unchanged from bash): read ``coordinator/hooks/hooks.json``
+Port of: ``coordinator/bin/gen-settings-hooks.sh`` (DoE a2078a9b, 2026-07-22)
+[DoE-claude repo]. Purpose (unchanged from bash): read ``coordinator/hooks/hooks.json``
 and emit/merge a settings.json ``hooks`` block where:
 
   - ONLY ``type=='command'`` entries WITH ``${CLAUDE_PLUGIN_ROOT}`` in their
@@ -76,11 +76,11 @@ output on re-run); ``--out`` param; fail-loud on generator business errors.
 
 Port backlink: docs/plans/2026-07-16-clean-slate-residual-migration.md
     (BIG_PORT Wave B, item gen-settings-hooks).
-Spec backlink: docs/plans/2026-07-04-doe-maximalist-execution-plugin-dir.md § M1
+Spec backlink: DoE-claude:pln-doe-maximalist-execution-plugi-6d808d § M1
 Mechanism: coordinator/docs/wiki/external-plugin-live-resolution.md
-    § Hook-delivery — SOLVED via settings.json [coordinator-claude repo]
+    § Hook-delivery — SOLVED via settings.json [DoE-claude repo]
 
-Double-fire refusal (added 2026-07-29, coordinator-claude dispatch
+Double-fire refusal (added 2026-07-29, DoE-claude dispatch
 state/subagent-share/78b683cd-1b62-4a25-904d-954cb3c69412/
 coordinatorexecutor-ba51c36f.md): ``hooks.json`` is the sole input to BOTH
 delivery surfaces this generator can produce — everything this generator can
@@ -129,8 +129,8 @@ Negative-spec (faithful bash-oracle reproduction, NOT a fix):
     resolution (when ``--coordinator-root`` is not given) delegates to
     :func:`coordinator_core.install._shared.resolve_coordinator_root`,
     which is a strict SUPERSET of the bash oracle's own resolution order.
-    The bash oracle only tried ``machine-local get repos.example_doctrine_repo`` then
-    ``$REPO_EXAMPLE_DOCTRINE_REPO`` before failing loud; the shared helper additionally
+    The bash oracle only tried ``machine-local get repos.doe_claude`` then
+    ``$REPO_DOE_CLAUDE`` before failing loud; the shared helper additionally
     tries an explicit ``$COORDINATOR_ROOT`` env var first and a
     ``${CLAUDE_HOME:-$HOME}/.doe-root`` pointer file as a final fallback
     before failing loud. Every input that resolved under the bash oracle
@@ -174,6 +174,12 @@ from coordinator_core.install.write_surface import (
 from coordinator_core.ops.session.guard_settings_integrity import (
     detect_hook_delivery_duplication,
 )
+
+# Generator-provenance declaration (generator_provenance.py). generate()
+# writes the operator's ~/.claude/settings.json hooks block (out_path resolved
+# outside this repo per install.md contract §3.5c) and a consent marker file
+# under the operator's settings-home -- never a tracked claude-klabauter artifact.
+GENERATES = []
 
 # ---------------------------------------------------------------------------
 # helpers — CPR (${CLAUDE_PLUGIN_ROOT}) filter/rewrite
@@ -341,7 +347,7 @@ def _usage_text() -> str:
         "  -h, --help                Show this help\n"
         "\n"
         "Environment:\n"
-        "  REPO_EXAMPLE_DOCTRINE_REPO           Fallback if machine-local get repos.example_doctrine_repo fails\n"
+        "  REPO_DOE_CLAUDE           Fallback if machine-local get repos.doe_claude fails\n"
         "\n"
         "Exit codes:\n"
         "  0  success (including operator-kill-switch no-op)\n"
@@ -732,7 +738,7 @@ def generate(
 
     ``"skipped (clone absent)"`` is a SOFT skip (no exception, generate()
     returns normally, exit 0) — this mirrors the retired bash trampoline's
-    own ``else`` branch ("coordinator-claude clone not resolved — complete step 3.5a
+    own ``else`` branch ("DoE clone not resolved — complete step 3.5a
     first"), which never set a non-zero rc either. It applies ONLY when NO
     explicit ``coordinator_root_override`` was given and the registry/env/
     pointer-file resolution chain (``resolve_coordinator_root()``) itself

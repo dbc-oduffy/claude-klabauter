@@ -9,8 +9,8 @@ rendered each direct-mode initiative as a human-readable "advances initiative"
 line) has been fully ported to
 coordinator_core/ops/coordinator_render_rollup.py (co-located
 test_coordinator_render_rollup.py) per the R2-R6 clean-slate residual
-migration. This file is now a thin coordinator-claude-side (contract) trampoline over that
-Claude-klabauter (engine) module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns
+migration. This file is now a thin DoE-side (contract) trampoline over that
+Claude-klabauter (engine) module, per DR-047 (DoE owns contract/generator, claude-klabauter owns
 engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -20,8 +20,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Exit convention — never-block (auto-push shape), NOT fail-loud: this is a

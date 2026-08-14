@@ -7,7 +7,7 @@ WHY THIS EXISTS
     repair it (Write, Edit, Bash) are exactly the tools the break disables. A
     guard that runs through the tool it guards can detect a break but never
     repair it — see `docs/plans/2026-07-29-windows-viability-stop-the-spawn-
-    storms.md` row WS-9 and coordinator-claude `state/2026-07-29-deleted-hook-scripts-
+    storms.md` row WS-9 and DoE-claude `state/2026-07-29-deleted-hook-scripts-
     bricked-every-write.md`. This module's PRIMARY invocation is a plain
     terminal (`python3 <this-repo>/coordinator/bin/doctor.py`, or the paired
     `doctor.cmd` on Windows) with NO Claude Code process involved, so a session
@@ -21,12 +21,12 @@ AUDIENCE
 
 LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list)
     1. Sibling resolution     — can this machine resolve claude-klabauter's own
-       root and coordinator-claude's root via the settings-home ladder? (the same
+       root and DoE-claude's root via the settings-home ladder? (the same
        resolution every coordinator bin/ trampoline depends on.)
     2. Hook registration      — every `coordinator/hooks/hooks.json` command
-       (coordinator-claude side) resolves to a script that exists on disk, and reports
+       (DoE-claude side) resolves to a script that exists on disk, and reports
        whether it routes through the fail-open launcher
-       (`coordinator/hooks/fail_open_launcher.py`, coordinator-claude 7e5b546a9) or is a bare
+       (`coordinator/hooks/fail_open_launcher.py`, DoE 7e5b546a9) or is a bare
        command that would brick every tool call if its target ever goes
        missing. Also inspects a `hooks` block inside `~/.claude/settings.json`
        itself, if one is present — WS-12 has not yet decided whether the
@@ -47,7 +47,7 @@ LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list)
 REPAIR POSTURE — what this command fixes vs. only reports, and why
     Exactly one layer is auto-repairable, and only when `--fix` is passed
     (never on a bare read): layer 2's BARE (non-fail-open-wrapped) hook
-    command entries in coordinator-claude's `coordinator/hooks/hooks.json`. This is
+    command entries in DoE-claude's `coordinator/hooks/hooks.json`. This is
     safe because (a) `hooks.json` is not the bidirectionally-synced file —
     `~/.claude/settings.json` is, and this doctor never writes that one — and
     (b) the wrap is idempotent and already covered by the fail_open_launcher
@@ -63,7 +63,7 @@ REPAIR POSTURE — what this command fixes vs. only reports, and why
     not be evaluated (unresolvable sibling root, unreadable hooks.json, etc.)
     reports itself as UNKNOWN, distinct from OK.
 
-Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md WS-9 / AC-28
+Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 WS-9 / AC-28
 """
 
 from __future__ import annotations
@@ -81,6 +81,11 @@ from coordinator_core.session.declared_writes import declare_write
 _HOOK_SEAM_MARKER = "COORDINATOR HOOK SEAM"
 _PLUGIN_ROOT_TOKEN = "${CLAUDE_PLUGIN_ROOT}"
 _HOOKS_DISABLED_MARKER_NAME = ".coordinator-hooks-disabled"
+
+# Generator-provenance: the only auto-repair write (--fix, layer 2) targets
+# DoE-claude's coordinator/hooks/hooks.json -- a sibling repo's tree, never
+# claude-klabauter's own.
+GENERATES = []
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +217,8 @@ def _check_sibling_resolution() -> Layer:
         findings.append(
             Finding(
                 "broken",
-                "coordinator-claude root did not resolve — set it via "
-                "'machine-local set repos.example_doctrine_repo <path>', or repair the "
+                "DoE-claude root did not resolve — set it via "
+                "'machine-local set repos.doe_claude <path>', or repair the "
                 "'.doe-root' pointer under the settings-home machine-local dir.",
             )
         )
@@ -222,12 +227,12 @@ def _check_sibling_resolution() -> Layer:
         findings.append(
             Finding(
                 "broken",
-                f"resolved coordinator-claude root '{doe_root}' has no "
+                f"resolved DoE-claude root '{doe_root}' has no "
                 "coordinator/hooks/hooks.json — wrong path or partial checkout.",
             )
         )
 
-    return Layer("Sibling repo resolution (claude-klabauter + coordinator-claude)", status, findings)
+    return Layer("Sibling repo resolution (claude-klabauter + DoE-claude)", status, findings)
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +316,7 @@ def _check_hook_registration() -> Layer:
         findings.extend(doc_findings)
     else:
         statuses.append("unknown")
-        findings.append(Finding("broken", "hooks.json: cannot check — coordinator-claude root unresolved."))
+        findings.append(Finding("broken", "hooks.json: cannot check — DoE-claude root unresolved."))
 
     settings_path = _config_dir() / "settings.json"
     status, doc_findings, present = _check_one_hooks_doc(
@@ -337,7 +342,7 @@ def _check_hook_registration() -> Layer:
 
 
 def _fix_bare_hook_commands(fix_report: List[str]) -> None:
-    """--fix action: wrap every bare (unwrapped) command in coordinator-claude's
+    """--fix action: wrap every bare (unwrapped) command in DoE-claude's
     hooks.json via the real, already-tested fail_open_launcher.wrap_command —
     imported from its actual source location rather than re-derived here, so
     this command shares the exact same wrapping logic the rest of the fleet
@@ -348,7 +353,7 @@ def _fix_bare_hook_commands(fix_report: List[str]) -> None:
 
     doe_root = coordinator_doe_root()
     if not doe_root:
-        fix_report.append("--fix: skipped hooks.json wrap — coordinator-claude root unresolved.")
+        fix_report.append("--fix: skipped hooks.json wrap — DoE-claude root unresolved.")
         return
 
     hooks_json_path = Path(doe_root) / "coordinator" / "hooks" / "hooks.json"

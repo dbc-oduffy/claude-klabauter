@@ -10,7 +10,7 @@ blind.
 
 Run: python -m pytest coordinator_core/review_assemble/test_residue.py -q
 
-Spec backlink: docs/plans/2026-07-26-review-skill-computed-residue.md, chunk C5
+Spec backlink: DoE-claude:pln-review-skill-computed-residue--db84bf, chunk C5
 """
 from __future__ import annotations
 

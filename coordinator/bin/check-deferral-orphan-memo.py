@@ -12,7 +12,7 @@ only -- the op is owned and invoked by claude-klabauter's coordinator_core packa
 this script never writes anything, it only invokes and renders. Same
 template as check-engine-drift.py (R1 DOE-PORT template Section 4): a pure
 CLI-rendering veneer with no legacy body to strangle, reusing the EXISTING
-Coordinator-claude-side Python transport, coordinator/bin/lib/cc_invoke.py's cc_invoke().
+DoE-side Python transport, coordinator/bin/lib/cc_invoke.py's cc_invoke().
 
 Invoke contract (via cc_invoke.cc_invoke("deferral.detect_orphan_memo", {},
 repo_root)): Returns the bare `result` dict on success:
@@ -55,7 +55,7 @@ Negative-spec:
   - Does NOT hardcode CLAUDE_KLABAUTER_ROOT -- resolves via cc_invoke's
     _resolve_claude_klabauter_root() (env var -> settings-home pointer -> bash resolver).
   - Does NOT hard-error or nag when the op is unregistered/claude-klabauter absent --
-    degrades to a fully silent skip (exit 0, no output). Coordinator-claude is a consumer;
+    degrades to a fully silent skip (exit 0, no output). DoE is a consumer;
     it must never nag about claude-klabauter's activation state.
   - Does NOT re-implement the invoke transport -- imports and calls cc_invoke().
 """

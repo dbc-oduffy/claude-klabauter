@@ -4,7 +4,7 @@ RUNTIME behaviour must agree. A probe that calls `module.check(payload)`
 directly bypasses the engine's two-phase ordering and cannot detect a
 swallowed slot (an incumbent hard-deny/advisory shadowing the flipped
 guard's own envelope) -- every probe here goes through the REAL entrypoint,
-`coordinator_core.write_guards.engine.evaluate`, exactly as the coordinator-claude
+`coordinator_core.write_guards.engine.evaluate`, exactly as the DoE
 PreToolUse dispatcher calls it.
 
 Covers the write-side wave's nine C2-C12 hard-deny -> advisory flips

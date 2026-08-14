@@ -30,7 +30,7 @@ production ``state/goals/<id>.yaml`` shape (lesson: test-fidelity-seed-fixtures-
 key_results written as a proper YAML list-of-mappings block so the yaml.safe_load path
 is exercised.
 
-Spec backlink: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C3
+Spec backlink: DoE-claude:pln-per-repo-okr-goal-setting-syst-80bced § C3
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ coordinator_core.ops.fleet.memo_list — memo.list COMPUTE_ONLY UDS op handler.
 Purpose: Enumerate registered cross-repo memo receivers and, given a `to`
 target, resolve it (footgun #1's no-write `--dry-run`/`--check` verb) WITHOUT
 writing or committing anything — the sender-side "am I about to write into
-the right place?" check that the coordinator-claude bash CLI never had, which is exactly how
+the right place?" check that the DoE bash CLI never had, which is exactly how
 a bare `--title` test probe wrote-and-committed a live memo into a sibling
 repo (2026-07-17, example-retrieval-repo-em). Registered as "memo.list" via @register_op;
 classification (OpClass.COMPUTE_ONLY) and the `_OP_KEY_SCOPE` entry are wired
@@ -26,8 +26,8 @@ Two modes, selected by whether `to` is supplied:
         marked `is_receiver: False` — publish TARGETS, never valid memo
         receivers, kept in a distinct `kind` so a renderer can never
         conflate them with `receiver` entries.
-      - `kind: "canonical_home_alias"` — coordinator-claude-canonical redirect aliases
-        (`identity.redirectAliases`, promoted by coordinator-claude 2026-07-21) — `[]` only
+      - `kind: "canonical_home_alias"` — DoE-canonical redirect aliases
+        (`identity.redirectAliases`, promoted by DoE 2026-07-21) — `[]` only
         when the field is absent/unreadable (stale manifest or read
         failure), not an error in itself. Any id here takes precedence over
         a colliding `publish_mirror` id (see `_enumerate_publish_mirrors()`'s
@@ -36,10 +36,10 @@ Two modes, selected by whether `to` is supplied:
         registry read succeeded (a positive soft-status signal for the
         renderer; a genuine hard failure never reaches this shape at all —
         see negative-spec below).
-    This is the data `_format_receiver_listing()` in the coordinator-claude CLI's
+    This is the data `_format_receiver_listing()` in the DoE CLI's
     `cross-repo-memo` currently sources+composes itself (central-first
     block with aliases, a registry-read-failure warning, a publish-mirrors
-    section, a coordinator-claude-canonical-home-aliases section); moving it into this op
+    section, a DoE-canonical-home-aliases section); moving it into this op
     lets that CLI's `--list-receivers` verb flip to pure invoke-and-render.
   - Resolution mode (`to` supplied): resolve `to` through the ONE shared
     `_memo_resolver` (C3) — the identical resolution `memo.send` performs —
@@ -66,8 +66,8 @@ Two modes, selected by whether `to` is supplied:
     when absent. Prior to this, `resolved_filename` was computed with the
     engine actor id HARDCODED regardless of what `from_id` an actual send
     would use — correct only for claude-klabauter-origin sends, silently wrong for
-    every other caller (reported by coordinator-claude/claude-central-em: `cross-repo-memo
-    --dry-run` previewed `claude-klabauter-engine`-namespaced filenames for coordinator-claude-origin
+    every other caller (reported by DoE/claude-central-em: `cross-repo-memo
+    --dry-run` previewed `claude-klabauter-engine`-namespaced filenames for DoE-origin
     sends that actually land `claude-central-em`-namespaced). `to` supplied
     without `topic` (or vice versa) behaves exactly as before this addition —
     no `resolved_filename` key is added to the candidate dict at all.
@@ -96,9 +96,9 @@ Spec backlink:
     docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md § Amendment
     2026-07-21 (Option A, full ownership move).
     Resolver: coordinator_core/ops/fleet/_memo_resolver.py (C3).
-    Parity source: coordinator-claude coordinator/bin/cross-repo-memo receiver-listing section
+    Parity source: DoE coordinator/bin/cross-repo-memo.py receiver-listing section
     (this op is an ergonomic superset — it additionally proves no-write via a
-    real dry-run resolution path, which the coordinator-claude CLI's bare `--title` probe did
+    real dry-run resolution path, which the DoE CLI's bare `--title` probe did
     not have).
 
 Negative-spec:
@@ -137,7 +137,7 @@ Negative-spec:
     positive "read succeeded" signal.
   - Does NOT conflate `publish.mirrors.*` entries with `repos.*` receivers —
     they carry a distinct `kind: "publish_mirror"` and `is_receiver: False`,
-    mirroring the coordinator-claude CLI's own hard separation (mirrors are outward OSS
+    mirroring the DoE CLI's own hard separation (mirrors are outward OSS
     distribution targets whose owner must be addressed instead, never the
     mirror itself).
 """
@@ -352,7 +352,7 @@ def _enumerate_publish_mirrors(mirrors_by_key: Optional[dict] = None) -> list:
     Only mirror keys with a present `.owner` are surfaced — an
     incomplete/malformed mirror table (no owner to route a rejected send to)
     is silently excluded here, mirroring
-    `read_publish_mirror_owners()`'s own owner-required filter (the coordinator-claude CLI's
+    `read_publish_mirror_owners()`'s own owner-required filter (the DoE CLI's
     `_get_publish_target_owners()` derivation has the same requirement).
 
     Each entry is `kind: "publish_mirror"` and carries `is_receiver: False`
@@ -367,7 +367,7 @@ def _enumerate_publish_mirrors(mirrors_by_key: Optional[dict] = None) -> list:
     "publish target with an owner to route to", it's "this id IS the central
     receiver under another name" (see `_enumerate_canonical_home_aliases()`).
     Emitting the same id under both `kind`s hands a reader two contradictory
-    verdicts for the identical string (defect: coordinator-claude's `--list-receivers`
+    verdicts for the identical string (defect: DoE's `--list-receivers`
     output showed `coordinator-claude-em` twice — once as
     `publish_mirror`/"reject, route to owner", once as
     `canonical_home_alias`/"redirects to the central receiver" — with no way
@@ -383,7 +383,7 @@ def _enumerate_publish_mirrors(mirrors_by_key: Optional[dict] = None) -> list:
     (non-redirect) aliases, `owner`/`path`/`note` unchanged. This subtraction
     is a no-op (identical to pre-fix behavior byte-for-byte) whenever
     `read_redirect_aliases()` degrades to `set()` — the case on every machine
-    until coordinator-claude promotes `identity.redirectAliases` (see that function's own
+    until DoE promotes `identity.redirectAliases` (see that function's own
     docstring) — since subtracting the empty set changes nothing. Invariant:
     no id ever appears in both a `publish_mirror` entry's addressable surface
     (`id`/`em_id`/`aliases`) and a `canonical_home_alias` entry.
@@ -435,14 +435,14 @@ def _enumerate_publish_mirrors(mirrors_by_key: Optional[dict] = None) -> list:
 def _enumerate_canonical_home_aliases() -> list:
     """Enumerate central/canonical-home redirect aliases (`identity.redirectAliases`).
 
-    coordinator-claude-manifest-declarative equivalent of the coordinator-claude CLI's hardcoded
+    DoE-manifest-declarative equivalent of the DoE CLI's hardcoded
     `_DOE_CANONICAL_REDIRECT_ALIASES` block (`.claude-em`, `claude-home`,
     `coordinator-claude`, `coordinator-claude-em` — ids that are not
     distribution mirrors at all, just the central receiver under a different
     name). Sourced via `_memo_resolver.read_redirect_aliases()`, which
     degrades to `set()` (never an error) when the manifest lacks
     `identity.redirectAliases` — a graceful-degradation floor, not the
-    common case: coordinator-claude promoted this field into
+    common case: DoE promoted this field into
     `coordinator-registry.manifest.json` on 2026-07-21, so this normally
     returns a non-empty list on any machine with an up-to-date manifest;
     `[]` now means either a stale/un-updated manifest or a genuine read
@@ -460,7 +460,7 @@ def _enumerate_canonical_home_aliases() -> list:
             "alias": alias,
             "is_receiver": False,
             "note": (
-                "coordinator-claude-canonical home/redirect alias — not directly addressable "
+                "DoE-canonical home/redirect alias — not directly addressable "
                 "as `to`; always redirects to the central receiver."
             ),
         }
@@ -489,8 +489,8 @@ def _enumerate_candidates() -> list:
         publish TARGETS, never valid memo receivers — kept in a clearly
         distinct `kind` so a renderer can never conflate them with `receiver`
         entries (see `_enumerate_publish_mirrors`).
-      - `kind: "canonical_home_alias"` — coordinator-claude-canonical redirect aliases
-        (`identity.redirectAliases`, promoted by coordinator-claude 2026-07-21); an empty
+      - `kind: "canonical_home_alias"` — DoE-canonical redirect aliases
+        (`identity.redirectAliases`, promoted by DoE 2026-07-21); an empty
         list means the field is absent/unreadable on this machine, not a
         failure (see `_enumerate_canonical_home_aliases`). Takes precedence
         over any colliding `publish_mirror` id (see
@@ -643,11 +643,11 @@ def _resolve_candidate(
             "resolved": False,
             "note": (
                 f"receiver {to!r} is a central receiver id "
-                f"(identity.centralReceiverIds) that resolves to the coordinator-claude "
+                f"(identity.centralReceiverIds) that resolves to the DoE-claude "
                 f"repo, but none of the manifest's central receiver ids is "
                 f"registered in the machine-local registry. "
                 f"Register the central repo first, e.g.: "
-                f"machine-local set repos.example_doctrine_repo <abs-path-to-coordinator-claude-repo>"
+                f"machine-local set repos.doe_claude <abs-path-to-DoE-claude-repo>"
             ),
         }
 

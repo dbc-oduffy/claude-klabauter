@@ -1,6 +1,6 @@
 """test_sweep_boot.py — self-contained test suite for sweep-boot.py.
 
-Port of: test-sweep-boot-wrapper.sh (coordinator-claude a920e2de, 2026-07-19). Retargets the bash oracle's
+Port of: test-sweep-boot-wrapper.sh (DoE a920e2de, 2026-07-19). Retargets the bash oracle's
 contract assertions onto the Python trampoline: integer-count stdout contract on every
 path (success / op-level refusal / transport failure), exit-0-always ceremony contract,
 WARN-to-stderr on non-success paths, params-json state_common_dir forwarding, and the

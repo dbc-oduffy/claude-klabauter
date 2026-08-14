@@ -1,7 +1,7 @@
 """
 coordinator_core.archive_stamp — handoff/memo/plan lifecycle frontmatter-write
 orchestration, direct-import Python port of coordinator-archive-stamp.sh
-(coordinator-claude 243b9a7c, 2026-07-19).
+(DoE 243b9a7c, 2026-07-19).
 
 Purpose: the single authorized-writer family for claimed/shipped handoff frontmatter,
 cross-repo memo lifecycle frontmatter, and plan-implemented stamping. Each public
@@ -13,8 +13,8 @@ subprocess hop, no strangler-facade legacy fallback) — this module IS the clau
 so the "route to native or fall back to legacy node CLI" State-1/2/3 distinction the
 bash oracle carried is now moot: there is no legacy path to fall back to.
 
-Port of: coordinator-archive-stamp.sh (coordinator-claude 243b9a7c, 2026-07-19; 977 lines, 11 functions).
-Coordinator-claude veneer: coordinator/bin/archive-stamp-cli (polyglot trampoline calling this module).
+Port of: coordinator-archive-stamp.sh (DoE 243b9a7c, 2026-07-19; 977 lines, 11 functions).
+DoE veneer: coordinator/bin/archive-stamp-cli.py (polyglot trampoline calling this module).
 
 Function-to-oracle map:
     stamp_shipped_in         <- stamp_shipped_in()            (handoff.stamp op)
@@ -61,7 +61,7 @@ Function-to-oracle map:
                                                                  archive/handoffs/ deployment_state
                                                                  (+ continued_into/closed_reason),
                                                                  added 2026-07-26 after a
-                                                                 coordinator-claude cross-repo memo
+                                                                 DoE-claude cross-repo memo
                                                                  reported 13 archived handoffs
                                                                  hand-edited out of stuck
                                                                  deployment_state: in_flight
@@ -139,7 +139,7 @@ Negative-spec:
       already natively ported there (field-level merge, mkdir lock, atomic
       write — see that module's docstring), so this module no longer needs a
       `bash -c "source coordinator-session.sh && cs_session_shape_set ..."`
-      subprocess bridge. Retired the coordinator-claude-root-pointer bash-lib resolution
+      subprocess bridge. Retired the DoE-root-pointer bash-lib resolution
       (`_bash_lib_path`) and the subprocess wrapper (`_session_shape_set_bridge`)
       that carried it.
 """
@@ -300,7 +300,7 @@ _WALK_BACK_MAX_CANDIDATES = 50
 def _mechanical_commit_denylist() -> Sequence[str]:
     """Resolves the mechanical-commit-subject denylist the walk-back below
     consumes to skip housekeeping/archival-machinery commits, sourced from the
-    SAME coordinator-claude-owned policy YAML `coordinator_core.reconcile.commit_reality`'s own
+    SAME DoE-owned policy YAML `coordinator_core.reconcile.commit_reality`'s own
     three-signal matcher reads (`mechanical_commit_denylist`, via
     `policy_loader.load_policy`) — never a second, independently-driftable copy
     of the token list.
@@ -731,7 +731,7 @@ def stamp_shipped_in(
     """Resolve the most recent git SHA touching the handoff's scope: paths, then insert
     `shipped_in: <SHA8>` into the frontmatter via the native handoff.stamp op.
 
-    kind: REQUIRED, keyword-only, no default (DR-096, coordinator-claude 2026-07-26 ruling —
+    kind: REQUIRED, keyword-only, no default (DR-096, DoE-claude 2026-07-26 ruling —
     "kind must be REQUIRED at the seam, not defaulted silently. A caller that does not
     say which kind it is writing is exactly how this field acquired five meanings.").
     This function is the SINGLE choke point that owns the `shipped_in` value grammar —
@@ -1267,7 +1267,7 @@ def cs_ship_handoff(
 
     Composes handoff.archive_transition (NOT the plain handoff.transition op) so
     every caller — standalone (/pickup, /workstream-complete embedded bash blocks
-    via coordinator-claude's archive-stamp-cli) included — gets the SAME unconditional
+    via DoE's archive-stamp-cli) included — gets the SAME unconditional
     live-children guard and stamp-then-flip ordering as the archive-ceremony
     call sites, closing the incoherent half-state (shipped_in present while
     deployment_state stays in_flight) a standalone stamp_shipped_in() call could
@@ -2106,7 +2106,7 @@ def cs_stamp_plan_implemented(plan_path: str) -> int:
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
     byte-parity port of the node oracle's stamp-implemented verb — see that
     module's docstring for the full status-transition matrix). Calls it
-    directly in-process; no subprocess, no node dependency, no coordinator-claude-root
+    directly in-process; no subprocess, no node dependency, no DoE-root
     resolution. Returns the port's own exit code verbatim.
 
     Offer, not a block (spec: state/audits/2026-08-13-implemented-plans-
@@ -2218,7 +2218,7 @@ def cs_repair_archived_deployment_state(
     archived (``archive/handoffs/``) — a narrow, separate door onto a path
     every other lifecycle verb (ship/claim/supersede/repark/stamp)
     deliberately cannot reach, sibling of ``cs_repair_archived_shipped_in``
-    above. Added 2026-07-26 after a coordinator-claude cross-repo memo reported 13
+    above. Added 2026-07-26 after a DoE-claude cross-repo memo reported 13
     archived handoffs hand-edited out of stuck ``deployment_state: in_flight``
     because ``ship-handoff``'s ``state/handoffs/``-only containment refuses
     ``archive/handoffs/`` paths.
@@ -2235,7 +2235,7 @@ def cs_repair_archived_deployment_state(
     handoff-archived.schema.json's own ``allOf`` rules) BEFORE any write, so
     a repair through this verb can never reproduce the exact
     continued-without-continued_into defect a hand-edit produced (10 of the
-    13 coordinator-claude hand-edits did exactly this).
+    13 DoE-claude hand-edits did exactly this).
 
     ``continued_into`` is ALSO resolution-and-existence checked (2026-07-26):
     it must resolve to a real file under the worktree (searched by path and

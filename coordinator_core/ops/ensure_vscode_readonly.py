@@ -44,7 +44,7 @@ Negative-spec (bash-oracle parity, do NOT "fix" mid-port):
       (existing keys preserved, our two keys added/overwritten) — never a full
       replace of the pre-existing `files.readonlyInclude` object.
 
-Port of: ensure-vscode-readonly.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Port of: ensure-vscode-readonly.sh (DoE 894d4bc6, 2026-07-22)
 Spec backlink: docs/plans/2026-05-29-handoff-tracker-system.md (edit-resistance follow-up)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 """
@@ -60,6 +60,11 @@ from typing import List, Tuple
 from coordinator_core.session.declared_writes import declare_write
 
 _PROG = "ensure-vscode-readonly"
+
+# Generator-provenance: merges guard keys into <--root>/.vscode/settings.json
+# for whatever repo root the caller passes -- a caller-supplied target repo,
+# not a fixed claude-klabauter path.
+GENERATES = []
 
 GUARD_KEYS = {
     "**/state/handoff-tracker.md": True,

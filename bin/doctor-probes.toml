@@ -269,7 +269,7 @@ id = "claude-klabauter.strategic.draft_staleness"
 cluster = "install"
 weight = "cheap"
 interactivity = "assert"
-fix = "none (nudge only — run strategic.generate to refresh the draft, or the coordinator-claude refresh ceremony to reconcile it)"
+fix = "none (nudge only — run strategic.generate to refresh the draft, or the DoE refresh ceremony to reconcile it)"
 symptom_keywords = ["strategic draft stale", "self-description draft out of date", "strategic.generate not run recently", "week-changelog newer than draft"]
 # triage=false: this is a nudge surfaced on full runs and /workday-start, not part
 # of the bare-invocation triage set (no functional-headline signal here).
@@ -277,18 +277,18 @@ triage = false
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_strategic_draft_staleness"
 required = false
 severity_if_fail = "degraded"
-remediation = "Run strategic.generate to refresh state/strategic/self-description.draft.yaml, then invoke the coordinator-claude refresh ceremony to reconcile it against the canonical self-description.yaml"
+remediation = "Run strategic.generate to refresh state/strategic/self-description.draft.yaml, then invoke the DoE refresh ceremony to reconcile it against the canonical self-description.yaml"
 
 # ---------------------------------------------------------------------------
-# Cluster: install — vendored-schema drift watch (coordinator-claude pin currency)
+# Cluster: install — vendored-schema drift watch (DoE pin currency)
 # ---------------------------------------------------------------------------
 
 # OPTIONAL, NEVER-GATING probe: compares every schema vendored under
-# coordinator_core/frontmatter/schemas/ against coordinator-claude HEAD via the non-gating
+# coordinator_core/frontmatter/schemas/ against DoE HEAD via the non-gating
 # check_schema_drift_advisory (aggregated by
 # coordinator_core.frontmatter.schema_drift_watch). Closes the 2026-07-22 class
 # defect where that advisory had ZERO callers and a vendored improvement-queue
-# schema sat ~12h behind coordinator-claude until a sibling repo's CLI rejected a value that was
+# schema sat ~12h behind DoE until a sibling repo's CLI rejected a value that was
 # valid on their surface.
 #
 # THIS PROBE IS THE CADENCE. It is triage=true precisely because /workday-start's
@@ -298,15 +298,15 @@ remediation = "Run strategic.generate to refresh state/strategic/self-descriptio
 # wiring in name only. Weight is "standard": one short-lived `git show` per vendored
 # schema (12 today), no network, honouring the triage invariant (cheap|standard).
 #
-# Verdict shape: DRIFT -> DEGRADED (AMBER + re-vendor hint); coordinator-claude clone present but
+# Verdict shape: DRIFT -> DEGRADED (AMBER + re-vendor hint); DoE clone present but
 # unreadable -> DEGRADED worded as INDETERMINATE (never a false drift claim, never a
-# silent green); no coordinator-claude clone on this machine at all -> SKIP-as-advisory (not
+# silent green); no DoE clone on this machine at all -> SKIP-as-advisory (not
 # applicable, e.g. fresh install or CI without the sibling checked out).
 #
 # TWO-ORACLE WARNING — why the remediation names a script and not `cp`. This probe
-# compares against coordinator-claude HEAD; the GATING tamper-check (check_schema_drift(..., ref=...)
+# compares against DoE HEAD; the GATING tamper-check (check_schema_drift(..., ref=...)
 # in coordinator_core/frontmatter/tests/test_schema_validate.py) compares against a
-# per-schema pinned SHA in _QUEUE_SCHEMA_PINS. Copying coordinator-claude's file in by hand satisfies
+# per-schema pinned SHA in _QUEUE_SCHEMA_PINS. Copying DoE's file in by hand satisfies
 # this probe and BREAKS that gate. That is not hypothetical: on 2026-07-28 an installing
 # agent followed the previous `cp`-shaped remediation verbatim, watched this probe go
 # green at 13/13, and simultaneously turned check_schema_drift red
@@ -321,12 +321,42 @@ cluster = "install"
 weight = "standard"
 interactivity = "assert"
 fix = "none (run bin/claude-klabauter-revendor-schema.py <name> — it re-vendors the bytes AND moves the gating pin together; never hand-copy)"
-symptom_keywords = ["vendored schema drift", "schema out of date with coordinator-claude", "re-vendor schema", "sibling repo rejects valid value", "improvement-queue.schema.json stale", "schema pin behind coordinator-claude HEAD", "SchemaDriftError after re-vendor", "_QUEUE_SCHEMA_PINS out of date"]
+symptom_keywords = ["vendored schema drift", "schema out of date with DoE", "re-vendor schema", "sibling repo rejects valid value", "improvement-queue.schema.json stale", "schema pin behind DoE HEAD", "SchemaDriftError after re-vendor", "_QUEUE_SCHEMA_PINS out of date"]
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_vendored_schema_drift"
 required = false
 severity_if_fail = "degraded"
-remediation = "ADVISORY, never gating — this probe is required=false and cannot break an install; action it on its own cadence. To fix: python3 bin/claude-klabauter-revendor-schema.py <name> --dry-run, then re-run without --dry-run (add --reason '<why>' if it reports a pin move, and --ack-major if it reports a MAJOR advance). That entrypoint writes the vendored bytes AND updates the gating pin in coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS in one verified operation, then re-checks both. Do NOT cp the schema in by hand — this probe compares against coordinator-claude HEAD but the gating tamper-check compares against that pinned SHA, so a hand copy turns this probe green while breaking check_schema_drift."
+remediation = "ADVISORY, never gating — this probe is required=false and cannot break an install; action it on its own cadence. To fix: python3 bin/claude-klabauter-revendor-schema.py <name> --dry-run, then re-run without --dry-run (add --reason '<why>' if it reports a pin move, and --ack-major if it reports a MAJOR advance). That entrypoint writes the vendored bytes AND updates the gating pin in coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS in one verified operation, then re-checks both. Do NOT cp the schema in by hand — this probe compares against DoE HEAD but the gating tamper-check compares against that pinned SHA, so a hand copy turns this probe green while breaking check_schema_drift."
+
+# ---------------------------------------------------------------------------
+# Cluster: install — generator/output staleness cadence
+# (docs/plans/2026-08-13-generator-output-staleness-detector.md § Tasks id C5)
+# ---------------------------------------------------------------------------
+
+# THIS PROBE IS THE CADENCE, same rationale as claude-klabauter.schema.vendor_drift — the
+# --triage envelope already writes state/doctor-last-run.json, and DoE's
+# /workday-start already reads it via coordinator_core.ops.check_claude_klabauter_doctor_sentinel,
+# so wiring this probe surfaces generator/output staleness daily with NO change to any
+# DoE-owned surface. weight = "standard" because compute_all_staleness spawns `git log`
+# per declared pair on the local leg, and the vendored leg (compute_vendored_staleness)
+# also shells to `git` against the resolved peer clone; triage = true is permitted at
+# that weight per the manifest invariant above (triage=true ==> weight in {cheap,
+# standard}).
+#
+# AC7: this probe REPORTS, it does not GATE — never a non-zero process exit, a commit
+# hook, or a test that goes red on a STALE verdict in the live repo.
+[[probe]]
+id = "claude-klabauter.generator.output_staleness"
+cluster = "install"
+weight = "standard"
+interactivity = "assert"
+fix = "none (re-run the generator named in the STALE pair's `detail` field, which regenerates the artifact; then re-run this probe)"
+symptom_keywords = ["generator output stale", "artifact behind its generator", "GENERATES pair drifted", "STALE verdict", "UNDECLARED generator", "vendored artifact drift", "generated_from_sha behind HEAD"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_generator_output_staleness"
+required = false
+severity_if_fail = "degraded"
+remediation = "ADVISORY, never gating — this probe is required=false and cannot break an install. A STALE entry names the drifted pair in `detail`; re-run the generator that emits that artifact to refresh it, then re-run this probe. An UNDECLARED or INDETERMINATE entry means coverage or resolution is incomplete, not that regeneration is owed — see the entry's own `detail` for the specific cause."
 
 # ---------------------------------------------------------------------------
 # Cluster: install — cross-repo-commitments ledger re-resolution (C12b)

@@ -1,19 +1,19 @@
 """coordinator_core.ops.docgen.tests.test_conformance_canary — loud gate for every
-skip-if-coordinator-claude-absent conformance LANE registered in ``LANES`` (C6, AC5; extended
+skip-if-DoE-absent conformance LANE registered in ``LANES`` (C6, AC5; extended
 2026-07-25 to also cover the ``contract_blocks``/``header_style`` lane).
 
 Purpose: several test modules across ``coordinator_core`` are entirely
-module-level ``skipif(coordinator-claude clone unavailable)`` — on a genuinely
-consumer/CI-standalone install with no sibling coordinator-claude clone, the guarantees those
+module-level ``skipif(DoE clone unavailable)`` — on a genuinely
+consumer/CI-standalone install with no sibling DoE clone, the guarantees those
 modules exist to prove degrade to a SILENT SKIP, not a failure. This repo is
 explicitly published as its own standalone install-chain node, so
-Coordinator-claude-clone-absent is the *normal* consumer shape, not an edge case — a future
+DoE-clone-absent is the *normal* consumer shape, not an edge case — a future
 template/contract divergence in that environment would report green
 (code-review finding, 2026-07-21, Finding 1 / D1 of the strang-12
 doc-generation slice review).
 
 This module is the loud counterpart: in any environment flagged "should have
-the coordinator-claude clone" (CI, or a dev machine that opts in), a missing/unresolvable
+the DoE clone" (CI, or a dev machine that opts in), a missing/unresolvable
 clone here is a FAILURE, not a skip, FOR EVERY REGISTERED LANE. A
 genuinely-clone-absent consumer install is the documented, deliberately-optional
 lane and is still allowed to skip THIS canary too — see
@@ -29,12 +29,12 @@ logic must exist exactly once in the repo.
 
 Registered lanes:
   - ``docgen-byte-identity``: ``test_c6_conformance.py`` and
-    ``test_type_enum.py``'s ``TestAC4LiveConformance`` (~29 tests) — coordinator-claude-HEAD
+    ``test_type_enum.py``'s ``TestAC4LiveConformance`` (~29 tests) — DoE-HEAD
     template byte-identity.
   - ``contract-blocks-header-style``:
     ``subagent_sandbox/tests/test_provision_report_contract_blocks_byte_identity.py``
     — proves the ``contract_blocks`` assembler's ``header_style``-aware
-    extraction reproduces coordinator-claude's registered snippet content byte-for-byte.
+    extraction reproduces DoE's registered snippet content byte-for-byte.
 
 Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5)
 """
@@ -68,12 +68,12 @@ def _environment_requires_doe_clone() -> bool:
 
 
 def _resolve_docgen_doe_clone() -> None:
-    """Raise iff the coordinator-claude-HEAD byte-identity conformance lane's clone is unresolvable."""
+    """Raise iff the DoE-HEAD byte-identity conformance lane's clone is unresolvable."""
     resolve_doe_clone()
 
 
 def _resolve_contract_blocks_doe_root() -> None:
-    """Raise iff the contract_blocks/header_style byte-identity lane's coordinator-claude root
+    """Raise iff the contract_blocks/header_style byte-identity lane's DoE root
     is unresolvable — the same ``coordinator_core.testing.doe_root`` resolver
     ``test_provision_report_contract_blocks_byte_identity.py`` gates its own
     module-level ``skipif`` on.
@@ -81,12 +81,12 @@ def _resolve_contract_blocks_doe_root() -> None:
     root, present = doe_root_and_present()
     if not present:
         raise DoeResolveError(
-            f"sibling coordinator-claude checkout not resolvable (resolved root={root!r})"
+            f"sibling DoE-claude checkout not resolvable (resolved root={root!r})"
         )
 
 
 #: Each entry: ``(lane_id, human description used in the failure message, resolver)``.
-#: ``resolver`` raises (any exception) iff the lane's coordinator-claude dependency is
+#: ``resolver`` raises (any exception) iff the lane's DoE dependency is
 #: unresolvable, and returns normally iff it resolved. Append a new tuple here
 #: to register a new guarded lane — never author a second canary module.
 LANES: list[tuple[str, str, Callable[[], None]]] = [
@@ -112,24 +112,24 @@ def test_doe_clone_conformance_lane_ran_or_environment_is_documented_optional(
     lane_id: str, description: str, resolver: Callable[[], None]
 ) -> None:
     """FAIL (not skip) if this environment should have run ``description``'s
-    lane but the coordinator-claude clone is unresolvable — the exact silent-skip class a
+    lane but the DoE clone is unresolvable — the exact silent-skip class a
     code-review finding flagged. A genuinely clone-absent, non-CI dev machine
     is the documented optional-skip lane and is allowed to skip this canary
     too, so the conformance guarantee's absence is at least loud where it
     matters (CI, or an opted-in dev machine) without forcing every consumer
-    install to carry a sibling coordinator-claude clone it has no other reason to have.
+    install to carry a sibling DoE clone it has no other reason to have.
     """
     if not _environment_requires_doe_clone():
         pytest.skip(
             "DOCUMENTED optional-skip lane: neither CLAUDE_KLABAUTER_REQUIRE_DOE_CONFORMANCE "
             "nor CI is set truthy — this machine is not flagged as "
-            "should-have-coordinator-claude-clone (see module docstring)"
+            "should-have-DoE-clone (see module docstring)"
         )
     try:
         resolver()
     except Exception as exc:
         pytest.fail(
             f"{description} is SILENTLY SKIPPING in an environment flagged "
-            f"should-have-coordinator-claude-clone (CI or CLAUDE_KLABAUTER_REQUIRE_DOE_CONFORMANCE "
+            f"should-have-DoE-clone (CI or CLAUDE_KLABAUTER_REQUIRE_DOE_CONFORMANCE "
             f"truthy): {exc}"
         )

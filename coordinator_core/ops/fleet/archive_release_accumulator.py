@@ -16,16 +16,26 @@ Response shape (contract — see state/audits/2026-07-22-command-payload-invento
 op-classification.tsv row archive-accumulator-file-git-mv):
     {"archived": bool, "dest": str | None, "already_archived": bool}
 
+A refused git-mv additionally carries `failed` — archive_and_commit's own
+`[{"id", "reason"}]` items, unmodified. ADDITIVE and absent on every other
+path (the same discipline fleet.archive_paper_trail's `failed` key follows),
+so a consumer reading only the three fields above is unaffected. Without it a
+refusal reported the same three booleans as a setup error, with the reason
+reaching `_LOG.error` alone.
+
 Tri-state encoding (only two booleans on the wire, three outcomes):
     archived=True,  already_archived=False -> this call moved the accumulator; dest set.
     archived=False, already_archived=True  -> no accumulator file found (never existed,
                                                or a prior call already moved it) — vacuous
                                                no-op, dest is None.
     archived=False, already_archived=False -> an accumulator file WAS found but the git-mv
-                                               attempt failed (dry_run:false only); dest is
-                                               None, reason logged daemon-side (best-effort,
-                                               non-gating per the SKILL.md source step — a
-                                               failure here never raises).
+                                               attempt was refused (dry_run:false only); dest
+                                               is None, the reason is on the wire under
+                                               `failed` and also logged daemon-side
+                                               (best-effort, non-gating per the SKILL.md
+                                               source step — a failure here never raises).
+                                               A setup error returns these same two booleans
+                                               with no `failed` key.
 
 dry_run:true is a preview: never mutates, always reports archived=False.  When an
 accumulator is found it reports the dest it WOULD move to (already_archived=False);
@@ -39,7 +49,7 @@ no-op shape above rather than raising on a missing git-mv source.
 Spec backlinks:
   - Plan: docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md § Wave 1 C1b
   - Fence source: coordinator/skills/merging-to-main/SKILL.md § Step 5 "Archive the
-    pending-release accumulator" (coordinator-claude tree; cross-repo, read-only reference)
+    pending-release accumulator" (DoE tree; cross-repo, read-only reference)
   - DR-211: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md (D1-D4, five bounds)
 
 Negative-spec:
@@ -108,9 +118,25 @@ def _dest_for(accumulator: Path, worktree_root: Path, tag: str) -> Path:
     return worktree_root / "archive" / "release-notes" / f"{stem}-{tag}-pending-release.md"
 
 
-def _result(archived: bool, dest: Optional[str], already_archived: bool) -> dict:
-    """Assemble the frozen three-field response envelope."""
-    return {"archived": archived, "dest": dest, "already_archived": already_archived}
+def _result(
+    archived: bool,
+    dest: Optional[str],
+    already_archived: bool,
+    failed: Optional[List[dict]] = None,
+) -> dict:
+    """Assemble the frozen three-field response envelope.
+
+    `failed` is an ADDITIVE fourth key, emitted ONLY when an accumulator was
+    found and its git-mv was refused — `archive_and_commit`'s own
+    `[{"id", "reason"}]` items, unmodified. Same additive discipline as
+    `fleet.archive_paper_trail`'s `failed` key: a consumer reading only
+    `{archived, dest, already_archived}` is unaffected, and the tri-state
+    encoding above is unchanged.
+    """
+    out = {"archived": archived, "dest": dest, "already_archived": already_archived}
+    if failed:
+        out["failed"] = failed
+    return out
 
 
 def _setup_error(reason: str) -> dict:
@@ -139,7 +165,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     params: {repo_root: str (optional, D3 consistency check), tag: str (required),
              dry_run: bool (required)}
-    returns: {archived: bool, dest: str | None, already_archived: bool}
+    returns: {archived: bool, dest: str | None, already_archived: bool}, plus an
+             additive `failed: [{"id", "reason"}]` when a found accumulator's
+             git-mv was refused (see module docstring § Response shape)
 
     repo_root arg: the git common dir delivered by _OP_KEY_SCOPE="common_dir".
                    Handlers MUST NOT use ctx.repo_root (None in the global service).
@@ -188,10 +216,15 @@ async def _handler(params: dict, repo_root=None) -> dict:
         return _result(archived=True, dest=rel_id(dest, worktree), already_archived=False)
 
     # Best-effort/non-gating per the SKILL.md source step: log and report the
-    # failure shape rather than raising.
+    # failure shape rather than raising. The reason also reaches the wire —
+    # `_LOG.error` alone left a caller unable to tell a refused move from a
+    # setup error, both of which return the same three booleans.
     if failed:
         _LOG.error(
             "fleet.archive_release_accumulator: git-mv failed for %s -> %s: %s",
             accumulator, dest, failed[0].get("reason"),
+        )
+        return _result(
+            archived=False, dest=None, already_archived=False, failed=failed
         )
     return _result(archived=False, dest=None, already_archived=False)

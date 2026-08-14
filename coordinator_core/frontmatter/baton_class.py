@@ -52,7 +52,7 @@ Negative-spec
   vendored schema every call site would otherwise have had to trust a
   second, hand-typed copy of.
 
-Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md
+Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f
                § D1, D2, C2, C3.
 """
 

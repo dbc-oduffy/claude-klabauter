@@ -65,7 +65,7 @@
     },
     "declaration": {
       "type": "object",
-      "description": "Optional typed carrier for a sibling-notification-duty declaration (DR-097 — see docs/decisions/DR-097-sibling-notification-duty-on-terminal-events.md). Populated when this commitment records a coordinator-claude->sibling notification triggered by a contract bump or a spinoff-closure memo, so downstream guards can key on a structured field instead of parsing prose out of `body`/`commitment`.",
+      "description": "Optional typed carrier for a sibling-notification-duty declaration (DR-097 — see docs/decisions/DR-097-sibling-notification-duty-on-terminal-events.md). Populated when this commitment records a DoE->sibling notification triggered by a contract bump or a spinoff-closure memo, so downstream guards can key on a structured field instead of parsing prose out of `body`/`commitment`.",
       "properties": {
         "consumer": {
           "type": "string",

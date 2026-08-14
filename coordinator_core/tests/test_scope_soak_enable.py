@@ -3,8 +3,8 @@
 Ports the bash oracle 1:1, plus the not-in-git-repo path the bash suite
 never exercised.
 
-Port of: test-scope-soak-enable.sh (coordinator-claude 67202df6, 2026-07-16)
-Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/
+Port of: test-scope-soak-enable.sh (DoE 67202df6, 2026-07-16)
+Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/
     recipe-small-bin-clis-gate-aging-scope-soak-scope-warning.md § 2
 """
 from __future__ import annotations

@@ -25,7 +25,7 @@ import re
 
 # DR-209 floor: clusters with fewer than this many items are not surfaced.
 #
-# Spec backlink: docs/plans/2026-07-04-initiative-govern-sweep-prioritize-doe-d.md § C4
+# Spec backlink: DoE-claude:pln-initiative-govern-sweep-priori-6cf808 § C4
 MIN_CLUSTER_SIZE = 3
 
 # Stop words for title-keyword clustering — common English function words plus
@@ -156,8 +156,17 @@ def _normalize_tags(fm: dict | None) -> list[str]:
 def _parent_dir(file_path: str) -> str:
     """Return the parent directory of a path, normalized to forward slashes.
     Used as the directory-cluster key.
+
+    `file_path` is a recorded frontmatter field, not a live filesystem path
+    on this host -- it may have been authored on either platform. Normalize
+    to forward-slash form FIRST, then split off the last segment, rather
+    than calling `os.path.dirname()` (host-native separator semantics) on
+    the raw string: on a POSIX host, `os.path.dirname()` does not recognize
+    a backslash-separated value, so a Windows-authored path with no `/`
+    would silently resolve to an empty parent dir instead of the real one.
     """
-    return os.path.dirname(file_path).replace("\\", "/")
+    normalized = file_path.replace("\\", "/")
+    return normalized.rsplit("/", 1)[0] if "/" in normalized else ""
 
 
 def _extract_keywords(title: str) -> list[str]:

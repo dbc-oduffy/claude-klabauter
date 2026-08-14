@@ -1,7 +1,7 @@
 """Tests for coordinator_core.ops.check_pcli_drift_gate.
 
 Fixtures are synthetic, written into tmp_path — the boundary tests must not
-depend on the live coordinator-claude clone. See that module's docstring for the
+depend on the live DoE-claude clone. See that module's docstring for the
 granularity/staleness-window reasoning these tests hold to a fixed shape.
 """
 
@@ -170,7 +170,7 @@ def test_hash_drift_raises_gate_error_on_unsupported_algorithm(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# run_gate — full integration over a synthetic coordinator-claude-clone-shaped tmp_path tree
+# run_gate — full integration over a synthetic DoE-clone-shaped tmp_path tree
 # ---------------------------------------------------------------------------
 
 
@@ -230,7 +230,7 @@ def _write_resolution(doe_root: Path, schemas_dir: Path, source_hashes: dict[str
 
 
 def _doe_root(tmp_path: Path) -> tuple[Path, Path]:
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "DoE-claude"
     schemas_dir = doe_root / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True)
     return doe_root, schemas_dir

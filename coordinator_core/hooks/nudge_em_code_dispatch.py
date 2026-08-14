@@ -71,6 +71,12 @@ _DOC_DATA_EXTENSIONS: frozenset[str] = frozenset([
     ".csv", ".lock", ".cfg", ".ini",
 ])
 
+#: Generator-provenance declaration: _write_pending_dispatch_artifact writes
+#: coordinator-pending-dispatch-<sid>-<hash>.json under
+#: tempfile.gettempdir() — never a tracked repo artifact; this op is also
+#: read-only per its own negative-spec for sentinel checks.
+GENERATES: list = []
+
 
 def _sanitize_for_hostname(s: str) -> str:
     """Replace non-alphanumeric/hyphen/underscore chars — mirrors JS hostname sanitize."""
@@ -186,7 +192,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
 # op(payload) — synchronous, in-process, stdin->stdout trampoline entry point.
 #
 # Purpose: full line-for-line port of nudge-em-code-dispatch.js's `main()`
-# orchestration for the coordinator-claude-resident stdin->stdout hook stub
+# orchestration for the DoE-resident stdin->stdout hook stub
 # (coordinator/hooks/scripts/nudge-em-code-dispatch.py), replacing the `node`
 # cold-spawn on every Write/Edit/MultiEdit (constraint 7, performant-or-dead).
 #
@@ -200,15 +206,15 @@ async def _handler(params: dict, repo_root=None) -> dict:
 # bootstrap/out-of-repo carve-out, EXT_EXECUTOR_MAP/COORDINATOR_PATH_MARKERS
 # executor-type derivation, and the pending-dispatch artifact write — none of
 # which the pcore-04 op implements. Do not conflate the two; do not route the
-# coordinator-claude stub through the async op above.
+# DoE stub through the async op above.
 #
 # Contract: takes the raw stdin-parsed payload dict, returns a Form-A
 # hookSpecificOutput dict (see context_only()) when the nudge fires, or None
 # for every silent-allow/bypass path. Never raises on well-formed input;
-# callers (the coordinator-claude stub) wrap this in a broad try/except for fail-open ALLOW
+# callers (the DoE stub) wrap this in a broad try/except for fail-open ALLOW
 # on any resolve/import/run failure per constraint discipline.
 #
-# Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+# Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 # Source: coordinator/hooks/scripts/nudge-em-code-dispatch.js (435 lines, ported whole)
 # =============================================================================
 

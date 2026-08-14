@@ -14,8 +14,8 @@ this file is a thin direct-import trampoline over it.
 # of one completeness-checklist item: <class>: <assertion> [probe: <cmd>]) has
 # been fully ported to coordinator_core/ops/parse_completeness_item.py, with
 # co-located pytest coverage (test_parse_completeness_item.py). This file is
-# now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module,
-# per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
+# now a thin DoE-side (contract) trampoline over that claude-klabauter (engine) module,
+# per DR-047 (DoE owns contract/generator, claude-klabauter owns engine).
 #
 # Op registered? NO — plain module, direct in-process import (no register_op,
 # no ops/__init__.py / _registry_map.py / ipc.py / classification.py entry).
@@ -39,9 +39,9 @@ this file is a thin direct-import trampoline over it.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Spec backlink: docs/plans/2026-06-24-install-baton-completeness-claude-code-validation.md § C3
 # Prior bash implementation: see git log (parse-completeness-item.py, 284 lines, retired on this cutover)

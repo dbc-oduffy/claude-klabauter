@@ -32,7 +32,7 @@ _BUMP_TRIPWIRE = os.path.join(_SCRIPT_DIR, "..", "check-schema-version-bump.py")
 # diffs whether canonical-structure.yaml/coordinator-schema-version changed
 # between two git commits, never their contents) -- these tests only need
 # SOME realistic seed bytes, not the real production files. Both files are
-# coordinator-claude-owned and NOT vendored into claude-klabauter (D5 decision:
+# DoE-owned and NOT vendored into claude-klabauter (D5 decision:
 # coordinator_core/install/scaffold_structure.py module docstring, "Does NOT
 # vendor a copy of canonical-structure.yaml"), so a hardcoded
 # `../../canonical-structure.yaml` path here previously resolved to a file

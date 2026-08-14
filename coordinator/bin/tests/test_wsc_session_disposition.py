@@ -15,9 +15,9 @@ is not a valid Python import identifier — same idiom used for the
 extensionless polyglot entrypoints (`session-claim-cli`,
 `archive-stamp-cli`) elsewhere in this test directory.
 
-Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md
+Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9
 (M3 chunk WSC-1); ported source:
-Coordinator-claude coordinator/skills/workstream-complete/SKILL.md Step 0.
+DoE-claude coordinator/skills/workstream-complete/SKILL.md Step 0.
 
 Run:
     python -m pytest coordinator/bin/tests/test_wsc_session_disposition.py -q
@@ -1497,7 +1497,7 @@ class TestFindSessionClaimCli(unittest.TestCase):
             os.environ["USERPROFILE"] = str(userprofile_home)
             real_access = os.access
             real_is_file = Path.is_file
-            sibling_path = _BIN_DIR / "session-claim-cli"
+            sibling_path = _BIN_DIR / "session-claim-cli.py"
 
             def _fake_access(path, mode):
                 # Force the sibling-entrypoint rung (checked first) to miss --
@@ -1949,21 +1949,24 @@ class TestMemoPredecessorLeg(unittest.TestCase):
 
 
 class SessionClaimCliArgvTests(unittest.TestCase):
-    """`session-claim-cli` is extensionless and shebang-dispatched, so on
-    Windows detector C must invoke it through an interpreter — CreateProcess
-    raises WinError 193 on a bare extensionless path and does not read `#!`
-    lines. Before the fix these tests pin, that OSError escaped
+    """`session-claim-cli.py` (in-repo sibling) and the settings-home
+    installed `session-claim-cli` shim both carry neither a shebang nor an
+    exec bit post-C6/C4, so a bare-path launch fails on POSIX (no exec
+    permission) exactly as it fails on Windows (CreateProcess WinError 193 —
+    "%1 is not a valid Win32 application" — which also does not read `#!`
+    lines). Detector C must invoke through an interpreter on both platforms.
+    Before the original fix these tests pinned, the Windows OSError escaped
     `list_stale_claim_handoffs` and crashed `brief()` outright, taking the
-    whole `/workstream-complete` ceremony down on Windows rather than
-    degrading detector C."""
+    whole `/workstream-complete` ceremony down rather than degrading
+    detector C."""
 
-    def test_extensionless_path_routes_through_the_interpreter_on_windows(self):
+    def test_py_sibling_routes_through_the_interpreter_on_windows(self):
         with unittest.mock.patch.object(wsc.os, "name", "nt"):
-            argv = wsc._session_claim_cli_argv(Path("/bin/session-claim-cli"))
+            argv = wsc._session_claim_cli_argv(Path("/bin/session-claim-cli.py"))
         self.assertEqual(argv[0], sys.executable)
-        self.assertTrue(argv[1].endswith("session-claim-cli"))
+        self.assertTrue(argv[1].endswith("session-claim-cli.py"))
 
-    def test_extensioned_path_is_invoked_directly_on_windows(self):
+    def test_extensioned_cmd_path_is_invoked_directly_on_windows(self):
         # A `.cmd`/`.exe` sibling IS directly executable — routing it through
         # the interpreter would hand Python a batch file to parse.
         with unittest.mock.patch.object(wsc.os, "name", "nt"):
@@ -1971,11 +1974,11 @@ class SessionClaimCliArgvTests(unittest.TestCase):
         self.assertEqual(len(argv), 1)
         self.assertTrue(argv[0].endswith("session-claim-cli.cmd"))
 
-    def test_posix_invokes_the_bare_path_and_gains_no_interpreter(self):
+    def test_posix_installed_bare_name_also_routes_through_the_interpreter(self):
         with unittest.mock.patch.object(wsc.os, "name", "posix"):
             argv = wsc._session_claim_cli_argv(Path("/bin/session-claim-cli"))
-        self.assertEqual(len(argv), 1)
-        self.assertNotEqual(argv[0], sys.executable)
+        self.assertEqual(argv[0], sys.executable)
+        self.assertTrue(argv[1].endswith("session-claim-cli"))
 
 
 if __name__ == "__main__":

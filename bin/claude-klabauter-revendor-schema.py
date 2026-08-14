@@ -2,7 +2,7 @@
 bin/claude-klabauter-revendor-schema.py — general, named-schema re-vendor for every schema
 vendored under coordinator_core/frontmatter/schemas/.
 
-Purpose: re-vendor ANY vendored schema from the coordinator-claude clone AND update the gating
+Purpose: re-vendor ANY vendored schema from the DoE clone AND update the gating
 pin registry in the SAME verified operation, so claude-klabauter's two drift oracles can
 never be satisfied one at a time.
 
@@ -10,14 +10,14 @@ Why this exists (the two-oracle trap it closes)
 -----------------------------------------------
 Claude-klabauter checks vendored-schema drift twice, against two different references:
 
-  * ADVISORY, non-gating — `check_schema_drift_advisory` against coordinator-claude **HEAD**,
+  * ADVISORY, non-gating — `check_schema_drift_advisory` against DoE **HEAD**,
     aggregated by `coordinator_core.frontmatter.schema_drift_watch` and surfaced
     by the `claude-klabauter.schema.vendor_drift` doctor probe.
   * GATING tamper-check — `check_schema_drift(..., ref=<pinned SHA>)` against a
     per-schema pin in
     `coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS`.
 
-Copying coordinator-claude's file in by hand satisfies the first and BREAKS the second. That is
+Copying DoE's file in by hand satisfies the first and BREAKS the second. That is
 not hypothetical: on 2026-07-28 an installing agent followed the doctor probe's
 own `cp`-shaped remediation verbatim, watched the advisory probe go green at
 13/13, and simultaneously turned `check_schema_drift` red with `SchemaDriftError`
@@ -37,13 +37,13 @@ registry itself so this script cannot drift from the gate:
   * PIN-TRACKED — the schema's name is a key in `_QUEUE_SCHEMA_PINS`. Its gate
     compares against that pinned SHA. Re-vendoring it REQUIRES moving the pin.
   * HEAD-TRACKED — everything else (handoff, handoff-archived, plan-tasks,
-    percolate-store, ...). Its gate compares against coordinator-claude HEAD, so there is no pin
+    percolate-store, ...). Its gate compares against DoE HEAD, so there is no pin
     to move and `--ref` other than HEAD is refused (vendoring such a schema at a
     non-HEAD ref would land a tree that is red by construction).
 
 Contract (mirrors bin/claude-klabauter-revendor-handoff-schema.py, which now delegates here)
 ----------------------------------------------------------------------------------
-  - Fail-closed: an absent coordinator-claude clone, an unreadable pin registry, a failed
+  - Fail-closed: an absent DoE clone, an unreadable pin registry, a failed
     `git show`, or an unknown schema name each abort loudly. Never a silent no-op.
   - Byte-for-byte overwrite, no reformatting (`.prettierignore` guards it upstream).
   - Idempotent: already in sync with nothing to re-pin makes no changes, exits 0.
@@ -159,9 +159,9 @@ _SHA_SHAPE_RE = re.compile(r"^[0-9a-f]{7,40}$")
 # bearing corpus, CLAUDE.md), just a directory of its own.
 _DECLINE_RECORDS_DIR = _REPO_ROOT / "state" / "schema-decline-records"
 
-# claude-klabauter-owned (not coordinator-claude-vendored) — lives in coordinator_core/contract/ alongside
+# claude-klabauter-owned (not DoE-vendored) — lives in coordinator_core/contract/ alongside
 # cross-repo-memo.schema.json / change-signal.schema.json, deliberately NOT under
-# coordinator_core/frontmatter/schemas/ (that directory is coordinator-claude-vendored territory
+# coordinator_core/frontmatter/schemas/ (that directory is DoE-vendored territory
 # globbed by schema_drift_watch.vendored_schema_paths; see emit_memo_schema.py's
 # `forbidden` guard for the rule this placement follows).
 _DECLINE_RECORD_SCHEMA_PATH = _REPO_ROOT / "coordinator_core" / "contract" / "schema-decline-record.schema.json"
@@ -220,7 +220,7 @@ def _git(clone: Path, *args: str) -> subprocess.CompletedProcess:
     except subprocess.TimeoutExpired:
         _die(
             f"git {' '.join(args)} timed out after {_GIT_TIMEOUT}s in {clone} — "
-            "the coordinator-claude clone may be corrupt or on a stalled mount."
+            "the DoE clone may be corrupt or on a stalled mount."
         )
         raise  # unreachable; keeps type-checkers honest
 
@@ -414,7 +414,7 @@ def _reason_comment_lines(
     """
     today = time.strftime("%Y-%m-%d", time.gmtime())
     head = (
-        f"Pin moved {today} to {sha} (coordinator-claude {ref}) by "
+        f"Pin moved {today} to {sha} (DoE {ref}) by "
         f"bin/claude-klabauter-revendor-schema.py {name}."
     )
     body = " ".join(str(reason).split())
@@ -479,7 +479,7 @@ def _fleet_corpus_gate_reasons(incoming_text: str) -> tuple[list[str], list[str]
     A pre-flight FINDING (off-enum records, or an unclassified registry key) is
     a genuine gating reason: advancing a major narrow while live fleet records
     still carry a value the incoming schema would reject is exactly the defect
-    this wiring closes (cross-repo/inbox/2026-07-31-coordinator-claude-em-consumer-
+    this wiring closes (cross-repo/inbox/2026-07-31-doe-claude-em-consumer-
     corpus-preflight-blind-to-half-the-fleet.md).
 
     A pre-flight FAILURE (an unreadable registry, or its own oracle — the
@@ -535,13 +535,13 @@ def _major_bump_reasons(
 
     `x-bump-class` is STICKY metadata: it describes the schema's own most recent
     version bump and stays on the file forever after, so it says nothing on its own
-    about the delta THIS run would apply. Gating on it directly cries wolf — coordinator-claude's
+    about the delta THIS run would apply. Gating on it directly cries wolf — DoE's
     handoff.schema.json has carried `x-bump-class: major` since its 3.0.0 bump, and a
     naive read would refuse every subsequent re-vendor of it, including whitespace.
 
     So the two gating signals are both delta-scoped:
       * The incoming `x-schema-version` MAJOR exceeds the vendored one.
-      * The version changed at all AND coordinator-claude classified that change `major`.
+      * The version changed at all AND DoE classified that change `major`.
 
     A `major` bump-class with an UNCHANGED version is returned as a note, not a gate:
     the vendored copy is already at that major, so the delta is post-bump content.
@@ -573,7 +573,7 @@ def _major_bump_reasons(
         reasons.append(f"x-schema-version major advances {local_v} -> {doe_v}")
     elif local_v != doe_v and doe_bump == "major":
         reasons.append(
-            f"coordinator-claude classified the {local_v} -> {doe_v} bump as x-bump-class: major"
+            f"DoE classified the {local_v} -> {doe_v} bump as x-bump-class: major"
         )
     elif local_v == doe_v and doe_bump == "major":
         notes.append(
@@ -629,7 +629,7 @@ def _decline_gate_reasons(name: str, incoming_bytes: bytes) -> tuple[list[str], 
     against, OR the incoming shape hash differs from the declined one, this
     returns no reason. That is deliberate — the real-world resolution path for
     a decline is upstream bumping the version (the DR-097 handoff-schema
-    episode this feature responds to resolved exactly that way, coordinator-claude later
+    episode this feature responds to resolved exactly that way, DoE later
     landing 8.0.0), and an operator must never have to hand-clear a decline
     that upstream already resolved.
 
@@ -725,7 +725,7 @@ def _build_plan(
     r = _git(clone, "cat-file", "-e", f"{sha}:{doe_rel}")
     if r.returncode != 0:
         _die(
-            f"Precondition FAILED: '{doe_rel}' not found in the coordinator-claude clone at {sha}. "
+            f"Precondition FAILED: '{doe_rel}' not found in the DoE clone at {sha}. "
             f"Known vendored schemas: {', '.join(_vendored_names())}."
         )
     incoming = _git_show_bytes(clone, sha, doe_rel)
@@ -758,7 +758,7 @@ def _verify(plans: list[_Plan], clone: Path, sha: str) -> list[str]:
     """Verify every touched schema against the reference its OWN gate uses.
 
     Pin-tracked schemas are checked against the pin this run just wrote; HEAD-tracked
-    schemas against coordinator-claude HEAD. Both are `check_schema_drift` — the same function the
+    schemas against DoE HEAD. Both are `check_schema_drift` — the same function the
     gating test calls — so a green result here is the gate's own verdict, not a
     restatement of what this script believes it wrote.
 
@@ -817,22 +817,22 @@ def run(
     (`bin/claude-klabauter-revendor-handoff-schema.py`) can fix a schema set and delegate the
     whole mechanism here rather than carrying a second copy of it.
     """
-    # --- Step 1: resolve the coordinator-claude clone -------------------------------------
-    _info("[1] Resolving coordinator-claude clone...")
+    # --- Step 1: resolve the DoE clone -------------------------------------
+    _info("[1] Resolving DoE clone...")
     if doe_clone_arg:
         clone = Path(doe_clone_arg).expanduser().resolve()
         if not clone.is_dir():
             _die(f"--doe-clone path does not exist or is not a directory: {clone}")
-        _info(f"  coordinator-claude clone (--override): {clone}")
+        _info(f"  DoE clone (--override): {clone}")
     else:
         try:
             clone = resolve_doe_clone()
         except DoeResolveError as exc:
             _die(str(exc))
             raise AssertionError  # unreachable
-        _info(f"  coordinator-claude clone (registry): {clone}")
+        _info(f"  DoE clone (registry): {clone}")
     if not (clone / ".git").exists():
-        _die(f"coordinator-claude clone at {clone} does not look like a git repo (no .git).")
+        _die(f"DoE clone at {clone} does not look like a git repo (no .git).")
 
     # --- Step 2: resolve the ref -------------------------------------------
     _info(f"[2] Resolving ref {ref!r}...")
@@ -849,7 +849,7 @@ def run(
         _warn(
             f"{clone} is {behind} commit(s) BEHIND its upstream (as of the last fetch). This "
             "run compares against a STALE local HEAD, so an 'already in sync' result does NOT "
-            f"mean the vendored files match coordinator-claude's real HEAD. Run `git -C {clone} pull` and "
+            f"mean the vendored files match DoE's real HEAD. Run `git -C {clone} pull` and "
             "re-run before trusting a no-op result."
         )
 
@@ -884,12 +884,12 @@ def run(
         if head_tracked:
             _die(
                 f"--ref {ref!r} refused for HEAD-tracked schema(s): {', '.join(head_tracked)}. "
-                "Their gating check compares against coordinator-claude HEAD, so vendoring them at any other "
+                "Their gating check compares against DoE HEAD, so vendoring them at any other "
                 "ref would land a tree that is red by construction. Re-vendor them at HEAD."
             )
 
     # --- Step 5: build the plan --------------------------------------------
-    _info("[4] Diffing vendored bytes and pins against the coordinator-claude clone...")
+    _info("[4] Diffing vendored bytes and pins against the DoE clone...")
     plans = [_build_plan(n, clone, sha, pins) for n in names]
     for plan in plans:
         cls = f"pin-tracked (pin {plan.pin.sha})" if plan.pin else "HEAD-tracked"
@@ -956,7 +956,7 @@ def run(
     # --- Step 7: dry-run exit ----------------------------------------------
     if dry_run:
         _info("\n[DRY RUN] Plan — no files written:")
-        _info(f"  coordinator-claude ref:        {ref} ({sha})")
+        _info(f"  DoE ref:        {ref} ({sha})")
         _info(f"  Bytes to write: {[p.name for p in actionable if p.needs_write] or 'none'}")
         _info(f"  Pins to move:   {[p.name for p in repins] or 'none'}")
         if repins:
@@ -1046,7 +1046,7 @@ def run(
 
 
 def _drifted_names() -> list[str]:
-    """Schema names the advisory drift watch currently reports as behind coordinator-claude HEAD.
+    """Schema names the advisory drift watch currently reports as behind DoE HEAD.
 
     Reuses `scan_vendored_schema_drift` — the exact function the
     `claude-klabauter.schema.vendor_drift` doctor probe calls — so `--all-drifted` acts on the
@@ -1080,7 +1080,7 @@ def _print_list() -> int:
     for name in _vendored_names():
         pin = pins.get(name)
         if pin is None:
-            _info(f"  {name:<28} HEAD-tracked  (gate compares against coordinator-claude HEAD)")
+            _info(f"  {name:<28} HEAD-tracked  (gate compares against DoE HEAD)")
         else:
             alias = f" via {pin.via_alias}" if pin.via_alias else ""
             _info(f"  {name:<28} pin-tracked   {pin.sha}{alias}")
@@ -1096,13 +1096,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="claude-klabauter-revendor-schema.py",
         description=(
             "Re-vendor any schema under coordinator_core/frontmatter/schemas/ from the "
-            "coordinator-claude clone AND update its gating pin in the same verified operation. "
+            "DoE clone AND update its gating pin in the same verified operation. "
             "Fail-closed, byte-identical, idempotent, rolled back on any verification failure."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Why not `cp`: claude-klabauter checks vendored-schema drift twice — an ADVISORY check\n"
-            "against coordinator-claude HEAD (the claude-klabauter.schema.vendor_drift doctor probe) and a GATING\n"
+            "against DoE HEAD (the claude-klabauter.schema.vendor_drift doctor probe) and a GATING\n"
             "tamper-check against a per-schema pinned SHA in\n"
             "coordinator_core/frontmatter/tests/test_schema_validate.py::_QUEUE_SCHEMA_PINS.\n"
             "Copying the file by hand satisfies the first and breaks the second.\n\n"
@@ -1113,7 +1113,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  python3 bin/claude-klabauter-revendor-schema.py review-findings --dry-run\n\n"
             "  # Re-vendor + re-pin, with the reason recorded in the pin registry:\n"
             "  python3 bin/claude-klabauter-revendor-schema.py review-findings \\\n"
-            "      --reason 'coordinator-claude landed v2.0.0 frontmatter-required shape' --ack-major\n\n"
+            "      --reason 'DoE landed v2.0.0 frontmatter-required shape' --ack-major\n\n"
             "  # Everything the drift probe just named:\n"
             "  python3 bin/claude-klabauter-revendor-schema.py --all-drifted --reason '...' --dry-run\n"
         ),
@@ -1131,7 +1131,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Re-vendor every schema the advisory drift watch currently reports as behind "
-            "coordinator-claude HEAD — the same set the claude-klabauter.schema.vendor_drift probe names."
+            "DoE HEAD — the same set the claude-klabauter.schema.vendor_drift probe names."
         ),
     )
     p.add_argument(
@@ -1144,7 +1144,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="HEAD",
         metavar="GITREF",
         help=(
-            "coordinator-claude ref to vendor from (default: HEAD). Refused for HEAD-tracked schemas, "
+            "DoE ref to vendor from (default: HEAD). Refused for HEAD-tracked schemas, "
             "whose gate compares against HEAD by construction."
         ),
     )
@@ -1152,8 +1152,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--doe-clone",
         metavar="PATH",
         help=(
-            "Override the coordinator-claude clone path. Default: resolve via the machine-local registry "
-            "(repos.example_doctrine_repo). Reuses resolve_doe_clone() — never re-implements registry parsing."
+            "Override the DoE clone path. Default: resolve via the machine-local registry "
+            "(repos.doe_claude). Reuses resolve_doe_clone() — never re-implements registry parsing."
         ),
     )
     p.add_argument(
@@ -1168,7 +1168,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--ack-major",
         action="store_true",
         help=(
-            "Acknowledge a MAJOR advance (coordinator-claude x-bump-class: major, or an x-schema-version "
+            "Acknowledge a MAJOR advance (DoE x-bump-class: major, or an x-schema-version "
             "major increase). Without it, a major advance is refused."
         ),
     )
@@ -1184,7 +1184,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--decline",
         action="store_true",
         help=(
-            "Write a decline record for the named schema's current coordinator-claude incoming shape "
+            "Write a decline record for the named schema's current DoE incoming shape "
             "instead of vendoring it — requires --reason and --backout-sha."
         ),
     )
@@ -1209,7 +1209,7 @@ def _write_decline(
     reason: str | None,
     backout_sha: str | None,
 ) -> int:
-    """Record a deliberate decline of the coordinator-claude incoming shape for each named schema.
+    """Record a deliberate decline of the DoE incoming shape for each named schema.
 
     The cheap-path counterpart to `run()`'s import path (CLAUDE.md north star: the
     correct path must be cheaper than the wrong one). An operator who just reverted a
@@ -1245,7 +1245,7 @@ def _write_decline(
             _die(str(exc))
             raise AssertionError  # unreachable
     if not (clone / ".git").exists():
-        _die(f"coordinator-claude clone at {clone} does not look like a git repo (no .git).")
+        _die(f"DoE clone at {clone} does not look like a git repo (no .git).")
     sha = _resolve_ref_sha(clone, ref)
 
     _DECLINE_RECORDS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1253,7 +1253,7 @@ def _write_decline(
         doe_rel = f"{_DOE_SCHEMAS_REL}/{name}{_SCHEMA_SUFFIX}"
         r = _git(clone, "cat-file", "-e", f"{sha}:{doe_rel}")
         if r.returncode != 0:
-            _die(f"Precondition FAILED: '{doe_rel}' not found in the coordinator-claude clone at {sha}.")
+            _die(f"Precondition FAILED: '{doe_rel}' not found in the DoE clone at {sha}.")
         incoming = _git_show_bytes(clone, sha, doe_rel)
         incoming_text = incoming.decode("utf-8", errors="replace")
         version = _read_schema_string_key(incoming_text, "x-schema-version")

@@ -155,7 +155,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "the file must not fail, or behave differently, on a claim-"
         "bookkeeping nicety -- same pattern as the priority_drain.py and "
         "rewrite_basename.py entries above",
-    ("bin", "cross-repo-memo", "_archive_sent_outbox_draft", "shutil.move", "shutil.move(outbox_path, dest)", 1):
+    ("bin", "cross-repo-memo.py", "_archive_sent_outbox_draft", "shutil.move", "shutil.move(outbox_path, dest)", 1):
         "cross-repo-memo._archive_sent_outbox_draft's fail-open fallback -- "
         "tries relocate_touched_path first (this is the confirmed strand "
         "instance the plan's source memo reported), falls back to a plain "
@@ -291,15 +291,15 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     # --- coordinator/bin no-strand sites (atomic tmp->final, or external- ---
     # --- destination trees outside this worktree entirely).               ---
     ("bin", "lib/git_hook_install.py", "_atomic_write", "os.replace", "os.replace(tmp, path)", 1): "atomic tmp->final; temp source never claimed",
-    ("bin", "coordinator-initiative", "_cmd_create", "os.replace", "os.replace(tmp, target)", 1): "atomic tmp->final; temp source never claimed (_cmd_create)",
-    ("bin", "coordinator-initiative", "_cmd_attach", "os.replace", "os.replace(tmp, artifact_path)", 1): "atomic tmp->final; temp source never claimed (_cmd_attach)",
+    ("bin", "coordinator-initiative.py", "_cmd_create", "os.replace", "os.replace(tmp, target)", 1): "atomic tmp->final; temp source never claimed (_cmd_create)",
+    ("bin", "coordinator-initiative.py", "_cmd_attach", "os.replace", "os.replace(tmp, artifact_path)", 1): "atomic tmp->final; temp source never claimed (_cmd_attach)",
     ("bin", "coordinator-tasks-mirror.py", "cmd_init", "os.replace", "os.replace(tmp_path, mirror_file)", 1): "atomic tmp->final; temp source never claimed (cmd_init)",
     ("bin", "coordinator-tasks-mirror.py", "cmd_update", "os.replace", "os.replace(tmp_path, mirror_file)", 1): "atomic tmp->final; temp source never claimed (cmd_update)",
     ("bin", "reconcile-completion-commits.py", "_atomic_write", "os.replace", "os.replace(tmp_path, path)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "claude-ue-bootstrap.py", "bootstrap", "Path.replace", "tmp_path.replace(settings_path)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "claude-ue-bootstrap.py", "bootstrap", "Path.replace", "tmp_path.replace(settings_path)", 2): "atomic tmp->final; temp source never claimed",
     ("bin", "seed-skill-overrides.py", "_atomic_write", "os.replace", "os.replace(tmp, settings_path)", 1): "atomic tmp->final; temp source never claimed",
-    ("bin", "coordinator-queue-append", "_write_out_path_overwrite", "os.replace", "os.replace(tmp_path, out_path)", 1): "atomic tmp->final; temp source never claimed",
+    ("bin", "coordinator-queue-append.py", "_write_out_path_overwrite", "os.replace", "os.replace(tmp_path, out_path)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "derive-file-attribution.py", "_save_cache", "os.replace", "os.replace(tmp_path, cache_path)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "workday-start-handoff-triage.py", "trim_orphan_sweep_notes", "Path.replace", "tmp_path.replace(path)", 1): "atomic tmp->final; temp source never claimed",
     ("bin", "seed-marketplace-enabledplugins.py", "_atomic_write", "os.replace", "os.replace(tmp, target)", 1): "atomic tmp->final; temp source never claimed",

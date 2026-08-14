@@ -1,6 +1,6 @@
 """test_probe_memory_headroom.py — test suite for probe-memory-headroom.py.
 
-Port of: probe-memory-headroom.test.sh (coordinator-claude 71e76370, 2026-07-21). Proves the probe's CONTRACT
+Port of: probe-memory-headroom.test.sh (DoE 71e76370, 2026-07-21). Proves the probe's CONTRACT
 (stable output shape + graceful degradation), not a specific machine's numbers: every field is
 always present, every value is an integer or the literal `unknown`, exit is always 0 on
 success, and --human never crashes. On Linux (/proc/meminfo present) it additionally

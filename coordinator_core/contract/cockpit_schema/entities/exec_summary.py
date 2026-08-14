@@ -1,5 +1,5 @@
 """
-ExecSummary — per-repo executive-summary entity. Pydantic port of coordinator-claude
+ExecSummary — per-repo executive-summary entity. Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/exec-summary.ts` (Zod source).
 
 A coordinator-mandated, one-screen "why this project matters" brief that
@@ -24,8 +24,8 @@ doc registry; see that field's own docstring for its null-vs-`[]` contract.
 
 Spec backlink: docs/wiki/exec-summary-artifact.md
 Spec backlink: docs/plans/2026-07-03-exec-summary-per-repo-brief.md
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
-Spec backlink: docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C6
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Spec backlink: DoE-claude:pln-human-facing-doc-staleness-det-d9c047 § C6
 """
 from __future__ import annotations
 

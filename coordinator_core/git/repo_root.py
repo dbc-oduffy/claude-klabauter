@@ -143,10 +143,8 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
-from coordinator_core.win_portability import no_console_creationflags
 
 _TIMEOUT_SECS = 2.0
-_NO_CONSOLE = no_console_creationflags()
 
 # cwd-keyed memo: absolute-cwd -> (toplevel_or_None, gitdir_or_None,
 # common_dir_or_None), populated by the WALK-based path. Deliberately
@@ -225,7 +223,7 @@ def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
             text=True,
             stdin=subprocess.DEVNULL,
             timeout=_TIMEOUT_SECS,
-            **_NO_CONSOLE,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False, None

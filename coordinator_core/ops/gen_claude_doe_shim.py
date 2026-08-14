@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.gen_claude_doe_shim — Port of: gen-claude-doe-shim.sh
-(coordinator-claude b5a4192c, 2026-07-20).
+(DoE b5a4192c, 2026-07-20).
 
 Purpose: renders .claude/shell/claude-doe-shim.sh — under CLAUDE_HOME when set,
 else under the HOME env var, else under the expanded platform home — from the
@@ -9,7 +9,7 @@ coordinator template (the claude() shell-function wrapper that shadows the bare
 the operator's interactive rc, selected from the SHELL env var (zsh picks
 ~/.zshrc, bash picks ~/.bashrc).
 
-Spec backlink: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § C2
+Spec backlink: DoE-claude:pln-coordinator-maximalist-install-e73afa § C2
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Idempotency:  safe to re-run — sentinel-guarded rc block, atomic writes; re-running
@@ -17,7 +17,7 @@ Idempotency:  safe to re-run — sentinel-guarded rc block, atomic writes; re-ru
 Dry-run safe: --check-only renders to a discarded temp path, never touches live files.
 Migration:    detects the legacy `# --- coordinator maximalist launch ---` block and
               surfaces a one-line migration note; does NOT silently rewrite it.
-Override:     --rc <path> (or the coordinator-claude trampoline's COORDINATOR_SHIM_RC env passthrough)
+Override:     --rc <path> (or the DoE trampoline's COORDINATOR_SHIM_RC env passthrough)
               selects the rc directly (escape hatch when $SHELL detection is wrong).
 
 Shell family: --shell bash|powershell (default: bash, preserving all prior
@@ -61,7 +61,7 @@ applied in the sibling ports gen_claude_doe_launcher.py / gen_doe_root_pointer.p
 Transport-failure exit code note (porter-brief addendum § 3b): this module's own
 exit codes are pure CLI-usage/business codes (0 success, 1 failure) — it has no
 notion of a "transport" failure itself (no subprocess, no claude-klabauter-internal call).
-The coordinator-claude-side trampoline's CLAUDE_KLABAUTER_ROOT-resolution / import-failure path (a distinct,
+The DoE-side trampoline's CLAUDE_KLABAUTER_ROOT-resolution / import-failure path (a distinct,
 outer transport-failure class) maps to a DEDICATED exit code 2 — never a reused
 business rc — per addendum rule A3b, so `run_required`-style callers can tell
 "the install step's own business logic failed" (1) apart from "the claude-klabauter engine
@@ -80,7 +80,7 @@ from typing import List, Optional
 
 from coordinator_core.session.declared_writes import declare_write
 
-_PROG = "gen-claude-doe-shim.sh"  # literal program-name prefix, matches the coordinator-claude filename
+_PROG = "gen-claude-doe-shim.sh"  # literal program-name prefix, matches the DoE filename
 
 SENTINEL_BEGIN = "# --- coordinator claude-doe shim [generated] ---"
 SENTINEL_END = "# --- end coordinator claude-doe shim ---"
@@ -88,7 +88,7 @@ SENTINEL_END = "# --- end coordinator claude-doe shim ---"
 LEGACY_MARKER = "# --- coordinator maximalist launch ---"
 # The invariant lead-in shared by every observed hand-written variant of the
 # marker line above -- real-world instances append a trailing comment/padding
-# suffix (e.g. "... (coordinator-claude-resident plugin source) ----------------") after
+# suffix (e.g. "... (DoE-resident plugin source) ----------------") after
 # "launch", so detection matches this as a line PREFIX (after strip), never
 # the full LEGACY_MARKER string as a whole-line equality check.
 LEGACY_MARKER_PREFIX = "# --- coordinator maximalist launch"
@@ -112,6 +112,12 @@ EXPECTED_SOURCE_LINE_POWERSHELL = (
 
 SHELL_FAMILIES = ("bash", "powershell")
 
+# Generator-provenance: writes the rendered shim under <CLAUDE_HOME|HOME>/
+# .claude/shell/claude-doe-shim.sh and wires a sentinel block into the
+# operator's interactive rc (~/.bashrc or ~/.zshrc) -- entirely outside
+# claude-klabauter's own tracked tree.
+GENERATES = []
+
 
 def _shim_filename(shell_family: str) -> str:
     """bash/zsh render a POSIX-sourced ``.sh`` shim; PowerShell dot-sources a
@@ -134,7 +140,7 @@ Options:
   --check-only        Validate without mutating any live file (renders to a
                       temp path, discards it, exits 0 on success)
   --template <path>   Override template source path (default: auto-resolved
-                      relative to the coordinator-claude trampoline; useful for tests)
+                      relative to the DoE trampoline; useful for tests)
   --shell <family>    Target shell family: "bash" (default, covers bash/zsh)
                       or "powershell" (selects the .ps1 shim path and a
                       dot-source wired line instead of a bash source line)
@@ -150,7 +156,7 @@ Exit codes:
        --check-only pass)
   1 -- any failure: unknown argument, missing --template value, template not
        found, rc sentinel block hand-modified, rc file uncreatable, or (from the
-       coordinator-claude trampoline) CLAUDE_KLABAUTER_ROOT/import resolution failure
+       DoE trampoline) CLAUDE_KLABAUTER_ROOT/import resolution failure
 """
 
 
@@ -200,8 +206,8 @@ def main(argv: List[str]) -> int:
     (docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9).
 
     ``--graceful-skip-unresolved`` exits 0 with a ``skipped`` row (instead of
-    attempting the write) when ``repos.example_doctrine_repo`` cannot be resolved via
-    ``REPO_EXAMPLE_DOCTRINE_REPO``/``machine-local`` — mirrors the install.md chain-order
+    attempting the write) when ``repos.doe_claude`` cannot be resolved via
+    ``REPO_DOE_CLAUDE``/``machine-local`` — mirrors the install.md chain-order
     guard that used to live in the doc's own ``elif -n "${DOE_CLONE:-}"``
     branch. Has no effect under --check-only (its own validation contract is
     unchanged).
@@ -262,7 +268,7 @@ def main(argv: List[str]) -> int:
             i += 1
 
     if graceful_skip_unresolved and not check_only:
-        env_override = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "")
+        env_override = os.environ.get("REPO_DOE_CLAUDE", "")
         doe_resolved = bool(env_override)
         if not doe_resolved:
             ml_bin = shutil.which("machine-local")
@@ -271,7 +277,7 @@ def main(argv: List[str]) -> int:
                     from coordinator_core.win_portability import no_console_creationflags
 
                     result = subprocess.run(
-                        [ml_bin, "get", "repos.example_doctrine_repo"],
+                        [ml_bin, "get", "repos.doe_claude"],
                         capture_output=True,
                         text=True,
                         check=False,
@@ -281,20 +287,20 @@ def main(argv: List[str]) -> int:
                 except OSError:
                     doe_resolved = False
         if not doe_resolved:
-            print("claude_shim: skipped (coordinator-claude clone not resolved — complete step 3.5a first)")
+            print("claude_shim: skipped (DoE clone not resolved — complete step 3.5a first)")
             return 0
 
     if not template_override:
-        # This module has no co-located coordinator-claude-side script path to derive the oracle's
+        # This module has no co-located DoE-side script path to derive the oracle's
         # `${_script_dir}/../templates/shell/claude-doe-shim.sh.tmpl` default from —
-        # the coordinator-claude trampoline resolves that default itself (relative to its own
+        # the DoE trampoline resolves that default itself (relative to its own
         # on-disk location) and always passes --template explicitly, so this branch
         # is reached only when a caller invokes main() directly without one. Fail
         # loud rather than guess a cwd-relative path that could silently pick up the
         # wrong template.
         print(
             f"{_PROG}: --template not supplied and no default resolvable "
-            "(the coordinator-claude trampoline should always pass one explicitly).",
+            "(the DoE trampoline should always pass one explicitly).",
             file=sys.stderr,
         )
         print("claude_shim: failed (see stderr for gen-claude-doe-shim.py output)")

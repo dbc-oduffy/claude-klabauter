@@ -1,6 +1,6 @@
 """test_learn_lessons_age_sweep — pytest tests for coordinator/bin/learn-lessons-age-sweep.py.
 
-Spec backlink: coordinator-claude coordinator/skills/learn-lessons/SKILL.md
+Spec backlink: DoE-claude coordinator/skills/learn-lessons/SKILL.md
   § Phase 4.5 — Local-Mode Age-Sweep (Bound the File) [cutoff subcommand]
   § Phase 5 — Authorization and Apply § Strip-list orphan-rejection
     [check-strip-orphans subcommand]

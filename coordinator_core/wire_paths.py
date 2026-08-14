@@ -33,7 +33,7 @@ def rel_id(path: Path, root: Path) -> str:
     a lookup map on.  ``str(path.relative_to(root))`` is WRONG for all of those: it
     renders with ``os.sep``, so the same artifact gets id ``state/handoffs/x.md`` on
     POSIX and ``state\\handoffs\\x.md`` on Windows.  A wire value whose shape depends
-    on the producing host's OS is a contract defect — cockpit, rag, and coordinator-claude tooling
+    on the producing host's OS is a contract defect — cockpit, rag, and DoE tooling
     all key on this string, and git and ripgrep only ever speak forward-slash paths
     (so any comparison against ``git ls-files`` / ``git status --porcelain`` output,
     or any ``rg --fixed-strings`` needle built from a path, silently mismatches on

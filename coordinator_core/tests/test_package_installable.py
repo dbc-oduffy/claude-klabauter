@@ -13,7 +13,7 @@ top-level packages and refused to install at all. Fixing that also surfaced a
 second, more insidious failure mode: `coordinator_core/contract/` had no
 `__init__.py`, so a real (non-editable) wheel silently DROPPED
 `coordinator_core.contract` and everything nested beneath it (including
-`cockpit_schema`, coordinator-claude's sole cockpit-contract regeneration path).
+`cockpit_schema`, DoE's sole cockpit-contract regeneration path).
 
 **Only the non-editable leg below actually guards that second regression.**
 setuptools' PEP 660 editable install redirects each top-level package to its

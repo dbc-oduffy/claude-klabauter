@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """tests/test_check_multi_event_hook_hardcoded_event.py — Tests for
 bin/check-multi-event-hook-hardcoded-event.py.
 

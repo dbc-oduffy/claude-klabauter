@@ -10,7 +10,7 @@ mirroring cache.py's negative-spec.
 
 `surface_and_clear` (mirroring `ahs_surface_and_clear`) is ported alongside the
 write side (`record_failure` / `status_dir`) for full parity.
-Port of: async-hook-status.sh (coordinator-claude c187f5b9, 2026-07-21).
+Port of: async-hook-status.sh (DoE c187f5b9, 2026-07-21).
 
 Marker shape and directory layout are BYTE-IDENTICAL to the retired bash
 producer, which remains load-bearing for any consumer still golden-diffing
@@ -43,6 +43,11 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core._settings_home import claude_config_dir
+
+# Generator-provenance declaration (generator_provenance.py). record_failure
+# writes a JSON marker under claude_config_dir()/.cache/async-hook-status/ --
+# a settings-home cache directory, never a tracked claude-klabauter repo artifact.
+GENERATES = []
 
 
 def status_dir(claude_home: Optional[Path] = None) -> Optional[Path]:

@@ -30,7 +30,7 @@ also renders `result.gates_cleared[]` entries where `dry_run` is truthy AND
 `coordinator/bin/check-auto-reconcile.py`'s `_render` uses for its own
 would-flip line.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C2c
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C2c
 Spec backlink: cross-repo/inbox/2026-08-13-example-cockpit-repo-em-clear-verdict-invisible-under-dry-run-so-gates-never-announce.md
 
 Negative-spec:
@@ -310,12 +310,16 @@ def _read_auto_reconcile() -> ReaderResult:
 
     desync_points: list[dict[str, Any]] = []
     for idx, entry in enumerate(failed_reconciles):
+        handoff_id = entry.get("handoff_id") or "?"
         message = truncate_external_text(entry.get("message") or "no message")
         desync_points.append(
             build_judgment_point(
                 None,
                 id=f"j-desync-repair-failed-{idx + 1}",
-                question="Ledger/frontmatter desync repair failed — review manually?",
+                question=(
+                    f"Handoff {handoff_id!r} ledger/frontmatter desync repair "
+                    "failed — review manually?"
+                ),
                 dispositions=[
                     build_disposition("pm_reviews_manually"),
                     build_disposition("leave_for_now"),

@@ -28,7 +28,7 @@ Two entrypoints, two different contracts:
     loud with ``DivergentDeliverableIdError`` — a handoff chain spanning
     several plans carries an id differing from every one of them, so the two
     rungs disagreeing is the expected steady state, not the anomaly the error
-    text implies (coordinator-claude-em memo, 2026-08-10, with repro).
+    text implies (doe-claude-em memo, 2026-08-10, with repro).
 
     Tier (b) exists, and is load-bearing (not polish), because the tier (a)
     write is DOCUMENTED best-effort: ``claim_plan`` wraps the

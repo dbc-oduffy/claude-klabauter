@@ -25,7 +25,7 @@ Behavior:
 
 Size guard: THIS MODULE ENFORCES NO BYTE BUDGET FOR THIS TARGET. It
 originally self-gated post-merge byte size against the same HARD threshold
-`check-claude-md-size.py` enforces, scraped out of that coordinator-claude-resident file's
+`check-claude-md-size.py` enforces, scraped out of that DoE-resident file's
 source at runtime — but `coordinator_core.claude_md_budget.is_governed_claude_md`
 is a basename/governed-path concept (the global `~/.claude/CLAUDE.md`, or a
 dev-repo-sentinel-anchored `coordinator/CLAUDE.md`), and this module's real
@@ -49,16 +49,16 @@ checked on BOTH the insert path (no managed block yet) and the swap path
 module FAILS LOUD on that collision rather than silently appending a second
 `## Posture` heading or silently swap-merging past it.
 
-Port of: render-posture-overlay.sh (coordinator-claude a1a568d2, 2026-07-22)
+Port of: render-posture-overlay.sh (DoE a1a568d2, 2026-07-22)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
-Exit codes (parity-critical — the coordinator-claude trampoline forwards this verbatim):
+Exit codes (parity-critical — the DoE trampoline forwards this verbatim):
     0 — success (insert/swap performed, or --check-only report printed)
     1 — usage error / validation failure / collision
         (mirrors every `die()`/bad-usage exit in the bash oracle, which
         funnels ALL such failures to a single exit 1 — not split further,
         to stay byte-parity with the oracle's exit-code contract)
-    2 — RESERVED for the coordinator-claude trampoline's own claude-klabauter-link/import failure
+    2 — RESERVED for the DoE trampoline's own claude-klabauter-link/import failure
         (CLAUDE_KLABAUTER_ROOT resolution / ImportError) — never returned by this
         module's own main(); documented here so the two layers' exit-code
         tables stay disjoint (rule: transport-failure code must not collide
@@ -92,7 +92,10 @@ Negative-spec (do NOT "fix" while porting):
       matching semantics byte-for-byte.
 """
 
+
 from __future__ import annotations
+
+GENERATES = []  # merges into a caller-supplied target file (a consumer repo's .claude/em-context.md), never a fixed claude-klabauter artifact
 
 import os
 import re
@@ -311,9 +314,9 @@ def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tu
 def main(argv: List[str], coordinator_root: Optional[str] = None) -> int:
     """CLI entrypoint mirroring the bash oracle's arg-parse/usage/exit contract.
 
-    `coordinator_root` is a required keyword for real invocation (the coordinator-claude
+    `coordinator_root` is a required keyword for real invocation (the DoE
     trampoline resolves it from its own on-disk location, since the anchor
-    templates are coordinator-claude-resident, not claude-klabauter-resident) but defaults to None so
+    templates are DoE-resident, not claude-klabauter-resident) but defaults to None so
     a missing caller-supplied value surfaces as a normal usage-style error
     rather than an AttributeError/TypeError.
     """
@@ -375,7 +378,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         ),
     ),
 )
-"""One call site today (coordinator-claude's `install.md:500`); a second (`repo-setup`) is
+"""One call site today (DoE's `install.md:500`); a second (`repo-setup`) is
 named as a future caller in `install.md:540` but is not wired yet, so this
 declares the one real caller only, not a speculative second.
 
@@ -389,6 +392,6 @@ module's own constants, read by `_swap()` at write time — never retyped, so
 a future edit to either constant changes this declaration for free.
 
 `path` keeps the `${_EM_CONTEXT_REPO_ROOT}` placeholder unresolved: `target`
-is supplied by the caller at runtime (coordinator-claude's trampoline resolves it from its
+is supplied by the caller at runtime (DoE's trampoline resolves it from its
 own env var), and this declaration describes the surface's SHAPE, not one
 machine's resolved absolute path."""

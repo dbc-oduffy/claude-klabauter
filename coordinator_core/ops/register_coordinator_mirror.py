@@ -9,12 +9,12 @@ Registering this structural fact lets bin/check-plugin-drift.sh surface it as
 `n/a-by-design` rather than treating it as an unchecked entry.
 
 Spec: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 5 / AC-7
-Port of: register-coordinator-mirror.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Port of: register-coordinator-mirror.sh (DoE 6fb5fb37, 2026-07-22)
 
-Division of labor (DR-047 — coordinator-claude owns contract, claude-klabauter owns engine): the coordinator-claude-side
-trampoline resolves the coordinator-claude-local "coordinator live path" fact (via
+Division of labor (DR-047 — DoE owns contract, claude-klabauter owns engine): the DoE-side
+trampoline resolves the DoE-local "coordinator live path" fact (via
 `resolve-coordinator-clone.sh --for-content`, with a `claude-home plugins` fallback —
-both coordinator-claude-specific path computations this engine-tree module has no business
+both DoE-specific path computations this engine-tree module has no business
 duplicating) and threads it in via `--live-path`; this module owns only the
 idempotent atomic TOML-section write, which is pure and portable. The registry path
 itself (`registry.local.toml` under the machine-local settings-home dir) IS resolved
@@ -25,11 +25,11 @@ of re-spawning a subprocess for a value obtainable in-process (confirmed byte-id
 output during the port's parity check).
 
 Negative-spec:
-    - Does NOT resolve the coordinator live path itself — that is a coordinator-claude-side concern
+    - Does NOT resolve the coordinator live path itself — that is a DoE-side concern
       (script-relative resolver lookup + claude-home-plugins fallback) threaded in via
       `--live-path`. A caller that omits `--live-path` gets a fail-loud usage error, not
       a silently-wrong registration (the bash oracle's fallback lived in the .sh; the
-      analogous fallback for a DIRECT caller of this module — no coordinator-claude trampoline in the
+      analogous fallback for a DIRECT caller of this module — no DoE trampoline in the
       loop — is out of scope for a pristine, unregistered op).
     - Does NOT reimplement a TOML parser — plain substring section-header detection
       only, matching the bash oracle's `section_header in existing` check exactly (a
@@ -40,7 +40,10 @@ Negative-spec:
       and dropped everything else on the floor — this is not a bug to "fix" mid-port).
 """
 
+
 from __future__ import annotations
+
+GENERATES = []  # writes an idempotent TOML section into machine-local registry.local.toml, outside claude-klabauter's repo tree
 
 import os
 import sys
@@ -49,7 +52,7 @@ from typing import List, Optional
 
 from coordinator_core._settings_home import machine_local_dir
 
-_PROG = "register-coordinator-mirror.sh"  # literal program-name prefix, matches the coordinator-claude filename
+_PROG = "register-coordinator-mirror.sh"  # literal program-name prefix, matches the DoE filename
 _SECTION_HEADER = "[plugin.mirrors.coordinator-claude]"
 
 

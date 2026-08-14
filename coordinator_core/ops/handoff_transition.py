@@ -6,8 +6,8 @@ mutations invoked at pickup-time (claim), supersession-time (supersede), and
 stamp-only archival-time (ship).  Each verb is ONE atomic file write (no
 half-mutated on-disk intermediate); post-mutation schema validation gates the write.
 
-Spec backlink: coordinator-claude coordinator/bin/handoff-transition.js
-Port source:   coordinator-claude coordinator/bin/handoff-transition.js
+Spec backlink: DoE-claude coordinator/bin/handoff-transition.js
+Port source:   DoE-claude coordinator/bin/handoff-transition.js
 
 Verb contracts (mirrored from the JS spec):
 
@@ -86,7 +86,7 @@ Verb contracts (mirrored from the JS spec):
       old field name consumed_by is ALSO stripped if present)
     - gate_dependency: STRIPPED entirely on the flip to ready_to_fire (remove the
       key, not blank it — the ready_to_fire→gate_dependency-forbidden cross-field
-      rule requires absence; mirrors gate-recheck --cleared, matches coordinator-claude parity)
+      rule requires absence; mirrors gate-recheck --cleared, matches DoE parity)
     - pickup_ready: preserved untouched (authorial-intent record)
     - Optional `note` (str): when non-empty, stamps park_note: in FRONTMATTER
       (replace if present, insert after deployment_state if absent) — never
@@ -447,6 +447,44 @@ def _validate_fm(fm_text: str) -> list:
     return validate_frontmatter(fm_dict, _SCHEMA_PATH)
 
 
+def _normalize_claim_summary(fm_text: str, path: Path) -> str:
+    """Truncate an over-cap ``summary:`` ahead of the CLAIM verb's validation gate.
+
+    An over-cap ``summary:`` is cosmetic (PM ruling 2026-07-22, cross-repo ask 2 —
+    stated for the memo receiver's stamp, and adopted here for the same reason: a
+    validator that blocks on a cosmetic field converts a formatting nit into a
+    lifecycle outage). Refusing the claim strands the baton — the operator has to
+    hand-edit the record before ``pickup-assemble apply`` will take it, which is
+    exactly the manual-editing loop the ruling exists to end.
+
+    Delegates to ``handoff_normalize.normalize_present_summary`` rather than
+    re-implementing the truncation: one shape (``value[:139] + "…"``), one
+    measurement (the ``yaml.safe_load``-decoded value the gate itself measures),
+    across both handoff writer seams. The trailing ``…`` keeps the truncation
+    visible to a later reader rather than silently lossy.
+
+    Scoped to CLAIM ONLY, deliberately. Claim is the verb that takes a baton, and a
+    stranded baton is the outage this closes; the other eight verbs (ship, close,
+    supersede, unclaim, repark, gate_recheck, gate_cascade_clear) keep their hard
+    refusal, so nothing here relaxes validation for a caller that wants it strict.
+
+    Negative-spec: does NOT touch ``_validate_fm``, ``_cf_summary_length_cap``, or
+    any of the 36 ``_HANDOFF_CROSS_FIELD_RULES`` — the gate stays strict and still
+    runs, on the normalized text, immediately after this. Every other cross-field
+    rejection (including a rejection on any field but ``summary``) still aborts the
+    claim with the validator's own message.
+    """
+    # Function-local: importing handoff_normalize fires its
+    # @register_op("handoff.normalize") side-effect, and importing
+    # handoff_transition must not silently register a second op.
+    from coordinator_core.ops.handoff_normalize import normalize_present_summary
+
+    normalized, _change = normalize_present_summary(
+        fm_text, path, label="handoff.transition"
+    )
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # claim
 # ---------------------------------------------------------------------------
@@ -576,6 +614,9 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
         # the advisory field into the same noise AC9 is trying to remove.
         # Plain strip is correct.
         fm = _strip_gate_evidence(fm)
+
+        # Summary-cap normalization ahead of the gate — see _normalize_claim_summary.
+        fm = _normalize_claim_summary(fm, path)
 
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)
@@ -860,7 +901,7 @@ def _repark(handoff_path: str, worktree: Path, repo_root: Path) -> dict:
 
     Fail-loud (exit_code=1, no write) when deployment_state is not currently
     in_flight — repark is defined ONLY as the in_flight → ready_to_fire
-    transition (mirror coordinator-claude handoff-transition.js:367-400, esp. 385-389).
+    transition (mirror DoE handoff-transition.js:367-400, esp. 385-389).
     Idempotency: no-op when deployment_state is already ready_to_fire.
     gate_dependency is STRIPPED entirely on the flip to ready_to_fire (schema
     cross-field rule — a stale gate_dependency can survive onto an in_flight node).
@@ -1126,7 +1167,7 @@ def _close(
         # preserve. Replace if present (covers a stale true AND a stale
         # already-quoted value); insert if absent (a record minted before
         # pickup_ready existed gets the same guarantee going forward).
-        # Spec: cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-
+        # Spec: cross-repo/inbox/2026-08-10-doe-claude-em-reconcile-close-
         # terminal-and-scrub-key.md § 1.
         if read_fm_field(fm, "pickup_ready") is not None:
             fm = replace_fm_field(fm, "pickup_ready", "false")
@@ -1437,7 +1478,7 @@ def _unclaim(
         # cross-field rule requires absence (not blank). A node can reach in_flight
         # still carrying a stale gate_dependency (claim does not strip it), so
         # unclaim must retire it defensively or fail-loud on that input. Mirrors
-        # gate-recheck --cleared and the coordinator-claude handoff-transition.js unclaim writer (cross-writer parity).
+        # gate-recheck --cleared and the DoE handoff-transition.js unclaim writer (cross-writer parity).
         fm = _retire_gate_dependency(fm)
 
         # gate_evidence STRIPPED (C7, AC10) on the same flip to ready_to_fire,
@@ -1491,7 +1532,7 @@ def _unclaim(
 # ---------------------------------------------------------------------------
 
 #: KEBAB -> SNAKE translation table (the dispatch brief's "one thing most
-#: likely to be got wrong"). Coordinator-claude's ratified gate_evidence.legs[].kind
+#: likely to be got wrong"). DoE's ratified gate_evidence.legs[].kind
 #: vocabulary (coordinator_core/frontmatter/schemas/handoff.schema.json) is
 #: kebab-case (file-exists, frontmatter-field, commit-ancestor, ...) —
 #: coordinator_core.sibling_fact's three I/O primitives are snake_case
@@ -2043,15 +2084,15 @@ def _retire_gate_evidence(fm: str, *, rechecked_by_this_clear: bool = True) -> s
 _SIBLING_PROSE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*")
 
 #: One narrowly-scoped, DOCUMENTED bare-word alias — not a general alias
-#: mechanism. This repo's own doctrine (CLAUDE.md) uses bare "coordinator-claude" as the
-#: standing shorthand for the `example_doctrine_repo` sibling throughout its prose, and
+#: mechanism. This repo's own doctrine (CLAUDE.md) uses bare "DoE" as the
+#: standing shorthand for the `doe_claude` sibling throughout its prose, and
 #: the spinoff's own motivating incident (its "What this covers" section) is
-#: itself a bare-"coordinator-claude" `gate_dependency:` sentence ("coordinator-claude 'finalizing its
-#: contract'"), not a hyphenated "coordinator-claude" one — so the un-hyphenated form
+#: itself a bare-"DoE" `gate_dependency:` sentence ("DoE 'finalizing its
+#: contract'"), not a hyphenated "DoE-claude" one — so the un-hyphenated form
 #: is the dominant real-corpus shape this table exists to catch, not an edge
 #: case. Extending this table for other repos' informal names is a judgment
 #: call for a future chunk/PM ruling, not a local addition here.
-_SIBLING_PROSE_ALIASES: Dict[str, str] = {"doe": "example_doctrine_repo"}
+_SIBLING_PROSE_ALIASES: Dict[str, str] = {"doe": "doe_claude"}
 
 
 def _registered_sibling_repo_named_in_prose(prose: str) -> Optional[str]:
@@ -2068,7 +2109,7 @@ def _registered_sibling_repo_named_in_prose(prose: str) -> Optional[str]:
     Token shape: prose is scanned for identifier-like runs
     (`[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*`), each lowercased and
     hyphen-normalised to underscore to match this repo's own `repos.<id>`
-    naming convention (e.g. "coordinator-claude" -> "example_doctrine_repo", "claude-klabauter"
+    naming convention (e.g. "DoE-claude" -> "doe_claude", "claude-klabauter"
     -> "claude_klabauter" — the same convention CLAUDE.md's own prose uses
     throughout). `_SIBLING_PROSE_ALIASES` covers the one documented bare-word
     exception (see its own docstring).
@@ -2199,12 +2240,12 @@ def _gate_recheck(
     `at` is always stamped into last_gate_recheck (replace if present, insert after
     gate_dependency if absent). `cleared` additionally flips deployment_state:
     awaiting_gate → ready_to_fire and STRIPS gate_dependency entirely (remove the
-    key, not blank it — matches coordinator-claude wire semantics and the schema's
+    key, not blank it — matches DoE wire semantics and the schema's
     ready_to_fire→gate_dependency-forbidden if/then rule).
 
     Fail-loud (exit_code=1, no write) when deployment_state is not currently
     awaiting_gate — gate-recheck is defined ONLY as the awaiting_gate
-    re-check/clear transition (mirror coordinator-claude handoff-transition.js:432-500).
+    re-check/clear transition (mirror DoE handoff-transition.js:432-500).
     Idempotency: with `cleared`, no-op ONLY when deployment_state is already
     ready_to_fire. A bare re-run always re-stamps last_gate_recheck.
 

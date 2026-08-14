@@ -70,7 +70,7 @@ NEGATIVE-SPEC -- what this module deliberately does NOT do
   coverage is unverified, not merely "should work". Say so, do not imply
   otherwise.
 
-Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md
+Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9
 Sibling: ``_guard_coverage.py`` (reach measurement); ``tests/test_deny_message_
 accuracy.py`` (sampled message-vs-trigger correspondence, BX-12).
 
@@ -158,6 +158,11 @@ from coordinator_core.bash_guards import guard_plumbing_and_loops
 from coordinator_core.daily_day import local_day
 
 _PROBE_TIMEOUT_SEC = 10
+
+# Generator-provenance declaration (generator_provenance.py). Every on-disk
+# write in this module targets a tempfile.mkdtemp() scratch git repo used to
+# fire guards for measurement -- never the real working tree or a tracked path.
+GENERATES = []
 
 
 class GuardBand(enum.Enum):
@@ -751,10 +756,10 @@ def discover_write_guard_names() -> List[str]:
 def _trigger_validate_frontmatter_schema_advisory() -> Optional[Dict[str, Any]]:
     """Fires the warn-mode schema-validation leg with a `state/handoffs/*.md`
     write carrying no frontmatter at all -- the simplest deterministic
-    `build_violation_payload_advisory` trigger, needing no coordinator-claude
+    `build_violation_payload_advisory` trigger, needing no DoE-claude
     sibling checkout (the schema-validation leg matches purely off
     claude-klabauter's own vendored `_VENDORED_SCHEMAS_DIR`; `_load_doe_registry()`
-    fails open when the coordinator-claude root is unresolvable, per that guard's own
+    fails open when the DoE root is unresolvable, per that guard's own
     module docstring). Scratch git repo, never the real working tree --
     same pattern as this module's own `_scratch_git_repo` bash_guards
     triggers above."""

@@ -68,7 +68,7 @@ def test_count_inline_mechanism_signals_bash_fence() -> None:
 def test_count_inline_mechanism_signals_cc_trusted_anchored() -> None:
     # Whole-line anchor: `_cc_trusted=0` on its own line counts once; a
     # compound line carrying the same substring does not match (documented
-    # blind spot, mirrors the coordinator-claude ancestor's own anchoring rationale).
+    # blind spot, mirrors the DoE ancestor's own anchoring rationale).
     text = "_cc_trusted=0\n_cc_trusted=0  # reset\n"
     signals = count_inline_mechanism_signals(text)
     assert signals["cc_trusted"] == 1

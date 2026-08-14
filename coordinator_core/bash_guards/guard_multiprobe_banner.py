@@ -52,7 +52,7 @@ only toward a CONFIRMED outlet" gap fix): this module used to render its
 deny/advisory around a FIXED, generic ``outlet_example`` regardless of
 whether the sibling rewrite chain entry would actually produce a rewrite
 for THIS exact command -- a caller-text-inventory finding
-(`state/audits/2026-07-29-bash-guard-caller-text-inventory.md` § 2, coordinator-claude
+(`state/audits/2026-07-29-bash-guard-caller-text-inventory.md` § 2, DoE
 repo) named this the cheapest available promotion in this row ("the
 sibling `check_multiprobe_banner_rewrite` chain entry already computes the
 literal per-command rewrite; this guard's own message could reuse that
@@ -157,8 +157,8 @@ Negative-spec
     (allows silently, per the 2026-08-06 change above), never as a reason
     to skip its own override check.
 
-Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md § BX-7
-Spec backlink (shape/verdict primitives): docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md § C2, C6
+Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 § BX-7
+Spec backlink (shape/verdict primitives): DoE-claude:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C2, C6
 Spec backlink (rewrite target this guard denies toward): coordinator_core/bash_guards/dispatch_checks.py::check_multiprobe_banner_rewrite
 Spec backlink (seam-calling architecture this module now mirrors): coordinator_core/bash_guards/guard_plumbing_and_loops.py
 """

@@ -9,7 +9,7 @@ state/review-trail/findings/ — a sidecar is reapable iff BOTH:
      boundary; see _scan_reapable's docstring and test_boundary_13d_kept_vs_14d_reaped).
 
 This is leg (b) of the two-leg review-trail cleanup split (DR-218): marker-PRESENT
-sidecars (integrated, coordinator-claude's leg (a)) are never touched here; marker-ABSENT sidecars
+sidecars (integrated, DoE's leg (a)) are never touched here; marker-ABSENT sidecars
 younger than the age threshold are left alone (not yet aged into reap eligibility).
 
 Age-gate-FIRST scan ordering (reviewer finding 5) is load-bearing: the filename-only
@@ -33,7 +33,7 @@ Spec backlinks:
 
 Negative-spec:
   - Does NOT reap marker-present sidecars — those are integrated and belong to
-    coordinator-claude's leg (a); this op only ever removes marker-ABSENT files.
+    DoE's leg (a); this op only ever removes marker-ABSENT files.
   - Does NOT reap on marker-absence alone — the file must ALSO be aged past the
     14-day threshold (a fresh unintegrated finding is not yet reapable).
   - Does NOT use file mtime for the age gate — the authored date is parsed from
@@ -50,7 +50,7 @@ Negative-spec:
     "## Integrator Dispositions" verbatim in a ``` fence, flush-left). This is
     an ACCEPTED, FAIL-SAFE limitation, not an oversight: a false-positive match
     only ever KEEPS an otherwise-reapable file (never reaps a truly-unintegrated
-    one), and it matches coordinator-claude's own reference implementation
+    one), and it matches DoE's own reference implementation
     (`grep -qE '^## Integrator Dispositions'`) — parity with leg-(a) over
     incremental hardening this op alone would not carry through to the shell side.
 """

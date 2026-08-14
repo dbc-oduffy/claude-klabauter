@@ -3,7 +3,7 @@ coordinator_core.session.shape — the per-session ``session-shape.json``
 observable: pickup / memo-action / plan-claim write-moment facts, plus
 on-demand magnitude derivation.
 
-Port of: session-shape.sh (coordinator-claude e34f2484, 2026-07-22).
+Port of: session-shape.sh (DoE e34f2484, 2026-07-22).
 
 Writes/reads ``.git/coordinator-sessions/<sid>/session-shape.json`` — the
 per-session observable that ceremonies read once instead of grep/inferring
@@ -33,7 +33,7 @@ base-wins semantics directly. The jq-vs-awk-vs-python fallback ladder is an
 artefact of bash not having a JSON library in-process; it is unnecessary here
 and is intentionally NOT ported.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4a-g1
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4a-g1
 Spec backlink (original C1/C5 contract):
     docs/plans/2026-07-02-ceremony-as-pipeline-v1-session-state-co.md § C1, § C5
 Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/
@@ -83,6 +83,11 @@ from coordinator_core.win_portability import no_console_creationflags
 #: ``claimed_at`` recency gate. Overridable per-call via the
 #: ``_CS_SHAPE_LOCK_STALE_SEC`` environment variable (matching the bash
 #: ``${_CS_SHAPE_LOCK_STALE_SEC:-30}`` read).
+# Generator-provenance declaration (generator_provenance.py). session_shape_set/
+# producer_set write only `.git/coordinator-sessions/<sid>/session-shape.json` --
+# git-internal session-hub state, never a tracked repo artifact.
+GENERATES = []
+
 _SHAPE_LOCK_STALE_SEC_DEFAULT = 30
 
 #: Port of ``cs_session_shape_set``'s bounded-retry loop constants.
@@ -391,7 +396,7 @@ def session_shape_read(sid: str, cwd: Optional[str] = None) -> str:
 #: is rejected, because a typo here (e.g. ``"unresolvd"``) would otherwise
 #: be written silently and render as an ordinary open-vocabulary command
 #: name downstream, defeating the three-state distinguishability the whole
-#: design rests on. This is NOT a re-enumeration of coordinator-claude's open command
+#: design rests on. This is NOT a re-enumeration of DoE's open command
 #: vocabulary -- an unrelated real command name never matches closely
 #: enough to trip the guard.
 _TYPED_COMMAND_SENTINELS = ("other-command", "unresolved")
@@ -435,7 +440,7 @@ def producer_set(
     records in this design and they are deliberately different shapes:
 
       - CAPTURE-side (this function, ``session-shape.json``):
-        ``typed_command`` + ``captured_at``. Coordinator-claude's landed
+        ``typed_command`` + ``captured_at``. DoE-claude's landed
         ``session-shape.schema.json`` (x-schema-version 1.1.0) declares this
         object ``additionalProperties: false`` with both keys REQUIRED, so an
         extra ``op_identity`` key here is a hard validation failure on their
@@ -464,7 +469,7 @@ def producer_set(
 
     Negative-spec: do NOT validate ``typed_command`` against the coordinator
     command vocabulary here. That vocabulary is declared single-point in
-    coordinator-claude (their AC-6, with its own parity test); re-enumerating it on
+    DoE-claude (their AC-6, with its own parity test); re-enumerating it on
     this side would create a second source of truth that drifts silently.
     Any non-empty ``str`` is accepted by design -- the closed members
     (``"other-command"`` / ``"unresolved"``) are the contract this side
@@ -480,7 +485,7 @@ def producer_set(
     indistinguishable "ordinary command name" on disk.
 
     Spec backlink: state/sizings/2026-08-12-producer-axis-claude-klabauter-engine-half.yaml
-    Spec backlink (cross-repo contract): coordinator-claude
+    Spec backlink (cross-repo contract): DoE-claude
         docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md D6
     """
     if typed_command is not None and not isinstance(typed_command, str):

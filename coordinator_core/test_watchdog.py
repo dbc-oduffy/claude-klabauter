@@ -1,6 +1,6 @@
 """Tests for coordinator_core.watchdog — parity + edge-case coverage.
 
-Port of: test-coordinator-watchdog.sh (coordinator-claude c6d97219, 2026-07-22) — mirrors
+Port of: test-coordinator-watchdog.sh (DoE c6d97219, 2026-07-22) — mirrors
 its AC set (timeout return-code 124, ceiling bail, stall bail, probe-failure
 no-signal) plus the Python-port-specific edge cases (empty cmd, probe timeout
 — see module docstring's DELIBERATE DIVERGENCE note).

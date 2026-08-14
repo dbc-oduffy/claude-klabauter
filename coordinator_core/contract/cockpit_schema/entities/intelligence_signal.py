@@ -1,6 +1,6 @@
 """
 IntelligenceSignal — example-market-data-repo signal fact (Level-2 aggregate).
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/intelligence-signal.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/intelligence-signal.ts`
 (Zod source).
 
 Second of two v2.16.0 example-market-data-repo emission entities. Per-repo (D25
@@ -17,13 +17,13 @@ ask with cockpit's descriptor ask into one coherent union (D29).
 v2.19.0 widen: types the `confidence_interval` field deferred at D29/v2.18.0
 now that its wire shape is confirmed by example-market-data-repo + cockpit (D30).
 
-Spec backlink: docs/plans/2026-07-14-cockpit-contract-widen-market-intel-entities.md
+Spec backlink: DoE-claude:pln-cockpit-contract-widen-competi-0d708f
 Spec backlink: coordinator/docs/wiki/cockpit-contract-entity-addition-protocol.md
 Spec backlink: cross-repo/inbox/2026-07-14-example-cockpit-repo-em-market-intel-cockpit-contract-widen.md
 Spec backlink: cross-repo/inbox/2026-07-14-claude-klabauter-em-intelligence-signal-widen-conflict.md
 Spec backlink: cross-repo/inbox/2026-07-14-example-market-data-repo-em-doe-intelligence-signal-confidence-interval-type-confirmed.md
 Spec backlink: DECISIONS.md D29, D30
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

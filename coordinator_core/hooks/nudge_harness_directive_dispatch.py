@@ -17,12 +17,12 @@ Anthropic harness."
 
 This op is a LATE backstop, not the fix: it fires at end-of-turn, after the
 misattribution has already been spoken. Per DR-123 (`docs/decisions/
-DR-123-the-per-turn-dispatch-restatement-is-ret.md`, coordinator-claude), the work of
+DR-123-the-per-turn-dispatch-restatement-is-ret.md`, DoE-claude), the work of
 countering the harness line is now split three ways: the binding statement
 lives at SessionStart (`coordinator/snippets/agent-role-em.md` § How You
 Dispatch); the mid-conversation salience carrier is the once-per-session
 UserPromptSubmit line (`_DISPATCH_DEFAULT_LINE` in `runtime-tripwire-em-
-check.py`, coordinator/coordinator-claude-side, not this module); and this op is the third,
+check.py`, coordinator/DoE-side, not this module); and this op is the third,
 late backstop. The two tells this op originally shipped with (citing the
 directive; asking permission) both missed the actual 2026-08-02 failure
 shape — misattribution to the PM; Tell C below closes that gap. Tell D
@@ -68,7 +68,7 @@ Negative-spec:
       dual-path convention established in ``nudge_em_code_dispatch.py``. That is
       deliberate, not an omission: Stop events are not routed through the IPC
       daemon path at all, so there is nothing for a daemon-side handler to
-      register against. Transport here is the coordinator-claude-resident stdin/stderr shim
+      register against. Transport here is the DoE-resident stdin/stderr shim
       (``op(payload)`` only) — see ``nudge_em_code_dispatch.py``'s own banner
       comment for the fuller rationale on why the two paths must not be
       conflated.
@@ -532,7 +532,7 @@ def op(payload: dict) -> dict | None:
     """Stop advisory: nudge an EM that declined to dispatch on a misread harness line.
 
     Returns ``{"message": <str>}`` when the nudge should fire, ``None`` otherwise.
-    The caller owns transport (the coordinator-claude shim writes the message to stderr and
+    The caller owns transport (the DoE shim writes the message to stderr and
     exits 2, the documented Stop-hook block channel) — this op decides only
     *whether* to speak, per the DR-047 transport-seam split.
 
@@ -573,7 +573,7 @@ def op(payload: dict) -> dict | None:
     # Routed through the shared chokepoint (coordinator_core._hook_envelope) so
     # this emitter's bytes are captured by capture_session() alongside every
     # other prose-carrying builder call, per AC12. This module's transport is
-    # NOT the harness's hookSpecificOutput JSON protocol (see the coordinator-claude-resident
+    # NOT the harness's hookSpecificOutput JSON protocol (see the DoE-resident
     # stdin/stderr shim note in the module banner above) — only ``message`` is
     # ever read by the caller — so the envelope is built for measurement and
     # then unwrapped back to the same ``{"message": <str>}`` shape this op has

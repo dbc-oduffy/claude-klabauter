@@ -52,7 +52,7 @@ Negative-spec: does NOT resurrect `platform-localize.sh` — this reuses the
 merge *idiom* (codex / the engine repo's shipped `seed_enabled_plugins.py`
 shape), not the file.
 
-Spec backlink: docs/plans/2026-07-16-seed-marketplace-enabledplugins-at-install.md
+Spec backlink: DoE-claude:pln-seed-marketplace-sibling-enabl-4806a8
   § D1 (C1) — AC1, AC2, AC3, AC4, AC5. § D4 (C6) — AC9 (registration).
 Twin: the engine repo's shipped `scripts/seed_enabled_plugins.py` (f4e165e9)
   — same shape, differs only in TARGET (settings.local.json here, not
@@ -112,7 +112,7 @@ if sys.version_info < (3, 11):
 import tomllib  # stdlib, 3.11+
 
 # coordinator_core is engine-owned (this repo), not on sys.path by default for
-# a coordinator/bin script (coordinator-claude-side) — resolve this script's own co-located
+# a coordinator/bin script (DoE-side) — resolve this script's own co-located
 # CLAUDE_KLABAUTER_ROOT (self-location-first, never a machine-local registry lookup for
 # a checkout this script already lives inside) rather than importing
 # coordinator_core.machine_resolver/_machine_local in-process, per this
@@ -132,6 +132,8 @@ from coordinator_core.install.write_surface import (  # noqa: E402
 # Marketplace name never seeded as an enabledPlugins key — the inline install
 # loads coordinator live via --plugin-dir, so it has no marketplace entry to
 # enable. See module docstring "No coordinator self-entry" above.
+GENERATES = []  # writes settings.local.json and known_marketplaces.json under the resolved Claude home/settings-home (module docstring: "Only settings.local.json (gitignored, per-machine)") — outside claude-klabauter's own tracked tree
+
 _COORDINATOR_MARKETPLACE_NAME = "coordinator-claude"
 
 # Subpaths (relative to a sibling repo root) searched for a marketplace

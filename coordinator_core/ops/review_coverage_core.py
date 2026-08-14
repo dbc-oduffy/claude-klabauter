@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.review_coverage_core — Port of: review-coverage-core.sh
-(coordinator-claude c187f5b9, 2026-07-21) — BIG_PORT Wave C, direct-import trampoline,
+(DoE c187f5b9, 2026-07-21) — BIG_PORT Wave C, direct-import trampoline,
 template-variant #1.
 
 Purpose: shared coverage-computation core for review-trail gates. Exposes two
@@ -68,7 +68,7 @@ Spec backlink: docs/plans/2026-06-23-chain-end-review-coverage-gate.md § C2
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Central-reg: this op is a PLAIN MODULE (no @register_op) — direct-import
-trampoline variant (template-variant #1; see coordinator-claude
+trampoline variant (template-variant #1; see DoE-claude
 tasks/2026-07-16-clean-slate-recon/r1-doe-port-template.md § 1).
 NOT wired into ops/__init__.py / _registry_map.py / ipc.py /
 authz/classification.py — no registration action needed.
@@ -718,7 +718,7 @@ def classify_pending_records(
 # --segments-json result as data (no subprocess, no JSON round-trip). Used by
 # coordinator_core.ops.workweek_trail_scope, which used to shell out to this
 # module's own CLI trampoline (coordinator/lib/review-coverage-core.sh,
-# coordinator-claude) via `bash <script> --segments-json --on-unresolvable-ref skip`;
+# DoE-claude) via `bash <script> --segments-json --on-unresolvable-ref skip`;
 # now a same-process call now that both live in coordinator_core.
 # ---------------------------------------------------------------------------
 

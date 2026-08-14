@@ -179,8 +179,8 @@ def test_is_runnable_file_false_for_missing_and_for_dirs(tmp_path, monkeypatch):
 
 # --- P-9/P-11/P-13/P-18: presence-gate retirement — always in-process ---
 #
-# These 4 probes formerly shelled out to their own coordinator-claude-owned `.sh` sibling
-# scripts via _sh_argv (retired). Coordinator-claude's W4a rename (b5a4192c) turned each
+# These 4 probes formerly shelled out to their own DoE-owned `.sh` sibling
+# scripts via _sh_argv (retired). DoE's W4a rename (b5a4192c) turned each
 # `.sh` into a thin polyglot trampoline over an already-native claude-klabauter module,
 # so the probe now calls that module's main() directly in-process. A
 # subsequent presence-gate (_sibling_present, checking for the sibling script
@@ -607,11 +607,11 @@ def test_currency_plugin_root_prefers_doe_root_when_schema_file_present(tmp_path
 
 
 def test_currency_plugin_root_falls_back_when_doe_root_lacks_schema_file(tmp_path, monkeypatch):
-    """Marketplace-layout non-regression: the coordinator-claude-clone value is only verified
+    """Marketplace-layout non-regression: the DoE-clone value is only verified
     for the dev-clone layout, so it is used only when it demonstrably carries
     the schema-version file the probe needs. coordinator_doe_root() is
     monkeypatched to None so this stays hermetic against the real machine's
-    own coordinator-claude clone (which may itself carry the marker)."""
+    own DoE clone (which may itself carry the marker)."""
     monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
     doe = tmp_path / "doe" / "coordinator"
     doe.mkdir(parents=True)
@@ -631,7 +631,7 @@ def test_currency_plugin_root_falls_back_when_doe_root_is_none(tmp_path, monkeyp
 
 # --- Review: code-reviewer (P2, Finding 1) — _doe_coordinator_root()'s own
 # resolution ladder, repointed onto coordinator_doe_root() so P-11/P-13 honor
-# REPO_EXAMPLE_DOCTRINE_REPO/machine-local like every other consumer in the doe-root-sweep
+# REPO_DOE_CLAUDE/machine-local like every other consumer in the doe-root-sweep
 # wave. Prior coverage above only exercised _currency_plugin_root()'s downstream
 # fallback given an already-resolved value; these pin the resolver itself.
 
@@ -639,26 +639,26 @@ def test_currency_plugin_root_falls_back_when_doe_root_is_none(tmp_path, monkeyp
 def test_doe_coordinator_root_prefers_coordinator_bin_root_override(monkeypatch, tmp_path):
     """COORDINATOR_BIN_ROOT stays rung 1 — sentinel's own documented
     test-isolation seam, ahead of the shared coordinator_doe_root() ladder."""
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_BIN_ROOT", str(bin_dir))
     assert S._doe_coordinator_root() == tmp_path / "coordinator"
 
 
-def test_doe_coordinator_root_resolves_via_repo_example_doctrine_repo_env(monkeypatch, tmp_path):
-    """REPO_EXAMPLE_DOCTRINE_REPO alone (no ~/.claude/.doe-root file) must resolve —
+def test_doe_coordinator_root_resolves_via_repo_doe_claude_env(monkeypatch, tmp_path):
+    """REPO_DOE_CLAUDE alone (no ~/.claude/.doe-root file) must resolve —
     this is the exact gap Finding 1 identified: the pre-fix resolver only ever
-    read ~/.claude/.doe-root directly and never consulted REPO_EXAMPLE_DOCTRINE_REPO."""
+    read ~/.claude/.doe-root directly and never consulted REPO_DOE_CLAUDE."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    fake_doe_root = tmp_path / "fake-coordinator-claude"
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(fake_doe_root))
+    fake_doe_root = tmp_path / "fake-doe-claude"
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_root))
     assert S._doe_coordinator_root() == fake_doe_root / "coordinator"
 
 
 def test_doe_coordinator_root_returns_none_when_ladder_unresolvable(monkeypatch, tmp_path):
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
     assert S._doe_coordinator_root() is None
 
@@ -865,13 +865,13 @@ def test_p17_end_to_end_native_dispatch_no_subprocess(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Manifest resolution (doctor-probes.toml) — regression coverage for the
 # b644d5a9 executable-surface migration (2026-07-22): doctor-probes.toml moved
-# from coordinator-claude's coordinator/bin/ into claude-klabauter's own coordinator/bin/,
+# from DoE-claude's coordinator/bin/ into claude-klabauter's own coordinator/bin/,
 # but the manifest's non-override default kept resolving through
-# _doe_coordinator_root()'s coordinator-claude-root ladder, which no longer houses the file.
+# _doe_coordinator_root()'s DoE-root ladder, which no longer houses the file.
 # Every real invocation with no DOCTOR_PROBES_MANIFEST / COORDINATOR_BIN_ROOT
 # override hard-failed at the selector ("manifest not found") before any probe
 # fired. These tests pin that the DEFAULT resolution is claude-klabauter-native and does
-# NOT depend on coordinator-claude's coordinator/bin containing the manifest.
+# NOT depend on DoE-claude's coordinator/bin containing the manifest.
 # ---------------------------------------------------------------------------
 
 
@@ -888,12 +888,12 @@ def test_claude_klabauter_bin_root_resolves_this_repos_own_coordinator_bin():
 
 def test_default_manifest_path_ignores_doe_root_and_uses_claude_klabauter_bin_root(monkeypatch, tmp_path):
     """The regression pin: even when a `bin_dir_sibling` derived from a (fake,
-    manifest-less) coordinator-claude root is supplied and COORDINATOR_BIN_ROOT is unset, the
+    manifest-less) DoE root is supplied and COORDINATOR_BIN_ROOT is unset, the
     default manifest path must resolve to claude-klabauter's own coordinator/bin/ -- the
     exact failure mode this fix closes (manifest resolution silently depending
-    on a coordinator-claude coordinator/bin/ that no longer carries the file)."""
+    on a DoE-claude coordinator/bin/ that no longer carries the file)."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    fake_doe_bin = tmp_path / "fake-coordinator-claude" / "coordinator" / "bin"
+    fake_doe_bin = tmp_path / "fake-doe-claude" / "coordinator" / "bin"
     fake_doe_bin.mkdir(parents=True)
     # Deliberately does NOT contain doctor-probes.toml -- proves the default
     # path never even looks here.
@@ -903,7 +903,7 @@ def test_default_manifest_path_ignores_doe_root_and_uses_claude_klabauter_bin_ro
 
 
 def test_default_manifest_path_none_bin_dir_sibling_still_resolves_claude_klabauter_native(monkeypatch):
-    """No coordinator-claude root resolvable at all (bin_dir_sibling is None) must still
+    """No DoE root resolvable at all (bin_dir_sibling is None) must still
     resolve to claude-klabauter's own manifest, not degrade to None/unresolvable."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
     resolved = S._default_manifest_path(None)
@@ -925,13 +925,13 @@ def test_default_manifest_path_coordinator_bin_root_override_still_wins(monkeypa
 
 def test_run_triage_end_to_end_resolves_manifest_without_doe_root(monkeypatch, tmp_path):
     """End-to-end: `_run("triage", "")` must not hard-fail at the selector even
-    when the coordinator-claude-root ladder is entirely unresolvable (REPO_EXAMPLE_DOCTRINE_REPO unset,
+    when the DoE-root ladder is entirely unresolvable (REPO_DOE_CLAUDE unset,
     COORDINATOR_BIN_ROOT unset, coordinator_doe_root() patched to None) and
     DOCTOR_PROBES_MANIFEST is not set -- the exact repro from the bug report
     (`python3 -m coordinator_core.plugin_health.sentinel --triage` exiting 3
     with "selector error: inconclusive: manifest not found")."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("DOCTOR_PROBES_MANIFEST", raising=False)
     monkeypatch.setattr(S, "coordinator_doe_root", lambda: None)
     stdout_lines, stderr_lines, exit_code = S._run("triage", "")

@@ -1,6 +1,6 @@
 """
 CompetitorSummary — example-market-data-repo competitor relationship fact (Level-2).
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/competitor-summary.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/competitor-summary.ts`
 (Zod source).
 
 One of two entities added in the v2.16.0 widen for cockpit's example-market-data-repo
@@ -15,10 +15,10 @@ present carrying null). `extra="forbid"` per DD-7. competitor_uid non-null whene
 provenance.entity_anchor.kind === 'competitor_uid' per DD-8 (see model_validator) —
 one-directional presence check; value-equality is deliberately NOT enforced.
 
-Spec backlink: docs/plans/2026-07-14-cockpit-contract-widen-market-intel-entities.md
+Spec backlink: DoE-claude:pln-cockpit-contract-widen-competi-0d708f
 Spec backlink: coordinator/docs/wiki/cockpit-contract-entity-addition-protocol.md
 Spec backlink: cross-repo/inbox/2026-07-14-example-cockpit-repo-em-market-intel-cockpit-contract-widen.md
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

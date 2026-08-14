@@ -2,7 +2,7 @@
 test_new_entity_schemas — parse/reject tests for four entities across contract
 v2.1.0 (Roadmap/Tracker/HealthStatus) and v2.2.0 (DecisionGuideSummary).
 
-Pytest port of coordinator-claude `coordinator/cockpit-contract/test/new-entity-schemas.test.ts`.
+Pytest port of DoE `coordinator/cockpit-contract/test/new-entity-schemas.test.ts`.
 
 Spec backlink: docs/plans/2026-06-27-emit-new-record-types-producer-wiring.md § B4;
 docs/plans/2026-06-27-cockpit-emission-decision-guide-4th-type.md § C5

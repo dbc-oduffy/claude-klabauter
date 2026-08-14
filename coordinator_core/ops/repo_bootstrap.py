@@ -53,8 +53,8 @@ Machine-local CLI resolution: PATH first (`shutil.which`), then
 `${CLAUDE_HOME:-$HOME}/.claude/bin/machine-local` — the same two-rung ladder
 `coordinator_core.ops.register_discovered_repos._resolve_machine_local` uses,
 duplicated locally (not imported) because that function's second parameter
-(`self_dir`, a coordinator-claude-trampoline-supplied sibling-file directory) has no meaning
-here; this op has no coordinator-claude-side trampoline in its call chain. Per the plan's
+(`self_dir`, a DoE-trampoline-supplied sibling-file directory) has no meaning
+here; this op has no DoE-side trampoline in its call chain. Per the plan's
 mandated-resolvers table, a `repos.*` key is not the `coordinator.*` hot path,
 so resolution goes through the `machine-local` CLI (canonical), never the
 direct-TOML `machine_resolver.registry_get` short-circuit.

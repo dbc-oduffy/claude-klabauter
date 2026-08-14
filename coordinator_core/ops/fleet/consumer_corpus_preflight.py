@@ -4,7 +4,7 @@ consumer-corpus pre-flight.
 
 Purpose: report, PER REGISTERED FLEET REPO, how many ``state/handoffs/**`` +
 ``archive/handoffs/**`` records carry each ``kind`` frontmatter value — scanning
-CONSUMER trees (coordinator-claude, claude-klabauter, example-retrieval-repo, example-cockpit-repo,
+CONSUMER trees (DoE-claude, claude-klabauter, example-retrieval-repo, example-cockpit-repo,
 Example-retrieval-repo-ue-addon, example-game-workbench-repo, example-market-data-repo), never just
 this repo's own corpus — AND fail loud the moment any counted LIVE value falls
 outside the live ``kind`` enum, or the fleet-repo set itself has silently
@@ -18,7 +18,7 @@ nothing caught it before ceremony failures did. A producer-scoped oracle is the
 exact bug this module exists to stop repeating; landing it here IS the notice
 protocol the queue entry asked for.
 
-2026-07-31 hardening (cross-repo/inbox/2026-07-31-coordinator-claude-em-consumer-
+2026-07-31 hardening (cross-repo/inbox/2026-07-31-doe-claude-em-consumer-
 corpus-preflight-blind-to-half-the-fleet.md): the first cut of this module
 COULD NOT have caught the thing it was built for. A 2026-07-29 enum narrow
 (``kind: spinoff-roadmap`` retired) stranded 59 live records — 34 of them in
@@ -85,7 +85,7 @@ The fix is NOT blind ``repos.*`` enumeration — this machine's own registry
 genuinely carries non-EM junk (a `/tmp` smoke-test fixture, a UE `Saved/`
 scratch-log path) that a blind sweep would wrongly treat as a fleet repo, and
 the ORIGINAL ``:79-83`` rationale for excluding sandboxes/test fixtures was
-sound and coordinator-claude-ratified; this hardening does not reverse that intent.
+sound and DoE-ratified; this hardening does not reverse that intent.
 
 Instead every registered ``repos.*`` key is RECONCILED, every run, against two
 explicit, checked-in sets:
@@ -118,7 +118,7 @@ case in one rule.
 Enum oracles: ``coordinator_core/frontmatter/schemas/handoff.schema.json``
 (live) and ``coordinator_core/frontmatter/schemas/handoff-archived.schema.json``
 (archived) — both vendored copies, authoritative for claude-klabauter's engine; this
-module never reads across into coordinator-claude's tree. Both ``properties.kind.enum``
+module never reads across into DoE's tree. Both ``properties.kind.enum``
 lists are loaded fresh every run; a schema file that is missing, unparseable,
 or has no ``properties.kind.enum`` is a broken oracle and FAILS LOUD (raises
 ``PreflightOracleError``) rather than silently skipping the enum check and
@@ -156,9 +156,9 @@ Negative-spec:
     above) — an unrecognised key is surfaced for classification, never silently
     swept in as a fleet repo or silently ignored as noise.
 
-Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § C5
+Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § C5
 Origin defect: state/improvement-queue/2026-07-23-vocabulary-retirement-needs-consumer-corpus-preflight.yaml
-Hardening backlink: cross-repo/inbox/2026-07-31-coordinator-claude-em-consumer-corpus-preflight-blind-to-half-the-fleet.md
+Hardening backlink: cross-repo/inbox/2026-07-31-doe-claude-em-consumer-corpus-preflight-blind-to-half-the-fleet.md
 """
 from __future__ import annotations
 
@@ -173,7 +173,7 @@ from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_re
 
 _PROG = "consumer-corpus-preflight"
 
-# The vendored, authoritative copies of the two governing schemas — never coordinator-claude's tree.
+# The vendored, authoritative copies of the two governing schemas — never DoE's tree.
 _SCHEMAS_DIR = Path(__file__).resolve().parent.parent.parent / "frontmatter" / "schemas"
 _HANDOFF_SCHEMA_PATH = _SCHEMAS_DIR / "handoff.schema.json"
 _ARCHIVED_HANDOFF_SCHEMA_PATH = _SCHEMAS_DIR / "handoff-archived.schema.json"
@@ -202,7 +202,7 @@ class PreflightOracleError(Exception):
 # stranding a repo outside this oracle's field of view (an unclassified key,
 # not silence, is what a new/forgotten repo now produces).
 FLEET_REPO_KEYS: Dict[str, str] = {
-    "coordinator-claude": "example_doctrine_repo",
+    "DoE-claude": "doe_claude",
     "claude-klabauter": "claude_klabauter",
     "example-retrieval-repo": "example_retrieval_repo",
     "cockpit": "example_cockpit_repo",

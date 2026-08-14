@@ -16,7 +16,7 @@ surfaces, at a moment the caller controls (e.g. the existing PostToolUse Agent-t
 hook, which already fires reliably and already carries `agent_id` —
 see hooks.track_dispatched_agents / hooks.agent_completion_log). Resolving per-agent
 rather than dumping the whole store closes the gap for every agent whose Stage-1
-write DID land (SubagentStop is not pinned as the sole trigger; coordinator-claude's own spike found
+write DID land (SubagentStop is not pinned as the sole trigger; DoE's own spike found
 it fires for most backgrounded dispatches, just not guaranteed to), and gives a loud,
 specific, actionable reason for the remainder — never a bare "UNKNOWN".
 
@@ -40,7 +40,7 @@ Negative-spec:
     subagent-zero-tool-use.jsonl` file Stage 1 already writes.
 
     Does NOT perform "dispatched but no record ever will arrive" reconciliation across
-    the whole session — that stays coordinator-claude-side per the cross-repo contract. This op only
+    the whole session — that stays DoE-side per the cross-repo contract. This op only
     answers "what does the store say about THIS agent_id, right now."
 
     Does NOT retry, wait, or poll on a timer — a single point-in-time read. If Stage 1
@@ -53,7 +53,7 @@ Negative-spec:
     "verify the deliverable manually", "no action needed") rather than only naming
     the failure.
 
-Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-verdict-viable.md
+Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-verdict-viable.md
     (constraint 3 — "do not pin SubagentStop as the sole trigger")
 """
 

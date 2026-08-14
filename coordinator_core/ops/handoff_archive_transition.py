@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.handoff_archive_transition — "handoff.archive_transition" op.
 
-Purpose: single native-Python composition of coordinator-claude's bash orchestrator
-coordinator-handoff-archive.sh — collapses the coordinator-claude bash -> node -> python hop
+Purpose: single native-Python composition of DoE's bash orchestrator
+coordinator-handoff-archive.sh — collapses the DoE bash -> node -> python hop
 chain into ONE in-process op. Four modes, all operating on one handoff .md path:
 
   chain (default)  — UNCONDITIONAL live-children guard; if safe AND the
@@ -45,7 +45,7 @@ the handoff on disk and return a graceful (exit_code:0) skip -- retention is
 NEVER an error, and (as of the fix below) never suppresses the supersede
 status flip either, only the archival git-mv.
 
-Status-flip-precedes-guard fix (2026-07-27, cross-repo coordinator-claude incident
+Status-flip-precedes-guard fix (2026-07-27, cross-repo DoE incident
 "handoff-archive-transition supersede silently no-ops"): the supersede
 mutation (status:claimed + deployment_state:continued + continued_into) used
 to run AFTER the live-children guard's early-return, so a live child — which
@@ -152,7 +152,7 @@ Reuse (no reimplementation of tested internals):
   - coordinator_core.ops.handoff_children._handoff_has_live_children (the guard)
   - coordinator_core.ops.fleet._common.handoff_archive_dest / archive_and_commit / Move
 
-Terminal-state precondition (coordinator-claude, 2026-07-26, plan C7): the git-mv
+Terminal-state precondition (DoE-claude, 2026-07-26, plan C7): the git-mv
 block at the tail of this op (all modes that reach it — chain, stamp_shipped,
 supersede; stamp_only never reaches it, it returns before the move) is now
 gated on the CANDIDATE'S OWN on-disk deployment_state already being terminal
@@ -245,13 +245,13 @@ fails closed for anything outside `state/handoffs/` ∪ ARCHIVE_ROOT_SUBDIRS,
 and every OTHER mode's allowlist is completely unchanged (still
 `state/handoffs/` only).
 
-Port of: coordinator-handoff-archive.sh (coordinator-claude c47b0268, 2026-07-19).
-Spec: cross-repo coordinator-claude 7-bug route item 4 (this op). DR-059 (engine-tier bash
+Port of: coordinator-handoff-archive.sh (DoE c47b0268, 2026-07-19).
+Spec: cross-repo DoE 7-bug route item 4 (this op). DR-059 (engine-tier bash
 bugs route to claude-klabauter).
 
 --- Position A: no branch-tip fallback, no Session-Id trailer-correction walk ---
 
-The coordinator-claude bash oracle (and this op's earlier faithful port) stamped shipped_in
+The DoE bash oracle (and this op's earlier faithful port) stamped shipped_in
 via stamp_shipped_in(allow_branch_tip_fallback=True): when the handoff's
 scope: paths resolved to no commit, it fell back to guessing the current
 branch tip. On a shared work/* branch, that guess can land a SIBLING
@@ -284,7 +284,7 @@ Negative-spec:
     handoff.stamp op call.
   - Does NOT change handoff_ship_archive.py's behavior or scope -- that op
     remains the event-driven ship+archive composite for the /workstream-complete
-    call site; this op is the faithful port of the coordinator-claude archive-ceremony CLI
+    call site; this op is the faithful port of the DoE archive-ceremony CLI
     for /handoff Step 1 and callers that need the 4-mode flag surface
     (stamp_shipped / stamp_only / supersede / chain) and the unconditional
     live-children guard in one call.
@@ -745,7 +745,7 @@ def _supersede_continued(
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.archive_transition" — the 4-mode handoff archive ceremony.
 
-    Faithful native-Python port (Port of: coordinator-handoff-archive.sh, coordinator-claude
+    Faithful native-Python port (Port of: coordinator-handoff-archive.sh, DoE
     c47b0268, 2026-07-19). See module docstring for the full mode/order
     contract and the Position-A no-branch-tip-fallback rationale.
 
@@ -839,6 +839,25 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      selected" warnings above — never a second, bespoke
                      warning convention. Ignored for mode="chain" (no stamp
                      call to feed).
+        restage_src (bool, optional, default False) — opt a COMPOSING caller's
+                     own pre-move write into `Move.restage_src` (targeted
+                     `git add -- <src>` against the private index only, see
+                     `coordinator_core/ops/fleet/_common.py`'s
+                     "op-authored pre-move content" note). Exists for exactly
+                     one shape: a caller that wrote this handoff's terminal
+                     frontmatter ITSELF, in this same logical call, and left
+                     it uncommitted — `handoff.reconcile_close_terminal`'s
+                     `_close` + mode="chain" composition is the canonical
+                     one. Without it, `archive_and_commit`'s disk/HEAD drift
+                     guard (commit 4541069c3) correctly refuses the move,
+                     because a plain move would commit src's stale HEAD blob
+                     rather than the terminal state the precondition above
+                     just verified on disk. Redundant for the modes that
+                     stamp (`stamp_shipped`/`supersede`), which already
+                     restage unconditionally. NEVER set it for drift this
+                     caller did not author: the guard's refusal is the whole
+                     point there, and restaging would sweep a concurrent
+                     session's uncommitted work into this archival commit.
 
     Returns:
         exit_code (int)         — 0 ok (incl. graceful retain-skip); 1 setup or
@@ -874,9 +893,23 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                    selected as scope-derived — the legacy,
                                    no-`--sha` path, DR-096; stamp transport
                                    failure; scope resolved to no commit —
-                                   shipped_in left unset; git-mv concurrent-
-                                   move failure).
-        message (str)            — human-readable outcome summary.
+                                   shipped_in left unset; a refused archival
+                                   move, carrying `archive_and_commit`'s own
+                                   reason verbatim).
+        failed (list[dict])      — ADDITIVE, present ONLY when the archival
+                                   move was refused (`moved: False` with a
+                                   reason): `archive_and_commit`'s own
+                                   `[{"id", "reason"}]` items, unmodified.
+                                   Same additive discipline as
+                                   `fleet.archive_paper_trail`'s `failed`.
+        message (str)            — human-readable outcome summary; names the
+                                   refusal reason when the move was refused.
+
+    A refused move keeps `exit_code: 0` (see § Terminal-state precondition for
+    the codes that are errors). The refusal is reported, never inferred: this
+    op does not know why the guard refused beyond the reason it was handed,
+    and must not name a cause — notably "a concurrent session already moved
+    it" — that nothing here established.
 
     P9 WORKTREE DERIVATION: repo_root arrives as the git common dir
     (<worktree>/.git); main_worktree_root(repo_root) derives the worktree.
@@ -894,6 +927,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _kind_raw.strip() if isinstance(_kind_raw, str) and _kind_raw.strip() else None
     )
     successor_path_raw: str = (params.get("successor_path") or "").strip()
+    restage_src_opt_in: bool = bool(params.get("restage_src", False))
     # DR-096 (2026-07-26): stamp_shipped_in's `kind` param is now required at
     # the choke point, with no default. This module never invents its own
     # scope: paths — a caller-supplied `stamp_sha` (params["sha"]) is, by
@@ -1183,7 +1217,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     superseded = False
 
     # ------------------------------------------------------------------
-    # successor_path resolution (coordinator-claude, 2026-07-26) — resolves the
+    # successor_path resolution (DoE-claude, 2026-07-26) — resolves the
     # SUCCESSOR's own sha internally, BEFORE the scope-derived-selection
     # warning below (so that warning correctly no-ops once resolution
     # succeeds — stamp_kind is no longer "scope-derived" at that point).
@@ -1221,7 +1255,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 mode,
             )
 
-    # DR-096 (coordinator-claude, 2026-07-26): scope-derivation is retired as the
+    # DR-096 (DoE-claude, 2026-07-26): scope-derivation is retired as the
     # PREFERRED write-time strategy but survives as a narrowing legacy path
     # here — this op has no `--sha` call shape, so every stamp attempt with
     # no caller-supplied sha silently fell into `kind="scope-derived"`
@@ -1352,7 +1386,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # ------------------------------------------------------------------
     # supersede: status:claimed + deployment_state:continued +
     # continued_into:<successor> — BEFORE the live-children guard (2026-07-27
-    # fix, cross-repo coordinator-claude incident: "supersede silently no-ops"). PM ruling:
+    # fix, cross-repo DoE incident: "supersede silently no-ops"). PM ruling:
     # "as soon as a successor baton exists, the predecessor is by definition
     # no longer in flight" — a live claim holder is IRRELEVANT to that fact.
     # The status flip is NOT gated on `_handoff_has_live_children`'s
@@ -1694,8 +1728,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # ------------------------------------------------------------------
     # git mv — YYYY-MM archive/handoffs/ destination + one atomic commit.
-    # On failure (already moved by a concurrent session): warning, continue,
-    # exit_code:0 (bash :438-440 — non-fatal).
+    # A refused move is non-fatal (bash :438-440): exit_code stays 0, and the
+    # refusal reaches the caller as `moved: False` plus the mover's own reason
+    # on `warnings`/`message`/`failed`.
     # ------------------------------------------------------------------
     dest = handoff_archive_dest(worktree, contained)
     # restage_src=do_stamp (2026-07-27 review fix, Finding 1): stamp_shipped
@@ -1708,26 +1743,46 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # the exact defect class the sibling archive_handoffs.py fix
     # (restage_src=is_heir, "2026-07-27 C4c fix") closed the same day. See
     # Move.restage_src in coordinator_core/ops/fleet/_common.py.
-    move = Move(src=contained, dst=dest, candidate_id=rel_id, restage_src=do_stamp)
+    #
+    # `or restage_src_opt_in` extends the same reasoning to a COMPOSING
+    # caller's own pre-move write, which this op cannot see: mode="chain"
+    # stamps nothing here, but `handoff.reconcile_close_terminal` reaches
+    # chain mode immediately after its own `_close` wrote the terminal
+    # frontmatter and left it uncommitted. The terminal-state precondition
+    # above reads that fresh on-disk content, so a plain move would commit a
+    # blob the precondition never saw — exactly the drift 4541069c3's guard
+    # refuses. See this handler's `restage_src` param doc for why it stays
+    # opt-in rather than becoming chain mode's default.
+    move = Move(
+        src=contained,
+        dst=dest,
+        candidate_id=rel_id,
+        restage_src=do_stamp or restage_src_opt_in,
+    )
     subject = f"archive handoff: {rel_id}\n\nVia handoff.archive_transition (mode={mode})."
     acted, failed = await archive_and_commit(worktree, [move], subject)
 
     moved = bool(acted) and not failed
+    # The move's own refusal reason is the only account of why `moved` is
+    # False. It is carried verbatim — archive_and_commit already states one
+    # fact (the drift guard's own text names the src and what differs), and
+    # this op has no evidence for any second cause of its own.
+    move_failure_reason: Optional[str] = None
     if failed:
-        reason = failed[0].get("reason", "git-mv-failed")
-        warnings.append(
-            f"git mv failed for {rel_id}: {reason} — may already have been moved "
-            "by a concurrent session; continuing"
-        )
+        move_failure_reason = failed[0].get("reason") or "git mv failed, no reason reported"
+        warnings.append(f"not archived: {move_failure_reason}")
 
     if moved:
         message = f"archived {rel_id} to {_wire_rel_id(dest, worktree)}"
+    elif move_failure_reason:
+        prefix = f"superseded {rel_id}; " if do_supersede else f"{rel_id}: "
+        message = f"{prefix}not archived: {move_failure_reason}"
     elif do_supersede:
         message = f"superseded {rel_id}; archival did not complete this call"
     else:
         message = f"{rel_id}: archival did not complete this call"
 
-    return {
+    out = {
         "exit_code": 0,
         "mode": mode,
         "stamped": stamped,
@@ -1738,3 +1793,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "warnings": warnings,
         "message": message,
     }
+    if failed:
+        # ADDITIVE key, present only on the refusal path (same discipline as
+        # fleet.archive_paper_trail's own `failed`): a caller that reads only
+        # the documented keys is unaffected, and one that needs the machine-
+        # readable reason no longer has to parse it back out of `warnings`.
+        out["failed"] = failed
+    return out

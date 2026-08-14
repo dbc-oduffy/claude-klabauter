@@ -1,5 +1,5 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""run-full-tests.py — Slow-tier shell-suite orchestrator for coordinator-claude.
+"""run-full-tests.py — Slow-tier shell-suite orchestrator for DoE-claude.
 
 PURPOSE: Closes the KNOWN GAP named in `CLAUDE.md § Build & Test` and in
 run-fast-tests.py's own module docstring: `full_test_cmd:` was a real seam

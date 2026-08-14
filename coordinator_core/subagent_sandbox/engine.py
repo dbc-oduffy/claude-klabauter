@@ -26,7 +26,7 @@ consumers still depend on:
 
 Spec backlink: pln-claude-klabauter-subagent-sandbox-enforc-62cc03
                 (original enforcement engine, now retired)
-Removal: coordinator-claude DR-058, commit 0998c6a6 (write_guards splice excision)
+Removal: DoE DR-058, commit 0998c6a6 (write_guards splice excision)
 Contract: coordinator_core/subagent_sandbox/CONTRACT.md
 
 Negative-spec:
@@ -34,7 +34,7 @@ Negative-spec:
     removed with DR-058. This module resolves identity/policy INPUTS only;
     it makes no enforcement decision itself.
   - Does NOT vendor or copy the policy YAML — reads it fresh from the injected
-    path every invocation (single source of truth with coordinator-claude's policy file).
+    path every invocation (single source of truth with DoE's policy file).
   - Does NOT key confined-vs-exempt on model tier — ``subagent_type`` string
     membership ONLY; lookup-miss is simply not-eligible (no report sidecar
     provisioned), never a model-tier fallback (retained for
@@ -66,7 +66,7 @@ _SESSION_ID_FORMAT_RE = re.compile(r"^[a-zA-Z0-9_-]{3,}$")
 _DEFAULT_POLICY_ENV_CANDIDATES = ("CLAUDE_PLUGIN_ROOT",)
 _DEFAULT_POLICY_RELATIVE = "subagent-sandbox-policy.yaml"
 
-#: Env var the coordinator-claude shim injects the primary policy path through.
+#: Env var the DoE shim injects the primary policy path through.
 POLICY_ENV_VAR = "SUBAGENT_SANDBOX_POLICY"
 
 
@@ -149,7 +149,7 @@ def load_policy(policy_path: Optional[str] = None) -> Policy:
     Resolution order:
       1. ``policy_path`` (injected explicitly — the CLI ``--policy`` arg).
       2. ``SUBAGENT_SANDBOX_POLICY`` env var (the shim's primary injection —
-         only coordinator-claude knows its plugin root; this is the expected common case).
+         only DoE knows its plugin root; this is the expected common case).
       3. Best-effort ``_cc_root``-style default (``_resolve_default_policy_path``).
 
     Any absent/unreadable/malformed file at any of the above, or the complete
@@ -185,7 +185,7 @@ def load_policy(policy_path: Optional[str] = None) -> Policy:
         return _empty_policy()
 
     # Unknown/removed keys (e.g. a YAML that still carries the DR-058-removed
-    # confined/exempt/sanctioned_dirs fields, pending coordinator-claude's lockstep YAML
+    # confined/exempt/sanctioned_dirs fields, pending DoE's lockstep YAML
     # strip) are silently ignored here -- .get() on a dict never raises for
     # an absent or surplus key, so reading either an old-shape or new-shape
     # policy file is equally harmless.
@@ -278,7 +278,7 @@ def _resolve_git_root_uncached(cwd: Optional[str] = None) -> Optional[str]:
 
     Review: code-reviewer F10 — the reference hook tries a `_cs_git_root`
     bash-library helper first, falling back to bare `git rev-parse` only if
-    that helper isn't loaded. `_cs_git_root` is coordinator-claude-bash-specific with no
+    that helper isn't loaded. `_cs_git_root` is DoE-bash-specific with no
     Python equivalent in coordinator_core and is deliberately not ported;
     bare `git rev-parse --show-toplevel` is the full contract on this side.
 

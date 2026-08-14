@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.audit_enabled_plugins
 
-Port of: audit-enabled-plugins.sh (coordinator-claude b5a4192c, 2026-07-20).
+Port of: audit-enabled-plugins.sh (DoE b5a4192c, 2026-07-20).
 
 Purpose: drift-checks a repo's `.claude/settings.json` `enabledPlugins` object against
 that repo's `coordinator.local.md` frontmatter (`project_type` / `stack_tags`), per
@@ -41,7 +41,7 @@ Negative-spec (faithfully reproduced bash-oracle quirks — do NOT "fix" mid-por
     - No settings.json, or an unparseable/empty enabledPlugins, is a SILENT no-op
       (prints nothing, exits 0) — not an error. Faithfully reproduced.
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 """
 from __future__ import annotations
 

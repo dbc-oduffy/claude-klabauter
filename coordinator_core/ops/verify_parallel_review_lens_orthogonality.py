@@ -31,7 +31,7 @@ Chunk-manifest format (TSV, one file per line): "chunk-<k>\\t<relpath>".
 Exit codes (parity-critical — both callers branch on these):
   0 — all checks passed.
   1 — one or more checks failed (diagnostic printed to stdout), OR the skill
-      file / chunk manifest was not found, OR the coordinator-claude repo root could
+      file / chunk manifest was not found, OR the DoE-claude repo root could
       not be resolved (cross-repo lookup failure — see below), OR a CLI usage
       error (unknown arg, missing --chunk-manifest value, empty chunk
       manifest; these print to STDERR, matching the bash oracle's `>&2`
@@ -39,9 +39,9 @@ Exit codes (parity-critical — both callers branch on these):
 
 Cross-repo note: this op lives in claude-klabauter but the manifest it checks
 (coordinator/skills/parallel-code-review/SKILL.md) and the agent files it
-verifies live in the coordinator-claude repo — the bash oracle never needed this
+verifies live in the DoE-claude repo — the bash oracle never needed this
 resolution step because it ran FROM inside that repo (SCRIPT_DIR-relative).
-This port resolves the coordinator-claude root via
+This port resolves the DoE-claude root via
 `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()`. A
 resolution failure is folded into the same "cannot verify without the
 manifest" exit-1 stdout branch the oracle uses for a missing SKILL_FILE —
@@ -245,7 +245,7 @@ def chunk_check(manifest_path: Path) -> Tuple[List[str], bool]:
 def run(
     argv: List[str], doe_root: Optional[str] = None
 ) -> Tuple[List[str], List[str], int]:
-    """Core driver: parse args, resolve the coordinator-claude repo root, run static
+    """Core driver: parse args, resolve the DoE-claude repo root, run static
     check then (if requested) chunk check.
 
     Returns (stdout_lines, stderr_lines, rc). CLI usage errors (unknown arg,
@@ -279,7 +279,7 @@ def run(
     if not repo_root_str:
         return (
             [
-                "ERROR: could not resolve the coordinator-claude repo root (needed to locate "
+                "ERROR: could not resolve the DoE-claude repo root (needed to locate "
                 "coordinator/skills/parallel-code-review/SKILL.md).",
                 "Cannot verify lens-orthogonality without the manifest.",
             ],

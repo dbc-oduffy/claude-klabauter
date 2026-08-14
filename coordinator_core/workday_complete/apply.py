@@ -1,6 +1,6 @@
 """
 coordinator_core.workday_complete.apply — the `workday-complete` computed-
-skill engine's MUTATING half, standalone-conformant per coordinator-claude
+skill engine's MUTATING half, standalone-conformant per DoE-claude
 `coordinator/docs/wiki/computed-skills.md` § The compute/apply split and
 § What bounds a mutating apply half.
 
@@ -23,8 +23,8 @@ surface (plan § Anti-scope); this module's directive-execution engine,
 closed dispatch, and halt contract are authored locally instead (plan §
 Tasks C2 body, "Apply half (the Staff Engineer F1)" paragraph).
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C2
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54, chunk C2
 
 HALT CONTRACT (2026-07-24 premise-check reconciliation; mirrors the pickup
 exemplar's AC10 design, `claude-klabauter/docs/plans/2026-07-24-pickup-as-a-

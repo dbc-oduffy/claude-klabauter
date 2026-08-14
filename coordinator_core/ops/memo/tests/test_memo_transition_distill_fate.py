@@ -1,20 +1,20 @@
 """
 distill_fate / in_repo_capture parity tests for coordinator_core.ops.memo_transition._action.
 
-Purpose: closes a scope-drop found while porting coordinator-claude coordinator/bin/memo-transition.js
+Purpose: closes a scope-drop found while porting DoE-claude coordinator/bin/memo-transition.js
 (BIG_PORT item memo-transition, Wave B). The pre-existing native port
 (coordinator_core/ops/memo_transition.py, landed under
 docs/plans/2026-07-06-memo-transition-native-python-port.md) predates the JS oracle's
 distill_fate/in_repo_capture stamp-at-source fields (Finding #11, C3,
 docs/plans/2026-07-12-distill-rebuild-claude-klabauter-reliant.md § C3) — the native op silently
-dropped those two fields even though the coordinator-claude-side strangler facade
+dropped those two fields even though the DoE-side strangler facade
 (coordinator/lib/memo-transition-facade.sh) already forwarded them in its params JSON.
 This file independently re-derives parity against the JS oracle's exact field-write and
 cross-field-validation behavior (memo-transition.js:423-453 write logic;
 coordinator/bin/lib/schema.js:2236-2280 cross-field rule) rather than re-asserting this
 session's own transcription.
 
-Parity oracle: coordinator-claude coordinator/bin/memo-transition.js + coordinator/bin/lib/schema.js
+Parity oracle: DoE-claude coordinator/bin/memo-transition.js + coordinator/bin/lib/schema.js
 Spec backlink: docs/plans/2026-07-12-distill-rebuild-claude-klabauter-reliant.md § C3
 """
 
@@ -77,7 +77,7 @@ def _setup_memo(tmp_path: Path, content: str = _IN_PROGRESS_FIXTURE) -> str:
     """Create a git repo + memo under cross-repo/inbox/, tracked in HEAD.
 
     The memo is committed at setup because that is the only state a transition
-    verb ever observes in production: `coordinator/bin/cross-repo-memo`'s
+    verb ever observes in production: `coordinator/bin/cross-repo-memo.py`'s
     `_commit_delivered_memo` stages and commits the delivered memo in the
     receiver repo before any verb can run against it. An untracked fixture
     describes a state delivery cannot produce, and the commit path

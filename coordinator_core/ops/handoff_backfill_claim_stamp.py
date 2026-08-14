@@ -143,7 +143,7 @@ def _validate_backfilled_fields(fm_text: str) -> list:
     Deliberately does NOT call `coordinator_core.frontmatter.schema_validate`
     or any full-document validator — see this op module's docstring, "Why
     not shared validation": `schema_validate.py` is a hard external
-    dependency (coordinator-claude imports `validate_frontmatter_obj` by path) and its
+    dependency (DoE imports `validate_frontmatter_obj` by path) and its
     leniency is contract; narrowing that path would be a global behaviour
     change under one caller's remit. This function is local to THIS op and
     checks nothing beyond what THIS op actually writes.

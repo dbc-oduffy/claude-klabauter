@@ -2,7 +2,7 @@
 -- the offer-git-c-over-cd guard -- pinning the prefix-evasion close and the
 regression it guards.
 
-Subject: coordinator-claude-EM-relayed defect, reproduced live on macOS --
+Subject: DoE-EM-relayed defect, reproduced live on macOS --
 
     cd /repo && git log -1          -> DENIED (correct)
     FOO=1 cd /repo && git log -1    -> RAN    (evasion)
@@ -97,7 +97,7 @@ class TestBareCdGitStillDenies:
 
 
 class TestTildeTargetExpandsBeforeQuoting:
-    """coordinator-claude memo (2026-08-12): `cd ~/X/peer && git log` was rewritten
+    """DoE-claude memo (2026-08-12): `cd ~/X/peer && git log` was rewritten
     into `git -C '~/X/peer' log`, which dies with "cannot change to
     '~/X/peer'" -- `shlex.quote` quotes the tilde, and a quoted tilde is
     never expanded by the shell that runs the suggestion. The rewrite must

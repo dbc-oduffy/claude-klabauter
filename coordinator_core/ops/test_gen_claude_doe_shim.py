@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.gen_claude_doe_shim.
 
-Spec backlink: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § C2
+Spec backlink: DoE-claude:pln-coordinator-maximalist-install-e73afa § C2
 """
 from __future__ import annotations
 
@@ -235,13 +235,13 @@ def test_legacy_stopgap_detected_in_home_bashrc(tmp_path, monkeypatch, capsys):
 
 def test_legacy_stopgap_detected_with_padded_line_form(tmp_path, capsys):
     """The real-world hand-written block carries a trailing comment/padding
-    suffix on the marker line (e.g. ``... (coordinator-claude-resident plugin source) ---...``)
+    suffix on the marker line (e.g. ``... (DoE-resident plugin source) ---...``)
     rather than the bare marker in isolation. The detector must match on the
     marker as a line prefix (after strip), not whole-line equality, or it
     never fires on the one machine that actually has the legacy block."""
     home = Path(os.environ["HOME"])
     (home / ".bashrc").write_text(
-        "# --- coordinator maximalist launch (coordinator-claude-resident plugin source) "
+        "# --- coordinator maximalist launch (DoE-resident plugin source) "
         "----------------\nold stuff\n# end\n"
     )
     tmpl = _make_template(tmp_path)
@@ -347,16 +347,16 @@ def test_claude_home_override_used_for_shim_dest_not_legacy_detector(
 
 
 def test_graceful_skip_unresolved_exits_zero_with_skip_row(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setenv("PATH", "")  # no machine-local resolvable
     rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path))])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "claude_shim: skipped (coordinator-claude clone not resolved" in out
+    assert "claude_shim: skipped (DoE clone not resolved" in out
 
 
 def test_graceful_skip_unresolved_noop_when_resolved(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(tmp_path))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path))
     rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path))])
     assert rc == 0
     assert "claude_shim: installed (" in capsys.readouterr().out

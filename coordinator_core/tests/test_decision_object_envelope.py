@@ -10,7 +10,7 @@ Also asserts `coordinator_core.contract.decision_object` stays stdlib-light —
 importing it must not pull in pydantic, asyncio, or the `cockpit_schema` tree.
 
 Spec backlink: docs/plans/2026-07-21-canonical-resolution-engine.md (Wave 1,
-chunk W1-A2). [DEAD-CITATION: plan file never committed to this repo] Conformance target: coordinator-claude's
+chunk W1-A2). [DEAD-CITATION: plan file never committed to this repo] Conformance target: DoE-claude's
 `schemas/decision-object.schema.json` (DR-047) is the schema-of-record; this
 suite asserts this package's key set matches it by name (8 canonical keys).
 """
@@ -109,7 +109,7 @@ def test_build_judgment_point_carries_the_given_recommendation():
     # Review: code-reviewer -- cross-slice correction (AC-13). The canonical
     # `recommendation` shape is an object `{disposition, rationale}` | None,
     # not a bare string -- see `pickup_assemble.__init__`'s
-    # `Optional[dict[str, str]]` signature and the coordinator-claude schema-of-record.
+    # `Optional[dict[str, str]]` signature and the DoE schema-of-record.
     point = build_judgment_point(
         {"disposition": "proceed", "rationale": "no competing claim found"},
         id="jcc",

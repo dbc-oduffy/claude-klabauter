@@ -4,7 +4,7 @@ refresh-plugin-live-install.py — Managed refresh for a registered plugin's liv
 
 Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md §Chunk 2 [DEAD-CITATION: plan file never committed to this repo]
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave E2, chunk E2-e)
-Port of: refresh-plugin-live-install.sh (coordinator-claude 9a00683c, 2026-07-21) — naked-Python
+Port of: refresh-plugin-live-install.sh (DoE 9a00683c, 2026-07-21) — naked-Python
 port, no bash in the middle: git/uv/pip are still invoked as subprocesses, which is
 the genuine external-tool boundary, not a shell wrapper around this script's own logic.
 
@@ -69,6 +69,8 @@ import urllib.parse
 from pathlib import Path
 
 PROG = "refresh-plugin-live-install.py"
+
+GENERATES = []  # writes live_path (a registered plugin's live checkout under the Claude plugins dir), the refresh audit log, and snapshot dirs — all under the operator's Claude home, outside claude-klabauter's own tree (abs-path-ok: descriptive prose, not a resolve site)
 
 
 def _no_console_kwargs() -> dict:

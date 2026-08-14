@@ -13,7 +13,7 @@ Logs which path was taken to stderr ("carry" / "mint-from-stub" /
 "mint-from-slug") — callers/tests grep this.
 
 Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D1, C3a
-Port of: mint-deliverable-id.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: mint-deliverable-id.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec:
     (shell-doc-ok: the recipe below quotes the bash oracle's own parameter

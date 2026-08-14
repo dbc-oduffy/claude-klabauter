@@ -93,8 +93,8 @@ class GitSetting:
 # which makes this legal.
 _SETTINGS: tuple[GitSetting, ...] = (
     GitSetting(key="gc.autoDetach", value="false"),
-    # scope="global" per coordinator-claude-em's ruling (Ask 1, ruled (a)) in
-    # cross-repo/inbox/2026-08-07-coordinator-claude-em-configure-git-per-key-scope-ruled-a.md,
+    # scope="global" per doe-claude-em's ruling (Ask 1, ruled (a)) in
+    # cross-repo/inbox/2026-08-07-doe-claude-em-configure-git-per-key-scope-ruled-a.md,
     # citing coordinator/commands/uninstall.md item 14 which asserts
     # core.checkStat machine-wide.
     GitSetting(key="core.checkStat", value="minimal", scope="global"),
@@ -102,7 +102,7 @@ _SETTINGS: tuple[GitSetting, ...] = (
     # docs/plans/2026-08-07-git-help-browser-settings-shape.md. `git help --web`
     # defaults to launching the operator's OS browser on every doc lookup; this
     # triple redirects `web.browser` to a no-op printer instead, machine-wide
-    # (scope="global") even when this writer runs per-repo — coordinator-claude's
+    # (scope="global") even when this writer runs per-repo — DoE's
     # coordinator/commands/install.md §1a.1 invokes it bare (no --global), and
     # its own doctrine requires the triple land machine-wide regardless. Skipped
     # whole-group when `web.browser` is already set (see _help_browser_group_precondition)

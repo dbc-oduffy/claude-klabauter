@@ -1,12 +1,12 @@
 """
-coordinator_core.reconcile.policy_loader -- coordinator-claude-owned auto-reconcile policy reader.
+coordinator_core.reconcile.policy_loader -- DoE-owned auto-reconcile policy reader.
 
-Purpose: reads the coordinator-claude-owned `coordinator/auto-reconcile-policy.yaml` (coordinator-claude
+Purpose: reads the DoE-owned `coordinator/auto-reconcile-policy.yaml` (DoE
 authors it; claude-klabauter NEVER writes it) and validates it against claude-klabauter's grammar
 pin (`coordinator_core/contract/auto-reconcile-policy.grammar.md`) before
 handing it to C2's commit_reality matcher / C3's gate_eval evaluator. Mirrors
 the `subagent-sandbox-policy.yaml` <- `coordinator_core/subagent_sandbox`
-read pattern (DR-047 contract-vs-engine split): coordinator-claude owns the policy DATA,
+read pattern (DR-047 contract-vs-engine split): DoE owns the policy DATA,
 Claude-klabauter owns the reading/validating MACHINE and the grammar it validates
 against.
 
@@ -22,19 +22,19 @@ Reference precedent: coordinator_core/subagent_sandbox/engine.py load_policy()
 
 Fail-closed behavior (absent-vs-malformed split, the Staff Engineer review finding 5):
   - policy file ABSENT -> conservative no-auto-ship policy, NO warning. This
-    is the expected steady state until coordinator-claude authors the yaml; logging a
+    is the expected steady state until DoE authors the yaml; logging a
     warning every workday-start during the pre-ratification period is noise.
   - policy file PRESENT-but-MALFORMED (grammar-pin validation fails) ->
     conservative no-auto-ship policy + a surfaced data-defect warning. This
-    is a real defect coordinator-claude should hear about, distinct from the expected-absent
+    is a real defect DoE should hear about, distinct from the expected-absent
     case above.
 
 `policy_report_fields(result)` (§ C10 / AC16) flattens `PolicyResult.source`
 and `.resolved_path` into the two fields a downstream reconcile report must
-surface -- landed because coordinator-claude named the un-reported `source` split as
+surface -- landed because DoE-claude named the un-reported `source` split as
 the cheap engine-side fix that would have told a starvation-report reader
 which of "absent"/"malformed"/"loaded" a run was in, one line, no cross-repo
-round-trip (`cross-repo/inbox/2026-07-28-coordinator-claude-em-handoff-terminal-
+round-trip (`cross-repo/inbox/2026-07-28-doe-claude-em-handoff-terminal-
 starvation-answers.md`).
 
 Repo-resident overlay (route 3 of 4, see § Overlay in the grammar pin):
@@ -61,7 +61,7 @@ Negative-spec:
   - Does NOT auto-ship on any fail-closed branch (absent OR malformed) -- both
     return `dry_run: True` / `auto_ship_enabled: False`; only the warning
     differs between the two branches.
-  - Does NOT write the policy file -- coordinator-claude is the sole author. This includes
+  - Does NOT write the policy file -- DoE is the sole author. This includes
     the repo-resident overlay: claude-klabauter discovers and reads it, never authors
     or scaffolds it.
   - Does NOT deep-merge the overlay over the floor -- the merge is a
@@ -85,12 +85,12 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 import yaml
 
-#: Env var a coordinator-claude-side caller may inject the primary policy path through,
+#: Env var a DoE-side caller may inject the primary policy path through,
 #: mirroring subagent_sandbox.engine.POLICY_ENV_VAR.
 POLICY_ENV_VAR = "AUTO_RECONCILE_POLICY"
 
 #: Best-effort default relative path when no explicit path/env var resolves,
-#: matching the coordinator-claude-side repo layout cited in the plan
+#: matching the DoE-side repo layout cited in the plan
 #: (`coordinator/auto-reconcile-policy.yaml`).
 _DEFAULT_POLICY_ENV_CANDIDATES = ("CLAUDE_PLUGIN_ROOT",)
 _DEFAULT_POLICY_RELATIVE = "auto-reconcile-policy.yaml"
@@ -109,7 +109,7 @@ class PolicyResult:
     """The outcome of a `load_policy` call.
 
     ``policy`` is always a usable dict (conservative fail-closed default when
-    absent/malformed, or the validated coordinator-claude-authored data on success).
+    absent/malformed, or the validated DoE-authored data on success).
     ``warning`` is populated ONLY on the malformed branch -- absent-file and
     successful-load both leave it ``None`` (see module docstring fail-closed
     split).
@@ -121,7 +121,7 @@ class PolicyResult:
     the `CLAUDE_PLUGIN_ROOT` default did not resolve to any path at all).
 
     Spec backlink: pln-handoff-close-path-fail-loud-b-db23e8 § C10
-    (AC16) -- coordinator-claude's reply (`cross-repo/inbox/2026-07-28-coordinator-claude-em-
+    (AC16) -- DoE-claude's reply (`cross-repo/inbox/2026-07-28-doe-claude-em-
     handoff-terminal-starvation-answers.md`) named the missing report surface
     for this data as the cheap fix that would have told a downstream reader
     which of "absent" / "malformed" / "loaded" a run was in without a
@@ -242,7 +242,7 @@ def _validate_grammar(data: Any) -> List[str]:
 
 
 def load_policy(policy_path: Optional[str] = None) -> PolicyResult:
-    """Load + grammar-validate the coordinator-claude-owned auto-reconcile policy.
+    """Load + grammar-validate the DoE-owned auto-reconcile policy.
 
     Resolution order mirrors ``subagent_sandbox.engine.load_policy``, plus a
     fourth repo-resident overlay route (see § Overlay in the grammar pin):
@@ -354,7 +354,7 @@ def load_policy(policy_path: Optional[str] = None) -> PolicyResult:
     policy = dict(data)
     # Fail-closed: absent key must resolve identically to the absent-file and
     # malformed-file branches (both `auto_ship_enabled: False`), so silence
-    # never arms auto-ship. See cross-repo/inbox/2026-08-13-coordinator-claude-em-
+    # never arms auto-ship. See cross-repo/inbox/2026-08-13-doe-claude-em-
     # grammar-pin-cannot-express-auto-ship-off.md.
     policy.setdefault("auto_ship_enabled", False)
     return PolicyResult(
@@ -384,8 +384,8 @@ class PolicyReportFields(TypedDict):
 def policy_report_fields(result: PolicyResult) -> PolicyReportFields:
     """Flatten a `PolicyResult` into the two fields a reconcile report must
     surface, per plan (§ C10 / AC16): `policy_source` distinguishes "absent"
-    (expected steady state until coordinator-claude authors the yaml) from "malformed" (a
-    real data defect) from "loaded" (coordinator-claude's policy, wherever it resolved
+    (expected steady state until DoE authors the yaml) from "malformed" (a
+    real data defect) from "loaded" (DoE's policy, wherever it resolved
     from) -- see module docstring's fail-closed split. `policy_path` is the
     path this call looked for, reported even when `policy_source == "absent"`,
     since "the path we looked for and did not find" is the actionable half

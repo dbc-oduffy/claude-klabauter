@@ -801,7 +801,7 @@ def test_c7_internal_when_same_system(tmp_path):
 
 def test_c7_cross_system_when_caller_and_target_in_different_systems(tmp_path):
     """Target inverts to a first-party path, and the CALLER inverts to a
-    first-party path in a DIFFERENT system -> "cross-system" (coordinator-claude's
+    first-party path in a DIFFERENT system -> "cross-system" (DoE's
     `[BOUNDARY -> system-name]`: this call reaches INTO a different
     system)."""
     root = tmp_path / "repo"
@@ -831,7 +831,7 @@ def test_c7_cross_system_when_caller_and_target_in_different_systems(tmp_path):
 
 def test_c7_entry_when_caller_outside_mapped_system_set(tmp_path):
     """Target inverts to a first-party path, but the CALLER does not
-    resolve into the mapped system set at all -> "entry" (coordinator-claude's `[ENTRY]`:
+    resolve into the mapped system set at all -> "entry" (DoE's `[ENTRY]`:
     this target is reached from OUTSIDE its own system entirely). The
     caller's own file is deliberately OMITTED from `path_system_map` here —
     that omission is what makes it "outside the mapped system set", not

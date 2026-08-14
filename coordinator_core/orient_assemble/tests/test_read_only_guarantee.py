@@ -12,7 +12,7 @@ stand-ins (this file is not a live-environment smoke test — it is a
 hermetic guarantee check) so the guard actually exercises each reader's
 own code path rather than timing out against real environment state.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C3
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
 """
 
 from __future__ import annotations

@@ -50,9 +50,9 @@ home (not the settings home) can delegate here instead of hand-rolling their own
 is unchanged; only its visibility widened.
 
 Spec backlink: pln-repoint-coordinator-core-claud-56d805 § C1
-Spec backlink: docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C1
+Spec backlink: DoE-claude:pln-relocate-durable-coordinator-s-d48415 § C1
 
-Port of: settings-home.sh (coordinator-claude b644d5a9, 2026-07-22) — `_coordinator_settings_home`,
+Port of: settings-home.sh (DoE b644d5a9, 2026-07-22) — `_coordinator_settings_home`,
 `_settings_home_realpath`, `_check_machine_local_divergence`. This module is the
 Python-native mirror for claude-klabauter-resident callers.
 
@@ -143,7 +143,7 @@ def normalize_native_path(raw):
     already-native paths ('X:/...', 'X:\\...'). Returns a Path.
 
     Rationale: a leading '/x/...' handed to a native-Windows process resolves as
-    drive-relative 'X:\\x\\...' (doubled drive) — the .doe-root / repos.example_doctrine_repo
+    drive-relative 'X:\\x\\...' (doubled drive) — the .doe-root / repos.doe_claude
     mis-resolution bug. Mirrors the `cygpath -m` normalization used on the write side.
     """
     s = str(raw)

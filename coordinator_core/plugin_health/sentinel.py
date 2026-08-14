@@ -10,13 +10,13 @@ config, bin/ resolvers). This module is the non-skill primitive that fires the
 probes on cadence (from /workday-start Step 1.10 --full) and writes
 ~/.claude/plugins/coordinator-claude/data/doctor-last-run.json.
 
-Port of coordinator-claude coordinator/bin/coordinator-doctor-sentinel.sh (989 lines, bash).
+Port of DoE-claude coordinator/bin/coordinator-doctor-sentinel.sh (989 lines, bash).
 The selection grammar already delegated to a Python selector
 (coordinator_core.plugin_health.probe_select) via subprocess under the bash oracle —
 this port converts that into an in-process import, closing a spawn site that fired
 on every single invocation. P-9/P-11/P-13/P-18 formerly shelled out to their own
-Coordinator-claude-owned `.sh` sibling scripts (verify-ue-overrides.sh, verify-templates-setup-
-sync.sh, probe-onboarding-currency.sh, check-install-singularity.sh); coordinator-claude's W4a
+DoE-owned `.sh` sibling scripts (verify-ue-overrides.sh, verify-templates-setup-
+sync.sh, probe-onboarding-currency.sh, check-install-singularity.sh); DoE's W4a
 rename (b5a4192c) turned each of those into a thin polyglot trampoline over an
 already-native claude-klabauter module, so these 4 probes now call that module's `main()`
 directly in-process (via `_call_native_main`) — no bash spawn, no subprocess at
@@ -31,15 +31,15 @@ these 4 probes now calls its native module directly, unconditionally, with
 `_NativeCallFailed -> _inconclusive(...)` as the sole degradation path — see
 `docs/wiki/doctor-probe-design.md` § `inconclusive` Is a First-Class Probe
 Status. P-15/P-17 formerly shelled
-out to their own coordinator-claude-owned bash sibling (scripts/lib/prereq_probe.sh, sourced via
+out to their own DoE-owned bash sibling (scripts/lib/prereq_probe.sh, sourced via
 `bash -c 'source ...; <fn>'`) — DR-079's prereq-probe-debash-complete-migration
 repoint (2026-07-21) retired that bridge in favor of in-process calls to the
 already-landed native port `coordinator_core.install.prereq_probe` (which the
-Coordinator-claude bash file's own SSOT header still documents as a PARALLEL Python-native
+DoE bash file's own SSOT header still documents as a PARALLEL Python-native
 implementation, not a trampoline over the bash — see that module's docstring).
 `_run_prereq_probe_function` now dispatches `func_name` to the corresponding
 `prereq_probe` module-level callable in-process; no bash spawn remains for
-P-15/P-17. Claude-klabauter does not delete or otherwise touch coordinator-claude's or
+P-15/P-17. Claude-klabauter does not delete or otherwise touch DoE's or
 Example-retrieval-repo-ue-addon's vendored bash copy — only claude-klabauter's own bridge is retired.
 
 P-5/P-6/P-6s (coordinator_whoami probes) deliberately KEEP their subprocess-to-a-
@@ -75,7 +75,7 @@ Self-registration: importing this module calls register_op("plugin_health.sentin
 ...) as a side-effect (same pattern as plugin_health.drift / plugin_health.scan).
 
 Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g2/T3b
-Port of: coordinator-doctor-sentinel.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: coordinator-doctor-sentinel.sh (DoE b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations
@@ -102,6 +102,11 @@ from coordinator_core.plugin_health.probe_select import id_to_cluster, load_prob
 from coordinator_core.pyresolve import PythonPinInvalid, resolve_python_bin
 from coordinator_core.win_portability import is_executable
 
+# Generator-provenance declaration (generator_provenance.py). This sentinel writes
+# only `~/.claude/plugins/coordinator-claude/data/doctor-last-run.json` (settings-home
+# / operator home directory) -- never a path inside claude-klabauter's own tracked tree.
+GENERATES = []
+
 _PROG = "coordinator-doctor-sentinel.sh"
 
 # severity in {"red", "amber", "advisory"} — advisory NEVER contributes to verdict.
@@ -127,24 +132,24 @@ class _UsageError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# coordinator-claude-side sibling script root resolution
+# DoE-side sibling script root resolution
 # ---------------------------------------------------------------------------
 
 
 def _doe_coordinator_root() -> Optional[Path]:
-    """Resolve the coordinator-claude-side coordinator/ root housing this sentinel's still-bash
+    """Resolve the DoE-side coordinator/ root housing this sentinel's still-bash
     sibling probe scripts (P-9/P-11/P-12/P-13/P-15/P-17/P-18/P-19's dependencies).
 
     Resolution chain:
       1. COORDINATOR_BIN_ROOT env var (test isolation — names coordinator/bin
          directly, mirroring the bash oracle's _SCRIPT_DIR variable). Kept
          first-rung: this is sentinel's own documented test-isolation seam,
-         distinct from (and taking precedence over) the shared coordinator-claude-root ladder.
+         distinct from (and taking precedence over) the shared DoE-root ladder.
       2. coordinator_core.ops.coordinator_doe_root.coordinator_doe_root() — the
-         same DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO/machine-local ladder every other
-         coordinator-claude-root-dependent script in the doe-root-sweep wave resolves through
+         same DOE_ROOT/REPO_DOE_CLAUDE/machine-local ladder every other
+         DoE-root-dependent script in the doe-root-sweep wave resolves through
          (Review: code-reviewer — sentinel previously read ~/.claude/.doe-root
-         directly and never consulted DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO, silently
+         directly and never consulted DOE_ROOT/REPO_DOE_CLAUDE, silently
          diverging from every other consumer in the wave).
 
     Returns None (never raises) when neither resolves — every dependent probe
@@ -165,9 +170,9 @@ def _doe_coordinator_root() -> Optional[Path]:
 def _claude_klabauter_bin_root() -> Path:
     """This module's own repo root's `coordinator/bin/` — where
     `doctor-probes.toml` actually lives as of the b644d5a9 executable-surface
-    migration (2026-07-22, coordinator-claude -> claude-klabauter).
+    migration (2026-07-22, DoE-claude -> claude-klabauter).
 
-    sentinel.py already runs from INSIDE the resolved claude-klabauter root (no coordinator-claude-side
+    sentinel.py already runs from INSIDE the resolved claude-klabauter root (no DoE-side
     trampoline required to reach this import), so — mirroring
     `coordinator_core.ops.check_claude_klabauter_doctor_sentinel._claude_klabauter_root` and
     `coordinator_core.ops.render_template_tree`'s co-located-sibling
@@ -180,9 +185,9 @@ def _claude_klabauter_bin_root() -> Path:
     Negative-spec: does NOT consult `coordinator_core.ops.coordinator_doe_root`
     or `coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()` for this
     default — the manifest is claude-klabauter-native data now, so resolving it through
-    a sibling-repo pointer (REPO_EXAMPLE_DOCTRINE_REPO / machine-local `repos.example_doctrine_repo`)
+    a sibling-repo pointer (REPO_DOE_CLAUDE / machine-local `repos.doe_claude`)
     would still be wrong-repo-shaped even where it happens to resolve; the
-    fix is to stop treating manifest location as a coordinator-claude-root question at all.
+    fix is to stop treating manifest location as a DoE-root question at all.
     """
     return Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
@@ -197,14 +202,14 @@ def _default_manifest_path(bin_dir_sibling: Optional[Path]) -> Path:
          rung 1); honored here exactly as it was before this fix, so existing
          test-isolation usage is unaffected.
       2. Default: claude-klabauter's own `coordinator/bin/doctor-probes.toml`
-         (`_claude_klabauter_bin_root()`) — NOT the coordinator-claude-root ladder
-         (`coordinator_doe_root()` / REPO_EXAMPLE_DOCTRINE_REPO / machine-local
-         `repos.example_doctrine_repo`), which is what `bin_dir_sibling` resolves to for
+         (`_claude_klabauter_bin_root()`) — NOT the DoE-root ladder
+         (`coordinator_doe_root()` / REPO_DOE_CLAUDE / machine-local
+         `repos.doe_claude`), which is what `bin_dir_sibling` resolves to for
          every OTHER caller of `_doe_coordinator_root()` (P-9/P-11/P-12/P-13's
-         still-coordinator-claude-owned sibling scripts, left untouched by this fix).
+         still-DoE-owned sibling scripts, left untouched by this fix).
 
     Bug this closes: prior to this fix, the manifest's non-override default
-    was `bin_dir_sibling / "doctor-probes.toml"` — i.e. the coordinator-claude clone's
+    was `bin_dir_sibling / "doctor-probes.toml"` — i.e. the DoE-claude clone's
     `coordinator/bin/`. That directory stopped housing the manifest after the
     b644d5a9 migration moved the executable surface (including
     doctor-probes.toml) into claude-klabauter; every triage/full run with no
@@ -464,14 +469,14 @@ def _run_prereq_probe_function(scripts_lib_dir: Path, func_name: str) -> Tuple[s
 
     DR-079 repoint (2026-07-21): func_name is dispatched to the corresponding
     coordinator_core.install.prereq_probe module-level callable instead of
-    shelling out to coordinator-claude's bash SSOT. "missing" now means "the native
+    shelling out to DoE's bash SSOT. "missing" now means "the native
     module/entrypoint is unavailable" (import failure, or an unrecognized
     func_name) rather than "the bash lib file is absent at scripts_lib_dir" —
     scripts_lib_dir is accepted for call-site/signature compatibility with
     probe_p15/probe_p17 (whose OWN `if scripts_lib_dir is None: return []`
     gate is untouched, preserving the pre-repoint skip-when-unresolved
     behavior) but is no longer consulted here: the native callable runs
-    in-process regardless of where (or whether) coordinator-claude's coordinator_root
+    in-process regardless of where (or whether) DoE's coordinator_root
     resolved. "source_failed" now covers a raising native callable — same
     "never let a probe crash the suite" contract _call_native_main enforces
     elsewhere in this module (see also probe_p19's identical
@@ -932,7 +937,7 @@ def probe_p11(plugins_root: Path, coordinator_root: Optional[Path] = None) -> Li
     _currency_plugin_root): on a source-is-live dev-clone host,
     <plugins_root>/coordinator-claude/coordinator/ holds only data/ — no
     bin/ — so the marketplace-shaped path is the wrong plugin root there.
-    Prefer coordinator_root (the coordinator-claude clone _doe_coordinator_root() already
+    Prefer coordinator_root (the DoE clone _doe_coordinator_root() already
     resolves) when given; otherwise fall back to the historical
     plugins_root-derived path so the marketplace case is unaffected. This is
     a root-selection preference, not a precondition for making the call —
@@ -952,9 +957,9 @@ def probe_p11(plugins_root: Path, coordinator_root: Optional[Path] = None) -> Li
                 "templates/setup drift detected — run verify-templates-setup-sync.py (no "
                 "flags, inspect-only) to see which files. Read NOT_PRESENT rows as benign "
                 "(neither side exists yet); only MISMATCH rows are drift. Since the "
-                "runtime-root resolver prefers a resolved coordinator-claude clone over the shared "
+                "runtime-root resolver prefers a resolved DoE clone over the shared "
                 "~/.claude/setup/ copy (see coordinator_percolate_runtime_root()), a "
-                "MISMATCH does not reach the resolved truth on a machine with a coordinator-claude clone "
+                "MISMATCH does not reach the resolved truth on a machine with a DoE clone "
                 "— real, but not urgent. RE-RUNNING THE INSTALLER WILL NOT CLEAR THIS, and "
                 "that is by design, not a bug: substrate.py's percolation step classifies a "
                 "drifted destination as operator-customized and PRESERVES it, logging "
@@ -969,7 +974,7 @@ def probe_p11(plugins_root: Path, coordinator_root: Optional[Path] = None) -> Li
                 "copy against the template the log line names, decide which side is "
                 "authoritative, and re-pin deliberately with a commit that says why — or "
                 "route it to the coordinator-claude owner via "
-                "coordinator/bin/cross-repo-memo if the call is theirs.",
+                "coordinator/bin/cross-repo-memo.py if the call is theirs.",
             )
         ]
     return []
@@ -1007,14 +1012,14 @@ def _currency_plugin_root(coordinator_root: Optional[Path], plugins_root: Path) 
 
     The probe needs the directory holding the actual coordinator plugin payload
     — specifically the `coordinator-schema-version` file it diffs the repo's
-    stamp against. On a coordinator-claude dev-clone host the marketplace-shaped path
+    stamp against. On a DoE dev-clone host the marketplace-shaped path
     <plugins_root>/coordinator-claude/coordinator/ holds only data/; the live
-    payload is the coordinator-claude clone that _doe_coordinator_root() already resolves (and
+    payload is the DoE clone that _doe_coordinator_root() already resolves (and
     that main() already hands to P-19).
 
-    Fallback chain rather than a straight swap: the coordinator-claude-clone value is verified
+    Fallback chain rather than a straight swap: the DoE-clone value is verified
     correct for the dev-clone layout but NOT for a marketplace install, where
-    the plugins_root derivation may be the right answer. Prefer the coordinator-claude root
+    the plugins_root derivation may be the right answer. Prefer the DoE root
     only when it actually carries the schema-version file; otherwise keep the
     historical plugins_root path so the marketplace case does not regress.
     """
@@ -1027,21 +1032,21 @@ def _doe_payload_root(
     """Resolve the coordinator root that actually carries `marker`.
 
     Shared by P-11 (marker `templates/setup`) and P-13 (marker
-    `coordinator-schema-version`). Both probes need the coordinator-claude-side payload, and
+    `coordinator-schema-version`). Both probes need the DoE-side payload, and
     both were reaching for it the same broken way.
 
     Three rungs, marker-verified rather than assumed:
 
     1. `coordinator_root` when it carries the marker. On a marketplace install
        this is the right answer and stays first.
-    2. The coordinator-claude-root ladder (`coordinator_doe_root()`), when THAT carries it.
+    2. The DoE-root ladder (`coordinator_doe_root()`), when THAT carries it.
        This is the rung the CLI path needs and did not have: `coordinator_root`
        arrives from `_doe_coordinator_root()`, whose first rung is
        COORDINATOR_BIN_ROOT — which the CLI entry sets to CLAUDE-KLABAUTER's bin. So the
        CLI hands these probes `<claude-klabauter>/coordinator`, which carries neither
-       marker: `coordinator-schema-version` stayed in coordinator-claude when the probe
+       marker: `coordinator-schema-version` stayed in DoE when the probe
        migrated here (see coordinator/bin/probe-onboarding-currency.py's
-       plugin-root note), and `templates/setup` is coordinator-claude-owned outright.
+       plugin-root note), and `templates/setup` is DoE-owned outright.
     3. The historical marketplace path, unchanged, so that case cannot regress.
 
     Why this matters beyond a wrong path: on a live-source install the
@@ -1119,7 +1124,7 @@ def probe_p13(
 
 
 # Review: code-reviewer (F1) — operator-facing note on the DR-079 semantic
-# change: before the repoint, P-15/P-17 "missing" fired whenever coordinator-claude's
+# change: before the repoint, P-15/P-17 "missing" fired whenever DoE's
 # scripts/lib/prereq_probe.sh was absent at scripts_lib_dir (silent skip,
 # []). After the repoint, that file's on-disk presence is no longer
 # consulted at all — "missing" now fires only if the native

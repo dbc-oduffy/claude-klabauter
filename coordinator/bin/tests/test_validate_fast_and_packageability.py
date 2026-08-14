@@ -4,7 +4,7 @@
 Purpose: Unit tests for validate-fast-and-packageability.py -- the ported
 fast-test resolution ladder (mktemp-diagnostic-capture equivalent + rc==2/
 126/other-nonzero/0 classification) and the packageability
-loud-skip-vs-silent-pass guard, both lifted out of coordinator-claude's
+loud-skip-vs-silent-pass guard, both lifted out of DoE-claude's
 coordinator/skills/validate/SKILL.md bash fences.
 
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (M3 chunk
@@ -130,7 +130,7 @@ class FastSubcommandTest(unittest.TestCase):
         # classified Tier F (`full_test_cmd` fallback -- no separate
         # `full_test_cmd` configured, so the resolver's own rc=3 fallback
         # makes the fast string the full string too). Per PM ruling
-        # 2026-08-04 (cross-repo/archive/2026-07-25-coordinator-claude-em-validate-
+        # 2026-08-04 (cross-repo/archive/2026-07-25-doe-claude-em-validate-
         # tier-u-shape-ruling.md's amendment), Tier F is no longer exempt
         # from the grant requirement -- the Tier-U gate now refuses this
         # BEFORE the child ever runs, still on exit 3 (the gate's own

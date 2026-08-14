@@ -14,8 +14,8 @@ is installed ONCE (alongside every emitted forwarder, in the same shim
 dir — settings-home ``bin/`` and the ``~/.claude/bin`` compat mirror) and
 imported by each forwarder's now-trivial ~6-line body.
 
-Contract preserved verbatim from the prior inline body (coordinator-claude
-``coordinator/snippets/resolve-claude-klabauter-bin.md``, coordinator-claude commit ``ad7fb0d1``):
+Contract preserved verbatim from the prior inline body (DoE-claude
+``coordinator/snippets/resolve-claude-klabauter-bin.md``, DoE commit ``ad7fb0d1``):
 registry-key-then-sentinel resolution rungs, ``coordinator/bin`` composition,
 the ``..``-traversal guard, on-disk existence checks for the resolved root
 and ``coordinator/bin``, an *executable* sentinel probe (``archive-stamp-cli``),
@@ -32,7 +32,7 @@ config value is a real, non-adversarial failure mode, not a trust boundary —
 is exactly the four checks enumerated above.
 
 Spec backlink:
-    coordinator-claude coordinator/snippets/resolve-claude-klabauter-bin.md (coordinator-claude commit ad7fb0d1)
+    DoE-claude coordinator/snippets/resolve-claude-klabauter-bin.md (DoE commit ad7fb0d1)
     docs/plans/2026-07-23-... (M1 — forwarder-ladder extraction + derived set)
     cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
 
@@ -63,6 +63,7 @@ import os
 import runpy
 import stat
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -215,7 +216,7 @@ def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
 
 
 # Resolution classes returned alongside the root by
-# ``resolve_claude_klabauter_root_with_class()``. Verbatim from coordinator-claude's
+# ``resolve_claude_klabauter_root_with_class()``. Verbatim from DoE-claude's
 # ``coordinator/hooks/scripts/_engine_root.py`` — a conformance fixture
 # (chunk C8) drives both implementations against the same registry-state
 # cases, so the string values themselves are part of the contract, not just
@@ -317,7 +318,7 @@ def _maybe_emit_skew_advisory(ml_dir: Path, published: str) -> None:
 def _flatten_registry(data: dict, _prefix: str = "") -> dict:
     """Flatten nested registry TOML tables to dotted keys.
 
-    Mirrors coordinator-claude's ``_engine_root.py::_flatten_registry`` bit-for-bit — the
+    Mirrors DoE's ``_engine_root.py::_flatten_registry`` bit-for-bit — the
     two-tier readers below (``_engine_working_repo_roots``,
     ``_registry_value``) need to enumerate or look up keys under a table
     prefix (``engine.working_repos.*``, ``repos.claude_klabauter``) the same
@@ -341,7 +342,7 @@ def _registry_value(ml_dir: Path, key: str) -> Optional[str]:
     """Read *key* from the machine-local registry TOML pair under *ml_dir*.
 
     Reads ``registry.local.toml`` before the tracked ``registry.toml``
-    baseline and returns the first hit — mirrors coordinator-claude's ``_registry_value``.
+    baseline and returns the first hit — mirrors DoE's ``_registry_value``.
     Fail-open throughout: missing file, unparseable TOML, or a missing
     ``tomllib`` (pre-3.11) all fall through to the next rung rather than
     raising. An empty-string value is a declaration, not a resolution."""
@@ -373,7 +374,7 @@ def _engine_working_repo_roots(ml_dir: Path) -> List[str]:
     Deliberately NOT first-hit-wins (unlike ``_registry_value`` and
     ``_resolve_claude_klabauter_root``'s single-key read) — this reads a SET of
     working repos, not one key, so a repo registered in either file is a
-    working repo. Mirrors coordinator-claude's ``_engine_working_repo_roots``. Dedupes by
+    working repo. Mirrors DoE's ``_engine_working_repo_roots``. Dedupes by
     value; never raises."""
     try:
         import tomllib
@@ -399,7 +400,7 @@ def _engine_working_repo_roots(ml_dir: Path) -> List[str]:
 
 
 def _same_repo_path(a: str, b: str) -> bool:
-    """Cross-platform path-equality check — mirrors coordinator-claude's
+    """Cross-platform path-equality check — mirrors DoE's
     ``_same_repo_path``: ``samefile`` when both paths exist, falling back to
     ``normcase``+``realpath`` comparison (so a registry entry pointing at a
     not-yet-cloned repo never raises). Never raises.
@@ -424,7 +425,7 @@ def _same_repo_path(a: str, b: str) -> bool:
 def _session_repo_root() -> Optional[Path]:
     """The repo root of the SESSION currently running.
 
-    Mirrors coordinator-claude's ``_session_repo_root``: ``CLAUDE_PROJECT_DIR`` env var
+    Mirrors DoE's ``_session_repo_root``: ``CLAUDE_PROJECT_DIR`` env var
     first, then a pure-Python upward walk from ``Path.cwd()`` looking for a
     ``.git`` entry (directory for a normal clone, file for a worktree).
     Never raises. Returns ``None`` if undeterminable."""
@@ -462,7 +463,7 @@ def _is_engine_working_repo(ml_dir: Path) -> Optional[bool]:
     caller MUST NOT treat ``None`` as ``False``: diverting an undeterminable
     repo away from the live tree, with nowhere principled to divert it FROM,
     would silently strand it. See ``resolve_claude_klabauter_root_with_class``'s
-    ``is False`` check, never bare falsiness. Mirrors coordinator-claude's
+    ``is False`` check, never bare falsiness. Mirrors DoE's
     ``_is_engine_working_repo``. Never raises."""
     session_root = _session_repo_root()
     if session_root is None:
@@ -498,7 +499,7 @@ def _resolve_published_engine(ml_dir: Path) -> Optional[str]:
     "Registered and usable" iff the key resolves to a value, that path
     exists as a directory, AND ``<root>/coordinator_core`` exists — guards
     the half-installed-clone case, where a root got registered before its
-    clone finished. Mirrors coordinator-claude's ``_resolve_published_engine``. Fail-open,
+    clone finished. Mirrors DoE's ``_resolve_published_engine``. Fail-open,
     never raises."""
     try:
         root = _registry_value(ml_dir, "repos.claude_klabauter")
@@ -516,7 +517,7 @@ def _resolve_published_engine(ml_dir: Path) -> Optional[str]:
 
 def resolve_claude_klabauter_root_with_class() -> Tuple[Optional[str], str]:
     """Resolve the engine root AND say which class of thing answered —
-    DR-132's two-tier ladder, mirroring coordinator-claude's
+    DR-132's two-tier ladder, mirroring DoE's
     ``_engine_root.py::resolve_claude_klabauter_root_with_class`` step order exactly.
     The NET effect is live-tree preference; do not "simplify" this into a
     live-tree-first ladder or invert it to prefer the published engine.
@@ -639,15 +640,54 @@ def _validate_bin_dir(claude_klabauter_root: str) -> str:
             "root (not a subdirectory)\n"
         )
 
-    sentinel = bin_dir + "/archive-stamp-cli"
-    if not _is_executable(sentinel):
-        raise ClaudeKlabauterResolutionError(
-            f"ERROR: '{sentinel}' is missing or not executable — coordinator/bin "
-            f"exists at '{bin_dir}' but its sentinel CLI (archive-stamp-cli, the "
-            "sole authorized handoff/memo frontmatter writer) is absent; this is a "
-            "stale or partial claude-klabauter migration, not a wrong-path problem. "
-            "Re-sync/re-clone claude-klabauter\n"
-        )
+    # Both shapes are accepted, and the `.py` one is accepted on EXISTENCE
+    # rather than the exec bit: the POSIX-exec drain (docs/plans/2026-08-13-
+    # grind-the-posix-exec-baseline-to-zero.md, chunk C6) renames the
+    # extensionless entrypoints to `.py` and clears their exec bit, so
+    # demanding an executable extensionless sentinel means demanding the
+    # pre-drain shape forever. Checking both also keeps this resolver working
+    # while the rename is mid-flight on a shared tree, which is when a false
+    # negative here does the most damage.
+    # Accepting both shapes is necessary but NOT sufficient to survive the
+    # rename, because C6 lands it as delete-then-write rather than an atomic
+    # move: for the instant between the two, NEITHER shape is on disk and a
+    # single probe reads the same as a genuinely absent sentinel. Measured
+    # live 2026-08-13 from a memo pickup taken mid-wave — the resolver raised,
+    # and since archive-stamp-cli is the sole authorized frontmatter writer,
+    # every concurrent session's handoff and memo stamping fails closed for
+    # the width of that window.
+    #
+    # Re-probe before believing the miss. A rename window is sub-millisecond;
+    # a genuinely absent sentinel stays absent, so the retry costs a bounded
+    # ~300ms on a path that was about to hard-fail anyway and nothing at all
+    # on the happy path (the first probe short-circuits). Deliberately NOT
+    # solved by widening the sentinel to several files: that trades a precise
+    # "this exact writer is missing" diagnostic for a fuzzy one, and every
+    # candidate file is renamed by the same wave.
+    sentinel_bare = bin_dir + "/archive-stamp-cli"
+    sentinel_py = sentinel_bare + ".py"
+
+    def _sentinel_present() -> bool:
+        return _is_executable(sentinel_bare) or os.path.isfile(sentinel_py)
+
+    if not _sentinel_present():
+        for _backoff_sec in (0.05, 0.1, 0.15):
+            time.sleep(_backoff_sec)
+            if _sentinel_present():
+                break
+        else:
+            raise ClaudeKlabauterResolutionError(
+                f"ERROR: neither '{sentinel_bare}' nor '{sentinel_py}' is present — "
+                f"coordinator/bin exists at '{bin_dir}' but its sentinel CLI "
+                "(archive-stamp-cli, the sole authorized handoff/memo frontmatter "
+                "writer) is absent in either shape, and stayed absent across a "
+                "re-probe; this is a stale or partial claude-klabauter migration, "
+                "not a wrong-path problem. Re-run the "
+                "installer against this clone, or check out the missing file with "
+                "`git checkout -- coordinator/bin/` — do NOT re-clone: this tree is "
+                "shared by concurrent sessions and a re-clone discards their "
+                "uncommitted work\n"
+            )
 
     return bin_dir
 
@@ -831,6 +871,20 @@ def exec_cli(target: str, argv: Optional[List[str]] = None) -> None:
         sys.exit(1)
 
     target_path = bin_dir + "/" + target
+    # `.py`-suffix probe for a bare target name. The 745 installed settings-home
+    # forwarders each call `exec_cli("<bare-name>")`, and the POSIX-exec drain
+    # (docs/plans/2026-08-13-grind-the-posix-exec-baseline-to-zero.md, chunk C6)
+    # renames the extensionless entrypoints they name to `<bare-name>.py`. The
+    # install chain maps the suffix back off at INSTALL time, so a re-installed
+    # tree is fine either way — but a forwarder installed before the rename
+    # keeps naming the bare form, and every session on a not-yet-reinstalled
+    # tree would exec-fail until it reinstalled. Probing here makes the
+    # transition survivable without a fleet-wide reinstall, which is the same
+    # bargain DoE took for `install-sentinel-write` in their `d34a977a8`.
+    if not os.path.isfile(target_path) and not target.endswith(".py"):
+        suffixed = target_path + ".py"
+        if os.path.isfile(suffixed):
+            target_path = suffixed
     target_claude_klabauter_root = claude_klabauter_root
 
     # Hoisted above the os.name branch (Review: code-reviewer F4 — was

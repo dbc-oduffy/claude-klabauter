@@ -218,7 +218,7 @@ class TestResolveCandidateCore:
     def test_many_items_clear_match_auto_resolves(self):
         """A 51-item corpus with one clearly-matching title still
         auto-resolves -- this is the exact regression the arithmetic
-        auto-resolution defect (memo: coordinator-claude has 230 plans and 4 goals, so
+        auto-resolution defect (memo: DoE has 230 plans and 4 goals, so
         stamp mode nulled origin_plan_id on EVERY fork) is about; it must
         have failed against the old len(items) == 1 branch this helper
         replaces."""

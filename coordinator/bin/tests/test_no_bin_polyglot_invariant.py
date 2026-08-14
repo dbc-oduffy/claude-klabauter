@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_no_bin_polyglot_invariant.py — regression net for the PM-ratified
 2026-07-21 rule "the `#!/bin/sh` sh/python polyglot wrapper is legacy debt,
 not a blessed class": no tracked file under `coordinator/` may carry

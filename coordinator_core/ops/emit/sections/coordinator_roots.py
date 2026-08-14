@@ -28,7 +28,7 @@ the emitted array ordering is identical, and the concurrency was a latency optim
 not a semantic (now moot — there is no remote call left to fan out). Emit-DERIVED fields are
 not applicable to this entity.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 7,
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 7,
   CoordinatorRoots. Byte/semantic parity port (parity with the gh-backed path retired
   2026-07-29 per the PM ruling above).
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P07

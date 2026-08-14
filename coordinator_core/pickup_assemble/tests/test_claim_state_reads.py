@@ -124,7 +124,7 @@ def _make_ledger_claim(
     `stamped` (default False) controls whether the claim dir also carries
     the `session.claims.mark_claim_stamped` durable marker — the fact
     `pickup_assemble`'s `stamp_evidence` fallback now reads (cross-repo/inbox/
-    2026-08-13-coordinator-claude-em-pickup-already-satisfied-masks-a-refused-write.md),
+    2026-08-13-doe-claude-em-pickup-already-satisfied-masks-a-refused-write.md),
     in place of the old (unsound) `claim_stage(...) == CLAIM_STAGE_APPLY`
     inference. A bare ledger claim with no `stamped` marker is exactly the
     "reservation taken, stamp never confirmed" state that invariant was
@@ -223,7 +223,7 @@ def test_compute_competing_claim_ledger_only_sibling_is_a_candidate(tmp_path, mo
 
 def test_compute_competing_claim_send_message_address_resolves(tmp_path, monkeypatch):
     """`state/handoffs/2026-08-13-session-owner-reachability-registry.md`
-    § 3; `cross-repo/inbox/2026-08-13-coordinator-claude-em-peer-roster-doctrine-
+    § 3; `cross-repo/inbox/2026-08-13-doe-claude-em-peer-roster-doctrine-
     reply.md` § Counter 2 — a candidate whose holder resolves gets a
     populated `send_message_address`."""
     repo = tmp_path / "repo"
@@ -490,7 +490,7 @@ def test_classify_no_ledger_claim_and_dropped_deployment_state_stays_ambiguous(t
 def test_brief_self_claimed_ledger_only_stamped_marks_d2_already_satisfied(
     tmp_path, monkeypatch
 ):
-    """Row 35, repaired for cross-repo/inbox/2026-08-13-coordinator-claude-em-pickup-
+    """Row 35, repaired for cross-repo/inbox/2026-08-13-doe-claude-em-pickup-
     already-satisfied-masks-a-refused-write.md: ledger-sourced stamp evidence
     now requires the durable `stamped` marker (`session.claims.
     mark_claim_stamped`), not merely `claim_stage(...) == CLAIM_STAGE_APPLY`

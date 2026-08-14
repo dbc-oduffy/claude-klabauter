@@ -14,7 +14,7 @@ Source: reads the central-state ``state/health`` tree via
 central state is claude-klabauter-resident post stop-the-rot, so health rows live there, not under the
 meta-repo. Emit-DERIVED fields do not apply to this entity; collect() returns final records.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.10,
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 8.10,
   HealthStatusSummary. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P14
 

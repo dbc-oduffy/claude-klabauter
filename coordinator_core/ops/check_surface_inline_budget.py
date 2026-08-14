@@ -15,7 +15,7 @@ away from inline procedure toward a named entrypoint (AC-11):
                         `NO-MULTI-LINE-SHELL-FENCE` recognizes).
   - `cc_trusted`       — a `_cc_trusted=0` trusted-root-preamble initializer
                         line (anchored whole-line match, matching the
-                        coordinator-claude `test_no_command_fences_in_doctrine.py` gate's
+                        DoE `test_no_command_fences_in_doctrine.py` gate's
                         own anchoring rationale — a substring match
                         double-counts the preamble's traversal re-zero
                         line, which contains the same text).
@@ -28,7 +28,7 @@ away from inline procedure toward a named entrypoint (AC-11):
                         fence) containing a shell chaining/substitution
                         metacharacter (`&&`, `||`, `;`, `` ` ``, `$(`) — a
                         payload that migrated out of a fence into prose
-                        rather than being converted, mirroring the coordinator-claude
+                        rather than being converted, mirroring the DoE
                         gate's H5 "container-swap" finding.
 
 Note: these four signals are independent tells, not mutually exclusive
@@ -43,16 +43,16 @@ Note: these four signals are independent tells, not mutually exclusive
 Spec backlink: canonical-resolution-engine plan, chunk W1-A3a (2026-07-24)
   — AC-11 anti-rebound inline-mechanism budget gate.
 Prior art: coordinator_core/ops/check_wsc_inline_budget.py (single-surface,
-  single-signal ancestor of this module); coordinator-claude
+  single-signal ancestor of this module); DoE-claude
   coordinator/tests/test_no_command_fences_in_doctrine.py (BLOCK-severity
   doctrine gate over the full signal space this module approximates at
   WARN-severity and reduced precision — deliberately not ported verbatim;
   see Negative-spec below).
 
 Negative-spec:
-    - This is NOT a port of the coordinator-claude BLOCK-severity gate. That gate is a
+    - This is NOT a port of the DoE BLOCK-severity gate. That gate is a
       ~2000-line, corpus-calibrated, multi-pass-tuned detector living in
-      the doctrine repo (coordinator-claude) against a fixed guarded-tree scope
+      the doctrine repo (DoE-claude) against a fixed guarded-tree scope
       (skills/commands/agents/pipelines/snippets) and is out of scope for
       this repo (claude-klabauter) to depend on or duplicate. This module is
       a lighter-weight, WARN-only, surface-agnostic heuristic — false
@@ -67,7 +67,7 @@ Negative-spec:
     - Never BLOCKs. `check()` returns exit code 1 on over-budget (WARN,
       non-blocking by caller convention) or 0/2 exactly as the ancestor
       does — see its own Exit codes docstring. A caller that wants BLOCK
-      severity should reach for the coordinator-claude gate instead of tightening this
+      severity should reach for the DoE gate instead of tightening this
       one.
 """
 from __future__ import annotations
@@ -86,7 +86,7 @@ _SHELL_FENCE_RE = re.compile(
     r"^```(?:bash|sh|shell|console|shell-session)\b", re.IGNORECASE
 )
 
-# Anchored whole-line match (not substring) — mirrors the coordinator-claude gate's own
+# Anchored whole-line match (not substring) — mirrors the DoE gate's own
 # `_PREAMBLE_RE` anchoring rationale: the preamble's traversal re-zero line
 # also contains the literal text `_cc_trusted=0` as a substring, so a
 # substring test double-counts one preamble copy as two hits.
@@ -102,7 +102,7 @@ _NARRATED_STEP_RE = re.compile(
 
 # An inline single-backtick span (never a fence body — callers strip fence
 # lines before scanning) carrying a shell chaining/substitution
-# metacharacter — the same class of tell the coordinator-claude gate's H5 "container-swap"
+# metacharacter — the same class of tell the DoE gate's H5 "container-swap"
 # finding names: a payload moved out of a fence into prose is still a
 # payload.
 _INLINE_SPAN_RE = re.compile(r"`([^`\n]+)`")

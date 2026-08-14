@@ -12,7 +12,7 @@ wins on a re-dispatched agent_id, and registration-quad presence for the op key.
 All handlers are async; asyncio.run() is used directly in sync test functions — no
 pytest-asyncio dependency, matching coordinator_core/hooks/test_subagent_zero_tool_use_surface.py.
 
-Spec backlink: cross-repo/inbox/2026-07-25-coordinator-claude-em-zero-tool-use-detection-verdict-viable.md
+Spec backlink: cross-repo/inbox/2026-07-25-doe-claude-em-zero-tool-use-detection-verdict-viable.md
 """
 
 from __future__ import annotations

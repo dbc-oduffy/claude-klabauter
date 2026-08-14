@@ -11,7 +11,7 @@ caller now invokes this CLI, or imports coordinator_core.trusted_root_guard
 directly where the call site is already Python).
 
 Trust-core + mode semantics are NOT reimplemented here — this is a thin argv
-passthrough to coordinator_core.trusted_root_guard (DR-047: coordinator-claude owns
+passthrough to coordinator_core.trusted_root_guard (DR-047: DoE owns
 contract, claude-klabauter owns engine).
 
 This CLI is now the sole non-Python entrypoint for the trust-core check.

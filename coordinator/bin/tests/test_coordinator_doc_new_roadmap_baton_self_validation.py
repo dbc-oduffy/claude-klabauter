@@ -33,8 +33,8 @@ Loaded by file path (``importlib.machinery.SourceFileLoader``) since
 module -- same load idiom as test_coordinator_doc_new_predecessor.py.
 
 Spec backlink: cross-repo memo
-2026-08-01-coordinator-claude-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
-Spec backlink (AC13): docs/plans/2026-08-01-baton-spine-information-integrity.md § A5
+2026-08-01-doe-claude-em-roadmap-baton-write-guard-warns-where-claim-gate-denies.md
+Spec backlink (AC13): DoE-claude:pln-baton-spine-information-integr-d3e1d7 § A5
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ import yaml
 from coordinator_core.win_portability import no_console_creationflags
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
-_CLI_PATH = _BIN_DIR / "coordinator-doc-new"
+_CLI_PATH = _BIN_DIR / "coordinator-doc-new.py"
 
 _NO_CONSOLE = no_console_creationflags()
 

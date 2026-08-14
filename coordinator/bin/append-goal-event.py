@@ -73,7 +73,7 @@ Prior backlink: docs/plans/2026-06-22-cockpit-tc-3-coordinator-emission.md § C2
 Finish backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T2 AC4
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Parity oracle (this port): coordinator/bin/append-goal-event-facade.test.sh
-(coordinator-claude a2fe06f8, 2026-07-22)
+(DoE a2fe06f8, 2026-07-22)
 """
 
 from __future__ import annotations
@@ -83,6 +83,8 @@ import os
 import subprocess
 import sys
 import tempfile
+
+GENERATES = []  # writes only a NamedTemporaryFile params payload (deleted after the subprocess call) and prints to stdout — the goal.append write itself happens inside the dispatched coordinator_core.invoke subprocess, not this trampoline
 
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 if _LIB_DIR not in sys.path:

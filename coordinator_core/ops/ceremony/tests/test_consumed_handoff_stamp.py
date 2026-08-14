@@ -47,7 +47,7 @@ Coverage:
       write landing between the stamp and ship locks aborts the ship (CAS
       mismatch) rather than being silently lost or overwritten
   (s) post_commit_non_shipped_terminal_and_archived_is_noop — 2026-08-13
-      coordinator-claude-em memo: a baton flipped to ANY terminal deployment_state
+      doe-claude-em memo: a baton flipped to ANY terminal deployment_state
       and swept before the stamp step is a no-op, not a containment failure;
       the two companion tests keep that widening narrow (non-terminal
       archived, and `shipped` with no `shipped_in`, both still fail loud)
@@ -262,7 +262,7 @@ def test_reject_future_dated_date_only_prefix_past_accepted():
 
 def test_reject_future_dated_accepts_utc_plus_14_local_producer_case():
     """C1 regression: cross-repo/inbox/2026-07-23-claude-central-em-wsc-
-    tail-stamp-ship-silent-skip.md's real confirmed case. Coordinator-claude's
+    tail-stamp-ship-silent-skip.md's real confirmed case. DoE-claude's
     `/handoff` and `/spinoff` skills stamp filenames with LOCAL wall-clock
     time; on a machine east of UTC (up to UTC+14) that filename reads as
     "future" relative to naive-UTC now(). The memo's exact numbers: filename
@@ -625,7 +625,7 @@ def test_post_commit_already_shipped_and_archived_is_noop(repo):
 @pytest.mark.parametrize("terminal_state", ["closed", "abandoned", "continued"])
 def test_post_commit_non_shipped_terminal_and_archived_is_noop(repo, terminal_state):
     """The archived no-op guard covers EVERY terminal `deployment_state`, not
-    just `shipped` (coordinator-claude-em, 2026-08-13, cross-repo/inbox/2026-08-13-doe-
+    just `shipped` (doe-claude-em, 2026-08-13, cross-repo/inbox/2026-08-13-doe-
     claude-em-wsc-tail-consumed-stamp-refuses-archived-baton.md).
 
     A baton flipped terminal before the close ceremony -- e.g. a displaced

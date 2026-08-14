@@ -16,7 +16,7 @@ Wire params (all optional):
     from_handoff       (str)       — closing handoff absolute path; enables DAG mode.
     scope_paths        (list[str]) — path-scope for flat-mode chain_set only (never applied to
                                      reviewed_set — asymmetric scope, mirrors review-coverage-gate.sh
-                                     (coordinator-claude d9ac8232, 2026-07-19)).
+                                     (DoE d9ac8232, 2026-07-19)).
     closing_session_id (str)       — active Claude Code session ID of the closing handoff;
                                      enables D3 case 3 (unpublished closing handoff attribution).
                                      Maps to $CLAUDE_CODE_SESSION_ID in the bash original.
@@ -93,7 +93,7 @@ behaviour already described above. Only a caller passing ``mint_chain_waivers=Tr
 (ceremony-close) takes on the additional mint side effect, and that side effect is itself
 idempotent per (sha, chain_id) — see ``record_chain_ancestry_waiver``.
 
-Exit-code contract (mirrors review-coverage-gate.sh, coordinator-claude d9ac8232 2026-07-19, and AC11):
+Exit-code contract (mirrors review-coverage-gate.sh, DoE d9ac8232 2026-07-19, and AC11):
     0 — COVERED or WARN verdict (veneer prints verdict_line and exits 0; C10 —
         WARN is the pre-C10 UNCOVERED token's replacement and never halts).
     2 — INDETERMINATE (veneer exits 2; calling skill treats exit 2 as a halt).
@@ -326,6 +326,11 @@ Spec backlink: pln-coordinator-ops-buildout-from--903224 § C1e
 """
 
 from __future__ import annotations
+
+# Generator-provenance declaration: coverage.gate writes its disk artifact
+# to state/coverage/gate-result.json, which is gitignored (.gitignore:62)
+# -- an cockpit read-contract cache file, not a tracked repo artifact.
+GENERATES = []
 
 import contextlib
 import json
@@ -785,7 +790,7 @@ async def _coverage_gate(params: dict, repo_root: Optional[Path] = None) -> dict
 
     # Surface diagnostic notes.
     # Uncovered SHAs are included as notes (mirrors "uncovered: <sha>" to stderr in
-    # review-coverage-gate.sh (coordinator-claude d9ac8232, 2026-07-19) — the op layer surfaces them
+    # review-coverage-gate.sh (DoE d9ac8232, 2026-07-19) — the op layer surfaces them
     # as notes since the veneer is responsible for rendering stderr output). Commit
     # subjects are NOT appended here (would require a `git log` spawn this module
     # does not otherwise make on the uncovered-SHA path — see coverage.py's

@@ -76,7 +76,7 @@ def _require_git():
 def decoy(tmp_path: Path) -> Path:
     """A real repo standing in for OURS — what a poisoned GIT_DIR retargets at.
 
-    It deliberately carries the SAME paths the probes read out of the coordinator-claude clone,
+    It deliberately carries the SAME paths the probes read out of the DoE clone,
     with different content. That is what makes the poisoning silent rather than
     merely noisy: an unscoped probe finds a file, reads it, and reports a
     confident finding about a repo it never opened.
@@ -94,8 +94,8 @@ def decoy(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def doe(tmp_path: Path) -> Path:
-    """A real repo shaped like a coordinator-claude clone."""
-    root = tmp_path / "coordinator-claude-fake"
+    """A real repo shaped like a DoE clone."""
+    root = tmp_path / "DoE-fake"
     _seed_repo(
         root,
         {
@@ -108,7 +108,7 @@ def doe(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def vendored(tmp_path: Path, doe: Path) -> Path:
-    """A vendored schema copy byte-identical to the coordinator-claude clone's HEAD."""
+    """A vendored schema copy byte-identical to the DoE clone's HEAD."""
     path = tmp_path / "vendored" / _SCHEMA_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -125,7 +125,7 @@ def vendored(tmp_path: Path, doe: Path) -> Path:
 def test_check_schema_drift_is_not_retargeted_by_an_inherited_git_dir(
     monkeypatch, doe, decoy, vendored
 ):
-    """The vendored copy MATCHES coordinator-claude HEAD, so this must pass silently.
+    """The vendored copy MATCHES DoE HEAD, so this must pass silently.
 
     Unscoped, `git -C <doe> show HEAD:coordinator/schemas/...` reads the DECOY's
     copy of the same path, finds a byte difference, and raises a tamper finding
@@ -140,7 +140,7 @@ def test_check_schema_drift_is_not_retargeted_by_an_inherited_git_dir(
 def test_check_schema_drift_reports_an_unreadable_clone_as_not_a_drift_finding(
     tmp_path, vendored
 ):
-    """A coordinator-claude path that is not a git repository is a could-not-check, and the
+    """A DoE path that is not a git repository is a could-not-check, and the
     raised message must say so rather than reading as a tamper verdict."""
     not_a_repo = tmp_path / "not-a-clone"
     not_a_repo.mkdir()
@@ -196,7 +196,7 @@ def test_probe_freshness_ref_reads_the_doe_clones_own_origin(monkeypatch, doe, d
     """`remote get-url origin` is the first hop, and the one that decides which
     remote gets ls-remote'd. Retargeted, the probe queries OUR origin, finds no
     cockpit-contract-release there, and returns None — reported downstream as
-    "coordinator-claude has not published it yet", a confident false claim about a remote this
+    "DoE has not published it yet", a confident false claim about a remote this
     process never contacted.
     """
     _git(doe, "remote", "add", "origin", "https://example.invalid/doe.git")
@@ -235,7 +235,7 @@ def test_probe_freshness_ref_skips_an_unreadable_clone_without_claiming_absence(
     assert result is None
     text = " ".join(str(w.message) for w in recorded)
     assert "could not be read as a git repository" in text
-    assert "not a finding about what coordinator-claude has or has not published" in text
+    assert "not a finding about what DoE has or has not published" in text
 
 
 def test_tag_ancestry_distinguishes_absent_commits_from_a_real_negative(doe, decoy):
@@ -262,7 +262,7 @@ def test_tag_ancestry_is_not_retargeted_by_an_inherited_git_dir(monkeypatch, doe
     monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
 
     assert doe_drift._tag_is_ancestor_of_pin(doe, doe_head, doe_head) is True, (
-        "a commit that exists only in the coordinator-claude clone became unresolvable — the "
+        "a commit that exists only in the DoE clone became unresolvable — the "
         "probe answered from the decoy's object database"
     )
 

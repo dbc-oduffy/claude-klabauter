@@ -7,7 +7,7 @@ Coverage (the Staff Engineer F10 — authored in the C2 chunk itself, not deferr
   (b) unregistered repo -> read_ok False, explicit reason, never a guess.
   (c) registered repo whose root is absent from disk ("absent clone") ->
       read_ok False, distinguished from "unregistered".
-  (d) `example_doctrine_repo` routes through `read_doe_root_pointer`, every other repo id
+  (d) `doe_claude` routes through `read_doe_root_pointer`, every other repo id
       through bare `registry_get`.
   (e) `frontmatter_field`: absent field, unreadable file, literal null, empty
       value, and a real value — five distinguishable outcomes, not one `""`.
@@ -137,13 +137,13 @@ def test_registered_but_absent_clone_is_read_ok_false(monkeypatch: pytest.Monkey
     assert "does not exist on disk" in observation["error"]
 
 
-def test_example_doctrine_repo_routes_through_doe_root_pointer(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
-    """`repo: example_doctrine_repo` MUST resolve via `read_doe_root_pointer`, not bare
+def test_doe_claude_routes_through_doe_root_pointer(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """`repo: doe_claude` MUST resolve via `read_doe_root_pointer`, not bare
     `registry_get` (D6/eng-director F6) — asserted by making the two
     resolvers disagree and checking which one wins."""
     monkeypatch.setattr(sibling_fact, "read_doe_root_pointer", lambda: str(repo))
     monkeypatch.setattr(sibling_fact, "registry_get", lambda key: None)
-    leg = {"leg_id": "L1", "kind": "file_exists", "repo": "example_doctrine_repo", "path": "README.md"}
+    leg = {"leg_id": "L1", "kind": "file_exists", "repo": "doe_claude", "path": "README.md"}
     observation = resolve_leg(leg)
     assert observation["read_ok"] is True
     assert observation["source"].startswith(str(repo))
@@ -151,7 +151,7 @@ def test_example_doctrine_repo_routes_through_doe_root_pointer(monkeypatch: pyte
 
 def test_non_doe_repo_never_calls_doe_root_pointer(monkeypatch: pytest.MonkeyPatch, registered_repo: Path) -> None:
     def _fail() -> str:
-        raise AssertionError("read_doe_root_pointer must not be called for a non-example_doctrine_repo repo id")
+        raise AssertionError("read_doe_root_pointer must not be called for a non-doe_claude repo id")
 
     monkeypatch.setattr(sibling_fact, "read_doe_root_pointer", _fail)
     leg = {"leg_id": "L1", "kind": "file_exists", "repo": "fixture-repo", "path": "README.md"}

@@ -1,5 +1,5 @@
 """test_workday_start_advisory_counters — pytest tests for
-workday-start-advisory-counters.py (WDS-3: coordinator-claude /workday-start bash-block
+workday-start-advisory-counters.py (WDS-3: DoE-claude /workday-start bash-block
 extirpation — improvement-queue depth, push-failure log stats, local-only-ahead
 branch check, all ported to one naked-Python CLI).
 

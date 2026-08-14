@@ -1,6 +1,6 @@
 """test_update_docs_probes — pytest coverage for update-docs-probes.py's 4 subcommands.
 
-Spec backlink: coordinator/commands/update-docs.md (coordinator-claude) — Pre-flight probe,
+Spec backlink: coordinator/commands/update-docs.md (DoE-claude) — Pre-flight probe,
   Phase 9b, Phase 11i, Phase 13 steps 1-2.
 
 Coverage:
@@ -397,9 +397,9 @@ def test_retired_snippet_sync_sweep_verb_is_still_accepted(tmp_path):
     """The retired verb must keep exiting 0, not argparse's exit-2 "invalid
     choice".
 
-    The caller lives in another repo (coordinator-claude `coordinator/commands/
+    The caller lives in another repo (DoE-claude `coordinator/commands/
     update-docs.md` Phase 11b), so dropping the verb outright would break
-    `/update-docs` for every user until coordinator-claude lands a matching edit. This test
+    `/update-docs` for every user until DoE lands a matching edit. This test
     is the contract that keeps the two repos independently deployable while
     that edit is outstanding — delete it in the same change that deletes the
     shim, once Phase 11b no longer names the verb.
@@ -411,7 +411,7 @@ def test_retired_snippet_sync_sweep_verb_is_still_accepted(tmp_path):
         check=False,
     )  # popup-intentional-last-resort — test-only subprocess, no headless-parent focus-steal concern
     assert proc.returncode == 0, (
-        "the retired verb must no-op, not exit 2 — a coordinator-claude-side Phase 11b run "
+        "the retired verb must no-op, not exit 2 — a DoE-side Phase 11b run "
         f"would break.\nstdout: {proc.stdout}\nstderr: {proc.stderr}"
     )
     assert "retired" in proc.stderr.lower(), (

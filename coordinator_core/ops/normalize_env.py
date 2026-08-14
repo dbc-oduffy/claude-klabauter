@@ -7,7 +7,7 @@ applies consent-gated fixes for fixable prereqs. Windows-first mutations;
 macOS/Linux prints offers only (no silent mutation on non-Windows) — same
 posture as the bash oracle.
 
-Port of: normalize-env.sh (coordinator-claude ca30f76c, 2026-07-17), 1075 lines, bash 3.2-safe
+Port of: normalize-env.sh (DoE ca30f76c, 2026-07-17), 1075 lines, bash 3.2-safe
 oracle. This module is byte-parity-verified against the oracle's plan/dry-run and --restore
 surfaces; the Windows-only mutation surfaces (winget Python install, App
 Execution alias disable via embedded PowerShell) are structurally ported but
@@ -15,7 +15,7 @@ cannot be executed end-to-end on this dev machine (macOS) — see
 test_normalize_env.py fresh-install-shape smoke test and its own docstring.
 
 Probe delegation (2026-07-21 de-bash cutover — see git log): the read-only
-probe layer previously bridged to coordinator-claude's scripts/lib/prereq_probe.sh via a
+probe layer previously bridged to DoE's scripts/lib/prereq_probe.sh via a
 `bash -c 'source ...; <fn>'` subprocess per probe call. It now calls
 `coordinator_core.install.prereq_probe`'s already-landed native port
 in-process — no subprocess, no bash dependency, same probe SSOT (that
@@ -56,6 +56,11 @@ from typing import Optional
 
 from coordinator_core.install import prereq_probe
 from coordinator_core.win_portability import no_console_creationflags
+
+# mutates only operator machine state outside any repo: ~/.bash_profile,
+# ~/.coordinator-env-backup.<ts> / ~/.bash_profile.coordinator-backup.<ts>,
+# and Windows git-config-global/winget/PowerShell alias state
+GENERATES = []
 
 _PROBE_TIMEOUT_SECS = 30
 _MUTATION_TIMEOUT_SECS = 300
@@ -1132,7 +1137,7 @@ def _ne_windows_path(
 
 
 def _ne_default_prereq_probe_path() -> Optional[str]:
-    """Resolution order: explicit env var set by the coordinator-claude-side trampoline
+    """Resolution order: explicit env var set by the DoE-side trampoline
     (which knows its own coordinator/scripts/ location) -- this module has
     no reliable way to locate a sibling-repo bash script on its own, per
     the Build-For-Someone-Else's-Machine path-resolution-order convention

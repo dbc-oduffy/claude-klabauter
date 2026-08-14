@@ -1,4 +1,5 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
+# Spec backlink: DoE-claude DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C3
 """priority-set.py — CLI trampoline over claude-klabauter's priority.set op
 (coordinator_core/ops/priority_set.py).
 
@@ -39,7 +40,6 @@ Exit codes:
         out-of-enum target_kind/priority, schema-validation MutateAbort, lock
         timeout, or malformed envelope).
 
-Spec backlink: coordinator-claude docs/plans/2026-07-26-priority-ledger.md § C3
 """
 
 from __future__ import annotations

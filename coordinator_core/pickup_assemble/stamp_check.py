@@ -11,7 +11,7 @@ resolving the repo root and the artifact's own frontmatter, then delegating
 straight to `compute_execution_stamp_match` — zero behavior change to that
 function or to the existing apply/brief/drop arms (additive-CLI).
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b5-planning-cluster.md, chunk C3a
+Spec backlink: DoE-claude:pln-computed-skills-b5-planning-cl-a28764, chunk C3a
 """
 
 from __future__ import annotations

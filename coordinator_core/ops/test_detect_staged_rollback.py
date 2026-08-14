@@ -208,7 +208,11 @@ def test_override_env_exits_zero_but_still_prints_findings(tmp_path, capsys):
     assert "a.txt" in captured.err
     assert "b.txt" in captured.err
     assert "c.txt" in captured.err
-    assert OVERRIDE_ENV in captured.err
+    # The already-applied override is confirmed without re-naming the key
+    # (B6/B8, docs/wiki/guard-messaging.md § Register) -- see
+    # OVERRIDE_ENV not appearing anywhere in rendered stderr below.
+    assert OVERRIDE_ENV not in captured.err
+    assert "override is set" in captured.err
 
 
 def test_override_env_zero_value_still_blocks(tmp_path):
@@ -340,7 +344,7 @@ def test_ratio_at_or_above_production_threshold_fires(tmp_path):
 def test_ratio_matching_historical_legitimate_prune_does_not_fire(tmp_path):
     """Calibration check: the largest legitimate single-commit deletion ratio
     ever observed in this repo's own history (`e6783a68bd0`, "prune(reclaim):
-    drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by coordinator-claude") was 1,709/3,382
+    drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by DoE") was 1,709/3,382
     ~= 0.505. Reproduced here at fixture scale (10/20 files, same ratio) —
     this must NOT fire, or the threshold would have blocked that real,
     PM-legitimate commit."""
@@ -411,7 +415,10 @@ def test_mass_deletion_override_permits_commit_but_still_reports(tmp_path, capsy
 
     captured = capsys.readouterr()
     assert "f0.txt" in captured.err
-    assert MASS_DELETION_OVERRIDE_ENV in captured.err
+    # Same B6/B8 register discipline as the rollback-override test above --
+    # the confirmation text no longer re-names the key.
+    assert MASS_DELETION_OVERRIDE_ENV not in captured.err
+    assert "override is set" in captured.err
 
 
 def test_mass_deletion_override_zero_value_still_blocks(tmp_path):

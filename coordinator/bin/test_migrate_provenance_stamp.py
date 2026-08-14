@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_migrate_provenance_stamp.py — unit tests for migrate-provenance-stamp.py
 

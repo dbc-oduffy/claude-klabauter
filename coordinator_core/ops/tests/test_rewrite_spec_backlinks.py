@@ -249,6 +249,143 @@ def test_batch_entry_point_aggregates_reported_set(tmp_path: Path) -> None:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Cross-repo (C7) fallback — a citation this repo cannot resolve, resolved
+# against a lazily-built DoE-claude peer index.
+# ---------------------------------------------------------------------------
+
+
+def _patch_peer_root(monkeypatch, peer_root: Path) -> None:
+    """Point `_doe_root_path()` at a fixture peer corpus instead of the real
+    DoE-claude checkout, so these tests never touch the real peer repo."""
+    import coordinator_core.ops.spec_backlink_resolve as resolve_mod
+
+    monkeypatch.setattr(resolve_mod, "_doe_root_path", lambda: peer_root)
+
+
+def test_peer_only_hit_emits_repo_qualified_pln_form(tmp_path: Path, monkeypatch) -> None:
+    # Local root has NO corpus at all (only the citing file) -- this citation
+    # can only ever resolve against the peer.
+    local_root = tmp_path / "local"
+    local_root.mkdir()
+
+    peer_root = tmp_path / "peer"
+    build_spec_backlink_corpus(peer_root)
+    _patch_peer_root(monkeypatch, peer_root)
+
+    peer_only_file = local_root / "peer_only_citer.py"
+    peer_only_file.write_text(
+        "# Spec backlink: docs/plans/2026-08-13-fixture-plan-pln-only.md § AC9\n",
+        encoding="utf-8",
+    )
+
+    report = rewrite_file(peer_only_file, worktree_root=local_root)
+    after = peer_only_file.read_text(encoding="utf-8")
+
+    assert "DoE-claude:pln-fixture-plan-pln-only-dddddd" in after
+    assert report["rewritten"] == ["docs/plans/2026-08-13-fixture-plan-pln-only.md"]
+    assert report["unresolvable"] == []
+
+
+def test_peer_hit_prefers_pln_over_dlv(tmp_path: Path, monkeypatch) -> None:
+    local_root = tmp_path / "local"
+    local_root.mkdir()
+
+    peer_root = tmp_path / "peer"
+    build_spec_backlink_corpus(peer_root)
+    _patch_peer_root(monkeypatch, peer_root)
+
+    peer_full_file = local_root / "peer_full_citer.py"
+    peer_full_file.write_text(
+        "# Spec backlink: docs/plans/2026-08-13-fixture-plan-full.md § AC10\n",
+        encoding="utf-8",
+    )
+
+    report = rewrite_file(peer_full_file, worktree_root=local_root)
+    after = peer_full_file.read_text(encoding="utf-8")
+
+    # Both plan_id and deliverable_id are real on the peer record; pln- wins,
+    # matching the same local-corpus preference order (§ pln->dlv ordering).
+    assert "DoE-claude:pln-fixture-plan-full-aaaaaa" in after
+    assert "dlv-fixture-plan-full-bbbbbb" not in after
+    assert report["rewritten"] == ["docs/plans/2026-08-13-fixture-plan-full.md"]
+
+
+def test_local_hit_wins_over_peer_when_target_resolves_in_both(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A citation resolving in BOTH this repo and the peer repo stays LOCAL,
+    unqualified — this repo's own index is tried first and, on a real-id hit,
+    the peer index is never even built. Documented precedence rule: this
+    repo is authoritative for its own citations; DoE-claude is consulted only
+    as a fallback for what this repo's index cannot resolve (see
+    `_default_resolver`'s own docstring, C7 extension paragraph)."""
+    import coordinator_core.ops.spec_backlink_resolve as resolve_mod
+
+    corpus = build_spec_backlink_corpus(tmp_path)
+
+    peer_root = tmp_path / "peer"
+    build_spec_backlink_corpus(peer_root)
+
+    build_calls = {"n": 0}
+    real_build_index = resolve_mod.build_index
+
+    def _counting_build_index(worktree_root):
+        build_calls["n"] += 1
+        return real_build_index(worktree_root)
+
+    monkeypatch.setattr(resolve_mod, "build_index", _counting_build_index)
+    monkeypatch.setattr(resolve_mod, "_doe_root_path", lambda: peer_root)
+
+    citing_file = corpus["citing_file"]
+    report = rewrite_file(citing_file, worktree_root=corpus["root"])
+    after = citing_file.read_text(encoding="utf-8")
+
+    # Resolves locally (present in both corpora, identical fixture) -> local,
+    # unqualified form; peer index is never built at all (still 1 call: the
+    # local index only).
+    assert "pln-fixture-plan-full-aaaaaa" in after
+    assert "DoE-claude:" not in after
+    assert build_calls["n"] == 1
+    assert report["rewritten"] == ["docs/plans/2026-08-13-fixture-plan-full.md"]
+
+
+def test_peer_index_built_at_most_once_per_resolver(tmp_path: Path, monkeypatch) -> None:
+    """The peer index build is lazy AND single-shot per resolver instance —
+    two peer-resolving citations across a batch must not rebuild it."""
+    import coordinator_core.ops.spec_backlink_resolve as resolve_mod
+
+    local_root = tmp_path / "local"
+    local_root.mkdir()
+
+    peer_root = tmp_path / "peer"
+    build_spec_backlink_corpus(peer_root)
+    _patch_peer_root(monkeypatch, peer_root)
+
+    build_calls = {"n": 0}
+    real_build_index = resolve_mod.build_index
+
+    def _counting_build_index(worktree_root):
+        build_calls["n"] += 1
+        return real_build_index(worktree_root)
+
+    monkeypatch.setattr(resolve_mod, "build_index", _counting_build_index)
+
+    multi_peer_file = local_root / "multi_peer_citer.py"
+    multi_peer_file.write_text(
+        "# Spec backlink: docs/plans/2026-08-13-fixture-plan-pln-only.md § AC11\n"
+        "# Spec backlink: docs/plans/2026-08-13-fixture-plan-dlv-only.md § AC12\n",
+        encoding="utf-8",
+    )
+
+    rewrite_file(multi_peer_file, worktree_root=local_root)
+
+    # 1 local build (resolver construction) + 1 peer build (first fallback
+    # citation) = 2 total, NOT 3 (a second per-citation peer rebuild would be
+    # the exact regression this guard exists for).
+    assert build_calls["n"] == 2
+
+
 def test_default_resolver_builds_index_exactly_once_per_batch(
     tmp_path: Path, monkeypatch
 ) -> None:

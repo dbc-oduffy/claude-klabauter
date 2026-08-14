@@ -7,7 +7,7 @@ monkeypatched values this same test file invented -- a test that patches a
 value and then asserts that value proves nothing about correctness.
 
 Spec backlink: docs/research/2026-07-28-windows-simulation-test-harness-design.md
-  (coordinator-claude), coordinator_core/tests/test_home_resolution_lint.py (this repo).
+  (DoE-claude), coordinator_core/tests/test_home_resolution_lint.py (this repo).
 """
 
 from __future__ import annotations
@@ -179,12 +179,12 @@ def test_split_path_list_never_uses_literal_colon_on_windows_shaped_input(monkey
 
 
 def test_split_path_folds_backslash_windows_native_form():
-    result = split_path("X:\\coordinator-claude\\coordinator", maxsplit=1, from_right=True)
-    assert result == ["X:/coordinator-claude", "coordinator"]
+    result = split_path("X:\\DoE-claude\\coordinator", maxsplit=1, from_right=True)
+    assert result == ["X:/DoE-claude", "coordinator"]
 
 
 def test_split_path_matches_purewindowspath_parent_and_name():
-    raw = "X:\\coordinator-claude\\coordinator"
+    raw = "X:\\DoE-claude\\coordinator"
     result = split_path(raw, maxsplit=1, from_right=True)
 
     # Independently-derived expectation via PureWindowsPath (the real Win32
@@ -198,11 +198,11 @@ def test_split_path_matches_purewindowspath_parent_and_name():
 
 
 def test_split_path_msys_mount_form_already_forward_slash_unaffected():
-    # /x/coordinator-claude/coordinator is the Git-Bash/MSYS mount-form rendering of
-    # X:\coordinator-claude\coordinator -- already all-forward-slash, must split
+    # /x/DoE-claude/coordinator is the Git-Bash/MSYS mount-form rendering of
+    # X:\DoE-claude\coordinator -- already all-forward-slash, must split
     # identically whether or not the fold runs.
-    result = split_path("/x/coordinator-claude/coordinator", maxsplit=1, from_right=True)
-    assert result == ["/x/coordinator-claude", "coordinator"]
+    result = split_path("/x/DoE-claude/coordinator", maxsplit=1, from_right=True)
+    assert result == ["/x/DoE-claude", "coordinator"]
 
 
 def test_split_path_posix_form_unaffected_by_fold():

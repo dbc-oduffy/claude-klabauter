@@ -5,9 +5,9 @@ Mirrors the bash oracle's own test coverage (T1-T5) plus a rung-2.5-specific
 case (T6) the bash suite exercises only indirectly via T3's fallthrough.
 Scenarios are driven the same way the bash tests drive them: a fake
 `machine-local` stub placed first on PATH, environment variables scoped per-test via
-monkeypatch, and a fresh `os.environ["REPO_EXAMPLE_DOCTRINE_REPO"]` state.
+monkeypatch, and a fresh `os.environ["REPO_DOE_CLAUDE"]` state.
 
-Port of: coordinator-doe-root.test.sh (coordinator-claude 09e5e5f9, 2026-07-19)
+Port of: coordinator-doe-root.test.sh (DoE 09e5e5f9, 2026-07-19)
 
 NOTE (2026-07-21): the module is no longer process-global-state-bearing via
 `os.environ` — the bash oracle's `export` was retired because it leaked across the
@@ -44,7 +44,7 @@ def _clean_env(monkeypatch):
     # so a value pinned by one test would otherwise leak into the next. Mirrors the
     # _reset_central_root_memo fixture in test_deliverable_rollup.py.
     mod._reset_doe_root_cache()
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     yield
@@ -61,7 +61,7 @@ def test_t1_env_short_circuit_no_machine_local_call(tmp_path, monkeypatch):
         f"pathlib.Path({str(sentinel)!r}).touch()\n"
         "print('/should-not-be-returned')\n",
     )
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/tmp/fake-doe-root")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/tmp/fake-doe-root")
     monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
     result = mod.coordinator_doe_root()
@@ -73,7 +73,7 @@ def test_t1_env_short_circuit_no_machine_local_call(tmp_path, monkeypatch):
 def test_t2_registry_resolution(tmp_path, monkeypatch):
     stubdir = tmp_path / "t2-stub"
     stubdir.mkdir()
-    expected = "/x/coordinator-claude"
+    expected = "/x/DoE-claude"
     _write_stub(str(stubdir), f"print({expected!r})\n")
     monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
@@ -81,7 +81,7 @@ def test_t2_registry_resolution(tmp_path, monkeypatch):
 
     assert result == expected
     # Inverted 2026-07-21: the resolver is pure and no longer exports on rung 2.
-    assert "REPO_EXAMPLE_DOCTRINE_REPO" not in os.environ
+    assert "REPO_DOE_CLAUDE" not in os.environ
 
 
 def test_t3_fail_loud_returns_none_and_remediation(tmp_path, monkeypatch, capsys):
@@ -99,13 +99,13 @@ def test_t3_fail_loud_returns_none_and_remediation(tmp_path, monkeypatch, capsys
     rc = mod.main([])
     captured = capsys.readouterr()
     assert rc == 1
-    assert "repos.example_doctrine_repo" in captured.err
+    assert "repos.doe_claude" in captured.err
 
 
 def test_t4_memo_idempotency_second_call_skips_machine_local(tmp_path, monkeypatch):
     """Renamed from `test_t4_export_idempotency_...` (2026-07-21): the
     single-machine-local-call property is now carried by the module-scope memo
-    rather than by the retired `os.environ["REPO_EXAMPLE_DOCTRINE_REPO"]` export. The
+    rather than by the retired `os.environ["REPO_DOE_CLAUDE"]` export. The
     assertion is unchanged -- only the mechanism under it moved."""
     stubdir = tmp_path / "t4-stub"
     stubdir.mkdir()
@@ -114,16 +114,16 @@ def test_t4_memo_idempotency_second_call_skips_machine_local(tmp_path, monkeypat
         str(stubdir),
         "with open(" + repr(str(sentinel)) + ", 'a') as _f:\n"
         "    _f.write('called\\n')\n"
-        "print('/x/coordinator-claude')\n",
+        "print('/x/DoE-claude')\n",
     )
     monkeypatch.setenv("PATH", f"{stubdir}{os.pathsep}{os.environ.get('PATH', '')}")
 
     first = mod.coordinator_doe_root()
     second = mod.coordinator_doe_root()
 
-    assert first == "/x/coordinator-claude"
-    assert second == "/x/coordinator-claude"
-    # B1 review fix (2026-08-08): the stub resolves rung 2 (repos.example_doctrine_repo)
+    assert first == "/x/DoE-claude"
+    assert second == "/x/DoE-claude"
+    # B1 review fix (2026-08-08): the stub resolves rung 2 (repos.doe_claude)
     # immediately, so neither the codename-free ladder (now rung 2.75, tried
     # only when rungs 2/2.5 both fail) nor rung 2.5 itself is ever reached on
     # this stub. The property this test guards -- exactly one machine-local
@@ -159,16 +159,16 @@ def test_t5_rung3_pointer_file_fallback_via_clone_root_script(tmp_path, monkeypa
     result = mod.coordinator_doe_root()
 
     assert result == str(fake_doe_root)
-    # The resolver is PURE as of 2026-07-21 -- it no longer exports REPO_EXAMPLE_DOCTRINE_REPO
+    # The resolver is PURE as of 2026-07-21 -- it no longer exports REPO_DOE_CLAUDE
     # (see the module docstring's DECISION REVERSAL section). This assertion was
-    # inverted from `os.environ["REPO_EXAMPLE_DOCTRINE_REPO"] == str(fake_doe_root)`: it now
+    # inverted from `os.environ["REPO_DOE_CLAUDE"] == str(fake_doe_root)`: it now
     # pins the absence of the interpreter-global write, which is the property that
     # actually matters to every other test in the suite.
-    assert "REPO_EXAMPLE_DOCTRINE_REPO" not in os.environ
+    assert "REPO_DOE_CLAUDE" not in os.environ
 
 
 def test_t6_rung25_live_path_fallback(tmp_path, monkeypatch):
-    """Rung 2 (repos.example_doctrine_repo) empty, rung 2.5 (live_path) resolves."""
+    """Rung 2 (repos.doe_claude) empty, rung 2.5 (live_path) resolves."""
     stubdir = tmp_path / "t6-stub"
     stubdir.mkdir()
     _write_stub(
@@ -177,7 +177,7 @@ def test_t6_rung25_live_path_fallback(tmp_path, monkeypatch):
             """\
             import sys
             argv2 = sys.argv[2] if len(sys.argv) > 2 else None
-            if argv2 == "repos.example_doctrine_repo":
+            if argv2 == "repos.doe_claude":
                 sys.exit(1)
             if argv2 == "plugin.mirrors.coordinator-claude.live_path":
                 print("/x/live-path-doe")
@@ -195,7 +195,7 @@ def test_t6_rung25_live_path_fallback(tmp_path, monkeypatch):
 
     assert result == "/x/live-path-doe"
     # Inverted 2026-07-21: the resolver is pure and no longer exports on rung 2.5.
-    assert "REPO_EXAMPLE_DOCTRINE_REPO" not in os.environ
+    assert "REPO_DOE_CLAUDE" not in os.environ
 
 
 def test_negative_no_machine_local_no_pointer_file(tmp_path, monkeypatch):
@@ -220,7 +220,7 @@ def test_negative_no_machine_local_no_pointer_file(tmp_path, monkeypatch):
 def test_c1b_codename_free_rung_resolves_with_registry_unreachable(tmp_path, monkeypatch):
     """C1B — proves the new codename-free ladder is load-bearing, not merely
     present: with the registry unreachable (empty PATH, no `machine-local`
-    binary at all) and REPO_EXAMPLE_DOCTRINE_REPO unset, a planted `.doe-root` pointer
+    binary at all) and REPO_DOE_CLAUDE unset, a planted `.doe-root` pointer
     under a redirected settings-home resolves the OSS-flat manifest layout.
     Mirrors the C1B brief's executed probe (published mirror, registry
     reachability removed -> previously `None`)."""
@@ -242,11 +242,11 @@ def test_c1b_codename_free_rung_resolves_with_registry_unreachable(tmp_path, mon
     result = mod.coordinator_doe_root()
 
     assert result == str(fake_plugin_root)
-    assert "REPO_EXAMPLE_DOCTRINE_REPO" not in os.environ
+    assert "REPO_DOE_CLAUDE" not in os.environ
 
 
 def test_c1b_codename_free_rung_private_manifest_layout(tmp_path, monkeypatch):
-    """Same rung, private coordinator-claude-repo manifest shape (`coordinator/schemas/...`)
+    """Same rung, private DoE-repo manifest shape (`coordinator/schemas/...`)
     instead of the OSS-flat one -- both published layouts must be probed."""
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
@@ -347,7 +347,7 @@ def test_c1e_plugin_root_content_root_normalized_to_repo_root(tmp_path, monkeypa
 
 
 def test_b5_plugin_root_normalizes_without_marketplace_marker(tmp_path):
-    """B5 review fix (2026-08-08): the private coordinator-claude repo root may not carry
+    """B5 review fix (2026-08-08): the private DoE repo root may not carry
     `.claude-plugin/plugin.json` (the C1E fix's marker was an unverified
     premise). With no marketplace marker ANYWHERE, a candidate whose basename
     is "coordinator" and whose parent has the manifest at
@@ -464,7 +464,7 @@ def test_f1_marketplace_cache_rung_ordered_ahead_of_flat_layout(tmp_path, monkey
 
 
 def test_main_cli_success_prints_no_trailing_newline(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", "/tmp/some-doe-root")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/tmp/some-doe-root")
     rc = mod.main([])
     captured = capsys.readouterr()
     assert rc == 0

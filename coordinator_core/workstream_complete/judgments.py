@@ -4,7 +4,7 @@ judgment_point builders for the `workstream-complete-assemble` computed
 engine.
 
 Purpose: the D-3/census conversion of `coordinator/skills/workstream-
-complete/SKILL.md` (coordinator-claude) extracts every genuinely mechanical branch
+complete/SKILL.md` (DoE-claude) extracts every genuinely mechanical branch
 into `directives_*.py` submodules and leaves a narrow residue that the
 source text itself names as non-computable — an open-ended qualitative
 call, an authorial-prose act, or a classification the SKILL delegates to a
@@ -34,7 +34,7 @@ session hygiene, and commit/tail — see `JUDGMENT_POINT_BUILDERS` at the
 bottom for the full roster in one place.
 
 Tier discipline (`coordinator/docs/wiki/computed-skills.md` § The
-three-tier model, coordinator-claude): every builder below carries a
+three-tier model, DoE-claude): every builder below carries a
 `recommendation` (tier 2, `build_judgment_point`) UNLESS its evidence is
 content this engine did not itself compute — another session's memo
 prose, another session's git activity, or a classification explicitly
@@ -84,7 +84,7 @@ Negative-spec:
     this module's concern at any layer (D-1's separate baton).
 
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
-chunk C2f. Census: coordinator-claude
+chunk C2f. Census: DoE-claude
 state/plan-sidecars/2026-07-26-workstream-complete-computed-frontage.census-steps.md
 (rows classified JUDGMENT for Steps 1, 1.2, 2, 2.4, 2.4b, 2.6, 2.6.7,
 2.6.8, 2.6b, 2.65, 2.67, 2.7, 2.8, 2.9, 2.95, 2.96, 3.0, 3, 4).
@@ -376,8 +376,8 @@ def build_memo_resolution_attribution_judgment_point(
 
     Source text: "non-automatable... no reliable programmatic signal
     connects commits to memo resolution." That premise is STALE as of the
-    2026-07-30 coordinator-claude-em cross-repo memo (`cross-repo/archive/2026-07-30-
-    coordinator-claude-em-wsc-review-trail-passthrough-and-memo-attribution.md`):
+    2026-07-30 doe-claude-em cross-repo memo (`cross-repo/archive/2026-07-30-
+    doe-claude-em-wsc-review-trail-passthrough-and-memo-attribution.md`):
     three signals this engine itself writes DO connect commits to memo
     resolution — `picked_up_by == sid`, `realized_by` matching a commit SHA
     in this session's range, and an inbox->archive `git mv` landing as an
@@ -1067,7 +1067,7 @@ def build_stage_paths_missing_judgment_point(
     sweep, silently under-committing the session's own completion entry,
     lessons, and review-trail records while still reporting `landed`
     (state/bug-backlog/2026-07-29-workstream-complete-silently-under-commi-
-    33e5cdf24112.yaml, coordinator-claude).
+    33e5cdf24112.yaml, DoE-claude).
 
     `candidate_paths` is the CALLER's already-derived candidate set --
     `resolve_session_start_time` -> `classify_session_authored_files` ->
@@ -1138,7 +1138,7 @@ def build_stage_paths_missing_judgment_point(
 
 
 # ---------------------------------------------------------------------------
-# No-commit row disposition (coordinator-claude docs/plans/2026-07-29-pm-approved-
+# No-commit row disposition (DoE-claude docs/plans/2026-07-29-pm-approved-
 # provenance-write-time-closure-gate.md, chunk C13 -- NOT part of the C2f
 # census above; a later addition, its own judgment point, kept out of
 # `JUDGMENT_POINT_BUILDERS` deliberately -- see that tuple's own docstring
@@ -1223,13 +1223,13 @@ def build_no_commit_row_disposition_judgment_point(
     caller that does not (yet) thread the value through.
 
     Five named exits, matching the five-exit ruling
-    (cross-repo/inbox/2026-08-05-coordinator-claude-em-plan-tasks-five-exits-
-    ruling.md, ask 3; `coordinator/bin/plan-tasks-resolve --id <row-id>
+    (cross-repo/inbox/2026-08-05-doe-claude-em-plan-tasks-five-exits-
+    ruling.md, ask 3; `python3 coordinator/bin/plan-tasks-resolve --id <row-id>
     ...`) rather than the pre-ruling three -- ships (a commit lands,
     `disposition: coded`, via `--coded <sha>` -- no PM word), spun-off (a
     row moved off this plan -- to a new plan via `--spun-off <ref>` or an
     existing one via `--moved-to <plan-path>` -- `disposition: spun_off`,
-    relaxed at coordinator-claude `bd0475fd5`/schema 1.4.0 -- no PM word), backlogged
+    relaxed at DoE `bd0475fd5`/schema 1.4.0 -- no PM word), backlogged
     (`disposition: backlogged` via `--backlogged` -- a PM word is
     required, retained by PM ruling), wont-do (`disposition: wont_do` via
     `--wont-do` -- a PM word is required, retained by PM ruling), or
@@ -1287,7 +1287,7 @@ def build_no_commit_row_disposition_judgment_point(
         id="jp-no-commit-row-disposition",
         question=(
             "Task-spine row(s) with no covering commit this pass -- "
-            f"{row_line} -- five exits via `coordinator/bin/plan-tasks-resolve "
+            f"{row_line} -- five exits via `python3 coordinator/bin/plan-tasks-resolve "
             "--id <row-id> ...`: did they ship (--coded <sha>, no PM word), get "
             "spun off or moved to an existing plan (--spun-off/--moved-to, no "
             "PM word), get backlogged (--backlogged, PM word required), get "
@@ -1307,9 +1307,9 @@ def build_no_commit_row_disposition_judgment_point(
             "not a fixed predicate this engine can pick for itself -- shipped "
             "requires a real commit the oracle can find, spun-off requires a "
             "recorded `disposition_ref` (new or existing plan -- no PM word, "
-            "relaxed at coordinator-claude bd0475fd5/schema 1.4.0), backlogged and wont-do "
+            "relaxed at DoE bd0475fd5/schema 1.4.0), backlogged and wont-do "
             "each require a PM word (retained by PM ruling -- cross-repo/inbox/"
-            "2026-08-05-coordinator-claude-em-plan-tasks-five-exits-ruling.md), and "
+            "2026-08-05-doe-claude-em-plan-tasks-five-exits-ruling.md), and "
             "carried-forward requires an explicit handoff_carry_gate carry_id, "
             "so none of the five resolves without an actual decision"
         ),

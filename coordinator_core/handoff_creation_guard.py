@@ -6,7 +6,7 @@ path.
 
 Purpose: close the upstream half of the live/archive handoff duplication hole
 documented in ``state/audits/2026-07-26-handoff-live-archive-duplication-
-origin.md`` (coordinator-claude). That investigation ruled out archival itself, the
+origin.md`` (DoE-claude). That investigation ruled out archival itself, the
 stale-index restore fix, and the DR-084 migration's own write primitive as
 the creator of a duplicate, and narrowed the remaining candidates to
 unconditional-create writers reachable in a shared working tree. It could not
@@ -18,7 +18,7 @@ Enforced at three call sites (the enumeration this module's own audit
 produced — see the dispatching sidecar for the full trace):
   - ``coordinator_core.ops.handoff_author_fork`` (``handoff.author_fork`` op)
   - ``coordinator_core.ops.queue_scaffold_baton`` (``handoff.scaffold_from_queue`` op)
-  - ``coordinator/bin/coordinator-doc-new`` (``--type handoff|recovery|spinoff|
+  - ``coordinator/bin/coordinator-doc-new.py`` (``--type handoff|recovery|spinoff|
     spinoff-roadmap`` CLI scaffold path)
 
 These are the only writers found that can materialize a NEW file at a
@@ -35,7 +35,7 @@ Two independent match bases, either one sufficient to trip the guard:
     frontmatter scalar already exists on an archived record — the durable,
     path-independent identity ``docs/plans/2026-07-08-lifecycle-vocab-c2-
     durable-links-rollup.md`` § C1 introduced, and the same basis
-    ``coordinator/tests/test_handoff_id_uniqueness.py`` (coordinator-claude) checks
+    ``coordinator/tests/test_handoff_id_uniqueness.py`` (DoE-claude) checks
     after the fact.
 
 Negative-spec: no ``force``/escape parameter. There is no legitimate reason

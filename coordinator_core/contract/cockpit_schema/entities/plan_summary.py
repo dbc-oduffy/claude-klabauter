@@ -1,6 +1,6 @@
 """
 PlanSummary — summary view over docs/plans/*.md lifecycle and status.
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/plan-summary.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/plan-summary.ts`
 (Zod source).
 
 Spec backlink: state/roadmap/cockpit-contract-ext-2026-06-22/COORDINATOR-RESOLUTIONS.md
@@ -12,7 +12,7 @@ verbatim from plan frontmatter — no git-blame inference (C-F6).
 `repo` and `coordinator_root_path` are connector-injected (D4).
 Nullable fields follow D9 (present-as-null, not optional).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

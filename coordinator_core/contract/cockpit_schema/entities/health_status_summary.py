@@ -1,11 +1,11 @@
 """
-HealthStatusSummary — pydantic port of coordinator-claude
+HealthStatusSummary — pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/health-status-summary.ts` (Zod
 source). Summary view over state/health/*.md lifecycle and health posture.
 
 Spec backlink: schemas/health-status.yaml + docs/plans/2026-06-27-emit-new-record-types-producer-wiring.md
 § B1 + DECISIONS.md D9 + D5.
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 
 Composite primary key: (repo, coordinator_root_path, path). `title` is
 emitted verbatim from health-status frontmatter.

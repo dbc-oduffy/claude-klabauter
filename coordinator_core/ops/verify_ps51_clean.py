@@ -21,7 +21,7 @@ Exit codes (parity-critical — matches the bash oracle byte-for-byte):
   1 — one or more files have a genuine unexpected PS 5.1 parse error (FAIL)
   2 — usage error: called with no path/dir arguments
 
-Port of: verify-ps51-clean.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: verify-ps51-clean.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: state/handoffs/2026-06-22_215618_windows-clean-install-verification.md
                (Part B)
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
@@ -281,7 +281,7 @@ def main(argv: List[str]) -> int:
            2 if called with no arguments (usage error);
            3 if the claude-klabauter-link import that reached this module failed transport-
              side — dedicated code, does NOT collide with 1 (business FAIL) or
-             2 (CLI-usage error). Set by the coordinator-claude-side trampoline, not here (this
+             2 (CLI-usage error). Set by the DoE-side trampoline, not here (this
              module has no transport seam of its own — see trampoline comment).
     """
     if not argv:

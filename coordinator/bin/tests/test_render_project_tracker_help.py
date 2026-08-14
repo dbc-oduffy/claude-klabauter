@@ -32,7 +32,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "render_project_tracker_help_test", str(_BIN_DIR / "render-project-tracker")
+        "render_project_tracker_help_test", str(_BIN_DIR / "render-project-tracker.py")
     )
     spec = importlib.util.spec_from_loader(
         "render_project_tracker_help_test", loader

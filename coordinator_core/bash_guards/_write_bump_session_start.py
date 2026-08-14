@@ -2,7 +2,7 @@
 coordinator_core.bash_guards._write_bump_session_start — SessionStart anchor record.
 
 Purpose: the write-confinement speed bump (docs/plans/2026-08-02-write-confinement-guards.md
-[coordinator-claude repo], chunk C0) needs to know, later in a session and from an arbitrary Bash or
+[DoE-claude repo], chunk C0) needs to know, later in a session and from an arbitrary Bash or
 tool-surface call, "what repo did this session actually launch in" — a value an ordinary `cd`
 must NOT be able to move (the Director of Engineering F1: the harness Bash tool contract states "Working directory
 persists between calls", so the live payload `cwd` drifts under an agent with no adversarial
@@ -56,7 +56,7 @@ read-settings-home-first" call in that plan's Problem section):
      `~/` path. Lifecycle: this record is session ephemera, not durable data, and does NOT survive
      by uninstall's blanket-with-provenance default — it is deleted on session end by
      :func:`delete_settings_home_session_record`, called from
-     `coordinator_core.session.scope.archive()` (the live seam coordinator-claude's real `SessionEnd` hook
+     `coordinator_core.session.scope.archive()` (the live seam DoE's real `SessionEnd` hook
      actually calls), by an EXACT `session_id` match — no prefix matching, so it shares no
      collision hazard with `_write_bump_marker.py`'s prefix-match bug (C6's fix, a different
      record entirely).
@@ -90,19 +90,19 @@ Negative-spec:
 
 Install-surface note (2026-08-03, C0 dispatch; wiring landed 2026-08-03, C8 dispatch): the plan's
 chunk body named `coordinator_core/install/gen_settings_hooks.py` as the file to "register" this
-hook in. That generator is data-driven entirely off `coordinator/hooks/hooks.json` [coordinator-claude
+hook in. That generator is data-driven entirely off `coordinator/hooks/hooks.json` [DoE-claude
 repo] — it has no per-hook registration list of its own to edit (confirmed by reading the whole
 module: the only per-hook-shaped logic is the generic CPR-rewrite/portability-assert pipeline,
 which applies uniformly to every `hooks.json` entry). C8 landed the actual wiring: a
 `type=="command"` `SessionStart` entry (matcher `startup|resume|clear|compact|fork`) in
-`coordinator/hooks/hooks.json` [coordinator-claude repo], plus a thin shim,
-`coordinator/hooks/scripts/session-start-write-bump-anchor.py` [coordinator-claude repo], that imports
+`coordinator/hooks/hooks.json` [DoE-claude repo], plus a thin shim,
+`coordinator/hooks/scripts/session-start-write-bump-anchor.py` [DoE-claude repo], that imports
 this module directly (not via `coordinator_core.hooks`/`coordinator_core.ipc`, per this module's
 own "Negative-spec" above) and calls :func:`write_session_start_record` in-process. Both are
-Coordinator-claude-resident and were out of C0's file scope, hence this breadcrumb; it now points at the
+DoE-claude-resident and were out of C0's file scope, hence this breadcrumb; it now points at the
 landed wiring rather than describing a gap.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md § Anchor applicability
+Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567 § Anchor applicability
     on something an agent cannot move; chunk C0.
 """
 
@@ -121,6 +121,13 @@ from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 #: `docs/reference/boundary-and-data-planes.md` § Durable-data plane's forward-binding rule.
 #: NOT the settings-home root -- see the module docstring's "Storage location" § item 2.
 _SETTINGS_HOME_ANCHOR_SUBDIR = ("claude-klabauter", "write-bump-anchor")
+
+# Generator-provenance declaration (generator_provenance.py).
+# write_session_start_record writes write_bump_launch_cwd under
+# sessions_dir()/<session_id>/ (.git/coordinator-sessions/, untracked) and
+# under the settings-home write-bump-anchor hub -- neither is a tracked
+# repo artifact.
+GENERATES = []
 
 #: Liveness-probe verdict for `CLAUDE_PROJECT_DIR` inside a real, live confined Bash-tool
 #: subprocess (the closest first-party evidence available to this dispatch — see the module
@@ -162,7 +169,7 @@ def _settings_home_anchor_dir(env: Optional[dict] = None) -> str:
     """`$(coordinator-settings-home)/claude-klabauter/write-bump-anchor`, resolved via the
     injected `env` mapping (defaulting to `os.environ` when `env` is `None` -- the same
     optional-`env` contract every function in this module honours, per this chunk's
-    cross-repo-writer constraint: coordinator-claude's `session-start-write-bump-anchor.py` calls
+    cross-repo-writer constraint: DoE's `session-start-write-bump-anchor.py` calls
     `write_session_start_record` with no `env`, so a required parameter would break that
     call site).
 
@@ -209,7 +216,7 @@ def write_session_start_record(
 
     `env` is optional, defaulting to `None` (meaning: resolve the settings home from
     `os.environ`) — see `_settings_home_anchor_dir`'s own docstring for why this MUST stay
-    optional: coordinator-claude's `coordinator/hooks/scripts/session-start-write-bump-anchor.py` calls this
+    optional: DoE's `coordinator/hooks/scripts/session-start-write-bump-anchor.py` calls this
     function with no `env` argument, and a required parameter would break that cross-repo
     call site.
 

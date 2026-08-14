@@ -5,7 +5,7 @@ Purpose: single implementation of the "resolve the enclosing git repo root, or
 None if not in one" primitive shared by scope_soak_enable and
 scope_warning_resolve (both need GIT_ROOT to locate `.git/coordinator-sessions/`).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md,
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292,
     chunk B3 (handoff-gate-aging.sh + scope-soak-enable + scope-warning-resolve port)
 
 Negative-spec:

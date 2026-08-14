@@ -13,7 +13,7 @@ load-bearing field once workweek's separate `hard_block` bookkeeping
 pass is accounted for (see negative-spec below) — this module factors
 the shared pair so neither assembler hand-maintains its own copy.
 
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C5, AC9
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54, chunk C5, AC9
 Spec backlink: pln-a-best-effort-directive-cannot-be9948, chunk C4, AC8/AC9
 
 Negative-spec:

@@ -43,7 +43,7 @@ import coordinator_registry as reg  # noqa: E402
 #: (`Path(__file__).resolve().parent`), so a fixture holding only the helper makes
 #: `_resolve_settings_home()` return "" and silently demotes the read to the
 #: LEGACY `${CLAUDE_HOME:-$HOME}/.claude/.doe-root` rung — which on a configured
-#: dev box resolves the real coordinator-claude root and fails this assertion, and on an
+#: dev box resolves the real DoE root and fails this assertion, and on an
 #: unconfigured box resolves "" and fails it differently. Negative spec: staging
 #: the helper alone does not reproduce the payload layout.
 _REAL_LIB_DIR = os.path.join(os.path.dirname(_BIN_DIR), "lib")

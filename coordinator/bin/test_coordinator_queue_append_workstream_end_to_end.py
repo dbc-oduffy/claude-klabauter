@@ -1,7 +1,7 @@
 """
 test_coordinator_queue_append_workstream_end_to_end.py — AC7 regression oracle.
 
-AC7 (docs/plans/2026-07-30-workstream-store-writer-and-parser.md, coordinator-claude): "A
+AC7 (docs/plans/2026-07-30-workstream-store-writer-and-parser.md, DoE-claude): "A
 workstream minted end-to-end through the sanctioned writer alone renders with its
 deliverables, specs, and dependency_annotations — no hand-authoring step."
 
@@ -18,7 +18,7 @@ Mirrors: test_coordinator_queue_append_workstream_deliverables.py (same
 importlib.machinery.SourceFileLoader idiom for the extensionless CLI script, same
 QUEUE_APPEND_OUTPUT_ROOT test-isolation env var).
 
-Spec backlink: docs/plans/2026-07-30-workstream-store-writer-and-parser.md § AC7
+Spec backlink: DoE-claude:pln-workstream-store-make-the-sanc-546afa § AC7
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from coordinator_core.ops import render_project_tracker as rpt
 
 pytestmark = pytest.mark.cadence
 
-_QUEUE_APPEND_SCRIPT = Path(__file__).resolve().parent / "coordinator-queue-append"
+_QUEUE_APPEND_SCRIPT = Path(__file__).resolve().parent / "coordinator-queue-append.py"
 
 # The coordinator_root_path the writer stamps and the renderer filters on — must
 # match on both sides of the writer/render seam, same convention as

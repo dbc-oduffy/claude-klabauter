@@ -1,5 +1,5 @@
 """
-test_engine_root_conformance.py — consumes coordinator-claude's engine-root
+test_engine_root_conformance.py — consumes DoE-claude's engine-root
 conformance fixture as the fidelity oracle for claude-klabauter's two DR-132
 two-tier engine-root ladder implementations.
 
@@ -9,29 +9,29 @@ Drives BOTH:
     resolve_claude_klabauter_root_with_class()``, and
   - C4a's wrapper, ``coordinator_core.claude_klabauter_root::
     coordinator_claude_klabauter_root_with_class()``,
-against every declarative case in coordinator-claude's fixture, and asserts both agree
+against every declarative case in DoE's fixture, and asserts both agree
 with each other and with the fixture's ``expect``.
 
 Spec backlink:
     docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md (chunk C8)
-    coordinator-claude coordinator/engine-root-contract/conformance/
+    DoE-claude coordinator/engine-root-contract/conformance/
         engine-root-conformance.json (read live, never vendored — see
         negative-spec below and that fixture's own schema docstring on
         pull-fresh-never-vendored)
-    coordinator-claude coordinator/hooks/scripts/_engine_root.py
+    DoE-claude coordinator/hooks/scripts/_engine_root.py
         (resolve_claude_klabauter_root_with_class, _resolve_live_working_tree,
         LIVE_TREE_ENV_VARS)
 
 Negative-spec: this file must NEVER embed a copy of the fixture's cases
 (paths/registry bodies/expectations) — it reads the fixture live off the
-Coordinator-claude checkout, resolved via ``machine-local get
-engine.working_repos.example_doctrine_repo``, at collection time. Referencing case
+DoE checkout, resolved via ``machine-local get
+engine.working_repos.doe_claude``, at collection time. Referencing case
 IDs (kebab-case strings) in the xfail-reason table below is parametrize
 plumbing, not a vendored copy of fixture content.
 
 THE KNOWN LADDER DIVERGENCE (see module-level ``_XFAIL_ENV_RUNG_REASON``
 table): claude-klabauter's live-tree ladder has NO env-var rungs at all (registry
-key then ``.claude-klabauter-root`` sentinel only); coordinator-claude's ``_resolve_live_working_tree``
+key then ``.claude-klabauter-root`` sentinel only); DoE's ``_resolve_live_working_tree``
 checks ``LIVE_TREE_ENV_VARS = (REPO_CLAUDE_KLABAUTER, CLAUDE_KLABAUTER_ROOT)`` first.
 C4a's wrapper adds a CLAUDE_KLABAUTER_ROOT-only rung (not REPO_CLAUDE_KLABAUTER). Cases
 that fail ONLY because of this are marked ``xfail(strict=True)`` — see the
@@ -85,7 +85,7 @@ def _machine_local_get(key: str) -> Optional[str]:
 
 
 def _resolve_doe_root() -> Optional[Path]:
-    value = _machine_local_get("engine.working_repos.example_doctrine_repo")
+    value = _machine_local_get("engine.working_repos.doe_claude")
     if not value:
         return None
     p = Path(value)
@@ -95,9 +95,9 @@ def _resolve_doe_root() -> Optional[Path]:
 _DOE_ROOT = _resolve_doe_root()
 
 _SKIP_REASON = (
-    "engine.working_repos.example_doctrine_repo is unregistered or its path is absent — "
-    "register the coordinator-claude checkout via 'machine-local set "
-    "engine.working_repos.example_doctrine_repo <path>' to run the coordinator-claude conformance oracle. "
+    "engine.working_repos.doe_claude is unregistered or its path is absent — "
+    "register the DoE checkout via 'machine-local set "
+    "engine.working_repos.doe_claude <path>' to run the DoE conformance oracle. "
     "claude-klabauter carries no CI lane where this suite runs rather than skips "
     "(no .github/workflows/, per CLAUDE.md § Build & Test) — this skip is a "
     "known, unremedied gap, not a claim of coverage."
@@ -118,7 +118,7 @@ def _load_fixture(doe_root: Path) -> dict:
     )
     if not fixture_path.is_file():
         raise AssertionError(
-            f"coordinator-claude checkout is registered at {doe_root} but the conformance "
+            f"DoE checkout is registered at {doe_root} but the conformance "
             f"fixture is missing at {fixture_path} — this is a FAILURE, not a "
             "skip (AC12)."
         )
@@ -142,12 +142,12 @@ def _load_fixture(doe_root: Path) -> dict:
 
 
 def _sibling_engine_checkout_absent(doe_root: Path) -> bool:
-    """Recompute coordinator-claude's rung-3 sibling-walk expression against coordinator-claude's own
+    """Recompute DoE's rung-3 sibling-walk expression against DoE's own
     module — never a hardcoded path (that would be wrong on every other
     host). Per the fixture's ``preconditions`` schema entry: read-only load
-    of coordinator-claude's ``_engine_root.py`` by path, purely to evaluate
+    of DoE's ``_engine_root.py`` by path, purely to evaluate
     ``Path(__file__).resolve().parents[3].parent / _CLAUDE_KLABAUTER_SIBLING_DIR_NAME``
-    exactly as coordinator-claude's own rung 3 would."""
+    exactly as DoE's own rung 3 would."""
     module_path = doe_root / "coordinator" / "hooks" / "scripts" / "_engine_root.py"
     spec = importlib.util.spec_from_file_location(
         "_doe_engine_root_precondition_probe", module_path
@@ -163,7 +163,7 @@ _NO_ENV_RUNGS_REASON_TEMPLATE = (
     "{cid}: claude-klabauter's live-tree ladder "
     "(coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::_resolve_claude_klabauter_root) has "
     "NO env-var rungs at all — registry key 'repos.claude_klabauter' then the "
-    "'.claude-klabauter-root' sentinel only. Coordinator-claude's _resolve_live_working_tree "
+    "'.claude-klabauter-root' sentinel only. DoE's _resolve_live_working_tree "
     "(coordinator/hooks/scripts/_engine_root.py:527-560) checks "
     "LIVE_TREE_ENV_VARS = (REPO_CLAUDE_KLABAUTER, CLAUDE_KLABAUTER_ROOT) first. C4a's wrapper "
     "(coordinator_core/claude_klabauter_root.py::coordinator_claude_klabauter_root_with_class) adds a "
@@ -216,7 +216,7 @@ _XFAIL_ENV_RUNG_REASON: dict[str, str] = {
     "checks for: the shim (no env rungs at all) raises, while the wrapper's "
     "CLAUDE_KLABAUTER_ROOT-only rung short-circuits and returns CLAUDE_KLABAUTER_ROOT's value "
     "(<OTHER_REPO> in this case) rather than REPO_CLAUDE_KLABAUTER's — the two "
-    "entrypoints disagree with EACH OTHER, not just with coordinator-claude's expectation.",
+    "entrypoints disagree with EACH OTHER, not just with DoE's expectation.",
 }
 
 
@@ -278,7 +278,7 @@ def _prepare_case(
 
 def _invoke(fn, error_type) -> Any:
     """Run *fn*; a raised *error_type* becomes a comparable sentinel tuple
-    rather than propagating — coordinator-claude's own ladder never raises (fail-open,
+    rather than propagating — DoE's own ladder never raises (fail-open,
     "Zero-spawn, fail-open, never raises", ``_engine_root.py``:469), so this
     driver treats the one documented fail-open error type as a comparable
     outcome. Only *error_type* is caught this way; any other exception is a
@@ -325,8 +325,8 @@ else:
                 pytest.skip(
                     f"{case['id']}: unmet precondition "
                     "sibling_engine_checkout_absent — this host has a "
-                    "'claude-klabauter' sibling checkout next to the coordinator-claude clone, so "
-                    "coordinator-claude's rung-3 __file__-relative sibling walk always answers "
+                    "'claude-klabauter' sibling checkout next to the DoE clone, so "
+                    "DoE's rung-3 __file__-relative sibling walk always answers "
                     "and the branch this case pins is unreachable declaratively "
                     "on this host."
                 )

@@ -38,7 +38,7 @@ Test coverage:
       RuntimeError, so wrong ordering would misroute it to exit 3)
 
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave 1b)
-Spec backlink: docs/plans/2026-07-11-emission-cadence-trigger-rewire.md § C2 / D3
+Spec backlink: DoE-claude:pln-emission-cadence-trigger-re-wi-a93e8a § C2 / D3
 """
 from __future__ import annotations
 

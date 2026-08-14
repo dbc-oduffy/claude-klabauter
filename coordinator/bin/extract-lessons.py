@@ -43,6 +43,8 @@ from pathlib import Path
 
 import yaml  # PyYAML — available in coordinator venv
 
+GENERATES = []  # writes only to the caller-supplied -o/--out path (or stdout when omitted) — no fixed tracked artifact
+
 
 # ---------------------------------------------------------------------------
 # Extraction from per-entry YAML directory

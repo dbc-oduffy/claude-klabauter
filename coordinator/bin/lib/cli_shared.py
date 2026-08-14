@@ -1,20 +1,20 @@
-"""cli_shared.py — shared CLI/arg/IO boilerplate for coordinator-claude-resident coordinator bin/ CLIs.
+"""cli_shared.py — shared CLI/arg/IO boilerplate for DoE-resident coordinator bin/ CLIs.
 
 Consolidation target for the ~150 LoC of near-verbatim duplication between
 coordinator-queue-append and coordinator-lesson-promote (both write structured
-YAML entries into claude-klabauter/coordinator-claude-routed state directories and resolve their own
+YAML entries into claude-klabauter/DoE-routed state directories and resolve their own
 from_repo identity from cwd git context). Extracts exactly four primitives:
 
   - machine_local_get / machine_local_repos_keys — `machine-local` CLI bridge
   - claude_klabauter_root — CLAUDE_KLABAUTER_ROOT env-or-registry resolution (AC1/AC13)
   - resolve_from_repo — the cwd git-root -> machine-local reverse-lookup ->
-    example_doctrine_repo -> unregistered-repo -> "unknown-sender-em" ladder (same
+    doe_claude -> unregistered-repo -> "unknown-sender-em" ladder (same
     convention as cross-repo-memo._sender_em_id)
   - write_path_excl — O_CREAT|O_EXCL + retry-with-incrementing-suffix write,
     bounded and fail-loud-after-cap-exhausted (never a silent overwrite, never
     a bare first-collision FileExistsError)
 
-Coordinator-claude-resident (NOT coordinator_core-resident): this is call-site/CLI plumbing —
+DoE-resident (NOT coordinator_core-resident): this is call-site/CLI plumbing —
 arg parsing support, path resolution for THIS repo's machine-local registry —
 not engine-owned business logic, so it does not cross the DR-047 boundary.
 Consistent with cc_invoke.py's own residency alongside this module.
@@ -157,7 +157,7 @@ def resolve_from_repo(root: str | None = None) -> str:
 
     Resolution order (same convention as cross-repo-memo._sender_em_id):
       1. cwd git-root -> reverse-lookup against machine-local repos.* table
-      2. repos.example_doctrine_repo (coordinator-claude repo) -> "claude-central-em"
+      2. repos.doe_claude (DoE-claude repo) -> "claude-central-em"
       3. Unregistered git repo -> basename of git root + "-em"
       4. Not in a git repo -> "unknown-sender-em"
       Never uses `git remote get-url origin` — that yields a URL, not a shortname.
@@ -175,7 +175,7 @@ def resolve_from_repo(root: str | None = None) -> str:
     UNRESOLVED never refuses either, degrading to `root=None` exactly as the
     predecessor's git-failure branch did.
 
-    Ensures repos.example_doctrine_repo is present in the paths table for the central-identity
+    Ensures repos.doe_claude is present in the paths table for the central-identity
     anchor even when machine_local_repos_keys() omits it (e.g. unregistered machine).
     """
     if root is None:
@@ -187,7 +187,7 @@ def resolve_from_repo(root: str | None = None) -> str:
             )
     keys = machine_local_repos_keys()
     paths = {k: machine_local_get(k) for k in keys}
-    paths.setdefault("repos.example_doctrine_repo", machine_local_get("repos.example_doctrine_repo"))
+    paths.setdefault("repos.doe_claude", machine_local_get("repos.doe_claude"))
     return em_id_for_root(root, {k: v for k, v in paths.items() if v})
 
 
@@ -216,7 +216,7 @@ def write_path_excl(out_path: str, content: str, *, caller_name: str) -> str:
     loud on the FIRST collision would drop the entry rather than preserve it;
     retry-with-suffix is required.
 
-    Counter-pattern (deliberate divergence): coordinator/bin/cross-repo-memo's
+    Counter-pattern (deliberate divergence): coordinator/bin/cross-repo-memo.py's
     _write_file FAILS LOUD (FileExistsError, no retry) on collision because its
     caller is interactive and retries with a new --topic.
 

@@ -1,6 +1,6 @@
 """
 TrackerSummary — summary view over docs/project-tracker.md lifecycle and
-status. Pydantic port of coordinator-claude
+status. Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/tracker-summary.ts` (Zod source).
 
 Spec backlink: schemas/tracker.yaml + docs/plans/2026-06-27-emit-new-record-types-producer-wiring.md
@@ -12,7 +12,7 @@ emitted verbatim from tracker frontmatter.
 `repo` and `coordinator_root_path` are connector-injected (D4). Nullable
 fields follow D9 (present-as-null, not optional).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

@@ -15,11 +15,11 @@ stay observable).  Only an UNDERIVABLE ``repo_root`` (None or non-existent direc
 raises — that is the corruption/aliasing case.  ``coordinator_root`` is irrelevant for
 attribution — it resolves via ``resolve_coordinator_root()`` to the LIVE post-W4.2-cutover
 coordinator script/lib clone (``<claude-klabauter-root>/coordinator`` on a current install; the
-Coordinator-claude clone's ``coordinator/bin`` is empty post-migration and is never consulted, see
+DoE-claude clone's ``coordinator/bin`` is empty post-migration and is never consulted, see
 ``envelope.resolve_coordinator_root``'s docstring).
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C1
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19)
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19)
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ _GIT_BACKED_SOURCE_KINDS = frozenset({"github_graphql", "github_rest", "git_comm
 def _posix_path(path: str) -> str:
     """Render a filesystem path as forward-slash POSIX, regardless of the host OS.
 
-    ``provenance.path`` is a byte-contract field consumed cross-platform by coordinator-claude/rag
+    ``provenance.path`` is a byte-contract field consumed cross-platform by DoE/rag
     (same os.sep-at-wire-boundary rule already applied to ``provenance.path``-adjacent
     fields elsewhere in this repo — e.g. ``list_review_trail_records.py``'s
     ``os.path.normpath`` note). On Windows, section porters that build ``path`` via
@@ -158,7 +158,7 @@ def resolve_repo_name(repo_root: Optional[Path]) -> str:  # Review: code-reviewe
 
     ``repo_root`` MUST be the root of the emitting working tree.  Do NOT pass
     ``coordinator_root`` (the resolved coordinator script/lib clone — see
-    ``resolve_coordinator_root()``, NOT the coordinator-claude clone on a current install) — it
+    ``resolve_coordinator_root()``, NOT the DoE-claude clone on a current install) — it
     would attribute the wrong tree.
 
     Spec backlink: pln-per-repo-emission-cutover-un-h-03f05e § C1 / AC5 / Q-B
@@ -191,7 +191,7 @@ class EmitContext:
         coordinator_root   — the live post-W4.2-cutover coordinator script/lib clone,
                              resolved via ``resolve_coordinator_root()`` (rung 2:
                              ``<claude-klabauter-root>/coordinator`` on a current install; the
-                             coordinator-claude clone's ``coordinator/bin`` is empty post-migration
+                             DoE-claude clone's ``coordinator/bin`` is empty post-migration
                              and is never consulted — see that function's docstring).
                              NOT the emitting repo; do NOT use for slug attribution.
         central_state_root — per-repo state root: ``<repo_root>/state``; output/sentinel dir.
@@ -360,7 +360,7 @@ class EmitContext:
         (local-only / air-gapped repo), emits ``local/<basename>`` (Q-B hybrid, AC5).
         Only raises when ``repo_root`` is underivable (None or non-existent directory).
         Do NOT pass ``coordinator_root`` (the resolved coordinator script/lib clone — see
-        ``resolve_coordinator_root()``, NOT the coordinator-claude clone on a current install) — it
+        ``resolve_coordinator_root()``, NOT the DoE-claude clone on a current install) — it
         would attribute the wrong tree.  ``git_branch``/``git_sha`` reflect the main
         worktree HEAD (intended).
         # Review: code-reviewer (Slice-1 F1) — old text said "raises on no remote"; Q-B hybrid returns local/<basename> instead.

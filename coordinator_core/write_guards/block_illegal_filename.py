@@ -1,8 +1,8 @@
 """coordinator_core.write_guards.block_illegal_filename — hard-deny guard.
 
 Python engine-ification of the RELIABLE ARM (Write|Edit|NotebookEdit leg
-only) of coordinator-claude's retired ``coordinator/hooks/scripts/block-illegal-filename.sh``
-PreToolUse hook (deleted 2026-07-20, coordinator-claude ``e91827a7``), per the naked-Python
+only) of DoE's retired ``coordinator/hooks/scripts/block-illegal-filename.sh``
+PreToolUse hook (deleted 2026-07-20, DoE ``e91827a7``), per the naked-Python
 hook migration (write_guards/INTERFACE.md).
 
 Purpose (ported verbatim from the reference hook): a file committed from a
@@ -58,9 +58,9 @@ Negative-spec:
 
 Spec backlink: docs/plans/2026-06-30-cross-platform-file-naming-helper.md § D1
 Tripwire entry: docs/wiki/coordinator-tripwires.md § BLOCK-ILLEGAL-FILENAME
-Ported from the retired coordinator-claude bash guard ``block-illegal-filename.sh``
-  (deleted 2026-07-20, coordinator-claude ``e91827a7``); csn_check ported from coordinator-claude
-  coordinator/bin/lib/coordinator-safe-name.sh (coordinator-claude ``721a71f4``, 2026-07-21)
+Ported from the retired DoE bash guard ``block-illegal-filename.sh``
+  (deleted 2026-07-20, DoE ``e91827a7``); csn_check ported from DoE
+  coordinator/bin/lib/coordinator-safe-name.sh (DoE ``721a71f4``, 2026-07-21)
 """
 
 from __future__ import annotations

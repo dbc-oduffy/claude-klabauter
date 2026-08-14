@@ -36,7 +36,7 @@ Worktree resolution mirrors ``handoff_children.py`` and ``initiatives_serve.py``
   - If ``repo_root`` is absent the op returns ``{"candidates": []}`` with a logged
     warning rather than raising — empty is safe for a nudge.
 
-Spec backlink: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C3
+Spec backlink: DoE-claude:pln-per-repo-okr-goal-setting-syst-80bced § C3
 Refactor: docs/plans/2026-07-07-claude-klabauter-fork-provenance-creation-path-tooling.md § C1
 Parity/sibling: coordinator_core/ops/initiatives_serve.py, coordinator_core/ops/match_core.py
 """

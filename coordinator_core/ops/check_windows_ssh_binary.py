@@ -18,7 +18,7 @@ commit) — so on an unpinned box, work/* pushes fail silently forever and the
 ONLY signal is .git/push-failures.log, which nobody reads.
 
 Full background, reproduced two-armed control, and the mechanism writeup:
-coordinator/docs/wiki/bash-on-windows-gotchas.md §15 (coordinator-claude).
+coordinator/docs/wiki/bash-on-windows-gotchas.md §15 (DoE-claude).
 
 Contract for scripts in bin/install-health/ (see install_health_run's own
 docstring): self-gate on OS, exit 0 silently when the gate fails, be
@@ -34,12 +34,12 @@ under-detect (falls through to the "unresolvable" WARN branch), never
 mis-report a PASS. Reproduced verbatim from the bash oracle.
 
 Direct-import adaptation: no subprocess hop back into a Python CLI is
-needed here (unlike seed_skill_overrides.py's coordinator-claude-resident-helper shape) —
+needed here (unlike seed_skill_overrides.py's DoE-resident-helper shape) —
 this module IS the whole probe, ported 1:1 into a single in-process
 function chain. The only subprocess calls are to `git` itself, which has no
 Python-native substitute.
 
-Port of: check-windows-ssh-binary.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: check-windows-ssh-binary.sh (DoE 290997c7, 2026-07-22)
 Spec backlink: docs/decisions/ DR-079 (tool 8 assignment to claude-klabauter); source
 memo cross-repo/inbox/2026-07-21-claude-central-em-dr079-doe-dispositions-and-install-health-defect.md
 

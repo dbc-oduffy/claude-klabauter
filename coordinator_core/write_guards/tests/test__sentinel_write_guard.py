@@ -2,7 +2,7 @@
 -- the shared sentinel-path helper consumed by guard-worktree-sentinel-
 write, guard-settings-json-write, and guard-doctrine-surface-edits.
 
-Spec backlink: docs/plans/2026-07-29-hook-fan-in-write-path.md (chunk C3)
+Spec backlink: DoE-claude:pln-hook-fan-in-fold-the-pretoolus-27c1e9 (chunk C3)
 """
 
 from __future__ import annotations

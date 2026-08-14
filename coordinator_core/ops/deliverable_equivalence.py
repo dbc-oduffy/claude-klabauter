@@ -18,18 +18,27 @@ module lets every reader treat a declared fork pair as one entity without touchi
 any of those legs' own records carry on disk.
 
 Reads the declared equivalence artifact at `state/deliverable-equivalence.yaml`
-(relative to the worktree root), authored by chunk C3b:
+(relative to the worktree root), authored by chunk C3b and widened by the
+retraction-as-observation pass (2026-08-14):
 
     entries:
       - loser: dlv-...
         winner: dlv-...
         evidence: "..."
+        adjudicated_at: "2026-..."   # optional; ISO 8601
+        evidence_commits: [...]      # optional structured evidence
+        retracted_at: "2026-..."     # optional; ISO 8601, marks the row withdrawn
 
-`load_equivalence_map` builds `{loser: winner}` from `entries`. Every `loser` is unique
-and no `winner` ever appears elsewhere as a `loser` (no transitive chains) — that
-invariant is C3b's authoring obligation, not this module's to enforce by walking chains;
-this loader only guards against a malformed artifact silently masquerading as a clean map
-(see `_build_equivalence_map`'s duplicate-loser handling below).
+`load_equivalence_map` builds `{loser: winner}` from `entries`. A repeated `loser` is a
+LEGITIMATE REVISION, not a violation — `_build_equivalence_map` resolves it to whichever
+row carries the LATEST `adjudicated_at`, and a row carrying `retracted_at` removes its
+mapping entirely rather than competing for it (see `_build_equivalence_map`'s own
+docstring for the missing-stamp tie-break and the no-transitive-chains check, both of
+which this loader still enforces). No `winner` ever appears elsewhere as a `loser` (no
+transitive chains) — that invariant is still C3b's/every subsequent author's obligation,
+not this module's to enforce by walking chains; this loader only guards against a
+malformed artifact silently masquerading as a clean map (see `_build_equivalence_map`'s
+duplicate-loser handling below).
 
 Spec backlink: pln-deliverable-id-fork-remediatio-894e26 § C4 (AC6, AC6b, AC9, AC12)
 
@@ -131,13 +140,39 @@ def _build_equivalence_map(entries: list) -> Dict[str, str]:
     Purpose: isolates the entries -> map projection so ``load_equivalence_map`` stays
     focused on I/O and memoization. A malformed entry (missing loser/winner, non-string
     values) is skipped with a WARNING rather than raising — a single bad row in the
-    declared artifact should not take down every consumer's read path. A duplicate
-    ``loser`` (violating C3b's uniqueness obligation) keeps the FIRST mapping seen and
-    logs a WARNING rather than silently overwriting it, since silently resolving a
-    duplicate one way is exactly the kind of one-level chain-resolution this module
-    must not do quietly.
+    declared artifact should not take down every consumer's read path (AC10).
+
+    Retraction-as-observation resolution order (2026-08-14 widening — supersedes this
+    function's earlier first-seen-wins behaviour): a repeated ``loser`` is no longer a
+    uniqueness violation. It is resolved by LATEST ``adjudicated_at`` wins, and a row
+    carrying a non-null ``retracted_at`` removes its mapping entirely (so
+    ``canonicalize`` falls through to returning the raw id unchanged, exactly as for an
+    id that was never mapped). The three sub-rules, in the order applied per ``loser``:
+
+      1. **Retraction removes the mapping.** A row with a non-null ``retracted_at`` is
+         never installed into the map for its ``loser`` on this pass; if a mapping was
+         already installed for that ``loser`` from an earlier-processed row, the
+         retraction removes it (it does not merely skip re-adding). Retraction is
+         evaluated per row independently of ordering — a retracted row never wins a
+         latest-``adjudicated_at`` comparison, whatever its own timestamp.
+      2. **Latest ``adjudicated_at`` wins among live (non-retracted) rows.** When two
+         live rows share a ``loser``, the one with the chronologically later
+         ``adjudicated_at`` (ISO 8601 string compare, which is chronological for
+         same-format strings) replaces the earlier one. This no longer logs a WARNING —
+         a legitimate revision is not an artifact defect.
+      3. **Missing-stamp tie-break (AC6) — not silent.** If a live row with no
+         ``adjudicated_at`` competes for the same ``loser`` as another live row (whether
+         or not that other row has a stamp), the pair is AMBIGUOUS: this function keeps
+         the row already installed (first-processed-wins, mirroring the artifact's own
+         entry order as the tie-break of last resort) but logs a WARNING naming the
+         ambiguity, so a silently-arbitrary resolution is never mistaken for a resolved
+         revision. This is the one case left that still warns on a duplicate ``loser``.
     """
+    # loser -> row dict actually installed in the map on this pass (used to compare
+    # adjudicated_at / retracted_at against a newly-seen row for the same loser).
+    installed_rows: Dict[str, dict] = {}
     equivalence_map: Dict[str, str] = {}
+
     for entry in entries:
         if not isinstance(entry, dict):
             logger.warning(
@@ -162,24 +197,60 @@ def _build_equivalence_map(entries: list) -> Dict[str, str]:
             continue
         loser = loser.strip()
         winner = winner.strip()
-        if loser in equivalence_map:
+
+        retracted_at = entry.get("retracted_at")
+        is_retracted = isinstance(retracted_at, str) and retracted_at.strip() != ""
+        adjudicated_at = entry.get("adjudicated_at")
+        has_stamp = isinstance(adjudicated_at, str) and adjudicated_at.strip() != ""
+
+        if is_retracted:
+            # A retracted row never wins the map, and it withdraws a mapping already
+            # installed for this loser by an earlier row.
+            if loser in equivalence_map:
+                del equivalence_map[loser]
+                del installed_rows[loser]
+            continue
+
+        prior = installed_rows.get(loser)
+        if prior is None:
+            equivalence_map[loser] = winner
+            installed_rows[loser] = entry
+            continue
+
+        prior_retracted_at = prior.get("retracted_at")
+        prior_adjudicated_at = prior.get("adjudicated_at")
+        prior_has_stamp = (
+            isinstance(prior_adjudicated_at, str) and prior_adjudicated_at.strip() != ""
+        )
+
+        if not has_stamp or not prior_has_stamp:
             logger.warning(
-                "deliverable_equivalence: duplicate loser id %r in "
-                "state/deliverable-equivalence.yaml — keeping first-seen mapping to %r, "
-                "ignoring %r. This violates C3b's uniqueness obligation; the artifact "
-                "should be corrected.",
+                "deliverable_equivalence: ambiguous duplicate loser id %r in "
+                "state/deliverable-equivalence.yaml — one or both competing rows lack "
+                "'adjudicated_at' (existing: %r, incoming: %r); keeping the "
+                "already-installed mapping to %r, ignoring %r. Add 'adjudicated_at' to "
+                "both rows to resolve this deterministically.",
                 loser,
+                prior_adjudicated_at,
+                adjudicated_at,
                 equivalence_map[loser],
                 winner,
             )
             continue
-        equivalence_map[loser] = winner
+
+        if adjudicated_at > prior_adjudicated_at:
+            equivalence_map[loser] = winner
+            installed_rows[loser] = entry
+        # else: prior row is already later-or-equal; keep it, no warning — this is the
+        # ordinary "artifact lists rows out of chronological order" case, not ambiguity.
 
     # Review: coordinatorcode-reviewer-67ffaa7e Finding 2 — the no-transitive-chains
     # invariant (a winner must never also appear as a loser) previously had zero
     # enforcement signal, unlike the duplicate-loser case above which warns. This does
-    # not walk/resolve chains (still C3b's authoring obligation) — it only makes the
-    # violation visible.
+    # not walk/resolve chains (still every author's obligation, not the loader's to
+    # enforce by walking) — it only makes the violation visible. Unaffected by the
+    # retraction-as-observation widening above (AC8): still fires on the resolved map,
+    # still does not walk chains.
     chained_ids = set(equivalence_map.values()) & set(equivalence_map.keys())
     if chained_ids:
         logger.warning(
@@ -279,6 +350,15 @@ def canonicalize(raw_id: Optional[str], equivalence_map: Dict[str, str]) -> Opti
     if raw_id is None:
         return None
     return equivalence_map.get(raw_id, raw_id)
+
+
+# ---------------------------------------------------------------------------
+# Retraction-as-observation widening (2026-08-14) — negative-spec, load-bearing:
+#   - Do NOT make canonicalize() walk chains; it stays single-level (AC8, and the
+#     module's own negative-spec above).
+#   - Do NOT canonicalize on any write path; this widening touches map-BUILD
+#     resolution order only, never a write.
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

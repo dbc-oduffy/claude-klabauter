@@ -5,7 +5,7 @@ main()/sys.exit) into collectable top-level test_* functions; assertion intent
 preserved 1:1.
 
 Native-Python successor to the retired close-origin-stub-on-ship.test.sh
-(coordinator-claude 394c8b64, 2026-07-19; 2026-07-19 Windows de-bash campaign, Wave 1b —
+(DoE 394c8b64, 2026-07-19; 2026-07-19 Windows de-bash campaign, Wave 1b —
 B-facade repoint). The retired bash suite stubbed the `cc_invoke` shell function to
 exercise the veneer's fail-loud ladder hermetically, with no live claude-klabauter checkout. This
 port achieves the same hermeticity by pre-populating `sys.modules["cc_invoke"]`

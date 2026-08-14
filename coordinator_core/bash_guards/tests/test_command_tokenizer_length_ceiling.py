@@ -710,6 +710,90 @@ class TestDialectAwareTokenizer:
         assert tokens is None
         assert was_silent("test-guard", silences)
 
+    def test_import_error_writes_durable_dialect_parser_unavailable_log(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The residual fix: an ImportError (the grammar package absent --
+        an INSTALL property, disabling PowerShell classification for EVERY
+        guard machine-wide) must leave a durable, out-of-band trace, not
+        just the SILENT channel `record_silent` alone provides (that
+        channel is a no-op outside a `collecting()` context, per
+        `_verdict.py`'s own docstring -- inert in production)."""
+        from coordinator_core.bash_guards import _dialect
+
+        def _boom():
+            raise ImportError("planted fixture: tree_sitter_pwsh absent")
+
+        monkeypatch.setattr(_dialect, "_parser", _boom)
+        monkeypatch.setattr(_dialect, "_parser_cache", None)
+        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE", False)
+        monkeypatch.setattr(_dialect, "settings_home", lambda: tmp_path)
+
+        # abs-path-ok: synthetic PowerShell fixture text, never resolved.
+        _dialect.tokenize_command(
+            "Remove-Item -Recurse -Force C:\\x",
+            _dialect.Dialect.POWERSHELL,
+            guard_name="test-guard",
+        )
+
+        log_path = tmp_path / "state" / "dialect-parser-unavailable.log"
+        assert log_path.exists()
+        content = log_path.read_text(encoding="utf-8")
+        assert "PARSER-UNAVAILABLE" in content
+        assert "test-guard" in content
+        assert "/coordinator:install" in content
+
+    def test_has_error_path_does_not_write_the_durable_log(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The genuine per-command grammar-gap SILENT route
+        (`root_node.has_error`) is dynamic, per-command residue, NOT an
+        install-wide capability loss -- it must stay plain SILENT and never
+        touch the durable ImportError-only log."""
+        from coordinator_core.bash_guards import _dialect
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE", False)
+        monkeypatch.setattr(_dialect, "settings_home", lambda: tmp_path)
+
+        cmd = "Remove-Item -Recurse -Force &> out.txt"
+        with collecting() as silences:
+            tokens = _dialect.tokenize_command(
+                cmd, _dialect.Dialect.POWERSHELL, guard_name="test-guard"
+            )
+        assert tokens is None
+        assert was_silent("test-guard", silences)
+
+        log_path = tmp_path / "state" / "dialect-parser-unavailable.log"
+        assert not log_path.exists()
+
+    def test_durable_log_write_never_raises_when_log_dir_unwritable(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Mirrors `_log_fail_open`'s own never-raise contract: a broken
+        observability path must never become the reason a guard fails to
+        return its ordinary verdict."""
+        from coordinator_core.bash_guards import _dialect
+
+        unwritable_parent = tmp_path / "not-a-dir"
+        unwritable_parent.write_text("occupied by a file, not a directory")
+
+        def _boom():
+            raise ImportError("planted fixture: tree_sitter_pwsh absent")
+
+        monkeypatch.setattr(_dialect, "_parser", _boom)
+        monkeypatch.setattr(_dialect, "_parser_cache", None)
+        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE", False)
+        monkeypatch.setattr(_dialect, "settings_home", lambda: unwritable_parent)
+
+        # abs-path-ok: synthetic PowerShell fixture text, never resolved.
+        tokens = _dialect.tokenize_command(
+            "Remove-Item -Recurse -Force C:\\x",
+            _dialect.Dialect.POWERSHELL,
+            guard_name="test-guard",
+        )
+        assert tokens is None
+
     def test_no_collection_open_is_a_no_op_not_a_crash(self) -> None:
         """`record_silent` is a no-op when no collection is open (production
         shape, per `_verdict.py`'s own contract) -- this must not raise."""
@@ -764,7 +848,7 @@ class TestStartProcessArgvReconstruction:
     genuine grammar regression (not just this function's own walk) would
     also be caught here.
 
-    Spec backlink: cross-repo/inbox/2026-08-07-coordinator-claude-em-powershell-
+    Spec backlink: cross-repo/inbox/2026-08-07-doe-claude-em-powershell-
     suite-guard-converted-and-wave2-findings.md § Finding 1
     """
 

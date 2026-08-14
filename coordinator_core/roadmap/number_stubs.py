@@ -28,7 +28,7 @@ Provides two modes:
                    Spec backlink: docs/plans/2026-07-24-computed-skills-b5-
                    planning-cluster.md § C12.
 
-Port source: coordinator/bin/roadmap-number-stubs.js (coordinator-claude), 387 LoC.
+Port source: coordinator/bin/roadmap-number-stubs.js (DoE-claude), 387 LoC.
 Domain vocabulary: stub, sprint, wave, topological linearization, blocked_by edge,
 dependency-monotone, (sprint, wave) slot, roadmap_id, spinoff-roadmap.
 Spec backlink: docs/plans/2026-06-28-roadmap-stub-numbering-dependency-order.md § C2
@@ -57,7 +57,7 @@ Exit codes (faithful to the oracle CLI):
 Negative-spec / documented scope adaptations from the oracle:
   - ``resolve_root()`` deliberately does NOT reproduce the oracle's ``__dirname``
     -relative fallback heuristic (``path.resolve(__dirname, '../../../../')``) --
-    that heuristic assumed a fixed directory depth between the script and the coordinator-claude
+    that heuristic assumed a fixed directory depth between the script and the DoE
     plugin's ``bin/`` folder, a relationship that has no analog once the CLI is a
     claude-klabauter-resident Python module (``__file__`` lives under
     ``claude-klabauter/coordinator_core/roadmap/``, unrelated to any consumer repo's
@@ -760,6 +760,10 @@ def main(argv: List[str]) -> int:
     if not args:
         sys.stderr.write(_USAGE)
         return 2
+
+    if args[0] in ("--help", "-h"):
+        sys.stdout.write(_USAGE)
+        return 0
 
     if args[0] == "--check":
         run_id = args[1] if len(args) > 1 else None

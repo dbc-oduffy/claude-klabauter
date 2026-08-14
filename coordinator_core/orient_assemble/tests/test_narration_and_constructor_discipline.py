@@ -11,11 +11,11 @@ every reader module's own docstring documents this as an intentional
 mirror of `coordinator_core.pickup_assemble`'s directive shape ("no
 separate shipped directive constructor exists"), so this file does not
 assert directives were built via a constructor that does not exist. It
-instead asserts every directive conforms to the coordinator-claude schema-of-record's
+instead asserts every directive conforms to the DoE schema-of-record's
 required directive key set (id, cli, args, depends_on, already_satisfied)
 — the structural contract that DOES apply.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C3
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ coordinator_core.ops.review_trail_write — per-session review-trail entry write
 Purpose: writes a JSON review-trail entry (additive-create) under
 ``<worktree>/state/review-trail/<timestamp>-<session_id_short>.json``.
 
-Port of: coordinator-write-review-trail.sh (coordinator-claude 30f4c5fc, 2026-07-19).
+Port of: coordinator-write-review-trail.sh (DoE 30f4c5fc, 2026-07-19).
 
 JSON record shape (key order is canonical; hand-serialized for byte-parity):
     {"sha_range":"A..B","reviewer":"code-reviewer","scope":"chain","scope_kind":"diff",
@@ -106,7 +106,10 @@ Negative-spec:
       discharges nothing at the chain-terminal path.
 """
 
+
 from __future__ import annotations
+
+MUTATES = ["state/review-trail/*.json"]  # timestamp+session-keyed, data-dependent set of additive-create entries
 import sys
 
 import asyncio
@@ -386,7 +389,7 @@ def _sidecar_evidence_exists(evidence: str, caller_worktree: Path) -> bool:
 #: Section heading the sidecar templates in
 #: ``coordinator_core.subagent_sandbox.provision_report`` scaffold
 #: (``## Execution capability``), and the literal read-only fallback string
-#: coordinator-claude's producer side landed at ``2cb87e464``. Matched case-sensitively --
+#: DoE's producer side landed at ``2cb87e464``. Matched case-sensitively --
 #: this is a fixed contract string, not free prose to fuzzy-match.
 _EXECUTION_CAPABILITY_HEADING_RE = re.compile(
     r"^##\s+Execution capability\s*$", re.MULTILINE,
@@ -425,7 +428,7 @@ def _derive_execution_basis_from_sidecar_text(text: str) -> Optional[str]:
     stripped = _HTML_COMMENT_RE.sub("", section_text).strip()
     if not stripped:
         return None
-    if stripped == _READ_ONLY_FALLBACK_TEXT:
+    if stripped.startswith(_READ_ONLY_FALLBACK_TEXT):
         return "read-only"
     return "executed"
 
@@ -988,6 +991,102 @@ def _own_session_touched_paths_and_untrailered_flag(
     return frozenset(paths), saw_untrailered
 
 
+def _own_deliverable_id_for_recovery(own_session_id: str, caller_worktree: Path) -> str:
+    """Resolve THIS WRITE's own deliverable id, via the same resolution
+    ladder `coordinator_core.git.commit_trailers._resolve_deliverable_id`
+    uses to MINT the `Deliverable-Id` trailer at commit time (session-shape
+    pickup record, then DoE-claude's own git-dir as a cross-repo fallback,
+    then the session's own claimed plan) -- called here with `paths=None` to
+    skip the two path-dependent tiers (tier 0 artifact-first, and the
+    scope-match tier), which need the COMMIT's pathspec, not this WRITE's.
+    Reusing the exact same ladder that produced the commit's trailer in the
+    first place is what makes an equality check against it meaningful; a
+    parallel/forked resolver could disagree with what actually got stamped
+    on a legitimate commit and either under- or over-recover.
+
+    Returns "" (never raises) on any resolution miss -- omit-rather-than-guess,
+    same contract as every tier of the ladder it delegates to. An empty
+    result means the Deliverable-Id recovery fallback simply does not apply
+    for this write; the caller falls through to the pre-existing case 2/3
+    disposition unchanged.
+    """
+    from coordinator_core.git import commit_trailers as _commit_trailers
+
+    git_dir = _commit_trailers._resolve_git_dir(caller_worktree)
+    try:
+        return _commit_trailers._resolve_deliverable_id(
+            git_dir, own_session_id, caller_worktree, paths=None,
+        )
+    except Exception:
+        # Fail-closed for the recovery fallback specifically: any resolver
+        # exception (e.g. `DivergentDeliverableIdError`, which cannot even
+        # fire with paths=None today, but a future ladder change might add
+        # another tier that can) must never surface as a WRITE failure for a
+        # call site that would otherwise have succeeded or refused on its
+        # own pre-existing terms -- it just means "no recovery id available".
+        return ""
+
+
+def _deliverable_id_matched_untrailered_shas(
+    shas: List[str], deliverable_id: str, caller_worktree: Path,
+) -> FrozenSet[str]:
+    """Return the subset of `shas` that carry NO Session-Id trailer at all
+    AND carry a `Deliverable-Id` trailer EXACTLY equal to `deliverable_id`.
+
+    Deliberately re-checks Session-Id absence here rather than trusting the
+    caller's classification: `shas` is expected to already be
+    `unplaced_or_foreign` (rule-2-only, untrailered-and-out-of-scope, by the
+    time this is called -- see the call site's own comment), but this
+    function's own safety property -- never touching a commit whose
+    Session-Id trailer names a different session -- does not depend on that
+    upstream invariant holding. A commit with a PRESENT Session-Id trailer
+    (this session's own, or a different one) is excluded unconditionally,
+    regardless of any Deliverable-Id it also carries.
+
+    Exact string equality only -- no normalization, no case-folding. Returns
+    the empty set on any git failure or when `shas`/`deliverable_id` is
+    empty -- fail-closed, same contract as this module's sibling foreign-sha
+    classifiers.
+    """
+    if not shas or not deliverable_id:
+        return frozenset()
+    rc, out, _err = _git_runner(
+        [
+            "git", "log", "--no-walk",
+            # `%x1e` (record separator) demarcates commits, NOT `\n` --
+            # `%(trailers:...,valueonly)` embeds a trailing `\n` in the
+            # value whenever the trailer is PRESENT (empty when absent), so
+            # a present Session-Id value corrupts a newline-delimited parse
+            # by splitting one record into two. This bit a prior version of
+            # this query directly: a present-but-foreign Session-Id on a
+            # commit reaching this function was silently dropped by the
+            # `len(parts) != 3` guard below rather than by the explicit
+            # absence re-check the guard exists to perform -- functionally
+            # inert-safe (both paths exclude the record) but not what the
+            # code claimed to be doing.
+            "--format=%x1e%H\x1f%(trailers:key=Session-Id,valueonly)"
+            "\x1f%(trailers:key=Deliverable-Id,valueonly)",
+            *shas,
+        ],
+        str(caller_worktree),
+    )
+    if rc != 0:
+        return frozenset()
+    matched: set[str] = set()
+    for record in out.split("\x1e"):
+        if "\x1f" not in record:
+            continue
+        parts = record.split("\x1f")
+        if len(parts) != 3:
+            continue
+        sha, session_trailer, deliverable_trailer = parts
+        if session_trailer.strip():
+            continue
+        if deliverable_trailer.strip() == deliverable_id:
+            matched.add(sha.strip())
+    return frozenset(matched)
+
+
 def _guard_foreign_session_range(
     sha_range: str,
     own_session_id: str,
@@ -1295,6 +1394,63 @@ def _guard_foreign_session_range(
     unplaced_or_foreign = session_attribution.detect_foreign_commits(
         caller_worktree, own_session_id, sha_range, known_scope_paths,
     )
+
+    # Deliverable-Id recovery fallback (approved 2026-08-14, in-session PM
+    # ruling; state/bug-backlog/2026-08-14-a-prepare-commit-msg-outage-
+    # permanently-07d3a77f3d56.yaml). By the time we reach here, case 1 above
+    # has already refused (or fully waived) every commit whose OWN Session-Id
+    # trailer names a DIFFERENT session AND is visible to
+    # `session_attribution.trailer_foreign_shas` -- but that feeder runs
+    # `git log --no-merges`, while `detect_foreign_commits` (which produces
+    # `unplaced_or_foreign`, below) deliberately walks merges. So a foreign-
+    # Session-Id MERGE commit can still reach this point. That is safe not
+    # because case 1 is unreachable here, but because
+    # `_deliverable_id_matched_untrailered_shas` independently RE-CHECKS
+    # Session-Id absence on every candidate SHA before ever matching on
+    # Deliverable-Id (see that function's own docstring) -- this is
+    # defence-in-depth, not unreachability, and it is pinned by
+    # `TestDeliverableIdRecoveryFallback.test_present_foreign_session_id_on_merge_commit_still_refused_even_with_matching_deliverable_id`.
+    # Do not remove that independent re-check as "redundant" -- it is the
+    # only thing keeping a foreign-Session-Id merge commit out of this
+    # recovery path.
+    #
+    # Deliverable-Id is a WEAKER signal than Session-Id -- several sessions,
+    # even several CONCURRENT ones, can legitimately share one deliverable,
+    # so a commit dropped by one of them via this path can be credited to
+    # another session sharing the same Deliverable-Id (a real false-
+    # attribution risk, accepted by PM ruling 2026-08-14 as the cost of
+    # making an outage-orphaned chain cappable at all -- see the bug-backlog
+    # file above) -- so this is deliberately scoped as a narrow recovery path
+    # for an attribution outage, not a general-purpose equivalence between
+    # the two trailers. It fires ONLY on a commit with an ABSENT Session-Id
+    # trailer, never a present-but-foreign one: it only ever pulls a commit
+    # OUT of `unplaced_or_foreign` (never widens what counts as foreign), and
+    # it never touches case 1 above: a commit whose own Session-Id trailer
+    # names a different session is refused exactly as before, unconditionally,
+    # regardless of any Deliverable-Id it also carries.
+    if unplaced_or_foreign:
+        own_deliverable_id = _own_deliverable_id_for_recovery(
+            own_session_id, caller_worktree,
+        )
+        if own_deliverable_id:
+            deliverable_matched = _deliverable_id_matched_untrailered_shas(
+                unplaced_or_foreign, own_deliverable_id, caller_worktree,
+            )
+            if deliverable_matched:
+                logger.info(
+                    "review_trail.write: sha_range %r contains untrailered "
+                    "commit(s) %s recoverable via Deliverable-Id %r matching "
+                    "this session's own deliverable -- treating as "
+                    "attributable (Session-Id-absent recovery path, weaker "
+                    "signal than Session-Id, see this call's own comment)",
+                    sha_range,
+                    ", ".join(sorted(deliverable_matched)),
+                    own_deliverable_id,
+                )
+                unplaced_or_foreign = [
+                    sha for sha in unplaced_or_foreign if sha not in deliverable_matched
+                ]
+
     contiguous = session_attribution.range_is_contiguous_suffix(
         caller_worktree, sha_range, unplaced_or_foreign,
     )
@@ -1311,7 +1467,7 @@ def _guard_foreign_session_range(
         )
         return frozenset()
 
-    # DEFECT 2 fix (2026-08-07 coordinator-claude-em memos: case3-remedy-is-not-
+    # DEFECT 2 fix (2026-08-07 doe-claude-em memos: case3-remedy-is-not-
     # performable / review-trail-guard-remedy-unreachable, CONFIRMED-LIVE per
     # state/audits/2026-08-12-inbox-blitz-dominant-verify-wave-b.md items
     # 11/12): when sha_range is ALREADY a single commit, "supply a narrower

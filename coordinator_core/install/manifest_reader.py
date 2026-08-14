@@ -3,7 +3,7 @@ of the interpreter-resolution and NDJSON-emission logic in
 coordinator/scripts/lib/manifest_reader.sh's ``_co_find_python``,
 ``_co_resolve_manifest_path``, and ``_co_manifest_read_ndjson``.
 
-Port source: coordinator/scripts/lib/manifest_reader.sh [coordinator-claude repo]
+Port source: coordinator/scripts/lib/manifest_reader.sh [DoE-claude repo]
 (bash lib is SOURCED by coordinator/scripts/lib/dep_check.sh — it stays in
 place; this module is a parallel Python-native implementation for
 Python-side consumers, NOT a trampoline over the bash file.
@@ -44,7 +44,7 @@ Python at all:
   2. resolve_manifest_path()'s bash original falls back to a location
      derived from the SCRIPT'S OWN FILE PATH (``scripts/lib`` -> two levels
      up) when no repo_root is supplied — a fallback that only makes sense
-     because manifest_reader.sh lives inside the coordinator-claude coordinator/
+     because manifest_reader.sh lives inside the DoE-claude coordinator/
      tree it is resolving paths within. This claude-klabauter module has no analogous
      co-located tree to derive from, so repo_root is REQUIRED here (via
      argument or $REPO_ROOT) — callers get a loud ValueError instead of a

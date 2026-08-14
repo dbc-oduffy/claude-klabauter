@@ -44,7 +44,7 @@ interpreted as a state root verbatim when it ends in ``/state``, or as a
 repo root (``+"/state"`` appended) otherwise — mirrors the oracle's exact
 branching, backward-compat with existing callers.
 
-Port of: list-review-trail-records.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: list-review-trail-records.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-05-28-archive-aware-review-oracle-and-audit-skill.md § Chunk C0
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 

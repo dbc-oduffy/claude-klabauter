@@ -6,7 +6,7 @@ Covers the behaviors probed in the tc-3 code review (F2):
   - append_goal() end-to-end: row shape, status='active', 12-char goal_id, shard path
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C6
-Port of: append-goal-event.sh (coordinator-claude b5a4192c, 2026-07-20).
+Port of: append-goal-event.sh (DoE b5a4192c, 2026-07-20).
 """
 
 from __future__ import annotations
@@ -550,7 +550,7 @@ class TestAppendGoalPassthroughFields:
 # _goal_append(): JSON-RPC handler passthrough (Review: code-reviewer, Finding 2)
 #
 # The original regression was in the _goal_append handler itself (the entry point
-# coordinator-claude's producer actually calls), not in append_goal(). The tests above pin the
+# DoE's producer actually calls), not in append_goal(). The tests above pin the
 # writer's behavior directly but never invoke the handler, so a future regression
 # in the handler's params.get(...) wiring (e.g. a refactor that drops one of the
 # three passthrough lines) would go undetected while every test above stays green.
@@ -647,7 +647,7 @@ class TestGoalAppendHandlerPassthrough:
 # ---------------------------------------------------------------------------
 # _normalize_coordinator_root_path: repo-root-relative normalization
 #
-# Bug: a coordinator-claude caller (emit-goal-from-artifact.sh) has been passing an absolute
+# Bug: a DoE caller (emit-goal-from-artifact.sh) has been passing an absolute
 # git-toplevel path for coordinator_root_path. The contract declares this field
 # repo-root-relative ("." / "subdir"); an absolute (machine-specific) path
 # resolves the same logical repo to a phantom second repo_fk in rag's
@@ -708,7 +708,7 @@ class TestNormalizeCoordinatorRootPath:
 
 class TestGoalAppendHandlerNormalizesCoordinatorRootPath:
     """The goal.append handler must normalize an absolute coordinator_root_path
-    before writing the row, defending against coordinator-claude's emit-goal-from-artifact.sh
+    before writing the row, defending against DoE's emit-goal-from-artifact.sh
     passing an absolute git-toplevel path."""
 
     def _fake_coordinator_root(self, tmp_path: Path) -> Path:

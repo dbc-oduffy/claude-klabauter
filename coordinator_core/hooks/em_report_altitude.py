@@ -38,7 +38,7 @@ Explicitly NOT detected (negative-spec, with reason):
       and break/ask polarity — a classifier, not a regex. Do not ship a regex
       for it.
 
-NON-BLOCKING BY CONSTRUCTION: the coordinator-claude-side consumer composes this op's
+NON-BLOCKING BY CONSTRUCTION: the DoE-side consumer composes this op's
 `message` into an advisory `additionalContext` envelope and always exits 0.
 This op must NEVER be wired to the exit-2 Stop-blocking channel. Blocking the
 Stop gives the EM another turn to write MORE text, which makes a verbosity
@@ -78,7 +78,7 @@ follows that sibling's shape deliberately: `last_assistant_text()` and
 carries no `@register_op`-decorated async handler for the same reason that
 one doesn't — Stop events are not routed through the IPC daemon path, so
 there is nothing for a daemon-side handler to register against. Transport
-here is the coordinator-claude-resident stdin/stderr shim calling `op(payload)` directly.
+here is the DoE-resident stdin/stderr shim calling `op(payload)` directly.
 The dispatch name `hooks.em_report_altitude` names this module/function pair
 for that shim, not an IPC registration.
 
@@ -95,7 +95,7 @@ Environment variables:
         other's fired-state. The env var name kept its original "TALLY"
         spelling on purpose — same mechanism, repurposed, not replaced.
 
-Spec backlink: coordinator/docs/wiki/em-pm-communication-style.md (coordinator-claude)
+Spec backlink: coordinator/docs/wiki/em-pm-communication-style.md (DoE-claude)
 """
 
 from __future__ import annotations
@@ -188,7 +188,7 @@ _FILE_LINE_RE = re.compile(
 )
 
 # POSIX absolute path — the common home/system roots this fleet's machines
-# actually use. "/Users/..." alone was macOS-only; coordinator-claude's CLAUDE.md
+# actually use. "/Users/..." alone was macOS-only; DoE-claude's CLAUDE.md
 # makes multi-OS support (macOS/Windows/Linux) P0, so a Linux-only path
 # under /home, /opt, /var, /tmp, /usr, or /etc must be recognized too.
 # Rooted on a leading "/" + known segment + "/", specific enough not to need
@@ -236,6 +236,11 @@ _META_DISCUSSION = re.compile(
 # ---------------------------------------------------------------------------
 
 _TALLY_FILENAME = "em-report-altitude-tally.json"
+
+#: Generator-provenance declaration: _mark_fired writes the has-fired
+#: sentinel under <git_common_dir>/coordinator-sessions/<session>/ (inside
+#: .git/) or an env-overridden demo/test dir — never a tracked artifact.
+GENERATES: list = []
 
 
 def _tally_path(payload: dict) -> str | None:
@@ -388,7 +393,7 @@ def op(payload: dict) -> dict | None:
         # emitter's bytes are captured by capture_session() alongside every other
         # prose-carrying builder call, per AC12. Routing must sit HERE rather than in the
         # __main__ probe block: __main__ is the manual path, so instrumenting it leaves the
-        # real caller — the coordinator-claude-resident shim, which reads op()'s return directly —
+        # real caller — the DoE-resident shim, which reads op()'s return directly —
         # unmeasured. This module's transport is not the harness's hookSpecificOutput JSON
         # protocol; only ``message`` is ever read, so the envelope is built for measurement
         # and unwrapped back to the same {"message": <str>} shape. context_only() wraps

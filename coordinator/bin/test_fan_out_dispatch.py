@@ -393,7 +393,7 @@ def test_stdin_spec_path(root):
 # ---------------------------------------------------------------------------
 # candidate_restatements (5th field: change_kind) — push-not-pull hook onto
 # coordinator_core.learn_lessons_assemble.generate_candidates. Spec backlink:
-# coordinator-claude coordinator/agents/executor.md § Candidate-Restatement Disposition.
+# DoE-claude coordinator/agents/executor.md § Candidate-Restatement Disposition.
 # ---------------------------------------------------------------------------
 
 # CLAUDE_KLABAUTER_ROOT for these tests is this very checkout — coordinator_core lives

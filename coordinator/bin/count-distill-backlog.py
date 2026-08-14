@@ -37,11 +37,11 @@ THRESHOLD_DAYS = 30
 
 
 def _resolve_root() -> str:
-    """Resolve the archive/wiki scan root: the coordinator-claude repo, whose
+    """Resolve the archive/wiki scan root: the DoE-claude repo, whose
     `archive/completed` + `docs/wiki` (source layout) or the live-installed
     `~/.claude` + `plugins/coordinator-claude/coordinator/docs/wiki`
     (live-install layout) hold the completion-log corpus this script counts
-    against — this is coordinator-claude doctrine's own distill backlog, not the calling
+    against — this is DoE doctrine's own distill backlog, not the calling
     repo's.
 
     An EXPLICIT CLAUDE_HOME env var always wins over registry resolution
@@ -56,19 +56,19 @@ def _resolve_root() -> str:
     port invents).
 
     Absent CLAUDE_HOME, resolves via `coordinator_registry.doe_root()`
-    (DOE_ROOT / REPO_EXAMPLE_DOCTRINE_REPO env -> machine-local `repos.example_doctrine_repo` ->
+    (DOE_ROOT / REPO_DOE_CLAUDE env -> machine-local `repos.doe_claude` ->
     raise).
 
     THIS DOES NOT DERIVE FROM __file__. b644d5a9 migrated this executable
-    from coordinator-claude into claude-klabauter's `coordinator/bin/`, while
+    from DoE-claude into claude-klabauter's `coordinator/bin/`, while
     `archive/completed` and `docs/wiki` (the corpus this script counts)
-    stayed in coordinator-claude. Claude-klabauter ALSO has its own `archive/completed`
+    stayed in DoE-claude. Claude-klabauter ALSO has its own `archive/completed`
     — a distinct, unrelated completion log — so the retired hop-count
     resolution below (bin/ -> up N levels) would silently land on and count
-    claude-klabauter's OWN backlog instead of coordinator-claude's: wrong answer, zero
+    claude-klabauter's OWN backlog instead of DoE-claude's: wrong answer, zero
     errors, the nastiest failure shape. A future reader must not restore
     script-location inference to "fix" this — self-location is no longer a
-    valid proxy for the coordinator-claude root once this script lives outside it, and
+    valid proxy for the DoE root once this script lives outside it, and
     restoring it is precisely the shape of the original bug.
 
     Fails loud (`sys.exit(1)`) when `doe_root()` cannot resolve — this is a
@@ -88,9 +88,9 @@ def _resolve_root() -> str:
         return doe_root()
     except _DoeUnresolvable as exc:
         print(
-            f"{PROG}: cannot resolve the coordinator-claude repo root ({exc}). "
-            "Set repos.example_doctrine_repo in the machine-local registry, or set the "
-            "DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO env var, or set CLAUDE_HOME directly.",
+            f"{PROG}: cannot resolve the coordinator doctrine repo root ({exc}). "
+            "Set repos.doe_claude in the machine-local registry, or set the "
+            "DOE_ROOT/REPO_DOE_CLAUDE env var, or set CLAUDE_HOME directly.",
             file=sys.stderr,
         )
         sys.exit(1)

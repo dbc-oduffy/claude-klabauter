@@ -8,8 +8,8 @@ Reconcile with origin/main, called by workday-start-step0.py after the
 precedence switch resolves on a non-main active branch) has been fully
 ported to coordinator_core/ops/workday_start_step0_reconcile.py, co-located
 test coordinator_core/ops/test_workday_start_step0_reconcile.py. This file
-is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine)
-module, per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
+is now a thin DoE-side (contract) trampoline over that claude-klabauter (engine)
+module, per DR-047 (DoE owns contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
 owned by `gen-launcher-shim.py --ensure-unix`, and correct for this shape. On
@@ -18,8 +18,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Exit-code convention: this is a FAIL-LOUD gate script, not a never-block
@@ -32,7 +32,7 @@ Exit codes (parity-critical, unchanged from the bash oracle / ported module):
     3 — merge conflict; PM resolves first.
     1 — unexpected error (including this trampoline's own link failure).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 
 DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than a
 plain in-process `import ... as _op_main` + `sys.exit(op_main(argv))` tail, so

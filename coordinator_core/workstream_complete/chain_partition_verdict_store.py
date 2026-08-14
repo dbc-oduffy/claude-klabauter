@@ -80,6 +80,12 @@ from typing import Any, Optional
 
 from coordinator_core.session import scope as session_scope
 
+# Generator-provenance declaration (generator_provenance.py). write_verdict_record
+# writes one JSON record per closing session id under
+# `state/ceremony/wsc-chain-partition-verdict/<sha256-hash>.json` -- a data-dependent,
+# session-keyed file SET under a tracked directory, not a single fixed artifact.
+MUTATES = ["state/ceremony/wsc-chain-partition-verdict/*.json"]
+
 SCHEMA_VERSION: int = 1
 
 #: Repo-relative directory this store's records live under — SIBLING to

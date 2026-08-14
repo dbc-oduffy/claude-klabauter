@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import ntpath
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,7 @@ from coordinator_core.install.substrate import (
     _agent_cmd_raw_cmdline_block,
     _agent_ps1_dest_name,
     _c10a_steps,
+    _derive_agent_helper_target_map,
     _emit_and_verify_ps1_forwarders,
     _handle_ps1_gate_verdict,
     _ps1_policy_repair_message,
@@ -55,6 +57,7 @@ from coordinator_core.install.substrate import (
     _write_agent_cmd_forwarder,
     _write_agent_ps1_forwarder,
     _write_bin_manifest,
+    run,
 )
 
 # Real cmd.exe/subprocess spawns are load-bearing: the .cmd-forwarder tests
@@ -321,7 +324,8 @@ def _render_forwarder_pair(tmp_path: Path, baked_bin: str) -> Path:
     name = "coordinator-fake-cli"
     unix_half = tmp_path / name
     unix_half.write_text(
-        f"import sys\nprint({_FORWARDER_TOKEN!r})\nprint(' '.join(sys.argv[1:]))\n",
+        f"import sys\nprint({_FORWARDER_TOKEN!r})\nprint(' '.join(sys.argv[1:]))\n"
+        "print(sys.executable)\n",
         encoding="utf-8",
     )
     cmd_half = tmp_path / f"{name}.cmd"
@@ -388,9 +392,176 @@ def test_agent_cmd_forwarder_falls_through_on_missing_bake_with_spaces(tmp_path)
     assert _FORWARDER_TOKEN in proc.stdout
 
 
+# --- Windows resolution cache (DR-303 / windows-interpreter-bake-is-empty) --
+#
+# The baked rung stays empty for every install run off-Windows (or via
+# --setup-only), so the ladder falls through to `where python.exe` on EVERY
+# invocation -- ~10 process spawns per op instead of 2. The fix: cache a
+# successful `where`-rung resolution under %LOCALAPPDATA% (never synced
+# between machines, unlike the settings-home a bake lives in) so the ladder
+# only pays the slow rung roughly once per host, not once per invocation.
+#
+# Text-level tests below are platform-portable (assert on the generated
+# body); the runtime proofs are Windows-only, mirroring the skip pattern the
+# existing baked-rung tests already use in this file.
+
+
+def test_agent_cmd_forwarder_body_includes_localappdata_cache_rungs(tmp_path):
+    dst = tmp_path / "some-other-cli.cmd"
+    _write_agent_cmd_forwarder(
+        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
+    )
+    body = dst.read_text(encoding="utf-8")
+
+    assert "LOCALAPPDATA" in body
+    assert "python-bin-cache.txt" in body
+    # Cache write must be an atomic rename, never an in-place write to the
+    # cache file itself.
+    assert "move /y" in body.lower() or "move  /y" in body.lower()
+
+
+def test_agent_ps1_forwarder_body_includes_localappdata_cache_rungs(tmp_path):
+    dst = tmp_path / "some-other-cli.ps1"
+    _write_agent_ps1_forwarder("some-other-cli", dst, False, python3_cmd_resolved_bin="")
+    body = dst.read_text(encoding="utf-8")
+
+    assert "$env:LOCALAPPDATA" in body
+    # R2 (cross-dialect cache-file encoding fix): the .ps1 leg uses its OWN
+    # cache file, never the .cmd leg's `python-bin-cache.txt` -- the two
+    # dialects write/read in different encodings (UTF-8-no-BOM vs console
+    # codepage) and a shared file only round-trips for an ASCII interpreter
+    # path. See `_write_agent_cmd_forwarder`'s "Cross-dialect encoding"
+    # docstring paragraph.
+    assert "python-bin-cache-ps1.txt" in body
+    assert "python-bin-cache.txt" not in body.replace("python-bin-cache-ps1.txt", "")
+    # Cache write must be an atomic rename (Move-Item), never an in-place
+    # write to the cache file itself, and must stay in-process (no new
+    # spawn on the steady-state path).
+    assert "Move-Item" in body
+    assert "Start-Process" not in body
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
+def test_agent_cmd_forwarder_cold_cache_resolves_and_warms_cache(tmp_path, monkeypatch):
+    # No baked interpreter, no pre-existing cache: the where.exe rung must
+    # still resolve (via the real python.exe on PATH in CI) and the cache
+    # file must exist afterward, pointing at an existing interpreter.
+    fake_localappdata = tmp_path / "LocalAppData"
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
+
+    proc = _run_forwarder(_render_forwarder_pair(tmp_path, ""), "hello")
+
+    assert proc.returncode == 0, proc.stderr
+    assert _FORWARDER_TOKEN in proc.stdout
+
+    cache_file = fake_localappdata / "coordinator" / "python-bin-cache.txt"
+    assert cache_file.exists()
+    cached_bin = cache_file.read_text(encoding="utf-8").strip()
+    assert cached_bin != ""
+    assert Path(cached_bin).exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
+def test_agent_cmd_forwarder_warm_cache_is_used_without_reresolving(tmp_path, monkeypatch):
+    # A valid, pre-seeded cache entry must be used directly -- no baked bin
+    # required. Review: staff-eng (Finding 6) -- the prior version of this
+    # test seeded the cache with sys.executable itself, which is also what
+    # the where.exe miss-path would resolve on this host, so it passed even
+    # with the entire cache rung deleted. Seed a COPY of sys.executable at a
+    # path `where python.exe` cannot find (a directory never added to
+    # PATH) and assert the output identifies THAT copy specifically -- only
+    # reachable if the cache rung actually fired.
+    shim_dir = tmp_path / "shim-not-on-path"
+    shim_dir.mkdir()
+    shim_bin = shim_dir / Path(sys.executable).name
+    shutil.copy2(sys.executable, shim_bin)
+
+    fake_localappdata = tmp_path / "LocalAppData"
+    cache_dir = fake_localappdata / "coordinator"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "python-bin-cache.txt").write_text(str(shim_bin) + "\n", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
+
+    proc = _run_forwarder(_render_forwarder_pair(tmp_path, ""), "hello")
+
+    assert proc.returncode == 0, proc.stderr
+    assert _FORWARDER_TOKEN in proc.stdout
+    assert str(shim_bin) in proc.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason=".cmd forwarders are Windows-only")
+def test_agent_cmd_forwarder_stale_cache_self_heals(tmp_path, monkeypatch):
+    # A cache entry naming a path that no longer exists (the exact
+    # Mac/Windows-sync hazard, one level down) must fall through to the
+    # where.exe rung rather than hard-failing, AND must overwrite the cache
+    # file with a fresh, valid entry -- if the cache rung were deleted
+    # outright, the where.exe fallback would still succeed but the stale
+    # on-disk entry would be left untouched (Review: staff-eng Finding 6).
+    fake_localappdata = tmp_path / "LocalAppData"
+    cache_dir = fake_localappdata / "coordinator"
+    cache_dir.mkdir(parents=True)
+    stale_bin = str(tmp_path / "Users" / "alice" / "gone-python")
+    assert not Path(stale_bin).exists()
+    cache_file = cache_dir / "python-bin-cache.txt"
+    cache_file.write_text(stale_bin + "\n", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(fake_localappdata))
+
+    proc = _run_forwarder(_render_forwarder_pair(tmp_path, ""), "hello")
+
+    assert proc.returncode == 0, proc.stderr
+    assert _FORWARDER_TOKEN in proc.stdout
+    healed = cache_file.read_text(encoding="utf-8").strip()
+    assert healed != stale_bin
+    assert Path(healed).exists()
+
+
+def test_agent_cmd_forwarder_body_never_creates_a_new_process_for_cache_ops(tmp_path):
+    # Every cache-rung token must be a cmd.exe builtin (if/exist/set /p/
+    # mkdir/move) -- no PowerShell, cscript, or other spawned helper.
+    dst = tmp_path / "some-other-cli.cmd"
+    _write_agent_cmd_forwarder(
+        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
+    )
+    body = dst.read_text(encoding="utf-8")
+
+    assert "powershell" not in body.lower()
+    assert "cscript" not in body.lower()
+    assert "start " not in body.lower()
+
+
+def test_agent_cmd_forwarder_cache_hit_region_never_spawns_where_or_findstr(tmp_path):
+    # Review: staff-eng (Finding 6) -- the whole-body assertion above denylists
+    # powershell/cscript/start but the body still legitimately spawns `where`
+    # and `findstr` on the MISS path, so it never checked the claim in the
+    # cache rung's own comment ("zero added processes on the cache-hit
+    # path"). Scope to the cache-hit region specifically: the baked fast
+    # path plus the cache-read rung, up through `:skip_cache_read` -- before
+    # the miss-path `where`/`findstr` ladder begins.
+    dst = tmp_path / "some-other-cli.cmd"
+    _write_agent_cmd_forwarder(
+        "some-other-cli", dst, False, python3_cmd_resolved_bin="", target="some-other-cli"
+    )
+    body = dst.read_text(encoding="utf-8")
+
+    # Review: review-integrator (F2) -- `body.index(":skip_cache_read")`
+    # matched the FIRST occurrence of that substring, which is inside a
+    # `goto :skip_cache_read` reference in the cache-read rung itself (e.g.
+    # `if not defined LOCALAPPDATA goto :skip_cache_read`), not the LABEL
+    # several lines later -- truncating hit_region before the cache-read
+    # block's own findstr call, the exact defect this test exists to catch.
+    # Slice on the label line itself instead.
+    hit_region = body[: body.index("\n:skip_cache_read\n")]
+
+    assert "where " not in hit_region.lower()
+    assert "findstr" not in hit_region.lower()
+    assert "powershell" not in hit_region.lower()
+    assert "cscript" not in hit_region.lower()
+    assert "start " not in hit_region.lower()
+
+
 # --- _RAW_CMDLINE_TARGETS coverage -- scoped-git-commit / cross-repo-memo ----
 #
-# cross-repo/inbox/2026-08-07-coordinator-claude-em-cmd-forwarder-drops-everything-
+# cross-repo/inbox/2026-08-07-doe-claude-em-cmd-forwarder-drops-everything-
 # after-a-newline.md: `%*`-populated batch parameters silently lose everything
 # after a literal newline in an argument (a `.cmd` forwarder parse-time
 # defect, not a caller-side quoting bug -- see `_agent_cmd_raw_cmdline_block`'s
@@ -408,15 +579,51 @@ def test_agent_cmd_forwarder_falls_through_on_missing_bake_with_spaces(tmp_path)
 # runs this suite.
 
 
+def _installed_to_ondisk(agent_bin: Path, installed_name: str) -> str:
+    """Resolve `installed_name` to its on-disk TARGET filename the same way
+    the real install path does (`_derive_agent_helper_target_map`), rather
+    than hardcoding either the installed or the on-disk form.
+
+    `_RAW_CMDLINE_TARGETS` is keyed by on-disk filename (see that set's own
+    docstring in substrate.py), but production only ever has the INSTALLED
+    name in hand up front — it resolves the on-disk filename through this
+    same map before ever touching `_RAW_CMDLINE_TARGETS`. A test that
+    hardcodes `cross-repo-memo.py` fixes today's mismatch but re-breaks
+    silently the day a target's on-disk filename changes; resolving through
+    the map cannot drift from production keying because it IS production's
+    own resolution step.
+    """
+    return _derive_agent_helper_target_map(agent_bin)[installed_name]
+
+
 def test_raw_cmdline_targets_cover_scoped_git_commit_and_cross_repo_memo():
-    assert "scoped-git-commit" in _RAW_CMDLINE_TARGETS
-    assert "cross-repo-memo" in _RAW_CMDLINE_TARGETS
+    agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+    # scoped-git-commit's installed and on-disk forms are IDENTICAL (no
+    # `.py` suffix on disk) -- that coincidence must not be what makes this
+    # assertion pass, so it is asserted against the resolved on-disk form,
+    # not a hardcoded literal that happens to match either form.
+    assert (
+        _installed_to_ondisk(agent_bin, "scoped-git-commit") in _RAW_CMDLINE_TARGETS
+    )
+    # cross-repo-memo's installed and on-disk forms DIFFER
+    # ("cross-repo-memo" vs "cross-repo-memo.py") -- this is the assertion
+    # that actually distinguishes the two key forms and would have caught
+    # the installed-name/on-disk-filename mismatch this test previously
+    # missed.
+    assert (
+        _installed_to_ondisk(agent_bin, "cross-repo-memo") in _RAW_CMDLINE_TARGETS
+    )
+    assert _installed_to_ondisk(agent_bin, "cross-repo-memo") == "cross-repo-memo.py"
     # Regression guard (AC1): the original sole member must still be present.
     assert "coordinator-write-review-trail.py" in _RAW_CMDLINE_TARGETS
 
 
-@pytest.mark.parametrize("target", ["scoped-git-commit", "cross-repo-memo"])
-def test_agent_cmd_raw_cmdline_block_emits_capture_for_newly_covered_targets(target):
+@pytest.mark.parametrize("installed_name", ["scoped-git-commit", "cross-repo-memo"])
+def test_agent_cmd_raw_cmdline_block_emits_capture_for_newly_covered_targets(
+    installed_name,
+):
+    agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+    target = _installed_to_ondisk(agent_bin, installed_name)
     block = _agent_cmd_raw_cmdline_block(target)
 
     assert block != ""
@@ -430,13 +637,26 @@ def test_agent_cmd_raw_cmdline_block_stays_empty_for_uncovered_target():
     assert _agent_cmd_raw_cmdline_block("some-other-cli") == ""
 
 
-@pytest.mark.parametrize("target", ["scoped-git-commit", "cross-repo-memo"])
+@pytest.mark.parametrize("installed_name", ["scoped-git-commit", "cross-repo-memo"])
 def test_agent_cmd_forwarder_body_includes_raw_cmdline_capture_for_target(
-    tmp_path, target
+    tmp_path, installed_name
 ):
-    dst = tmp_path / f"{target}.cmd"
+    # `_write_agent_cmd_forwarder`'s first positional arg (`name`) is the
+    # INSTALLED forwarder name; its `target=` kwarg is the on-disk filename
+    # -- exactly the two forms production resolves apart via
+    # `_derive_agent_helper_target_map` before calling this function (see
+    # the real call site in substrate.py's install loop). Passing the same
+    # string for both, as this test previously did, is what hid the
+    # installed-name/on-disk-filename mismatch.
+    agent_bin = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+    ondisk_target = _installed_to_ondisk(agent_bin, installed_name)
+    dst = tmp_path / f"{installed_name}.cmd"
     _write_agent_cmd_forwarder(
-        target, dst, False, python3_cmd_resolved_bin="", target=target
+        installed_name,
+        dst,
+        False,
+        python3_cmd_resolved_bin="",
+        target=ondisk_target,
     )
     body = dst.read_text(encoding="utf-8")
 
@@ -602,6 +822,190 @@ def test_windows_health_steps_mutates_for_a_genuine_non_temp_path(monkeypatch, c
 
     assert any("SetEnvironmentVariable" in c for c in calls)
     assert "REFUSED" not in capsys.readouterr().err
+
+
+# --- _windows_health_steps: soft-gate failures must not degrade silently ----
+#
+# state/bug-backlog/2026-08-14-setup-only-installs-never-put-the-launch-
+# be74f05c9f5b.yaml: a `cygpath`/`powershell.exe` probe failure previously
+# degraded to a bare "skipping PATH integration" WARNING with no stated
+# consequence or remediation -- an operator reading it had no way to know
+# bare-name CLI invocation would fail, nor what to do about it.
+
+
+def test_windows_health_steps_cygpath_unavailable_states_consequence_and_fix(monkeypatch, capsys):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
+
+    monkeypatch.setattr(substrate, "_cygpath_w", lambda p: "")
+    # The AppX-stub/store-alias legs downstream of the PATH check still run
+    # (they don't depend on a resolved Windows path) -- answer "nothing
+    # found" like `_fake_powershell_for_windows_health_steps` does, rather
+    # than asserting this leg is never reached.
+    monkeypatch.setattr(substrate, "_powershell", lambda *a, **k: "")
+
+    _windows_health_steps(bin_dst, check_only=False)
+
+    err = capsys.readouterr().err
+    assert "cygpath unavailable" in err
+    assert "bare-name CLI invocation will fail" in err
+    assert "re-run install" in err
+
+
+def test_windows_health_steps_powershell_unavailable_states_consequence_and_fix(monkeypatch, capsys):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
+
+    monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
+    monkeypatch.setattr(substrate, "_powershell", lambda *a, **k: "")
+
+    _windows_health_steps(bin_dst, check_only=False)
+
+    err = capsys.readouterr().err
+    assert "could not read Windows user PATH" in err
+    assert "bare-name CLI invocation will fail" in err
+    assert "re-run install" in err
+
+
+# --- run(): setup-only / soft-gate PATH visibility --------------------------
+#
+# Regression coverage for the same backlog item -- `run(setup_only=True)`
+# never wrote the Windows PATH entry and, on the full chain, `_is_windows_shell()`
+# returning False (OSTYPE/OS unset) silently skipped `_windows_health_steps`
+# with no operator-visible trace. Both branches previously returned 0 with
+# no message naming the consequence or the fix; this coverage locks in that
+# they now do, without re-exercising the full install-substrate write chain
+# (already covered by the `_windows_health_steps`/`_install_bin_resolvers`
+# suites elsewhere in this file).
+
+
+def _stub_run_dependencies(monkeypatch, tmp_path):
+    """Monkeypatch every `run()` step up to (and past) the `setup_only`
+    checkpoint so tests can isolate the new PATH-visibility messaging
+    without standing up the full install-substrate write surface."""
+    plugin_root = tmp_path / "plugin"
+    (plugin_root / "templates" / "machine-local").mkdir(parents=True)
+    (plugin_root / "templates" / "bin").mkdir(parents=True)
+    (plugin_root / "templates" / "setup").mkdir(parents=True)
+
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    ch_bin = claude_klabauter_root / "coordinator" / "lib" / "claude-home"
+    ch_bin.mkdir(parents=True)
+
+    ml_templates = plugin_root / "templates" / "machine-local"
+    for name in substrate._TRACKED_ML_FILES:
+        (ml_templates / name).write_text("")
+    (ml_templates / f"{substrate._ML_UNREAL_TOML_NAME}.example").write_text("")
+    (ml_templates / f"{substrate._ML_REGISTRY_TOML_NAME}.example").write_text("")
+    (ml_templates / f"{substrate._ML_HARDWARE_TOML_NAME}.example").write_text("")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    settings = tmp_path / "settings-home"
+
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+    monkeypatch.setattr(substrate, "coordinator_claude_klabauter_root", lambda: str(claude_klabauter_root))
+    monkeypatch.setattr(
+        substrate, "_load_setup_template_manifest", lambda root: (["a"], [], [])
+    )
+    monkeypatch.setattr(substrate, "require_home", lambda who: str(home))
+    monkeypatch.setattr(
+        substrate, "migrate_substrate_to_settings_home", lambda *a, **k: 0
+    )
+    monkeypatch.setattr(substrate, "settings_home", lambda: settings)
+    monkeypatch.setattr(substrate, "_resolve_baked_python_bin", lambda: "")
+    monkeypatch.setattr(substrate, "_install_bin_resolvers", lambda *a, **k: None)
+    monkeypatch.setattr(substrate, "_percolation_and_path_steps", lambda *a, **k: None)
+    monkeypatch.setattr(substrate, "_register_hardware_concern", lambda *a, **k: None)
+    monkeypatch.setattr(substrate, "_run_hardware_audit", lambda *a, **k: None)
+    monkeypatch.setattr(substrate, "_c10a_steps", lambda *a, **k: 0)
+    monkeypatch.setattr(substrate, "_install_seed_wikis", lambda *a, **k: None)
+    monkeypatch.setattr(substrate, "_fnm_step", lambda *a, **k: None)
+    return settings / "bin"
+
+
+def test_run_setup_only_on_windows_states_path_not_written(monkeypatch, tmp_path, capsys):
+    _stub_run_dependencies(monkeypatch, tmp_path)
+    monkeypatch.setattr(substrate, "_is_windows_shell", lambda: True)
+
+    rc = run(setup_only=True)
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "was NOT added to the Windows user PATH" in err
+    assert "Bare-name coordinator CLI invocation will not resolve" in err
+    assert "without --setup-only" in err
+
+
+def test_run_setup_only_off_windows_keeps_original_notice(monkeypatch, tmp_path, capsys):
+    _stub_run_dependencies(monkeypatch, tmp_path)
+    monkeypatch.setattr(substrate, "_is_windows_shell", lambda: False)
+
+    rc = run(setup_only=True)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "skipping fnm/Windows machine-env steps" in out
+    assert "substrate seeded" in out
+
+
+def test_run_setup_only_check_only_off_windows_does_not_claim_seeded(monkeypatch, tmp_path, capsys):
+    # R3: under check_only nothing is written, so the notice must not claim
+    # the substrate WAS seeded.
+    bin_dst = _stub_run_dependencies(monkeypatch, tmp_path)
+    ml_dst = bin_dst.parent / "machine-local"
+    ml_dst.mkdir(parents=True)
+    for name in substrate._TRACKED_ML_FILES:
+        (ml_dst / name).write_text("")
+    monkeypatch.setattr(substrate, "_is_windows_shell", lambda: False)
+
+    rc = run(setup_only=True, check_only=True)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "skipping fnm/Windows machine-env steps" in out
+    assert "substrate would be seeded" in out
+    assert "substrate seeded" not in out
+
+
+def test_run_setup_only_check_only_on_windows_does_not_claim_seeded(monkeypatch, tmp_path, capsys):
+    # R3 sibling: the Windows-branch notice has the same defect ("forwarders
+    # seeded") under check_only.
+    bin_dst = _stub_run_dependencies(monkeypatch, tmp_path)
+    ml_dst = bin_dst.parent / "machine-local"
+    ml_dst.mkdir(parents=True)
+    for name in substrate._TRACKED_ML_FILES:
+        (ml_dst / name).write_text("")
+    monkeypatch.setattr(substrate, "_is_windows_shell", lambda: True)
+
+    rc = run(setup_only=True, check_only=True)
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "forwarders would be seeded" in err
+    assert "forwarders seeded" not in err
+
+
+# A `run()`-level test of the `os.name == "nt"` soft-gate-mismatch branch
+# (`_is_windows_shell()` False while `os.name == "nt"`) is not exercisable in
+# this sandbox: flipping `os.name` mid-process makes every subsequent
+# `pathlib.Path(...)` construction resolve to `WindowsPath`, which raises
+# `pathlib.UnsupportedOperation` on a non-Windows interpreter (Python 3.14's
+# strict pathlib) -- `run()` constructs fresh `Path` objects throughout, so
+# this combination cannot be driven end-to-end off this host. The branch
+# itself is reasoned from source (mirrors the already-covered `_is_windows_
+# shell() is True` setup-only branch immediately above), not executed here.
+
+
+def test_run_full_chain_posix_no_warning(monkeypatch, tmp_path, capsys):
+    _stub_run_dependencies(monkeypatch, tmp_path)
+    monkeypatch.setattr(substrate, "_is_windows_shell", lambda: False)
+    monkeypatch.setattr(substrate.os, "name", "posix")
+
+    rc = run(setup_only=False)
+
+    assert rc == 0
+    assert "Windows PATH integration skipped" not in capsys.readouterr().err
 
 
 # --- _windows_health_steps: orphan AppX stub deletion gate -------------------

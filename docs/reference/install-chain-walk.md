@@ -135,7 +135,7 @@ is the documented default for a new node joining the chain.
 The full worked chain, root to an unnamed leaf:
 
 ```
-Coordinator-claude  (root, terminal — "chain step 5 of 5" means root of the OSS
+coordinator-claude  (root, terminal — "chain step 5 of 5" means root of the OSS
                       plugin-adoption chain, NOT "step five of five")
        |
        v  hard dep

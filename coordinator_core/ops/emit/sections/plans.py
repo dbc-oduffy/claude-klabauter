@@ -52,7 +52,7 @@ the seam reuses ``coordinator_core.ops.records_query._apply_plan_filename_filter
 port that JSON-RPC ``records.query`` uses, so this section never re-derives that filter
 locally. See ``_query_plan_records`` for the root/cwd and fail-open parity notes.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.6,
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 8.6,
   PlanSummary. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P10
   (upstream: docs/plans/2026-06-23-cockpit-contract-ext-wave2-emit-and-queue-migration.md § C4b).

@@ -27,7 +27,7 @@ subprocess round-trip to a real CLI). Covers:
       baton's *wiring* to that runner, not the runner's own internals a
       second time.
 
-Spec backlink: coordinator-claude docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
+Spec backlink: DoE-claude DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48,
 chunk C3 (depends C1-C2).
 
 Run: python -m pytest coordinator_core/test_baton_assemble.py -q
@@ -1869,7 +1869,7 @@ class TestStandaloneHandoffSlugFromTitle:
 
 # ---------------------------------------------------------------------------
 # 2026-07-29 follow-up: successor-derivation archive-collision fix. Evidence:
-# coordinator-claude state/handoffs/2026-07-29_175200_confinement-band-split-plan-
+# DoE-claude state/handoffs/2026-07-29_175200_confinement-band-split-plan-
 # awaiting-review.md § Session Ledger -- `baton-assemble apply handoff`'s
 # first brief timestamped the predecessor's basename (a live same-day
 # collision, correctly disambiguated); a concurrent session then archived
@@ -2010,7 +2010,7 @@ class TestSuccessorDerivationSurvivesPredecessorArchival:
 
         repo_root_here = Path(__file__).resolve().parents[1]
         bin_dir = repo_root_here / "coordinator" / "bin"
-        cli = bin_dir / "coordinator-doc-new"
+        cli = bin_dir / "coordinator-doc-new.py"
         env = dict(os.environ)
         env.pop("COORDINATOR_SESSION_ID", None)
         env.pop("CLAUDE_SESSION_ID", None)
@@ -3521,7 +3521,7 @@ class TestHandoffStampPhaseSiteReceivesArgsVerbatim:
         assert result["args"] == [normalized]
 
     def test_nonzero_exit_code_raises_rather_than_returning_a_failed_result(self, tmp_path, monkeypatch):
-        """The swallow coordinator-claude-em reported 2026-07-29: `_invoke_op_in_process`
+        """The swallow doe-claude-em reported 2026-07-29: `_invoke_op_in_process`
         returns the op's `_err(...)` dict as an ordinary value, and
         `apply_base.execute_directives` treats only a RAISED exception as
         failure -- so without this raise a failed stamp landed in `landed`
@@ -3572,7 +3572,7 @@ class TestHandoffStampPhaseSiteReceivesArgsVerbatim:
 
 # ---------------------------------------------------------------------------
 # C1 -- the push-side succession writer (d6, "handoff.supersede_predecessor").
-# Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md, chunk C1.
+# Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d, chunk C1.
 #
 # Three required assertions:
 #   (a) continuation -> predecessor stamped `continued` + `continued_into`
@@ -6534,7 +6534,7 @@ class TestC4PlanTierSupersessionTargetFromLedger:
     `_resolve_held_handoff_for_session` already reads for the empty-
     artifact-path self-resolution case -- rather than from the plan's
     `predecessor_handoff`/`predecessor` fields, which name PROVENANCE (the
-    handoff that SPAWNED this plan per coordinator-claude's plan.schema.json), not a
+    handoff that SPAWNED this plan per DoE's plan.schema.json), not a
     termination target (F3). `predecessor_handoff` must still be carried on
     `lineage` for lineage-carry purposes (assumed key name
     `lineage["predecessor_handoff"]`, mirroring this module's existing

@@ -35,7 +35,7 @@ from coordinator_core.install.ensure_venv import (
 def _trust_any_root(monkeypatch):
     # Mirrors test_ensure_venv.py's fixture: bypasses
     # coordinator_trusted_root_guard so an arbitrary tmp_path plugin_root
-    # can be used without registering it as a real coordinator/coordinator-claude/claude-klabauter
+    # can be used without registering it as a real coordinator/DoE/claude-klabauter
     # anchor.
     monkeypatch.setenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", "1")
 

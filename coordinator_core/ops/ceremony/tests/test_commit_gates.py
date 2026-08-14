@@ -8,7 +8,7 @@ docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md).
 
 Coverage (parity-oracle assertions, per the deleted
 `tests/wsc-asic/test-wsc-commit-parity.sh` recovered from
-`coordinator-claude:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`):
+`DoE:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`):
   (c)  deletion_block_gate passes on a well-formed message (Kept block only,
        no staged deletions).
   (c2) deletion_block_gate fails on a malformed message (Deleted-claimed path

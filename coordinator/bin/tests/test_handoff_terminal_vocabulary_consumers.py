@@ -110,7 +110,7 @@ _REPO_ROOT = _BIN_DIR.parent.parent
 # touchers, verified individually below.
 _CONSUMERS: list[tuple[str, bool]] = [
     ("coordinator/bin/assert-no-terminal-plans-in-live.py", False),  # PLAN_TERMINAL_STATUS, not handoff
-    ("coordinator/bin/coordinator-doc-new", True),  # writes deployment_state, but only ready_to_fire/awaiting_gate — never a terminal
+    ("coordinator/bin/coordinator-doc-new.py", True),  # writes deployment_state, but only ready_to_fire/awaiting_gate — never a terminal
     ("coordinator/bin/emit-goal-from-artifact.py", False),  # goal _STATUS_MAP, not handoff
     ("coordinator/bin/prune-closed-bugs.py", False),  # bug-backlog status, not handoff
     ("coordinator/bin/test_emit_goal_from_artifact.py", False),  # goal _STATUS_MAP's test twin (abandoned -> dropped), not handoff

@@ -6,7 +6,7 @@ the two chunks were told explicitly not to coordinate on that shared file) so
 this dispatch's own additions land with no merge/ownership ambiguity.
 
 Spec backlink: pln-anchor-the-write-confinement-b-25890e,
-chunk C7 -- findings #3 and #4 (carried on coordinator-claude's evidence, re-verified here)
+chunk C7 -- findings #3 and #4 (carried on DoE's evidence, re-verified here)
 and AC14 (the linked-worktree false positive, `_same_repo_root`'s own bug,
 fixed alongside #3 since both live in this file).
 

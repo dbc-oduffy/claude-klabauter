@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.check_auto_memory_drained.
 
-Spec backlink: coordinator-claude
+Spec backlink: DoE-claude
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C13, AC15.
 """
 
@@ -35,8 +35,8 @@ def test_slugify_replaces_path_separators_with_dashes() -> None:
     assert _slugify_repo_root("/home/example/repos/claude-klabauter") == (
         "-home-example-repos-claude-klabauter"
     )
-    assert _slugify_repo_root("/home/example/repos/coordinator-claude") == (
-        "-home-example-repos-coordinator-claude"
+    assert _slugify_repo_root("/home/example/repos/DoE-claude") == (
+        "-home-example-repos-DoE-claude"
     )
 
 

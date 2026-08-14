@@ -6,7 +6,7 @@ Mirrors the structure of a `block_tracker_edit.py`-shaped guard: no repo
 fixture is needed since the match is a pure path-tail regex, independent of
 cwd/git-root resolution.
 
-Spec backlink: docs/plans/2026-07-26-priority-ledger.md (chunk C9a)
+Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 (chunk C9a)
 """
 
 from __future__ import annotations

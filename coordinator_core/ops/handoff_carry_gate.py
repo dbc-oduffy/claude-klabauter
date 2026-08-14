@@ -12,14 +12,14 @@ field exists to remove.
 
 Identity across re-wording: each carried item carries a stable `carry_id`
 (minted once, threaded byte-identical hop to hop — see
-Coordinator-claude coordinator/schemas/handoff.schema.json `carried_items`). The gate
+DoE-claude coordinator/schemas/handoff.schema.json `carried_items`). The gate
 keys EXCLUSIVELY on `carry_id`, never on `description` text, so rephrasing an
 item never makes it look "new".
 
 Entry point: `evaluate_gate(items)` — returns a `GateResult`; `main()` maps a
 non-ok result to exit 1 and a malformed/unreadable handoff to exit 2.
 
-Spec backlink: coordinator-claude coordinator/schemas/handoff.schema.json
+Spec backlink: DoE-claude coordinator/schemas/handoff.schema.json
     `carried_items` field, coordinator/skills/handoff/SKILL.md
     § Cascading unresolved items.
 
@@ -153,6 +153,10 @@ def read_carried_items(handoff_path: str) -> List[Dict[str, Any]]:
 
 def main(argv: List[str]) -> int:
     """CLI entry: `handoff-carry-gate check <handoff-path>`."""
+    if argv[:1] and argv[0] in ("--help", "-h"):
+        print(f"{_PROG}: usage: {_PROG} check <handoff-path>")
+        return 0
+
     if not argv or argv[0] != "check" or len(argv) != 2:
         # Review: coordinatorcode-reviewer-6b7a876d — reject trailing argv
         # (e.g. a stale --override-reason) rather than silently swallowing it.

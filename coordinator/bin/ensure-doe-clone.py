@@ -2,15 +2,15 @@
 """
 ensure-doe-clone.py — CLI trampoline over claude-klabauter coordinator_core.ops.ensure_doe_clone.
 
-Resolves the local coordinator-claude clone path (REPO_EXAMPLE_DOCTRINE_REPO env override, then
-`machine-local get repos.example_doctrine_repo`) and clones it if the resolved directory
+Resolves the local DoE-claude clone path (REPO_DOE_CLAUDE env override, then
+`machine-local get repos.doe_claude`) and clones it if the resolved directory
 is not yet a git checkout. Collapses the two literal bash fences at
-coordinator/commands/install.md lines 731 and 747 (coordinator-claude repo) into one
+coordinator/commands/install.md lines 731 and 747 (DoE-claude repo) into one
 call — see coordinator_core.ops.ensure_doe_clone's own docstring for the
 full design rationale and negative-spec (this trampoline owns no logic of
 its own beyond the standard CLAUDE_KLABAUTER_ROOT resolve-and-import dance).
 
-Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9
+Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3/D9
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def _import_runner():
     """Resolve CLAUDE_KLABAUTER_ROOT and import `run_op_main`.
 
     DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather
-    than importing the op's `main` directly, so the resolved coordinator-claude-clone path
+    than importing the op's `main` directly, so the resolved DoE-clone path
     it declares (on an actual `git clone`) becomes a session scope-touch
     claim instead of an unclaimed orphan at the `scoped_git_commit` sink.
     """

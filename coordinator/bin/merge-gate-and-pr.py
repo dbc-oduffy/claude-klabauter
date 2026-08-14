@@ -1,6 +1,6 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """merge-gate-and-pr.py — merge-time imperative logic ported off the bash
-fences embedded in coordinator-claude coordinator/skills/merging-to-main/SKILL.md.
+fences embedded in DoE-claude coordinator/skills/merging-to-main/SKILL.md.
 
 Subcommands (argv[1] selects):
 
@@ -37,7 +37,7 @@ Subcommands (argv[1] selects):
 
 Spec backlink: docs/plans/2026-07-21-doe-skill-bash-to-claude-klabauter-python-port.md [DEAD-CITATION: plan file never committed to this repo]
   (M3 chunk MTM-2 — merging-to-main review-coverage gate / PR body / active-
-  branch merge guard). Source: coordinator-claude
+  branch merge guard). Source: DoE-claude
   coordinator/skills/merging-to-main/SKILL.md §§ Step 1.5, Step 1.65, Step 4.
 
 Exit codes:

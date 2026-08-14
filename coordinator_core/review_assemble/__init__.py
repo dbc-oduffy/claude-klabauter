@@ -23,9 +23,9 @@ to stderr. Exit codes are locally scoped to this CLI: 0 OK, 1 business
 (e.g. `residue.ResidueAssembleError`), 2 usage, 3 transport (e.g.
 `ResolveCoordinatorCloneError`) — see `main`'s own docstring.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b8-review-ci-cluster.md, chunk C6
-Spec backlink: docs/plans/2026-07-26-review-skill-computed-residue.md, chunk C3
-Spec backlink: docs/plans/2026-07-26-review-skill-computed-residue.md, chunk C4
+Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
+Spec backlink: DoE-claude:pln-review-skill-computed-residue--db84bf, chunk C3
+Spec backlink: DoE-claude:pln-review-skill-computed-residue--db84bf, chunk C4
 """
 
 from __future__ import annotations
@@ -122,6 +122,9 @@ def main(argv: list[str]) -> int:
     `orient_assemble`'s cadence-implicit-default shape: the common case
     needs no subcommand word at all.
     """
+    if argv and argv[0] in ("--help", "-h"):
+        print("usage: review-assemble [brief] [--artifact <path>] [--surface plan|diff]")
+        return _ReviewAssembleExitCode.SUCCESS
     if argv and argv[0] in _SUBCOMMANDS:
         return _SUBCOMMANDS[argv[0]](argv[1:])
     return _dispatch_brief(argv)

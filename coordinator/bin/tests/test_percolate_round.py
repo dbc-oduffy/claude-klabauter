@@ -8,11 +8,11 @@ that greps its own docstring, and never via `mod._run` alone, which would
 miss a hypothetical direct `subprocess.run`/`Popen` call bypassing that
 wrapper) — no real publish, commit, or CI process ever spawns.
 
-Push-detection threat model (Review: code-reviewer): the never-push
-assertions cover the `subprocess.run` boundary only — a hypothetical
-`os.system("git ... push")` or direct `subprocess.Popen` call bypassing
-`subprocess.run` would not be caught here. Neither is used anywhere in this
-diff today.
+Push-detection threat model (Review: code-reviewer, hardened by
+review-integrator): `test_never_invokes_git_push` patches `os.system` and
+`subprocess.Popen` in addition to the `subprocess.run` boundary, so a future
+edit routing a push through either would fail the test loudly instead of
+slipping past a `subprocess.run`-only spy.
 
 Run: python -m pytest coordinator/bin/tests/test_percolate_round.py -q
 """
@@ -22,13 +22,16 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import List
 
 import pytest
 
-pytestmark = [pytest.mark.cadence]
+# Review: code-reviewer — no `cadence` marker: subprocess.run is fully
+# monkeypatched below, nothing here spawns a real process, so this suite
+# belongs in the per-commit tier, not deferred to cadence gates.
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
@@ -58,41 +61,79 @@ class _SubprocessSpy:
 
     def __init__(self, *, dryrun_stdout, real_stdout, parse1_stdout, parse2_stdout,
                  scan_stdout="Content-leakage scan:\n  HIGH (credential/secret shapes -- BLOCKS publish):\n    (none)\n  MEDIUM (identity / internal paths / peer-repo names -- surfaces to gate):\n    (none)\n  LOW (informational -- commit SHAs, doctrine language):\n    (none)\n",
+                 scan_returncode=0,
                  drift_stdout="anchor_mode: 30day-fallback\n",
                  commit_stdout='{"status": "ok"}',
                  ci_returncode=0,
-                 ci_stdout="all green\n"):
+                 ci_stdout="all green\n",
+                 dest_status_stdout="",
+                 dest_status_returncode=0,
+                 push_returncode=0,
+                 dest_ahead_stdout="",
+                 dest_ahead_returncode=0,
+                 reset_returncode=0,
+                 clean_returncode=0,
+                 rev_parse_stdout="deadbeef1234\n"):
         self.calls: List[List[str]] = []
         self._dryrun_stdout = dryrun_stdout
         self._real_stdout = real_stdout
         self._parse1_stdout = parse1_stdout
         self._parse2_stdout = parse2_stdout
         self._scan_stdout = scan_stdout
+        self._scan_returncode = scan_returncode
         self._drift_stdout = drift_stdout
         self._commit_stdout = commit_stdout
         self._ci_returncode = ci_returncode
         self._ci_stdout = ci_stdout
+        # Review: review-integrator — working tree diverged further than
+        # the dispatch brief described: `_cmd_round` now runs a
+        # `_dest_dirty_status` crash-recovery pre-flight (`git status
+        # --porcelain` on `dest`) between the Step 3 gate and Step 4. Every
+        # existing test needs this handled to stay clean/not-dirty by
+        # default, matching today's "nothing landed yet" fixtures.
+        self._dest_status_stdout = dest_status_stdout
+        self._dest_status_returncode = dest_status_returncode
+        # C3: a clean round now pushes by default — `git push` and the
+        # no-op paths' `git status --porcelain=v2 --branch` ahead-count
+        # check both need stub responses too.
+        self._push_returncode = push_returncode
+        self._dest_ahead_stdout = dest_ahead_stdout
+        self._dest_ahead_returncode = dest_ahead_returncode
+        self._reset_returncode = reset_returncode
+        self._clean_returncode = clean_returncode
+        self._rev_parse_stdout = rev_parse_stdout
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
         joined = " ".join(str(c) for c in cmd)
 
-        # Token-exact, not substring: a pytest tmp_path for this very test
-        # module legitimately contains the substring "push" in its own
-        # directory name (e.g. "test_red_ci_prints_no_push_command"), which
-        # a naive substring check on the full joined argv would misfire on.
-        if any(str(token) == "push" for token in cmd):
-            raise AssertionError(f"subprocess.run invoked with a 'push' argv token: {cmd!r}")
-
         if "machine-local" in joined:
             return _completed(1, "", "")
+
+        if cmd and str(cmd[0]) == "git" and any(str(t) == "push" for t in cmd):
+            return _completed(self._push_returncode, "", "")
+
+        if cmd and str(cmd[0]) == "git" and "reset" in cmd and "--hard" in cmd:
+            return _completed(self._reset_returncode, "", "")
+
+        if cmd and str(cmd[0]) == "git" and "clean" in cmd:
+            return _completed(self._clean_returncode, "", "")
+
+        if cmd and str(cmd[0]) == "git" and "rev-parse" in cmd:
+            return _completed(0, self._rev_parse_stdout, "")
+
+        if "status" in cmd and "--porcelain=v2" in cmd:
+            return _completed(self._dest_ahead_returncode, self._dest_ahead_stdout, "")
+
+        if "status" in cmd and "--porcelain" in cmd:
+            return _completed(self._dest_status_returncode, self._dest_status_stdout, "")
 
         if str(_mod._PUBLISH) in joined and "--dry-run" in cmd:
             return _completed(0, self._dryrun_stdout, "")
         if str(_mod._PUBLISH) in joined:
             return _completed(0, self._real_stdout, "")
         if str(_mod._PERCOLATE_GATE) in joined and "scan-secrets" in cmd:
-            return _completed(0, self._scan_stdout, "")
+            return _completed(self._scan_returncode, self._scan_stdout, "")
         if str(_mod._PERCOLATE_GATE) in joined and "inverse-drift" in cmd:
             return _completed(0, self._drift_stdout, "")
         if str(_mod._PARSE_DRYRUN) in joined and "--medium-leak-count" in cmd:
@@ -134,7 +175,12 @@ def _parse2_stdout(gate_fires: bool = False) -> str:
     )
 
 
-def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_fires=False, yes=True):
+def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_fires=False, yes=True,
+                scan_returncode=0, commit_stdout='{"status": "ok"}', dest_status_stdout="",
+                dest_status_returncode=0, no_publish=False, push_returncode=0,
+                dest_ahead_stdout="", dest_ahead_returncode=0, percolate_root=None,
+                reconcile_dest=None, reset_returncode=0, clean_returncode=0,
+                rev_parse_stdout="deadbeef1234\n", no_delta=False):
     dest = tmp_path / "dest"
     dest.mkdir()
     if ci_exists:
@@ -145,8 +191,9 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
     source_dir = tmp_path / "source"
     source_dir.mkdir()
 
-    percolate_root = tmp_path / "percolate-root"
-    (percolate_root / "setup").mkdir(parents=True)
+    if percolate_root is None:
+        percolate_root = tmp_path / "percolate-root"
+        (percolate_root / "setup").mkdir(parents=True)
 
     spy = _SubprocessSpy(
         dryrun_stdout=_dryrun_stdout(),
@@ -154,6 +201,16 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
         parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(gate_fires),
         ci_returncode=ci_returncode,
+        scan_returncode=scan_returncode,
+        commit_stdout=commit_stdout,
+        dest_status_stdout=dest_status_stdout,
+        dest_status_returncode=dest_status_returncode,
+        push_returncode=push_returncode,
+        dest_ahead_stdout=dest_ahead_stdout,
+        dest_ahead_returncode=dest_ahead_returncode,
+        reset_returncode=reset_returncode,
+        clean_returncode=clean_returncode,
+        rev_parse_stdout=rev_parse_stdout,
     )
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
@@ -164,6 +221,12 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
     argv = ["alpha", "--percolate-root", str(percolate_root)]
     if yes:
         argv.append("--yes")
+    if no_publish:
+        argv.append("--no-publish")
+    if reconcile_dest is not None:
+        argv += ["--reconcile-dest", reconcile_dest]
+    if no_delta:
+        argv.append("--no-delta")
     args = parser.parse_args(argv)
 
     buf = io.StringIO()
@@ -178,13 +241,69 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
 # at the subprocess boundary and on the filesystem — not via source grep.
 # ---------------------------------------------------------------------------
 
-def test_never_invokes_git_push(tmp_path, monkeypatch):
-    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
+def test_no_publish_flag_prints_notice_and_does_not_push(tmp_path, monkeypatch):
+    """`--no-publish` keeps the old print-and-stop terminus: no `git push`
+    argv is ever spawned, and the printed command names the short
+    `percolate-push` entry point, not a raw `git -C <abs-path> push` line
+    (state/handoffs/2026-08-13-one-command-publish.md, shape 2)."""
+    # Review: review-integrator — harden past the subprocess.run boundary:
+    # a future edit routing a push through os.system or a direct
+    # subprocess.Popen call would previously slip past this test silently
+    # (see this module's own docstring). Any call to either now fails loud.
+    def _forbidden_system(cmd, *a, **kw):
+        raise AssertionError(f"os.system invoked: {cmd!r}")
+
+    def _forbidden_popen(cmd, *a, **kw):
+        raise AssertionError(f"subprocess.Popen invoked: {cmd!r}")
+
+    # `percolate-round.py` has no module-level `os` import (only a local
+    # `import os` inside `_build_commit_pathspec`) — patch the shared `os`
+    # module object directly rather than a nonexistent `_mod.os` attribute;
+    # any `import os` anywhere resolves to the same cached module.
+    monkeypatch.setattr(os, "system", _forbidden_system)
+    monkeypatch.setattr(_mod.subprocess, "Popen", _forbidden_popen)
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, no_publish=True)
     assert rc == _mod._EXIT_OK
     for call in spy.calls:
         assert not any(str(token) == "push" for token in call)
-    # The push command is only ever PRINTED, never argv-shaped.
-    assert f"git -C {dest} push" in out
+    assert "percolate-push alpha" in out
+    assert f"git -C {dest} push" not in out
+
+
+def test_clean_round_pushes_by_default(tmp_path, monkeypatch):
+    """AC2: a clean round publishes with no `--no-publish` opt-out and no
+    operator step after the first command."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
+    assert rc == _mod._EXIT_OK
+
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert len(push_calls) == 1
+    assert push_calls[0] == ["git", "-C", str(dest), "push"]
+    assert f"Published: pushed to {dest}." in out
+
+    commit_idx = next(
+        i for i, c in enumerate(spy.calls) if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)
+    )
+    push_idx = spy.calls.index(push_calls[0])
+    assert commit_idx < push_idx
+
+
+def test_source_scan_no_allow_xrepo_write_marker_creation():
+    """AC5: no code path creates or clears an `allow-xrepo-write` marker —
+    a source scan, not just a runtime assertion, so a marker constructed
+    but never exercised at runtime would still fail loud. The string still
+    appears legitimately in prose (docstring/comments explaining this
+    module does NOT touch it) — only a path/write construction is
+    forbidden."""
+    src = (_BIN_DIR / "percolate-round.py").read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.strip()
+        if "allow-xrepo-write" not in stripped:
+            continue
+        assert not any(
+            marker in stripped for marker in ("Path(", ".write_text(", ".touch(", "open(")
+        ), f"allow-xrepo-write appears in a path/write construction: {stripped!r}"
 
 
 def test_never_writes_allow_xrepo_write_marker(tmp_path, monkeypatch):
@@ -258,6 +377,7 @@ def test_red_ci_prints_no_push_command_and_fails(tmp_path, monkeypatch):
     assert rc == _mod._EXIT_FAIL
     assert "git -C" not in out
     assert f"git -C {dest} push" not in out
+    assert "percolate-push alpha" not in out
     for call in spy.calls:
         assert not any(str(token) == "push" for token in call)
 
@@ -293,6 +413,26 @@ def test_gate_fires_with_yes_skips_input_and_prints_evidence(tmp_path, monkeypat
     assert len(commit_calls) == 1
 
 
+def test_gate_fires_with_no_publish_falls_through_and_skips_only_push(tmp_path, monkeypatch):
+    """gate_fires=True, --no-publish (--yes stays at `_run_round`'s default
+    True): control falls through the gate to the real run, commits land,
+    and `--no-publish` skips only the final `git push` -- it does not
+    re-block on the gate a second time or skip the commit (DR-301)."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, gate_fires=True, no_publish=True)
+
+    assert rc == _mod._EXIT_OK
+    assert "Step 3 gate fired: 1 medium hit(s)" in out
+    assert "Proceed with real publish? [y/N] y (--yes)" in out
+
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+    assert "percolate-push alpha" in out
+    assert f"git -C {dest} push" not in out
+
+
 def test_gate_fires_without_yes_declined_cancels_before_real_run(tmp_path, monkeypatch):
     """gate_fires=True, no --yes, operator declines: the round cancels with
     exit 0 and never reaches the real publish/commit steps."""
@@ -310,6 +450,351 @@ def test_gate_fires_without_yes_declined_cancels_before_real_run(tmp_path, monke
     commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
     assert real_run_calls == []
     assert commit_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer — the HIGH-tier content-leak abort path (Step 2c)
+# had no coverage; `_SubprocessSpy`'s default `scan_stdout` always yields
+# rc 0, so a regression that stopped scan-secrets from returning 2 on a
+# HIGH hit, or stopped round.py from checking for it, would pass unnoticed.
+# ---------------------------------------------------------------------------
+
+def test_high_tier_scan_hit_aborts_before_step3(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, scan_returncode=2)
+
+    assert rc == _mod._EXIT_FAIL
+
+    # Step 3/4/commit must never run — no publish real-run, no commit call.
+    real_run_calls = [
+        c for c in spy.calls
+        if str(_mod._PUBLISH) in " ".join(str(x) for x in c) and "--dry-run" not in c
+    ]
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert real_run_calls == []
+    assert commit_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer — the `committed and declined_paths` partial-landed
+# branch had no test; the default `commit_stdout` has no `committed`/
+# `declined_paths` keys, so this whole `if` block was dead in the suite.
+# ---------------------------------------------------------------------------
+
+def test_commit_landed_with_declined_paths_reports_partial_and_fails(tmp_path, monkeypatch):
+    commit_stdout = json.dumps(
+        {
+            "status": "partial",
+            "committed": True,
+            "sha": "abc123def456",
+            "declined_paths": [{"path": "some/declined.md", "reason": "outside allowlist"}],
+        }
+    )
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, commit_stdout=commit_stdout)
+
+    assert rc == _mod._EXIT_FAIL
+
+    # The commit itself must have run exactly once — it DID land locally.
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+
+    # CI smoke must never run past a partial-landed commit report.
+    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
+    assert ci_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer — early-return failure branches in `_cmd_round` had
+# no coverage; every one of these calls `_print_step_failure` and returns
+# _EXIT_FAIL/_EXIT_USAGE, none previously asserted.
+# ---------------------------------------------------------------------------
+
+def test_resolve_percolate_root_failure_returns_usage_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(tmp_path / "unused"))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "unused"))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    def _fail_run(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if "resolve-root" in joined:
+            return _completed(1, "", "no root")
+        raise AssertionError(f"unexpected call before percolate-root resolution: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fail_run)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_USAGE
+
+
+def test_branch0_gate_failure_returns_usage_error(tmp_path, monkeypatch):
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: None)
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "unused"))
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_USAGE
+
+
+def test_resolve_dest_failure_returns_usage_error(tmp_path, monkeypatch):
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_USAGE
+
+
+def test_dryrun_step_failure_returns_fail(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    def _dryrun_fail(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" in cmd:
+            return _completed(1, "", "dry-run exploded")
+        raise AssertionError(f"unexpected call past dry-run failure: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _dryrun_fail)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_FAIL
+
+
+def test_parse_dryrun_pass1_failure_returns_fail(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    def _parse1_fail(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" in cmd:
+            return _completed(0, _dryrun_stdout(), "")
+        if str(_mod._PARSE_DRYRUN) in joined:
+            return _completed(1, "", "parse1 exploded")
+        raise AssertionError(f"unexpected call past parse1 failure: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _parse1_fail)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_FAIL
+
+
+def test_scan_secrets_non2_nonzero_failure_returns_fail(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, scan_returncode=1)
+    assert rc == _mod._EXIT_FAIL
+
+
+def test_inverse_drift_failure_returns_fail(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _drift_fail(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PERCOLATE_GATE) in joined and "inverse-drift" in cmd:
+            return _completed(1, "", "drift exploded")
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _drift_fail)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_FAIL
+
+
+def test_real_run_failure_returns_fail(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _real_fail(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            return _completed(1, "", "real run exploded")
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _real_fail)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_FAIL
+
+
+def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
+    commit_stdout = "not-json-and-nonzero-exit"
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+        commit_stdout=commit_stdout,
+    )
+
+    def _commit_fail(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._SCOPED_GIT_COMMIT) in joined:
+            return _completed(1, commit_stdout, "commit exploded")
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _commit_fail)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Review: code-reviewer — the no-op path, PASS-WITH-WARNINGS verdict, and
+# ci_exists=False branch were untested.
+# ---------------------------------------------------------------------------
+
+def test_noop_dryrun_reports_pass_noop(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout="",
+        real_stdout="",
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_OK
+    assert "PASS (no-op): nothing to publish" in buf.getvalue()
+
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert commit_calls == []
+
+
+def test_review_warnings_yield_pass_with_warnings_verdict(tmp_path, monkeypatch):
+    real_stdout_with_warning = _real_stdout() + "REVIEW WARNING: check this file\n"
+
+    percolate_root = tmp_path / "percolate-root2"
+    (percolate_root / "setup").mkdir(parents=True)
+    dest2 = tmp_path / "dest2"
+    dest2.mkdir()
+    source_dir2 = tmp_path / "source2"
+    source_dir2.mkdir()
+
+    spy2 = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=real_stdout_with_warning,
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+    monkeypatch.setattr(_mod.subprocess, "run", spy2)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir2))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest2))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc2 = _mod._cmd_round(args)
+
+    assert rc2 == _mod._EXIT_OK
+    out2 = buf.getvalue()
+    assert "PASS-WITH-WARNINGS" in out2
+    assert "Phase 4 audit found REVIEW items" in out2
+
+
+def test_no_ci_script_at_dest_skips_ci_smoke(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_exists=False)
+
+    assert rc == _mod._EXIT_OK
+    assert "(no .github/scripts/run-all-checks.py at dest" in out
+    assert "ci-smoke:  n/a (no run-all-checks.py)" in out
+
+    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
+    assert ci_calls == []
 
 
 def test_gate_fires_without_yes_accepted_proceeds(tmp_path, monkeypatch):
@@ -331,3 +816,871 @@ def test_gate_fires_without_yes_accepted_proceeds(tmp_path, monkeypatch):
 
     commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
     assert len(commit_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Review: review-integrator — `_dest_dirty_status` crash-recovery pre-flight
+# had no coverage: a dirty dest must abort before Step 4/commit, a clean
+# dest must proceed unaffected, and a `git status` failure ("undetermined")
+# must proceed while still printing the loud stderr line that exists
+# specifically so an undetermined answer can't become a silent pass.
+# ---------------------------------------------------------------------------
+
+def test_dest_dirty_status_clean_tree_returns_none(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return _completed(0, "", "")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    assert _mod._dest_dirty_status(str(tmp_path)) is None
+    assert any("status" in c and "--porcelain" in c for c in calls)
+
+
+def test_dest_dirty_status_dirty_tree_returns_porcelain_output(tmp_path, monkeypatch):
+    porcelain = " M some/file.md\n"
+
+    def _fake_run(cmd, **kwargs):
+        return _completed(0, porcelain, "")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    assert _mod._dest_dirty_status(str(tmp_path)) == porcelain
+
+
+def test_dest_dirty_status_git_failure_is_undetermined_and_warns(tmp_path, monkeypatch, capsys):
+    def _fake_run(cmd, **kwargs):
+        return _completed(128, "", "fatal: not a git repository")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    assert _mod._dest_dirty_status(str(tmp_path)) is None
+    err = capsys.readouterr().err
+    assert "dest dirty-check: undetermined" in err
+    assert "proceeding unchecked" in err
+
+
+def test_dirty_dest_aborts_round_before_real_run_and_commit(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, dest_status_stdout=" M pre-existing.md\n"
+    )
+
+    assert rc == _mod._EXIT_FAIL
+
+    real_run_calls = [
+        c for c in spy.calls
+        if str(_mod._PUBLISH) in " ".join(str(x) for x in c) and "--dry-run" not in c
+    ]
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert real_run_calls == []
+    assert commit_calls == []
+
+
+def test_clean_dest_proceeds_through_commit(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, dest_status_stdout="")
+
+    assert rc == _mod._EXIT_OK
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+
+
+def test_undetermined_dest_status_proceeds_with_stderr_warning(tmp_path, monkeypatch, capsys):
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, dest_status_returncode=128)
+
+    assert rc == _mod._EXIT_OK
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+    err = capsys.readouterr().err
+    assert "dest dirty-check: undetermined" in err
+    assert "proceeding unchecked" in err
+
+
+# ---------------------------------------------------------------------------
+# `--reconcile-dest` (refuse [default] | discard) — the in-tool remedy the
+# refusal message names instead of directing the operator to hand-run git
+# inside a publish mirror.
+# ---------------------------------------------------------------------------
+
+def test_default_reconcile_dest_is_refuse_dirty_dest_still_refuses(tmp_path, monkeypatch):
+    """No `--reconcile-dest` flag at all -- default stays `refuse`, same
+    exit code as before this change."""
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, dest_status_stdout=" M pre-existing.md\n"
+    )
+    assert rc == _mod._EXIT_FAIL
+    reset_calls = [c for c in spy.calls if str(c[0]) == "git" and "reset" in c]
+    assert reset_calls == []
+
+
+def test_refusal_message_names_the_reconcile_dest_flag(tmp_path, monkeypatch, capsys):
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, dest_status_stdout=" M pre-existing.md\n"
+    )
+    assert rc == _mod._EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "--reconcile-dest=discard" in err
+
+
+def test_reconcile_dest_discard_clears_residue_and_proceeds(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(
+        tmp_path,
+        monkeypatch,
+        dest_status_stdout=" M pre-existing.md\n?? untracked.txt\n",
+        reconcile_dest="discard",
+        dest_ahead_stdout="# branch.ab +0 -0\n",
+    )
+    assert rc == _mod._EXIT_OK
+    reset_calls = [c for c in spy.calls if str(c[0]) == "git" and "reset" in c and "--hard" in c]
+    clean_calls = [c for c in spy.calls if str(c[0]) == "git" and "clean" in c]
+    assert len(reset_calls) == 1
+    assert len(clean_calls) == 1
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+    assert "discarded 2 path(s)" in out
+    assert "deadbeef1234" in out
+
+
+def test_reconcile_dest_discard_refuses_when_dest_ahead_of_remote(tmp_path, monkeypatch, capsys):
+    rc, out, spy, dest = _run_round(
+        tmp_path,
+        monkeypatch,
+        dest_status_stdout=" M pre-existing.md\n",
+        reconcile_dest="discard",
+        dest_ahead_stdout="# branch.ab +2 -0\n",
+    )
+    assert rc == _mod._EXIT_FAIL
+    reset_calls = [c for c in spy.calls if str(c[0]) == "git" and "reset" in c and "--hard" in c]
+    assert reset_calls == []
+    err = capsys.readouterr().err
+    assert "ahead of its remote" in err
+    assert "refusing to discard" in err
+
+
+def test_yes_alone_never_triggers_discard(tmp_path, monkeypatch):
+    """`--yes` answers the Step 3 publish confirmation only -- a dirty dest
+    with `--yes` but no `--reconcile-dest=discard` still refuses, never
+    resets."""
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, dest_status_stdout=" M pre-existing.md\n", yes=True
+    )
+    assert rc == _mod._EXIT_FAIL
+    reset_calls = [c for c in spy.calls if str(c[0]) == "git" and "reset" in c]
+    clean_calls = [c for c in spy.calls if str(c[0]) == "git" and "clean" in c]
+    assert reset_calls == []
+    assert clean_calls == []
+
+
+def test_reconcile_dest_discard_function_direct(tmp_path, monkeypatch):
+    """Direct unit coverage of `_reconcile_dest_discard`, mirroring the
+    `_dest_dirty_status` direct-call tests above."""
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "rev-parse" in cmd:
+            return _completed(0, "abc123\n", "")
+        if "status" in cmd and "--porcelain=v2" in cmd:
+            return _completed(0, "# branch.ab +0 -0\n", "")
+        if "reset" in cmd or "clean" in cmd:
+            return _completed(0, "", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    ok, message = _mod._reconcile_dest_discard(str(tmp_path), " M a.md\n?? b.txt\n")
+    assert ok is True
+    assert "abc123" in message
+    assert "discarded 2 path(s)" in message
+    assert any("reset" in c and "--hard" in c for c in calls)
+    assert any("clean" in c and "-fd" in c for c in calls)
+
+
+def test_reconcile_dest_discard_function_refuses_on_ahead_probe_failure(tmp_path, monkeypatch):
+    def _fake_run(cmd, **kwargs):
+        if "status" in cmd and "--porcelain=v2" in cmd:
+            return _completed(128, "", "fatal")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    ok, message = _mod._reconcile_dest_discard(str(tmp_path), " M a.md\n")
+    assert ok is False
+    assert "could not determine" in message
+
+
+# ---------------------------------------------------------------------------
+# state/audits/2026-08-13-percolate-round-race-repro.md — Step 4's real-run
+# subprocess and the scoped-git-commit subprocess must be held under one
+# `held_lock(dest)` acquired by `_cmd_round` itself, spanning the whole
+# sequence (closing the gap `publish.py`'s own internal held_lock leaves
+# open between its own release and the commit subprocess starting).
+# ---------------------------------------------------------------------------
+
+class _RecordingLockCtx:
+    """Stands in for `_round_held_lock`'s real context manager: records
+    'acquire'/'release' markers into the same call-order list the subprocess
+    spy appends to, so a test can assert the lock's acquire precedes the
+    Step 4 real-run call and its release follows the commit call — proving
+    the lock SPANS both, not merely that it is acquired somewhere."""
+
+    def __init__(self, order: List[str], target, **kwargs):
+        self._order = order
+
+    def __enter__(self):
+        self._order.append("lock-acquired")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._order.append("lock-released")
+        return False
+
+
+def test_lock_spans_real_run_and_commit(tmp_path, monkeypatch):
+    """The held lock's acquire happens before Step 4's real-run subprocess
+    and its release happens after the commit subprocess — not narrower."""
+    order: List[str] = []
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _recording_run(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            order.append("real-run")
+        elif str(_mod._SCOPED_GIT_COMMIT) in joined:
+            order.append("commit")
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _recording_run)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+    monkeypatch.setattr(
+        _mod, "_round_held_lock", lambda target, **kw: _RecordingLockCtx(order, target, **kw)
+    )
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_OK
+    assert order == ["lock-acquired", "real-run", "commit", "lock-released"], order
+
+
+def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
+    """A contended dest fails FAST via `_print_step_failure`'s `_EXIT_FAIL`
+    path, naming that another round is running against the dest, and never
+    reaches the real-run or commit subprocesses."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    class _TimeoutLockCtx:
+        def __init__(self, target, **kwargs):
+            pass
+
+        def __enter__(self):
+            raise _mod._RoundLockTimeout("another holder has target locked")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+    monkeypatch.setattr(_mod, "_round_held_lock", lambda target, **kw: _TimeoutLockCtx(target, **kw))
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_FAIL
+    err = buf.getvalue()
+    assert "another round is running against this dest" in err
+
+    real_run_calls = [
+        c for c in spy.calls
+        if str(_mod._PUBLISH) in " ".join(str(x) for x in c) and "--dry-run" not in c
+    ]
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert real_run_calls == []
+    assert commit_calls == []
+
+
+# ---------------------------------------------------------------------------
+# C2/AC3 — `_round_refusal_reason` predicate coverage: one test per real
+# early-return path in `_cmd_round` (failed row, non-empty `declined_paths`,
+# CI-red), each asserting refusal, the named reason, and that no push occurs.
+# Per the C2 calibration, the first two conditions never reach the
+# predicate's own call site (post-CI-smoke) at all — `_cmd_round` already
+# returns FAIL earlier, with its own existing reason text; forcing those
+# conditions at the gate site itself would mean monkeypatching states
+# unreachable in production. Only the CI-red case reaches the predicate's
+# call site and surfaces its own `refusal_reason` string.
+# ---------------------------------------------------------------------------
+
+def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
+    """A failed real-run row (`publish.py` exits non-zero) is the first
+    refusing condition `_round_refusal_reason` names
+    ("the real publish run did not succeed") — `_cmd_round` returns FAIL for
+    it at Step 4, before CI smoke or the predicate's own call site are ever
+    reached."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _real_fail(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            return _completed(1, "", "real run exploded")
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _real_fail)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    out_buf = io.StringIO()
+    err_buf = io.StringIO()
+    with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+        rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_FAIL
+    assert "Step 4 (real run) failed" in err_buf.getvalue()
+
+    assert _mod._round_refusal_reason(
+        real_returncode=1,
+        declined_paths=[],
+        has_review_warnings=False,
+        ci_exit=None,
+    ) == "the real publish run did not succeed"
+
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
+    assert commit_calls == []
+    assert ci_calls == []
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+
+
+def test_declined_paths_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
+    """Non-empty `declined_paths` is the second refusing condition
+    `_round_refusal_reason` names — `_cmd_round` returns FAIL for it at the
+    commit branch, before CI smoke or the predicate's own call site are ever
+    reached."""
+    commit_stdout = json.dumps(
+        {
+            "status": "partial",
+            "committed": True,
+            "sha": "abc123def456",
+            "declined_paths": [{"path": "some/declined.md", "reason": "outside allowlist"}],
+        }
+    )
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, commit_stdout=commit_stdout)
+
+    assert rc == _mod._EXIT_FAIL
+
+    assert _mod._round_refusal_reason(
+        real_returncode=0,
+        declined_paths=[{"path": "some/declined.md", "reason": "outside allowlist"}],
+        has_review_warnings=False,
+        ci_exit=None,
+    ) == "1 path(s) were declined during commit"
+
+    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
+    assert ci_calls == []
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+
+
+def test_ci_red_refuses_with_named_reason_and_no_push(tmp_path, monkeypatch):
+    """CI-red is the one refusing condition that actually reaches
+    `_round_refusal_reason`'s own call site in `_cmd_round` (the other two
+    already returned early) — the terminal message names the CI failure
+    instead of a generic "not clean"."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_returncode=1)
+
+    assert rc == _mod._EXIT_FAIL
+    assert "percolate-round: publish refused — CI smoke came back red (exit 1)" in out
+
+    assert _mod._round_refusal_reason(
+        real_returncode=0,
+        declined_paths=[],
+        has_review_warnings=False,
+        ci_exit=1,
+    ) == "CI smoke came back red (exit 1)"
+
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+
+
+# ---------------------------------------------------------------------------
+# PM ruling 1 (2026-08-14) — the round-failure marker. C4's own reader
+# (`percolate-push.py::_round_failure_marker_path`) MUST agree byte-for-byte
+# with this module's writer on path and JSON shape.
+# ---------------------------------------------------------------------------
+
+def _marker_path(percolate_root: Path, target: str = "alpha") -> Path:
+    return percolate_root / "setup" / "percolate-state" / f"{target}.round-failed.json"
+
+
+def test_declined_paths_failure_writes_round_failure_marker(tmp_path, monkeypatch):
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    commit_stdout = json.dumps(
+        {
+            "status": "partial",
+            "committed": True,
+            "sha": "abc123def456",
+            "declined_paths": [{"path": "some/declined.md", "reason": "outside allowlist"}],
+        }
+    )
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, commit_stdout=commit_stdout, percolate_root=percolate_root
+    )
+    assert rc == _mod._EXIT_FAIL
+
+    marker = _marker_path(percolate_root)
+    assert marker.is_file()
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["reason"] == "declined_paths"
+    assert data["sha"] == "abc123def456"
+    assert "timestamp" in data
+
+
+def test_ci_red_failure_writes_round_failure_marker(tmp_path, monkeypatch):
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    commit_stdout = json.dumps({"status": "ok", "committed": True, "sha": "deadbeef0001"})
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, ci_returncode=1, commit_stdout=commit_stdout, percolate_root=percolate_root
+    )
+    assert rc == _mod._EXIT_FAIL
+
+    marker = _marker_path(percolate_root)
+    assert marker.is_file()
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["reason"] == "ci_red"
+    assert data["sha"] == "deadbeef0001"
+    assert "timestamp" in data
+
+
+def test_subsequent_clean_round_clears_marker_before_publishing(tmp_path, monkeypatch):
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup" / "percolate-state").mkdir(parents=True)
+    marker = _marker_path(percolate_root)
+    marker.write_text(
+        json.dumps({"reason": "ci_red", "sha": "stale0001", "timestamp": "2026-08-01T00:00:00Z"}),
+        encoding="utf-8",
+    )
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, percolate_root=percolate_root)
+
+    assert rc == _mod._EXIT_OK
+    assert not marker.exists()
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert len(push_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Review: review-integrator (P2 polarity inversion) — the round-failure
+# marker is now written IMMEDIATELY once a commit lands (before CI smoke and
+# the gate), not only on a failure path, so a crash anywhere after the
+# commit lands leaves the marker standing (fail-safe) instead of leaving a
+# landed-but-uncertified commit unmarked. It is cleared only on a genuinely
+# clean verdict (`refusal_reason is None`), whether or not this round
+# itself pushes.
+# ---------------------------------------------------------------------------
+
+def test_crash_after_commit_before_ci_smoke_leaves_marker_standing(tmp_path, monkeypatch):
+    """A process death between the commit landing and CI smoke completing
+    must leave the marker in place — simulated here by making the CI-smoke
+    subprocess call raise, so the round never reaches the clear-marker
+    branch at all."""
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    commit_stdout = json.dumps({"status": "ok", "committed": True, "sha": "cafebabe0001"})
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    ci_dir = dest / ".github" / "scripts"
+    ci_dir.mkdir(parents=True)
+    (ci_dir / "run-all-checks.py").write_text("", encoding="utf-8")
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+        commit_stdout=commit_stdout,
+    )
+
+    class _SimulatedCrash(Exception):
+        pass
+
+    def _crash_on_ci(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if "run-all-checks.py" in joined:
+            raise _SimulatedCrash("process died mid CI-smoke")
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _crash_on_ci)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    with pytest.raises(_SimulatedCrash):
+        _mod._cmd_round(args)
+
+    marker = _marker_path(percolate_root)
+    assert marker.is_file()
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["reason"] == "uncommitted-verdict"
+    assert data["sha"] == "cafebabe0001"
+
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert push_calls == []
+
+
+def test_clean_round_clears_marker_before_pushing_itself(tmp_path, monkeypatch):
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, percolate_root=percolate_root)
+
+    assert rc == _mod._EXIT_OK
+    marker = _marker_path(percolate_root)
+    assert not marker.exists()
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert len(push_calls) == 1
+
+
+def test_clean_round_with_no_publish_still_clears_marker(tmp_path, monkeypatch):
+    """`--no-publish` only defers the push, not certification — a genuinely
+    clean round must clear the marker even though it doesn't push itself,
+    so a subsequent manual `percolate-push` is not falsely refused."""
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, no_publish=True, percolate_root=percolate_root
+    )
+
+    assert rc == _mod._EXIT_OK
+    marker = _marker_path(percolate_root)
+    assert not marker.exists()
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert push_calls == []
+
+
+def test_review_warnings_refusal_leaves_marker_standing_even_with_no_publish(tmp_path, monkeypatch):
+    """A `refusal_reason`-refused round (unacknowledged review warnings)
+    leaves the marker standing regardless of `--no-publish` — that commit
+    is genuinely uncertified, not merely deferred."""
+    real_stdout_with_warning = _real_stdout() + "REVIEW WARNING: check this file\n"
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    commit_stdout = json.dumps({"status": "ok", "committed": True, "sha": "deadbeefcafe"})
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=real_stdout_with_warning,
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+        commit_stdout=commit_stdout,
+    )
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(
+        ["alpha", "--percolate-root", str(percolate_root), "--yes", "--no-publish"]
+    )
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_OK
+    marker = _marker_path(percolate_root)
+    assert marker.is_file()
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["reason"] == "uncommitted-verdict"
+    assert data["sha"] == "deadbeefcafe"
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+
+
+def test_review_warnings_refuse_publish_and_print_notice_naming_reason(tmp_path, monkeypatch):
+    """PASS-WITH-WARNINGS is a refusing condition (C2) — `_print_push_notice`
+    names it rather than pushing or failing silently."""
+    real_stdout_with_warning = _real_stdout() + "REVIEW WARNING: check this file\n"
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=real_stdout_with_warning,
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+
+    out = buf.getvalue()
+    assert rc == _mod._EXIT_OK
+    assert "PASS-WITH-WARNINGS" in out
+    assert "Publish refused — Phase 4 audit found unacknowledged REVIEW warnings" in out
+    assert "percolate-push alpha" in out
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+
+
+# ---------------------------------------------------------------------------
+# AC2b — a no-op round still evaluates the gate and publishes unpushed dest
+# commits from an earlier round that stopped at the old print-and-stop
+# terminus; a no-op round with a dest already in sync does nothing and says
+# so. Covered for both no-op branches: the dry-run-detects-nothing branch
+# (before Step 4 ever runs) and the real-run-reports-nothing-to-commit
+# branch (after Step 4, still under the held lock).
+# ---------------------------------------------------------------------------
+
+def test_dryrun_noop_with_unpushed_dest_commits_still_publishes(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout="",
+        real_stdout="",
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+        dest_ahead_stdout="# branch.ab +2 -0\n",
+    )
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+
+    out = buf.getvalue()
+    assert rc == _mod._EXIT_OK
+    assert "PASS (no-op): nothing to publish" in out
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert len(push_calls) == 1
+    assert "pushed 2 unpushed commit(s)" in out
+
+
+def test_dryrun_noop_with_dest_already_in_sync_does_nothing(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout="",
+        real_stdout="",
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+        dest_ahead_stdout="# branch.ab +0 -0\n",
+    )
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+
+    out = buf.getvalue()
+    assert rc == _mod._EXIT_OK
+    assert "already in sync with its upstream" in out
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert push_calls == []
+
+
+def test_realrun_noop_with_unpushed_dest_commits_still_publishes(tmp_path, monkeypatch):
+    """The real-run-reports-nothing-to-commit branch, exercised while the
+    round's own lock is already held (must not re-acquire it)."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout="",
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+        dest_ahead_stdout="# branch.ab +1 -0\n",
+    )
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+
+    out = buf.getvalue()
+    assert rc == _mod._EXIT_OK
+    assert "real run reported no changed files; nothing to commit" in out
+    push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
+    assert len(push_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# The push runs INSIDE the held lock, not after it releases (Anti-scope /
+# state/audits/2026-08-13-percolate-round-race-repro.md, extended by C3).
+# ---------------------------------------------------------------------------
+
+def test_push_happens_inside_held_lock(tmp_path, monkeypatch):
+    order: List[str] = []
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _recording_run(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            order.append("real-run")
+        elif str(_mod._SCOPED_GIT_COMMIT) in joined:
+            order.append("commit")
+        elif cmd and str(cmd[0]) == "git" and any(str(t) == "push" for t in cmd):
+            order.append("push")
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _recording_run)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+    monkeypatch.setattr(
+        _mod, "_round_held_lock", lambda target, **kw: _RecordingLockCtx(order, target, **kw)
+    )
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    rc = _mod._cmd_round(args)
+
+    assert rc == _mod._EXIT_OK
+    assert order == ["lock-acquired", "real-run", "commit", "push", "lock-released"], order
+
+
+# ---------------------------------------------------------------------------
+# --delta-by-default wiring (PM ruling: --delta is the round's default mode).
+# ---------------------------------------------------------------------------
+
+def _publish_calls(spy):
+    return [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
+
+
+def test_delta_is_passed_to_publish_by_default(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
+
+    assert rc == _mod._EXIT_OK
+    publish_calls = _publish_calls(spy)
+    assert publish_calls, "expected at least one publish.py invocation"
+    for call in publish_calls:
+        assert "--delta" in call, call
+
+
+def test_no_delta_flag_suppresses_delta_on_every_publish_call(tmp_path, monkeypatch):
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, no_delta=True)
+
+    assert rc == _mod._EXIT_OK
+    publish_calls = _publish_calls(spy)
+    assert publish_calls, "expected at least one publish.py invocation"
+    for call in publish_calls:
+        assert "--delta" not in call, call

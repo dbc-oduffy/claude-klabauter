@@ -93,7 +93,7 @@ Negative-spec:
     - ``write_review_trail`` is NOT shed by C6, and MUST NOT be shed as a follow-on "cleanup"
       pass without a fresh PM ruling. It has a live cross-repo contract (SKILL.md:1713,
       documenting the five ``--review-*`` fields' composition contract) and a SEQUENTIAL
-      PREDECESSOR reader: coordinator-claude's chain-end ``review-coverage-gate.py`` (SKILL.md:28) requires
+      PREDECESSOR reader: DoE's chain-end ``review-coverage-gate.py`` (SKILL.md:28) requires
       the gate to emit ``VERDICT=COVERED`` before its own Step 3 may proceed. Shedding this
       write off the blocking path without first coordinating that change across the
       cross-repo boundary would silently race (or drop) the record that predecessor reads.
@@ -117,11 +117,18 @@ Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C2
 Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C6
 Behavior reference (read for behavior, not structure, per the plan's Anti-scope):
     Port of: coordinator-session.sh cs_archive, cs_release_artifact,
-    _cs_claim_held_by_me (coordinator-claude e34f2484, 2026-07-22).
+    _cs_claim_held_by_me (DoE e34f2484, 2026-07-22).
 """
 
 from __future__ import annotations
 import sys
+
+# Generator-provenance declaration: this module wires/reuses other modules'
+# writes (render_handoff_tracker, refresh_roadmap_callout, cs_archive/
+# cs_release_artifact native ports, detached CLI fires) but performs no
+# direct file write of its own to a tracked repo path -- every actual write
+# site lives in the module it delegates to.
+GENERATES = []
 
 import contextlib
 import io
@@ -333,7 +340,7 @@ OP_HANDOFF_TRACKER = "renderers:render_repo_section"
 OP_ROADMAP_CALLOUT = "node:refresh-roadmap-callout.sh"
 
 # roadmap_id is attacker-influenceable frontmatter on a shared work/* branch and is
-# interpolated into a subprocess arg -- mirrors the coordinator-claude pickup skill's allowlist guard.
+# interpolated into a subprocess arg -- mirrors the DoE pickup skill's allowlist guard.
 # Imported (not re-compiled) from renderers.py, which owns the single canonical
 # copy -- see that module's C8c negative-spec for why this must never be a second
 # compiled definition.
@@ -461,7 +468,7 @@ def refresh_roadmap_callout(worktree_root: Path, consumed_handoff_paths: List[st
     Security: ``roadmap_id`` is attacker-influenceable frontmatter on a shared ``work/*``
     branch and is interpolated into a subprocess arg -- gated through
     ``_ROADMAP_ID_ALLOWLIST_RE`` (bare identifier, no "..", no path separators) before use,
-    mirroring the coordinator-claude pickup skill's allowlist guard.
+    mirroring the DoE pickup skill's allowlist guard.
 
     Ported from the OLD ``wsc_commit.py``'s ``_tail_refresh_roadmap_callout`` -- widened here
     to loop over the caller-supplied ``consumed_handoff_paths`` list directly (C9's

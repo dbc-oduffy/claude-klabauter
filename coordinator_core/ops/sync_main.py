@@ -2,7 +2,7 @@
 coordinator_core.ops.sync_main — branch-creation-invariant enforcer
 (local main == origin/main).
 
-Purpose: DR-059 bash-to-naked-Python port of the coordinator-claude-owned script
+Purpose: DR-059 bash-to-naked-Python port of the DoE-owned script
 `coordinator/bin/sync-main.sh` (~124 lines). Every branch-creation site in the
 coordinator pipeline calls this before `git checkout -b` — after this module's
 `main()` returns 0, local `main` == `origin/main` regardless of which branch
@@ -10,7 +10,7 @@ the working tree is on, so callers can trust `git checkout -b new-branch main`.
 
 Spec backlink: archive/specs/2026-05-01-orphan-branch-prevention.md § 1.1.5
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port of: sync-main.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: sync-main.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec: does NOT create branches, does NOT push, does NOT merge
 feature/work branches, does NOT touch anything other than the main ref.

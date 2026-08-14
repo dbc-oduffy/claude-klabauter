@@ -2,7 +2,7 @@
 test_coordinator_harvest_deferrals.py — selection-rule tests for
 coordinator-harvest-deferrals, covering the C5b widening (D8).
 
-Spec backlink: docs/plans/2026-07-27-plan-line-item-resolution-model.md § C5b,
+Spec backlink: DoE-claude:pln-plan-line-item-resolution-mode-16787c § C5b,
 § D8 (AC18).
 
 C5b widened `coordinator-harvest-deferrals` selection from
@@ -60,7 +60,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 def _script_path() -> str:
     """Return the absolute path to coordinator-harvest-deferrals."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-harvest-deferrals")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-harvest-deferrals.py")
 
 
 def _python() -> str:
@@ -427,7 +427,7 @@ def test_all_routable_behavior_unchanged(harvest_mod):
 # ---------------------------------------------------------------------------
 # Routing-set / vendored-schema agreement
 #
-# The two frozensets are a hand-maintained mirror of coordinator-claude-owned enums, and the
+# The two frozensets are a hand-maintained mirror of DoE-owned enums, and the
 # comment above `_QUEUE_ELIGIBLE_CHANGE_KINDS` states that mirror obligation in
 # prose. Prose is not a discharge: on 2026-07-29 the `verification` member was
 # added to the frozenset while the vendored improvement-queue schema was left
@@ -484,7 +484,7 @@ def test_routing_sets_cover_the_plan_tasks_authoring_enum(harvest_mod):
     plan-tasks is the wider universal enum an author writes against; the two
     routing sets partition it. A value in the schema but in neither set is
     authorable-but-unroutable — the exact shape that dropped a PM-ratified row
-    (`W-windows-verify`) and prompted coordinator-claude 1239761c1. A value in a routing set
+    (`W-windows-verify`) and prompted DoE 1239761c1. A value in a routing set
     but not the schema is unreachable routing for a value nobody can author.
     """
     routable = harvest_mod._QUEUE_ELIGIBLE_CHANGE_KINDS | harvest_mod._LESSON_PROMOTE_CHANGE_KINDS
@@ -494,7 +494,7 @@ def test_routing_sets_cover_the_plan_tasks_authoring_enum(harvest_mod):
 # ---------------------------------------------------------------------------
 # _derive_proposed_action — proposed_action must never duplicate surface
 #
-# coordinator-claude cross-repo memo: `_run_queue_append` passed `str(row["surface"])` for
+# DoE cross-repo memo: `_run_queue_append` passed `str(row["surface"])` for
 # both --surface and --proposed-action, so proposed_action (a required
 # improvement-queue field meant to make a queue entry actionable to a
 # non-authoring session) landed byte-identical to a bare file path on every

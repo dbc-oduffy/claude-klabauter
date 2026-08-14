@@ -57,10 +57,10 @@ _REPO_ROOT_COORDINATOR_CORE = os.path.join(_REPO_ROOT, "coordinator_core")
 
 
 def _resolve_doe_root_for_tests() -> str:
-    """Best-effort coordinator-claude sibling root, for tests that override CLAUDE_HOME.
+    """Best-effort DoE-claude sibling root, for tests that override CLAUDE_HOME.
 
     coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back to
-    a machine-local `repos.example_doctrine_repo` lookup that is itself CLAUDE_HOME/
+    a machine-local `repos.doe_claude` lookup that is itself CLAUDE_HOME/
     settings-home-anchored -- a test overriding CLAUDE_HOME to a throwaway dir
     (to prove CLAUDE_HOME is unused for project scope, e.g.) collaterally
     breaks that fallback too. Resolving it once here and forwarding it as an
@@ -85,7 +85,7 @@ _DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
 
 def _script_path() -> str:
     """Return the absolute path to coordinator-queue-append."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-queue-append")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-queue-append.py")
 
 
 def _python() -> str:
@@ -236,7 +236,7 @@ def _cross_repo_commitment_required_args() -> list[str]:
     machine-local resolution in test environments, matching every other
     schema's test helper.
 
-    Spec backlink: docs/plans/2026-07-11-cross-repo-commitment-lifecycle.md § C3b
+    Spec backlink: DoE-claude:pln-cross-repo-commitment-lifecycl-104a3c § C3b
     """
     return [
         "--schema", "cross-repo-commitment",
@@ -812,9 +812,9 @@ def test_central_scope_writes_to_claude_klabauter_root() -> None:
 
     Central state routes to _claude_klabauter_root() unconditionally, per
     docs/wiki/state-placement-law.md § Taxonomy "Central/global state" (governing law:
-    coordinator-claude coordinator/docs/wiki/state-placement-law.md:36). The
-    [coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md plan's
-    proposal to instead route this branch to coordinator-claude was never ratified: that plan is
+    DoE-claude coordinator/docs/wiki/state-placement-law.md:36). The
+    [DoE-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md plan's
+    proposal to instead route this branch to DoE was never ratified: that plan is
     `status: draft`, its AC1/AC2 are `pending`, and its own C3 is HELD with recorded
     disk proof the flip never took effect on the production path — see
     _output_path()'s own negative-spec docstring.
@@ -1610,7 +1610,7 @@ def test_provenance_completeness_is_valid_by_construction() -> None:
 
 def _lesson_add_script_path() -> str:
     """Return the absolute path to coordinator-lesson-add."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-add")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-add.py")
 
 
 def _run_lesson_add_cli(args: list[str], env: dict[str, str] | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -1933,7 +1933,7 @@ def _make_fake_coordinator_core(tmpdir: str, mode: str = "success", out_path: st
     schema-op branch below is why captured.json is now keyed by the op name in "capture"
     mode's on-disk shape — callers must select the "queue.append" entry.
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     coord_dir = os.path.join(tmpdir, "coordinator_core")
     os.makedirs(coord_dir, exist_ok=True)
@@ -2063,7 +2063,7 @@ def test_routing_seam_absent_uses_legacy() -> None:
     test_routing_seam_present_uses_native and friends; the truly-empty-seam case
     for schema failure specifically is covered by test_schema_load_fails_loud_via_env_override.
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     name = "Test R1 — routing: total seam absence -> fails loud, no write (State-1, post de-node cutover)"
     with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
@@ -2120,7 +2120,7 @@ def test_routing_seam_present_uses_native() -> None:
     Does NOT set QUEUE_APPEND_OUTPUT_ROOT (routing tests exercise the live routing gate,
     not the test-isolation bypass). Uses a git-initialized tmpdir as cwd.
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     name = "Test R2 — routing: seam-present -> native path, stdout = result out_path (State-2)"
     with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
@@ -2166,7 +2166,7 @@ def test_grep_gate_legacy_fn_present() -> None:
     Greps coordinator-queue-append for 'def legacy_fn' to confirm the write-core
     body is still present on the legacy path.
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2 / AC6
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2 / AC6
     """
     name = "Test R3 — grep-gate: legacy_fn body present in coordinator-queue-append source (AC6)"
     script_path = _script_path()
@@ -2198,7 +2198,7 @@ def test_native_provenance_parity() -> None:
       - session_id in params == the known session_id (param-first as of claude-klabauter a9f0a9e;
         no longer threaded via os.environ mutation)
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2 / AC11
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2 / AC11
     """
     name = "Test R4 — AC11: native path receives CLI-resolved from_repo and session_id"
     with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
@@ -2276,7 +2276,7 @@ def test_native_queue_scope_param_threading() -> None:
     CLI includes queue_scope in _op_params when set; this test would catch accidental
     removal of that path.
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2 / AC11
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2 / AC11
     """
     # Review: code-reviewer — F5: AC11 gap — queue_scope="central" on native path is untested.
     name = "Test R4b — AC11: --queue-scope central appears in native op params"
@@ -2331,7 +2331,7 @@ def test_skipped_envelope_emits_warn_no_path() -> None:
 
     Contract pt 5: skipped:true must NOT be treated as unconditional success.
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2 / AC12
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2 / AC12
     """
     name = "Test R5 — AC12: skipped envelope -> WARN to stderr, no path to stdout"
     with tempfile.TemporaryDirectory() as claude_klabauter_dir, \
@@ -2387,7 +2387,7 @@ def test_output_root_bypass_skips_native() -> None:
     Without this test, moving the bypass below the route() call (or removing it) would
     not be caught.
 
-    Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C2
+    Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C2
     """
     # Review: code-reviewer — F8: QUEUE_APPEND_OUTPUT_ROOT bypass has no seam-present test.
     name = "Test R6 — QUEUE_APPEND_OUTPUT_ROOT bypass skips native path when seam present"

@@ -32,7 +32,7 @@ Exit codes:
 Test seam (internal, not part of the ceremony contract):
   --self-heal-machine-slug      run only the Step 0.2a machine-slug self-heal/drift block.
   --self-heal-contributor-slug  run only the Step 0.2b contributor-slug self-heal/drift block.
-  These exist so bin/tests/test-coordinator-daily-branch.sh (AC5/AC6; coordinator-claude 2fbe0e77,
+  These exist so bin/tests/test-coordinator-daily-branch.sh (AC5/AC6; DoE 2fbe0e77,
   2026-07-19) can exercise the slug blocks in isolation now that they are Python,
   not an awk-extractable bash region.
 
@@ -48,20 +48,20 @@ verdict itself comes back `"unknown"`) is treated exactly like a CONFIRMED live
 peer (`"refused"`) — never collapsed to "no peers, safe to delete". Only a clean
 `"ok"` verdict (provably zero live peers) permits the remote-delete refspec.
 
-Port of: workday-start-step0.sh (coordinator-claude 091c0f3e, 2026-07-19). `today` is
+Port of: workday-start-step0.sh (DoE 091c0f3e, 2026-07-19). `today` is
 natively imported from coordinator_core.daily_day.local_day (de-bash campaign,
-2026-07-21 — Port of: coordinator-daily-day.sh, coordinator-claude c6d97219, 2026-07-22;
+2026-07-21 — Port of: coordinator-daily-day.sh, DoE c6d97219, 2026-07-22;
 commands/workday-start.md's Step 0.45 span-assertion was repointed to the same
 native peer in the same chunk).
 session-ensure-branch is natively imported from
 lib/session_ensure_branch.py (de-bash campaign, chunk E3-f — Port of:
-session-ensure-branch.sh, coordinator-claude 9cc1d315, 2026-07-21). sync-main.py and
+session-ensure-branch.sh, DoE 9cc1d315, 2026-07-21). sync-main.py and
 workday-start-step0-reconcile.py are invoked as subprocesses (separate
 surfaces). cs_compute_machine / cs_compute_machine_live /
 cs_compute_contributor_live / cs_parse_branch_span / cs_should_prompt_rename /
 cs_rename_target are natively imported from coordinator_core.machine_resolver /
 coordinator_core.daily_branch (de-bash campaign, unit "daily-branch" —
-Port of: coordinator-daily-branch.sh, coordinator-claude 2fbe0e77, 2026-07-19).
+Port of: coordinator-daily-branch.sh, DoE 2fbe0e77, 2026-07-19).
 """
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ def _err(msg: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Native bridge — coordinator_core.daily_branch / coordinator_core.machine_resolver
-# (replaces the retired coordinator-daily-branch.sh bash-lib bridge, coordinator-claude 2fbe0e77, 2026-07-19)
+# (replaces the retired coordinator-daily-branch.sh bash-lib bridge, DoE 2fbe0e77, 2026-07-19)
 # ---------------------------------------------------------------------------
 
 def _ensure_claude_klabauter_on_path() -> None:
@@ -569,7 +569,7 @@ def _main_with_crash_guard(argv: list[str]) -> int:
     distinguish-a-step-0-tha-2245f21fe6d0.yaml.
 
     Reuses exit code 1 rather than minting a new one: grepping
-    ``coordinator/commands/workday-start.md`` (coordinator-claude) shows the
+    ``coordinator/commands/workday-start.md`` (DoE-claude) shows the
     consumer already treats exit 1 as "unexpected error -> halt"
     unconditionally of WHICH unexpected error — nothing downstream
     branches on 1 vs. a hypothetical distinct crash code, so a new code

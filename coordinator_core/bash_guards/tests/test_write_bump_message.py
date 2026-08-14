@@ -51,7 +51,7 @@ def _init_repo(tmp_path: Path, name: str = "repo") -> Path:
     return root
 
 
-_TARGET_REPO = "coordinator-claude"
+_TARGET_REPO = "DoE-claude"
 _SESSION_REPO = "claude-klabauter"
 _SESSION_ID = "751ab9de-9319-4d63-b174-36145a4a3045"
 _SANDBOX_ROOT = "state/subagent-share/751ab9de-9319-4d63-b174-36145a4a3045"

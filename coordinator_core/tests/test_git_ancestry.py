@@ -20,7 +20,7 @@ Coverage:
       must turn cases (b)-(d) red — asserted directly by comparing against the
       known-mutant formula.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b5-planning-cluster.md § C1
+Spec backlink: DoE-claude:pln-computed-skills-b5-planning-cl-a28764 § C1
 """
 
 from __future__ import annotations

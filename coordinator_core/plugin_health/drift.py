@@ -7,7 +7,7 @@ Purpose: detect when a live install has fallen behind its source — git-state d
 and SHA-sentinel drift (copy_install mode). Surfaces daily via /workday-start Step
 1.10 Addon Health.
 
-Port of coordinator-claude coordinator/bin/check-plugin-drift.sh (recovered pre-stub body,
+Port of DoE-claude coordinator/bin/check-plugin-drift.sh (recovered pre-stub body,
 commit dd820339^ — the script had been silently replaced with an always-fail test
 stub on disk; this port restores + ports the real 977-line body, not the stub).
 Also folds in the plugin.mirrors registry reader formerly at coordinator/bin/lib/
@@ -45,8 +45,8 @@ Extended by:    docs/plans/2026-05-23-copy-install-drift-coverage.md § Chunk 2
                 docs/plans/2026-05-29-windows-console-flash-elimination.md § Chunk 2
                 docs/plans/2026-05-30-editable-sibling-venv-propagation-mode.md § Chunk 2
                 docs/plans/2026-07-06-durable-substrate-to-settings-home.md § C2b
-Port of: check-plugin-drift.sh (coordinator-claude b5a4192c, 2026-07-20; dd820339^ recovered
-         pre-stub body), read-mirrors.sh (coordinator-claude 721a71f4, 2026-07-21)
+Port of: check-plugin-drift.sh (DoE b5a4192c, 2026-07-20; dd820339^ recovered
+         pre-stub body), read-mirrors.sh (DoE 721a71f4, 2026-07-21)
 """
 
 from __future__ import annotations

@@ -6,8 +6,8 @@ Finish-strangler port (bash→pure-Python clean-slate migration): the bash
 implementation (F16 fix — bridges tier-gated discovery output into the
 machine-local `repos.*` registry) has been fully ported to
 coordinator_core/ops/register_discovered_repos.py in the claude-klabauter sibling repo. This
-file is now a thin coordinator-claude-side (contract) trampoline over that claude-klabauter (engine) module,
-per DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine).
+file is now a thin DoE-side (contract) trampoline over that claude-klabauter (engine) module,
+per DR-047 (DoE owns contract/generator, claude-klabauter owns engine).
 
 De-bash rename (2026-07-21, chunk I-a): this trampoline itself started life as
 a `.sh`-suffixed pure-Python file (a bash-invocation-tax artifact, not genuine

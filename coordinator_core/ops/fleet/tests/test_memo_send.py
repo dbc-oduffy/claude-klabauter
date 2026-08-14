@@ -158,7 +158,7 @@ async def _fake_sleep(*args, **kwargs):
 
 
 def _load_cli_delivery_module():
-    """Import the extensionless `coordinator/bin/cross-repo-memo` script as a
+    """Import the extensionless `coordinator/bin/cross-repo-memo.py` script as a
     module, for direct unit calls into `_verify_delivery_landed` /
     `_commit_delivered_memo` (the CLI copy C1 also fixed for AC1/AC2/AC3).
 
@@ -172,7 +172,7 @@ def _load_cli_delivery_module():
     from importlib.machinery import SourceFileLoader
 
     repo_root = Path(__file__).resolve().parents[4]
-    script_path = repo_root / "coordinator" / "bin" / "cross-repo-memo"
+    script_path = repo_root / "coordinator" / "bin" / "cross-repo-memo.py"
     loader = SourceFileLoader("cross_repo_memo_c2", str(script_path))
     spec = importlib.util.spec_from_loader("cross_repo_memo_c2", loader)
     mod = importlib.util.module_from_spec(spec)
@@ -229,10 +229,10 @@ def _make_doe_manifest(
     """Write .doe-root sentinel and a fake coordinator-registry.manifest.json.
 
     Creates a doe-root dir, writes the manifest with the given aliases, and
-    points the DR-071 doe-root ladder at it. Mirrors the shape ratified in coordinator-claude
+    points the DR-071 doe-root ladder at it. Mirrors the shape ratified in DoE
     consult 2026-07-05 strang-03 follow-up, Q2.
 
-    The doe-root is this fixture's own `repos.example_doctrine_repo` when registered —
+    The doe-root is this fixture's own `repos.doe_claude` when registered —
     exactly as on a real machine, where the ladder's canonical registry rung
     outranks the pointer file and the two agree — else a standalone dir. The
     pointer itself lands on the durable `<settings-home>/machine-local/.doe-root`
@@ -246,11 +246,11 @@ def _make_doe_manifest(
     Returns the doe_root Path for callers that need it.
     """
     if central_ids is None:
-        central_ids = ["claude-central-em", "central-em", "central", "coordinator-claude-em"]
+        central_ids = ["claude-central-em", "central-em", "central", "doe-claude-em"]
     if redirect_aliases is None:
         redirect_aliases = []
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
-    doe_root = _registered_example_doctrine_repo(machine_local) or (tmp_path / "fake-doe-root")
+    doe_root = _registered_doe_claude(machine_local) or (tmp_path / "fake-doe-root")
     schema_dir = doe_root / "coordinator" / "schemas"
     schema_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -268,11 +268,11 @@ def _make_doe_manifest(
     return doe_root
 
 
-def _registered_example_doctrine_repo(machine_local: Path) -> Path | None:
-    """Return this fixture's `repos.example_doctrine_repo` path, or None if unregistered.
+def _registered_doe_claude(machine_local: Path) -> Path | None:
+    """Return this fixture's `repos.doe_claude` path, or None if unregistered.
 
     Handles both spellings `_make_claude_home` and hand-written fixtures use:
-    the flat quoted-dotted key (`"repos.example_doctrine_repo" = "..."`) and the nested
+    the flat quoted-dotted key (`"repos.doe_claude" = "..."`) and the nested
     `[repos]` table.
     """
     import tomllib
@@ -286,7 +286,7 @@ def _registered_example_doctrine_repo(machine_local: Path) -> Path | None:
                 data = tomllib.load(f)
         except Exception:
             continue
-        value = data.get("repos.example_doctrine_repo") or (data.get("repos") or {}).get("example_doctrine_repo")
+        value = data.get("repos.doe_claude") or (data.get("repos") or {}).get("doe_claude")
         if value:
             return Path(str(value))
     return None
@@ -681,7 +681,7 @@ class TestScopedToShaResolvabilityGate:
         quietly re-broaden this into the pre-flight gate that ruling forbids
         (see `_scoped_to_errors`/`_validate_scoped_to` docstrings, and
         `_print_premise_check_advisory`'s own 2026-08-03 lifecycle-rule
-        docstring in coordinator/bin/cross-repo-memo)."""
+        docstring in coordinator/bin/cross-repo-memo.py)."""
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -1353,12 +1353,19 @@ class TestDeliveredMemoCommit:
         )
 
     def test_delivery_commit_message_has_no_injected_trailer(self, tmp_path, monkeypatch):
-        """The delivery commit message is exactly the subject — no injected
-        Session-Id or other trailer from a receiver message hook.
+        """The delivery commit message never carries a RECEIVER-HOOK-injected
+        trailer — no `prepare-commit-msg`/`commit-msg` hook of the receiver's
+        own ever runs on a foreign delivery commit; the all-hooks-off
+        mechanism guarantees this.
 
-        A prepare-commit-msg (or commit-msg) hook that appends a trailer
-        meaningful only to the receiver's OWN commits must never run on a
-        foreign delivery commit; the all-hooks-off mechanism guarantees this.
+        A `Session-Id:` trailer MAY legitimately appear in the message — C7
+        (docs/plans/2026-08-13-session-identity-earns-its-keep.md) has this
+        same function author its OWN `Session-Id: <sent_by-uuid>` trailer
+        in-process (never via a hook). This test's negative assertion is
+        therefore on the FAKE FOREIGN VALUE the hook tries to inject, not on
+        the trailer key existing at all — see
+        test_delivery_commit_session_id_trailer_matches_sent_by below for the
+        positive-path assertion that this function's own trailer DOES land.
         """
         receiver_repo = _make_receiver_git_repo(tmp_path)
         hooks_dir = receiver_repo / ".git" / "hooks"
@@ -1380,12 +1387,52 @@ class TestDeliveredMemoCommit:
         rel_path = os.path.relpath(memo_path, receiver_repo)
         log = _git(receiver_repo, "log", "-1", "--format=%B", "--", rel_path)
         message = log.stdout.decode(errors="replace")
-        assert "Session-Id" not in message, (
+        assert "fake-foreign-session" not in message, (
             f"delivery commit message must not carry a receiver-hook-injected "
             f"trailer (prepare-commit-msg must not have run): {message!r}"
         )
         assert "deliver" in message
         assert "Test Memo" in message
+
+    def test_delivery_commit_session_id_trailer_matches_sent_by(self, tmp_path, monkeypatch):
+        """C7: a resolvable sender session id lands as this function's OWN
+        in-process `Session-Id:` trailer on the delivery commit message —
+        never via a hook (the receiver's hooks are all disabled for this
+        commit), and the value matches the sent_by resolved for this send.
+        """
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "c7-trailer-session-uuid")
+
+        result = _run(_memo_send(_base_params(dry_run=False, topic="trailer-match-test")))
+
+        assert result["exit_code"] == 0
+        memo_path = Path(result["acted"][0]["id"])
+        rel_path = os.path.relpath(memo_path, receiver_repo)
+        log = _git(receiver_repo, "log", "-1", "--format=%B", "--", rel_path)
+        message = log.stdout.decode(errors="replace")
+        assert "Session-Id: c7-trailer-session-uuid" in message
+
+    def test_delivery_commit_no_trailer_when_sent_by_unresolved(self, tmp_path, monkeypatch):
+        """C7 never-raise contract: an unresolvable sender session id means
+        an ABSENT trailer, never a failed/degraded commit."""
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+        result = _run(_memo_send(_base_params(dry_run=False, topic="trailer-unresolved-test")))
+
+        assert result["exit_code"] == 0
+        assert result["acted"][0]["delivery_commit"]["committed"] is True
+        memo_path = Path(result["acted"][0]["id"])
+        rel_path = os.path.relpath(memo_path, receiver_repo)
+        log = _git(receiver_repo, "log", "-1", "--format=%B", "--", rel_path)
+        message = log.stdout.decode(errors="replace")
+        assert "Session-Id" not in message
         assert _ENGINE_ACTOR_ID in message
 
     def test_commit_delivered_memo_idempotent_nothing_to_commit(self, tmp_path):
@@ -1791,7 +1838,7 @@ class TestDeliveredMemoCommit:
 
 
 # ===========================================================================
-# 2b. CLI copy (`coordinator/bin/cross-repo-memo`) delivery-verify hole (AC1,
+# 2b. CLI copy (`coordinator/bin/cross-repo-memo.py`) delivery-verify hole (AC1,
 #     AC2, AC3) — docs/plans/2026-08-13-memo-send-delivery-commit-verify-hole.md
 # ===========================================================================
 
@@ -2410,7 +2457,7 @@ class TestRegistryEnumeratedAllowedSet:
     def test_registry_key_convention(self):
         """Receiver EM identity → repos.* key conversion follows the correct convention."""
         assert _receiver_em_to_repo_key("example-retrieval-repo-em") == "repos.example_retrieval_repo"
-        assert _receiver_em_to_repo_key("coordinator-claude-em") == "repos.example_doctrine_repo"
+        assert _receiver_em_to_repo_key("doe-claude-em") == "repos.doe_claude"
         assert _receiver_em_to_repo_key("claude-klabauter-em") == "repos.claude_klabauter"
         # Without -em suffix (bare shortname is also accepted)
         assert _receiver_em_to_repo_key("example-retrieval-repo") == "repos.example_retrieval_repo"
@@ -2547,7 +2594,7 @@ class TestInternalHelpers:
 class TestCollisionFailLoud:
     """C4: same-day/same-topic collision → fail-loud (refuse, no silent clobber).
 
-    Collision semantics ratified in C1 (DR-214 D2 criterion 4, coordinator-claude-normative 2026-07-05):
+    Collision semantics ratified in C1 (DR-214 D2 criterion 4, DoE-normative 2026-07-05):
     read-before-write → refuse on same-day/same-topic collision.
     Prior art: the Staff Engineer finding #2b; improvement-queue 2026-06-23-hot-shared-branch-a-cross-
     repo-memo-repl.yaml (canonical same-day/same-topic replace/clobber source); memo
@@ -2558,7 +2605,7 @@ class TestCollisionFailLoud:
         DR-214: docs/decisions/DR-214-send-class-cross-tree-write-boundary.md § D2 criterion 4
 
     Negative-spec: nonce/content-hash suffix is NOT a test variant — that would require a
-    coordinator-claude-coordinated filename-contract change across all 5 lockstep sites (strang-03 § C4).
+    DoE-coordinated filename-contract change across all 5 lockstep sites (strang-03 § C4).
     """
 
     def test_same_topic_second_act_refused(self, tmp_path, monkeypatch):
@@ -2662,7 +2709,7 @@ class TestCollisionFailLoud:
     def test_collision_cross_sender_both_survive(self, tmp_path, monkeypatch):
         """DR-026: two DIFFERENT senders, same topic + same day → both memos survive.
 
-        Mirrors coordinator-claude's test_collision_cross_sender_both_survive (cross-repo-memo-
+        Mirrors DoE's test_collision_cross_sender_both_survive (cross-repo-memo-
         roundtrip.test.py) — the whole point of the DR-026 sender-namespaced
         filename is that an N-repo broadcast reply with an identical topic slug
         on the same day does not collapse into a single-writer collision. Both
@@ -3203,13 +3250,13 @@ class TestNoMemoIndex:
 
 
 # ===========================================================================
-# 10. Receiver alias resolution via coordinator-claude manifest (coordinator-claude consult 2026-07-05 strang-03 Q2)
+# 10. Receiver alias resolution via DoE manifest (DoE consult 2026-07-05 strang-03 Q2)
 # ===========================================================================
 
 class TestReceiverAliasResolution:
     """Manifest-driven alias resolution for _receiver_em_to_repo_key.
 
-    Spec backlink: coordinator-claude consult 2026-07-05 strang-03 follow-up, Q2.
+    Spec backlink: DoE consult 2026-07-05 strang-03 follow-up, Q2.
     Aliases (identity.repoAliases) and central IDs (identity.centralReceiverIds)
     are read from coordinator-registry.manifest.json via the .doe-root sentinel.
     """
@@ -3453,7 +3500,7 @@ class TestFrontmatterSelfValidation:
 class TestComposedMemoYamlSchemaValid:
     """Parse claude-klabauter's REAL _compose_memo output as YAML and assert schema shape.
 
-    Closes the residual conformance gap the coordinator-claude round-trip fixture cannot catch:
+    Closes the residual conformance gap the DoE round-trip fixture cannot catch:
     the fixture SIMULATES the claude-klabauter write shape at most sites rather than driving
     claude-klabauter's own op, and test_act_written_memo_has_schema_valid_frontmatter (above)
     only asserts via substrings ('status: open' in content) — neither actually
@@ -3554,20 +3601,20 @@ class TestCentralReceiverResolution:
     Bug: the plain convention fallback in _receiver_em_to_repo_key mapped each
     central id independently ('claude-central-em' -> 'repos.claude_central',
     'central-em' -> 'repos.central', 'central' -> 'repos.central',
-    'coordinator-claude-em' -> 'repos.example_doctrine_repo') — only 'coordinator-claude-em' happened to
-    match the machine-local registry's actual central entry (repos.example_doctrine_repo),
+    'doe-claude-em' -> 'repos.doe_claude') — only 'doe-claude-em' happened to
+    match the machine-local registry's actual central entry (repos.doe_claude),
     so sending to the canonical alias 'claude-central-em' silently refused
     (exit_code:1) even though central IS registered under a different id.
 
     Fix: _resolve_receiver_inbox resolves ANY central id to the single
     registered central key by scanning centralReceiverIds against the
-    registered repos (no hardcoded 'repos.example_doctrine_repo' literal).
+    registered repos (no hardcoded 'repos.doe_claude' literal).
     """
 
-    def test_claude_central_em_resolves_to_example_doctrine_repo_path(self, tmp_path, monkeypatch):
+    def test_claude_central_em_resolves_to_doe_claude_path(self, tmp_path, monkeypatch):
         """claude-central-em (the canonical claude-klabauter-side central alias) resolves — was broken."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
@@ -3580,12 +3627,12 @@ class TestCentralReceiverResolution:
         )
         memo_path = Path(result["acted"][0]["id"])
         assert memo_path.exists()
-        assert memo_path.parent.parent == example_doctrine_repo_repo / "cross-repo"
+        assert memo_path.parent.parent == doe_claude_repo / "cross-repo"
 
-    def test_central_em_resolves_to_example_doctrine_repo_path(self, tmp_path, monkeypatch):
+    def test_central_em_resolves_to_doe_claude_path(self, tmp_path, monkeypatch):
         """central-em fans in to the same registered central key."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
@@ -3596,12 +3643,12 @@ class TestCentralReceiverResolution:
         assert result["exit_code"] == 0, f"central-em must resolve to registered central: {result}"
         memo_path = Path(result["acted"][0]["id"])
         assert memo_path.exists()
-        assert memo_path.parent.parent == example_doctrine_repo_repo / "cross-repo"
+        assert memo_path.parent.parent == doe_claude_repo / "cross-repo"
 
-    def test_bare_central_resolves_to_example_doctrine_repo_path(self, tmp_path, monkeypatch):
+    def test_bare_central_resolves_to_doe_claude_path(self, tmp_path, monkeypatch):
         """'central' (bare, no -em suffix) fans in to the same registered central key."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
@@ -3612,30 +3659,30 @@ class TestCentralReceiverResolution:
         assert result["exit_code"] == 0, f"'central' must resolve to registered central: {result}"
         memo_path = Path(result["acted"][0]["id"])
         assert memo_path.exists()
-        assert memo_path.parent.parent == example_doctrine_repo_repo / "cross-repo"
+        assert memo_path.parent.parent == doe_claude_repo / "cross-repo"
 
-    def test_example_doctrine_repo_em_still_resolves_regression_guard(self, tmp_path, monkeypatch):
-        """coordinator-claude-em (the pre-fix working case) keeps working after the fan-in fix."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+    def test_doe_claude_em_still_resolves_regression_guard(self, tmp_path, monkeypatch):
+        """doe-claude-em (the pre-fix working case) keeps working after the fan-in fix."""
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
         result = _run(_memo_send(
-            _base_params(to="coordinator-claude-em", dry_run=False, topic="coordinator-claude-em-regression")
+            _base_params(to="doe-claude-em", dry_run=False, topic="doe-claude-em-regression")
         ))
 
-        assert result["exit_code"] == 0, f"coordinator-claude-em must still resolve: {result}"
+        assert result["exit_code"] == 0, f"doe-claude-em must still resolve: {result}"
         memo_path = Path(result["acted"][0]["id"])
         assert memo_path.exists()
-        assert memo_path.parent.parent == example_doctrine_repo_repo / "cross-repo"
+        assert memo_path.parent.parent == doe_claude_repo / "cross-repo"
 
     def test_non_central_receiver_unchanged(self, tmp_path, monkeypatch):
         """A non-central receiver (example-retrieval-repo-em) resolves to its own repo, unaffected."""
         rag_repo = _make_receiver_git_repo(tmp_path, "rag-repo")
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
         claude_home = _make_claude_home(
-            tmp_path, {"example_retrieval_repo": rag_repo, "example_doctrine_repo": example_doctrine_repo_repo}
+            tmp_path, {"example_retrieval_repo": rag_repo, "doe_claude": doe_claude_repo}
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
@@ -3658,7 +3705,7 @@ class TestCentralReceiverResolution:
         (None, None, all_repos) graceful return when no central id resolves to a
         registered key, and _memo_send returns the central-specific setup-error envelope.
         """
-        # Only an unrelated repo is registered — no repos.example_doctrine_repo / repos.central / etc.
+        # Only an unrelated repo is registered — no repos.doe_claude / repos.central / etc.
         other_repo = _make_receiver_git_repo(tmp_path, "unrelated-repo")
         claude_home = _make_claude_home(tmp_path, {"unrelated": other_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -3675,16 +3722,16 @@ class TestCentralReceiverResolution:
 
     def test_resolve_receiver_inbox_central_fanin_direct_unit(self, tmp_path, monkeypatch):
         """Direct unit test of _resolve_receiver_inbox's central fan-in resolution."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
-        for central_id in ("claude-central-em", "central-em", "central", "coordinator-claude-em"):
+        for central_id in ("claude-central-em", "central-em", "central", "doe-claude-em"):
             inbox_dir, receiver_repo_path, all_repos = _resolve_receiver_inbox(central_id)
             assert inbox_dir is not None, f"{central_id!r} must resolve an inbox"
-            assert receiver_repo_path == example_doctrine_repo_repo, (
-                f"{central_id!r} must resolve to the registered example_doctrine_repo repo path; "
+            assert receiver_repo_path == doe_claude_repo, (
+                f"{central_id!r} must resolve to the registered doe_claude repo path; "
                 f"got: {receiver_repo_path}"
             )
 
@@ -3703,8 +3750,8 @@ class TestCentralReceiverResolution:
 #
 # Problem this closes: `_compose_memo` stamped `to:` verbatim from whatever
 # central/redirect alias the caller typed (`claude-central-em`, `central-em`,
-# `central`, `coordinator-claude-em`, `.claude-em`, `claude-home`, `coordinator-claude`,
-# `coordinator-claude-em` all address the SAME coordinator-claude seat) — a reader could not
+# `central`, `doe-claude-em`, `.claude-em`, `claude-home`, `coordinator-claude`,
+# `coordinator-claude-em` all address the SAME DoE seat) — a reader could not
 # verify by inspection that two differently-addressed memos landed at the
 # same receiver. Fix: _memo_resolver.canonical_receiver_id() derives the ONE
 # repo-matching central id, and memo_send.py stamps THAT into `to:` instead
@@ -3720,15 +3767,15 @@ class TestCanonicalReceiverIdStamping:
 
     @pytest.mark.parametrize(
         "alias",
-        ["claude-central-em", "central-em", "central", "coordinator-claude-em"],
+        ["claude-central-em", "central-em", "central", "doe-claude-em"],
     )
     def test_every_central_alias_stamps_same_canonical_to(
         self, tmp_path, monkeypatch, alias
     ):
         """Every central alias resolves to the SAME registered repo AND stamps
         the SAME canonical `to:` value — one seat, one name in the corpus."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
@@ -3739,11 +3786,11 @@ class TestCanonicalReceiverIdStamping:
         assert result["exit_code"] == 0, result
         memo_path = Path(result["acted"][0]["id"])
         stamped_to = self._read_to_field(memo_path)
-        assert stamped_to == "coordinator-claude-em", (
+        assert stamped_to == "doe-claude-em", (
             f"alias {alias!r} must stamp the repo-matching canonical id "
-            f"'coordinator-claude-em', got {stamped_to!r}"
+            f"'doe-claude-em', got {stamped_to!r}"
         )
-        assert result["acted"][0]["receiver"] == "coordinator-claude-em"
+        assert result["acted"][0]["receiver"] == "doe-claude-em"
 
     @pytest.mark.parametrize(
         "redirect_alias",
@@ -3758,16 +3805,16 @@ class TestCanonicalReceiverIdStamping:
         route redirect aliases to a registered repo (a separate, pre-existing
         concern this fix does not touch — memo.check_addressee owns that
         redirect-MATCH path per _memo_resolver's module docstring)."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(
             tmp_path, claude_home, [],
             redirect_aliases=[".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em"],
         )
 
-        assert _canonical_receiver_id(redirect_alias) == "coordinator-claude-em"
-        assert _canonical_receiver_id("claude-central-em") == "coordinator-claude-em"
+        assert _canonical_receiver_id(redirect_alias) == "doe-claude-em"
+        assert _canonical_receiver_id("claude-central-em") == "doe-claude-em"
 
     def test_non_central_receiver_stamped_unchanged(self, tmp_path, monkeypatch):
         """A non-central receiver (example-retrieval-repo-em) is stamped as-is — no rewrite."""
@@ -3805,8 +3852,8 @@ class TestCanonicalReceiverIdStamping:
     ):
         """A dry-run preview's `receiver` field must equal the `to:` the act
         path actually stamps — same canonicalization, same value, both paths."""
-        example_doctrine_repo_repo = _make_receiver_git_repo(tmp_path, "coordinator-claude-repo")
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": example_doctrine_repo_repo})
+        doe_claude_repo = _make_receiver_git_repo(tmp_path, "doe-claude-repo")
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": doe_claude_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _make_doe_manifest(tmp_path, claude_home, [])
 
@@ -3823,7 +3870,7 @@ class TestCanonicalReceiverIdStamping:
         memo_path = Path(result["acted"][0]["id"])
         stamped_to = self._read_to_field(memo_path)
 
-        assert previewed_receiver == stamped_to == "coordinator-claude-em"
+        assert previewed_receiver == stamped_to == "doe-claude-em"
 
     def test_read_central_receiver_ids_graceful_degradation(self, tmp_path, monkeypatch):
         """No .doe-root/manifest → _read_central_receiver_ids returns empty set, no raise."""
@@ -4521,11 +4568,11 @@ class TestSupersedesListForm:
 
     def test_redelivery_filename_slugs_first_reference_of_a_list(self):
         listed = _redelivery_filename(
-            "2026-07-28", "coordinator-claude-em", "topic",
+            "2026-07-28", "doe-claude-em", "topic",
             ["2026-07-20-a.md", "2026-07-21-b.md"],
         )
         scalar = _redelivery_filename(
-            "2026-07-28", "coordinator-claude-em", "topic", "2026-07-20-a.md",
+            "2026-07-28", "doe-claude-em", "topic", "2026-07-20-a.md",
         )
         assert listed == scalar
 
@@ -4533,7 +4580,7 @@ class TestSupersedesListForm:
 # ===========================================================================
 # Sender-outbox sent-stamp (write-back onto the SENDER's own draft copy)
 #
-# Root cause: verified cross-repo/inbox finding, coordinator-claude-em — send
+# Root cause: verified cross-repo/inbox finding, doe-claude-em — send
 # dispatched to the receiver and removed the sender's local draft, but
 # nothing ever wrote delivery evidence back onto the sender's own outbox
 # copy. See memo_send._stamp_sender_outbox_sent's docstring for the
@@ -4636,7 +4683,7 @@ class TestSenderOutboxSentStamp:
         delivered_id = result["acted"][0]["id"]
         # Portable form: receiver-repo-relative, not the absolute machine
         # path — see _portable_delivered_to_form. Absolute home paths tracked
-        # into a sent memo redden coordinator-claude's test_no_posix_home_path_citations gate.
+        # into a sent memo redden DoE's test_no_posix_home_path_citations gate.
         expected_relpath = Path(delivered_id).resolve().relative_to(
             receiver_repo.resolve()
         ).as_posix()
@@ -4743,7 +4790,7 @@ class TestSenderOutboxSentStamp:
 # Sender-side sent-memo ledger (append-only, UNCONDITIONAL on a draft
 # existing — closes the one-shot-form chunk-closure gap)
 #
-# Root cause: cross-repo memo, coordinator-claude-em, 2026-08-04 — a plan chunk in a
+# Root cause: cross-repo memo, doe-claude-em, 2026-08-04 — a plan chunk in a
 # sending repo whose deliverable is a memo has no local evidence the memo
 # shipped when sent via the legacy one-shot flag form (no memo.draft, so
 # _stamp_sender_outbox_sent's conditional stamp never fires). See
@@ -5421,3 +5468,159 @@ class TestSenderLedgerCommitLeg:
 _SENT_LEDGER_RELPATH_FOR_TEST = "/".join(
     memo_send_module._SENDER_OUTBOX_DIRNAME + (memo_send_module._SENT_LEDGER_FILENAME,)
 )
+
+
+# ===========================================================================
+# C7 (docs/plans/2026-08-13-session-identity-earns-its-keep.md) — sent_by
+# carries the sender's session UUID across the memo crossing, mirroring
+# picked_up_by on the receive path.
+# ===========================================================================
+
+class TestSentByRoundTrip:
+    """AC7/AC10: a composed memo carries sent_by, and the sent-ledger row
+    agrees — across BOTH live composers (memo_send._compose_memo and
+    bin/lib/memo_compose.compose_memo)."""
+
+    def test_memo_send_compose_memo_directly_renders_sent_by(self):
+        """_compose_memo (the send-path composer) renders sent_by as an
+        optional frontmatter line when supplied — never required (D2-6's
+        self-validator does not gate on it)."""
+        doc = _compose_memo(
+            from_id="sender-em",
+            to="receiver-em",
+            topic="c7-direct",
+            title="C7 Test",
+            body="Body text.",
+            kind="fyi",
+            summary="A summary.",
+            supersedes=None,
+            today="2026-08-13",
+            sent_by="11111111-2222-3333-4444-555555555555",
+        )
+        fm_text = split_frontmatter(doc).fm_text
+        assert 'sent_by: "11111111-2222-3333-4444-555555555555"' in fm_text
+
+    def test_memo_send_compose_memo_omits_sent_by_when_absent(self):
+        """No sent_by param → no sent_by: line at all (never a present-but-
+        empty key) — matches every other optional field this composer
+        renders (campaign_id, in_reply_to, space)."""
+        doc = _compose_memo(
+            from_id="sender-em",
+            to="receiver-em",
+            topic="c7-absent",
+            title="C7 Test",
+            body="Body text.",
+            kind="fyi",
+            summary="A summary.",
+            supersedes=None,
+            today="2026-08-13",
+        )
+        fm_text = split_frontmatter(doc).fm_text
+        assert "sent_by" not in fm_text
+
+    def test_bin_lib_memo_compose_composer_also_renders_sent_by(self):
+        """The second LIVE composer (coordinator/bin/lib/memo_compose.py,
+        imported by cross-repo-memo) renders sent_by identically — an
+        optional, caller-resolved, forwarded-not-derived field."""
+        _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(memo_send_module.__file__))
+        )))
+        _lib_dir = os.path.join(_repo_root, "coordinator", "bin", "lib")
+        import sys
+        if _lib_dir not in sys.path:
+            sys.path.insert(0, _lib_dir)
+        import memo_compose as _bin_lib_memo_compose
+
+        doc = _bin_lib_memo_compose.compose_memo(
+            from_id="sender-em",
+            title="C7 Test",
+            to="receiver-em",
+            topic="c7-bin-lib",
+            body="Body text.",
+            sent_by="11111111-2222-3333-4444-555555555555",
+        )
+        fm_text = split_frontmatter(doc).fm_text
+        assert 'sent_by: "11111111-2222-3333-4444-555555555555"' in fm_text
+
+    def test_delivered_memo_and_sent_ledger_row_agree_on_sent_by(
+        self, tmp_path, monkeypatch,
+    ):
+        """End-to-end via _memo_send: the delivered memo's sent_by:
+        frontmatter line and the sent-ledger row's sent_by key carry the
+        SAME resolved value for one send."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "c7-roundtrip-session-uuid")
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="c7-roundtrip", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+
+        memo_path = Path(result["acted"][0]["id"])
+        fm_text = split_frontmatter(memo_path.read_text(encoding="utf-8")).fm_text
+        assert 'sent_by: "c7-roundtrip-session-uuid"' in fm_text
+
+        lines = _read_ledger_lines(sender_repo)
+        assert len(lines) == 1
+        assert lines[0]["sent_by"] == "c7-roundtrip-session-uuid"
+
+    def test_sent_by_unresolved_sentinel_says_so_not_silent_omission(
+        self, tmp_path, monkeypatch,
+    ):
+        """No resolvable session id anywhere in the 3-tier chain → the
+        delivered memo and ledger row both carry the explicit unresolved
+        sentinel, never a missing sent_by field (a memo that cannot name its
+        sender must SAY SO)."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="c7-unresolved", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+
+        memo_path = Path(result["acted"][0]["id"])
+        fm_text = split_frontmatter(memo_path.read_text(encoding="utf-8")).fm_text
+        assert f'sent_by: "{memo_send_module._SENT_BY_UNRESOLVED}"' in fm_text
+
+        lines = _read_ledger_lines(sender_repo)
+        assert len(lines) == 1
+        assert lines[0]["sent_by"] == memo_send_module._SENT_BY_UNRESOLVED
+
+    def test_sent_by_never_a_resolved_address(self, tmp_path, monkeypatch):
+        """AC10 negative-spec: sent_by is a durable UUID, never a resolved
+        messaging address, anywhere it is persisted. Simulates the address
+        shape (a URI-like string, which a session UUID never is) never
+        showing up as a sent_by value regardless of what the session env
+        var happens to hold — this function only ever forwards it verbatim,
+        so the guarantee reduces to "never substitutes anything address-
+        shaped in place of the resolved chain value," which is checked here
+        by confirming the ledger/frontmatter value is byte-identical to the
+        env var this test set, not some derived/resolved address form."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "not-an-address-just-a-uuid")
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="c7-not-address", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+
+        memo_path = Path(result["acted"][0]["id"])
+        fm_text = split_frontmatter(memo_path.read_text(encoding="utf-8")).fm_text
+        assert 'sent_by: "not-an-address-just-a-uuid"' in fm_text
+        lines = _read_ledger_lines(sender_repo)
+        assert lines[0]["sent_by"] == "not-an-address-just-a-uuid"

@@ -896,7 +896,7 @@ class TestBlockedByDependents:
 class TestBlockedByDependentsOp:
     """`handoff.blocked_by_dependents` — registered op wrapper around
     `blocked_by_dependents` (PIN-1 registration, cross-repo/inbox/2026-08-02-
-    coordinator-claude-em-baton-lifecycle-three-asks-reply.md Ask 3). Mirrors the
+    doe-claude-em-baton-lifecycle-three-asks-reply.md Ask 3). Mirrors the
     op-level test shape used for `handoff.has_live_children` above: router
     supplies repo_root=<worktree>/.git (the common_dir), the op maps it via
     main_worktree_root before delegating to `blocked_by_dependents`."""
@@ -953,7 +953,7 @@ class TestBlockedByDependentsOp:
     ) -> None:
         """The tri-state case that matters: a scan error underneath the
         op boundary must surface as state=="indeterminate", NEVER a quiet
-        "none" — this is the exact protection coordinator-claude's accepted reply named
+        "none" — this is the exact protection DoE's accepted reply named
         as the reason to keep `indeterminate` loud through registration."""
         from coordinator_core.ops.handoff_children import _handoff_blocked_by_dependents
 

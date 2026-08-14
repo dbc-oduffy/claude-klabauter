@@ -6,8 +6,8 @@ known as Phases 11f / 11g / 11h / 11h2 / 11i / 11j, plus the pre-flight/threshol
 probes ported from `coordinator/bin/update-docs-probes.py`) and return ONE
 structured per-gate verdict array instead of six independent exit-code dialects.
 
-Source: cross-repo/inbox/2026-08-06-coordinator-claude-em-updatedocs-gates-structured-
-verdicts.md (kind: proposal, from coordinator-claude-em; ADOPTED). The measured cost this
+Source: cross-repo/inbox/2026-08-06-doe-claude-em-updatedocs-gates-structured-
+verdicts.md (kind: proposal, from doe-claude-em; ADOPTED). The measured cost this
 op removes: each of the six gates re-taught its own exit-code dialect in prose
 (11h alone spent a paragraph on why exit 2 != exit 1, a rule earned after a July
 2026 incident where that gate silently no-opped for a week), and severity lived on
@@ -55,11 +55,11 @@ not the injected `_origin_worktree` seam — this op is registered with op-scope
 matching the existing `update-docs-probes.py` CLI contract of an explicit
 `--repo-root` rather than requiring a JSON-RPC dispatch envelope.
 
-Every external CLI this op shells out to (the coordinator-claude-owned `bin/verify-*`,
+Every external CLI this op shells out to (the DoE-claude-owned `bin/verify-*`,
 `bin/sync-plugin-wiki`, `bin/reap-stale-subagent-sidecars` scripts) is resolved
 under `--settings-home` (default: `$COORDINATOR_SETTINGS_HOME` or
 `~/.coordinator-claude-settings`) and is READ-ONLY from this op's perspective —
-this file never edits a coordinator-claude-owned path, it only invokes already-shipped
+this file never edits a DoE-claude-owned path, it only invokes already-shipped
 CLIs there, exactly as `update-docs-probes.py` already did for
 `check-rag-state.py` / `generate-repomap.py` / `prune-resolved-queue-entries.py`.
 
@@ -74,7 +74,7 @@ responsibility, reading `rollup()["halt"]`. It does NOT define "harvest debt" �
 separate, unshaped workstream). It does NOT touch `verify_coverage.py` /
 `coverage_gate.py` (11h2) — see Deferred above.
 
-Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-updatedocs-gates-
+Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-updatedocs-gates-
 structured-verdicts.md
 """
 
@@ -200,7 +200,7 @@ def _run(
     and hand a non-Python script to the interpreter instead of failing with a
     spawn OSError. `.py` CLIs always get the explicit `sys.executable` prefix
     (the pre-existing contract for check-rag-state.py / generate-repomap.py /
-    prune-*.py); every other CLI (the extensionless coordinator-claude bin/ scripts)
+    prune-*.py); every other CLI (the extensionless DoE-claude bin/ scripts)
     is exec'd directly and relies on its own shebang, exactly as before this
     diff introduced those gates.
 
@@ -446,7 +446,7 @@ def _gate_plugin_wiki(_repo_root: Path, settings_home: Path, overrides: dict) ->
     #
     # Review: coordinator:code-reviewer — regex-over-freetext is the sole
     # CONTRADICTION-detection mechanism and is fragile to upstream wording
-    # drift (a coordinator-claude-owned CLI this repo does not control). The memo's
+    # drift (a DoE-claude-owned CLI this repo does not control). The memo's
     # own worked example ("clean (161 validated, 31 missing-bundled
     # warnings)") always carries a "N validated" count on exit 0 — if that
     # shape stops matching, missing_count silently defaults to 0 and this
@@ -707,7 +707,7 @@ def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
                          (this op is registered scope="none" — see module
                          docstring).
         settings_home  (str) — override for $COORDINATOR_SETTINGS_HOME
-                         resolution (external coordinator-claude CLI location).
+                         resolution (external DoE-claude CLI location).
         gates          (list[str]) — named subset to run; default: all gates
                          in the registry. An unknown name is a ValueError,
                          never a silent skip (no silent caps).

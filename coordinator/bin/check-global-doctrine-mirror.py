@@ -1,5 +1,5 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""check-global-doctrine-mirror.py -- drift probe for the coordinator-claude in-repo
+"""check-global-doctrine-mirror.py -- drift probe for the coordinator doctrine repo's in-repo
 mirror of the operator's global doctrine (`~/.claude/CLAUDE.md` and
 `~/.claude/CLAUDE.local.md`), tracked at repo-root `global-doctrine/`.
 
@@ -13,7 +13,7 @@ was possible was an out-of-band `.example-doctrine-mirror-repo` backup living OU
 `~/.claude`'s blast radius. A mirror is only worth keeping if a
 re-initialization of `~/.claude` cannot also destroy it -- that requires the
 mirror to live in a DIFFERENT repo with its OWN independent git history,
-which is exactly what `global-doctrine/` at the coordinator-claude repo root is.
+which is exactly what `global-doctrine/` at the coordinator doctrine repo root is.
 
 Direction of truth (load-bearing, do not invert): `global-doctrine/` is
 AUTHORITATIVE -- it is the AUTHORING surface. `~/.claude` is the DERIVED live
@@ -26,7 +26,7 @@ carrying the old direction (repointed 2026-07-31). Until that ruling
 backstop. A reader who remembers that shape must find out here that it
 changed deliberately rather than assume this probe regressed. What changed:
 `global-doctrine/CLAUDE.md` became the place doctrine is actually authored,
-and a whole enforcement envelope now keys on it -- the coordinator-claude PostToolUse
+and a whole enforcement envelope now keys on it -- the coordinator doctrine repo's PostToolUse
 hook `derive-global-doctrine-live-copy.py` (which re-derives `~/.claude` on
 every write to the tracked file), the invariant test
 `coordinator/tests/test_global_doctrine_tracked_copy.py`, and the CLAUDE.md
@@ -47,7 +47,7 @@ mirror still lives in a different repo with its own independent git history,
 so a re-initialization of `~/.claude` cannot destroy it. It is now the
 original rather than the copy.
 
-Placement (load-bearing): `global-doctrine/` lives at the coordinator-claude REPO
+Placement (load-bearing): `global-doctrine/` lives at the coordinator doctrine repo's REPO
 ROOT, never under `coordinator/`. `coordinator/` is the percolation SOURCE
 directory for the OSS `coordinator-claude` publish mirror -- the operator's
 global doctrine carries personal identity content (§ Owner: name,
@@ -66,11 +66,11 @@ probe is inert noise on any OSS install that has no `global-doctrine/`
 mirror at all.
 
 Silent-skip contract: when `global-doctrine/` does not exist relative to the
-resolved coordinator-claude repo root, this probe exits 0 with no output -- never a
+resolved coordinator doctrine repo root, this probe exits 0 with no output -- never a
 warning. This is the "silent skip (opt-in)" arm of the coordinator's
 path-resolution doctrine (§ Build For Someone Else's Machine): absence of
 the mirror is the expected, correct state on every OSS
-install and on any coordinator-claude clone that predates this feature, not a health
+install and on any coordinator doctrine repo clone that predates this feature, not a health
 regression to nag about.
 
 Usage:
@@ -83,7 +83,7 @@ Exit codes:
     1 -- DRIFT: at least one mirrored file differs from its ~/.claude
          counterpart, is missing on one side, or is missing on BOTH sides
          (there is no both-absent skip -- see the negative-spec entry),
-         OR the coordinator-claude repo root is unresolvable (see
+         OR the coordinator doctrine repo root is unresolvable (see
          _repo_root()'s docstring) -- this is a gate/probe script, so an
          unresolvable root fails loud rather than masquerading as the
          mirror-absent silent-skip case.
@@ -92,10 +92,10 @@ Environment:
     CLAUDE_HOME -- overrides the `~/.claude` resolution root (defaults to
                    `$HOME/.claude`), matching the convention documented in
                    `coordinator/bin/count-distill-backlog.py`.
-    DOE_ROOT / REPO_EXAMPLE_DOCTRINE_REPO -- overrides the coordinator-claude repo root that
+    DOE_ROOT / REPO_DOE_CLAUDE -- overrides the coordinator doctrine repo root that
                    owns `global-doctrine/` (see _repo_root()). Consulted via
                    the shared coordinator_registry.doe_root() resolver
-                   (env var -> machine-local repos.example_doctrine_repo -> raise);
+                   (env var -> machine-local repos.doe_claude -> raise);
                    this script does NOT derive its own repo root from
                    __file__ -- see _repo_root()'s docstring for why.
 
@@ -125,9 +125,9 @@ Negative-spec (hard-won):
       CLAUDE_HOME / os.path.expanduser("~"), so this runs on any machine.
     - Does NOT dump the full 27KB diff on drift -- caps the difflib excerpt
       (see _DIFF_EXCERPT_LINES) so a hit does not flood the session.
-    - Does NOT derive the coordinator-claude repo root from this script's own
+    - Does NOT derive the coordinator doctrine repo root from this script's own
       __file__ location -- this script migrated to claude-klabauter while
-      `global-doctrine/` stayed in coordinator-claude; self-location resolution
+      `global-doctrine/` stayed in the coordinator doctrine repo; self-location resolution
       would silently and permanently no-op the mirror-absent skip path
       instead of ever comparing anything. See _repo_root()'s docstring.
 
@@ -179,36 +179,36 @@ def _claude_home() -> str:
 
 
 def _repo_root() -> str:
-    """Resolve the coordinator-claude REPO ROOT that owns `global-doctrine/`.
+    """Resolve the DoE-claude REPO ROOT that owns `global-doctrine/`.
 
     This does NOT derive from this script's own __file__ location. That
-    used to be correct when this executable lived in coordinator-claude
+    used to be correct when this executable lived in DoE-claude
     (coordinator/bin/../.. IS the repo root there), but this file has
     since migrated to claude-klabauter (commit b644d5a9 here, 8a28a6ca in
-    coordinator-claude) while `global-doctrine/` stayed put in coordinator-claude at the
+    DoE-claude) while `global-doctrine/` stayed put in DoE-claude at the
     REPO root -- self-location now resolves to `<claude-klabauter>/`, which
     has no `global-doctrine/` at all. Because the mirror-absent case is a
     silent skip (see module docstring's silent-skip contract), that break
     was invisible: it just made this probe permanently inert instead of
     ever comparing anything. doe_root() is the correct authority for
-    "where is the coordinator-claude repo," independent of where THIS script
+    "where is the DoE-claude repo," independent of where THIS script
     happens to run from. A future reader must not "restore" __file__-based
     resolution to regain the old two-hops-up shape -- that is precisely
     what caused this break.
 
-    Resolves via doe_root() (DOE_ROOT env -> REPO_EXAMPLE_DOCTRINE_REPO env ->
-    machine-local repos.example_doctrine_repo -> raise). Fails loud (sys.exit(1)) if
+    Resolves via doe_root() (DOE_ROOT env -> REPO_DOE_CLAUDE env ->
+    machine-local repos.doe_claude -> raise). Fails loud (sys.exit(1)) if
     doe_root() cannot resolve: this is a gate/probe script, not a
-    never-block hook, so an unresolvable coordinator-claude root must not silently
+    never-block hook, so an unresolvable DoE root must not silently
     masquerade as the "mirror absent, skip" case.
     """
     try:
         return doe_root()
     except _DoeUnresolvable as exc:
         sys.stderr.write(
-            f"{PROG}: cannot resolve the coordinator-claude repo root ({exc}). Set "
-            "repos.example_doctrine_repo in the machine-local registry, or set the "
-            "DOE_ROOT / REPO_EXAMPLE_DOCTRINE_REPO env var.\n"
+            f"{PROG}: cannot resolve the coordinator doctrine repo root ({exc}). Set "
+            "repos.doe_claude in the machine-local registry, or set the "
+            "DOE_ROOT / REPO_DOE_CLAUDE env var.\n"
         )
         sys.exit(1)
 
@@ -334,7 +334,7 @@ def _sync(mirror_dir: str, claude_home: str) -> int:
     """Re-derive the ~/.claude live copies FROM the authoritative mirror.
     Never writes into the mirror.
 
-    This is the same derivation the coordinator-claude PostToolUse hook
+    This is the same derivation the DoE-claude PostToolUse hook
     `derive-global-doctrine-live-copy.py` performs on every write to the
     tracked file; this flag is the manual catch-up for the cases that hook
     cannot see (a cold re-install that clobbered `~/.claude`, an out-of-band
@@ -391,7 +391,7 @@ def main(argv: list[str]) -> int:
     mirror_dir = _mirror_dir()
     if not os.path.isdir(mirror_dir):
         # Silent skip -- see module docstring's silent-skip contract. This is
-        # the expected state on every OSS install and on any coordinator-claude clone
+        # the expected state on every OSS install and on any DoE-claude clone
         # that predates this feature.
         return 0
 

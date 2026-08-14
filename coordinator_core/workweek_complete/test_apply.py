@@ -14,7 +14,7 @@ text never reached `report["results"]`/`report["failed"]`.
 
 Run scoped only:
     python3 -m pytest coordinator_core/workweek_complete/test_apply.py -q
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C5
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54, chunk C5
 """
 
 from __future__ import annotations

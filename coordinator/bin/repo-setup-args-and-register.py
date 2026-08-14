@@ -1,6 +1,6 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """repo-setup-args-and-register.py — naked-Python port of the residual bash
-logic previously embedded in coordinator-claude's `coordinator/skills/repo-setup/SKILL.md`.
+logic previously embedded in DoE-claude's `coordinator/skills/repo-setup/SKILL.md`.
 
 Ports five concerns the skill's fenced bash blocks used to implement inline
 (2026-07-23 debash campaign, chunk C-REPOSETUP):
@@ -51,7 +51,7 @@ Machine-local reads/writes reuse `coordinator_core.install._shared`'s
 install/uninstall already use) rather than re-deriving a machine-local
 invocation ladder here.
 
-Spec backlink: coordinator-claude coordinator/skills/repo-setup/SKILL.md
+Spec backlink: DoE-claude coordinator/skills/repo-setup/SKILL.md
   §§ "Target-root resolution", "coordinator_whoami availability",
   "3d.5. docs/exec-summary.md", "3x. Fleet memo-destination registration"
 Port backlink: docs/plans (M3 chunk C-REPOSETUP, PM-authorized extirpation plan)

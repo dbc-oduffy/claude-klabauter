@@ -6,7 +6,7 @@ Purpose: Records agent IDs dispatched by the EM into two session-runtime files:
     .git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt (back-pointer)
 
 Ported from the retired ~/.claude/plugins/coordinator/hooks/scripts/
-track-dispatched-agents.sh (deleted 2026-07-22, coordinator-claude ``3a561713``). Faithful port of all write logic and
+track-dispatched-agents.sh (deleted 2026-07-22, DoE ``3a561713``). Faithful port of all write logic and
 conditionals — same 3-pass agent-id extraction (now pre-resolved to flat scalar
 input by the manifest), same 4-source model cascade (now pre-resolved), same
 tab-delimited format, same dedup / collision → AMBIGUOUS rewrite, same atomic
@@ -68,7 +68,7 @@ Negative-spec:
 
 Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C4
 Source: retired ~/.claude/plugins/coordinator/hooks/scripts/
-track-dispatched-agents.sh (deleted 2026-07-22, coordinator-claude ``3a561713``).
+track-dispatched-agents.sh (deleted 2026-07-22, DoE ``3a561713``).
 """
 
 from __future__ import annotations
@@ -83,6 +83,11 @@ from typing import TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
     import asyncio
+
+# Generator-provenance declaration (generator_provenance.py). This module
+# writes only session-runtime bookkeeping under .git/coordinator-sessions/
+# (dispatched-agents.txt, em-session-id.txt) -- never a tracked repo artifact.
+GENERATES = []
 
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory

@@ -21,7 +21,7 @@ Wired into coordinator_core.ops.__init__'s ``_EAGER_OP_MODULES``, so this op
 is LIVE on the dispatch path independent of import order.
 
 Consumption status: UNCONSUMED — no call site exists today; not named in
-Coordinator-claude's frozen contract (`docs/contracts/arch-engine-scripts.md`) at
+DoE-claude's frozen contract (`docs/contracts/arch-engine-scripts.md`) at
 all, and not among the two op names the survey's Workflow script does call
 (``cartography.chunk_table`` and ``cartography.churn`` —
 docs/plans/2026-08-06-claude-klabauter-ize-the-survey-census.md § "The survey calls

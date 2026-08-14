@@ -57,7 +57,7 @@ Op contract (C0a manifest row `merge-branch-into-active-workstream`):
 
 Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § A4
                docs/plans/2026-07-22-coordinator-ops-buildout-from-fence-inventory.md
-Fence source: coordinator/pipelines/workday-start-internals.md:203 (coordinator-claude)
+Fence source: coordinator/pipelines/workday-start-internals.md:203 (DoE-claude)
 """
 
 from __future__ import annotations

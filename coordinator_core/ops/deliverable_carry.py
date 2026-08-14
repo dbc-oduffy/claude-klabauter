@@ -39,7 +39,7 @@ initiative`'s own docstring for why the caller (not this function) asserts
 the plan-input fact.
 
 Spec backlink: coordinator/skills/handoff/SKILL.md § Deliverable-spine threading
-               (D1 carry-not-remint) — coordinator-claude, C3d
+               (D1 carry-not-remint) — DoE-claude, C3d
                docs/plans/2026-08-01-deliverable-id-carry-onto-executing-handoff.md
                (DR-207 DD#1) — chunk C1b
                docs/decisions/DR-207-deliverable-spine-initiative-entity.md DD#1
@@ -68,7 +68,7 @@ from coordinator_core.ops.deliverable_equivalence import canonicalize
 # parent tier (AC1). `handoff.schema.json` x-schema-version 4.0.0 RETIRED
 # `spinoff-roadmap` (along with `spinoff-goal` and `spinoff-roadmap-creator`)
 # from `properties.kind.enum`, replacing it with `roadmap-baton` — the live
-# corpus and `coordinator/bin/coordinator-doc-new`'s scaffolder both emit
+# corpus and `coordinator/bin/coordinator-doc-new.py`'s scaffolder both emit
 # `kind: roadmap-baton` now. `spinoff-roadmap` stays accepted here because
 # `handoff-archived.schema.json` was deliberately WIDENED in the same 4.0.0
 # change to admit both vocabularies (the archived corpus permanently retains

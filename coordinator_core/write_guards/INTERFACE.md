@@ -38,6 +38,6 @@ advisory:
 6. Fail direction matches the `.sh`: hard guards fail-CLOSED where bash emits deny on error; advisories/fail-open guards return None on error.
 7. Import-safe (no logic at import time). No stdin read (engine passes `payload`). Python 3.11+, stdlib only, plus `yaml` if the guard parses YAML frontmatter (already a claude-klabauter dep; see subagent_sandbox).
 8. Reuse shared helpers from `coordinator_core.ops._path_guard` (e.g. `contained_path`) and mirror subagent_sandbox's path-normalization helpers where the guard normalizes paths — don't reinvent.
-9. Provenance: top-of-file docstring citing the coordinator-claude `.sh` reference path (`coordinator/hooks/scripts/<name>.sh`).
+9. Provenance: top-of-file docstring citing the DoE `.sh` reference path (`coordinator/hooks/scripts/<name>.sh`).
 
 Only write your assigned `<name>.py` module(s). Do NOT edit engine.py, __main__.py, or hooks.json.

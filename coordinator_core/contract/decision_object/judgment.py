@@ -32,7 +32,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 #: `recommendation` carries exactly these two string fields when non-null —
-#: matches the coordinator-claude schema-of-record's object-shaped `recommendation` (AC-13
+#: matches the DoE schema-of-record's object-shaped `recommendation` (AC-13
 #: cross-slice correction; see `coordinator_core.pickup_assemble`'s
 #: `_RECOMMENDATION_FIELDS` for the pre-existing sibling shape this mirrors).
 _RECOMMENDATION_FIELDS = frozenset({"disposition", "rationale"})
@@ -46,7 +46,7 @@ def _validate_recommendation(recommendation: Any) -> None:
     rationale}`) or `None` — never a bare string. A plain string used to be
     accepted here; that was wrong (Review: code-reviewer — cross-slice
     correction from S3, verified against `pickup_assemble.build_judgment_point`
-    and the coordinator-claude `decision-object.schema.json` schema-of-record).
+    and the DoE `decision-object.schema.json` schema-of-record).
     """
     if recommendation is None:
         return

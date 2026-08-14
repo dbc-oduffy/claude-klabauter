@@ -1,7 +1,7 @@
 """
 coordinator_core.workstream_complete.apply — the `workstream-complete`
 computed-skill engine's MUTATING half, standalone-conformant per
-Coordinator-claude `coordinator/docs/wiki/computed-skills.md` § The compute/apply
+DoE-claude `coordinator/docs/wiki/computed-skills.md` § The compute/apply
 split and § What bounds a mutating apply half. Mirrors
 `coordinator_core.workday_complete.apply` and
 `coordinator_core.workweek_complete.apply`'s shape (Lineage 2, D-1 of the
@@ -30,9 +30,9 @@ reads back previously named only the args, which is why every one of the
 three cross-repo reporters this plan cites suspected the argument instead
 of the real cause.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md, chunk C4
-Spec backlink (no-commit row guard): coordinator-claude docs/plans/2026-07-29-pm-approved-
+Spec backlink (no-commit row guard): DoE-claude docs/plans/2026-07-29-pm-approved-
 provenance-write-time-closure-gate.md, chunk C13
 
 Deviation from the workday/workweek exemplars (both noted, both forced by
@@ -124,7 +124,7 @@ Deviation from the workday/workweek exemplars (both noted, both forced by
        once its producer is confirmed landed, otherwise fails the
        directive loud the same way `.entry_path` does.
 
-No-commit row guard (coordinator-claude docs/plans/2026-07-29-pm-approved-
+No-commit row guard (DoE-claude docs/plans/2026-07-29-pm-approved-
 provenance-write-time-closure-gate.md, chunk C13): before dispatching any
 directive, `apply()` checks whether the governing plan carries a
 commit-required task-spine row (disposition `open`/`coded`) that this
@@ -137,7 +137,7 @@ concerns THIS session's own commit, never a plan-spine row's. A no-commit
 row must resolve to one of five named exits (`shipped`/`spun-off`/
 `backlogged`/`wont-do`/`carried-forward`, `judgments.
 build_no_commit_row_disposition_judgment_point` — per the five-exit ruling,
-cross-repo/inbox/2026-08-05-coordinator-claude-em-plan-tasks-five-exits-ruling.md)
+cross-repo/inbox/2026-08-05-doe-claude-em-plan-tasks-five-exits-ruling.md)
 — "deferred, ignore the guard" is deliberately not a sixth option. This
 check gates the WHOLE apply, not one directive's `depends_on`: unlike
 every judgment point
@@ -944,7 +944,7 @@ def _execute_directives(
 
 
 # ---------------------------------------------------------------------------
-# No-commit row guard (coordinator-claude docs/plans/2026-07-29-pm-approved-
+# No-commit row guard (DoE-claude docs/plans/2026-07-29-pm-approved-
 # provenance-write-time-closure-gate.md, chunk C13) -- see module docstring
 # § No-commit row guard for the design rationale and why this lives in
 # `apply()` rather than `__init__.py`'s `brief()`/`_build_preserved_

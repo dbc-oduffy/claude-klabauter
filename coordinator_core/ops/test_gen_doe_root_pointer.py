@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.gen_doe_root_pointer.
 
-Spec backlink: docs/plans/2026-07-04-coordinator-maximalist-install-shape.md § C1
+Spec backlink: DoE-claude:pln-coordinator-maximalist-install-e73afa § C1
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def _make_doe_root(tmp_path: Path, name: str = "doe-clone") -> Path:
 
 
 def _make_fake_machine_local(tmp_path: Path, value: str, rc: int = 0) -> Path:
-    """Write a fake `machine-local` executable that echoes `value` for `get repos.example_doctrine_repo`.
+    """Write a fake `machine-local` executable that echoes `value` for `get repos.doe_claude`.
 
     Returns the bin dir (caller puts it on PATH) -- resolution goes through
     `shutil.which("machine-local")` in `gen_doe_root_pointer.py`, which honours
@@ -34,7 +34,7 @@ def _make_fake_machine_local(tmp_path: Path, value: str, rc: int = 0) -> Path:
     bin_dir = tmp_path / "fakebin"
     python_body = (
         "import sys\n"
-        "if len(sys.argv) >= 3 and sys.argv[1] == 'get' and sys.argv[2] == 'repos.example_doctrine_repo':\n"
+        "if len(sys.argv) >= 3 and sys.argv[1] == 'get' and sys.argv[2] == 'repos.doe_claude':\n"
         f"    sys.stdout.write({value!r})\n"
         f"    sys.exit({rc})\n"
         "sys.exit(9)\n"
@@ -63,7 +63,7 @@ def _isolated_env(tmp_path, monkeypatch):
     test body runs, on every platform. A regression here fails loud in the
     fixture, not silently in production.
     """
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     home = sandbox_home(monkeypatch, tmp_path / "home")
@@ -104,13 +104,13 @@ def _pointer_path(home):
 
 
 # ---------------------------------------------------------------------------
-# Env-override tier (REPO_EXAMPLE_DOCTRINE_REPO)
+# Env-override tier (REPO_DOE_CLAUDE)
 # ---------------------------------------------------------------------------
 
 
 def test_env_override_writes_pointer(tmp_path, monkeypatch, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc = main([])
 
@@ -121,7 +121,7 @@ def test_env_override_writes_pointer(tmp_path, monkeypatch, _isolated_env):
 
 def test_env_override_strips_trailing_slash(tmp_path, monkeypatch, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root) + "/")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root) + "/")
 
     rc = main([])
 
@@ -131,7 +131,7 @@ def test_env_override_strips_trailing_slash(tmp_path, monkeypatch, _isolated_env
 
 
 def test_nonexistent_root_fails_loud(tmp_path, monkeypatch, capsys, _isolated_env):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "does-not-exist"))
 
     rc = main([])
 
@@ -143,7 +143,7 @@ def test_nonexistent_root_fails_loud(tmp_path, monkeypatch, capsys, _isolated_en
 def test_root_missing_coordinator_subdir_fails_loud(tmp_path, monkeypatch, capsys, _isolated_env):
     bare_root = tmp_path / "bare-clone"
     bare_root.mkdir()
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(bare_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(bare_root))
 
     rc = main([])
 
@@ -182,7 +182,7 @@ def test_machine_local_get_nonzero_exit_fails_loud(tmp_path, monkeypatch, capsys
     rc = main([])
 
     assert rc == 1
-    assert "machine-local get repos.example_doctrine_repo failed" in capsys.readouterr().err
+    assert "machine-local get repos.doe_claude failed" in capsys.readouterr().err
 
 
 def test_machine_local_empty_value_fails_loud(tmp_path, monkeypatch, capsys, _isolated_env):
@@ -192,7 +192,7 @@ def test_machine_local_empty_value_fails_loud(tmp_path, monkeypatch, capsys, _is
     rc = main([])
 
     assert rc == 1
-    assert "repos.example_doctrine_repo is unset in the registry" in capsys.readouterr().err
+    assert "repos.doe_claude is unset in the registry" in capsys.readouterr().err
 
 
 def test_env_override_wins_over_registry(tmp_path, monkeypatch, _isolated_env):
@@ -200,7 +200,7 @@ def test_env_override_wins_over_registry(tmp_path, monkeypatch, _isolated_env):
     other_root = _make_doe_root(tmp_path, "registry-root")
     bin_dir = _make_fake_machine_local(tmp_path, str(other_root))
     monkeypatch.setenv("PATH", str(bin_dir))
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc = main([])
 
@@ -216,7 +216,7 @@ def test_env_override_wins_over_registry(tmp_path, monkeypatch, _isolated_env):
 
 def test_check_only_does_not_write_live_pointer(tmp_path, monkeypatch, capsys, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc = main(["--check-only"])
 
@@ -231,7 +231,7 @@ def test_check_only_does_not_write_live_pointer(tmp_path, monkeypatch, capsys, _
 
 def test_check_only_fresh_pointer_is_no_op(tmp_path, monkeypatch, capsys, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     assert main([]) == 0
     capsys.readouterr()
 
@@ -244,7 +244,7 @@ def test_check_only_fresh_pointer_is_no_op(tmp_path, monkeypatch, capsys, _isola
 def test_check_only_leaves_existing_pointer_byte_unchanged(tmp_path, monkeypatch, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
     other_root = _make_doe_root(tmp_path, "other-root")
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     # Seed a live pointer with a DIFFERENT value first.
     rc = main([])
@@ -254,7 +254,7 @@ def test_check_only_leaves_existing_pointer_byte_unchanged(tmp_path, monkeypatch
 
     # Now run --check-only against a DIFFERENT root -- must not mutate the
     # live file, but MUST fail loud (pointer is stale relative to this run).
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(other_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(other_root))
     rc = main(["--check-only"])
 
     assert rc == 1
@@ -262,7 +262,7 @@ def test_check_only_leaves_existing_pointer_byte_unchanged(tmp_path, monkeypatch
 
 
 def test_check_only_fails_on_missing_root(tmp_path, monkeypatch, capsys, _isolated_env):
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(tmp_path / "nope"))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "nope"))
 
     rc = main(["--check-only"])
 
@@ -277,7 +277,7 @@ def test_check_only_fails_on_missing_root(tmp_path, monkeypatch, capsys, _isolat
 
 def test_second_run_is_idempotent_noop(tmp_path, monkeypatch, capsys, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc1 = main([])
     assert rc1 == 0
@@ -301,11 +301,11 @@ def test_pointer_refreshed_when_root_changes(tmp_path, monkeypatch, _isolated_en
     doe_root_b = _make_doe_root(tmp_path, "root-b")
     pointer = _pointer_path(_isolated_env)
 
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root_a))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root_a))
     assert main([]) == 0
     assert pointer.read_text() == f"{doe_root_a}\n"
 
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root_b))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root_b))
     assert main([]) == 0
     assert pointer.read_text() == f"{doe_root_b}\n"
 
@@ -335,7 +335,7 @@ def test_claude_config_dir_no_longer_affects_pointer_location(tmp_path, monkeypa
     doe_root = _make_doe_root(tmp_path)
     config_dir = tmp_path / "explicit-config-dir"
     config_dir.mkdir()
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
 
     rc = main([])
@@ -349,7 +349,7 @@ def test_settings_home_override_selects_pointer_location(tmp_path, monkeypatch, 
     doe_root = _make_doe_root(tmp_path)
     settings_home = tmp_path / "alt-settings-home"
     settings_home.mkdir()
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
     rc = main([])
@@ -364,7 +364,7 @@ def test_claude_home_used_when_settings_home_unset(tmp_path, monkeypatch, _isola
     claude_home = tmp_path / "alt-claude-home"
     claude_home.mkdir()
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
     rc = main([])
@@ -376,7 +376,7 @@ def test_claude_home_used_when_settings_home_unset(tmp_path, monkeypatch, _isola
 def test_never_writes_the_synced_legacy_target(tmp_path, monkeypatch, _isolated_env):
     """No dual-write — a legacy copy would preserve the cross-machine clobber."""
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     assert main([]) == 0
     assert not (Path(_isolated_env) / ".claude" / ".doe-root").exists()
@@ -385,7 +385,7 @@ def test_never_writes_the_synced_legacy_target(tmp_path, monkeypatch, _isolated_
 def test_creates_machine_local_dir_when_absent(tmp_path, monkeypatch, _isolated_env):
     """Fresh machine: settings-home/machine-local need not pre-exist."""
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     assert not _pointer_path(_isolated_env).parent.exists()
 
     assert main([]) == 0
@@ -405,7 +405,7 @@ def test_generator_writes_where_settings_home_resolver_points(tmp_path, monkeypa
     independently-hand-rolled join. If either side's join logic drifts from
     the other, this fails without needing to know today's literal path."""
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc = main([])
 
@@ -427,12 +427,12 @@ def test_stale_legacy_pointer_does_not_shadow_fresh_write(tmp_path, monkeypatch,
     value -- never the stale legacy one.
     """
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     assert main([]) == 0
 
     legacy_pointer = _isolated_env / ".claude" / ".doe-root"
     legacy_pointer.parent.mkdir(parents=True, exist_ok=True)
-    legacy_pointer.write_text("/Users/someone-else/coordinator-claude\n")
+    legacy_pointer.write_text("/Users/someone-else/DoE-claude\n")
 
     resolved = trusted_root_guard._doe_root(dict(os.environ))
     assert resolved == str(doe_root)
@@ -450,7 +450,7 @@ def test_unknown_argument_is_silently_ignored(tmp_path, monkeypatch, _isolated_e
     ``register_coordinator_mirror`` pass-through-tolerant convention. This
     supersedes the prior strict fail-loud contract."""
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc = main(["--bogus", "--non-interactive"])
 
@@ -485,7 +485,7 @@ def test_graceful_skip_unresolved_exits_zero_with_skip_row(capsys, _isolated_env
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "doe_root_pointer: skipped (repos.example_doctrine_repo not resolved" in out
+    assert "doe_root_pointer: skipped (repos.doe_claude not resolved" in out
 
 
 def test_graceful_skip_unresolved_does_not_mask_check_only_failure(tmp_path, monkeypatch, capsys, _isolated_env):
@@ -499,7 +499,7 @@ def test_graceful_skip_unresolved_does_not_mask_check_only_failure(tmp_path, mon
 
 def test_written_row_on_fresh_write(tmp_path, monkeypatch, capsys, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc = main([])
 
@@ -510,7 +510,7 @@ def test_written_row_on_fresh_write(tmp_path, monkeypatch, capsys, _isolated_env
 
 def test_ready_noop_row_on_second_run(tmp_path, monkeypatch, capsys, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     assert main([]) == 0
     capsys.readouterr()
@@ -522,7 +522,7 @@ def test_ready_noop_row_on_second_run(tmp_path, monkeypatch, capsys, _isolated_e
 
 def test_would_write_row_under_check_only(tmp_path, monkeypatch, capsys, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
 
     rc = main(["--check-only"])
 
@@ -551,7 +551,7 @@ def test_check_only_temp_dir_never_hardcodes_posix_tmp_literal(tmp_path, monkeyp
     import coordinator_core.ops.gen_doe_root_pointer as mod
 
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     monkeypatch.delenv("TMPDIR", raising=False)
     monkeypatch.delenv("TEMP", raising=False)
     monkeypatch.delenv("TMP", raising=False)
@@ -582,7 +582,7 @@ def test_check_only_temp_dir_never_hardcodes_posix_tmp_literal(tmp_path, monkeyp
 
 def test_dual_seed_written_row(tmp_path, monkeypatch, capsys, _isolated_env):
     doe_root = _make_doe_root(tmp_path)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(doe_root))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
     bin_dir = tmp_path / "fakebin2"
     write_fake_machine_local(
         bin_dir,

@@ -32,7 +32,7 @@ failure is routed into the malformed bucket with a ``"state directory unreadable
 reason (this section's existing malformed-quarantine channel), never the graceful-absent
 shape.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) § SECTION 8.13 —
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) § SECTION 8.13 —
   SessionHierarchy (the embedded python3 heredoc). Byte/semantic parity port —
   the heredoc's glob, flatten, enum-quarantine, and record shape are reproduced
   in-process here.

@@ -22,6 +22,7 @@ os.path.join must not be).
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +39,7 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     EXEMPTIONS,
     IMPLICIT_ENCODING_CLASSES,
     PREFIX_EXCLUDABLE_CLASSES,
-    REPO_EXAMPLE_DOCTRINE_REPO,
+    REPO_DOE_CLAUDE,
     REPO_CLAUDE_KLABAUTER,
     REPORT_ONLY_CLASSES,
     TIER_A_CLASSES,
@@ -47,6 +48,8 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     check_implicit_encoding_zero_tolerance,
     check_no_stale_baseline_entries,
     check_no_stale_exempt_prefixes,
+    check_no_stale_exemptions,
+    check_no_stale_fixture_markers,
     check_tier_a_zero_tolerance,
     is_prefix_excluded,
     main,
@@ -497,7 +500,14 @@ def test_check_implicit_encoding_zero_tolerance_fails_on_any_violation(tmp_path)
 # Class 4: hardcoded path separator.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_path_separator_replace_normalization_hack(tmp_path):
+def test_scan_does_not_flag_path_separator_replace_normalization_hack(tmp_path):
+    """2026-08-14 (C1): the `.replace('/', '\\\\')` arm was DROPPED
+    OUTRIGHT as measured-noise-dominant (07-31 lesson: 27/28 ratchet hits
+    false positives) rather than restated as a dataflow-dependent property
+    the flat `ast.walk` cannot decide -- was
+    `test_scan_detects_path_separator_replace_normalization_hack`, a
+    positive control, before this change; now a negative control proving
+    the arm is genuinely gone, not merely narrowed."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def norm(p):\n    return p.replace('/', '\\\\')\n"
@@ -506,10 +516,16 @@ def test_scan_detects_path_separator_replace_normalization_hack(tmp_path):
 
     result = scan(repo)
 
-    assert "tool.py" in result["path_separator"]
+    assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_detects_path_separator_literal_backslash_concat(tmp_path):
+def test_scan_does_not_flag_path_separator_literal_backslash_concat(tmp_path):
+    """2026-08-14 (C1): the literal `'\\\\'` string-concatenation arm was
+    dropped outright -- see
+    test_scan_does_not_flag_path_separator_replace_normalization_hack's
+    docstring for why. Was
+    test_scan_detects_path_separator_literal_backslash_concat, a positive
+    control, before this change."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def build(a, b):\n    return a + '\\\\' + b\n"
@@ -518,10 +534,14 @@ def test_scan_detects_path_separator_literal_backslash_concat(tmp_path):
 
     result = scan(repo)
 
-    assert "tool.py" in result["path_separator"]
+    assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_detects_path_separator_manual_split(tmp_path):
+def test_scan_does_not_flag_path_separator_manual_split(tmp_path):
+    """2026-08-14 (C1): the `.split('\\\\')` arm was dropped outright --
+    see test_scan_does_not_flag_path_separator_replace_normalization_hack's
+    docstring for why. Was test_scan_detects_path_separator_manual_split, a
+    positive control, before this change."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def parts(p):\n    return p.split('\\\\')\n"
@@ -530,7 +550,7 @@ def test_scan_detects_path_separator_manual_split(tmp_path):
 
     result = scan(repo)
 
-    assert "tool.py" in result["path_separator"]
+    assert "tool.py" not in result["path_separator"]
 
 
 def test_scan_does_not_flag_os_path_join(tmp_path):
@@ -569,6 +589,231 @@ def test_scan_does_not_flag_os_sep(tmp_path):
     result = scan(repo)
 
     assert "tool.py" not in result["path_separator"]
+
+
+# ---------------------------------------------------------------------------
+# Report-only class: posix_path_assumption (AC1, C1, 2026-08-14).
+#
+# Prior to this class's introduction, `os.sep` compared or split against a
+# stored/foreign path had NO detector at all -- neither `path_separator`
+# (which only ever matched literal-backslash shapes) nor any other class
+# saw it. `test_scan_detects_posix_path_assumption_comparison` /
+# `_split` below are that gap's red evidence: before `_is_os_sep` and its
+# two call sites in `_scan_python_file` existed, both fixtures produced an
+# EMPTY `result["posix_path_assumption"]` (the key itself didn't exist in
+# `ALL_CLASSES` at all) -- these tests only pass now that the detector does.
+# ---------------------------------------------------------------------------
+
+def test_scan_detects_posix_path_assumption_comparison(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\n\ndef is_root_component(part):\n    return part == os.sep\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" in result["posix_path_assumption"]
+
+
+def test_scan_detects_posix_path_assumption_in_comparison(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\n\ndef looks_like_a_path(s):\n    return os.sep in s\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" in result["posix_path_assumption"]
+
+
+def test_scan_detects_posix_path_assumption_split(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\n\ndef parts(stored_path):\n    return stored_path.split(os.sep)\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" in result["posix_path_assumption"]
+
+
+def test_scan_does_not_flag_forward_slash_joined_construction(tmp_path):
+    """Negative control (AC1, review-struck scope): a `"/"`-joined path
+    construction is valid, unmodified, on Windows and is deliberately NOT
+    part of this class -- only `os.sep` compared/split against a path is."""
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        'def build(a, b):\n    return a + "/" + b\n'
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" not in result["posix_path_assumption"]
+
+
+def test_scan_does_not_flag_os_path_join_embedded_separator(tmp_path):
+    """Negative control (AC1, review-struck scope): `os.path.join` is
+    valid, unmodified, on Windows regardless of the separator embedded in
+    its implementation -- it is the fix, never a `posix_path_assumption`
+    violation."""
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\n\ndef build(a, b):\n    return os.path.join(a, b)\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" not in result["posix_path_assumption"]
+
+
+def test_scan_does_not_flag_os_sep_guarded_comparison(tmp_path):
+    """Same platform-guard recognition `path_separator`/`posix_mode_bits`
+    get -- an `os.sep` comparison structurally unreachable on Windows is
+    correct cross-platform code, not debt."""
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\n\n"
+        "def check(part):\n"
+        "    if os.name != 'nt':\n"
+        "        return part == os.sep\n"
+        "    return False\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "tool.py" not in result["posix_path_assumption"]
+
+
+def test_posix_path_assumption_is_report_only_not_blocking(tmp_path):
+    """AC1: landed as a NEW, SEPARATE, REPORT-ONLY class -- not merged into
+    `path_separator`'s existing gate behavior, and never blocking on its
+    own until a future, separately-reviewed promotion."""
+    assert "posix_path_assumption" in REPORT_ONLY_CLASSES
+    assert "posix_path_assumption" not in CLASSES
+
+
+def test_posix_path_assumption_never_fails_check_against_baseline(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "tool.py").write_text(
+        "import os\n\ndef check(part):\n    return part == os.sep\n"
+    )
+    _commit_all(repo)
+
+    baseline_path = repo / "state" / "posix-exec-baseline.json"  # absent
+
+    ok, msg = check_against_baseline(repo, baseline_path)
+
+    assert ok is True
+    assert "tool.py" in msg
+    assert "posix_path_assumption" in msg
+
+
+# ---------------------------------------------------------------------------
+# Fixture-recognition mechanism (AC4, C1): a suppression marker for a test
+# file's own deliberately violation-shaped specimen data, built to satisfy
+# three testable constraints rather than as a per-file EXEMPTIONS grant.
+# ---------------------------------------------------------------------------
+
+def test_fixture_marker_admissibility_honoured_in_test_path_file(tmp_path):
+    """Constraint 1: the marker suppresses the annotated finding when the
+    file matches the repo's test-path predicate (here, a `test_*.py`
+    basename)."""
+    repo = _init_repo(tmp_path)
+    (repo / "test_tool.py").write_text(
+        "import os\n\n"
+        "def specimen():\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "test_tool.py" not in result["posix_path_assumption"]
+
+
+def test_fixture_marker_admissibility_not_honoured_outside_test_path(tmp_path):
+    """Constraint 1 (negative control): the identical marker, on the
+    identical shape, in a file `_is_test_path` does NOT admit (no
+    `test_`/`tests/` marker) must still fire -- the marker is never honoured
+    in production code, however it is spelled there."""
+    repo = _init_repo(tmp_path)
+    (repo / "production_tool.py").write_text(
+        "import os\n\n"
+        "def specimen():\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "production_tool.py" in result["posix_path_assumption"]
+
+
+def test_fixture_marker_suppresses_only_its_own_line(tmp_path):
+    """Constraint 2 (minimum scope): a marker on one line does not suppress
+    a second, unmarked violation elsewhere in the SAME test file -- it is
+    not a file-scope grant."""
+    repo = _init_repo(tmp_path)
+    (repo / "test_tool.py").write_text(
+        "import os\n\n"
+        "def marked_specimen():\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+        "\n"
+        "def unmarked_finding():\n"
+        "    return os.sep in 'C:\\\\Users\\\\bob'\n"
+    )
+    _commit_all(repo)
+
+    result = scan(repo)
+
+    assert "test_tool.py" in result["posix_path_assumption"]
+
+
+def test_check_no_stale_fixture_markers_passes_when_marker_suppresses_a_hit(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "test_tool.py").write_text(
+        "import os\n\n"
+        "def specimen():\n"
+        "    return os.sep in 'C:\\\\Users\\\\alice'  # posix-exec-fixture\n"
+    )
+    _commit_all(repo)
+
+    ok, msg = check_no_stale_fixture_markers(repo)
+
+    assert ok is True
+
+
+def test_check_no_stale_fixture_markers_fails_on_marker_suppressing_nothing(tmp_path):
+    """Constraint 3 (staleness): a marker on a line that produces no finding
+    at all -- e.g. ordinary, non-violation-shaped code -- fails red, same
+    discipline `check_no_stale_exempt_prefixes` holds `EXEMPT_PREFIXES` to."""
+    repo = _init_repo(tmp_path)
+    (repo / "test_tool.py").write_text(
+        "def specimen():\n"
+        "    return 1 + 1  # posix-exec-fixture\n"
+    )
+    _commit_all(repo)
+
+    ok, msg = check_no_stale_fixture_markers(repo)
+
+    assert ok is False
+    assert "test_tool.py" in msg
+
+
+def test_check_no_stale_fixture_markers_passes_with_no_markers_declared(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "test_tool.py").write_text("def noop():\n    pass\n")
+    _commit_all(repo)
+
+    ok, msg = check_no_stale_fixture_markers(repo)
+
+    assert ok is True
 
 
 # ---------------------------------------------------------------------------
@@ -779,21 +1024,30 @@ def test_scan_still_flags_bare_early_return_with_unrecognized_windows_test(tmp_p
     firing, the 2026-08-13 fix would have widened past its stated scope
     (recognizing the SHAPE only when the TEST is a known windows-test) into
     treating any bare early return as a platform guard, which would hide
-    genuinely unguarded code behind an unrelated conditional."""
+    genuinely unguarded code behind an unrelated conditional.
+
+    2026-08-14 (C1): the fixture shape was `path_separator`'s `.replace('/',
+    '\\\\')` arm, dropped outright that day (see
+    `test_scan_does_not_flag_path_separator_replace_normalization_hack`'s
+    docstring); re-expressed on `posix_path_assumption`'s `os.sep`-compared
+    shape, which shares the exact same `_is_windows_guarded` call site and
+    guard-recognition contract, to keep exercising this guard-recognition
+    scenario on a class that still detects anything."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
+        "import os\n\n"
         "def _host_is_windows():\n"
         "    raise NotImplementedError\n\n"
         "def norm(p):\n"
         "    if not _host_is_windows():\n"
         "        return p\n"
-        "    return p.replace('/', '\\\\')\n"
+        "    return p == os.sep\n"
     )
     _commit_all(repo)
 
     result = scan(repo)
 
-    assert "tool.py" in result["path_separator"]
+    assert "tool.py" in result["posix_path_assumption"]
 
 
 def test_scan_still_flags_bare_early_return_guard_whose_body_does_not_exit(tmp_path):
@@ -801,20 +1055,23 @@ def test_scan_still_flags_bare_early_return_guard_whose_body_does_not_exit(tmp_p
     whose body does NOT unconditionally exit (no return/raise/sys.exit) does
     not actually make the following sibling statement unreachable on
     Windows, so it must still fire. Proves `_block_always_exits` is load-
-    bearing, not decorative."""
+    bearing, not decorative.
+
+    2026-08-14 (C1): re-expressed on `posix_path_assumption`'s `os.sep`
+    shape -- see the sibling test's docstring above for why."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
-        "import sys\n\n"
+        "import sys\nimport os\n\n"
         "def norm(p):\n"
         "    if sys.platform.startswith('win'):\n"
         "        print('on windows')\n"
-        "    return p.replace('/', '\\\\')\n"
+        "    return p == os.sep\n"
     )
     _commit_all(repo)
 
     result = scan(repo)
 
-    assert "tool.py" in result["path_separator"]
+    assert "tool.py" in result["posix_path_assumption"]
 
 
 def test_scan_still_flags_ungated_os_access(tmp_path):
@@ -1420,7 +1677,7 @@ def test_assert_baseline_not_grown_passes_when_baseline_file_absent(tmp_path):
 # genuinely-defective file at, e.g., `coordinator/scripts/setup.py`.
 # ---------------------------------------------------------------------------
 
-_EXEMPTED_IN_CLAUDE_KLABAUTER = "coordinator/scripts/setup.py"
+_EXEMPTED_IN_CLAUDE_KLABAUTER = "coordinator/bin/plan-tasks-resolve"
 
 
 def _repo_named(tmp_path: Path, dir_name: str) -> Path:
@@ -1430,6 +1687,7 @@ def _repo_named(tmp_path: Path, dir_name: str) -> Path:
     no repo holds an exemption for (the in-fixture control)."""
     repo = tmp_path / dir_name
     (repo / "coordinator" / "scripts").mkdir(parents=True)
+    (repo / "coordinator" / "bin").mkdir(parents=True)
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
@@ -1566,12 +1824,18 @@ _CLAUDE_KLABAUTER_PREFIX = "dist/mirror-native/"
 _DOE_PREFIX = "state/review-trail/diffs/m8-baseline/"
 
 #: A file that trips several PREFIX_EXCLUDABLE classes at once (env_shebang,
-#: path_separator, implicit_encoding) -- one specimen proving the exclusion is
-#: wholesale, not per-class.
+#: posix_path_assumption, implicit_encoding) -- one specimen proving the
+#: exclusion is wholesale, not per-class. Was a `path_separator`-tripping
+#: `.replace('/', '\\\\')` shape before 2026-08-14 (C1); that arm was
+#: dropped outright (see `test_scan_does_not_flag_path_separator_replace_
+#: normalization_hack`'s docstring), so this specimen now uses the
+#: `posix_path_assumption` shape (`os.sep` compared against a path) to keep
+#: exercising an AST-detected class alongside env_shebang/implicit_encoding.
 _MULTI_CLASS_VIOLATOR = (
     "#!/usr/bin/env python3\n"
+    "import os\n"
     "def norm(p):\n"
-    "    return p.replace('/', '\\\\')\n"
+    "    return p == os.sep\n"
     "def read(p):\n"
     "    return open(p).read()\n"
 )
@@ -1621,7 +1885,7 @@ def test_prefix_exclusion_does_not_swallow_a_similarly_named_sibling_path(tmp_pa
     result = scan(repo)
 
     assert outside in result["env_shebang"]
-    assert outside in result["path_separator"]
+    assert outside in result["posix_path_assumption"]
     assert outside in result["implicit_encoding"]
     assert not is_prefix_excluded(outside, REPO_CLAUDE_KLABAUTER)
 
@@ -1656,15 +1920,15 @@ def test_prefix_exclusion_is_repo_scoped(tmp_path):
     result = scan(sibling)
 
     assert inside in result["env_shebang"]
-    assert inside in result["path_separator"]
+    assert inside in result["posix_path_assumption"]
 
 
 def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_path):
-    """Migration proof: the three hand-listed coordinator-claude m8-baseline `path_separator`
+    """Migration proof: the three hand-listed DoE m8-baseline `path_separator`
     entries were deleted from EXEMPTIONS in favour of one prefix. The class
     they named must still be invisible -- migrating a carve-out must not
     quietly re-expose what it covered."""
-    repo = _repo_with_preserved_tree(tmp_path, "coordinator-claude", _DOE_PREFIX)
+    repo = _repo_with_preserved_tree(tmp_path, "DoE-claude", _DOE_PREFIX)
     for name in (
         "block_subagent_commit.py",
         "block_subagent_destructive_action.py",
@@ -1675,7 +1939,7 @@ def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_pat
 
     result = scan(repo)
 
-    assert repo_key_for_root(repo) == REPO_EXAMPLE_DOCTRINE_REPO
+    assert repo_key_for_root(repo) == REPO_DOE_CLAUDE
     for name in (
         "block_subagent_commit.py",
         "block_subagent_destructive_action.py",
@@ -2007,6 +2271,7 @@ def test_main_json_flag_emits_valid_json_with_expected_top_level_keys(tmp_path, 
         "implicit_encoding",
         "stale_exempt_prefixes",
         "stale_baseline_entries",
+        "stale_fixture_markers",
     }
     assert "scan" in payload
     assert "env_shebang" in payload["scan"]
@@ -2193,3 +2458,341 @@ def test_check_no_stale_baseline_entries_isolates_per_class(tmp_path):
     # env_shebang's still-live entry must not be listed as stale.
     env_shebang_idx = msg.find("env_shebang:")
     assert env_shebang_idx == -1 or "stale entry" not in msg[env_shebang_idx:env_shebang_idx + 40]
+
+
+def test_check_no_stale_baseline_entries_reads_committed_state_not_working_tree(tmp_path):
+    """`state/posix-exec-baseline.json` records COMMITTED reality, not this
+    session's uncommitted edits. A path present (and genuinely violating) at
+    HEAD but deleted only from the working tree -- e.g. a peer's uncommitted
+    edit on a tree carrying ~50 concurrent sessions -- must NOT read as
+    stale: `scan()` itself stays working-tree-scoped (every other caller's
+    behavior is unchanged), but this check must re-verify a "missing"
+    candidate against HEAD before declaring it a dead grandfather slot. See
+    docs/plans/2026-08-14-clear-the-windows-first-class-residuals.md R3."""
+    repo = _init_repo(tmp_path)
+    victim = repo / "tool.sh"
+    victim.write_text("#!/usr/bin/env bash\necho hi\n")
+    _commit_all(repo)
+
+    baseline_dir = repo / "state"
+    baseline_dir.mkdir()
+    baseline_path = baseline_dir / "posix-exec-baseline.json"
+    baseline_path.write_text(
+        json.dumps({cls: (["tool.sh"] if cls == "env_shebang" else []) for cls in CLASSES})
+    )
+
+    # Working-tree-only deletion -- committed at HEAD, gone on disk, never
+    # staged. `_tracked_files()` (git ls-files, index-based) still lists it;
+    # only `open(abspath)` inside `scan()` fails.
+    victim.unlink()
+
+    ok, msg = check_no_stale_baseline_entries(repo, baseline_path)
+
+    assert ok is True, msg
+    assert "tool.sh" not in msg
+
+
+def test_check_no_stale_baseline_entries_still_reds_when_genuinely_gone_at_head(tmp_path):
+    """The committed-state re-check must not blanket-suppress every
+    "missing from scan" candidate -- a path that is ALSO gone (or no longer
+    violating) at HEAD stays a genuine dead grandfather slot."""
+    repo = _init_repo(tmp_path)
+    victim = repo / "tool.sh"
+    victim.write_text("#!/usr/bin/env bash\necho hi\n")
+    _commit_all(repo)
+
+    baseline_dir = repo / "state"
+    baseline_dir.mkdir()
+    baseline_path = baseline_dir / "posix-exec-baseline.json"
+    baseline_path.write_text(
+        json.dumps({cls: (["tool.sh"] if cls == "env_shebang" else []) for cls in CLASSES})
+    )
+
+    victim.unlink()
+    _commit_all(repo, message="delete tool.sh")
+
+    ok, msg = check_no_stale_baseline_entries(repo, baseline_path)
+
+    assert ok is False, msg
+    assert "tool.sh" in msg
+
+
+# ---------------------------------------------------------------------------
+# AC7 (C6, docs/plans/2026-08-14-windows-first-class-gate-and-exemptions.md):
+# no EXEMPTIONS entry may exist without naming an admission test -- what
+# converts the PM's "a well-reasoned exemption that survives adversarial
+# review stands" from a remembered norm into an artifact -- plus the two
+# eng-director extensions from his own overturned-grant review
+# (state/review-trail/findings/2026-08-14-c4c1-resolve-python-grant-strike-
+# adversarial-review.md): every admission-test edit bound to a resolvable
+# decision record, and every third-test grant carrying its four evidence
+# items plus the elimination-target clause.
+# ---------------------------------------------------------------------------
+
+_ADMISSION_TEST_MARKERS = (
+    "two-leg pair",
+    "two-leg-pair",
+    "admission test:",
+    "permanent artifact-shape irreducibility",
+)
+
+
+def test_every_exemption_names_an_admission_test():
+    """AC7: no EXEMPTIONS entry can exist without its reason text naming
+    which of the three admission tests (module docstring) it invokes --
+    not a description of what the file does. This is the mechanism the C6
+    chunk body asks for; without it, a future grant can be written the
+    same free-prose way the struck resolve-python.sh grant was."""
+    for cls, per_repo in EXEMPTIONS.items():
+        for repo_key, relpaths in per_repo.items():
+            for relpath, reason in relpaths.items():
+                lowered = reason.lower()
+                assert any(marker in lowered for marker in _ADMISSION_TEST_MARKERS), (
+                    f"EXEMPTIONS[{cls!r}][{repo_key!r}][{relpath!r}] reason "
+                    "text does not name which admission test it invokes "
+                    "(expected one of the two-leg-pair test, the "
+                    "path_separator/posix_mode_bits two-way discriminator "
+                    "['Admission test:' prefix], or the third "
+                    "permanent-artifact-shape-irreducibility test) -- a "
+                    f"description of what the file does is not sufficient. "
+                    f"Reason: {reason!r}"
+                )
+
+
+_DECISION_RECORD_CITATION = re.compile(
+    r"state/(?:audits|review-trail)/[\w./-]+\.(?:md|yaml)"
+)
+
+
+def test_every_admission_test_edit_cites_a_resolvable_decision_record():
+    """Eng-director extension (2026-08-14, his own review of the overturned
+    C4c1 grant): the module docstring cites the third admission test's
+    ruling by relpath, but nothing previously checked that relpath
+    resolves -- so a future grant (or a fourth admission test) could cite
+    a decision record that does not exist and nothing would fail. Every
+    state/audits/... or state/review-trail/... citation in the module's own
+    docstring, where the admission tests themselves are defined, must
+    resolve to a real file in this repo.
+
+    Hyphen-wrapped filenames (this docstring word-wraps at 79 columns and a
+    citation can wrap mid-hyphen) are re-joined before matching -- a naive
+    single-line regex would silently see only the un-wrapped citations and
+    never notice a wrapped one going stale."""
+    doc = check_posix_exec_assumptions.__doc__
+    collapsed = re.sub(r"-\n\s*", "-", doc)
+    collapsed = " ".join(collapsed.split())
+    cited = sorted(set(_DECISION_RECORD_CITATION.findall(collapsed)))
+    assert cited, (
+        "expected at least one state/audits/... or state/review-trail/... "
+        "decision-record citation in the module docstring -- the third "
+        "admission test's ruling should be discoverable there"
+    )
+    missing = [p for p in cited if not (_REPO_ROOT / p).is_file()]
+    assert not missing, (
+        "module docstring cites decision record(s) that do not resolve on "
+        f"disk: {missing} -- an admission-test edit must cite a record "
+        "that actually exists, never a promise of one"
+    )
+
+
+_THIRD_TEST_EVIDENCE_ITEMS = (
+    "the mechanism, stated concretely",
+    "permanence, not contingency",
+    "the windows leg, named",
+    "a live caller, named",
+)
+
+
+def test_module_docstring_third_admission_test_states_all_four_evidence_items():
+    """Eng-director extension: a third-test grant carries its four evidence
+    items plus the elimination-target clause, or no grant -- same
+    discipline as every other EXEMPTIONS bar in this module. The
+    2026-08-13 grant failed item 3 of this four-item bar the same document
+    authored, and nothing caught it. This pins the bar ITSELF (the module
+    docstring's own four-item list) so a future edit cannot quietly drop an
+    item without a test noticing -- a per-grant checker cannot exist today
+    because no third-test grant currently survives in EXEMPTIONS (the one
+    example, resolve-python.sh, was struck 2026-08-14); this is the
+    equivalent guard on the bar definition itself, ready to extend to a
+    per-entry check the day a new third-test grant is added."""
+    doc = " ".join(check_posix_exec_assumptions.__doc__.split()).lower()
+    for item in _THIRD_TEST_EVIDENCE_ITEMS:
+        assert item in doc, (
+            f"module docstring no longer states third-admission-test "
+            f"evidence item {item!r} -- the four-item bar (mechanism, "
+            "permanence, Windows leg, live caller) plus the "
+            "elimination-target clause must all remain discoverable in "
+            "the docstring that defines the third admission test"
+        )
+    assert "elimination-target clause" in doc, (
+        "module docstring no longer states the elimination-target clause "
+        "required alongside the third admission test's four evidence items"
+    )
+
+
+def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers():
+    """Per-entry backstop: any EXEMPTIONS entry that invokes the third
+    admission test (names 'permanent artifact-shape irreducibility' or is
+    filed as an 'IRREDUCIBILITY_REASON') must itself carry markers for all
+    four evidence items, not merely cite the test by name. Currently
+    vacuous-but-armed (no third-test entry survives in EXEMPTIONS as of
+    this drain -- resolve-python.sh's grant was struck 2026-08-14) --
+    intentionally still asserted so the day a new third-test grant lands,
+    this fires immediately if it is evidence-incomplete, exactly the gap
+    that let the 2026-08-13 grant through with item 3 missing."""
+    markers = ("mechanism:", "permanence:", "windows leg:", "live caller:")
+    checked_any_third_test_entry = False
+    for cls, per_repo in EXEMPTIONS.items():
+        for repo_key, relpaths in per_repo.items():
+            for relpath, reason in relpaths.items():
+                lowered = reason.lower()
+                if "permanent artifact-shape irreducibility" not in lowered:
+                    continue
+                checked_any_third_test_entry = True
+                missing = [m for m in markers if m not in lowered]
+                assert not missing, (
+                    f"EXEMPTIONS[{cls!r}][{repo_key!r}][{relpath!r}] invokes "
+                    f"the third admission test but is missing evidence "
+                    f"item(s) {missing} -- all four (mechanism, permanence, "
+                    "Windows leg, live caller) are required, or no grant"
+                )
+    # No assertion on checked_any_third_test_entry: it is fine for zero
+    # third-test entries to currently exist (the register may be entirely
+    # two-leg-pair/two-way-discriminator grants at any given drain) -- the
+    # per-entry loop above is what actually gates a future addition.
+    assert checked_any_third_test_entry in (True, False)
+
+
+# ---------------------------------------------------------------------------
+# AC13 (highest-value artifact in the plan): every surviving EXEMPTIONS
+# entry's file must still produce a hit for its class under a real-tree
+# scan with EXEMPTIONS disabled -- the staleness direction
+# test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted does not
+# cover (that test only proves an exempted file stays invisible, which is
+# exactly what a STALE grant also produces). Mirrors
+# check_no_stale_exempt_prefixes' discipline one mechanism down (per-file
+# instead of per-directory) and test_no_parity_exemption_is_stale's
+# "empty the exemption set and see if it's still an offender" mechanism in
+# coordinator_core/test_bin_launcher_parity.py.
+# ---------------------------------------------------------------------------
+
+def test_check_no_stale_exemptions_passes_with_no_exemptions_declared(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "clean.py").write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+
+    ok, msg = check_no_stale_exemptions(repo)
+
+    assert ok is True, msg
+    assert "no EXEMPTIONS entries declared" in msg
+
+
+def test_check_no_stale_exemptions_flags_a_grant_whose_file_no_longer_offends(tmp_path):
+    """Synthetic repro of exactly what AC13 caught on the real tree: a
+    tracked file that once had mode 100755 and an env_shebang line, whose
+    EXEMPTIONS grant survived after the file was fixed (mode dropped,
+    shebang removed) -- the grant now excuses nothing."""
+    repo = _init_repo(tmp_path)
+    (repo / "coordinator").mkdir()
+    fixed = repo / "coordinator" / "fixed-tool.py"
+    fixed.write_text("print('hello')\n", encoding="utf-8")
+    _commit_all(repo)
+
+    repo_key = repo_key_for_root(repo)
+    monkeypatch_exemptions = {
+        "env_shebang": {repo_key: {"coordinator/fixed-tool.py": "stale grant"}},
+    }
+    orig = check_posix_exec_assumptions.EXEMPTIONS
+    check_posix_exec_assumptions.EXEMPTIONS = monkeypatch_exemptions
+    try:
+        ok, msg = check_no_stale_exemptions(repo)
+    finally:
+        check_posix_exec_assumptions.EXEMPTIONS = orig
+
+    assert ok is False, msg
+    assert "STALE EXEMPTIONS" in msg
+    assert "env_shebang" in msg
+    assert "coordinator/fixed-tool.py" in msg
+
+
+def test_check_no_stale_exemptions_passes_when_file_still_offends(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "coordinator").mkdir()
+    live = repo / "coordinator" / "still-live.py"
+    live.write_text("#!/usr/bin/env python3\nprint('hi')\n", encoding="utf-8")
+    _commit_all(repo)
+
+    repo_key = repo_key_for_root(repo)
+    monkeypatch_exemptions = {
+        "env_shebang": {repo_key: {"coordinator/still-live.py": "a live grant"}},
+    }
+    orig = check_posix_exec_assumptions.EXEMPTIONS
+    check_posix_exec_assumptions.EXEMPTIONS = monkeypatch_exemptions
+    try:
+        ok, msg = check_no_stale_exemptions(repo)
+    finally:
+        check_posix_exec_assumptions.EXEMPTIONS = orig
+
+    assert ok is True, msg
+
+
+def test_check_no_stale_exemptions_is_repo_scoped(tmp_path):
+    """A grant declared for a different repo key must never be checked
+    against `repo`'s own tree, same repo-scoping discipline as
+    check_no_stale_exempt_prefixes."""
+    repo = _init_repo(tmp_path)
+    (repo / "clean.py").write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+
+    orig = check_posix_exec_assumptions.EXEMPTIONS
+    check_posix_exec_assumptions.EXEMPTIONS = {
+        "env_shebang": {"some_other_repo": {"nonexistent/path.py": "not ours"}},
+    }
+    try:
+        ok, msg = check_no_stale_exemptions(repo)
+    finally:
+        check_posix_exec_assumptions.EXEMPTIONS = orig
+
+    assert ok is True, msg
+    assert "no EXEMPTIONS entries declared" in msg
+
+
+def test_scan_apply_exemptions_false_ignores_exemptions_but_keeps_prefix_exclusion(tmp_path):
+    """`scan(root, apply_exemptions=False)` must skip per-file EXEMPTIONS
+    subtraction while still honoring EXEMPT_PREFIXES -- the two mechanisms
+    are deliberately independent (module docstring), and
+    check_no_stale_exemptions relies on this precise split."""
+    repo = _init_repo(tmp_path)
+    (repo / "coordinator").mkdir()
+    exempt_file = repo / "coordinator" / "exempt-tool.py"
+    exempt_file.write_text("#!/usr/bin/env python3\nprint('hi')\n", encoding="utf-8")
+    _commit_all(repo)
+
+    repo_key = repo_key_for_root(repo)
+    orig = check_posix_exec_assumptions.EXEMPTIONS
+    check_posix_exec_assumptions.EXEMPTIONS = {
+        "env_shebang": {repo_key: {"coordinator/exempt-tool.py": "granted"}},
+    }
+    try:
+        with_exemptions = scan(repo)
+        without_exemptions = scan(repo, apply_exemptions=False)
+    finally:
+        check_posix_exec_assumptions.EXEMPTIONS = orig
+
+    assert "coordinator/exempt-tool.py" not in with_exemptions["env_shebang"]
+    assert "coordinator/exempt-tool.py" in without_exemptions["env_shebang"]
+
+
+def test_real_tree_no_stale_exemptions():
+    """AC13's real-tree wiring proof, mirroring
+    test_real_tree_ratchets_clean_against_committed_baseline and
+    test_check_no_stale_exempt_prefixes_flags_stale_file_based_prefix's
+    sibling real-tree assertion: every EXEMPTIONS entry granted for
+    claude_klabauter in THIS repo must still produce a live hit for its
+    class once EXEMPTIONS is disabled. This is the exact check that caught
+    the two struck coordinator/scripts/lib/invoking-shell-bash4-probe.sh /
+    coordinator/bin/tests/test-bin-sh-polyglot-direct-invocation.sh grants
+    during this chunk's own execution (2026-08-14) -- both files had lost
+    their exec bit/shebang with no corresponding EXEMPTIONS prune."""
+    ok, msg = check_no_stale_exemptions(_REPO_ROOT)
+    assert ok, msg

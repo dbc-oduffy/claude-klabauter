@@ -5,9 +5,9 @@ coordinator_core.ops.register_coordinator_mirror.
 Finish-strangler port (DOE-PORT, variant #1 — pristine, no claude-klabauter shim borrows this
 script): the bash implementation (idempotent atomic write of
 `registry.local.toml::plugin.mirrors.coordinator-claude`) has been fully ported to
-coordinator_core/ops/register_coordinator_mirror.py per DR-047 (coordinator-claude owns
-contract/generator, claude-klabauter owns engine). This file is now a thin coordinator-claude-side (contract)
-trampoline over that claude-klabauter (engine) module — it resolves the coordinator-claude-local "coordinator
+coordinator_core/ops/register_coordinator_mirror.py per DR-047 (DoE owns
+contract/generator, claude-klabauter owns engine). This file is now a thin DoE-side (contract)
+trampoline over that claude-klabauter (engine) module — it resolves the DoE-local "coordinator
 live path" fact (script-relative `resolve-coordinator-clone.py --for-content`, with a
 `claude-home plugins` fallback, exactly as the bash oracle did) and hands it to the
 Claude-klabauter module via `--live-path`; the claude-klabauter module owns only the pure TOML-section
@@ -90,7 +90,7 @@ def _claude_home_argv(*args: str) -> list:
         # through ~/.claude/bin") — this Windows-only probe previously tried
         # the retired compat mirror's `.cmd` BEFORE settings-home's, an
         # inverted precedence on the platform that matters most (Windows is
-        # the primary machine per coordinator-claude CLAUDE.md § Runtime conventions).
+        # the primary machine per DoE-claude CLAUDE.md § Runtime conventions).
         # Swapped so settings-home wins whenever both candidates exist; the
         # mirror candidate is retained, tried last.
         home = (
@@ -122,7 +122,7 @@ def _claude_home_argv(*args: str) -> list:
 
 
 def _resolve_coordinator_live() -> str:
-    """coordinator-claude-local "coordinator live path" resolution — unchanged from the bash oracle.
+    """DoE-local "coordinator live path" resolution — unchanged from the bash oracle.
 
     Tier 1: the script-relative resolve-coordinator-clone.py --for-content helper
     (co-located sibling of this file — this file lives in coordinator/lib/, so

@@ -1,7 +1,7 @@
 """
 coordinator_core.reconcile.tests.test_ac27_differential_oracle -- corpus-axis
 fixtures for the AC27 oracle (docs/plans/2026-07-26-gate-resolution-widen-and-
-migrate.md, coordinator-claude, C12 GATE).
+migrate.md, DoE-claude, C12 GATE).
 
 Covers the blind spot the evaluator axis structurally cannot see: a corpus
 migration (moving `gate_dependency` prose into `blocking_notes`) that flips a

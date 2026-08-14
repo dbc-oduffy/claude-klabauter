@@ -17,7 +17,7 @@ registry `coordinator.machine_slug` -> live hostname fallback).
 
 Converted from a hand-rolled unittest runner to top-level pytest functions.
 
-Spec backlink: docs/plans/2026-07-20-tested-platforms-teeth-windows-honest.md § C2
+Spec backlink: DoE-claude:pln-platform-verified-is-a-distinc-a076aa § C2
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from coordinator_core.win_portability import no_console_creationflags
 # test file: coordinator/bin/tests/test_record_platform_outcome.py
 # CLI:       coordinator/bin/record-platform-outcome
 # schema:    coordinator/schemas/platform-outcome.schema.json — schemas/ is
-#            CONTRACT and, per DR-047, stayed in coordinator-claude when bin/ moved
+#            CONTRACT and, per DR-047, stayed in DoE-claude when bin/ moved
 #            here (see coordinator_registry.py's own layout-tolerant comment).
 #            Resolved below via the already-imported coordinator_registry
 #            module rather than re-implementing its rung order.
@@ -49,7 +49,7 @@ from coordinator_core.win_portability import no_console_creationflags
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _COORDINATOR_DIR = _BIN_DIR.parent
-_CLI_PATH = _BIN_DIR / "record-platform-outcome"
+_CLI_PATH = _BIN_DIR / "record-platform-outcome.py"
 _LIB_DIR = _BIN_DIR / "lib"
 
 if str(_LIB_DIR) not in sys.path:
@@ -72,7 +72,7 @@ _cli = _load_cli(_CLI_PATH, "record_platform_outcome")
 
 # coordinator_registry is now import-time-resolvable (repo split, 4f74656c):
 # loading the CLI above pulled it into sys.modules already having walked its
-# own DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO/machine-local rungs against this process's
+# own DOE_ROOT/REPO_DOE_CLAUDE/machine-local rungs against this process's
 # ambient env, so reuse its resolved manifest path rather than re-deriving
 # the schemas/ location — the real schemas dir is wherever that landed.
 _REAL_MANIFEST_PATH = Path(sys.modules["coordinator_registry"]._MANIFEST_PATH)
@@ -166,8 +166,8 @@ def _setup_surface(tmp_path):
     surface_sha = _init_scratch_repo(surface_root)
     # _run_cli() points DOE_ROOT at surface_root, which coordinator_registry's
     # own import-time manifest bootstrap also reads (DOE_ROOT wins over the
-    # ambient REPO_EXAMPLE_DOCTRINE_REPO alias by design — same precedence as doe_root()).
-    # A scratch stand-in for "the coordinator-claude/coordinator repo" must therefore carry
+    # ambient REPO_DOE_CLAUDE alias by design — same precedence as doe_root()).
+    # A scratch stand-in for "the DoE/coordinator repo" must therefore carry
     # the schemas/ manifest too, or the CLI subprocess dies at import with an
     # install-integrity FileNotFoundError before ever reaching the surface
     # logic under test.
@@ -265,11 +265,11 @@ def test_doe_root_unresolvable_errors_cleanly(tmp_path) -> None:
     surface_root, _surface_sha = _setup_surface(tmp_path)
     env = dict(os.environ)
     env.pop("DOE_ROOT", None)
-    # REPO_EXAMPLE_DOCTRINE_REPO is the ambient alias doe_root() also checks (d5e22cb2) —
-    # left set, it resolves the real coordinator-claude clone regardless of the
+    # REPO_DOE_CLAUDE is the ambient alias doe_root() also checks (d5e22cb2) —
+    # left set, it resolves the real DoE-claude clone regardless of the
     # MACHINE_LOCAL_IMPL stub below, defeating the "fully unresolvable" premise
     # this test exists to cover.
-    env.pop("REPO_EXAMPLE_DOCTRINE_REPO", None)
+    env.pop("REPO_DOE_CLAUDE", None)
     stub = str(tmp_path / "_machine_local_stub.py")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write("import sys\nsys.exit(1)\n")

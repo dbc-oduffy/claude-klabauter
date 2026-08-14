@@ -4,10 +4,10 @@ open-plan-spine-row advisory for the `workstream-complete-assemble`
 computed-skill engine.
 
 Purpose: a plan-tasks spine row that never reaches a terminal
-`disposition` has five honest ends, reachable via `coordinator/bin/
+`disposition` has five honest ends, reachable via `python3 coordinator/bin/
 plan-tasks-resolve` — do it now (`disposition: coded`, no PM word), spin
 it off or move it to an existing plan (`disposition: spun_off`, no PM
-word — relaxed at coordinator-claude `bd0475fd5`, schema 1.4.0), backlog it to the
+word — relaxed at DoE `bd0475fd5`, schema 1.4.0), backlog it to the
 improvement queue (`disposition: backlogged`, a PM word required), or
 rule it won't-do (`disposition: wont_do`, a PM word required) — plus the
 legitimate non-terminal choice of leaving it genuinely `open` and
@@ -20,11 +20,11 @@ that silent dishonest exit — it does NOT write anything, and it never
 blocks (see Negative-spec).
 
 Spec backlink: pln-workstream-complete-names-its-dc94b7,
-chunk C1. Design provenance: C13 of coordinator-claude's
+chunk C1. Design provenance: C13 of DoE-claude's
 docs/plans/2026-07-29-pm-approved-provenance-write-time-closure-gate.md,
 PM-ratified, handed over via docs/plans/2026-08-05-leg-a-closing-aid-
 terminal-statuses.md and delivered as ask 5 of source memo
-2026-08-05-coordinator-claude-em-leg-a-ac-checkbox-divestment.md.
+2026-08-05-doe-claude-em-leg-a-ac-checkbox-divestment.md.
 
 Mirrors `directives_session_hygiene.py`'s Step 2.96 completeness-
 checklist gate shape (`FREE_VALUE_KEYS`, an item NamedTuple, a gate
@@ -132,7 +132,7 @@ _INDETERMINATE_SUMMARY = (
 )
 
 _WARN_TEMPLATE = """WARN [open-spine-row-worklist]: {count} plan-spine row(s) still open on {plan_ref}.
-Five honest ends, via `coordinator/bin/plan-tasks-resolve --id <row-id> ... --disposition-detail "<why>"`:
+Five honest ends, via `python3 coordinator/bin/plan-tasks-resolve --id <row-id> ... --disposition-detail "<why>"`:
   - do it now  : --coded <sha>          (disposition: coded      -- no PM word needed)
   - spin off   : --spun-off <ref>       (disposition: spun_off   -- no PM word needed)
   - move it    : --moved-to <plan-path> (disposition: spun_off   -- no PM word needed)
@@ -145,7 +145,7 @@ Open rows:
 
 Reference: docs/plans/2026-08-05-wsc-open-spine-row-worklist.md
 To waive: add the row id(s) to decisions["{waived_key}"] once you've reviewed and knowingly
-left it open, or resolve it via `coordinator/bin/plan-tasks-resolve` above and re-run
+left it open, or resolve it via `python3 coordinator/bin/plan-tasks-resolve` above and re-run
 /workstream-complete."""
 
 

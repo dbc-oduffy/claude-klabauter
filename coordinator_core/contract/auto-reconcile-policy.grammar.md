@@ -1,17 +1,17 @@
 # `auto-reconcile-policy.yaml` grammar pin
 
 Spec backlink: `pln-claude-klabauter-auto-reconcile-pass-off-425848` § C9, DEC-1.
-Boundary authority: `/Users/example-operator/X/coordinator-claude/docs/decisions/DR-047-coordinator-claude-klabauter-boundary-redraw-contract-vs-e.md`
-("coordinator-claude owns rules, claude-klabauter owns machine").
+Boundary authority: `/Users/example-operator/X/DoE-claude/docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md`
+("DoE owns rules, claude-klabauter owns machine").
 
 ## Ownership
 
 This grammar is the schema/shape **claude-klabauter ships and validates against**. The policy
 **data** file itself, `coordinator/auto-reconcile-policy.yaml`, is **authored and owned by
-Coordinator-claude** (the sibling `claude-central-em` repo) — claude-klabauter's `coordinator_core/reconcile/policy_loader.py`
+DoE** (the sibling `claude-central-em` repo) — claude-klabauter's `coordinator_core/reconcile/policy_loader.py`
 reads it fresh on every call and never writes it. This mirrors the existing
 `subagent-sandbox-policy.yaml` ← `coordinator_core/subagent_sandbox` precedent (DR-047
-contract-vs-engine split): a threshold/data amendment on coordinator-claude's side is a policy-YAML edit,
+contract-vs-engine split): a threshold/data amendment on DoE's side is a policy-YAML edit,
 zero claude-klabauter code change.
 
 ## Reader
@@ -24,7 +24,7 @@ zero claude-klabauter code change.
 
 | key | type | required | meaning |
 |---|---|---|---|
-| `three_signal` | mapping | yes | Tuning knobs for the DEC-1 three-signal shipped-ness bar (signal (a) commit-subject match, (b) named-deliverable-on-disk, (c) SHA-reachable-on-HEAD). Accepted as a mapping with OPTIONAL sub-keys (see below) — all sub-keys have code-side defaults, so an absent/empty `three_signal: {}` is valid and matches today's ratified behavior baseline. `policy_loader._validate_grammar` only checks the required top-level keys; these sub-keys are not independently type-validated by the loader, so adding/amending one is a coordinator-claude-side YAML data edit, zero claude-klabauter code change and zero re-validation. |
+| `three_signal` | mapping | yes | Tuning knobs for the DEC-1 three-signal shipped-ness bar (signal (a) commit-subject match, (b) named-deliverable-on-disk, (c) SHA-reachable-on-HEAD). Accepted as a mapping with OPTIONAL sub-keys (see below) — all sub-keys have code-side defaults, so an absent/empty `three_signal: {}` is valid and matches today's ratified behavior baseline. `policy_loader._validate_grammar` only checks the required top-level keys; these sub-keys are not independently type-validated by the loader, so adding/amending one is a DoE-side YAML data edit, zero claude-klabauter code change and zero re-validation. |
 | `auto_ship_enabled` | boolean | no (optional) | Gates whether `handoff.reconcile_open` may actually apply an auto-ship mutation; **default `false` (fail-closed)** — absent from the file resolves to `false`. `auto_ship_enabled` is INDEPENDENT of `dry_run`: flipping `dry_run: false` alone does NOT arm auto-ship. To arm auto-ship the author must ALSO explicitly write `auto_ship_enabled: true`. |
 
 ### `three_signal` optional sub-keys (2026-07-20 claude-central-em false-positive memo, Defect 2)
@@ -35,8 +35,8 @@ zero claude-klabauter code change.
 | `subject_match_extra_stopwords` | list of strings | `["ops", "core", "config", "plans", "docs", "state", "tests", "lib", "bin", "src", "schemas", "contract"]` | Additional noun-token stopwords unioned with the matcher's built-in set — structural/path-shape vocabulary that carries near-zero signal about what a handoff's actual deliverable is. |
 | `deliverable_requires_file` | boolean | `true` | When true, signal (b) requires an existing FILE (or a glob with >=1 file hit) — an existing directory alone no longer counts as "deliverable present". Setting `false` restores the pre-fix directory-tolerant behavior. |
 | `mechanical_commit_denylist` | list of strings | yes | Commit-subject prefixes/tokens that must NOT count as signal-(a) evidence even when they touch a scope path — guards against a `pickup:`/`session-init`/`memo:`/`handoff.transition`-family/frontmatter-mutation commit satisfying signal (a) without representing real completed work (the Staff Engineer #2, inverse-direction guard). Ratified initial content: `pickup:`, `reclaim(docs)`, `session-init`, `memo:`, `handoff.transition`-family subjects, frontmatter-mutation subjects. |
-| `cross_handoff_attribution` | boolean | yes | When `true` (the ratified default), the matcher demotes a candidate `verdict: auto-ship` to `surface` whenever >1 open handoff's `scope` pathspecs overlap the candidate commit's touched paths — the fourth DEC-1 conservatism guard (the Staff Engineer review, finding index 2). Setting `false` disables the guard (not recommended; coordinator-claude-owned toggle for future tuning). |
-| `dry_run` | boolean | yes | Default policy-level dry-run flag consumed by the `handoff.reconcile_open` op (C4) — **ratified default `true`** (first live pass is observation-only; coordinator-claude flips after reading the dry-run report). Distinct from the op's own per-call `dry_run` param, which may override this at invocation time. |
+| `cross_handoff_attribution` | boolean | yes | When `true` (the ratified default), the matcher demotes a candidate `verdict: auto-ship` to `surface` whenever >1 open handoff's `scope` pathspecs overlap the candidate commit's touched paths — the fourth DEC-1 conservatism guard (the Staff Engineer review, finding index 2). Setting `false` disables the guard (not recommended; DoE-owned toggle for future tuning). |
+| `dry_run` | boolean | yes | Default policy-level dry-run flag consumed by the `handoff.reconcile_open` op (C4) — **ratified default `true`** (first live pass is observation-only; DoE flips after reading the dry-run report). Distinct from the op's own per-call `dry_run` param, which may override this at invocation time. |
 
 ## Overlay
 
@@ -66,7 +66,7 @@ malformed branch (see § Fail-closed contract).
 
 ## Fail-closed contract (the reader's obligation, not a policy-file key)
 
-The grammar pin governs the **shape** coordinator-claude authors against; the **fail-closed behavior on a
+The grammar pin governs the **shape** DoE authors against; the **fail-closed behavior on a
 missing or malformed file** is a `policy_loader.py` reader-side obligation, not something the
 YAML itself declares:
 
@@ -76,7 +76,7 @@ YAML itself declares:
   the pre-ratification period would be noise.
 - File **present but fails grammar validation** (missing required key, wrong type on a
   required key, invalid YAML) → the reader returns the same conservative no-auto-ship policy
-  **plus a surfaced data-defect warning**. This IS a real defect coordinator-claude should hear about,
+  **plus a surfaced data-defect warning**. This IS a real defect DoE should hear about,
   distinct from the expected-absent case above.
 - File **present and valid** → the reader returns the parsed policy dict verbatim (with
   `auto_ship_enabled` defaulted to `false` if the key is absent from the file, so an
@@ -105,5 +105,5 @@ dry_run: true
   surfaces / partial-narrows / fail-loud-asymmetry) — those are C3's compute-engine contract,
   cited by the C5 producer-contract doc, not policy-YAML data.
 - Amending `mechanical_commit_denylist` values, the `cross_handoff_attribution` toggle, or the
-  `dry_run` default is a coordinator-claude-side YAML data edit — it does NOT require a claude-klabauter code change or
+  `dry_run` default is a DoE-side YAML data edit — it does NOT require a claude-klabauter code change or
   a re-read of this grammar doc, provided the shape stays within the table above.

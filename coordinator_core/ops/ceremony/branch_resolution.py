@@ -183,7 +183,7 @@ _CHAIN_TERMINAL_ONLY_STEPS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 # Partition-mandatory thresholds (mirrors review-brightline-gate.sh defaults;
-# Port of: review-brightline-gate.sh, coordinator-claude b5a4192c, 2026-07-20)
+# Port of: review-brightline-gate.sh, DoE b5a4192c, 2026-07-20)
 _BRIGHTLINE_LOC = 500
 _BRIGHTLINE_COMMITS = 5
 _BRIGHTLINE_SURFACES = 4
@@ -1809,7 +1809,7 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
                 # does not itself assert ownership.  Verify consumed_by == sid via the
                 # anchored helper before trusting the path; otherwise a peer's in-flight
                 # handoff gets misattributed as this session's consumed predecessor.
-                # (Originating incident: coordinator-claude 2026-07-09 — a /workstream-complete
+                # (Originating incident: DoE-claude 2026-07-09 — a /workstream-complete
                 # nearly stamped a live peer workstream's handoff as shipped.)
                 if (
                     hf_in_repo is not None

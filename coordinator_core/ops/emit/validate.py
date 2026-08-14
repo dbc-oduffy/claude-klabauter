@@ -10,7 +10,7 @@ skew-exemption for the adjacent repo"), NEVER the coordinator live head.
 Negative-spec — retired node/Zod validator (2026-07-21): this module used to shell out to a
 per-call ``node`` subprocess running a vendored Zod validator script
 (``_vendor/bin/lib/validate-cockpit-record.mjs`` against ``_vendor/cockpit-contract/dist/``).
-That toolchain is DEAD — coordinator-claude commit ``7cca4d4c`` (2026-07-16) deleted the upstream
+That toolchain is DEAD — DoE commit ``7cca4d4c`` (2026-07-16) deleted the upstream
 ``cockpit-contract`` TS/Zod source and its build output wholesale, and the vendored
 ``node_modules`` tree was never present here, so the spawn failed with
 ``ERR_MODULE_NOT_FOUND: Cannot find package 'zod'`` on every real invocation — the node-spawn
@@ -43,7 +43,7 @@ not assume otherwise from this module's presence; wiring is a deliberately defer
 decision (measured, not made, by the 2026-07-21 in-process-validation cutover).
 
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § C1 / D4
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — validate_main_array
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — validate_main_array
   and the version guards.
 """
 
@@ -200,7 +200,7 @@ def assert_version_consistency() -> str:
     Reworked 2026-07-21 (see module docstring): the PRE-2026-07-21 form of this guard
     cross-checked TWO vendored copies against each other (a vendored ``src/index.ts``
     CONTRACT_VERSION vs. the vendored schema bundle ``.version``) and treated a missing
-    ``src/index.ts`` as a non-fatal SKIP — once ``src/`` was deleted (coordinator-claude 7cca4d4c), that skip
+    ``src/index.ts`` as a non-fatal SKIP — once ``src/`` was deleted (DoE 7cca4d4c), that skip
     branch would have silently turned this guard into a permanent no-op, hiding the exact
     class of desync it exists to catch (DSR-2026-06-23-4 silent-break guard).
 
@@ -224,31 +224,31 @@ def assert_version_consistency() -> str:
             f"{schema_version}. The emitter's contract version and the schema bundle it "
             "validates emitted records against must match (DSR-2026-06-23-4 silent-break "
             "guard). Diagnose before remediating — WHICH side is stale determines the fix:\n"
-            "  (a) coordinator-claude's RELEASE TAG is already at CONTRACT_VERSION, only our vendored copy "
+            "  (a) DoE's RELEASE TAG is already at CONTRACT_VERSION, only our vendored copy "
             "lags — re-vendor: python bin/claude-klabauter-revendor-cockpit-contract.py\n"
-            "  (b) coordinator-claude has regenerated at CONTRACT_VERSION and committed it, but the "
+            "  (b) DoE has regenerated at CONTRACT_VERSION and committed it, but the "
             "release tag has NOT been advanced onto that commit — a default re-vendor "
             "resolves the tag and so pulls the SAME stale version, failing identically. "
             "Re-vendor at the explicit commit instead (--ref <sha>, --ack-major after "
             "reviewing the printed delta); vendoring ahead of the tag is the sanctioned "
             "DR-203 reader-first window and the drift-check reports it as expected. Then "
-            "memo coordinator-claude to run --advance-ref so the default ref is correct again.\n"
-            "  (c) CONTRACT_VERSION was bumped here and coordinator-claude's bundle has NOT been "
-            "regenerated at all — no coordinator-claude commit carries this version, so there is nothing "
-            "to vendor at any ref. Coordinator-claude's bundle is derived output of "
+            "memo DoE to run --advance-ref so the default ref is correct again.\n"
+            "  (c) CONTRACT_VERSION was bumped here and DoE's bundle has NOT been "
+            "regenerated at all — no DoE commit carries this version, so there is nothing "
+            "to vendor at any ref. DoE's bundle is derived output of "
             "coordinator_core.contract.cockpit_schema.emit_schema, so it must be "
             "regenerated FIRST: python coordinator/bin/regen-cockpit-schema.py, commit it "
-            "in coordinator-claude, then --advance-ref, then re-vendor here at that SHA.\n"
+            "in DoE, then --advance-ref, then re-vendor here at that SHA.\n"
             "  (d) CONTRACT_VERSION was bumped in error — revert it. Never bump it DOWN to "
             "match a stale bundle: that silently un-lands whatever contract widening the "
             "bump was carrying.\n"
             "Discriminate by reading the version AT THE REF THE RE-VENDOR ACTUALLY PULLS, "
-            "not coordinator-claude's working tree — the working tree routinely runs ahead of the release "
+            "not DoE's working tree — the working tree routinely runs ahead of the release "
             "tag, and reading it instead reports (a) when the truth is (b), sending you "
             "into a re-vendor that fails identically:\n"
             "  git -C <doe-clone> show refs/tags/cockpit-contract-release:"
             "coordinator/cockpit-contract/schema/cockpit-contract.schema.json\n"
-            "Tag == CONTRACT_VERSION -> (a). Tag stale but some coordinator-claude commit carries "
+            "Tag == CONTRACT_VERSION -> (a). Tag stale but some DoE commit carries "
             "CONTRACT_VERSION (git log on that schema path) -> (b). No commit carries it "
             "-> (c) or (d)."
         )
@@ -260,7 +260,7 @@ def contract_declares_backlog_history() -> bool:
 
     Purpose: contract-presence gate for backlog-history D9-hold decoupling (plan § Design
     decision → Option C). The block first appears in the vendored schema at whatever version
-    the coordinator lands it (contract v2.7.0; coordinator-claude+PM convention call + the Director of Engineering review); this
+    the coordinator lands it (contract v2.7.0; DoE+PM convention call + the Director of Engineering review); this
     probe self-activates at that re-vendor without hardcoding any version number.
 
     Reads ``$defs['snapshot-envelope']['properties']['backlog_history']`` from the vendored
@@ -732,7 +732,7 @@ def validate_array(records: list, entity_name: str, ctx=None) -> None:
 
     Negative-spec (2026-07-21): this function used to serialize the array to a temp JSON file
     and spawn ``node validate-cockpit-record.mjs --array <entity> <file>`` — a per-call subprocess
-    against the vendored Zod build. That toolchain is dead (coordinator-claude 7cca4d4c retired the upstream
+    against the vendored Zod build. That toolchain is dead (DoE 7cca4d4c retired the upstream
     TS/Zod source + build output; the vendored ``node_modules``/``zod`` dep tree was never
     present here — confirmed empirically via ``ERR_MODULE_NOT_FOUND``) and had zero production
     callers. Validation now runs entirely in-process against the vendored, language-neutral

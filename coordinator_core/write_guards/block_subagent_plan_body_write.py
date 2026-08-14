@@ -1,8 +1,8 @@
 """
 coordinator_core.write_guards.block_subagent_plan_body_write — Python
-engine-ification of coordinator-claude's retired
+engine-ification of DoE's retired
 ``coordinator/hooks/scripts/block-subagent-plan-body-write.sh`` PreToolUse
-hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
+hook (deleted 2026-07-16, DoE ``2f8b8450``).
 
 Purpose: makes ``docs/plans/**/*.md`` plan bodies AND ``docs/problems/**/*.md``
 ratified problem-sets immutable to ``coordinator:executor`` subagents.
@@ -14,7 +14,7 @@ guard, not calibration alone.
 
 Widened 2026-07-24 to also cover ``docs/problems/**`` (ratified problem-sets
 are EM-authored spec artifacts, same immutability rationale as a plan body)
-per coordinator-claude's agent-citizenship provisioning plan C9(c) — see spec backlink
+per DoE's agent-citizenship provisioning plan C9(c) — see spec backlink
 below. ``docs/wiki/**`` and ``docs/decisions/**`` are deliberately EXCLUDED:
 executors are routinely dispatched to author wikis/DRs as their deliverable,
 and blocking those would break legitimate delegated authoring.
@@ -33,12 +33,12 @@ Spec backlink: docs/plans/2026-06-09-executor-sidecar-flight-recorder.md § C3a
   § C8 — the flight-recorder sidecar carve-out is RETIRED; there is no
   sidecar-path carve-out in this port either.)
 Spec backlink (2026-07-24 widening to docs/problems/**):
-  cross-repo/inbox/2026-07-24-coordinator-claude-em-executor-spec-surface-widening.md
-  (actioning C9(c) of coordinator-claude's agent-citizenship provisioning plan).
-Ported from the retired coordinator-claude bash guard ``block-subagent-plan-body-write.sh``
-  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
-Identity resolver — Port of: coordinator-claude coordinator/lib/coordinator-session.sh
-  (coordinator-claude ``e34f2484``, 2026-07-22) ``resolve_subagent_identity`` /
+  cross-repo/inbox/2026-07-24-doe-claude-em-executor-spec-surface-widening.md
+  (actioning C9(c) of DoE's agent-citizenship provisioning plan).
+Ported from the retired DoE bash guard ``block-subagent-plan-body-write.sh``
+  (deleted 2026-07-16, DoE ``2f8b8450``).
+Identity resolver — Port of: DoE coordinator/lib/coordinator-session.sh
+  (DoE ``e34f2484``, 2026-07-22) ``resolve_subagent_identity`` /
   ``cs_build_canonical_agent_id``
 
 Fires on Write|Edit|MultiEdit|NotebookEdit when:
@@ -106,7 +106,7 @@ Negative-spec:
   - Does NOT reuse ``subagent_sandbox.engine``'s simplified
     ``_canonical_agent_id`` for named-teammate resolution — that helper
     (built for a DIFFERENT reference hook,
-    ``block-reviewer-write-outside-sidecar.sh`` — coordinator-claude ``8b29fa14``,
+    ``block-reviewer-write-outside-sidecar.sh`` — DoE ``8b29fa14``,
     2026-07-12) intentionally returns the
     RAW ``a<name>-<16hex>`` agent_id unchanged, whereas THIS guard's
     reference hook resolves named teammates to the canonical
@@ -202,6 +202,12 @@ def _resolve_roster_accessor():
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 40
+
+#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
+#: This module's only writes are _write_block_log()'s and _write_hook_emit_log()'s
+#: best-effort appends under <git_root>/.git/coordinator-sessions/<session_id>/ --
+#: inside .git/, never a tracked repo artifact.
+GENERATES = []
 
 #: Reference hook — tool-name guard.
 _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}

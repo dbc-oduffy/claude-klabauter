@@ -1,6 +1,6 @@
 """test_setup_verify — pytest tests for coordinator/bin/setup-verify.py.
 
-Spec backlink: coordinator-claude coordinator/skills/setup/SKILL.md (Steps 1, 3, 4, 6
+Spec backlink: DoE-claude coordinator/skills/setup/SKILL.md (Steps 1, 3, 4, 6
   Probes 2/3) — this CLI is the ported destination for that skill's genuine
   imperative bash logic (layout detection, visited-set init, paired-flag
   validation, hooks.json presence check, SKILL.md frontmatter parse,

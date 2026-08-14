@@ -32,7 +32,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "detect_initiative_candidates_help_test", str(_BIN_DIR / "detect-initiative-candidates")
+        "detect_initiative_candidates_help_test", str(_BIN_DIR / "detect-initiative-candidates.py")
     )
     spec = importlib.util.spec_from_loader(
         "detect_initiative_candidates_help_test", loader

@@ -51,6 +51,11 @@ from coordinator_core.pickup_assemble import (
     resolve_repo_root,
 )
 
+# Generator-provenance declaration (generator_provenance.py). `capture` writes only
+# to `out_path`, a CLI-supplied argument with no default location inside the repo --
+# a scaffolding harness, not a generator of a fixed tracked artifact.
+GENERATES = []
+
 #: Cap on how many mismatching artifacts `compare` prints in full before
 #: collapsing the remainder into a single "N more" line — keeps a
 #: whole-corpus regression readable instead of scrolling the terminal.

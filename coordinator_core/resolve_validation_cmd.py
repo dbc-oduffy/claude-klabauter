@@ -2,7 +2,7 @@
 resolve_validation_cmd.py — Python port of
 coordinator/lib/coordinator-resolve-validation-cmd.sh.
 
-Port of: coordinator-resolve-validation-cmd.sh (coordinator-claude c187f5b9, 2026-07-21)
+Port of: coordinator-resolve-validation-cmd.sh (DoE c187f5b9, 2026-07-21)
 Spec backlink: archive/specs/2026-05-28-workday-complete-fast-test-resolution.md § 3.4
 
 Purpose: resolve which shell command to use for test validation. Two tiers:

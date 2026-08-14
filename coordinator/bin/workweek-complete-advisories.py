@@ -1,12 +1,12 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """
 coordinator/bin/workweek-complete-advisories.py — read-only advisory subcommands
-for the coordinator-claude `/workweek-complete` ceremony (M3 chunk WWC-1 extirpation).
+for the DoE `/workweek-complete` ceremony (M3 chunk WWC-1 extirpation).
 
-Ports FOUR genuine bash logic blocks out of coordinator-claude's
+Ports FOUR genuine bash logic blocks out of DoE-claude's
 `coordinator/commands/workweek-complete.md` — the resolve-claude-klabauter-bin resolver
 boilerplate and `_cc_trusted`/`_cc_root` guard preambles that used to wrap each
-block are NOT ported (that plumbing is the D1/D2 wave's concern; the coordinator-claude
+block are NOT ported (that plumbing is the D1/D2 wave's concern; the DoE
 ceremony resolves this CLI's own path via the existing resolver, then invokes
 one of the subcommands below with an already-resolved path argument):
 
@@ -40,7 +40,7 @@ one of the subcommands below with an already-resolved path argument):
 
 Negative-spec:
     - Does NOT resolve CLAUDE_KLABAUTER_ROOT via the machine-local registry / .doe-root
-      ladder, and does NOT probe `repos.claude_klabauter` — the coordinator-claude ceremony
+      ladder, and does NOT probe `repos.claude_klabauter` — the DoE ceremony
       fence still owns that resolution (resolve-claude-klabauter-bin) and hands this
       CLI already-resolved path arguments. `resolve_colocated_claude_klabauter_root` is
       used only to put coordinator_core (THIS repo's own package) on
@@ -51,7 +51,7 @@ Negative-spec:
     - Does NOT re-implement `coordinator_core.ops.scan_unresolved_ubt_records`'s
       pending/resolved pairing scan — imports and calls it directly.
 
-Spec backlink: coordinator-claude coordinator/commands/workweek-complete.md
+Spec backlink: DoE-claude coordinator/commands/workweek-complete.md
     (Step 3.5, Step 4, Cruft-sweep verification, Step 4c — see per-subcommand
     docstrings above for line-range oracle fences)
 Port backlink: docs/plans/2026-07-23-m3-workweek-complete-extirpation.md § WWC-1
@@ -234,7 +234,7 @@ def _cmd_ubt_unresolved(args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="workweek-complete-advisories.py",
-        description="Read-only advisory subcommands for the coordinator-claude /workweek-complete ceremony.",
+        description="Read-only advisory subcommands for the DoE /workweek-complete ceremony.",
     )
     sub = parser.add_subparsers(dest="subcommand", required=True)
 

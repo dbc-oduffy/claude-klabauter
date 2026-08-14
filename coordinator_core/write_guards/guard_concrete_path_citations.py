@@ -32,7 +32,7 @@ a matter of taste:
 
 The backstop is unchanged and is what makes warning safe: the commit-time
 sweep (`coordinator_core.ops.session.guard_concrete_path_citations.
-scan_repo`, consumed by coordinator-claude's `test_no_absolute_path_literals.py`)
+scan_repo`, consumed by DoE-claude's `test_no_absolute_path_literals.py`)
 is still a hard failure across the whole tracked corpus. Nothing ships with
 a concrete path because this guard stopped blocking; a citation waved
 through here is caught before it lands in a commit.
@@ -51,10 +51,10 @@ write. A legacy citation sitting untouched anywhere else in the file
 contributes equally to both sides of the diff and never surfaces here; only
 a citation this write is the first to introduce (or duplicates an existing
 one an additional time) does. Same detection design as
-`coordinator/hooks/scripts/guard-prompt-surface-citations.py` (coordinator-claude)
+`coordinator/hooks/scripts/guard-prompt-surface-citations.py` (DoE-claude)
 -- this guard reimplements that shape natively in claude-klabauter rather than
-depending on a coordinator-claude-owned module, because (unlike that guard's SEED_WIKIS
-data dependency) nothing here needs coordinator-claude-owned data at hook time.
+depending on a DoE-owned module, because (unlike that guard's SEED_WIKIS
+data dependency) nothing here needs DoE-owned data at hook time.
 
 Reconstructing before/after
 -----------------------------
@@ -197,7 +197,7 @@ _LOUD_EXTENSIONS = frozenset({".py", ".sh", ".bats", ".json"})
 #
 # `state/` and `archive/` are deliberately NOT here -- an earlier cut of
 # this table lumped them in with genuine scratch, which was wrong: this
-# fleet's own doctrine (coordinator-claude CLAUDE.md's `state/ vs tasks/` section,
+# fleet's own doctrine (DoE-claude CLAUDE.md's `state/ vs tasks/` section,
 # and the sibling state-placement-law wiki) makes `state/` always-on
 # load-bearing substrate -- `state/lessons/` and `state/handoffs/` are read
 # and TRUSTED at session start, exactly the "an agent reads and trusts it as

@@ -28,7 +28,7 @@ call sites' docstrings too):
   - ``hand-authored``: the record was hand-edited, independent of what (if
     anything) the session typed to get there — its truth-condition does not
     depend on the ``typed_command`` axis.
-  - Matches coordinator-claude's vendored enum exactly (``machine-minted`` /
+  - Matches DoE-claude's vendored enum exactly (``machine-minted`` /
     ``hand-authored``) — this is a closed, fail-closed cross-repo contract;
     the two sides must not drift.
 

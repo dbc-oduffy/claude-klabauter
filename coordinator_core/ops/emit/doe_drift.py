@@ -1,14 +1,14 @@
 """
-coordinator_core.ops.emit.doe_drift — coordinator-claude-HEAD conformance fixture resolver + drift-check.
+coordinator_core.ops.emit.doe_drift — DoE-HEAD conformance fixture resolver + drift-check.
 
-Purpose: resolve the coordinator-claude-HEAD emission-conformance fixture at check-time and run a
-fail-loud drift-check when claude-klabauter's vendored schema-version lags the coordinator-claude-HEAD
+Purpose: resolve the DoE-HEAD emission-conformance fixture at check-time and run a
+fail-loud drift-check when claude-klabauter's vendored schema-version lags the DoE-HEAD
 ``min_supported_contract_version``.  Implements the three-piece resolution contract
 (dedicated ref + version band + shared provenance normalizer) ratified in
 cross-repo/archive/2026-07-04-strang-emission-fixture-answers.md § Ask 1.
 
-Resolution contract (coordinator-claude emission-conformance-contract.md § CD-1/CD-2):
-  - **Body read — no origin.** Resolve coordinator-claude clone via machine-local ``repos.example_doctrine_repo``
+Resolution contract (DoE emission-conformance-contract.md § CD-1/CD-2):
+  - **Body read — no origin.** Resolve DoE clone via machine-local ``repos.doe_claude``
     (direct TOML file read, NEVER the machine-local CLI — a plugin-load-PATH-only
     bootstrap hazard per CD-3 / Ask-2 caveat).  Read fixture body at
     ``coordinator/cockpit-contract/conformance/emission-conformance.json``.
@@ -21,7 +21,7 @@ Resolution contract (coordinator-claude emission-conformance-contract.md § CD-1
     ``git ls-remote <origin> refs/tags/cockpit-contract-release``.  Record the SHA the
     vendored pin was cut at in ``_vendor/cockpit-contract/.doe-ref-pin``.  Fail loud on
     SHA mismatch (the tag has advanced since pin was cut).  **Degrade gracefully when
-    the ref is absent** — coordinator-claude has not published it yet; treat as WARN/skip, not a
+    the ref is absent** — DoE has not published it yet; treat as WARN/skip, not a
     hard failure (live constraint: ref absent at strang-02 pickup).
   - **Reader-first ahead-of-tag path (DR-203).** When origin_sha != pin_sha the module
     uses ``git merge-base --is-ancestor`` to decide direction before failing loud: if the
@@ -39,11 +39,11 @@ AC5-PROVENANCE paths are scrubbed there; we do not duplicate the logic.
 
 Negative-spec: DriftError is NOT raised when the release tag is a git-ancestor of the
 vendored pin (reader-first window — pin AHEAD of tag is expected and graceful).  The
-ancestry helper uses the coordinator-claude local clone only; it issues NO network call.
+ancestry helper uses the DoE local clone only; it issues NO network call.
 
 Spec backlink: state/handoffs/2026-07-04_201949_roadmap-strang-02.md (strang-02)
 Spec backlink: docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md § 2
-Oracle: /Users/example-operator/X/coordinator-claude/coordinator/docs/wiki/emission-conformance-contract.md
+Oracle: /Users/example-operator/X/DoE-claude/coordinator/docs/wiki/emission-conformance-contract.md
 """
 
 from __future__ import annotations
@@ -73,13 +73,13 @@ _VENDOR_CONTRACT = Path(__file__).resolve().parent / "_vendor" / "cockpit-contra
 
 # PIN_SHA_FILE records the cockpit-contract-release ref SHA at vendoring time.
 # Written by the re-vendor step (bin/claude-klabauter-revendor-cockpit-contract.py); ``ABSENT`` when the ref was not
-# yet published (live constraint at strang-02 pickup — coordinator-claude lands it in parallel).
+# yet published (live constraint at strang-02 pickup — DoE lands it in parallel).
 PIN_SHA_FILE = _VENDOR_CONTRACT / ".doe-ref-pin"
 
-# Path inside the coordinator-claude clone where the conformance fixture lives (CD-1).
+# Path inside the DoE clone where the conformance fixture lives (CD-1).
 _FIXTURE_REL = Path("coordinator/cockpit-contract/conformance/emission-conformance.json")
 
-# Dedicated freshness ref coordinator-claude advances on every intentional contract change (CD-2 / AC8).
+# Dedicated freshness ref DoE advances on every intentional contract change (CD-2 / AC8).
 _CONTRACT_RELEASE_REF = "refs/tags/cockpit-contract-release"
 
 # Machine-local registry file names (direct TOML read — never CLI).
@@ -117,7 +117,7 @@ class DriftError(RuntimeError):
 class DriftWarning(UserWarning):
     """Emitted when a re-vendor action is urgently required but we do not hard-fail.
 
-    Currently used when the pin file contains the ABSENT sentinel but coordinator-claude has already
+    Currently used when the pin file contains the ABSENT sentinel but DoE has already
     published the ``cockpit-contract-release`` ref on origin — the SHA-mismatch
     freshness gate is disabled until ``bin/claude-klabauter-revendor-cockpit-contract.py`` is re-run.
 
@@ -134,9 +134,9 @@ class AheadOfReleaseWarning(UserWarning):
     """Emitted when the vendored pin is AHEAD of the cockpit-contract-release tag.
 
     Purpose: signal the expected reader-first window state — claude-klabauter has re-vendored a
-    new contract version before coordinator-claude has advanced the ``cockpit-contract-release`` tag
+    new contract version before DoE has advanced the ``cockpit-contract-release`` tag
     (per DR-203 reader-first invariant).  This is NOT a drift error; the SHA difference
-    will self-heal when coordinator-claude advances the tag.
+    will self-heal when DoE advances the tag.
 
     Negative-spec: AheadOfReleaseWarning does NOT subclass DriftWarning.  It must not —
     ``bin/claude-klabauter-revendor-cockpit-contract.py``'s ``_post_vendor_drift_check`` kills on
@@ -147,7 +147,7 @@ class AheadOfReleaseWarning(UserWarning):
 
 
 class DoeResolveError(RuntimeError):
-    """Raised when the coordinator-claude clone cannot be located via the machine-local registry."""
+    """Raised when the DoE clone cannot be located via the machine-local registry."""
 
 
 # ---------------------------------------------------------------------------
@@ -178,39 +178,39 @@ def _read_toml_file(path: Path) -> Optional[dict]:
     return _parse_toml_text(path.read_text(encoding="utf-8"))
 
 
-def _extract_repos_example_doctrine_repo_from_toml(data: dict) -> Optional[str]:
-    """Walk the nested TOML dict looking for 'repos.example_doctrine_repo'."""
+def _extract_repos_doe_claude_from_toml(data: dict) -> Optional[str]:
+    """Walk the nested TOML dict looking for 'repos.doe_claude'."""
     # Two forms the registry CLI writes:
-    #   1. Top-level quoted-dotted key: "repos.example_doctrine_repo" = "/path"
-    #   2. Nested table: [repos] ... Example_doctrine_repo = "/path"  (less common in this registry)
+    #   1. Top-level quoted-dotted key: "repos.doe_claude" = "/path"
+    #   2. Nested table: [repos] ... doe_claude = "/path"  (less common in this registry)
     # Check top-level flat dotted key first (most common form).
     for k, v in data.items():
-        if k == "repos.example_doctrine_repo" and isinstance(v, str) and v:
+        if k == "repos.doe_claude" and isinstance(v, str) and v:
             return v
     # Nested table form.
     repos = data.get("repos")
     if isinstance(repos, dict):
-        val = repos.get("example_doctrine_repo")
+        val = repos.get("doe_claude")
         if isinstance(val, str) and val:
             return val
     return None
 
 
-def _extract_repos_example_doctrine_repo_regex(text: str) -> Optional[str]:
+def _extract_repos_doe_claude_regex(text: str) -> Optional[str]:
     """Regex fallback for quoted-key form when TOML parser unavailable."""
-    m = re.search(r'"repos\.example_doctrine_repo"\s*=\s*[\'"]([^\'"]+)[\'"]', text)
+    m = re.search(r'"repos\.doe_claude"\s*=\s*[\'"]([^\'"]+)[\'"]', text)
     if m:
         return m.group(1).strip()
     return None
 
 
 def resolve_doe_clone() -> Path:
-    """Resolve the coordinator-claude local clone root from the machine-local registry.
+    """Resolve the DoE local clone root from the machine-local registry.
 
     Bootstrap-safe: reads ``registry.local.toml`` (per-machine) then ``registry.toml``
     (baseline) via DIRECT FILE READ.  NEVER calls the ``machine-local`` CLI — that
     binary is a plugin-load-PATH surface and is not available in cold shells (Ask-2
-    caveat; coordinator-claude emission-conformance-contract.md § CD-3 / § Resolution Contract).
+    caveat; DoE emission-conformance-contract.md § CD-3 / § Resolution Contract).
     Both file paths are joined off ``_settings_home.machine_local_dir()`` (pure
     env/home read, no subprocess) rather than a hardcoded ``~/.claude/machine-local``
     literal — the settings-home indirection does NOT reintroduce a CLI dependency.
@@ -225,19 +225,19 @@ def resolve_doe_clone() -> Path:
         text = registry_path.read_text(encoding="utf-8")
         data = _parse_toml_text(text)
         if data is not None:
-            raw = _extract_repos_example_doctrine_repo_from_toml(data)
+            raw = _extract_repos_doe_claude_from_toml(data)
         else:
             # TOML parser unavailable — fall back to regex using already-read text.
-            raw = _extract_repos_example_doctrine_repo_regex(text)
+            raw = _extract_repos_doe_claude_regex(text)
         if raw:
             candidate = normalize_native_path(raw).expanduser()
             if candidate.is_dir():
                 return candidate
 
     raise DoeResolveError(
-        "Cannot locate coordinator-claude clone: 'repos.example_doctrine_repo' unset or path absent in "
+        "Cannot locate DoE clone: 'repos.doe_claude' unset or path absent in "
         f"{_REGISTRY_LOCAL} and {_REGISTRY_BASE}.  "
-        "Set it with: machine-local set repos.example_doctrine_repo /path/to/coordinator-claude"
+        "Set it with: machine-local set repos.doe_claude /path/to/DoE-claude"
     )
 
 
@@ -246,32 +246,32 @@ def resolve_doe_clone() -> Path:
 # ---------------------------------------------------------------------------
 
 def read_doe_fixture(doe_clone: Optional[Path] = None) -> dict:
-    """Read and parse the coordinator-claude-HEAD conformance fixture body from the local clone.
+    """Read and parse the DoE-HEAD conformance fixture body from the local clone.
 
     No network: this is a direct file read of the clone's HEAD on disk (CD-1).
-    Resolves the coordinator-claude clone via ``resolve_doe_clone()`` when not supplied.
+    Resolves the DoE clone via ``resolve_doe_clone()`` when not supplied.
 
     Returns the parsed fixture dict containing ``contract_version``,
     ``min_supported_contract_version``, and all C2 entity arrays.
 
-    Raises DoeResolveError when the coordinator-claude clone or fixture file cannot be found.
+    Raises DoeResolveError when the DoE clone or fixture file cannot be found.
 
-    Negative-spec: does NOT co-vendor the fixture — reading from the coordinator-claude clone
+    Negative-spec: does NOT co-vendor the fixture — reading from the DoE clone
     at check-time is the anti-drift guarantee (DR-210 § 2).
     """
     doe_clone = doe_clone or resolve_doe_clone()
     fixture_path = doe_clone / _FIXTURE_REL
     if not fixture_path.exists():
         raise DoeResolveError(
-            f"coordinator-claude conformance fixture not found at {fixture_path}.  "
-            "coordinator-claude must commit it at coordinator/cockpit-contract/conformance/"
+            f"DoE conformance fixture not found at {fixture_path}.  "
+            "DoE must commit it at coordinator/cockpit-contract/conformance/"
             "emission-conformance.json per CD-1."
         )
     try:
         return json.loads(fixture_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError) as exc:
         raise DoeResolveError(
-            f"coordinator-claude conformance fixture is not valid JSON at {fixture_path}: {exc}"
+            f"DoE conformance fixture is not valid JSON at {fixture_path}: {exc}"
         ) from exc
 
 
@@ -310,14 +310,14 @@ def check_version_band(pinned_version: str, fixture: dict) -> None:
 
     Negative-spec: a ``contract_version`` bump alone MUST NOT trigger this gate.
     The equality-fail-loud pattern is architecturally incompatible with reader-first
-    (coordinator-claude emission-conformance-contract.md § CD-2 / Gate semantics).
+    (DoE emission-conformance-contract.md § CD-2 / Gate semantics).
     """
     min_supported_str = fixture.get("min_supported_contract_version")
     if not min_supported_str:
-        # Missing field — cannot check. Warn and pass (coordinator-claude commitment: field must be present).
+        # Missing field — cannot check. Warn and pass (DoE commitment: field must be present).
         warnings.warn(
-            "coordinator-claude fixture missing 'min_supported_contract_version' — cannot run version-band "
-            "check; treating as PASS.  coordinator-claude must publish this field per CD-2.",
+            "DoE fixture missing 'min_supported_contract_version' — cannot run version-band "
+            "check; treating as PASS.  DoE must publish this field per CD-2.",
             stacklevel=2,
         )
         return
@@ -325,7 +325,7 @@ def check_version_band(pinned_version: str, fixture: dict) -> None:
     min_t = _parse_semver(min_supported_str)
     if pinned_t < min_t:
         raise DriftError(
-            f"claude-klabauter vendored schema-version {pinned_version} is below the coordinator-claude "
+            f"claude-klabauter vendored schema-version {pinned_version} is below the DoE "
             f"min_supported_contract_version {min_supported_str}.  Re-vendor the "
             "cockpit-contract pin (python3 bin/claude-klabauter-revendor-cockpit-contract.py) to satisfy the version-band gate "
             "(DR-210 § 2 / strang-02 AC_Q-a-band)."
@@ -354,10 +354,10 @@ def _read_pin_sha() -> Optional[str]:
 
 
 def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
-    """Probe coordinator-claude origin for the cockpit-contract-release ref SHA via git ls-remote.
+    """Probe DoE origin for the cockpit-contract-release ref SHA via git ls-remote.
 
     Returns the **commit** SHA when the ref exists on origin, or None when absent.
-    A missing ref means coordinator-claude has not published it yet (ref-absent graceful path).
+    A missing ref means DoE has not published it yet (ref-absent graceful path).
 
     Network: one bounded single-ref ls-remote call (no full fetch, no fixture body).
     After the network call a local ``rev-parse <sha>^{}`` is attempted to dereference
@@ -382,7 +382,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
     relative ``"."``) still wins over discovery. Unscoped, the ``remote get-url
     origin`` below returns the LOCAL repo's origin, the ls-remote then finds no
     cockpit-contract-release there, and this function returns None — reported
-    downstream as "coordinator-claude has not published it yet", a confident false claim about
+    downstream as "DoE has not published it yet", a confident false claim about
     somebody else's remote. Both local calls therefore run under
     ``git_scope.scoped_git_env()``, and the clone is confirmed reachable AS a
     repository (git-dir confined to its own tree) before either runs. See
@@ -399,9 +399,9 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
     unusable = foreign_repo_unusable_reason(doe_clone, timeout=30)
     if unusable is not None:
         warnings.warn(
-            f"coordinator-claude clone at {doe_clone} could not be read as a git repository "
+            f"DoE clone at {doe_clone} could not be read as a git repository "
             f"({unusable}) — skipping freshness check; this is not a finding "
-            "about what coordinator-claude has or has not published.",
+            "about what DoE has or has not published.",
             stacklevel=3,
         )
         return None
@@ -417,13 +417,13 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
         )
     except FileNotFoundError as exc:
         raise DriftError(
-            "git executable not found — cannot probe coordinator-claude freshness ref.  "
+            "git executable not found — cannot probe DoE freshness ref.  "
             "Install git to enable the freshness check."
         ) from exc
 
     if origin.returncode != 0:
         warnings.warn(
-            f"Cannot determine coordinator-claude origin URL for freshness probe: {origin.stderr.strip()}; "
+            f"Cannot determine DoE origin URL for freshness probe: {origin.stderr.strip()}; "
             "skipping freshness check.",
             stacklevel=3,
         )
@@ -432,7 +432,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
     origin_url = origin.stdout.strip()
     if not origin_url:
         warnings.warn(
-            "coordinator-claude clone has no git remote 'origin' — skipping freshness check.",
+            "DoE clone has no git remote 'origin' — skipping freshness check.",
             stacklevel=3,
         )
         return None
@@ -448,7 +448,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         warnings.warn(
-            f"git ls-remote failed for coordinator-claude origin {origin_url!r}: {exc}; "
+            f"git ls-remote failed for DoE origin {origin_url!r}: {exc}; "
             "skipping freshness check.",
             stacklevel=3,
         )
@@ -456,7 +456,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
 
     if ls_remote.returncode != 0:
         warnings.warn(
-            f"git ls-remote returned non-zero for coordinator-claude origin: {ls_remote.stderr.strip()}; "
+            f"git ls-remote returned non-zero for DoE origin: {ls_remote.stderr.strip()}; "
             "skipping freshness check.",
             stacklevel=3,
         )
@@ -464,7 +464,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
 
     output = ls_remote.stdout.strip()
     if not output:
-        # Ref absent on origin — coordinator-claude hasn't published it yet (live constraint).
+        # Ref absent on origin — DoE hasn't published it yet (live constraint).
         return None
 
     # ls-remote output: "<sha>\t<refname>"
@@ -476,7 +476,7 @@ def probe_freshness_ref(doe_clone: Path) -> Optional[str]:
     # <sha>^{}`` peels any tag object to the commit it points to; for lightweight
     # tags (and plain commits) it is a no-op, returning the same SHA.
     # This requires the tag object to be present in the local clone (expected for
-    # a maintained coordinator-claude clone); if the object is absent, we fall back to raw_sha
+    # a maintained DoE clone); if the object is absent, we fall back to raw_sha
     # (same behaviour as before this fix — no regression vs the pre-existing path).
     #
     # Review: code-reviewer (F1) — prefer local rev-parse ^{} over the
@@ -508,11 +508,11 @@ def _tag_is_ancestor_of_pin(
     tag_sha: str,
     pin_sha: str,
 ) -> Optional[bool]:
-    """Check whether tag_sha is a git-ancestor of pin_sha in the coordinator-claude clone.
+    """Check whether tag_sha is a git-ancestor of pin_sha in the DoE clone.
 
     Purpose: distinguish "reader-first re-vendor — pin AHEAD of release tag" (graceful)
     from "pin stale behind current tag" (must re-vendor) using local-only ancestry probe.
-    No network call; operates entirely on the coordinator-claude local clone's object database.
+    No network call; operates entirely on the DoE local clone's object database.
 
     Returns:
       True  — exit 0: tag_sha IS an ancestor of pin_sha (pin is AHEAD of tag).
@@ -528,7 +528,7 @@ def _tag_is_ancestor_of_pin(
     repo-scoping environment that makes ``-C`` actually scope to ``doe_clone``
     both come from ``git_scope.git_predicate`` — see that module for why
     ``returncode != 0`` here would conflate "definitely not an ancestor" with
-    "the question never reached coordinator-claude's object database".
+    "the question never reached DoE's object database".
     """
     # Review: code-reviewer (F2) — timeout=30 matches probe_freshness_ref's bound and
     # makes the timeout branch live; a timeout is a real UNKNOWN, hence a real None.
@@ -551,17 +551,17 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
       1. Read the pin SHA from ``_vendor/cockpit-contract/.doe-ref-pin``.
          - Real SHA → proceed to origin probe.
          - Absent or ABSENT sentinel → still probe origin to distinguish two states:
-             (A) Ref absent on origin too → WARN/skip (coordinator-claude hasn't published yet).
+             (A) Ref absent on origin too → WARN/skip (DoE hasn't published yet).
              (B) Ref present on origin but pin not updated → emit DriftWarning (action
                  required: re-vendor to arm the gate).
-      2. Probe coordinator-claude origin: ``git ls-remote <origin> refs/tags/cockpit-contract-release``.
-         - Ref absent on origin → WARN and skip (coordinator-claude hasn't published yet — graceful).
+      2. Probe DoE origin: ``git ls-remote <origin> refs/tags/cockpit-contract-release``.
+         - Ref absent on origin → WARN and skip (DoE hasn't published yet — graceful).
          - Ref present + SHA matches pin → PASS.
          - Ref present + SHA differs from pin → ancestry check (step 3).
       3. Ancestry check via ``_tag_is_ancestor_of_pin`` (local, no network):
          - True (tag is ancestor of pin, pin AHEAD): emit ``AheadOfReleaseWarning`` and
            return — reader-first window; the discrepancy is expected and will self-heal
-           when coordinator-claude advances the tag.
+           when DoE advances the tag.
          - False or None (pin behind/diverged or indeterminate): raise ``DriftError``
            preserving the "SHA mismatch" message text — re-vendor required.  Indeterminate
            → DriftError is the fail-loud safe default.
@@ -573,7 +573,7 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
 
     Review: code-reviewer (F1) — when pin contains ABSENT, still probe origin.  If the
     ref has appeared on origin, emit DriftWarning (not DriftError — hard-fail the moment
-    coordinator-claude publishes would break claude-klabauter before re-vendor can run; a loud, distinct,
+    DoE publishes would break claude-klabauter before re-vendor can run; a loud, distinct,
     category-distinguishable warning is the safer choice that preserves operations while
     demanding action).  The two states — "ref absent on origin" vs "ref present but pin
     not updated" — are now distinguishable.
@@ -581,15 +581,15 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
     pin_sha = _read_pin_sha()
     if pin_sha is None:
         # Pin is ABSENT.  Probe origin to distinguish state (A) vs state (B).
-        # If the coordinator-claude clone cannot be resolved (DoeResolveError), degrade gracefully.
+        # If the DoE clone cannot be resolved (DoeResolveError), degrade gracefully.
         try:
             resolved_clone = doe_clone or resolve_doe_clone()
         except DoeResolveError:
             warnings.warn(
                 "No cockpit-contract-release SHA recorded in vendor pin "
-                f"({PIN_SHA_FILE}) and coordinator-claude clone unavailable for origin probe — "
+                f"({PIN_SHA_FILE}) and DoE clone unavailable for origin probe — "
                 "freshness check skipped.  "
-                "Run python3 bin/claude-klabauter-revendor-cockpit-contract.py to populate the pin when coordinator-claude publishes the ref.",
+                "Run python3 bin/claude-klabauter-revendor-cockpit-contract.py to populate the pin when DoE publishes the ref.",
                 stacklevel=2,
             )
             return
@@ -597,12 +597,12 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
         origin_sha = probe_freshness_ref(resolved_clone)
 
         if origin_sha is not None:
-            # State (B): coordinator-claude published the ref, but re-vendor hasn't been run.
+            # State (B): DoE published the ref, but re-vendor hasn't been run.
             # Emit a LOUD, category-distinct DriftWarning — not DriftError, because a hard
-            # failure the instant coordinator-claude publishes would break claude-klabauter before
+            # failure the instant DoE publishes would break claude-klabauter before
             # bin/claude-klabauter-revendor-cockpit-contract.py runs.
             warnings.warn(
-                "[ACTION REQUIRED] coordinator-claude has published the cockpit-contract-release ref "
+                "[ACTION REQUIRED] DoE has published the cockpit-contract-release ref "
                 f"(SHA={origin_sha!r}) but the vendored pin ({PIN_SHA_FILE}) still "
                 "contains the ABSENT sentinel — the SHA-mismatch freshness gate is "
                 "disabled.  Re-vendor via python3 bin/claude-klabauter-revendor-cockpit-contract.py to arm the gate and enable "
@@ -611,11 +611,11 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
                 stacklevel=2,
             )
         else:
-            # State (A): ref also absent on origin — coordinator-claude hasn't published yet.
+            # State (A): ref also absent on origin — DoE hasn't published yet.
             warnings.warn(
                 "No cockpit-contract-release SHA recorded in vendor pin "
                 f"({PIN_SHA_FILE}) — freshness check skipped.  "
-                "Pin was likely cut before coordinator-claude published the ref (expected during initial "
+                "Pin was likely cut before DoE published the ref (expected during initial "
                 "strang-02 window).  Re-vendor when the ref is published to enable the check.",
                 stacklevel=2,
             )
@@ -625,10 +625,10 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
     origin_sha = probe_freshness_ref(doe_clone)
 
     if origin_sha is None:
-        # Ref absent on coordinator-claude origin — graceful skip (live constraint).
+        # Ref absent on DoE origin — graceful skip (live constraint).
         warnings.warn(
-            f"coordinator-claude origin has no '{_CONTRACT_RELEASE_REF}' ref — "
-            "coordinator-claude has not published the dedicated freshness ref yet.  "
+            f"DoE origin has no '{_CONTRACT_RELEASE_REF}' ref — "
+            "DoE has not published the dedicated freshness ref yet.  "
             "Freshness check skipped (graceful ref-absent path per strang-02 live constraint).",
             stacklevel=2,
         )
@@ -644,16 +644,16 @@ def check_freshness(doe_clone: Optional[Path] = None) -> None:
                 f"[READER-FIRST] Vendored pin SHA={pin_sha!r} is AHEAD of the "
                 f"cockpit-contract-release tag SHA={origin_sha!r}.  "
                 "This is expected during the DR-203 reader-first re-vendor window — claude-klabauter "
-                "has vendored the new contract version before coordinator-claude has advanced the release "
-                "tag.  The discrepancy will self-heal when coordinator-claude runs the tag-advance step.  "
+                "has vendored the new contract version before DoE has advanced the release "
+                "tag.  The discrepancy will self-heal when DoE runs the tag-advance step.  "
                 "No action required until the release tag catches up.",
                 AheadOfReleaseWarning,
                 stacklevel=2,
             )
             return
         raise DriftError(
-            f"coordinator-claude cockpit-contract-release ref SHA mismatch: "
-            f"vendored-pin SHA={pin_sha!r}, coordinator-claude origin SHA={origin_sha!r}.  "
+            f"DoE cockpit-contract-release ref SHA mismatch: "
+            f"vendored-pin SHA={pin_sha!r}, DoE origin SHA={origin_sha!r}.  "
             "The contract has advanced since this pin was cut.  "
             "Re-vendor the cockpit-contract (python3 bin/claude-klabauter-revendor-cockpit-contract.py) to update the pin."
         )
@@ -668,11 +668,11 @@ def run_drift_check(
     pinned_version: Optional[str] = None,
     doe_clone: Optional[Path] = None,
 ) -> dict:
-    """Run the full coordinator-claude-HEAD drift-check and return the parsed conformance fixture.
+    """Run the full DoE-HEAD drift-check and return the parsed conformance fixture.
 
     Steps (strang-02 Spec items 1/2/3):
-      1. Resolve coordinator-claude clone via machine-local registry (body read — no origin).
-      2. Read the coordinator-claude-HEAD conformance fixture body.
+      1. Resolve DoE clone via machine-local registry (body read — no origin).
+      2. Read the DoE-HEAD conformance fixture body.
       3. check_version_band: fail loud when pinned_version < min_supported.
       4. check_freshness: probe the dedicated ref; warn on absent, fail on mismatch.
 

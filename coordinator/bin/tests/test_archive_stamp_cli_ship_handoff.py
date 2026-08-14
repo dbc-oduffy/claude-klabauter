@@ -44,7 +44,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "archive_stamp_cli_ship_handoff_test", str(_BIN_DIR / "archive-stamp-cli")
+        "archive_stamp_cli_ship_handoff_test", str(_BIN_DIR / "archive-stamp-cli.py")
     )
     spec = importlib.util.spec_from_loader(
         "archive_stamp_cli_ship_handoff_test", loader

@@ -1,13 +1,13 @@
 """normalize_snippet — byte-parity port of normalize-snippet.sh::normalize().
 
-Used by coordinator-claude-side verify-*-sync.sh scripts (via the
+Used by DoE-side verify-*-sync.sh scripts (via the
 coordinator/bin/normalize-snippet CLI trampoline) to canonicalize both the
 on-disk snippet body and the extracted sentinel block before diffing them
 (snippet-sync verification).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-Port recipe: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-normalize-snippet.md
-Port of: normalize-snippet.sh (coordinator-claude 67202df6, 2026-07-16)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
+Port recipe: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-normalize-snippet.md
+Port of: normalize-snippet.sh (DoE 67202df6, 2026-07-16)
 
 Original bash:
     normalize() {
@@ -30,7 +30,7 @@ _TRAILING_WHITESPACE = " \t\n\v\f\r"
 def normalize_snippet(text: str) -> str:
     """Strip leading/trailing blank lines and per-line trailing whitespace.
 
-    Byte-parity port of normalize-snippet.sh::normalize() (coordinator-claude 67202df6,
+    Byte-parity port of normalize-snippet.sh::normalize() (DoE 67202df6,
     2026-07-16) — whitespace-only lines count as blank (matches the sed
     pre-pass before the bash awk pass). No trailing newline in the return
     value (mirrors printf '%s' "$1", which never appends one).

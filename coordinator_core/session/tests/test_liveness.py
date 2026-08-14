@@ -2,7 +2,7 @@
 coordinator_core.session.tests.test_liveness — parity tests for
 coordinator_core.session.liveness.
 
-Port of: liveness.sh (coordinator-claude 6aa77d4b, 2026-07-21).
+Port of: liveness.sh (DoE 6aa77d4b, 2026-07-21).
 
 Oracle bash functions cited per test class:
   - is_session_live       -> _cs_is_session_live
@@ -27,7 +27,7 @@ is cross-platform).
 NEGATIVE-SPEC (2026-07-22 parity-retire-fold,
 state/review-trail/findings/2026-07-22-parity-retire-fold-plan.md § 7 C1):
 this module absorbed the former test_liveness_parity.py, which cross-checked
-this module's session_live against the coordinator-claude bash oracle
+this module's session_live against the DoE bash oracle
 (coordinator/lib/session/liveness.sh's _cs_session_live). That oracle was
 retired at 6aa77d4b ("A2-a: delete liveness.sh, cut over coordinator-session.sh
 to session-liveness-cli") and its trampoline shell deleted outright at
@@ -245,6 +245,75 @@ class TestSessionLive:
         monkeypatch.setattr(core, "stable_pid_alive", _boom)
         assert liveness.session_live("s-layer1-boom", cwd=str(repo)) is True
 
+    def test_layer1_exception_fails_open_emits_breadcrumb_without_changing_verdict(
+        self, tmp_path, monkeypatch
+    ):
+        # C4a deliverable (3): the fail-open arm must be DETECTABLE (a
+        # process-local counter increments) but must NEVER change the
+        # returned verdict -- same True as the plain fail-open test above.
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-layer1-boom-breadcrumb",
+            {
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": "12345",
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+            },
+        )
+
+        def _boom(*a, **k):
+            raise RuntimeError("simulated stable_pid_alive failure")
+
+        monkeypatch.setattr(core, "stable_pid_alive", _boom)
+        monkeypatch.setattr(liveness, "layer1_unknown_count", 0)
+        before = liveness.layer1_unknown_count
+        assert liveness.session_live("s-layer1-boom-breadcrumb", cwd=str(repo)) is True
+        assert liveness.layer1_unknown_count == before + 1
+
+    def test_layer1_rollback_lever_env_flag_skips_layer1(self, tmp_path, monkeypatch):
+        # C4a deliverable (1): COORDINATOR_SESSION_LAYER1_DISABLE, when
+        # truthy, must skip Layer 1 entirely and fall through to Layer 2 --
+        # a stable_pid that would resolve DEAD in Layer 1 must not gate the
+        # verdict when the lever is set; fresh last_activity makes Layer 2
+        # read live instead.
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-layer1-disabled",
+            {
+                "pid": "999",
+                "stable_pid": str(2**31 - 1),
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+                "last_activity": core.now_iso(),
+            },
+        )
+        monkeypatch.setenv("COORDINATOR_SESSION_LAYER1_DISABLE", "1")
+        assert liveness.session_live("s-layer1-disabled", cwd=str(repo)) is True
+
+    def test_layer1_rollback_lever_unset_leaves_layer1_engaged(self, tmp_path, monkeypatch):
+        # Companion negative case: with the lever unset (default), the same
+        # fixture as above reads DEAD via Layer 1 unchanged -- proves the
+        # lever is the only thing that changed behavior above, not the
+        # fixture.
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-layer1-enabled",
+            {
+                "pid": "999",
+                "stable_pid": str(2**31 - 1),
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+                "last_activity": core.now_iso(),
+            },
+        )
+        monkeypatch.delenv("COORDINATOR_SESSION_LAYER1_DISABLE", raising=False)
+        assert liveness.session_live("s-layer1-enabled", cwd=str(repo)) is False
+
     def test_layer1_epoch_only_witness_no_lstart_reaches_layer1_live(self, tmp_path, monkeypatch):
         """dca0e3e80 regression pin: POSIX init() stopped writing
         stable_pid_lstart 2026-07-27 but still writes
@@ -353,7 +422,7 @@ class TestSessionLive:
 
 
 class TestSessionLiveMetalessRecencyFallback:
-    """Wrongful-takeover fallback (coordinator-claude 642195ba / 88929bea):
+    """Wrongful-takeover fallback (DoE 642195ba / 88929bea):
     ``session_live``'s Layer 2 must NOT read a meta-less/unparseable session
     dir as instantly-DEAD by defaulting to epoch-0 recency — a mid-write dir
     (meta.json not yet flushed) is a LIVE session, not a takeable one. The
@@ -891,6 +960,44 @@ class TestLiveSessionVerdicts:
         assert live is True
         assert basis == "unknown"
         assert age_sec is None
+
+    def test_verdict_layer1_exception_fails_open_emits_own_breadcrumb(
+        self, tmp_path, monkeypatch
+    ):
+        # C4a-2 deliverable: the sibling _verdict_for_sdir fail-open arm
+        # must be DETECTABLE (its own SEPARATE process-local counter
+        # increments) but must NEVER change the returned verdict from the
+        # plain fail-open case above.
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-boom-breadcrumb",
+            {
+                "pid": "999",
+                "last_activity": "2000-01-01T00:00:00Z",
+                "stable_pid": "12345",
+                "stable_pid_lstart": "Sat Jan  1 00:00:00 2000",
+                "stable_pid_start_epoch": "946684800",
+            },
+        )
+
+        def _boom(*a, **k):
+            raise RuntimeError("simulated stable_pid_alive failure")
+
+        monkeypatch.setattr(core, "stable_pid_alive", _boom)
+        monkeypatch.setattr(liveness, "verdict_layer1_unknown_count", 0)
+        monkeypatch.setattr(liveness, "layer1_unknown_count", 0)
+        before = liveness.verdict_layer1_unknown_count
+        session_live_before = liveness.layer1_unknown_count
+        verdicts = liveness.live_session_verdicts(cwd=str(repo))
+        live, basis, age_sec = verdicts["s-boom-breadcrumb"]
+        assert live is True
+        assert basis == "unknown"
+        assert age_sec is None
+        assert liveness.verdict_layer1_unknown_count == before + 1
+        # The sibling session_live counter is untouched by this arm --
+        # proves the two counters are genuinely separate, not aliases.
+        assert liveness.layer1_unknown_count == session_live_before
 
     def test_layer1_fallthrough_lstart_absent_basis_recency_window_clamped(
         self, tmp_path

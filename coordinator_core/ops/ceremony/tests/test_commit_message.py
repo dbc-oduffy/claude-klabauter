@@ -26,7 +26,7 @@ Coverage:
 
 Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C2 (AC4).
 Provenance: golden fixture text recovered from
-  `coordinator-claude:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`
+  `DoE:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`
   (deleted 2026-07-15 by the wsc-commit kill; recovered per the plan's C2
   provenance instruction).
 """

@@ -247,6 +247,30 @@ class RollupRepo:
         path.write_text(content, encoding="utf-8")
         return path
 
+    def write_sizing(
+        self,
+        name: str,
+        *,
+        deliverable_id: Optional[str] = None,
+        plan_id: Optional[str] = None,
+        intent: str = "Test sizing intent.",
+    ) -> Path:
+        """Write a whole-document YAML sizing object to state/sizings/<name>.
+
+        Purpose: exercises the flat state/sizings/*.yaml scan path (C10 leg
+        (a)). Sizings have NO `---` frontmatter fence — unlike every other
+        write_* helper on this fixture, this is a bare YAML document.
+        """
+        path = self.root / "state" / "sizings" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f'intent: "{intent}"', "schema: sizing-object"]
+        if deliverable_id is not None:
+            lines.append(f"deliverable_id: {deliverable_id}")
+        if plan_id is not None:
+            lines.append(f"plan_id: {plan_id}")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
     def write_equivalence_map(self, entries: list) -> Path:
         """Write state/deliverable-equivalence.yaml with the given ``entries`` list.
 
@@ -821,11 +845,11 @@ def test_traversal_guard_in_initiative_id(rollup_repo: RollupRepo) -> None:
 def test_ac1_central_resolve_via_claude_klabauter_root_env(
     rollup_repo: RollupRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC1: CLAUDE_KLABAUTER_ROOT set to a tree with state/initiatives/<fk>.yaml; coordinator-claude-style scan
+    """AC1: CLAUDE_KLABAUTER_ROOT set to a tree with state/initiatives/<fk>.yaml; DoE-style scan
     worktree has NO local state/initiatives/ — advances_initiatives still resolves the FK
     from the central (CLAUDE_KLABAUTER_ROOT) tree.
 
-    This is the primary failure mode fixed by C1: coordinator-claude deliverables with a complete FK
+    This is the primary failure mode fixed by C1: DoE deliverables with a complete FK
     population return advances_initiatives=[] when the entity lives only centrally.
     """
     # --- Central (claude-klabauter) tree: holds the initiative entity ---
@@ -839,7 +863,7 @@ def test_ac1_central_resolve_via_claude_klabauter_root_env(
 
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(central_root))
 
-    # --- coordinator-claude-style scan worktree: plan carries FK, NO local state/initiatives/ ---
+    # --- DoE-style scan worktree: plan carries FK, NO local state/initiatives/ ---
     rollup_repo.write_plan(
         "2026-07-06-doe-deliverable.md",
         deliverable_id="dlv-doe-central-ac1",
@@ -1216,9 +1240,9 @@ class TestMachineLocalImplSettingsHomeRepoint:
 # indistinguishable from the genuinely-empty case unless the scan itself signals
 # partial/failed coverage. Mirrors roadmap_dag.py's scan_incomplete idiom.
 #
-# scan_incomplete is on the emitted payload as of coordinator-claude's be8b5d88 reader-widen
+# scan_incomplete is on the emitted payload as of DoE's be8b5d88 reader-widen
 # (coordinator_core/contract/deliverable-rollup-producer-contract.md § 5.2
-# reader-widen-before-writer-flips protocol — coordinator-claude's render layer now reads the
+# reader-widen-before-writer-flips protocol — DoE's render layer now reads the
 # field and appends " (partial scan)" per rendered line when it is set). These
 # tests assert the internal signal + the logged WARNING, and separately pin that
 # the wire shape carries the field through to the handler payload.
@@ -1424,7 +1448,7 @@ def test_handler_payload_wire_shape_includes_scan_incomplete_true(
 ) -> None:
     """Contract compliance pin: when a scan root is blocked and the internal
     scan_incomplete signal is True, the emitted payload carries
-    'scan_incomplete': True — on the wire as of coordinator-claude's be8b5d88 reader-widen
+    'scan_incomplete': True — on the wire as of DoE's be8b5d88 reader-widen
     (contract § 5.2)."""
     handoffs_dir = rollup_repo.root / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True, exist_ok=True)
@@ -1565,3 +1589,221 @@ def test_fork_equivalence_absent_entry_does_not_silently_merge(rollup_repo: Roll
     # rest of the suite's evidence-of-both-directions style.
     beta_result = _handler({"deliverable_id": "dlv-beta"}, repo_root=rollup_repo.common_dir)
     assert beta_result["artifacts_matched"] == 1
+
+
+# ---------------------------------------------------------------------------
+# C10b (docs/plans/2026-08-13-spec-backlinks-cite-a-stable-deliverable-id.md):
+# plan_id match arm + the shared resolvable-root surface with
+# spec_backlink_resolve.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_plan_id_match_arm(rollup_repo: RollupRepo) -> None:
+    """The scanner's plan_id match arm (leg (c)): a query id that itself
+    carries the `pln-` shape resolves against an artifact's own `plan_id`
+    frontmatter field, not just `deliverable_id`."""
+    path = rollup_repo.root / "docs" / "plans" / "2026-08-13-a.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\nplan_id: pln-widget-abc123\ntitle: \"A\"\ncreated: 2026-08-13\n"
+        "status: draft\ninitiative: null\n---\n\n# A\n",
+        encoding="utf-8",
+    )
+
+    matches, scan_incomplete = _scan_artifacts_by_deliverable_id(
+        rollup_repo.root, "pln-widget-abc123"
+    )
+
+    assert scan_incomplete is False
+    assert len(matches) == 1
+    assert matches[0]["plan_id"] == "pln-widget-abc123"
+
+
+def test_dlv_query_artifacts_matched_invariant_under_plan_id_carrying_records(
+    rollup_repo: RollupRepo,
+) -> None:
+    """Invariance proof for the C10b ungated ruling: a `deliverable.rollup`
+    query for a `dlv-` id is UNCHANGED by the presence of `plan_id`-carrying
+    records in the corpus, because the `pln-`/`dlv-` mint prefixes are
+    disjoint by construction. This is the evidence leg (c)'s plan_id match
+    arm is value-disjoint from every DoE-reachable input (a `dlv-` query),
+    not merely an assertion."""
+    rollup_repo.write_plan(
+        "2026-08-13-dlv.md", deliverable_id="dlv-widget-xyz789", initiative=None
+    )
+    baseline = _handler(
+        {"deliverable_id": "dlv-widget-xyz789"}, repo_root=rollup_repo.common_dir
+    )
+    assert baseline["artifacts_matched"] == 1
+
+    # Add plan_id-carrying records (none of which carry this deliverable_id).
+    plan_id_path = rollup_repo.root / "docs" / "plans" / "2026-08-13-pln.md"
+    plan_id_path.write_text(
+        "---\nplan_id: pln-widget-xyz789\ntitle: \"Pln\"\ncreated: 2026-08-13\n"
+        "status: draft\ninitiative: null\n---\n\n# Pln\n",
+        encoding="utf-8",
+    )
+    rollup_repo.write_handoff(
+        "2026-08-13-h-pln.md", deliverable_id=None, initiative=None
+    )
+    handoff_path = rollup_repo.root / "state" / "handoffs" / "2026-08-13-h-pln.md"
+    handoff_path.write_text(
+        "---\nplan_id: pln-another-widget-def456\ntitle: \"H\"\ncreated: 2026-08-13\n"
+        "branch: work/test/2026-08-13\nstatus: open\ninitiative: null\n---\n\n# H\n",
+        encoding="utf-8",
+    )
+
+    after = _handler(
+        {"deliverable_id": "dlv-widget-xyz789"}, repo_root=rollup_repo.common_dir
+    )
+
+    assert after["artifacts_matched"] == baseline["artifacts_matched"] == 1
+
+
+def test_resolvable_root_predicate_shared_constant_shape() -> None:
+    """`RESOLVABLE_ARTIFACT_ROOTS`/`SIZINGS_ONLY_ROOT` are the single source
+    of truth both `deliverable_rollup._scan_artifacts_by_deliverable_id` and
+    `spec_backlink_resolve.build_index` import — pins the shape so neither
+    caller can silently re-fork a hard-coded root list.
+
+    C10 leg (a) cleared (cross-repo/inbox/2026-08-13-doe-claude-em-spec-
+    backlink-id-form-ruled-and-rollup-cleared.md): `SIZINGS_ONLY_ROOT` is now
+    folded directly into `RESOLVABLE_ARTIFACT_ROOTS` (five entries), not a
+    separate root the rollup scanner omits."""
+    assert _rollup_mod.SIZINGS_ONLY_ROOT == (("state", "sizings"), "flat")
+    assert _rollup_mod.RESOLVABLE_ARTIFACT_ROOTS == (
+        (("docs", "plans"), "flat"),
+        (("state", "handoffs"), "flat"),
+        (("archive", "handoffs"), "recursive"),
+        (("archive", "specs"), "recursive"),
+        _rollup_mod.SIZINGS_ONLY_ROOT,
+    )
+
+    import coordinator_core.ops.spec_backlink_resolve as _resolver_mod
+
+    assert _resolver_mod.RESOLVABLE_ARTIFACT_ROOTS is _rollup_mod.RESOLVABLE_ARTIFACT_ROOTS
+    assert _resolver_mod.SIZINGS_ONLY_ROOT is _rollup_mod.SIZINGS_ONLY_ROOT
+
+
+def test_ac10_resolvable_root_sets_are_equal() -> None:
+    """AC10: the two callers' resolvable-root SETS are equal, with no duplicate root.
+
+    Was `test_ac10_resolvable_root_sets_are_equal_pending_gate`, red BY
+    DESIGN pending leg (a) of C10. The gate cleared
+    (cross-repo/inbox/2026-08-13-doe-claude-em-spec-backlink-id-form-ruled-
+    and-rollup-cleared.md): the reader (`coordinator_render_rollup.py`) is
+    count-agnostic over `artifacts_matched` and claude-klabauter-resident — no DoE-side
+    reader change was required. `SIZINGS_ONLY_ROOT` is now folded into
+    `RESOLVABLE_ARTIFACT_ROOTS` as its own entry — both callers import the
+    SAME tuple, so `SIZINGS_ONLY_ROOT` must appear in it EXACTLY once. A
+    naive `frozenset(RESOLVABLE_ARTIFACT_ROOTS + (SIZINGS_ONLY_ROOT,))`
+    comparison would silently dedupe a reintroduced double-add of
+    `SIZINGS_ONLY_ROOT` via `frozenset` and pass either way — this assertion
+    is structured to catch that instead (Review: code-reviewer P2)."""
+    import coordinator_core.ops.spec_backlink_resolve as _resolver_mod
+
+    # Both modules must be looking at the literal same tuple object (or an
+    # equal one) — not two independently-maintained root lists.
+    assert _resolver_mod.RESOLVABLE_ARTIFACT_ROOTS == _rollup_mod.RESOLVABLE_ARTIFACT_ROOTS
+    assert _resolver_mod.SIZINGS_ONLY_ROOT == _rollup_mod.SIZINGS_ONLY_ROOT
+
+    # SIZINGS_ONLY_ROOT must occur exactly once in the shared tuple — a
+    # duplicate (the double-scan bug) would inflate this count to 2 without
+    # `frozenset` masking it away.
+    assert _rollup_mod.RESOLVABLE_ARTIFACT_ROOTS.count(_rollup_mod.SIZINGS_ONLY_ROOT) == 1
+
+    rollup_roots = frozenset(_rollup_mod.RESOLVABLE_ARTIFACT_ROOTS)
+    resolver_roots = frozenset(_resolver_mod.RESOLVABLE_ARTIFACT_ROOTS)
+
+    assert rollup_roots == resolver_roots
+
+
+# ---------------------------------------------------------------------------
+# C10 leg (a) — sizings root evidence (P2 scenario, 61750c0fec61)
+# ---------------------------------------------------------------------------
+
+
+def test_dlv_query_resolves_via_sizing_object_only(rollup_repo: RollupRepo) -> None:
+    """P2 scenario (61750c0fec61): a commit staging ONLY a state/sizings/*.yaml
+    file resolves via `--deliverable-id` — no docs/plans, no handoff, no
+    archive artifact carries the id at all. This is the acceptance evidence
+    for the whole C10 fold: the sizings root was previously invisible to
+    `deliverable.rollup` even when it was the ONLY artifact carrying the id."""
+    rollup_repo.write_sizing(
+        "2026-08-13-only-a-sizing.yaml", deliverable_id="dlv-sizing-only-abc123"
+    )
+
+    result = _handler(
+        {"deliverable_id": "dlv-sizing-only-abc123"}, repo_root=rollup_repo.common_dir
+    )
+
+    assert result["artifacts_matched"] == 1
+    assert result["scan_incomplete"] is False
+
+
+def test_scanner_finds_sizing_deliverable_id_directly(rollup_repo: RollupRepo) -> None:
+    """A sizing's `deliverable_id` is found by
+    `_scan_artifacts_by_deliverable_id` — the matched dict is the parsed
+    whole-document YAML (not a frontmatter dict, since sizings have none)."""
+    rollup_repo.write_sizing(
+        "2026-08-13-sizing-two.yaml", deliverable_id="dlv-sizing-two-def456"
+    )
+
+    matches, scan_incomplete = _scan_artifacts_by_deliverable_id(
+        rollup_repo.root, "dlv-sizing-two-def456"
+    )
+
+    assert scan_incomplete is False
+    assert len(matches) == 1
+    assert matches[0]["deliverable_id"] == "dlv-sizing-two-def456"
+    assert matches[0]["schema"] == "sizing-object"
+
+
+def test_sizing_bogus_prefix_id_is_still_rejected(rollup_repo: RollupRepo) -> None:
+    """A queried id that does not match the sizing's own `deliverable_id`
+    (a bogus/unrelated prefix or value) is still rejected — the widened scan
+    does not loosen the equality match into a prefix or substring check."""
+    rollup_repo.write_sizing(
+        "2026-08-13-sizing-three.yaml", deliverable_id="dlv-sizing-three-ghi789"
+    )
+
+    result = _handler(
+        {"deliverable_id": "bogus-prefix-not-a-real-id"}, repo_root=rollup_repo.common_dir
+    )
+
+    assert result["artifacts_matched"] == 0
+
+
+def test_read_sizing_yaml_malformed_degrades_to_empty(tmp_path: Path) -> None:
+    """`_read_sizing_yaml`'s bare `except Exception` (matching the existing
+    `_resolve_initiative` convention in this file) degrades malformed YAML
+    to `{}` rather than raising. The OSError and PyYAML-ImportError branches
+    are already exercised elsewhere; this pins the parse-error branch, which
+    this diff's sizing reader introduced without test coverage."""
+    path = tmp_path / "malformed.yaml"
+    # Unbalanced flow-mapping brace — a YAML scanner/parser error, not merely
+    # an OSError or an ImportError.
+    path.write_text("deliverable_id: dlv-x\nbad: [unterminated\n", encoding="utf-8")
+
+    result = _rollup_mod._read_sizing_yaml(path)
+
+    assert result == {}
+
+
+def test_scan_ignores_sizing_file_with_malformed_yaml(rollup_repo: RollupRepo) -> None:
+    """A malformed `state/sizings/*.yaml` file is silently skipped by the
+    scanner (via `_read_sizing_yaml`'s degrade-to-empty), not raised — a
+    sibling well-formed sizing in the same directory still resolves."""
+    bad_path = rollup_repo.root / "state" / "sizings" / "2026-08-13-broken.yaml"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    bad_path.write_text("deliverable_id: dlv-broken\nbad: [unterminated\n", encoding="utf-8")
+    rollup_repo.write_sizing(
+        "2026-08-13-sizing-ok.yaml", deliverable_id="dlv-sizing-ok-jkl012"
+    )
+
+    result = _handler(
+        {"deliverable_id": "dlv-sizing-ok-jkl012"}, repo_root=rollup_repo.common_dir
+    )
+
+    assert result["artifacts_matched"] == 1
+    assert result["scan_incomplete"] is False

@@ -81,7 +81,7 @@ carve-out-3 paraphrase (above) would also require. The parity argument
 below is real and worth keeping on its own terms; it is not, as written,
 covered by DR-277.
 
-RULED 2026-08-11 (coordinator-claude, PM-delegated). This guard stays hard-deny by a
+RULED 2026-08-11 (DoE, PM-delegated). This guard stays hard-deny by a
 NAMED ONE-OFF RULING OUTSIDE THE THREE CARVE-OUTS -- not pending, not
 implied, and not a fourth carve-out. DR-277 records the ruling in its own
 § "Not a carve-out: cross-surface parity", verbatim: "A sibling guard's

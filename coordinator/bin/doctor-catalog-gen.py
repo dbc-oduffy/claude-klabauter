@@ -20,14 +20,14 @@ Environment:
   DOCTOR_WIKI_PATH         override wiki path (default: resolved via
                            coordinator_data_root.data_root("docs") / "wiki" /
                            "coordinator-doctor.md" — co-located if this repo ships
-                           its own docs/, else coordinator-claude-resident via coordinator_registry.
+                           its own docs/, else DoE-resident via coordinator_registry.
                            doe_root(); see coordinator/bin/lib/coordinator_data_root.py)
 
 Cross-repo write note: --write mode writes coordinator-doctor.md in place at the
 resolved wiki path above. In the current split-repo layout that path resolves to
-Coordinator-claude's coordinator/docs/wiki/coordinator-doctor.md (this repo's coordinator/docs/
-does not exist), so --write is a cross-repo write into coordinator-claude's tree, same as it always
-was pre-migration when this script's caller ran with a coordinator-claude-relative CWD. This module
+DoE-claude's coordinator/docs/wiki/coordinator-doctor.md (this repo's coordinator/docs/
+does not exist), so --write is a cross-repo write into DoE's tree, same as it always
+was pre-migration when this script's caller ran with a DoE-relative CWD. This module
 does not change that write behavior or its governance — it only fixes path resolution
 to still find the target after the executable-surface split.
 """
@@ -48,6 +48,8 @@ if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
 from coordinator_data_root import data_root  # noqa: E402
+
+GENERATES = []  # --write targets coordinator-doctor.md at the resolved wiki path, which resolves to DoE-claude's coordinator/docs/wiki/ tree (this repo has no coordinator/docs/) — a cross-repo write, never into claude-klabauter's own tree (see module docstring "Cross-repo write note")
 
 # ---------------------------------------------------------------------------
 # Sentinel markers (must stay byte-identical across all write/check operations)

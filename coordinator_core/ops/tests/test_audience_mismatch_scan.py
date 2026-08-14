@@ -6,7 +6,7 @@ Fixture shape mirrors test_check_harvest_debt.py (same argv-driven,
 sidecars directly under a tmp_path `state/subagent-share/` tree and assert
 on the probe's stdout nudge.
 
-Spec backlink: docs/plans/2026-07-27-claude-md-altitude-triage.md, C14.
+Spec backlink: DoE-claude:pln-claude-md-altitude-triage-earn-31f32e, C14.
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@ closure deletion, an Edit touching non-row prose, any YAML-directory write,
 and a nonexistent target (the creation-deny sibling's job); the punt
 override.
 
-Spec: coordinator-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec: DoE-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 """
 
 from __future__ import annotations

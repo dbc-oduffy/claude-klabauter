@@ -3,7 +3,7 @@ Tests for coordinator_core.ops.extract_scope_paths.
 
 Byte-parity fixtures lifted from the bash oracle this module ports.
 
-Port of: test-extract-scope-paths.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Port of: test-extract-scope-paths.sh (DoE 894d4bc6, 2026-07-22)
 """
 
 from __future__ import annotations

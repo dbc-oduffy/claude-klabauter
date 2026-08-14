@@ -31,7 +31,7 @@ Wire params:
 
 Consumption status: registered and reachable via dispatch (see
 "Self-registration" below), but UNCONSUMED — no call site exists today.
-Coordinator-claude's frozen contract (`docs/contracts/arch-engine-scripts.md`) names
+DoE-claude's frozen contract (`docs/contracts/arch-engine-scripts.md`) names
 this op under its `arch-callgraph` lane, but the survey's Workflow script
 does not call it; only `cartography.chunk_table` and `cartography.churn`
 have call sites (docs/plans/2026-08-06-claude-klabauter-ize-the-survey-census.md §

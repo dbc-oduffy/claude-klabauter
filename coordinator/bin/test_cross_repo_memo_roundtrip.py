@@ -8,7 +8,7 @@ Spec backlink: cross-repo/inbox/strang-03-fixture-executor-brief (claude-klabaut
 Purpose: exercise each of the 5 coupled path-declaration sites end-to-end (a memo
 written → schema-valid → own-inbox-guarded → surfaced → swept), independently, so a
 deliberately-broken single site turns exactly that test red. Also encodes the pinned
-Coordinator-claude collision contract (2 tests): cross-sender same-day-same-topic survives; same-sender
+DoE collision contract (2 tests): cross-sender same-day-same-topic survives; same-sender
 same-day-same-topic loud-fails via O_EXCL. AC9 adds an op-refusal regression case: a real
 Claude-klabauter collision refusal must exit `send` non-zero, retain the outbox, and commit nothing.
 
@@ -73,11 +73,11 @@ def _bin_dir() -> str:
 
 
 def _doe_bin_dir() -> str:
-    """Return the absolute path to the coordinator-claude clone's coordinator/bin dir.
+    """Return the absolute path to the DoE-claude clone's coordinator/bin dir.
 
     Schemas (schemas/cross-repo-memo.schema.json) and hooks
     (hooks/scripts/validate-frontmatter-schema.py) are CONTRACT and stay
-    coordinator-claude-side permanently (commit a0bb05a0, "21 hooks + dead schema guard") —
+    DoE-side permanently (commit a0bb05a0, "21 hooks + dead schema guard") —
     they were deliberately NOT migrated with bin/lib/scripts/tests in the
     2026-07-21 executable-surface migration that relocated THIS fixture into
     claude-klabauter's own coordinator/bin/. Resolving these two artifacts off this
@@ -87,12 +87,12 @@ def _doe_bin_dir() -> str:
     Follows the same resolution pattern as
     coordinator_registry.doe_root()/percolate-preflight-scratch-publish.py's
     _resolve_coordinator_root(): DOE_ROOT env (legacy alias, wins first) ->
-    REPO_EXAMPLE_DOCTRINE_REPO env -> machine-local `repos.example_doctrine_repo` key. Fails loud
-    (RuntimeError naming repos.example_doctrine_repo) rather than silently skipping the
-    two coordinator-claude-side sites -- a resolvable-but-wrong path would mask a real
+    REPO_DOE_CLAUDE env -> machine-local `repos.doe_claude` key. Fails loud
+    (RuntimeError naming repos.doe_claude) rather than silently skipping the
+    two DoE-side sites -- a resolvable-but-wrong path would mask a real
     schema/hook regression as a spurious "file not found".
     """
-    override = os.environ.get("DOE_ROOT", "").strip() or os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "").strip()
+    override = os.environ.get("DOE_ROOT", "").strip() or os.environ.get("REPO_DOE_CLAUDE", "").strip()
     if override:
         return os.path.join(override, "coordinator", "bin")
 
@@ -105,17 +105,17 @@ def _doe_bin_dir() -> str:
         root = doe_root()
     except _DoeUnresolvable as exc:
         raise RuntimeError(
-            "test_cross_repo_memo_roundtrip.py: cannot resolve the coordinator-claude "
-            f"repo root to locate its permanently-coordinator-claude-side schemas/ and hooks/ "
-            f"({exc}). Set repos.example_doctrine_repo in the machine-local registry, or "
-            "set the DOE_ROOT/REPO_EXAMPLE_DOCTRINE_REPO env var."
+            "test_cross_repo_memo_roundtrip.py: cannot resolve the coordinator "
+            f"doctrine repo root to locate its permanently-upstream schemas/ and hooks/ "
+            f"({exc}). Set repos.doe_claude in the machine-local registry, or "
+            "set the DOE_ROOT/REPO_DOE_CLAUDE env var."
         ) from exc
     return os.path.join(root, "coordinator", "bin")
 
 
 def _script_path() -> str:
     """Return the absolute path to cross-repo-memo."""
-    return os.path.join(_bin_dir(), "cross-repo-memo")
+    return os.path.join(_bin_dir(), "cross-repo-memo.py")
 
 
 def _load_dispatcher_module():
@@ -145,11 +145,11 @@ def _python() -> str:
     return sys.executable  # popup-safe-env-suppressed: test-harness subprocess, not hot-path
 
 
-def _sibling_example_doctrine_repo_probe() -> str:
-    """Env-independent fallback: locate the sibling coordinator-claude checkout by
+def _sibling_doe_claude_probe() -> str:
+    """Env-independent fallback: locate the sibling DoE-claude checkout by
     walking up from THIS file to the engine repo root, then probing that
     root's own parent directory for the fleet's conventional sibling-clone
-    name, `coordinator-claude` (see project CLAUDE.md "sibling coordinator-claude
+    name, `DoE-claude` (see project CLAUDE.md "sibling DoE-claude
     checkout"). Not a hand-typed absolute path -- portable to any machine
     that clones the fleet repos side-by-side, which is the established
     layout this whole file already depends on for `_doe_bin_dir()`.
@@ -176,7 +176,7 @@ def _sibling_example_doctrine_repo_probe() -> str:
         claude_klabauter_root = parent
     else:
         return ""
-    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-claude")
+    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")
     manifest = os.path.join(
         candidate, "coordinator", "schemas", "coordinator-registry.manifest.json"
     )
@@ -184,14 +184,14 @@ def _sibling_example_doctrine_repo_probe() -> str:
 
 
 def _resolve_doe_root_for_tests() -> str:
-    """Best-effort coordinator-claude sibling root, forwarded as DOE_ROOT to every
+    """Best-effort DoE-claude sibling root, forwarded as DOE_ROOT to every
     spawned CLI invocation in this file, AND pinned into this process's own
     `os.environ` (see below `_DOE_ROOT_FOR_TESTS` bootstrap) so in-process
     imports of `coordinator_registry` (e.g. `_doe_bin_dir()`'s direct
     `from coordinator_registry import ...`) resolve too.
 
     coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back
-    to a machine-local `repos.example_doctrine_repo` lookup that is itself CLAUDE_HOME/
+    to a machine-local `repos.doe_claude` lookup that is itself CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME-anchored -- tests in this file point those at
     an isolated settings_home tmpdir for fixture isolation, which
     collaterally starves that fallback too. Resolving it once here and
@@ -204,7 +204,7 @@ def _resolve_doe_root_for_tests() -> str:
     reads CLAUDE_HOME/COORDINATOR_SETTINGS_HOME internally, so it goes empty
     under a whole-process isolated-home run (e.g.
     `CLAUDE_HOME=$TMPH COORDINATOR_SETTINGS_HOME=$TMPH/settings pytest ...`)
-    even though the sibling checkout is present on disk; `_sibling_example_doctrine_repo_
+    even though the sibling checkout is present on disk; `_sibling_doe_claude_
     probe()` is the env-independent fallback that keeps this file hermetic
     to ambient machine state.
     """
@@ -216,7 +216,7 @@ def _resolve_doe_root_for_tests() -> str:
         root = ""
     if root and os.path.isdir(root):
         return root
-    return _sibling_example_doctrine_repo_probe()
+    return _sibling_doe_claude_probe()
 
 
 _DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
@@ -411,8 +411,8 @@ def _repo_key_for(to: str) -> str:
 def _write_registry_toml(settings_home: str, repo_key: str, repo_path: str) -> None:
     """Write an ISOLATED machine-local registry.toml under settings_home mapping
     repo_key -> repo_path — the exact surface claude-klabauter's memo_send.py reads directly
-    via stdlib tomllib (coordinator-claude-ratified resolver surface, DEC/Q1). Distinct from
-    MACHINE_LOCAL_IMPL, which only affects coordinator-claude-side (cross-repo-memo CLI) lookups."""
+    via stdlib tomllib (DoE-ratified resolver surface, DEC/Q1). Distinct from
+    MACHINE_LOCAL_IMPL, which only affects DoE-side (cross-repo-memo CLI) lookups."""
     reg_dir = os.path.join(settings_home, "machine-local")
     os.makedirs(reg_dir, exist_ok=True)
     with open(os.path.join(reg_dir, "registry.toml"), "w", encoding="utf-8") as f:
@@ -590,7 +590,7 @@ def test_site1_cli_write_target() -> None:
         _write_outbox_draft(sender_tmpdir, topic="roundtrip-site1", to=to,
                              title="Site 1 Roundtrip", body="Site 1 body.\n",
                              summary="Site 1 roundtrip fixture memo.",
-                             scoped_to_artifact="coordinator/bin/cross-repo-memo",
+                             scoped_to_artifact="coordinator/bin/cross-repo-memo.py",
                              scoped_to_sha=expected_sha, scoped_to_seam="site1-cli-write-target")
         env = {
             "MACHINE_LOCAL_IMPL": mock_impl,
@@ -630,7 +630,7 @@ def test_site1_cli_write_target() -> None:
         with open(receiver_file, encoding="utf-8") as f:
             delivered_content = f.read()
         if not re.search(
-            r'scoped_to:\s*\n\s*artifact:\s*"coordinator/bin/cross-repo-memo"\s*\n'
+            r'scoped_to:\s*\n\s*artifact:\s*"coordinator/bin/cross-repo-memo.py"\s*\n'
             rf'\s*sha:\s*"{re.escape(expected_sha)}"\s*\n\s*seam:\s*"site1-cli-write-target"',
             delivered_content,
         ):
@@ -741,7 +741,7 @@ def _write_guards_engine_module():
     Fails with the REAL cause (an import error) rather than folding a broken
     in-repo import into the `returncode != 0` assertion downstream — the same
     rationale the pre-port RuntimeError("hook not found at ...") existed for
-    when the target lived in the coordinator-claude sibling checkout (2026-07-23: the
+    when the target lived in the DoE-claude sibling checkout (2026-07-23: the
     .js oracle's deletion there manifested as a spurious claude-klabauter contract
     violation). Now that the target is IN-REPO, the equivalent failure mode is
     an import error in coordinator_core.write_guards.engine itself, surfaced
@@ -1053,11 +1053,11 @@ def test_collision_cross_sender_both_survive() -> None:
         _git_init(receiver_tmpdir, initial_commit=True)
 
         # Isolated claude-klabauter-side registry: the receiver must resolve to
-        # receiver_tmpdir (matching the coordinator-claude-side mock above) so both sides agree
+        # receiver_tmpdir (matching the DoE-side mock above) so both sides agree
         # on the delivery target. Senders need no registry entry — memo.send's
         # own-inbox guard compares sender_worktree to the REGISTERED receiver
         # path, and neither sender root matches it; the earlier per-sender
-        # "UNREGISTERED repo" message is a non-fatal coordinator-claude-side warning only.
+        # "UNREGISTERED repo" message is a non-fatal DoE-side warning only.
         to = "roundtrip-collision-cli-receiver-em"
         _write_registry_toml(settings_home, _repo_key_for(to), receiver_tmpdir)
 
@@ -1073,7 +1073,7 @@ def test_collision_cross_sender_both_survive() -> None:
             [_python(), _script_path(), "--to", to, "--topic", "roundtrip-collision",
              "--title", "From Alpha",
              "--summary", "Collision 1 roundtrip fixture memo (Alpha).",
-             "--scoped-to-artifact", "coordinator/bin/cross-repo-memo",
+             "--scoped-to-artifact", "coordinator/bin/cross-repo-memo.py",
              "--scoped-to-sha", _head_sha(receiver_tmpdir), "--scoped-to-seam", "collision1-flag-only-cli"],
             cwd=sender_a_root,
             env={**os.environ, **env_a},
@@ -1083,7 +1083,7 @@ def test_collision_cross_sender_both_survive() -> None:
             [_python(), _script_path(), "--to", to, "--topic", "roundtrip-collision",
              "--title", "From Beta",
              "--summary", "Collision 1 roundtrip fixture memo (Beta).",
-             "--scoped-to-artifact", "coordinator/bin/cross-repo-memo",
+             "--scoped-to-artifact", "coordinator/bin/cross-repo-memo.py",
              "--scoped-to-sha", _head_sha(receiver_tmpdir), "--scoped-to-seam", "collision1-flag-only-cli"],
             cwd=sender_b_root,
             env={**os.environ, **env_b},
@@ -1247,7 +1247,7 @@ def test_ac9_op_refusal_regression() -> None:
         _write_outbox_draft(sender_tmpdir, topic="roundtrip-ac9-collision", to=to,
                              title="AC9 First", body="First body.\n",
                              summary="AC9 first roundtrip fixture memo.",
-                             scoped_to_artifact="coordinator/bin/cross-repo-memo",
+                             scoped_to_artifact="coordinator/bin/cross-repo-memo.py",
                              scoped_to_sha=_head_sha(receiver_tmpdir), scoped_to_seam="ac9-op-refusal-regression")
         first = subprocess.run(
             [_python(), _script_path(), "send", "roundtrip-ac9-collision"],
@@ -1275,7 +1275,7 @@ def test_ac9_op_refusal_regression() -> None:
         second_outbox = _write_outbox_draft(sender_tmpdir, topic="roundtrip-ac9-collision", to=to,
                                              title="AC9 Second", body="Second body.\n",
                                              summary="AC9 second roundtrip fixture memo.",
-                                             scoped_to_artifact="coordinator/bin/cross-repo-memo",
+                                             scoped_to_artifact="coordinator/bin/cross-repo-memo.py",
                                              scoped_to_sha=_head_sha(receiver_tmpdir), scoped_to_seam="ac9-op-refusal-regression")
         second = subprocess.run(
             [_python(), _script_path(), "send", "roundtrip-ac9-collision"],
@@ -1305,7 +1305,7 @@ def test_ac9_op_refusal_regression() -> None:
 
 # ---------------------------------------------------------------------------
 # C4b — archive-leg CLI roundtrip: _archive_sent_outbox_draft /
-# _commit_archived_outbox_draft (coordinator/bin/cross-repo-memo, C3).
+# _commit_archived_outbox_draft (coordinator/bin/cross-repo-memo.py, C3).
 #
 # Spec backlink: pln-memo-send-commits-its-own-send-4760e3,
 # chunks C3 (implementation, committed 1a5a482e7eaa) and C4 (this coverage,

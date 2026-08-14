@@ -78,7 +78,7 @@ Negative-spec:
     - Does NOT attempt to interpret prose accuracy — that is content
       verification (`doc_content_verify.py`, C6b/C6c), a distinct op.
 
-Spec backlink: docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C1
+Spec backlink: DoE-claude:pln-human-facing-doc-staleness-det-d9c047 § C1
 """
 from __future__ import annotations
 

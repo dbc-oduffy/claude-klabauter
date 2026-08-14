@@ -6,7 +6,7 @@ surface from the W2.2 spec — which tri-plane subject a given artifact path
 belongs to (doctrine / engine / cross-cutting), plus the rc and stderr
 contract each verdict carries.
 
-Port of: coordinator-artifact-subject.test.sh (coordinator-claude 6fb5fb37, 2026-07-22).
+Port of: coordinator-artifact-subject.test.sh (DoE 6fb5fb37, 2026-07-22).
 Retargets the SUT from the deleted bash lib to the Python port; assertions
 are unchanged (same cases, same expected token/rc pairs).
 

@@ -3,7 +3,7 @@ coordinator_core.ops.cartography_stack — JSON-RPC "cartography.stack" operatio
 
 Purpose: pure-Python, cross-platform port of the fence-inventory
 `detect-project-stack` fingerprint (`coordinator/skills/bug-sweep/SKILL.md`
-Phase 0, coordinator-claude tree) — a language / test-framework / config-file
+Phase 0, DoE-claude tree) — a language / test-framework / config-file
 fingerprint of a caller-supplied `target_root`, for Phase-0 scoping in
 bug-sweep-shaped work. This is a different axis from
 `coordinator_core/ops/detect_project_runtime.py`, which detects

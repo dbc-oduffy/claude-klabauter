@@ -1,9 +1,9 @@
 """
 Tests for coordinator_core.ops.workday_start_cross_repo_memo_outbox_surface.
 
-Port of: workday-start-cross-repo-memo-outbox-surface.sh (coordinator-claude b5a4192c,
-2026-07-20). Cases mirror the coordinator-claude bash test suite (test-outbox-stale-nudge.sh,
-Coordinator-claude 894d4bc6, 2026-07-22) plus additional negative and edge cases exercised
+Port of: workday-start-cross-repo-memo-outbox-surface.sh (DoE b5a4192c,
+2026-07-20). Cases mirror the DoE bash test suite (test-outbox-stale-nudge.sh,
+DoE 894d4bc6, 2026-07-22) plus additional negative and edge cases exercised
 during the port (see the golden-oracle snapshot captured for this port).
 """
 

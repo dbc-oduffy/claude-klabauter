@@ -1,12 +1,12 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """handoff-archive-transition.py — CLI trampoline over claude-klabauter's
-`handoff.archive_transition` op, covering the two dispatch shapes coordinator-claude's
+`handoff.archive_transition` op, covering the two dispatch shapes DoE-claude's
 `coordinator/skills/handoff/SKILL.md` (predecessor chain-archival on write, and
 park-with-links on supersession) previously inlined as embedded
 `python3 -c` heredocs calling `cc_invoke.route_mutation` directly.
 
 Purpose: this file is the naked-Python landing spot for that inlined logic —
-the coordinator-claude skill invokes it by name instead of carrying the heredoc + resolver
+the DoE skill invokes it by name instead of carrying the heredoc + resolver
 boilerplate inline (M3/HO-3, the extirpation plan that ports genuine
 imperative bash/heredoc logic out of skill markdown and into claude-klabauter CLIs).
 
@@ -59,7 +59,7 @@ Subcommands:
         this. A literal port would therefore always fail at the engine. This
         CLI instead requires --continued-into as a first-class argument
         (rejected here, before even reaching the op, on absence) so the
-        coordinator-claude-side call site can be updated to pass the successor it already
+        DoE-side call site can be updated to pass the successor it already
         names in the body-prose link pair (SKILL.md § Park-with-links step 2)
         rather than porting a call shape that cannot succeed.
 
@@ -103,7 +103,7 @@ Negative-spec:
       (handoff.stamp_phase), out of scope for this port (see the M3/HO-3
       dispatch brief's "What to port vs leave").
 
-Spec backlink: coordinator-claude coordinator/skills/handoff/SKILL.md
+Spec backlink: DoE-claude coordinator/skills/handoff/SKILL.md
     §§ "Chain archival — presume the sweep wins" (event-driven cutover /
     option a) and "Park-with-links on supersession" (relocation step).
 """
@@ -517,7 +517,7 @@ def cmd_supersede(handoff_path: str, continued_into: str | None, exclude: list[s
     # exit_code:0 even when the live-children guard retains the archival
     # move (retention is never an error — see handoff_archive_transition.py's
     # module docstring). That means an unraised, unexamined result here IS
-    # the silent-no-op bug (cross-repo coordinator-claude incident, 2026-07-27): the caller
+    # the silent-no-op bug (cross-repo DoE incident, 2026-07-27): the caller
     # sees exit 0 and nothing else, indistinguishable from a real supersede.
     # Inspect the result explicitly and always print an outcome line.
     if not isinstance(result, dict):

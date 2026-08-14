@@ -1,18 +1,18 @@
 """
 coordinator_core.ops.seed_skill_overrides — thin orchestration wrapper around
-bin/seed-skill-overrides.py (coordinator-claude-resident); direct-import port of
+bin/seed-skill-overrides.py (DoE-resident); direct-import port of
 coordinator/bin/install-health/seed-skill-overrides.sh.
 
-Purpose: resolve the coordinator-claude-resident seed-skill-overrides.py helper path, build
+Purpose: resolve the DoE-resident seed-skill-overrides.py helper path, build
 its CLI args (--check-only when CHECK_ONLY is set, --with-deep-research
 always — deep-research ships bundled in coordinator post-Wave-C4), and
 invoke it via subprocess. The helper itself is NOT ported — it stays
-Coordinator-claude-resident and owns the actual settings.json merge logic; this module only
+DoE-resident and owns the actual settings.json merge logic; this module only
 replaces the bash orchestration shell (trust-guard + arg-building +
 graceful-degrade-on-absent-helper).
 
 Port source: coordinator/bin/install-health/seed-skill-overrides.sh
-    (coordinator-claude), replaced with a sh/python polyglot trampoline over this
+    (DoE-claude), replaced with a sh/python polyglot trampoline over this
     module on cutover.
 Spec backlink: docs/plans/2026-06-27-ccos-1-dual-context-validator.md
     (seed-skill-overrides chunk); install-health drop-in plan (2026-06-27).
@@ -55,11 +55,11 @@ def main(
     """Entry point.
 
     ``plugin_root`` is the trust-check anchor only (unchanged since this
-    module's introduction — the coordinator-claude-side invoking-harness root the
+    module's introduction — the DoE-side invoking-harness root the
     fail-loud trust-core validates). ``helper_root`` is the DIFFERENT root
     the `bin/seed-skill-overrides.py` helper is actually looked up under —
     added so a caller resolving legs off claude-klabauter (`coordinator_claude_klabauter_root()`,
-    per the dual-anchor split: coordinator-claude-side trust anchor stays plugin_root,
+    per the dual-anchor split: DoE-side trust anchor stays plugin_root,
     claude-klabauter-side content resolves off claude-klabauter root) can repoint the helper
     lookup without touching trust semantics. Defaults to ``plugin_root``,
     preserving the original single-root behavior for any other caller.

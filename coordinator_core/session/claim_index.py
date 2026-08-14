@@ -372,8 +372,12 @@ def _last_verb_per_path(lines: List[str]) -> Dict[str, Tuple[str, Optional[datet
     same walk, same parse) and is what lets ``rebuild()`` /``lookup()``
     answer the AC1d recency-of-EDIT question without a second read pass.
     ``timestamp`` is ``None`` when the line's timestamp field does not
-    parse via ``datetime.fromisoformat`` (unknown time — never treated as
-    "recent" by a caller of this data).
+    parse via ``datetime.fromisoformat``, OR parses but is NAIVE (no
+    ``tzinfo`` — rejected in lockstep with
+    ``coordinator_core.session.scope.parse_touch_event``, this module's
+    sibling parser of the same on-disk format, which also treats a naive
+    timestamp as unparseable) — either way, unknown time, never treated as
+    "recent" by a caller of this data.
 
     A line that does not match ``'<T|R> <timestamp> <path>'`` (via
     ``str.split(None, 2)``, so a path containing a space is never split)
@@ -393,6 +397,14 @@ def _last_verb_per_path(lines: List[str]) -> Dict[str, Tuple[str, Optional[datet
             ts = datetime.fromisoformat(ts_str)
         except ValueError:
             ts = None
+        else:
+            if ts.tzinfo is None:
+                # Review: coordinator:code-reviewer P3 — kept in lockstep
+                # with scope.parse_touch_event, which also rejects a naive
+                # (no-tzinfo) timestamp as unparseable. Treated identically
+                # to a ValueError here: ts=None, same as any other
+                # malformed/legacy timestamp this module already handles.
+                ts = None
         last[_normalize_key(path)] = (verb, ts)
     return last
 

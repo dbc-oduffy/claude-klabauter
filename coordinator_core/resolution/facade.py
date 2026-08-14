@@ -9,7 +9,7 @@ discriminator — never a single generic ``validate_root()`` that would hide
 it:
 
     resolve_operator_config()   — operator-authored, gitignored, per-machine
-                                   config (settings home, claude-klabauter root/bin, coordinator-claude
+                                   config (settings home, claude-klabauter root/bin, DoE
                                    root). Corruption-checked ONLY: these
                                    values are typo'd or stale, never
                                    adversarial, so this method never touches
@@ -88,7 +88,7 @@ def _corruption_reason(value: str) -> Optional[str]:
     (corruption-checked only, never trust-checked — see module docstring):
 
       - an embedded newline. Pinned edge case: the shipped
-        ``_registry_example_doctrine_repo``/``_registry_claude_klabauter`` readers join a
+        ``_registry_doe_claude``/``_registry_claude_klabauter`` readers join a
         list-valued TOML registry key with ``"\\n"`` (``"\\n".join(str(i)
         for i in val)``) — that shape is a corruption REJECT here, single-line
         is a hard requirement, not a value this facade silently re-flattens.

@@ -6,7 +6,7 @@ original against a real ~/.claude/projects/ tree and two negative corpora
 Negative-spec for the documented divergences (line order; zero-candidates
 stderr text).
 
-Port of: decode-claude-projects-dir.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: decode-claude-projects-dir.sh (DoE b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

@@ -26,8 +26,8 @@ against a representative envelope shaped exactly like each guard's own
 `_advisory(...)`/`allow_advisory(...)` return, rather than through a live
 trigger command.
 
-Spec backlink: docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md
-(coordinator-claude) row H6.
+Spec backlink: DoE-claude:pln-os-aware-guard-advisory-defaul-060dbe
+(DoE-claude) row H6.
 """
 from __future__ import annotations
 

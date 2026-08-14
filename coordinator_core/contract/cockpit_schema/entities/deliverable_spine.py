@@ -1,6 +1,6 @@
 """
 Deliverable-spine shared enums — used by HandoffSummary, PlanSummary, and
-RoadmapSummary. Pydantic port of coordinator-claude
+RoadmapSummary. Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/deliverable-spine.ts` (Zod source).
 
 Extracted into a standalone module to avoid circular imports in the TS
@@ -10,7 +10,7 @@ would create a circular reference. Preserved as a standalone module here for
 parity, though Python's import model does not force the same split.
 
 Spec backlink: pln-fleet-deliverable-spine-identity-and-facets-2b331c § D4, D5.
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ Workstream type — the normalized handoff `category` enum projected into the
 emission. 8-value closed set; source-of-truth in
 coordinator_core/ops/handoff_normalize.py (`_match_category`).
 `queue-derived-baton` added 2026-07-23 to match the sibling
-Coordinator-claude/claude-central-em repo's newly-shipped 8th `category` enum
+coordinator-claude/claude-central-em repo's newly-shipped 8th `category` enum
 value for queue-derived triage batons — without this, a handoff carrying that
 category was silently quarantined to the `malformed` bucket in cockpit
 emission (Pydantic `ValidationError` on `HandoffSummary`).

@@ -4,7 +4,7 @@
  * `cockpit-contract-release` tag-advance seam.
  *
  * PURPOSE
- * AC8 (docs/plans/2026-07-04-doe-emission-conformance-fixture.md) commits coordinator-claude
+ * AC8 (docs/plans/2026-07-04-doe-emission-conformance-fixture.md) commits DoE
  * to advancing the local `cockpit-contract-release` tag on every intentional
  * cockpit-contract schema change. That obligation used to be implemented in
  * `coordinator/bin/gen-emission-conformance.sh`; the script was deleted
@@ -26,7 +26,7 @@
  *
  * Run with: node bin/tests/test-cockpit-contract-release-tag.js
  *
- * Spec backlink: docs/plans/2026-07-04-doe-emission-conformance-fixture.md § AC8
+ * Spec backlink: DoE-claude:pln-doe-hosted-emission-conformanc-67bca4 § AC8
  * Spec backlink: coordinator/docs/wiki/emission-conformance-contract.md § Dedicated-Ref Freshness Protocol
  */
 
@@ -82,7 +82,7 @@ describe('cockpit-contract-release tag-advance seam (AC8 anti-drift guard)', () 
       `${REGEN_SCRIPT} contains a \`["git", "push", ...]\` invocation — the tag-advance seam ` +
       'must be LOCAL-ONLY. Pushing the release ref to origin is not this script\'s surface and ' +
       'must never be added here. The publishing mechanism for this ref is under active ' +
-      'discussion between claude-klabauter and coordinator-claude as of 2026-07-25 and is not yet decided ' +
+      'discussion between claude-klabauter and DoE-claude as of 2026-07-25 and is not yet decided ' +
       '— do not add a push call here to pre-empt that decision.'
     );
   });

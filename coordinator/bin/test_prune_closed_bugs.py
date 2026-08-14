@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_prune_closed_bugs.py — self-contained test suite for prune-closed-bugs.py.
 
 Native-Python successor to the retired coordinator/bin/tests/test-*-prune-closed-bugs.sh
@@ -18,7 +17,7 @@ archive) and the dry-run-only early exit (Call 2 skipped when --dry-run is passe
 Runs bash-free: `python3 test_prune_closed_bugs.py` (or via the coordinator test runner).
 Exit 0 = all tests pass; non-zero = at least one failure.
 
-Spec backlink: docs/plans/2026-07-06-dr215-fleet-ops-ceremony-wiring.md § KD-4 / AC6
+Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 § KD-4 / AC6
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 """
 from __future__ import annotations

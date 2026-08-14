@@ -3,7 +3,7 @@ coordinator_core.frontmatter.schema_cli — byte-identical parity CLI over
 schema_validate's describe()/validate(), PLUS dual registration of the same
 logic as the "schema.describe"/"schema.validate" JSON-RPC ops.
 
-Purpose: Python port of coordinator-claude coordinator/bin/schema-cli.js — a
+Purpose: Python port of DoE-claude coordinator/bin/schema-cli.js — a
 subprocess-friendly JSON bridge callers can shell out to
 (``python3 -m coordinator_core.frontmatter.schema_cli --describe <name>``),
 with an OWN argv/output contract that intentionally does NOT route through
@@ -64,8 +64,8 @@ Negative-spec:
 
 Spec backlink: docs/plans/2026-07-14-dual-yaml-parser-option-d.md § C7 [DEAD-CITATION: plan file never committed to this repo]
   (chunk C7 — parity CLI + dual op-registration)
-Coordinator-claude oracle: coordinator-claude coordinator/bin/schema-cli.js (229 lines)
-Coordinator-claude conformance fixture: coordinator-claude coordinator/bin/tests/test-schema-cli.bats
+DoE oracle: DoE-claude coordinator/bin/schema-cli.js (229 lines)
+DoE conformance fixture: DoE-claude coordinator/bin/tests/test-schema-cli.bats
 """
 from __future__ import annotations
 

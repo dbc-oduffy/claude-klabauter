@@ -33,7 +33,7 @@ def _stub_roster_absence_leg(monkeypatch):
     (``_helpers.is_confined_by_roster_absence``, wired into
     ``_is_confined_type`` this dispatch) -- that leg's non-trivial branch
     calls ``resolve_roster()``, which does real disk I/O against a live
-    coordinator-claude checkout and this machine's plugin discovery tree. Every test
+    DoE-claude checkout and this machine's plugin discovery tree. Every test
     in THIS file predates AC5 and exercises only the two pre-existing legs
     (``bash_policy:`` key, ``is_confined_findings_agent`` membership); none
     of them intends to depend on this machine's roster state. Stubbed to
@@ -60,7 +60,7 @@ _CONFINED_TYPE = "coordinator:code-reviewer"
 # which type is used for the (deliberately non-confined) primary leg.
 _NON_CONFINED_TYPE = "coordinator:enricher"
 
-_CLAUDE_KLABAUTER_ABS_PATH = "/x/claude-klabauter/coordinator/bin/coordinator-doc-new"
+_CLAUDE_KLABAUTER_ABS_PATH = "/x/claude-klabauter/coordinator/bin/coordinator-doc-new.py"
 
 
 def _payload(
@@ -585,8 +585,8 @@ def test_deny_reason_offers_resolved_absolute_path_form(monkeypatch):
     result = guard.check(payload)
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "<claude-klabauter-root>/coordinator/bin/coordinator-doc-new" in reason
-    assert "python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new" in reason
+    assert "<claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py" in reason
+    assert "python3 <claude-klabauter-root>/coordinator/bin/coordinator-doc-new.py" in reason
     # Retired forms are no longer offered.
     assert "  bin/coordinator-doc-new --type review-findings ...\n" not in reason
     assert "bash /abs/path/to/coordinator-doc-new" not in reason
@@ -728,7 +728,7 @@ def test_ls_suffix_bypass_denies(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Tier A: grep addition (2026-07-25, coordinator-claude correction memo)
+# Tier A: grep addition (2026-07-25, DoE-claude correction memo)
 # ---------------------------------------------------------------------------
 
 

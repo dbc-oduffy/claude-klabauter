@@ -1,8 +1,8 @@
 """coordinator_core.write_guards.nudge_windows_subprocess_popup — advisory guard.
 
-Python engine-ification of coordinator-claude's retired
+Python engine-ification of DoE's retired
 ``coordinator/hooks/scripts/nudge-windows-subprocess-popup.sh`` PreToolUse
-(Write|Edit|MultiEdit) hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``), per the
+(Write|Edit|MultiEdit) hook (deleted 2026-07-16, DoE ``2f8b8450``), per the
 naked-Python hook migration (write_guards/INTERFACE.md).
 
 Motivation (ported verbatim from the reference hook): Windows console-subsystem
@@ -27,7 +27,7 @@ Async-seam note (migration-specific, not present in the reference hook): the
 reference hook's tail section backgrounds an ``advisory_call`` to claude-klabauter
 (``hooks.nudge_windows_subprocess_popup``) via ``spawn-hidden.sh`` ->
 ``coordinator_core.client``, gated behind ``COORDINATOR_CLAUDE_KLABAUTER_DENY_AUTHORITATIVE``.
-That re-dispatch existed so coordinator-claude's bash shim could optionally defer its decision
+That re-dispatch existed so DoE's bash shim could optionally defer its decision
 to a claude-klabauter-side evaluation. Since this module now RUNS INSIDE claude-klabauter's own
 engine, re-dispatching to claude-klabauter from here would be a self-call — it is
 deliberately NOT ported. The reference hook does not delegate its DECISION
@@ -35,17 +35,17 @@ logic to any other pre-existing claude-klabauter engine function (no such functi
 existed prior to this module); this module IS that decision logic, computed
 in-process and returned directly.
 
-CLASS is "advisory" per DR-077 (2026-07-21) — a coordinator-claude-authored ruling that
+CLASS is "advisory" per DR-077 (2026-07-21) — a DoE-authored ruling that
 DELIBERATELY DEPARTS from the retired reference hook (see
 ``docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md``
-in the coordinator-claude repo). NOTE: DR-077's scope is the whole-file-context /
+in the DoE-claude repo). NOTE: DR-077's scope is the whole-file-context /
 advisory-class change ONLY (part 1 and part 2 below) — it contains no
 substantive discussion of git or DETACHED_PROCESS semantics and does not
 back the (now-removed) git exemption; that exemption's provenance is
 tracked separately, see the negative-spec below. The
 ``cross-repo/archive/2026-07-21-claude-central-em-popup-guard-fragment-scoped-false-denials-dr077.md``
 citation this docstring used to carry alongside DR-077 is DANGLING — that
-file does not exist in either this repo or coordinator-claude (verified
+file does not exist in either this repo or DoE-claude (verified
 2026-08-07 during the windows-popup-guard-blind-to-git-and-asyncio
 spinoff). Left noted here rather than silently dropped so a future reader
 does not re-cite it or burn time hunting for it.
@@ -117,7 +117,7 @@ Negative-spec:
   - Never raises: any unexpected input shape returns ``None`` (ALLOW/no-op).
 
 Spec backlink: docs/plans/2026-06-19-windows-console-popup-coordinator-doctrine.md § C2
-Ruling: DR-077 (coordinator-claude docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md)
+Ruling: DR-077 (DoE-claude docs/decisions/DR-077-console-popup-authoring-guard-whole-file-context-and-advisory.md)
 Grep anchors: WINDOWS-CONSOLE-POPUP DR-077
 """
 

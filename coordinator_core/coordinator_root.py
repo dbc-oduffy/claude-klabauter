@@ -20,7 +20,7 @@ def _resolve_plugin_root_for_machine_local(coord_path: Path) -> Path | None:
     `coordinator_core.install._shared.resolve_machine_local_cli` expects
     (the dir directly containing `templates/bin/_machine_local.py` and
     `bin/machine-local`) — a coordinator-claude root can be shaped two ways:
-    (a) the OSS mirror clone, plugin_root == coord_path itself, or (b) a coordinator-claude
+    (a) the OSS mirror clone, plugin_root == coord_path itself, or (b) a DoE
     dev-clone, where the coordinator plugin source (and its bin/) lives
     under a `coordinator/` subdir. Returns None if neither shape matches,
     in which case `resolve_machine_local_cli` falls back to an on-PATH
@@ -28,7 +28,7 @@ def _resolve_plugin_root_for_machine_local(coord_path: Path) -> Path | None:
 
     negative-spec: probe for the artifact this function actually needs
     (`templates/bin/_machine_local.py`), never for a doctrine file standing in
-    as a proxy for it. This branch tested `coordinator/CLAUDE.md` until coordinator-claude
+    as a proxy for it. This branch tested `coordinator/CLAUDE.md` until DoE
     retired that file (`e8f9051db`); the dev clone then resolved to None, and
     `install_bin_forwarders` skipped with a "no templates/ dir" advisory while
     `templates/bin/_machine_local.py` sat right there — so the documented

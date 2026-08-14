@@ -7,7 +7,7 @@ pointer-normalization seam). Two independent implementations of "who points at t
 baton" agreeing is much stronger evidence than either one's own unit tests.
 
 Relocated (2026-07-26) from a throwaway location
-(coordinator-claude/state/audits/2026-07-26-baton-dag.py) into this permanent test surface —
+(DoE-claude/state/audits/2026-07-26-baton-dag.py) into this permanent test surface —
 the throwaway copy was slated to evaporate; this module IS the copy now, extended with
 a `fields` parameter so a caller can score predecessor-family and origin_handoff-family
 pointers separately (the throwaway script summed both into one children set, which
@@ -46,18 +46,18 @@ Negative-spec:
     launder a successor-named-child check into looking like this predicate.
 
 Consumer note (CORRECTED 2026-07-29 — verify before trusting a claim like this).
-This header previously read: "this module is SHARED with coordinator-claude (relocated
-there by coordinator-claude's 2026-07-26-push-side-write-discipline plan's C6, commit
+This header previously read: "this module is SHARED with DoE-claude (relocated
+there by DoE's 2026-07-26-push-side-write-discipline plan's C6, commit
 `f2fefa23`) — any change here is producer-side with a live consumer." Both facts
 were wrong, and checked at the point of use they fall over immediately:
 
-  - `claimed_or_shipped` is defined NOWHERE in the coordinator-claude clone; the only
+  - `claimed_or_shipped` is defined NOWHERE in the DoE-claude clone; the only
     matches there are a `state/cockpit-emission.json` blob and two archived
     memos that merely mention the name. No code consumes this module outside
     claude-klabauter.
   - `f2fefa23` is a claude-klabauter commit ("C6: one pointer-normalization seam
-    for the six on-disk encodings"), not a coordinator-claude one. The header credited claude-klabauter's
-    own commit to coordinator-claude and asserted a relocation that never happened.
+    for the six on-disk encodings"), not a DoE one. The header credited claude-klabauter's
+    own commit to DoE and asserted a relocation that never happened.
 
 The cost was real, not theoretical: a 2026-07-29 fix to `_frontmatter` was
 scoped as a cross-repo producer-side change and a notice memo drafted for a

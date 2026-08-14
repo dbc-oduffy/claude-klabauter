@@ -1,15 +1,15 @@
 """workweek-complete-close.py — closing-orchestration CLI for /workweek-complete.
 
 Ports the residual imperative logic that was still hand-authored inline as
-bash fences in coordinator-claude `coordinator/commands/workweek-complete.md` (M3
+bash fences in DoE-claude `coordinator/commands/workweek-complete.md` (M3
 chunk WWC-4, the bash-kill campaign). It is a composite entrypoint over
 several concerns — one subcommand per concern — rather than N separate
-scripts, matching the multi-concern chunk convention: the coordinator-claude ceremony step
+scripts, matching the multi-concern chunk convention: the DoE ceremony step
 will invoke this CLI by subcommand name once D2 repoints the fence.
 
 Subcommands:
   week-start        Extract the "Week starting:" date from HEADER.md
-                     (coordinator-claude workweek-complete.md Step 9.1's inline
+                     (DoE workweek-complete.md Step 9.1's inline
                      `grep -m1 ... | sed ...` derivation, ported verbatim
                      as a reusable function — several ceremony steps need
                      this same value).
@@ -43,7 +43,7 @@ are the D1/D2 repoint's concern directly; wrapping them here would just be
 re-indirection, not a port. See the WWC-4 dispatch brief's "what to port vs
 leave" rule.
 
-Spec backlink: coordinator-claude coordinator/commands/workweek-complete.md
+Spec backlink: DoE-claude coordinator/commands/workweek-complete.md
     § Step 9.1 (week-start derivation, lines ~3337-3339)
     § Step 9.1.5 (reconcile sweep, lines ~3358-3505)
     § Step 13 (archive + reset + commit + push, lines ~3762-3903)
@@ -61,6 +61,17 @@ import subprocess
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+
+# Generator-provenance declaration (generator_provenance.py).
+# perform_archive_files moves the closing week's daily/priorities files into
+# archive/week-changelogs/<week-starting>/ and archive/review-trail/
+# <week-starting>/, and rewrites state/week-changelog/HEADER.md -- a
+# data-dependent target set keyed on week_starting, not a fixed artifact.
+MUTATES = [
+    "state/week-changelog/*.md",
+    "archive/week-changelogs/**/*.md",
+    "archive/review-trail/**",
+]
 
 _BIN_DIR = Path(__file__).resolve().parent
 _LIB_DIR = _BIN_DIR / "lib"
@@ -252,7 +263,7 @@ def _bin_dir() -> Path:
 def derive_week_start(header_path: Path) -> str:
     """Extract the `**Week starting:** YYYY-MM-DD` value from HEADER.md.
 
-    Port of the coordinator-claude bash fence's `grep -m1 '\\*\\*Week starting:\\*\\*'
+    Port of the DoE bash fence's `grep -m1 '\\*\\*Week starting:\\*\\*'
     state/week-changelog/HEADER.md | sed 's/.*\\*\\*Week starting:\\*\\*[[:space:]]*//'`.
 
     Divergence from the bash oracle (deliberate, noted in the WWC-4 executor

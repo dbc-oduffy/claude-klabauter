@@ -421,7 +421,7 @@ def test_active_reference_guard_blocks_when_cited_both_inside_and_outside_proven
 def test_active_reference_guard_blocks_on_unknown_marker_key(tmp_path):
     # A citation inside a frontmatter block under a key that is NOT in
     # PROVENANCE_MARKER_KEYS is not recognized as a tombstone -> blocks, exactly like a
-    # plain prose citation. Ambiguity blocks; only the named, coordinator-claude-ratified key set is
+    # plain prose citation. Ambiguity blocks; only the named, DoE-ratified key set is
     # excluded — a lookalike key must not be inferred as a marker.
     docs = tmp_path / "docs"
     docs.mkdir()

@@ -1,7 +1,7 @@
 """Characterization + parity tests for coordinator_core.ops.workday_start_step0_reconcile.
 
-Port of: workday-start-step0-reconcile.sh (coordinator-claude b5a4192c, 2026-07-20), ~42 lines.
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Port of: workday-start-step0-reconcile.sh (DoE b5a4192c, 2026-07-20), ~42 lines.
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 """
 from __future__ import annotations
 

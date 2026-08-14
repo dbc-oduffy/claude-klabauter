@@ -2,7 +2,7 @@
 coordinator_core.ops.bootstrap_orchestrate — Discovery-to-per-repo orchestration
 for /coordinator:repo-setup --batch (fleet scaffolding).
 
-Port of: bootstrap-orchestrate.sh (coordinator-claude 0fc2b3ba, 2026-07-22).
+Port of: bootstrap-orchestrate.sh (DoE 0fc2b3ba, 2026-07-22).
 
 Purpose: reads `~/.claude/working-repos.yaml`, resolves the repo list,
 presents the EXPRESS/CUSTOM two-choice surface, then delegates each selected
@@ -11,7 +11,7 @@ primitive — called by DIRECT in-process import, not subprocess: both this
 module and bootstrap_repo now live in the same claude-klabauter process, so a subprocess
 hop buys nothing). After a successful bootstrap, stamps coordinator currency
 natively (C19 — see "Currency stamp — native port" below; no longer shells
-out to the coordinator-claude-resident `lib/coordinator-currency.sh`).
+out to the DoE-resident `lib/coordinator-currency.sh`).
 
 Spec backlink: docs/plans/2026-05-29-it-just-works-agentic-install-currency.md § Chunk 4
              + docs/plans/2026-07-16-bash-clean-slate-residual-migration.md (BIG_PORT wave)
@@ -102,6 +102,13 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
 
+# Generator-provenance declaration (generator_provenance.py).
+# _coordinator_currency_write stamps docs/coordinator-currency.yaml under
+# `actual_path`, the target repo being bootstrapped by
+# /coordinator:repo-setup --batch (a fleet repo, not claude-klabauter itself) --
+# caller-supplied target repo outside claude-klabauter's own tree.
+GENERATES = []
+
 _GIT_TIMEOUT_SECS = 30
 _SCHEMA_VERSION_RE = re.compile(r"^[1-9][0-9]*$")
 _STAMP_LINE_RE = re.compile(r"^schema_version:\s*(.*)$", re.MULTILINE)
@@ -168,14 +175,14 @@ Destructive-action prohibition:
 
 
 # ---------------------------------------------------------------------------
-# coordinator-claude sibling-root resolution (copied ladder, per the convention already used
+# DoE sibling-root resolution (copied ladder, per the convention already used
 # by coordinator_core.ops.bootstrap_repo / learn_lessons_roots — a local copy,
 # not a shared import, per those modules' own stated convention)
 # ---------------------------------------------------------------------------
 
 
 def _resolve_coordinator_root() -> str:
-    """Resolve the coordinator-claude coordinator/ root.
+    """Resolve the DoE coordinator/ root.
 
     The caller sets `COORDINATOR_ROOT` in the environment before invoking
     this module's `main()` — this is a fast-path env-override read, not a
@@ -202,7 +209,7 @@ def _import_bootstrap_repo_main():
 
     Replaces the bash oracle's subprocess-shape ("$BOOTSTRAP_REPO" --root ...)
     with a plain function call — both modules are claude-klabauter-resident, so the
-    subprocess hop the bash oracle needed (crossing the coordinator-claude/claude-klabauter process
+    subprocess hop the bash oracle needed (crossing the DoE/claude-klabauter process
     boundary) no longer applies here. Raises ImportError on failure, mirroring
     the oracle's own "bootstrap-repo.sh not found" prerequisite-check exit 1.
     """
@@ -368,7 +375,7 @@ def _currency_read_stamp(stamp_path: str) -> Optional[str]:
 
 
 def _coordinator_currency_write(actual_path: str, plugin_root: str) -> bool:
-    """Port of: coordinator-currency.sh::coordinator_currency_write (coordinator-claude 9cc1d315, 2026-07-21).
+    """Port of: coordinator-currency.sh::coordinator_currency_write (DoE 9cc1d315, 2026-07-21).
 
     Idempotent: no-ops (returns True, no file change) if the stamp already
     carries the current schema version. Otherwise writes

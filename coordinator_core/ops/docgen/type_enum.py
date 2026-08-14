@@ -1,6 +1,6 @@
 """coordinator_core.ops.docgen.type_enum — internal doc-type enumeration (C3).
 
-Purpose: read coordinator-claude's authored ``coordinator-registry.manifest.json`` — the SAME
+Purpose: read DoE's authored ``coordinator-registry.manifest.json`` — the SAME
 manifest ``coordinator-doc-new`` itself consumes via ``bin/lib/coordinator_registry
 .py`` — and reconstruct its ``KNOWN_TYPES``/``DOC_TYPES`` derivation as plain data,
 then union in the one known non-manifest supplement the CLI applies locally
@@ -17,7 +17,7 @@ itself recognizes, whether or not this plan has extracted a template for it yet
 manifest-known but carry no local template — that is expected, not a defect;
 do not conflate the two surfaces).
 
-Manifest read (no vendoring): resolved live from the coordinator-claude clone via the SAME
+Manifest read (no vendoring): resolved live from the DoE clone via the SAME
 ``resolve_doe_clone()`` bootstrap-safe pattern ``coordinator_core.ops.emit
 .doe_drift`` already uses for the cockpit-contract conformance fixture — both
 sides cannot drift together unnoticed, and there is no second resolution
@@ -40,7 +40,7 @@ too and cite the same spec backlink the CLI comment carries.
 
 A missing type is a fail-loud condition (AC4: set-equality, not subset) —
 enforced by the conformance test in ``tests/test_type_enum.py``, which loads
-``bin/lib/coordinator_registry.py`` directly from the live coordinator-claude clone and asserts
+``bin/lib/coordinator_registry.py`` directly from the live DoE clone and asserts
 this module's ``known_types()`` is set-EQUAL (not merely a subset) to that
 module's own ``KNOWN_TYPES | frozenset({"run-report"})`` (the CLI's actual
 post-union resolved set) — a silently absent type here would otherwise produce
@@ -48,13 +48,13 @@ no failing conformance case in C6's byte-identity harness (which only iterates
 the 22 extracted templates), so this module's own test is where AC4 is proven.
 
 Spec backlink: pln-strang-12-document-generation--75a7eb § C3 (AC4)
-Oracle: /coordinator/bin/lib/coordinator_registry.py (coordinator-claude clone) — KNOWN_TYPES/
-DOC_TYPES/QUEUE_TYPES derivation; /coordinator/bin/coordinator-doc-new — the
+Oracle: /coordinator/bin/lib/coordinator_registry.py (DoE clone) — KNOWN_TYPES/
+DOC_TYPES/QUEUE_TYPES derivation; /coordinator/bin/coordinator-doc-new.py — the
 local ``run-report`` union shim (module-level, right after the ``coordinator_registry``
 import).
 Negative-spec: this module does not write files, does not shell out, and does
 not register any op. It also does not vendor a manifest copy — every read
-re-resolves the live coordinator-claude clone, so a manifest change is visible immediately.
+re-resolves the live DoE clone, so a manifest change is visible immediately.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ from typing import Any
 
 from coordinator_core.ops.emit.doe_drift import resolve_doe_clone
 
-# Path inside the coordinator-claude clone where the shared doc-type/identity manifest lives —
+# Path inside the DoE clone where the shared doc-type/identity manifest lives —
 # the SAME file bin/lib/coordinator_registry.py loads at import time.
 _MANIFEST_REL = Path("coordinator") / "schemas" / "coordinator-registry.manifest.json"
 
@@ -86,7 +86,7 @@ SUPPLEMENTAL_TYPES: frozenset[str] = frozenset({"run-report"})
 
 
 class ManifestReadError(RuntimeError):
-    """Raised when the coordinator-claude-authored manifest cannot be resolved, read, or parsed.
+    """Raised when the DoE-authored manifest cannot be resolved, read, or parsed.
 
     Distinct from ``coordinator_core.ops.emit.doe_drift.DoeResolveError`` (which
     that module raises for its own clone-resolution failures) so callers of this
@@ -96,32 +96,32 @@ class ManifestReadError(RuntimeError):
 
 
 def _manifest_path(doe_clone: Path | None = None) -> Path:
-    """Resolve the manifest's absolute path inside the (live-resolved) coordinator-claude clone."""
+    """Resolve the manifest's absolute path inside the (live-resolved) DoE clone."""
     clone = doe_clone if doe_clone is not None else resolve_doe_clone()
     return clone / _MANIFEST_REL
 
 
 def load_manifest(doe_clone: Path | None = None) -> dict[str, Any]:
-    """Read + parse the coordinator-claude-authored registry manifest. Raises ManifestReadError on defect.
+    """Read + parse the DoE-authored registry manifest. Raises ManifestReadError on defect.
 
-    No vendoring: reads the live coordinator-claude clone's HEAD-on-disk manifest every call —
+    No vendoring: reads the live DoE clone's HEAD-on-disk manifest every call —
     the anti-drift guarantee this module shares with ``doe_drift.read_doe_fixture``.
     """
     path = _manifest_path(doe_clone)
     if not path.exists():
         raise ManifestReadError(
-            f"coordinator-claude registry manifest not found at {path}. "
-            "Expected schemas/coordinator-registry.manifest.json in the coordinator-claude clone."
+            f"DoE registry manifest not found at {path}. "
+            "Expected schemas/coordinator-registry.manifest.json in the DoE clone."
         )
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ManifestReadError(f"coordinator-claude registry manifest at {path} is not readable/valid JSON: {exc}") from exc
+        raise ManifestReadError(f"DoE registry manifest at {path} is not readable/valid JSON: {exc}") from exc
     if not isinstance(data, dict):
-        raise ManifestReadError(f"coordinator-claude registry manifest at {path} must parse to a JSON object")
+        raise ManifestReadError(f"DoE registry manifest at {path} must parse to a JSON object")
     for key in ("docTypes", "queueTypes"):
         if key not in data:
-            raise ManifestReadError(f"coordinator-claude registry manifest at {path} is missing required key {key!r}")
+            raise ManifestReadError(f"DoE registry manifest at {path} is missing required key {key!r}")
     return data
 
 

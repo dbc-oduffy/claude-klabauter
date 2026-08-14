@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.install.maximalist.
 
-Port of: install-maximalist.sh (coordinator-claude 6fb5fb37, 2026-07-22, 622 lines).
+Port of: install-maximalist.sh (DoE 6fb5fb37, 2026-07-22, 622 lines).
 
 These tests independently re-derive parity against the bash oracle's OWN
 documented control-flow contract (read directly from
@@ -15,7 +15,7 @@ transcription):
   - `--check-only` skips ONLY the phases the oracle documents as
     mutating-and-skippable (Step 3.5c gen-settings-hooks.sh has no dry-run
     mode; Step 9 platform-localize; Phase 7 Step 0 setup-state record;
-    seeding repos.example_doctrine_repo) while Step 7.5 check-install-singularity
+    seeding repos.doe_claude) while Step 7.5 check-install-singularity
     ALWAYS runs (the oracle calls it unconditionally, no CHECK_ONLY guard)
     -- Test: check_only_skips_mutating_not_singularity.
   - A5 permission preservation: the claude-doe wrapper install must land
@@ -28,7 +28,7 @@ gen-claude-doe-shim, gen-claude-doe-launcher, register-coordinator-mirror,
 check-install-singularity, capture-fan-out-threshold, platform-localize,
 coordinator-setup-state) are now direct in-process calls into
 coordinator_core.ops/.install/.hooks modules that ALREADY lived in this
-package (the coordinator-claude-side .sh/.py files they used to spawn were themselves only
+package (the DoE-side .sh/.py files they used to spawn were themselves only
 thin polyglot trampolines back into these same modules). The bash-stub-tree
 mechanism (`_BASH_SUB_SCRIPTS` / `_write_bash_stub`) this file used to build
 for those ten is retired along with them -- coverage moves to Python `_fake_*`
@@ -188,7 +188,7 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
     # executable `bin/` surface (`claude-doe`, `gen-claude-klabauter-root-pointer.py`)
     # migrated wholesale to claude-klabauter in commit `b644d5a9` (2026-07-22),
     # so production code now resolves these two paths under
-    # `<claude_klabauter_root>/coordinator/bin/...`, distinct from the coordinator-claude clone's
+    # `<claude_klabauter_root>/coordinator/bin/...`, distinct from the DoE clone's
     # `coord_root` (which still correctly houses `templates/`). Mirroring
     # that split here (rather than leaving these files under `coord_root/bin`)
     # is what lets this fixture prove the real call sites resolve the right
@@ -211,7 +211,7 @@ def _build_stub_tree(tmp_path: Path) -> Dict[str, Path]:
 
     # claude-doe wrapper source -- installed via pure-Python cp+chmod, not a
     # subprocess call; content is irrelevant, executability + copy fidelity is.
-    wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe"
+    wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe.py"
     wrapper_src.write_text("#!/bin/sh\necho fake-claude-doe\n")
     wrapper_src.chmod(0o755)
 
@@ -289,7 +289,7 @@ def stub_env(tmp_path, monkeypatch):
     monkeypatch.setattr(_threshold_module, "main", _fake_capture_fan_out_threshold)
     monkeypatch.setattr(_platform_localize_module, "main", _fake_platform_localize)
     monkeypatch.setattr(_setup_state_module, "main", _fake_coordinator_setup_state)
-    # register-coordinator-mirror's own coordinator-claude-local "coordinator live path"
+    # register-coordinator-mirror's own DoE-local "coordinator live path"
     # resolution (native resolve_content_root() / claude-home plugins
     # fallback, out of C13's scope) is stubbed to a fixed value so the phase
     # under test never resolves either.
@@ -297,12 +297,12 @@ def stub_env(tmp_path, monkeypatch):
         maximalist, "_resolve_coordinator_live_path", lambda: "/fake/coordinator/live"
     )
     # The real `machine-local` CLI IS on PATH during tests (it's an installed
-    # binary, not sandboxed away) -- Step 7 Phase-2's repos.example_doctrine_repo seed
+    # binary, not sandboxed away) -- Step 7 Phase-2's repos.doe_claude seed
     # (maximalist.py ~line 519-524) shells out to it whenever
     # shutil.which("machine-local") resolves. If COORDINATOR_SETTINGS_HOME
     # were merely unset, the real CLI would fall back to resolving the
     # developer's REAL settings-home (~/.coordinator-claude-settings) and
-    # overwrite repos.example_doctrine_repo with this test's tmp_path, corrupting the
+    # overwrite repos.doe_claude with this test's tmp_path, corrupting the
     # real machine-local registry once tmp_path is reaped. Redirect it to an
     # isolated tmp settings-home instead so any write the real CLI performs
     # lands in the sandbox, never the developer's real registry. (`settings_home`
@@ -337,7 +337,7 @@ def test_unrecognized_argument_exits_two(capsys):
 
 def test_main_requires_plugin_root_and_doe_clone_env(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     rc = maximalist.main([])
     assert rc == 1
 
@@ -699,7 +699,7 @@ def test_claude_doe_wrapper_symlink_replaces_wrong_target_link(stub_env):
 
 
 def test_claude_doe_wrapper_missing_source_is_fatal(stub_env):
-    (stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "claude-doe").unlink()
+    (stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "claude-doe.py").unlink()
     rc = maximalist.run(
         check_only=False,
         non_interactive=True,
@@ -874,7 +874,7 @@ def test_step35c_marker_skip_surfaces_in_orchestrator_output_and_summary(stub_en
 # C13 -- the ten remaining bash bridges retired to in-process calls
 #
 # Each phase used to spawn `["bash", <coord_root or claude_home>/.../<name>]`.
-# That coordinator-claude-side script was, in every one of the ten cases, only a thin
+# That DoE-side script was, in every one of the ten cases, only a thin
 # polyglot trampoline back into a coordinator_core module already living in
 # THIS package. These tests pin the observable contract (argv shape, rc
 # propagation, halting semantics, and "no bash subprocess is spawned to get
@@ -931,7 +931,7 @@ def test_c13_check_only_forwarded_to_each_native_phase(stub_env):
 
 def test_c13_register_coordinator_mirror_receives_resolved_live_path(stub_env, monkeypatch):
     """register-coordinator-mirror is the one C13 phase carrying real (if
-    coordinator-claude-owned) resolution logic: the maximalist-local
+    DoE-owned) resolution logic: the maximalist-local
     `_resolve_coordinator_live_path` result must be threaded through to the
     engine module as `--live-path <value>`, matching the retired
     trampoline's own `--live-path` handoff exactly."""
@@ -1141,7 +1141,7 @@ def test_resolve_coordinator_live_path_falls_back_to_tier2_on_tier1_error(monkey
 # Cross-repo ask (claude-central-em, 2026-07-22, "Ask 1"): neither install
 # ordering ever wrote this registry key, so it has only ever resolved on this
 # machine because it was hand-set once on 2026-07-03. These tests pin the
-# seeding block's own contract in isolation from the example_doctrine_repo sibling it
+# seeding block's own contract in isolation from the doe_claude sibling it
 # mirrors -- the subprocess/registry seam is mocked throughout; none of these
 # tests may mutate the real machine-local registry.
 # ---------------------------------------------------------------------------
@@ -1266,7 +1266,7 @@ def test_seed_claude_klabauter_missing_coordinator_core_warns_and_skips(stub_env
     monkeypatch.setattr(maximalist, "__file__", str(fake_file))
 
     # NOTE: resolve_machine_local_cli is also called by the sibling
-    # repos.example_doctrine_repo seed block above this one in the same phase, so the
+    # repos.doe_claude seed block above this one in the same phase, so the
     # discriminating assertion is "no repos.claude_klabauter _run call" (below),
     # not "resolve_machine_local_cli was never called at all".
     captured = []

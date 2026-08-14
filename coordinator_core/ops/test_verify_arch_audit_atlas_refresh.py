@@ -2,10 +2,10 @@
 test_verify_arch_audit_atlas_refresh.py — pytest unit tests for
 coordinator_core.ops.verify_arch_audit_atlas_refresh.
 
-Port source: coordinator/tests/test_atlas_refresh_gate.py (coordinator-claude,
+Port source: coordinator/tests/test_atlas_refresh_gate.py (DoE-claude,
 bash-oracle subprocess tests over `bash <helper> ...`) — reauthored here as
 direct in-process calls against the ported Python module's `main(argv)`,
-same fixtures/assertions, plus platform-edge cases the coordinator-claude oracle test never
+same fixtures/assertions, plus platform-edge cases the DoE oracle test never
 exercised (Windows-shaped TMPDIR-absent env; git-timeout degrade path).
 
 Spec backlink: docs/plans/2026-06-04-architecture-audit-atlas-refresh-gate.md § C1
@@ -266,7 +266,7 @@ def test_skip_when_atlas_absent(tmp_path, monkeypatch, capsys):
 
 
 def test_skip_when_not_inside_git_work_tree(tmp_path, monkeypatch, capsys):
-    """Negative case not covered by the coordinator-claude oracle test: bare (non-git) cwd."""
+    """Negative case not covered by the DoE oracle test: bare (non-git) cwd."""
     non_repo = tmp_path / "not-a-repo"
     non_repo.mkdir()
     monkeypatch.chdir(non_repo)

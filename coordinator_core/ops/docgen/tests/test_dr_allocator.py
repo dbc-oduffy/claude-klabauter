@@ -1,4 +1,4 @@
-"""Tests for coordinator_core.ops.docgen.dr_allocator (vendored from coordinator-claude SSOT).
+"""Tests for coordinator_core.ops.docgen.dr_allocator (vendored from DoE SSOT).
 
 Covers the allocation algorithm's edge cases against a scratch directory —
 independent of the live oracle, unlike test_c6_conformance.py's byte-identity
@@ -9,7 +9,7 @@ plus the `assert_dr_id_unique` collision-detection cases gained with the
 vendored file.
 
 Spec backlink: pln-strang-12-document-generation--75a7eb § C6 (AC5)
-Oracle: coordinator-claude `coordinator/bin/lib/dr_allocator.py` (fleet SSOT, vendored
+Oracle: DoE-claude `coordinator/bin/lib/dr_allocator.py` (fleet SSOT, vendored
 verbatim @ sha 1a7989eb — see docs/decisions/DR-225).
 """
 

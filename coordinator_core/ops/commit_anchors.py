@@ -57,7 +57,7 @@ Negative-spec (hard-won):
     git interpret-trailers --in-place).
   - Does NOT write any file under state/, archive/, or any other coordinator substrate path.
   - Does NOT stage the trailer via a temp file — returns text only; the mutation (injecting
-    into the commit message) is git's own mechanism, executed by the hook (coordinator-claude surface, D3).
+    into the commit message) is git's own mechanism, executed by the hook (DoE surface, D3).
   - Does NOT emit Session-Id: — the prepare-commit-msg hook already stamps that separately.
   - Does NOT emit any key it cannot resolve unambiguously; precision over recall at every
     key boundary (claude-klabauter-commit-anchor-stamper.md § Anti-scope: a wrong anchor is worse than
@@ -348,7 +348,7 @@ def _has_staged_completion_entry(worktree_root: Path, deliverable_id: Optional[s
     (or to none at all) no longer satisfies this gate — fail closed rather than
     stamping a false `Resolves:` on an unrelated deliverable.
 
-    Spec backlink: docs/plans/2026-08-01-baton-spine-information-integrity.md
+    Spec backlink: DoE-claude:pln-baton-spine-information-integr-d3e1d7
     § A1 (b) — stamp Resolves: at the completion event, not on every commit.
 
     Both sides of the equality check below are canonicalized through the declared
@@ -485,7 +485,7 @@ def _handler(
     """JSON-RPC "commit.anchors" handler — COMPUTE_ONLY, sync.
 
     Purpose: Derives a git-trailer block from the staged diff and live read-model and
-    returns it as text. The prepare-commit-msg hook (coordinator-claude surface, D3) injects the block
+    returns it as text. The prepare-commit-msg hook (DoE surface, D3) injects the block
     into the commit message. Returns {"trailers": ""} when nothing is resolvable.
 
     Sync (not async): all I/O in this handler and its full call tree is synchronous

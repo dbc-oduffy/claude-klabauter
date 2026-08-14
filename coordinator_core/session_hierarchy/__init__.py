@@ -6,8 +6,8 @@ frontmatter lineage. See ``derive.py`` for the pure transform and
 ``coordinator_core.ops.session_hierarchy_derive`` for the op wrapper (query +
 atomic write) that composes it.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3
-Port of: derive-session-hierarchy.sh (coordinator-claude f0aa2d56, 2026-07-16)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g3
+Port of: derive-session-hierarchy.sh (DoE f0aa2d56, 2026-07-16)
 """
 
 from __future__ import annotations

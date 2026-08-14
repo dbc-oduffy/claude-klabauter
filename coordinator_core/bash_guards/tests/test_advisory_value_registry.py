@@ -22,8 +22,8 @@ against the two reachable no-`hookSpecificOutput` envelope shapes.
       against `{}` or a `hookSpecificOutput`-less dict, and must return
       `False` (not-suppressed) for both.
 
-Spec backlink: docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md
-(coordinator-claude) row H5.
+Spec backlink: DoE-claude:pln-os-aware-guard-advisory-defaul-060dbe
+(DoE-claude) row H5.
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def test_every_registered_guard_is_classified():
         "The following registered guard(s) carry no explicit advisory_value "
         "(AC-1 violation): %r. Classify them per "
         "state/plan-sidecars/2026-07-30-guard-advisory-value-classification.md "
-        "(coordinator-claude) rather than leaving the dataclass default in place." % unclassified
+        "(DoE-claude) rather than leaving the dataclass default in place." % unclassified
     )
 
 

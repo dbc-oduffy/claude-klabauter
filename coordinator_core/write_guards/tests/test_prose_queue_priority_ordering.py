@@ -18,7 +18,7 @@ Drives both guards through the real engine
 either guard in isolation, per the sibling bash-guard commit's
 ``TestReachableThroughTheDispatchChain`` model.
 
-Spec: coordinator-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec: DoE-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 Spec: docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md
 (Review: code-reviewer -- Finding 4, 2026-07-31.)
 """

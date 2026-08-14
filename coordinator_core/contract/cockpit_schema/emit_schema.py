@@ -1,5 +1,5 @@
 """
-emit_schema — pydantic port of coordinator-claude `coordinator/cockpit-contract/scripts/emit-schema.ts`.
+emit_schema — pydantic port of DoE `coordinator/cockpit-contract/scripts/emit-schema.ts`.
 
 Emits one `<name>.schema.json` per registered entity plus a bundled
 `cockpit-contract.schema.json` (all entities under `$defs`), reproducing the
@@ -61,8 +61,8 @@ level (verified against `schema/*.json` at port time) — a future
 self-referential entity would need `_resolve_refs` extended with a
 recursion guard before this emitter could safely handle it.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
-Source: coordinator/cockpit-contract/scripts/emit-schema.ts (coordinator-claude)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Source: coordinator/cockpit-contract/scripts/emit-schema.ts (DoE-claude)
 Negative-spec: this module does NOT own `ENTITY_SCHEMAS` (the name→model
 registry) — that is the stage-2 (T4e-d) agent's job, wiring
 `coordinator_core/contract/cockpit_schema/__init__.py`. `main()` below
@@ -86,13 +86,36 @@ from coordinator_core.contract.cockpit_schema.common import (
     _ISO_DATETIME_PATTERN,
 )
 
+# Generator-provenance declaration ONLY (C2, generator_provenance.py's AST
+# reader) -- this module is a HARD EXTERNAL DEPENDENCY (DoE's sole
+# regeneration path for their frozen schema; CLAUDE.md § Architecture) and
+# nothing else in this file changes for this chunk. `sources` names the
+# pydantic entity models whose movement actually changes the emitted bytes
+# -- `entities/` (the per-entity model definitions) and `__init__.py` (the
+# `ENTITY_SCHEMAS` registry mapping those entities to output names) -- never
+# this emitter's own path (§ Mechanism correction, docs/plans/2026-08-13-
+# generator-output-staleness-detector.md). `stamp_key` names `version`
+# (`CONTRACT_VERSION`, already embedded in every emitted schema's own JSON
+# body by `emit_schemas` below) rather than adding a new field: this row is
+# declaration-only and must not change one byte of what this module emits.
+GENERATES = [
+    {
+        "artifact": "schema/cockpit-contract.schema.json",
+        "stamp_key": "version",
+        "sources": [
+            "coordinator_core/contract/cockpit_schema/entities",
+            "coordinator_core/contract/cockpit_schema/__init__.py",
+        ],
+    },
+]
+
 # ---------------------------------------------------------------------------
 # CONTRACT_VERSION — single literal source of truth (this module).
 #
 # The T4e-c recipe (§ 6, GIVES-PAUSE) flagged an open architecture question —
 # where CONTRACT_VERSION canonically lives post-port, and whether it should
 # be read in-process from this pydantic module or cross-checked against
-# coordinator-claude's committed schema/*.json — as EM/PM/the Staff Engineer-adjudicated, NOT a
+# DoE's committed schema/*.json — as EM/PM/the Staff Engineer-adjudicated, NOT a
 # BUILD-wave call. That question is still open; this module wins only the
 # narrower "which literal is authoritative" sub-question, by being the
 # dependency-free leaf that must stay independently importable/runnable
@@ -106,7 +129,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # MINOR bump 3.3.0 -> 3.4.0 (C6a): adds four DERIVED HandoffSummary fields
 # (pm_priority/pm_priority_origin/pm_priority_source_id/suggested_priority)
 # and rides the already-landed owner-casing clause amendment (claude-klabauter
-# 4a73368b, coordinator-claude 39a65721), which shipped without its own bump so it
+# 4a73368b, DoE-claude 39a65721), which shipped without its own bump so it
 # would ride this one. MINOR, not MAJOR, is deliberate: example-cockpit-repo's
 # checkSchemaVersion() hard-throws on a MAJOR mismatch in either direction
 # but tolerates emission-minor-greater-than-vendored on the same major (with
@@ -122,7 +145,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # adds `docs_staleness` (REQUIRED-WITH-NULL, D9) to `ExecSummary` — per-doc
 # staleness verdicts from `coordinator_core.ops.doc_staleness`. Additive
 # only: no existing required field changed, narrowed, or removed, same
-# class as D19-D28/D32 §9 (coordinator-claude coordinator/cockpit-contract/
+# class as D19-D28/D32 §9 (DoE-claude coordinator/cockpit-contract/
 # DECISIONS.md) — cockpit confirmed this class in their 2026-07-28 reply.
 # The plan's original target was "3.3.0 -> 3.4.0"; disk had already moved
 # to 3.5.0 via the unrelated priority-ledger bump above by the time this
@@ -137,7 +160,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # "spinoff-roadmap-creator", "spinoff-goal"), stays in the Literal for
 # archived-record read-compatibility, same reasoning as "spike-result".
 # Same additive class as the 3.5.0->3.6.0 bump above.
-# Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § D1/C8a.
+# Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1/C8a.
 #
 # MINOR bump 3.8.0 -> 3.9.0 (C3a, baton-kind vocabulary publish): adds
 # `baton_class` (REQUIRED-WITH-NULL, D9) to `HandoffSummary` (entities/
@@ -160,22 +183,22 @@ from coordinator_core.contract.cockpit_schema.common import (
 # not dropped from the emission, and a spike result is not a baton, so it
 # has no class. Legacy pre-rename kinds are NOT null — they canonicalise
 # through the alias map, so an archived "spinoff-roadmap" emits "intention".
-# Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § D2/C3a.
+# Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D2/C3a.
 #
 # MINOR bump 3.9.0 -> 3.10.0 (D42 synthesized widen, cockpit-contract half):
 # adds "synthesized" to `Derivation` (provenance.py) — an agent-derived fact,
 # as distinct from fetched (raw), structured (parsed), aggregated (rolled_up),
 # or multi-source-derived (computed). Member-only additive on an existing
 # enum: no member removed, no required field changed, so MINOR, same class as
-# D22/D23/D28. Coordinator-claude ratified this in cockpit-contract DECISIONS.md D42
+# D22/D23/D28. DoE-claude ratified this in cockpit-contract DECISIONS.md D42
 # (2026-08-03) and routed the emitter work here under the D31
 # emitter-ownership boundary; the artifact-shape-contract half landed first
 # (ops/emit_artifact_shape_contract.py, its own 3.1.0 row), leaving this
 # emitter as the unexecuted second half — which the cross-package parity test
 # (contract/cockpit_schema/tests/test_provenance_parity.py) then caught as a
-# divergence. Coordinator-claude's bilateral version-bump assent for this bump is on record
-# in cross-repo/inbox/2026-08-05-coordinator-claude-em-cockpit-derivation-synthesized-
-# half-landed.md; coordinator-claude re-runs regen-cockpit-schema.py on their side once this
+# divergence. DoE's bilateral version-bump assent for this bump is on record
+# in cross-repo/inbox/2026-08-05-doe-claude-em-cockpit-derivation-synthesized-
+# half-landed.md; DoE re-runs regen-cockpit-schema.py on their side once this
 # lands, regenerating all 58 inlined enum sites plus the standalone envelope
 # from this one literal.
 # MINOR bump 3.10.0 -> 3.11.0 (scan-completeness on RoadmapSummary): adds
@@ -194,7 +217,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 # MINOR classification and the two D9 conditions (required/always-present, and
 # scan_errors items pinned to string) on 2026-08-11, discharged the D21 consumer
 # census (cockpit and rag both pass), and specified the D39 source-first release
-# sequence: claude-klabauter widens and regenerates into coordinator-claude's schema/ out-dir, coordinator-claude
+# sequence: claude-klabauter widens and regenerates into DoE's schema/ out-dir, DoE
 # commits the bundle and advances the release tag, claude-klabauter re-vendors, and only
 # then does the emitter begin populating the keys.
 # 3.11.0 -> 3.12.0 (producer-axis) adds the `producer` record to
@@ -210,7 +233,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 #     present-as-null when there is nothing to report. The sole construction
 #     site (ops/emit/sections/handoffs.py) always supplies it.
 # Classified MINOR either way: one new field on an existing entity, nothing
-# narrowed and nothing removed, the same class coordinator-claude assigned their paired
+# narrowed and nothing removed, the same class DoE assigned their paired
 # handoff.schema.json 7.1.0 / handoff-archived.schema.json 2.5.0
 # (`nested-field-additive`) — MINOR does not turn on optional-vs-required-
 # with-null, only on additive-vs-narrowing/removing.
@@ -219,11 +242,11 @@ from coordinator_core.contract.cockpit_schema.common import (
 # re-emit: HandoffSummary's shape moved while the constant did not, which is
 # the guard doing its job rather than a defect — a bundle whose version says
 # nothing changed is the failure it exists to prevent. It fired for
-# coordinator-claude-em when they went to run their C6b regen; reported to us by memo
+# doe-claude-em when they went to run their C6b regen; reported to us by memo
 # rather than worked around, and this bump is the discharge.
 #
 # D39 source-first release sequence, unchanged from 3.11.0: claude-klabauter widens and
-# regenerates into coordinator-claude's schema/ out-dir, coordinator-claude commits the bundle and advances
+# regenerates into DoE's schema/ out-dir, DoE commits the bundle and advances
 # the release tag, claude-klabauter re-vendors, and only then does the emitter's output
 # reach a validator that knows the shape. Between this bump and that
 # re-vendor the local desync guard is EXPECTED to trip — that interim red is

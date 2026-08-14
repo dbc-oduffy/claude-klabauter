@@ -1,7 +1,7 @@
 """Characterization tests for coordinator_core.ops.normalize_claimed_frontmatter.
 
 Golden-oracle-derived: cases 1-5 mirror
-coordinator/bin/normalize-consumed-frontmatter.test.js (coordinator-claude) 1:1,
+coordinator/bin/normalize-consumed-frontmatter.test.js (DoE-claude) 1:1,
 proving the write-path shape guard (C4b) survived the port byte-identically.
 Cases 6+ cover the CLI-level (main()) behavior the JS unit test never
 exercised directly (parseArgs, git-tracked-file gating, walkDir), hand-run
@@ -11,7 +11,7 @@ DR-084 C5: fixtures/assertions moved to the post-cutover status/claimed_at/
 shipped_in vocabulary; the body-comment marker convention
 (`<!-- consumed: ... -->`) is a separately-scoped, never-renamed surface.
 
-Port source: coordinator/bin/normalize-consumed-frontmatter.js (coordinator-claude)
+Port source: coordinator/bin/normalize-consumed-frontmatter.js (DoE-claude)
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def test_bare_sha_marker_notes_written_to_shipped_in(tmp_path):
 
 
 def test_all_numeric_sha_marker_notes_written_as_quoted_string(tmp_path):
-    """coordinator-claude declined to widen `shipped_in` to accept ints (schema 2.1.0): an
+    """DoE declined to widen `shipped_in` to accept ints (schema 2.1.0): an
     all-numeric abbreviated SHA is a write-side quoting defect on our surface,
     not a reader-schema gap. Pins that ``insert_fm_field`` writes an
     all-numeric SHA with ``numeric_quoting=True`` so it round-trips through
@@ -117,7 +117,7 @@ def test_malformed_shipped_in_refusal_recorded_in_changes(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_normalize_one_output_byte_identical_to_node_oracle_snapshot(tmp_path):
-    # DR-096 (coordinator-claude 2026-07-26 ruling): no longer byte-identical to the
+    # DR-096 (DoE-claude 2026-07-26 ruling): no longer byte-identical to the
     # pre-DR-096 node oracle -- this pass adds a lockstep `shipped_in_kind:`
     # insert immediately after `shipped_in:` that the oracle (predating the
     # kind discriminant entirely) never wrote. The snapshot below is pinned

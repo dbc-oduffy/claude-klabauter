@@ -12,7 +12,7 @@ dropped or orphaned CLI name fails on its own line.
 
 Run scoped only:
     python3 -m pytest coordinator_core/workweek_complete/test_workweek_complete_contract.py -q
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md § AC10
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54 § AC10
 """
 
 from __future__ import annotations

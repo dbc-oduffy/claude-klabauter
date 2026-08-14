@@ -9,7 +9,7 @@ work on repos it has never seen). Not to be confused with the tree-sitter
 — these two are distinct tools, see repo-census.py's module docstring.
 
 Spec backlink: coordinator/pipelines/deep-research/repo-research-internals.md
-    § Phase 1.5 — Repomap Generation (coordinator-claude)
+    § Phase 1.5 — Repomap Generation (DoE-claude)
 
 Run: python3 -m pytest <settings-home>/coordinator/bin/tests/test_repo_census.py
 """

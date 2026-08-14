@@ -6,7 +6,7 @@ re-transcribing it: each test builds its own fixture manifest/repo-root and
 asserts on this module's *own* documented exit-code contract and
 NDJSON/table shape, not on captured oracle output.
 
-Port of: setup.sh (coordinator-claude 6fb5fb37, 2026-07-22).
+Port of: setup.sh (DoE 6fb5fb37, 2026-07-22).
 """
 
 from __future__ import annotations
@@ -196,7 +196,7 @@ def test_resolve_coordinator_root_ladder_noop_when_no_mirrors_registered(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# Rung 3 — engine.working_repos.example_doctrine_repo registry key (C1b).
+# Rung 3 — engine.working_repos.doe_claude registry key (C1b).
 # ---------------------------------------------------------------------------
 
 def test_resolve_coordinator_root_ladder_rung3_resolves_via_registry(tmp_path, monkeypatch):
@@ -205,7 +205,7 @@ def test_resolve_coordinator_root_ladder_rung3_resolves_via_registry(tmp_path, m
     # _resolve_plugin_root_for_machine_local) is what makes it resolve to
     # the actual `<value>/coordinator` checkout, which carries the
     # positive-evidence shape.
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     plugin_root = doe_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
@@ -213,15 +213,15 @@ def test_resolve_coordinator_root_ladder_rung3_resolves_via_registry(tmp_path, m
     (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
 
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
 
     resolved = scw._resolve_coordinator_root_ladder([])
     assert resolved is not None
-    assert resolved == (plugin_root, "engine.working_repos.example_doctrine_repo registry key")
+    assert resolved == (plugin_root, "engine.working_repos.doe_claude registry key")
 
 
 def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, monkeypatch):
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     plugin_root = doe_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
@@ -229,7 +229,7 @@ def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, 
     (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
 
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
     monkeypatch.setattr(
         "coordinator_core.bash_guards._write_bump_applicability.target_is_publish_destination",
         lambda target_root, env=None: str(Path(target_root).resolve()) == str(plugin_root.resolve()),
@@ -239,13 +239,13 @@ def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, 
 
 
 def test_resolve_coordinator_root_ladder_rung3_rejects_missing_positive_evidence(tmp_path, monkeypatch):
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     doe_root.mkdir()
     # No `.claude-plugin/plugin.json` anywhere under `doe_root` -- the
     # derivation returns None (no templates/bin/_machine_local.py, no
     # plugin.json at either candidate shape), so the rung is a miss.
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
 
     assert scw._resolve_coordinator_root_ladder([]) is None
 
@@ -258,13 +258,13 @@ def test_resolve_coordinator_root_ladder_rung3_fail_open_when_key_absent(monkeyp
 
 
 def test_resolve_coordinator_root_ladder_flag_and_env_outrank_registry(tmp_path, monkeypatch):
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "doe-claude"
     plugin_root = doe_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
     (plugin_root / "templates" / "bin").mkdir(parents=True)
     (plugin_root / "templates" / "bin" / "_machine_local.py").write_text("")
-    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.example_doctrine_repo" else None)
+    monkeypatch.setattr(scw, "registry_get", lambda key: str(doe_root) if key == "engine.working_repos.doe_claude" else None)
 
     flag_tree = tmp_path / "flag-checkout"
     flag_tree.mkdir()
@@ -783,7 +783,7 @@ def test_pf_emit_row_present_maps_ndjson_status_pass(capsys):
 
 # ---------------------------------------------------------------------------
 # Fresh-install-shape smoke test (FAMILY-I: CLAUDE_KLABAUTER_ROOT may be unresolvable).
-# Exercises the real coordinator-claude-side trampoline end-to-end with CLAUDE_KLABAUTER_ROOT
+# Exercises the real DoE-side trampoline end-to-end with CLAUDE_KLABAUTER_ROOT
 # forced-unresolvable, asserting the dedicated transport-failure exit code
 # (95) and an actionable remediation message — not a bare traceback.
 #
@@ -796,7 +796,7 @@ def test_pf_emit_row_present_maps_ndjson_status_pass(capsys):
 # empty temp dir clears the rung-1.5 machine-local pointer file, and HOME
 # redirected to a fake temp dir clears rung 2 (cc_invoke._claude_home() falls
 # back to os.path.expanduser("~"), i.e. $HOME, when CLAUDE_HOME is unset —
-# see coordinator-claude coordinator/bin/lib/cc_invoke.py:148-158 — so this also
+# see DoE-claude coordinator/bin/lib/cc_invoke.py:148-158 — so this also
 # starves _machine_local_get's bin/_machine_local.py lookup). Popping
 # CLAUDE_KLABAUTER_ROOT alone is NOT sufficient (_resolve_claude_klabauter_root falls through to
 # the machine-local registry rung); the COORDINATOR_SETTINGS_HOME + HOME
@@ -804,7 +804,7 @@ def test_pf_emit_row_present_maps_ndjson_status_pass(capsys):
 # relies on.
 # ---------------------------------------------------------------------------
 
-# Renamed from setup.sh -> setup.py by coordinator-claude's 2026-07-22 de-bash
+# Renamed from setup.sh -> setup.py by DoE-claude's 2026-07-22 de-bash
 # campaign (pure extension rename, no logic change — see setup.py's own
 # header). The bare-.sh oracle path is gone; check for the surviving
 # artifact so this test's isolation-mechanism guarantee (see comment above)
@@ -814,7 +814,7 @@ _DOE_SETUP_PY = Path(resolve_doe_root() or "/doe-root-unresolved") / "coordinato
 
 @pytest.mark.skipif(
     not _DOE_SETUP_PY.is_file(),
-    reason="coordinator-claude sibling repo (coordinator/scripts/setup.py) not present at this layout",
+    reason="DoE-claude sibling repo (coordinator/scripts/setup.py) not present at this layout",
 )
 def test_trampoline_transport_failure_has_dedicated_exit_code_and_remediation(tmp_path):
     env = dict(os.environ)
@@ -844,7 +844,7 @@ def test_trampoline_transport_failure_has_dedicated_exit_code_and_remediation(tm
 
 
 def test_resolve_manifest_path_remediation_has_no_dead_publish_sh_command(tmp_path, capsys):
-    # Regression pin: setup/publish.sh was retired repo-wide by coordinator-claude's
+    # Regression pin: setup/publish.sh was retired repo-wide by DoE-claude's
     # percolate-python-port work (2026-07-21/22). The remediation text must
     # not tell an operator to run a dead command, and must not shell out via
     # bash (naked-Python-only convention — see project CLAUDE.md § Runtime

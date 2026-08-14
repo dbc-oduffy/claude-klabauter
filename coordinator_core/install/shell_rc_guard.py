@@ -139,6 +139,12 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 
+# Generator-provenance declaration (generator_provenance.py). Appends a
+# sentinel block to the operator's POSIX shell rc/login-profile files
+# (module docstring: "the fleet's ONE sentinel-guarded POSIX shell-rc block
+# writer") -- the operator's home shell config, outside the tracked repo.
+GENERATES = []
+
 _RC_BLOCK_CLAUSE_INDEX = 0
 """Index of this writer's sole (SHAPED) clause within `WRITE_SURFACE.clauses`
 below — the clause `write_shell_rc_guard_block` journals against."""

@@ -15,7 +15,7 @@ edge. `test_placeholder_id_would_false_clear_a_blocked_by` pins that mechanism
 directly against the real pattern, so a future change that reintroduces a
 "harmless-looking" placeholder id fails here with the reason attached.
 
-Spec backlink: cross-repo/inbox/2026-08-05-coordinator-claude-em-placeholder-id-minting-fix-unfiled.md
+Spec backlink: cross-repo/inbox/2026-08-05-doe-claude-em-placeholder-id-minting-fix-unfiled.md
 Sizing: state/sizings/2026-08-05-placeholder-title-guard-at-artifact-id-m.yaml
 
 Negative-spec: does NOT assert that a real title mints any PARTICULAR id -- the mint
@@ -47,7 +47,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "coordinator_doc_new_placeholder_mint_test", str(_BIN_DIR / "coordinator-doc-new")
+        "coordinator_doc_new_placeholder_mint_test", str(_BIN_DIR / "coordinator-doc-new.py")
     )
     spec = importlib.util.spec_from_loader(
         "coordinator_doc_new_placeholder_mint_test", loader

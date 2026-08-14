@@ -1,5 +1,5 @@
 """
-CoordinatorRoot — the unit of work-state. Pydantic port of coordinator-claude
+CoordinatorRoot — the unit of work-state. Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/coordinator-root.ts` (Zod source).
 
 Keyed on `(repo, coordinator_root_path)`, NOT `repo` alone (the Data Science Reviewer P2-D7): a
@@ -13,7 +13,7 @@ default), never absent (DECISIONS.md § D9). `open_pr_count` is GitHub-only
 (tc-4 connector populates it); non-GitHub producers (e.g. tc-3 local emission)
 emit null.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

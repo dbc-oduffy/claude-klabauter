@@ -73,11 +73,34 @@ route-vs-answer test above. In their place this module emits ROUTING facts:
 ``## Wiki`` (repo wiki, if one exists at the conventional path), ``##
 Architecture atlas`` (per-system pages, enumerated the same way
 ``coordinator_core.ops.check_atlas_watch_drift`` does — see
-``emit_architecture_atlas``), ``## Fast test`` (the resolved fast-test
-invocation, via ``cs_resolve_fast_test_cmd`` — the same resolver ``/validate``
-uses, not reimplemented), and ``## Audits & censuses`` (an index naming
-existing investigation records, answering "has someone already looked at
-this?" — never a bare count of them).
+``emit_architecture_atlas``), ``## Capabilities`` (repo-declared capability
+pointers, via ``resolve_capability_pointers`` reading ``coordinator.local.md``'s
+``capability_pointers:`` key — the same declare-once-in-config seam
+``fast_test_cmd:`` established; see ``emit_capability_pointers``), ``## Fast
+test`` (the resolved fast-test invocation, via ``cs_resolve_fast_test_cmd`` —
+the same resolver ``/validate`` uses, not reimplemented), and ``## Audits &
+censuses`` (a directory pointer naming which investigation-record buckets
+exist under ``state/``, answering "has someone already looked at this?" —
+never a bare count, and never a sample of what was in them most recently).
+
+``## Capabilities`` admission test (2026-08-14, per
+cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md):
+a pointer earns its place in THIS section when a newborn agent would not
+otherwise know the thing exists — discoverability, not usefulness. This is a
+narrower test than route-vs-answer above: plenty of routing-shaped facts fail
+it because the agent trips over them anyway (a tracked file, a directory
+listing); the concrete first case is example-retrieval-repo query tools in a repo where
+Example-retrieval-repo is available but nothing else in a cold session mentions it.
+
+Recency-sample ruling (2026-08-14, per
+cross-repo/inbox/2026-08-14-doe-claude-em-cache-recency-samples-are-not-pointers.md):
+generalizing beyond ``## Capabilities``, this governs any section in this
+module, present or future. The discriminator: does an enumeration tell the
+reader WHAT EXISTS (a pointer set — bounded by the shape of the space,
+changes only when that shape changes) or merely WHAT WAS TOUCHED LAST (a
+recency sample — a moment's snapshot that implies a significance the sample
+does not carry, and rots between boots)? The former earns a place here; the
+latter does not, regardless of how useful it looks in isolation.
 
 Behavior contract (byte-for-byte with the bash oracle for the sections both
 still emit, except the one named parity-plus below):
@@ -113,7 +136,7 @@ non-destructive peek) and the housekeeping-liveness stamps
 report — renders a ``## Housekeeping`` section, inserted immediately before the (always-last)
 ``## Pinboard`` section so `patch_pinboard_only`'s "Pinboard is the LAST section" invariant is
 undisturbed. This is the retargeted AC5 surfacing occasion: session boot's own SessionStart
-hook stdout is NOT context-injected (coordinator-claude hooks.json), but the orientation-cache FILE this
+hook stdout is NOT context-injected (DoE hooks.json), but the orientation-cache FILE this
 module writes IS read and injected at every session start by the retained ``async: false``
 injector (hooks.json:13) — so a failure recorded during session N's ceremony work reaches the
 EM at the START of session N+1, satisfying "within one session boundary." The failures log is
@@ -128,7 +151,7 @@ third write path that re-derives and embeds Housekeeping content and had silentl
 cross-repo/inbox/2026-07-28-example-retrieval-repo-em-orientation-cache-housekeeping-flood.md Defect 1).
 The ``--pinboard-only`` fast path (C18) DOES re-derive this ONE section (fixed 2026-07-23, see
 negative-spec below) — every other section still stays byte-identical, zero re-derive, exactly
-as C18 shipped it. Housekeeping is the sole named exception because coordinator-claude adopted
+as C18 shipped it. Housekeeping is the sole named exception because DoE adopted
 ``--pinboard-only`` at BOTH mid-session call sites (`/workstream-complete`, `/handoff`) — the two
 hottest mid-session cache-touch occasions — which meant a failure recorded between two FULL
 regens (potentially a day, `/workday-start` to `/workday-start`) would not reach the EM until
@@ -139,9 +162,9 @@ small files (`read_failures_log` + `check_stale_detailed`), not the full-regen s
 
 Negative-spec: ``--pinboard-only`` still does NOT re-derive any OTHER section —
 Workstreams/Rechecks/Branch/Recent-commits/Auto-push-health/Wiki/Architecture
-atlas/Fast test/Audits & censuses stay exactly what they were before the
-patch: byte-identical, zero re-derive. Only Housekeeping and Pinboard may
-change under ``--pinboard-only``. It DOES now clear the failures log itself,
+atlas/Capabilities/Fast test/Audits & censuses stay exactly what they were
+before the patch: byte-identical, zero re-derive. Only Housekeeping and
+Pinboard may change under ``--pinboard-only``. It DOES now clear the failures log itself,
 on a real (non-``--check``) write that actually embedded non-empty
 housekeeping content — see the "THREE such write call sites" paragraph
 above; this negative-spec previously (incorrectly) exempted it, which was
@@ -162,7 +185,7 @@ dependency. The op registration exists for future daemon-RPC callers, not as
 the CLI's own invocation path.
 
 Spec backlink: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 2
-Port of: regenerate-orientation-cache.sh (coordinator-claude 60489ea9, 2026-07-16)
+Port of: regenerate-orientation-cache.sh (DoE 60489ea9, 2026-07-16)
 """
 
 from __future__ import annotations
@@ -187,7 +210,26 @@ from coordinator_core.ops.ceremony.housekeeping_liveness import (
     REMEDY_COMMANDS,
     check_stale_detailed,
 )
-from coordinator_core.resolve_validation_cmd import cs_resolve_fast_test_cmd
+from coordinator_core.resolve_validation_cmd import (
+    _extract_frontmatter as _cs_extract_frontmatter,
+    _strip_wrapping_quotes as _cs_strip_wrapping_quotes,
+    cs_resolve_fast_test_cmd,
+)
+
+# Generator-provenance declaration (C2, generator_provenance.py's AST reader
+# — see that module for the discovery/coverage mechanism this feeds). `sources`
+# names this module's own path: unlike the bin/ CLI trampolines that delegate
+# derivation elsewhere, this module IS the whole derive-and-render
+# implementation (build_cache/_render_cache/write_cache all live here), so
+# its own movement is what actually changes state/orientation_cache.md's
+# content -- there is no deeper locus to point at.
+GENERATES = [
+    {
+        "artifact": "state/orientation_cache.md",
+        "stamp_key": "generated_at",
+        "sources": ["coordinator_core/orientation/regenerate_cache.py"],
+    },
+]
 
 # ---------------------------------------------------------------------------
 # state-root resolution (local minimal Rule-5 port — see module docstring)
@@ -387,11 +429,15 @@ ATLAS_INDEX_MAX = 10
 Architecture atlas`` bullet -- an ellipsis, never a number, marks a longer
 list (see the section's own negative-spec: no counts). The section is
 elastic (`_CACHE_ELASTIC_SECTIONS`), so a repo with many more pages is
-trimmed by `_enforce_cache_budget`, not by this cap alone."""
+trimmed by `_enforce_cache_budget`, not by this cap alone.
 
-AUDITS_INDEX_MAX = 5
-"""Cap on the number of filenames named per ``## Audits & censuses`` bucket,
-same discipline as `ATLAS_INDEX_MAX`."""
+Survives the recency-sample test (2026-08-14, per
+cross-repo/inbox/2026-08-14-doe-claude-em-cache-recency-samples-are-not-pointers.md)
+that the former ``## Audits & censuses`` filename tail failed: this
+enumeration is a stable taxonomy, bounded by the subsystems that exist
+rather than by when a page was last touched. It changes only when the
+architecture does, and reading it teaches a newborn agent what subsystems
+this repo has -- what exists, not what was touched last."""
 
 
 def emit_wiki_pointer(repo_root: Path) -> List[str]:
@@ -429,6 +475,96 @@ def emit_architecture_atlas(repo_root: Path) -> List[str]:
     ]
 
 
+CAPABILITY_POINTERS_MAX = 8
+"""Cap on the number of ``## Capabilities`` bullets rendered -- same
+ellipsis-not-count discipline as ATLAS_INDEX_MAX. The section is elastic
+(`_CACHE_ELASTIC_SECTIONS`), so a repo declaring more entries than this is
+trimmed by `_enforce_cache_budget` on top of this cap, not by this cap
+alone."""
+
+_CAPABILITY_POINTERS_HEADER_RE = re.compile(r"^capability_pointers:\s*$")
+_CAPABILITY_POINTERS_ITEM_RE = re.compile(r"^\s*-\s+(.*)$")
+
+
+def _extract_capability_pointers(frontmatter: str) -> List[str]:
+    """Extract the ``capability_pointers:`` YAML block-list from a
+    ``coordinator.local.md`` frontmatter block.
+
+    A small block-list reader for ONE key, not a YAML parser -- mirrors
+    resolve_validation_cmd.py's own flat-scalar ``_extract_fast_test_cmd``
+    (the sibling precedent this generalizes from a single scalar to a list).
+    Each ``  - "..."`` item is unquoted via `_cs_strip_wrapping_quotes`
+    (reused from resolve_validation_cmd.py rather than reimplemented -- same
+    declare-once-in-config parsing discipline as `cs_resolve_fast_test_cmd`).
+    Stops at the first line, once inside the block, that is neither blank nor
+    a list item (the next frontmatter key). Returns [] when the key is absent.
+    """
+    lines = frontmatter.split("\n")
+    out: List[str] = []
+    in_block = False
+    for line in lines:
+        if _CAPABILITY_POINTERS_HEADER_RE.match(line):
+            in_block = True
+            continue
+        if not in_block:
+            continue
+        if not line.strip():
+            continue
+        m = _CAPABILITY_POINTERS_ITEM_RE.match(line)
+        if not m:
+            break
+        item = _cs_strip_wrapping_quotes(m.group(1).strip())
+        if item:
+            out.append(item)
+    return out
+
+
+def resolve_capability_pointers(repo_root: str) -> List[str]:
+    """Resolve the ``capability_pointers:`` list from *repo_root*'s
+    ``coordinator.local.md`` frontmatter -- the SAME repo-local declaration
+    seam `cs_resolve_fast_test_cmd` reads (``fast_test_cmd:``), applied to a
+    second flat-top-level key. Deliberately no env-var escape hatch (unlike
+    `cs_resolve_fast_test_cmd`'s COORDINATOR_FAST_TEST_CMD): a discoverability
+    pointer is repo-local by construction, not a per-invocation override.
+    Returns [] when the file or key is absent/empty -- never raises.
+    """
+    local_md = Path(repo_root) / "coordinator.local.md"
+    if not local_md.is_file():
+        return []
+    fm = _cs_extract_frontmatter(local_md)
+    return _extract_capability_pointers(fm)
+
+
+def emit_capability_pointers(repo_root: Path) -> List[str]:
+    """Point at repo-declared capabilities a newborn agent would not
+    otherwise discover, fed from `resolve_capability_pointers` -- the same
+    declare-once-in-config -> render-a-thin-pointer mechanism `emit_fast_test`
+    already established via `cs_resolve_fast_test_cmd`, applied to a second
+    repo-local key rather than a new mechanism.
+
+    Admission test (memo-stated, discoverability not usefulness -- see module
+    docstring's ``## Capabilities`` paragraph): a pointer earns its place here
+    only when a newborn agent would not otherwise know the thing exists. The
+    concrete first case is example-retrieval-repo's query surface in a repo where it is
+    available but nothing else in a cold session boot mentions it.
+
+    Elastic, not protected (`_CACHE_ELASTIC_SECTIONS`): a pointer trimmed by
+    the byte budget costs an agent one lookup, not a wrong belief, so
+    trimmability is correct rather than a defect to engineer around -- see
+    cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md.
+    Omitted (not rendered as "none configured") when the key is absent/empty,
+    matching every other omit-when-empty section in this module.
+    """
+    pointers = resolve_capability_pointers(str(repo_root))
+    if not pointers:
+        return []
+    shown = pointers[:CAPABILITY_POINTERS_MAX]
+    out = [f"- {p}" for p in shown]
+    if len(pointers) > CAPABILITY_POINTERS_MAX:
+        out.append("- …")
+    return out
+
+
 def emit_fast_test(repo_root: Path) -> List[str]:
     """Point at the resolved fast-test invocation via `cs_resolve_fast_test_cmd`
     -- the exact resolver ``/validate`` already uses -- rather than
@@ -447,24 +583,30 @@ _AUDITS_SUBDIRS = ("audits", "censuses")
 def emit_audits_index(state_root: Path) -> List[str]:
     """Point at existing investigation records under ``state/audits/`` and
     ``state/censuses/`` (whichever exist) -- answering "has someone already
-    looked at this?" without pre-answering it. Filenames are date-prefixed by
-    convention, so a reverse sort is newest-first; only a bounded few are
-    named per directory, an ellipsis (never a count) marking a longer list."""
+    looked at this?" without pre-answering it.
+
+    Directory pointer only, never a filename tail (2026-08-14 ruling, per
+    cross-repo/inbox/2026-08-14-doe-claude-em-cache-recency-samples-are-not-
+    pointers.md): a "recent: <names>" enumeration failed this section's own
+    admission test. It samples a directory at one moment rather than naming
+    what exists, implies a significance the sample does not carry, goes
+    stale between every boot, and costs bytes in an elastic section
+    (`_CACHE_ELASTIC_SECTIONS`) that is trimmed first when the cache is over
+    budget. The directory pointer alone -- the fact the corpus exists at
+    this path -- is the whole value; the bucket is omitted entirely (not
+    rendered as "none yet") when it does not exist or is empty, since THAT
+    existence signal is what a newborn agent needs.
+
+    Negative-spec: do not reintroduce a filename enumeration here, "recent"
+    or otherwise -- see the ruling above."""
     out: List[str] = []
     for sub in _AUDITS_SUBDIRS:
         d = state_root / sub
         if not d.is_dir():
             continue
-        names = sorted((p.stem for p in d.glob("*.md")), reverse=True)
-        if not names:
+        if not any(d.glob("*.md")):
             continue
-        shown = names[:AUDITS_INDEX_MAX]
-        tail = "…" if len(names) > AUDITS_INDEX_MAX else ""
-        out.append(
-            f"- `state/{sub}/` — existing investigation records; recent: "
-            + ", ".join(shown)
-            + tail
-        )
+        out.append(f"- `state/{sub}/` — existing investigation records")
     return out
 
 
@@ -577,7 +719,10 @@ def emit_rechecks(repo_root: Path) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Branch line (bash:223-234)
+# Branch line (bash:223-234) -- same spawn-amortization buy as ``## Recent
+# commits`` below, and it survives on that ground alone: this is git state an
+# agent would otherwise shell out for at boot. Read the rationale block below
+# before applying the thin-pointer test to this section.
 # ---------------------------------------------------------------------------
 
 
@@ -591,10 +736,17 @@ def emit_branch_line(repo_root: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Recent commits (leg 3, 2026-07-29) -- git log recency, absent from the cache
-# schema entirely until now despite 89% of fleet sessions re-deriving it at
-# boot via their own git log call (state/audits/2026-07-29-orientation-cache-
-# boot-facts.md, coordinator-claude). This adds ONE git spawn to build_cache -- an
+# Recent commits (leg 3, 2026-07-29) -- this section exists SOLELY as
+# spawn-amortization, not because recent commit subjects are interesting
+# reading. Every agent that boots and shells out to `git log` to answer "what
+# just happened here" pays a process-spawn fork/exec penalty -- modest on
+# POSIX, "brutal on Windows" per this repo's own P0 doctrine (see CLAUDE.md's
+# "Windows is first-class" runtime convention: a spawn on a hot path is
+# break-class, reimplemented rather than tolerated). 89% of fleet sessions
+# were independently re-deriving this fact at boot via their own git log call
+# (state/audits/2026-07-29-orientation-cache-boot-facts.md, DoE-claude) before
+# this section existed. One cache-time git spawn here amortizes that cost
+# across every one of them: this adds ONE git spawn to build_cache -- an
 # explicitly cold, ceremony/machine-invoked path (~10 spawns already) with no
 # hot-path spawn-tax concern (constraint 7 does not apply here; see module
 # docstring's own "no hot-path spawn-tax concern" framing for build_cache as a
@@ -608,10 +760,25 @@ def emit_branch_line(repo_root: Path) -> str:
 # confidently-wrong state for whichever session boots next and reads a stale
 # dirty/clean claim. Do not add a working-tree field here or anywhere else in
 # this module.
+#
+# WARNING: this section fails the thin-pointer/route-vs-answer admission test
+# (see module docstring, and the recency-sample ruling applied to ``## Audits
+# & censuses`` above) if you don't know it's a spawn-tax buy. Read in
+# isolation, "- <sha> <subject>" lines look exactly like the recency samples
+# that ruling cut. They are not content; they are pre-paid spawn avoidance.
+# Applying that test to this section without this context will correctly
+# conclude it is content and wrongly cut it.
 # ---------------------------------------------------------------------------
 
 RECENT_COMMITS_MAX = 5
-"""Number of ``git log --oneline`` entries rendered in ``## Recent commits``."""
+"""Number of ``git log --oneline`` entries rendered in ``## Recent commits``
+-- DERIVED from the section's spawn-amortization reason above, not a taste
+default. 5 is what the boot-time `git log --oneline -5` call this section
+amortizes would itself have returned (state/audits/2026-07-29-orientation-
+cache-boot-facts.md) -- exactly enough to discharge the spawn the section is
+buying out, no more. Resizing this is answered by "what does the agent no
+longer need to spawn for", nothing else -- not by how many commit subjects
+look nice in the cache."""
 
 _COMMIT_SUBJECT_TRUNCATE_CHARS = 72
 """Max rendered length of one commit subject line, in CODE POINTS -- a plain
@@ -648,7 +815,11 @@ def emit_recent_commits(repo_root: Path) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Auto-push health (bash:236-275)
+# Auto-push health (bash:236-275) -- third section carried on the
+# spawn-amortization buy documented above ``## Recent commits``, alongside
+# ``## Branch``. All three are git state an agent would otherwise spawn for at
+# boot; none of them earn their place as interesting reading, and the
+# thin-pointer test applied without that context will wrongly cut them.
 # ---------------------------------------------------------------------------
 
 _LASTCLASS_RE = re.compile(r"\((direct push|powershell ssh push)/([a-z-]+) after")
@@ -908,6 +1079,7 @@ def _render_cache(
     push_health: str,
     wiki_lines: List[str],
     atlas_lines: List[str],
+    capability_pointers_lines: List[str],
     fast_test_lines: List[str],
     audits_lines: List[str],
     housekeeping_lines: List[str],
@@ -942,6 +1114,9 @@ def _render_cache(
 
     if atlas_lines:
         parts.append("\n## Architecture atlas\n" + "\n".join(atlas_lines) + "\n")
+
+    if capability_pointers_lines:
+        parts.append("\n## Capabilities\n" + "\n".join(capability_pointers_lines) + "\n")
 
     if fast_test_lines:
         parts.append("\n## Fast test\n" + "\n".join(fast_test_lines) + "\n")
@@ -1026,6 +1201,7 @@ def build_cache(
     push_health = emit_auto_push_health(repo_root)
     wiki_lines = emit_wiki_pointer(repo_root)
     atlas_lines = emit_architecture_atlas(repo_root)
+    capability_pointers_lines = emit_capability_pointers(repo_root)
     fast_test_lines = emit_fast_test(repo_root)
     audits_lines = emit_audits_index(state_root)
     housekeeping_lines = _emit_housekeeping(repo_root)
@@ -1050,6 +1226,7 @@ def build_cache(
         push_health,
         wiki_lines,
         atlas_lines,
+        capability_pointers_lines,
         fast_test_lines,
         audits_lines,
         housekeeping_lines,
@@ -1218,9 +1395,14 @@ _CACHE_PROTECTED_SECTIONS = frozenset({
 # Trimmed under pressure, largest-first, before anything protected is touched.
 _CACHE_ELASTIC_SECTIONS = frozenset({
     "Housekeeping", "Active workstreams", "Auto-push health",
-    "Recent commits", "Wiki", "Architecture atlas", "Fast test",
-    "Audits & censuses",
+    "Recent commits", "Wiki", "Architecture atlas", "Capabilities",
+    "Fast test", "Audits & censuses",
 })
+# "Capabilities" is elastic, not protected, by deliberate ruling (memo
+# cross-repo/inbox/2026-08-14-doe-claude-em-orientation-cache-capability-pointers.md):
+# a pointer trimmed by the byte budget costs an agent one lookup, not a wrong
+# belief, so protecting it would defend against a cost this section does not
+# actually impose.
 
 _CACHE_SECTION_RE = re.compile(r"\n## ([^\n]+)\n")
 _CACHE_BUDGET_EXCEEDED_SENTINEL = "orientation cache exceeded its"

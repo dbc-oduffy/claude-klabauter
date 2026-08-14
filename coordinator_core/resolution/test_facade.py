@@ -52,7 +52,7 @@ def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch
     settings_home.mkdir()
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "DoE-claude"
     doe_root.mkdir()
 
     env = {
@@ -155,21 +155,21 @@ def test_guard_plugin_root_mode_unrecognized_raises_value_error_parity():
 def test_guard_plugin_root_doe_root_sentinel_anchor_parity(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "coordinator-claude") + "\n")
+    (home / ".claude" / ".doe-root").write_text(str(tmp_path / "DoE-claude") + "\n")
     env = {"HOME": str(home)}
-    root = str(tmp_path / "coordinator-claude" / "coordinator")
+    root = str(tmp_path / "DoE-claude" / "coordinator")
 
     expected = coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
     assert guard_plugin_root(root, mode="fail-open", env=env) == expected
     assert expected is True
 
 
-def test_guard_plugin_root_registry_example_doctrine_repo_anchor_parity(tmp_path):
+def test_guard_plugin_root_registry_doe_claude_anchor_parity(tmp_path):
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
-        f'"repos.example_doctrine_repo" = "{registry_root}"\n'
+        f'"repos.doe_claude" = "{registry_root}"\n'
     )
     home = tmp_path / "home"
     env = {"HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
@@ -200,7 +200,7 @@ def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path):
 def test_guard_plugin_root_windows_separator_and_case_normalization_parity(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    doe = tmp_path / "coordinator-claude"
+    doe = tmp_path / "DoE-claude"
     (home / ".claude" / ".doe-root").write_text(str(doe).replace("\\", "/") + "\n")
     env = {"HOME": str(home)}
     root = str(doe / "coordinator")
@@ -230,7 +230,7 @@ def _happy_env(tmp_path):
     (settings_home / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    doe_root = tmp_path / "coordinator-claude"
+    doe_root = tmp_path / "DoE-claude"
     doe_root.mkdir()
 
     (settings_home / "machine-local" / ".claude-klabauter-root").write_text(str(claude_klabauter_root) + "\n")
@@ -275,7 +275,7 @@ def test_resolve_operator_config_whitespace_only_sentinel_is_corrupt(tmp_path):
 def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path):
     env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / ".doe-root").write_text(
-        str(tmp_path / "coordinator-claude" / ".." / "evil") + "\n"
+        str(tmp_path / "DoE-claude" / ".." / "evil") + "\n"
     )
 
     with pytest.raises(OperatorConfigError, match="doe_root"):
@@ -296,7 +296,7 @@ def test_resolve_operator_config_embedded_newline_from_list_registry_value_is_co
 ):
     env, settings_home, _claude_klabauter_root, _doe_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / "registry.local.toml").write_text(
-        '"repos.example_doctrine_repo" = ["line-one", "line-two"]\n'
+        '"repos.doe_claude" = ["line-one", "line-two"]\n'
     )
 
     with pytest.raises(OperatorConfigError, match="doe_root"):

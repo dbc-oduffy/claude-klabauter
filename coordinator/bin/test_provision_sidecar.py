@@ -4,7 +4,7 @@ Drives the CLI as a real subprocess (mirroring test_fan_out_dispatch.py's
 conventions, since dashed filenames aren't importable as modules) against a
 real `git init`'d tmp_path repo and a fixture `subagent-sandbox-policy.yaml`
 (mirroring coordinator_core/subagent_sandbox/tests/test_provision_report.py's
-fixture shape) — never the real coordinator-claude policy file or the developer's live
+fixture shape) — never the real DoE policy file or the developer's live
 session, per the dispatch brief.
 
 Covers the loudness property this CLI exists to guarantee: an ineligible
@@ -196,7 +196,7 @@ REVIEWER_TYPE = "coordinator:code-reviewer"
 
 @pytest.fixture
 def typed_policy_path(tmp_path: Path) -> Path:
-    """A policy carrying report_type_map, as the real coordinator-claude-side file does."""
+    """A policy carrying report_type_map, as the real DoE-side file does."""
     policy = {
         "report_sidecar": [ELIGIBLE_TYPE, REVIEWER_TYPE],
         "report_type_map": {

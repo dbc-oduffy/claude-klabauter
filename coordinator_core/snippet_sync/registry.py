@@ -15,7 +15,7 @@ empty). Optional `[[snippet.<name>.conditional_consumer]]` array-tables carry
 `condition_key` is REQUIRED for `machine-local-key` and FORBIDDEN for
 `file-exists` (paste-drift guard, parity with the bash reader).
 
-schema_version 4 (coordinator-claude 355255cc3, 2026-08-03) adds two OPTIONAL, ADDITIVE
+schema_version 4 (DoE 355255cc3, 2026-08-03) adds two OPTIONAL, ADDITIVE
 per-row fields. Both are additive-optional: a v3-shaped row carrying neither is
 still valid at v4, which is why the bump is a field-SET change rather than a
 value-shape break.
@@ -51,7 +51,7 @@ using them on a registry that has not declared the bump is mis-declared, and
 silently honouring them would defeat the fail-loud forward-compat contract the
 version field exists for.
 
-Enforcement of all of the above is claude-klabauter-resident by coordinator-claude's own declaration —
+Enforcement of all of the above is claude-klabauter-resident by DoE's own declaration —
 `registry.toml`'s header states the shape only and names this reader as the
 place the checks live.
 
@@ -106,8 +106,8 @@ key resolution) — it is NOT a pure function like normalize_snippet or
 sentinel_blocks. Callers needing determinism should pass an explicit
 machine_local_bin=None to disable the subprocess path.
 
-Spec backlink: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
-DR backlink: coordinator-claude docs/decisions/2026-06-15-snippet-registry-shape.md
+Spec backlink: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.md § 6
+DR backlink: DoE docs/decisions/2026-06-15-snippet-registry-shape.md
 """
 from __future__ import annotations
 
@@ -122,7 +122,7 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_SCHEMA_VERSIONS = (1, 2, 3, 4)
 
-#: Fields introduced by schema_version 4 (coordinator-claude 355255cc3). Both are additive-
+#: Fields introduced by schema_version 4 (DoE 355255cc3). Both are additive-
 #: optional AT v4 and unknown below it.
 _V4_ONLY_FIELDS = ("excluded_consumer", "eligible_glob")
 
@@ -137,8 +137,8 @@ _VALID_DELIVERIES = ("paste", "inject")
 # bash oracle's unconditional $HOME anchoring ("Sibling plugin entries keep
 # $HOME because they are always at the flat install layout"). Resolving these
 # relative to plugin_root is only correct when plugin_root itself IS that
-# live-install path; when plugin_root is the coordinator-claude SOURCE tree (the real
-# --plugin-dir production resolution path per coordinator-claude's own CLAUDE.md), a
+# live-install path; when plugin_root is the DoE SOURCE tree (the real
+# --plugin-dir production resolution path per DoE-claude's own CLAUDE.md), a
 # plugin_root-relative resolution silently lands on a nonexistent/wrong-layout
 # path and all 14 example-game-repo/game-dev conditional consumers vanish with no error.
 _SIBLING_PLUGIN_MARKER = "../../example-game-workbench-repo/"

@@ -18,9 +18,14 @@ UNRESOLVABLE and is reported, never guessed, dropped, or partially rewritten.
 Negative-spec (RAG-bait):
     This module never shells out to `perl` (see `_fix_file` in
     `assert_no_dangling_plan_backlinks.py` for the shape it deliberately does
-    NOT reproduce) -- the in-place edit is a literal `str.replace` on the
-    already-matched span, the faithful naked-Python port of the perl
-    one-liner's `\\Q...\\E` quotemeta literal match, never `re.sub`.
+    NOT reproduce) -- the in-place edit is a literal, whole-line `str.replace`
+    of the matched candidate substring (every occurrence on the line, not
+    anchored to a single match span), the faithful naked-Python port of the
+    perl one-liner's `\\Q...\\E` quotemeta literal match, never `re.sub`.
+    (Review: code-reviewer P3 — corrected from an earlier "matched span"
+    framing that overstated position-anchoring the code doesn't do; safe in
+    practice because `_PLAN_PATH_RE` candidates are `.md`-terminated and the
+    two-stage line filter already narrows scope.)
 
     An unresolvable citation is never deleted or invented — a no-op on that
     line, reported in the returned/unresolvable set, is the only correct
@@ -36,7 +41,9 @@ Spec backlink: pln-spec-backlinks-cite-a-stable-d-451b3e § C3
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 
@@ -47,6 +54,16 @@ from coordinator_core.ops.assert_no_dangling_plan_backlinks import (
 from coordinator_core.session.declared_writes import declare_write
 
 PathLike = Union[str, Path]
+
+# Peer-repo qualifier for a citation that resolves ONLY in DoE-claude, never
+# locally. Sourced from `doe_root()`'s own basename (DoE-claude coordinator/
+# docs/wiki/cross-repo-citation-conventions.md § "Foreign spec-backlink id
+# form" -- the qualifier examples there are repo directory basenames:
+# claude-klabauter, example-retrieval-repo, example-game-repo-control). This module's own repo
+# (claude-klabauter) never qualifies its own citations -- only a citation this
+# repo's index cannot resolve, but DoE-claude's can, gets the `<repo>:`
+# prefix.
+_PEER_REPO_NAME = "DoE-claude"
 
 # Resolver contract (C1, coordinator_core.ops.spec_backlink_resolve): a
 # callable taking the cited docs/plans/...md path and returning a
@@ -93,14 +110,61 @@ def _default_resolver(worktree_root: PathLike) -> Resolver:
     `resolve_path_with_index`/`resolve_path` are the INVERSE of C1's id ->
     path `resolve()` -- this module has a cited PATH, not an id, and needs
     that record's ids back.
+
+    Cross-repo (C7) extension: this repo's index is always tried FIRST -- a
+    citation that resolves locally is this repo's own plan and is never
+    repo-qualified, matching every pre-C7 test's expectation unchanged. Only
+    a citation this repo's index cannot resolve to a real id (local MISS,
+    AMBIGUITY, or a HIT whose record carries neither id as real) falls
+    through to a LAZILY-built DoE-claude peer index (`doe_root()`), mirroring
+    C1's `resolve()` peer-laziness contract: the peer index is built at most
+    ONCE per resolver instance (on the first citation that needs it, not
+    eagerly at resolver-construction time, and not once per citation) via a
+    closed-over `peer_state` flag. A citation resolving in the peer repo is
+    emitted `DoE-claude:pln-<id>` / `DoE-claude:dlv-<id>` -- local-first is
+    the documented precedence rule for a target that would resolve in BOTH:
+    this repo's own corpus is authoritative for its own citations, and the
+    peer repo is consulted only as a fallback for citations this repo cannot
+    resolve, never as a competing candidate once a local hit exists.
     """
-    from coordinator_core.ops.spec_backlink_resolve import build_index, resolve_path_with_index
+    from coordinator_core.ops.spec_backlink_resolve import (
+        build_index,
+        resolve_path_with_index,
+        _doe_root_path,
+    )
 
     root = Path(worktree_root)
     index = build_index(root)
+    peer_state: Dict[str, object] = {"attempted": False, "index": None, "root": None}
 
     def _resolve(cited_path: str) -> Dict[str, object]:
-        return resolve_path_with_index(index, root, cited_path)
+        outcome = resolve_path_with_index(index, root, cited_path)
+        if str(outcome.get("outcome", "")).lower() == "hit" and _emit_id(outcome) is not None:
+            outcome = dict(outcome)
+            outcome["repo"] = None
+            return outcome
+
+        if not peer_state["attempted"]:
+            peer_state["attempted"] = True
+            peer_root = _doe_root_path()
+            if peer_root is not None and peer_root.is_dir():
+                peer_state["root"] = peer_root
+                peer_state["index"] = build_index(peer_root)
+
+        peer_index = peer_state["index"]
+        if peer_index is not None:
+            peer_outcome = resolve_path_with_index(peer_index, peer_state["root"], cited_path)
+            if (
+                str(peer_outcome.get("outcome", "")).lower() == "hit"
+                and _emit_id(peer_outcome) is not None
+            ):
+                peer_outcome = dict(peer_outcome)
+                peer_outcome["repo"] = _PEER_REPO_NAME
+                return peer_outcome
+
+        outcome = dict(outcome)
+        outcome["repo"] = None
+        return outcome
 
     return _resolve
 
@@ -137,11 +201,25 @@ def _emit_id(outcome: Dict[str, object]) -> Optional[str]:
 def resolve_citation(cited_path: str, resolver: Resolver) -> Optional[str]:
     """Resolve one cited `docs/plans/...md` path to its `pln-`/`dlv-`
     replacement string, or None if unresolvable (MISS, AMBIGUITY, or a HIT
-    with neither id real)."""
+    with neither id real).
+
+    Repo-qualified (C7): an outcome dict carrying a truthy `"repo"` key (the
+    `_default_resolver` cross-repo fallback's own marker -- a plain stub
+    resolver in the existing unit tests never sets this key, so `.get`
+    defaults to None and every pre-C7 test's unqualified expectation is
+    unchanged) emits `<repo>:pln-<id>` / `<repo>:dlv-<id>` instead of the
+    bare local form.
+    """
     outcome = resolver(cited_path)
     if str(outcome.get("outcome", "")).lower() != "hit":
         return None
-    return _emit_id(outcome)
+    emitted = _emit_id(outcome)
+    if emitted is None:
+        return None
+    repo = outcome.get("repo")
+    if repo:
+        return f"{repo}:{emitted}"
+    return emitted
 
 
 def rewrite_file(
@@ -151,9 +229,11 @@ def rewrite_file(
 ) -> Dict[str, object]:
     """Rewrite path-form spec-backlink citations to id-form in one file, in
     place. Only lines passing the two-stage filter (spec.?backlink AND the
-    literal "docs/plans/" substring) are scanned for candidate paths; only
-    the matched `docs/plans/...md` span on such a line is replaced, byte-for-
-    byte preserving everything else including the `§ <anchor>` suffix.
+    literal "docs/plans/" substring) are scanned for candidate paths; each
+    resolved `docs/plans/...md` candidate on such a line is substituted via
+    a whole-line `str.replace` (every occurrence of that candidate string,
+    not a single anchored span), byte-for-byte preserving everything else
+    including the `§ <anchor>` suffix.
 
     Returns a report dict:
       {"path": <str>, "rewritten": [<cited_path>, ...],
@@ -205,8 +285,31 @@ def rewrite_file(
 
     if changed:
         new_content = "".join(new_lines)
-        with open(full_path, "w", encoding="utf-8") as fh:
-            fh.write(new_content)
+        # Review: code-reviewer P2 — atomic write (mkstemp sibling + os.replace,
+        # same idiom as coordinator_core.locked_write.locked_rmw) rather than a
+        # plain open(..., "w") over the live path. This rewriter mutates real
+        # docs/plans/*.md corpus files in place; a kill mid-write must never
+        # leave one truncated on disk. mkstemp in the target's own directory
+        # keeps os.replace same-filesystem (required for its atomicity
+        # guarantee on POSIX, and os.replace is likewise atomic on Windows
+        # for same-volume renames).
+        target_path = Path(full_path)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(target_path.parent), prefix=f".{target_path.name}.", suffix=".tmp"
+        )
+        try:
+            try:
+                os.write(tmp_fd, new_content.encode("utf-8"))
+            finally:
+                os.close(tmp_fd)
+            os.replace(tmp_path, str(target_path))
+            tmp_path = None
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
         # DR-276: declared AFTER the in-place edit lands, never before.
         declare_write(full_path)
 

@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.check_auto_memory_drained — closure-ceremony drain gate.
 
-Discharges AC15 of coordinator-claude's
+Discharges AC15 of DoE-claude's
 ``docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md`` (chunk C13).
 C12's ``guard_memory_store_cap`` bounds how big the auto-memory store gets
 WITHIN a day (a spatial bound); this gate bounds how long anything survives
@@ -72,8 +72,8 @@ sole writer deleted 2026-07-15) — the same proven seam
 Project-slug resolution: the target repo's absolute path with OS path
 separators replaced by ``-``, mirroring Claude Code's own
 ``~/.claude/projects/<slug>/`` naming (verified against this repo's own
-live slug, ``-Users-example-operator-X-claude-klabauter``, and coordinator-claude's,
-``-Users-example-operator-X-coordinator-claude`` — neither contains a character this
+live slug, ``-Users-example-operator-X-claude-klabauter``, and DoE-claude's,
+``-Users-example-operator-X-DoE-claude`` — neither contains a character this
 replacement does not cover). This is deliberately the same shape as
 ``check_harvest_debt``'s ``--root`` resolution (explicit flag, else
 ``git rev-parse --show-toplevel``) — no new resolution idiom introduced.
@@ -100,7 +100,7 @@ exactly the destructive "delete everything you can't identify" instruction
 this fix exists to remove: a gate that cannot tell whose rows these are
 must not order a deletion.
 
-Spec backlink: coordinator-claude
+Spec backlink: DoE-claude
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C13, AC15.
 
 Negative-spec:

@@ -35,6 +35,77 @@ migration debt regardless of which register would record it, and enumeration is 
 both (a granted `EXEMPTIONS`/`EXEMPT_PREFIXES` entry, not a rationale match, is what makes a file
 invisible to that guard). See that module's own docstring for the artifact-side admission tests.
 
+## Hot-path classification — commit and session-start
+
+`CLAUDE.md` § Runtime conventions: "a bash-spawning script or hook on the commit/session hot path
+is **break-class**, reimplemented in naked Python as touched." That standard is stricter than
+"carve-out-worthy" — a hot-path site is fix-by-default even if its rationale would otherwise
+survive class (a)-(f) scrutiny. This section names the hot-path subset explicitly rather than
+leaving it a property a reader has to infer per-entry.
+
+**Session-start hot path: zero sites below touch it.** No `Sites:` entry in classes (a)-(f) runs
+on SessionStart; those hooks are already naked Python outside this doc's scope.
+
+**Commit hot path: zero *Python-side bash spawns* touch it, but one site's *generated artifact*
+is what actually execs on every `git commit`.** The distinction matters because it is easy to
+conflate "generates/validates a commit-time artifact" with "runs on every commit":
+
+- The three class (b) sites (`install_meta_repo_precommit_hook.py` `main()`,
+  `install_publish_repo_precommit_hook.py`'s `_FRESH_HOOK_TEMPLATE`, `edit_live_hook.py`
+  `cmd_commit()`) run at **install-time or hook-edit-time** — fresh install, or an operator
+  running the `edit-hook` CLI subcommand — never on a user's ordinary `git commit`. `cmd_commit()`
+  in particular is a subcommand name of the edit-hook CLI, not literal `git commit` invocation;
+  don't let the name imply per-commit execution.
+- What DOES run on every `git commit` is the **generated hook file itself** — a `#!/bin/sh` shim
+  that git execs directly. That artifact is POSIX-`sh`, not bash, and git-for-Windows ships `sh`
+  on Windows — so the actual per-commit hot-path execution is already portable. This is the
+  concrete fact AC9's "the only commit-path sites are POSIX-`sh` hook generators" verdict rests
+  on: the *generators* are cold-path Python (with a POSIX-sh validation spawn in one case), and
+  the *artifact they produce* is the true hot-path exec, and it's `sh`, twinned by construction.
+
+No other class's sites are on either hot path — (a) and (d) are install-time, (e) is scoped
+by its own text to "never on an install, ceremony, commit, or session execution path," and (f)
+is an optional verification-only tool. See the per-site table below.
+
+## Per-site classification
+
+| Site | Class | Shape | Hot-path? |
+|---|---|---|---|
+| `install/first_run.py` `_install_homebrew()` | (a) | bash-specific (`curl \| bash` as-published) | No — install-time |
+| `install/substrate.py` `_fnm_step()` | (a) | bash-specific (`curl \| bash` as-published) | No — install-time |
+| `ops/install_meta_repo_precommit_hook.py` `main()` | (b) | POSIX-sh generic (assembles `#!/bin/sh` shim text; no subprocess spawn itself) | No — fresh-install-time; its *output* is the hot-path artifact (see above) |
+| `ops/install_publish_repo_precommit_hook.py` `_FRESH_HOOK_TEMPLATE` (in `main()`) | (b) | POSIX-sh generic (shim-body constant; no subprocess spawn itself) | No — install-time; its *output* is the hot-path artifact (see above) |
+| `ops/edit_live_hook.py` `cmd_commit()` | (b) | POSIX-shell generic (`sh -n` validation, narrowed from bash) | No — operator-invoked edit-hook CLI subcommand, not literal `git commit` |
+| `install/first_run.py` `_bash_version_ok()` | (d) | bash-specific (interpreter self-probe) | No — install-time |
+| `ops/normalize_env.py` `_ne_verify_bash_profile_repair()` | (d) | bash-specific (login-shell self-probe) | No — install-time (post-repair verify) |
+| `install/prereq_probe.py` `probe_pwsh()` (pwsh leg) | (d) | PowerShell-specific self-probe | No — install-time prereq probe |
+| `install/prereq_probe.py` `probe_pwsh()` (powershell.exe fallback leg) | (d) | Windows-PowerShell-specific self-probe, already the Windows leg itself | No — install-time prereq probe |
+| `install/prereq_probe.py` `shell_login_env_reconstruction_source()` | (d) | zsh-specific self-probe (macOS-only path) | No — install-time |
+| `install/sandbox_check.py` `_tier1b_mirror_and_cold_tier()` | (e) | bash-specific, scoped to verification harness by its own carve-out text | No — explicitly excluded from install/ceremony/commit/session paths by the class-(e) rationale itself |
+| `coordinator/bin/static-check` `run_pyright()` | (f) | 3rd-party Node CLI, PATH-resolved, degrade-to-UNAVAILABLE | No — optional verification tool, not on any required path |
+
+## Adversarial standard applied — no carve-out fails it
+
+Applying the same adversarial standard the plan's `EXEMPTIONS` register audit applies (a carve-out
+survives only if its irreducibility is permanent, not merely inconvenient-to-port): every site
+above is cold-path already, so none is subject to the hot-path fix-by-default rule in the first
+place. Within the cold-path set:
+
+- (a) installer sites are permanently irreducible — reimplementing a 3rd party's installer logic
+  is drift-prone churn the mandate's own text excludes, not carve-out convenience.
+- (b) sites' `sh` shape is required by git's own hook-exec contract (git execs hooks via `sh` on
+  every platform including Windows), so `sh` is not a portability gap to fix — it is the interop
+  surface itself.
+- (d) sites interrogate the interpreter/shell's own state, which has no native substitute by
+  construction (asking bash its own version, or a login shell its own reconstructed PATH).
+- (e)'s one site is scoped by its own anti-loophole teeth to verification-harness-only, and its
+  artifact is intrinsically shell-shaped (mutates the sourcing shell's own environment) — porting
+  it would destroy the thing under test.
+- (f)'s one site is an optional, PATH-resolved, degrade-to-UNAVAILABLE convenience outside
+  `coordinator_core/`'s own gate scope.
+
+No entry in this doc rests on "porting was inconvenient" — the standard this audit checked for.
+
 ## (a) 3rd-party upstream installer invoked as-published
 
 Homebrew's and fnm's own `curl | bash` / `curl | sh -s` installer contracts, run verbatim as
@@ -78,7 +149,7 @@ under test — there is no native substitute for "does bash accept this syntax,"
 the reimplementable bridge the mandate targets; scoped strictly to parse-checking, never
 execution. Its only named site, `coordinator_core/snippet_sync/verify_registry_consistency.py`
 `_bash_n()`, was deleted with the retired four-script (`verify-<X>-sync.sh`) leg it parse-checked
-— those scripts are retired everywhere (coordinator-claude `b644d5a9`), so there was nothing left to
+— those scripts are retired everywhere (DoE `b644d5a9`), so there was nothing left to
 parse-check.
 
 Kept as historical record per the enumeration-is-constitutive rule: the class's site list
@@ -133,7 +204,7 @@ Anti-loophole teeth — a one-artifact carve-out, not a testing exemption:
   file, this carve-out does not apply.
 
 Sites:
-- `coordinator_core/install/sandbox_check.py` `_tier1b_mirror_and_cold_tier()` (~:971, cold-shell `source '<sandbox>/.claude/shell/claude-doe-shim.sh'` reading back `REPO_EXAMPLE_DOCTRINE_REPO`; the shim is generated by claude-klabauter's own `coordinator_core.ops.gen_claude_doe_shim`)
+- `coordinator_core/install/sandbox_check.py` `_tier1b_mirror_and_cold_tier()` (~:971, cold-shell `source '<sandbox>/.claude/shell/claude-doe-shim.sh'` reading back `REPO_DOE_CLAUDE`; the shim is generated by claude-klabauter's own `coordinator_core.ops.gen_claude_doe_shim`)
 
 ## (f) optional 3rd-party static-verification tool, PATH-resolved, degrades to UNAVAILABLE
 
@@ -278,7 +349,7 @@ is the one class-(b) site with a real subprocess call and is entered below.
 ## Adjudicated and CLOSED 2026-07-21 — no longer a residual
 
 `coordinator_core/install/substrate.py` `_write_agent_forwarder` (formerly a generated
-`#!/bin/sh` bin-forwarder onto the coordinator-claude/coordinator-claude tree) was the one open scope decision
+`#!/bin/sh` bin-forwarder onto the coordinator-claude/DoE tree) was the one open scope decision
 under this section. Resolved as **native port**, not a carve-out (`daca1c74`): the forwarder emits
 `#!/usr/bin/env python3`. The carve-out case did not survive inspection — its `sh` shebang was
 never load-bearing, because both target classes resolve their sibling `lib/` from their OWN file

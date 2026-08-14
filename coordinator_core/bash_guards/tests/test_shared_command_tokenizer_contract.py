@@ -360,7 +360,7 @@ class TestTokenMatchesBinaryClosesExeAndCmdBypass:
 
     def test_reviewer_allowlist_recognizes_coordinator_doc_new_cmd(self):
         # coordinator-doc-new.cmd is ALSO a real, on-disk generated launcher
-        # twin (coordinator/bin/coordinator-doc-new.cmd). Before this fix,
+        # twin (coordinator/bin/coordinator-doc-new.py.cmd). Before this fix,
         # this was a Windows-usability defect in the OPPOSITE direction from
         # the git.exe/coordinator-safe-commit.cmd bypasses: the Tier B
         # scaffolder-allow gate (_first_token_is_allowlisted_binary) would

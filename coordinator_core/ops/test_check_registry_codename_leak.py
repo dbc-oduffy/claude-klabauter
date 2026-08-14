@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.check_registry_codename_leak.
 
-Port of: check-registry-codename-leak.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: check-registry-codename-leak.sh (DoE b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 
@@ -184,29 +184,81 @@ def test_unreadable_file_fails_closed_even_if_no_leak_found(tmp_path, capsys):
     assert "blocked.md" in captured.err
 
 
-def _example_doctrine_repo_fixture(tmp_path):
+def _doe_claude_fixture(tmp_path):
     d = tmp_path / "doe-em"
     d.mkdir()
     (d / "notes.md").write_text(
-        "This tree references coordinator-claude-em in a role-id context.\n"
+        "This tree references doe-claude-em in a role-id context.\n"
     )
     return d
 
 
-def test_no_exempt_absent_example_doctrine_repo_still_exempt_today(tmp_path, capsys):
-    """AC2 pin: fixture tree containing coordinator-claude-em, NO re-admission ->
-    exits 0. Regression guard on the global default (example_doctrine_repo stays kept
+def test_no_exempt_absent_doe_claude_still_exempt_today(tmp_path, capsys):
+    """AC2 pin: fixture tree containing doe-claude-em, NO re-admission ->
+    exits 0. Regression guard on the global default (doe_claude stays kept
     unless a target explicitly re-admits it)."""
+    d = _doe_claude_fixture(tmp_path)
+    rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude"))
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "no private codenames to check" in captured.err
+
+
+def test_no_exempt_flag_reveals_doe_claude_leak(tmp_path, capsys):
+    """AC2: --no-exempt doe_claude re-admits the slug -> exit 1, hit report
+    cites the file in path:lineno:line shape."""
+    d = _doe_claude_fixture(tmp_path)
+    rc = main(
+        ["--no-exempt", "doe_claude", str(d)],
+        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude"),
+    )
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "private codename(s) found in publish tree" in captured.err
+    hit_line = f"{d / 'notes.md'}:1:"
+    assert hit_line in captured.err
+
+
+def _example_doctrine_repo_fixture(tmp_path):
+    """`repos.example_doctrine_repo` is a SECOND machine-local registry alias
+    for the same DoE-claude clone `repos.doe_claude` resolves to (verified
+    2026-08-13, `machine-local get` on both keys returns the identical path).
+    Before 2026-08-13 (571a4d78f535) it was ALSO this machine's own
+    depersonalize scrub placeholder for `doe_claude`, which was the only thing
+    exempting its literal text from the registry-codename leak-check --
+    dropping that mapping (because the PM ruling stopped scrubbing doe_claude)
+    silently reopened this second alias as a leak candidate, even though it
+    names the exact same PM-ratified-public sibling. § KEEPSET's own
+    `example_doctrine_repo` comment for the full incident."""
+    d = tmp_path / "doe-alias"
+    d.mkdir()
+    (d / "notes.md").write_text(
+        "This tree cites repos.example_doctrine_repo in a docstring.\n"
+    )
+    return d
+
+
+def test_example_doctrine_repo_stays_exempt_default(tmp_path, capsys):
+    """Regression pin for the 2026-08-13 collateral leak (§ KEEPSET comment):
+    a fixture tree quoting the `example_doctrine_repo` registry alias, no
+    re-admission -> exits 0. `example_doctrine_repo` is a KEEPSET member for
+    the same reason `doe_claude` is -- both name the one PM-ratified-public
+    DoE-claude sibling, just under two different registered aliases."""
     d = _example_doctrine_repo_fixture(tmp_path)
-    rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.example_doctrine_repo"))
+    rc = main(
+        [str(d)],
+        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.example_doctrine_repo"),
+    )
     assert rc == 0
     captured = capsys.readouterr()
     assert "no private codenames to check" in captured.err
 
 
 def test_no_exempt_flag_reveals_example_doctrine_repo_leak(tmp_path, capsys):
-    """AC2: --no-exempt example_doctrine_repo re-admits the slug -> exit 1, hit report
-    cites the file in path:lineno:line shape."""
+    """--no-exempt example_doctrine_repo re-admits the slug -> exit 1, proving
+    the KEEPSET membership above is a real exemption (not an accidental no-op
+    from a typo'd/absent slug) exactly like doe_claude's own re-admission
+    pin."""
     d = _example_doctrine_repo_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "example_doctrine_repo", str(d)],
@@ -219,15 +271,15 @@ def test_no_exempt_flag_reveals_example_doctrine_repo_leak(tmp_path, capsys):
     assert hit_line in captured.err
 
 
-def test_no_exempt_env_var_reveals_example_doctrine_repo_leak(tmp_path, capsys):
+def test_no_exempt_env_var_reveals_doe_claude_leak(tmp_path, capsys):
     """AC2: COORDINATOR_CODENAME_NO_EXEMPT env channel re-admits the slug ->
     exit 1, hit report cites the file in path:lineno:line shape."""
-    d = _example_doctrine_repo_fixture(tmp_path)
+    d = _doe_claude_fixture(tmp_path)
     rc = main(
         [str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.example_doctrine_repo",
-            COORDINATOR_CODENAME_NO_EXEMPT="example_doctrine_repo",
+            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude",
+            COORDINATOR_CODENAME_NO_EXEMPT="doe_claude",
         ),
     )
     assert rc == 1
@@ -240,12 +292,12 @@ def test_no_exempt_env_var_reveals_example_doctrine_repo_leak(tmp_path, capsys):
 def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
     """Both channels union — either alone is sufficient, and passing both is
     not an error (dict.fromkeys dedupes)."""
-    d = _example_doctrine_repo_fixture(tmp_path)
+    d = _doe_claude_fixture(tmp_path)
     rc = main(
-        ["--no-exempt", "example_doctrine_repo", str(d)],
+        ["--no-exempt", "doe_claude", str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.example_doctrine_repo",
-            COORDINATOR_CODENAME_NO_EXEMPT="example_doctrine_repo",
+            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude",
+            COORDINATOR_CODENAME_NO_EXEMPT="doe_claude",
         ),
     )
     assert rc == 1
@@ -254,30 +306,30 @@ def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
 def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys):
     """AC2 shape correction (NOT a status-quo pin): re-admitting a slug that
     is not an exact KEEPSET member must raise loud, not silently no-op. A
-    `coordinator-claude` (hyphen) authoring slip against the `example_doctrine_repo` (underscore)
+    `doe-claude` (hyphen) authoring slip against the `doe_claude` (underscore)
     KEEPSET entry must not re-admit nothing and produce a green publish."""
-    d = _example_doctrine_repo_fixture(tmp_path)
+    d = _doe_claude_fixture(tmp_path)
     rc = main(
-        ["--no-exempt", "coordinator-claude", str(d)],
-        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.example_doctrine_repo"),
+        ["--no-exempt", "doe-claude", str(d)],
+        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude"),
     )
     assert rc == 2
     captured = capsys.readouterr()
     assert "not in KEEPSET" in captured.err
-    assert "coordinator-claude" in captured.err
+    assert "doe-claude" in captured.err
     # error message names the valid KEEPSET members
     assert "example_retrieval_repo" in captured.err
-    assert "example_doctrine_repo" in captured.err
+    assert "doe_claude" in captured.err
     assert "coordinator" in captured.err
 
 
 def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path, capsys):
     """Same shape correction via the env channel."""
-    d = _example_doctrine_repo_fixture(tmp_path)
+    d = _doe_claude_fixture(tmp_path)
     rc = main(
         [str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.example_doctrine_repo",
+            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.doe_claude",
             COORDINATOR_CODENAME_NO_EXEMPT="not_a_real_keepset_slug",
         ),
     )
@@ -311,7 +363,7 @@ def test_extra_positional_after_no_exempt_exits_two(tmp_path, capsys):
     --no-exempt."""
     d = tmp_path / "extra"
     d.mkdir()
-    rc = main(["--no-exempt", "example_doctrine_repo", str(d), "extra-positional"], env=_env())
+    rc = main(["--no-exempt", "doe_claude", str(d), "extra-positional"], env=_env())
     assert rc == 2
 
 

@@ -15,7 +15,7 @@ approval window with no Bash guard in the loop at all. The fix requires
 `_sentinel_state`, independent of the Bash surface, so a future edit cannot
 silently reintroduce the `getmtime`-only check.
 
-Spec backlink: coordinator-claude
+Spec backlink: DoE-claude
   coordinator/tests/test_guard_doctrine_surface_edits.py (sibling coverage,
   reached via `check()` rather than `_sentinel_state()` directly)
 """

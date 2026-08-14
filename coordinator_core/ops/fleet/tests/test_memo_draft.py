@@ -722,9 +722,9 @@ class TestClassifyReceiver:
 
 
 # ===========================================================================
-# 3c. rejection_class — cross-repo wire field (2026-07-21, coordinator-claude consult)
+# 3c. rejection_class — cross-repo wire field (2026-07-21, DoE consult)
 #
-# coordinator-claude claude-central-em's CLI previously mapped classify_receiver rejections
+# DoE claude-central-em's CLI previously mapped classify_receiver rejections
 # to three distinct process exit codes (publish-target: 1, unknown receiver:
 # 2, registry error: 3); collapsing to a single exit_code:1 setup-error
 # envelope lost that split. rejection_class restores it on the wire as a
@@ -807,7 +807,7 @@ class TestRejectionClass:
         Writes a syntactically-invalid registry.local.toml so
         _memo_resolver.read_registry_repos() raises RegistryReadError, which
         _classify_receiver_for_draft must translate into a
-        registry_error-tagged setup-error envelope (mirrors coordinator-claude's prior
+        registry_error-tagged setup-error envelope (mirrors DoE's prior
         exit-3 registry-error class).
         """
         claude_home = _make_claude_home(tmp_path)  # empty-but-present registry
@@ -847,15 +847,15 @@ class TestRejectionClass:
             tmp_path,
             receiver_repos={
                 "central": tmp_path / "central-repo",
-                "example_doctrine_repo": tmp_path / "coordinator-claude-repo",
+                "doe_claude": tmp_path / "doe-claude-repo",
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        # repos.example_doctrine_repo is registered, so the DR-071 doe-root ladder's
-        # registry rung resolves the coordinator-claude root — the manifest must live there,
+        # repos.doe_claude is registered, so the DR-071 doe-root ladder's
+        # registry rung resolves the DoE root — the manifest must live there,
         # and the pointer file goes on the durable settings-home rung.
-        doe_root = tmp_path / "coordinator-claude-repo"
+        doe_root = tmp_path / "doe-claude-repo"
         schemas_dir = doe_root / "coordinator" / "schemas"
         schemas_dir.mkdir(parents=True, exist_ok=True)
         machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
@@ -867,7 +867,7 @@ class TestRejectionClass:
             _json.dumps(
                 {
                     "identity": {
-                        "centralReceiverIds": ["central-em", "coordinator-claude-em"],
+                        "centralReceiverIds": ["central-em", "doe-claude-em"],
                         "repoAliases": [],
                     }
                 }

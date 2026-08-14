@@ -11,8 +11,8 @@ competitors[] array. Suppressed (design-as-offers decline-memory) when the PM ha
 declined within the last _COOLDOWN_DAYS days — an unconditional offer that
 resurfaces unchanged twice a week reads as a nag by week 3-4, not an offer.
 
-Port of: check-competitor-positioning-nudge.sh (coordinator-claude b5a4192c, 2026-07-20)
-Spec backlink: coordinator/docs/plans/2026-07-14-self-description-competitor-marking-deliverable.md
+Port of: check-competitor-positioning-nudge.sh (DoE b5a4192c, 2026-07-20)
+Spec backlink: coordinator/DoE-claude:pln-per-repo-competitor-peer-self--f0b04e
 
 Negative-spec (fidelity to the bash oracle — do NOT "fix" these mid-port):
     - A malformed self-description.yaml (unparseable YAML) is NOT caught — it
@@ -28,6 +28,11 @@ Negative-spec (fidelity to the bash oracle — do NOT "fix" these mid-port):
 """
 
 from __future__ import annotations
+
+# Generator-provenance declaration: _record_decline() writes only
+# state/strategic/.positioning-nudge-declined-at, a decline-memory marker
+# that is not tracked by git (untracked working state, never committed).
+GENERATES = []
 
 import os
 import sys

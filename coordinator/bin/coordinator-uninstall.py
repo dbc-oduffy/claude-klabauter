@@ -20,7 +20,7 @@ keeps working unchanged — the sh/python polyglot shebang below makes
 SAME file.
 
 Fail-loud-on-ambiguity doctrine (prior-art Compatible #6): this
-  orchestrator's aggregation instantiates coordinator-claude's
+  orchestrator's aggregation instantiates DoE-claude's
   coordinator/docs/wiki/implementation-standards-by-domain.md § Cross-cutting
   standards, "Detect-then-silently-pick is a footgun — refactor to
   detect-then-fail-loud on ambiguity" (coordinator/CLAUDE.md § Implementation
@@ -32,7 +32,7 @@ Fail-loud-on-ambiguity doctrine (prior-art Compatible #6): this
   install's out-of-repo surfaces un-reversed with no indication anything
   went wrong.
 
-Spec backlink: docs/plans/2026-07-08-coordinator-uninstall.md § C7
+Spec backlink: DoE-claude:pln-first-class-coordinator-uninst-15db2e § C7
 Surface source of truth: tasks/coordinator-uninstall/surface-map.md
 Leg source of truth: coordinator_core.install.uninstall_legs (claude-klabauter)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md

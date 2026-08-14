@@ -6,7 +6,7 @@ Purpose: the improvement queue has no owning closure op. 36 entries under
 ``state/improvement-queue/`` already carry a hand-stamped ``status: closed``
 (35 plain, one YAML-quoted) — evidence of a two-step discipline (stamp, then
 a SEPARATE ``git mv`` into ``archive/improvement-queue/YYYY-MM/``) that
-``backlog-prune-discipline.md`` (coordinator-claude wiki) names as an anti-pattern and
+``backlog-prune-discipline.md`` (DoE wiki) names as an anti-pattern and
 ``quick-wrap/SKILL.md`` § "2. Close the loose ends" calls out directly: "An
 entry marked closed but still sitting in `state/` is the failure mode this
 shape prevents." 24 of the 36 also carry no ``closed_by`` — the stamp step

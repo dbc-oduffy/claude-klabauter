@@ -12,7 +12,7 @@ stdout row install.md's Phase 7 status table reads — lives in
 coordinator_core.install.gen_settings_hooks; see that module's own docstring
 for the full design rationale and negative-spec.
 
-Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3
+Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3
 """
 
 from __future__ import annotations

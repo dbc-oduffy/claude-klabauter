@@ -3,7 +3,7 @@ Shared locator for sibling extensionless-Python CLIs in this directory
 (`coordinator-queue-append`, `coordinator-lesson-promote`, ...). Single
 source of truth for the PATH-probe + sibling-path fallback so the probe
 logic and its subprocess-cmd-list construction are not re-derived per
-caller (was triplicated pre-consolidation: coordinator-claude
+caller (was triplicated pre-consolidation: DoE
 docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md leaf
 already-python-cleanup).
 
@@ -59,8 +59,10 @@ def find_cli_cmd(caller_dir: str, cli_name: str) -> list[str] | None:
         if result.returncode == 0:
             return [candidate]
 
-    sibling = os.path.join(caller_dir, cli_name)
-    if os.path.exists(sibling):
+    for sibling_candidate in (cli_name, cli_name + ".py"):
+        sibling = os.path.join(caller_dir, sibling_candidate)
+        if not os.path.exists(sibling):
+            continue
         try:
             result = subprocess.run(  # popup-intentional-last-resort
                 [sys.executable, sibling, "--help"],

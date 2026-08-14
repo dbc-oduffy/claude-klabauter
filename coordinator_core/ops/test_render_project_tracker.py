@@ -1,13 +1,13 @@
 """coordinator_core.ops.test_render_project_tracker — golden-fixture parity
-tests for the naked-Python port of coordinator-claude's (now-retired) bash implementation.
+tests for the naked-Python port of DoE's (now-retired) bash implementation.
 
-Port of: render-project-tracker.sh (coordinator-claude 93887f6f, 2026-07-17).
+Port of: render-project-tracker.sh (DoE 93887f6f, 2026-07-17).
 
 Golden-fixture provenance (review-integrator note, F2 of the 2026-07-17
-BIG_PORT Wave B review, EM ruling): this test PREVIOUSLY ran the real coordinator-claude
+BIG_PORT Wave B review, EM ruling): this test PREVIOUSLY ran the real DoE
 bash oracle via subprocess and diffed its output byte-for-byte against the
 port. That bash oracle script was deleted as part of THIS SAME port (the
-Coordinator-claude trampoline was renamed off `.sh` to a polyglot Python entrypoint), so
+DoE trampoline was renamed off `.sh` to a polyglot Python entrypoint), so
 the live-subprocess oracle comparison can no longer function — byte parity
 against the retired bash implementation was verified at port-time, before
 the bash source was removed. This test now freezes the port's own output
@@ -32,7 +32,7 @@ replaces the deleted _load_yaml) and _RetiredFlowMapEncodingError, whose
 own dedicated test below is the one place the old encoding still appears
 on purpose, to prove it now fails loud instead of silently mis-parsing.
 
-Spec backlink: docs/plans/2026-07-08-project-tracker-render-from-queue.md
+Spec backlink: DoE-claude:pln-project-tracker-render-from-qu-41e413
 """
 
 from __future__ import annotations
@@ -905,10 +905,10 @@ def test_main_zero_section_render_over_previously_non_trivial_tracker_refuses(
 def test_main_zero_section_regression_over_non_matching_crp_names_offending_value(
     tmp_path, monkeypatch, capsys
 ):
-    """C1(2)/C1's coordinator-claude-shape case: a marker-bearing tracker that previously
+    """C1(2)/C1's DoE-shape case: a marker-bearing tracker that previously
     had content, plus a definition carrying a NON-MATCHING
-    coordinator_root_path (e.g. the coordinator-claude-side "coordinator_root_path:
-    coordinator-claude" shape), regresses to zero sections and refuses via
+    coordinator_root_path (e.g. the DoE-side "coordinator_root_path:
+    DoE-claude" shape), regresses to zero sections and refuses via
     EXIT_RENDER_REGRESSION — and the extended silent-drop warning names the
     offending (path, stored) pair, not just the scanned/matched counts."""
     monkeypatch.delenv(rpt._ALLOW_TRUNCATE_ENV, raising=False)
@@ -918,9 +918,9 @@ def test_main_zero_section_regression_over_non_matching_crp_names_offending_valu
     definition_path.write_text(
         textwrap.dedent("""\
             workstream_id: "wks-doe"
-            title: "coordinator-claude-shape workstream"
+            title: "DoE-shape workstream"
             created: "2026-08-01"
-            coordinator_root_path: "coordinator-claude"
+            coordinator_root_path: "DoE-claude"
         """),
         encoding="utf-8",
     )
@@ -944,7 +944,7 @@ def test_main_zero_section_regression_over_non_matching_crp_names_offending_valu
     captured = capsys.readouterr()
     assert "non-matching values:" in captured.err
     assert str(definition_path) in captured.err
-    assert "coordinator-claude" in captured.err
+    assert "DoE-claude" in captured.err
 
 
 def test_main_silent_success_over_non_matching_crp_still_warns_and_exits_zero(
@@ -961,9 +961,9 @@ def test_main_silent_success_over_non_matching_crp_still_warns_and_exits_zero(
     definition_path.write_text(
         textwrap.dedent("""\
             workstream_id: "wks-doe"
-            title: "coordinator-claude-shape workstream"
+            title: "DoE-shape workstream"
             created: "2026-08-01"
-            coordinator_root_path: "coordinator-claude"
+            coordinator_root_path: "DoE-claude"
         """),
         encoding="utf-8",
     )
@@ -977,7 +977,7 @@ def test_main_silent_success_over_non_matching_crp_still_warns_and_exits_zero(
     captured = capsys.readouterr()
     assert "non-matching values:" in captured.err
     assert str(definition_path) in captured.err
-    assert "coordinator-claude" in captured.err
+    assert "DoE-claude" in captured.err
 
 
 def test_format_non_matching_values_caps_at_five_with_rest_count():

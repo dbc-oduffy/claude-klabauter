@@ -89,6 +89,26 @@ class TestRunParseSweep:
         assert result.failures[0].path == "broken.py"
         assert result.failures[0].lineno == 1
 
+    def test_misplaced_future_import_fires(self, tmp_path):
+        """The defect `ast.parse` cannot see. A `from __future__` import
+        preceded by any other statement is valid to `ast.parse` and a hard
+        SyntaxError to `compile()` and to every real import -- so a sweep
+        built on `ast.parse` certifies an unimportable mirror as publishable.
+        Observed live on 2026-08-14: an annotation sweep put `GENERATES`/
+        `MUTATES` above the future import in 14 engine modules and took
+        `archive-stamp-cli` down in every consumer repo on the machine, while
+        parse-based checks reported the tree clean."""
+        (tmp_path / "broken.py").write_text(
+            '"""doc."""\n\nGENERATES = []\n\nfrom __future__ import annotations\n',
+            encoding="utf-8",
+        )
+
+        result = pct_engine.run_parse_sweep(tmp_path)
+        assert result.ok is False
+        assert len(result.failures) == 1
+        assert result.failures[0].path == "broken.py"
+        assert "__future__" in result.failures[0].message
+
     def test_catches_a_module_nothing_imports(self, tmp_path):
         """The exact case the OLD import-reachability gate missed: a module
         with a syntax error that no other file in the payload imports."""
@@ -146,13 +166,13 @@ class TestRunParseSweep:
         """§ BLOCKER-1: `coordinator/bin/` ships extensionless Python CLIs
         deliberately (the publish surface admits them via `surface.
         sniff_shebang`) -- this is the exact fixture from the finding
-        (`coordinator/bin/cross-repo-memo` containing a hyphenated,
+        (`coordinator/bin/cross-repo-memo.py` containing a hyphenated,
         scrub-broken identifier). Against the OLD `rglob("*.py")` admission
         this reported `ok=True, scanned=0` -- the fixture must fail loudly
         instead."""
         bin_dir = tmp_path / "coordinator" / "bin"
         bin_dir.mkdir(parents=True)
-        (bin_dir / "cross-repo-memo").write_text(
+        (bin_dir / "cross-repo-memo.py").write_text(
             "#!/usr/bin/env python3\nclaude-klabauter = 1\n", encoding="utf-8"
         )
         (bin_dir / "ok.py").write_text("x = 1\n", encoding="utf-8")
@@ -160,7 +180,7 @@ class TestRunParseSweep:
         result = pct_engine.run_parse_sweep(tmp_path)
         assert result.scanned == 2
         assert result.ok is False
-        assert {f.path for f in result.failures} == {"coordinator/bin/cross-repo-memo"}
+        assert {f.path for f in result.failures} == {"coordinator/bin/cross-repo-memo.py"}
 
     def test_extensionless_file_without_a_python_shebang_is_not_scanned(self, tmp_path):
         """A non-Python extensionless file (e.g. a bash script) must not be
@@ -447,36 +467,36 @@ class TestEntrypointGateDataLists:
         without this test being edited in the same review."""
         assert pct_engine._USAGE_NONZERO_ENTRYPOINTS == frozenset(
             {
-                "coordinator/bin/backlog-grind-assemble",
-                "coordinator/bin/consolidate-assemble",
-                "coordinator/bin/coordinator-fold-execution-record",
-                "coordinator/bin/coordinator-safe-name",
-                "coordinator/bin/handoff-carry-gate",
-                "coordinator/bin/learn-lessons-reconcile-candidates",
-                "coordinator/bin/merge-assemble",
-                "coordinator/bin/review-assemble",
-                "coordinator/bin/review-exec-auth-stamp",
-                "coordinator/bin/roadmap-number-stubs",
-                "coordinator/bin/schema-drift-gate",
-                "coordinator/bin/sizing-assemble",
-                "coordinator/bin/staff-session-assemble",
-                "coordinator/bin/workstream-complete-assemble",
+                "coordinator/bin/backlog-grind-assemble.py",
+                "coordinator/bin/consolidate-assemble.py",
+                "coordinator/bin/coordinator-fold-execution-record.py",
+                "coordinator/bin/coordinator-safe-name.py",
+                "coordinator/bin/handoff-carry-gate.py",
+                "coordinator/bin/learn-lessons-reconcile-candidates.py",
+                "coordinator/bin/merge-assemble.py",
+                "coordinator/bin/review-assemble.py",
+                "coordinator/bin/review-exec-auth-stamp.py",
+                "coordinator/bin/roadmap-number-stubs.py",
+                "coordinator/bin/schema-drift-gate.py",
+                "coordinator/bin/sizing-assemble.py",
+                "coordinator/bin/staff-session-assemble.py",
+                "coordinator/bin/workstream-complete-assemble.py",
                 # C6 sweep, 2026-08-10 — observed starting then rejecting
                 # --help in their own parsers.
-                "coordinator/bin/coordinator-safe-commit",
-                "coordinator/bin/handoff-gate-aging",
-                "coordinator/bin/pickup-assemble",
+                "coordinator/bin/coordinator-safe-commit.py",
+                "coordinator/bin/handoff-gate-aging.py",
+                "coordinator/bin/pickup-assemble.py",
                 "coordinator/bin/scoped-git-commit",
-                "coordinator/scripts/first-run",
-                "coordinator/scripts/normalize-env",
+                "coordinator/scripts/first-run.py",
+                "coordinator/scripts/normalize-env.py",
                 # klabauter-mirror gate closure, 2026-08-10 (11/12 -> 12/12):
                 # unmasked once the entrypoint gate's synthetic manifest
                 # fixture made its "snippets" data dir resolvable.
-                "coordinator/bin/snippet-registry",
+                "coordinator/bin/snippet-registry.py",
                 # klabauter-mirror gate closure, 2026-08-10 (12/12 -> next):
                 # own-parser usage rejection, no plugin-root dependency at
                 # all -- see `_USAGE_NONZERO_ENTRYPOINTS`'s own comment.
-                "coordinator/bin/orient-assemble",
+                "coordinator/bin/orient-assemble.py",
             }
         )
 
@@ -489,15 +509,15 @@ class TestEntrypointGateDataLists:
         # cause. Keeping the two groups distinct here means a later reader can
         # tell which entries carry an external source and which carry a
         # measurement, without reading the constant's comment.
-        # detect-initiative-candidates was here and was REMOVED by the C6
+        # detect-initiative-candidates.py was here and was REMOVED by the C6
         # sweep (2026-08-10) after it started clean -- the self-draining rule
-        # firing, not a regression. coordinator-lesson-promote was ALSO here
+        # firing, not a regression. coordinator-lesson-promote.py was ALSO here
         # and was REMOVED by the klabauter-mirror gate closure (2026-08-10)
         # for the same reason: the entrypoint gate's synthetic manifest
         # fixture made the native seam resolvable, it started clean, and the
         # self-draining rule demanded its removal. Two sourced entries remain.
         sourced_f3 = {
-            "coordinator/bin/claude-doe",
+            "coordinator/bin/claude-doe.py",
             "coordinator/bin/machine-local",
         }
         measured_2026_08_10 = {

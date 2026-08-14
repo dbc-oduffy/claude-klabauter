@@ -16,8 +16,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Usage:
@@ -51,10 +51,10 @@ from coordinator_data_root import data_root  # noqa: E402
 def _default_template_dir() -> str:
     """Mirror the bash oracle's `${_script_dir}/../templates/bin` default.
 
-    Resolved via `coordinator_data_root.data_root()`'s co-located/coordinator-claude-resident
+    Resolved via `coordinator_data_root.data_root()`'s co-located/DoE-resident
     two-rung chain, not a bare `__file__`-relative walk: the 2026-07-22
     executable-surface migration moved this trampoline into claude-klabauter
-    while `templates/` stayed in coordinator-claude (DR-047 contract/engine split), so
+    while `templates/` stayed in DoE-claude (DR-047 contract/engine split), so
     a `${script_dir}/../templates` walk no longer lands anywhere.
     """
     return os.path.join(str(data_root("templates")), "bin")

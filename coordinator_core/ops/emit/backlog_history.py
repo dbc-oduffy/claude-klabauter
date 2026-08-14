@@ -5,7 +5,7 @@ Purpose: aggregate latest-per-(repo,date) across all per-machine backlog-snapsho
 shards (written by recorder.py) into the snake_case ``backlog_history`` envelope block
 that cockpit consumes.
 
-Block shape (snake_case — coordinator-claude+PM convention call + the Director of Engineering review; contract v2.7.0 landed
+Block shape (snake_case — DoE+PM convention call + the Director of Engineering review; contract v2.7.0 landed
 the block as ``backlog_history``; cross-repo memo 2026-07-06-backlog-history-landed-v270-claude-klabauter.md):
     {
         "generated_at": "<ISO datetime>",    # null in D9 default
@@ -213,7 +213,7 @@ def collect(ctx: EmitContext) -> dict:
     Returns:
         A dict with snake_case keys ``generated_at`` (str|None), ``series`` (list),
         ``provenance`` (dict, non-null). Block key and timestamp key are snake_case per
-        contract v2.7.0 (coordinator-claude+PM convention call + the Director of Engineering review; 2026-07-06 cross-repo memo).
+        contract v2.7.0 (DoE+PM convention call + the Director of Engineering review; 2026-07-06 cross-repo memo).
     """
     # Block-level provenance — populated regardless of D9 state (provenance_fk NOT NULL, D6).
     provenance = ctx.provenance(

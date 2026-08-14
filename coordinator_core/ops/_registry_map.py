@@ -69,6 +69,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.subagent_zero_tool_use_resolve":   "coordinator_core.hooks",
     "hooks.subagent_arrival_check":           "coordinator_core.hooks",
     "hooks.subagent_fabrication_check":       "coordinator_core.hooks",
+    "hooks.receiver_state_sensor":            "coordinator_core.hooks",
     "backlog.record":                         "coordinator_core.ops.emit.recorder",
     "emit.cadence":                           "coordinator_core.ops.emit_cadence",
     "goal.append":                            "coordinator_core.ops.goal_append",

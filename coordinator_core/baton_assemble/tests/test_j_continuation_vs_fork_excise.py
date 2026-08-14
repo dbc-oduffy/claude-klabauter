@@ -21,10 +21,18 @@ Spec backlink: coordinator_core/baton_assemble/__init__.py `brief()` and
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import coordinator_core.baton_assemble as ba
-from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _write_artifact
+from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
+from coordinator_core.session import claims as session_claims
+from coordinator_core.test_baton_assemble import (
+    _FAKE_OPERATOR_CONFIG,
+    _init_repo,
+    _write_artifact,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -186,3 +194,177 @@ class TestExciseIsAdditiveOnly:
         d1 = next(d for d in decision["directives"] if d["id"] == "d1")
         assert any(a.startswith("--predecessor=") for a in d1["args"]), d1["args"]
         assert not any(a.startswith("--predecessor-id=") for a in d1["args"]), d1["args"]
+
+
+class TestExciseReachesTheDivergenceCheck:
+    """docs/plans/2026-08-14-excise-cut-reaches-the-divergence-check.md C2:
+    promoted from `repro_claim_a.py`. Before this fix, `excise`'s null-out
+    of `lineage["predecessor"]`/`["predecessor_id"]` happened strictly AFTER
+    `resolve_lineage` returned -- but `resolve_lineage` reaches
+    `resolve_deliverable_and_initiative`, which raises
+    `DivergentDeliverableIdError` on divergent claimed-plan/predecessor
+    rungs BEFORE `brief` ever gets to null anything out. Supplying `excise`
+    changed nothing; the corridor was walled."""
+
+    @staticmethod
+    def _seed_divergent_rungs(tmp_path: Path, session_id: str) -> tuple[str, Path]:
+        """A claimed plan naming one `deliverable_id` and an OPERATOR-NAMED
+        predecessor handoff naming a different one -- divergent by
+        construction, same fixture shape `repro_claim_a.py` used."""
+        _init_repo(tmp_path)
+        plan_slug = "2026-08-14-excise-divergence-alpha"
+        _write_artifact(
+            tmp_path / "docs" / "plans" / f"{plan_slug}.md",
+            ["deliverable_id: dlv-alpha-aaa111"],
+        )
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-14-predecessor-beta.md",
+            ["deliverable_id: dlv-beta-bbb222", "initiative: init-beta"],
+        )
+        session_claims.claim_plan(plan_slug, cwd=str(tmp_path))
+        return session_id, predecessor
+
+    def test_ac1_excise_rescues_a_divergent_rung_handoff(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-excise-rescue")
+        _, predecessor = self._seed_divergent_rungs(tmp_path, "sid-excise-rescue")
+
+        decision = ba.brief(
+            "handoff",
+            str(predecessor),
+            decisions=_excise_decisions("operator: two legitimate deliverables, excising"),
+            repo_root=tmp_path,
+        ).decision_object
+
+        assert decision["artifact"]["lineage"]["deliverable_id"] == "dlv-beta-bbb222"
+
+    def test_ac2_divergence_still_fatal_without_excise(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-excise-still-fatal")
+        _, predecessor = self._seed_divergent_rungs(tmp_path, "sid-excise-still-fatal")
+
+        with pytest.raises(DivergentDeliverableIdError):
+            ba.brief("handoff", str(predecessor), repo_root=tmp_path)
+
+    def test_ac4_surviving_id_is_the_operator_named_rung_and_note_carried(
+        self, tmp_path, monkeypatch
+    ):
+        """The operator supplied `artifact_path` (the predecessor) explicitly
+        -- per the plan's rule, an explicit `artifact_path` means the
+        OPERATOR named the predecessor, so excise cuts the auto-discovered
+        `_plan_file` rung and keeps `_predecessor_file`'s carry."""
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-excise-note")
+        _, predecessor = self._seed_divergent_rungs(tmp_path, "sid-excise-note")
+        note = "operator: two legitimate deliverables, excising the claimed-plan rung"
+
+        decision = ba.brief(
+            "handoff",
+            str(predecessor),
+            decisions=_excise_decisions(note),
+            repo_root=tmp_path,
+        ).decision_object
+        lineage = decision["artifact"]["lineage"]
+
+        assert lineage["deliverable_id"] == "dlv-beta-bbb222"
+        assert lineage["standalone_no_predecessor_reason"] == note
+
+    def test_predecessor_file_arm_self_resolved_from_ledger_is_cut(self, tmp_path, monkeypatch):
+        """Review: coordinatorcode-reviewer-25d61c87 Finding 2. The OTHER
+        arm of the rung rule: `artifact_path` empty, predecessor self-
+        resolved from the durable claim ledger via
+        `_resolve_held_handoff_for_session`. Per the plan's rule, an empty
+        `artifact_path` means the predecessor is auto-discovered, so excise
+        must cut `_predecessor_file` and keep the operator-named claimed
+        plan's `_plan_file` rung. `_excise_rung` is computed BEFORE the
+        self-resolution block reassigns `artifact_path`, so this test
+        confirms empirically (not by manual trace) that ordering holds --
+        the plan calls this predicate the only real judgment here."""
+        _init_repo(tmp_path)
+        session_id = "sid-excise-predecessor-arm"
+        plan_slug = "2026-08-14-excise-divergence-predecessor-arm"
+        _write_artifact(
+            tmp_path / "docs" / "plans" / f"{plan_slug}.md",
+            ["deliverable_id: dlv-plan-arm-ccc333", "initiative: init-plan-arm"],
+        )
+        held_predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-14-held-predecessor.md",
+            ["deliverable_id: dlv-predecessor-arm-ddd444", "initiative: init-predecessor-arm"],
+        )
+        self._seed_handoff_claim(tmp_path, session_id, held_predecessor.name)
+        monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+        session_claims.claim_plan(plan_slug, cwd=str(tmp_path))
+
+        decision = ba.brief(
+            "handoff",
+            "",
+            decisions=_excise_decisions("operator: cutting the self-resolved predecessor arm"),
+            repo_root=tmp_path,
+        ).decision_object
+        lineage = decision["artifact"]["lineage"]
+
+        # `_predecessor_file` was cut -- the claimed-plan rung survives,
+        # carrying its own deliverable_id/initiative.
+        assert lineage["deliverable_id"] == "dlv-plan-arm-ccc333"
+        assert lineage["initiative"] == "init-plan-arm"
+        assert lineage["predecessor"] is None
+        assert lineage["predecessor_id"] is None
+
+    def _seed_handoff_claim(self, repo_root, session_id, basename, claimed_at=None, stage=None):
+        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir.mkdir(parents=True, exist_ok=True)
+        (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
+        if claimed_at is not None:
+            (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
+        if stage is not None:
+            (claims_dir / "stage").write_text(stage, encoding="utf-8")
+
+
+class TestExciseInertWhenRungsAgree:
+    """Review: coordinatorcode-reviewer-25d61c87 Finding 1 (P2). When the
+    claimed-plan and predecessor rungs AGREE on `deliverable_id`, there is
+    nothing for excise to rescue -- `resolve_lineage` would not have raised
+    `DivergentDeliverableIdError` even without excise. Before the fix,
+    `_excise_rung` was computed purely from `_excise_predecessor and kind ==
+    "handoff"`, with no divergence check, so excise still nulled a rung and
+    silently swapped which artifact `initiative` resolved from (it is
+    resolved independently of `deliverable_id`, plan-file first). The
+    predecessor-edge null-out (`lineage["predecessor"]`/`["predecessor_id"]`)
+    is a separate, pre-existing effect and must still fire regardless."""
+
+    def test_initiative_source_unswapped_when_deliverable_ids_agree(self, tmp_path, monkeypatch):
+        _init_repo(tmp_path)
+        session_id = "sid-excise-rungs-agree"
+        plan_slug = "2026-08-14-excise-rungs-agree-plan"
+        _write_artifact(
+            tmp_path / "docs" / "plans" / f"{plan_slug}.md",
+            ["deliverable_id: dlv-shared-eee555", "initiative: init-from-plan"],
+        )
+        predecessor = _write_artifact(
+            tmp_path / "state" / "handoffs" / "2026-08-14-predecessor-agree.md",
+            ["deliverable_id: dlv-shared-eee555", "initiative: init-from-predecessor"],
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+        session_claims.claim_plan(plan_slug, cwd=str(tmp_path))
+
+        decision = ba.brief(
+            "handoff",
+            str(predecessor),
+            decisions=_excise_decisions("operator: excise supplied, but rungs agree"),
+            repo_root=tmp_path,
+        ).decision_object
+        lineage = decision["artifact"]["lineage"]
+
+        # `deliverable_id` is unaffected either way (same on both rungs) --
+        # the load-bearing assertion is `initiative`: with the rungs-agree
+        # guard, `_plan_file` is NOT cut, so the cascade's plan-first
+        # fallback still resolves `initiative` from the claimed plan, not
+        # the predecessor.
+        assert lineage["deliverable_id"] == "dlv-shared-eee555"
+        assert lineage["initiative"] == "init-from-plan", (
+            "excise must not swap the initiative-attribution source when "
+            "the rungs agree on deliverable_id -- got "
+            f"{lineage['initiative']!r}"
+        )
+        # The predecessor edge itself is still nulled -- that effect is
+        # unconditional on `excise` being supplied, separate from the
+        # cascade-input rung cut this guard makes conditional.
+        assert lineage["predecessor"] is None
+        assert lineage["predecessor_id"] is None

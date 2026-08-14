@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """test_coordinator_tasks_mirror.py — self-contained test suite for coordinator-tasks-mirror.py.
 
 Exercises the module's write/update
@@ -8,7 +7,7 @@ the CLI's usage/error paths via subprocess for the argument-parsing surface.
 
 Contract under test:
     CLI: coordinator/bin/coordinator-tasks-mirror.py
-    Spec backlink: docs/plans/2026-07-06-ceremony-as-pipeline-2-doe-land-d-slice.md § C1.2
+    Spec backlink: DoE-claude:pln-ceremony-as-pipeline-2-land-th-aa5ace § C1.2
 
 Run with: python3 -m pytest coordinator/bin/test_coordinator_tasks_mirror.py
 

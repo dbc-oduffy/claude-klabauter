@@ -4,7 +4,7 @@ meta_repo_identity.py — canonical boolean primitive: is a git root the coordin
 Purpose: single definition of "is the current (or given) git repository the
 coordinator meta-repo (~/.claude / CLAUDE_HOME)?"
 
-Port of: coordinator-is-meta-repo.sh (coordinator-claude 6fb5fb37, 2026-07-22).
+Port of: coordinator-is-meta-repo.sh (DoE 6fb5fb37, 2026-07-22).
 
 Design (mirrors the shell original):
   - CLAUDE_HOME-aware: resolves the meta-repo root via the same env-var

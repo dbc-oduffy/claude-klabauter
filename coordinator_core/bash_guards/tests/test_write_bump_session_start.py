@@ -1,7 +1,7 @@
 """Tests for coordinator_core.bash_guards._write_bump_session_start -- the
 write-confinement speed bump's SessionStart anchor record.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md, chunk C0.
+Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567, chunk C0.
 Extended by: docs/plans/2026-08-03-write-bump-anchor-outside-the-guarded-repo.md, chunk C1
     (the settings-home anchor hub, its env-injection contract, and its session-end cleanup).
 Covers: record creation on SessionStart, read-back after a `cd`-equivalent (resolving

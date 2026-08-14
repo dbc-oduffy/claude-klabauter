@@ -24,11 +24,11 @@ loose (a bounded bullet-shaped line) — the writer's own negative-spec (no
 counts) is what these sections must honour, not a machine-checkable regex on
 the section's prose content.
 
-Port of: verify-orientation-cache-sync.sh (coordinator-claude b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Port of: verify-orientation-cache-sync.sh (DoE b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
                docs/plans/2026-05-18-orientation-cache-authoring-discipline.md
 
-Division of labor with the coordinator-claude trampoline (template-variant #1, direct
+Division of labor with the DoE trampoline (template-variant #1, direct
 import — see docs/wiki/DOE-PORT template): the trampoline resolves
 REPO_ROOT / STATE_ROOT / CACHE_FILE (a 5-rule resolver,
 `coordinator-state-root.py`, deliberately NOT re-derived here — reused via
@@ -388,7 +388,7 @@ def _check_uproject_guard(
             violations.append(
                 "detector-output missing: *.uproject present in repo "
                 f"({uproject_path}) but ## Trust caveats section absent — "
-                "regenerate via bin/regenerate-orientation-cache"
+                "regenerate via bin/regenerate-orientation-cache.py"
             )
         elif "Unreal Engine project detected" not in tc_first:
             violations.append(
@@ -437,7 +437,7 @@ def verify(cache_path: str, repo_root: str) -> Tuple[List[str], int]:
 def main(argv: List[str]) -> int:
     """CLI entry: ``verify_orientation_cache_sync.py <cache_file> <repo_root>``.
 
-    Assumes the caller (the coordinator-claude trampoline) has already confirmed
+    Assumes the caller (the DoE trampoline) has already confirmed
     ``cache_file`` exists and resolved ``repo_root`` — see module docstring's
     division-of-labor note.
     """

@@ -2,7 +2,7 @@
 coordinator_core.tests.test_git_scope — regression suite for the foreign-repo
 git probing seam.
 
-Incident of record (2026-08-03, reported by coordinator-claude-em): a cross-repo premise
+Incident of record (2026-08-03, reported by doe-claude-em): a cross-repo premise
 check reported two shas with the identical "NOT in their clone" sentence. One was
 genuinely dangling; the other resolved cleanly on their branch and on origin. Two
 mechanical causes, both pinned here:

@@ -6,7 +6,7 @@ meta-repo-quirk faithful-repro case (T7, this port's own coverage — the bash
 oracle's behavior here was never independently unit-tested in bash, only
 exercised implicitly).
 
-Port of: generate-exec-summary.test.sh (coordinator-claude a2fe06f8, 2026-07-22)
+Port of: generate-exec-summary.test.sh (DoE a2fe06f8, 2026-07-22)
 """
 
 from __future__ import annotations

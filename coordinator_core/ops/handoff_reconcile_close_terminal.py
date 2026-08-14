@@ -34,7 +34,7 @@ harder to reach for than the audit-authoring step already is.
 Composition (pure reuse of tested single-verb internals — same pattern as
 `handoff_ship_archive.py`'s ship+archive composite):
   0. `handoff_children._handoff_has_live_children` (2026-08-10 fix, cross-
-     repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-
+     repo/inbox/2026-08-10-doe-claude-em-reconcile-close-terminal-and-scrub-
      key.md § 2) — the SAME live-lineage-edge guard step 2's chain-mode call
      runs internally, reused here BEFORE step 1 so a live successor edge
      refuses the call outright instead of letting step 1 stamp closed_reason:
@@ -88,7 +88,7 @@ handoff.ship_and_archive's own precedent.
 
 Spec backlink: cross-repo/inbox/2026-08-04-example-market-data-repo-em-baton-
 terminal-state-not-cleared-programmatically.md, defect 1, item 2. Also
-cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-
+cross-repo/inbox/2026-08-10-doe-claude-em-reconcile-close-terminal-and-
 scrub-key.md § 1-2 (pickup_ready + live-lineage-edge fixes).
 
 Negative-spec:
@@ -333,7 +333,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     rel_id = _wire_rel_id(contained_live, worktree)
 
     # --- Step 0: live-lineage-edge guard (defect 2, cross-repo/inbox/2026-
-    # 08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-key.md § 2) ---
+    # 08-10-doe-claude-em-reconcile-close-terminal-and-scrub-key.md § 2) ---
     # The handoff schema's own closed_reason description is explicit:
     # "displaced = replaced with NO lineage edge (with an edge it's
     # continued, not closed)". This op's `reason` param defaults callers
@@ -450,7 +450,32 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     already_closed = not bool(close_res.get("applied"))
 
     # --- Step 2: archive (chain mode; re-verifies terminality; git-mv + commit) ---
-    archive_params = {"handoff_path": rel_id, "mode": "chain"}
+    #
+    # restage_src=close_res["applied"]: step 1's `_close` wrote
+    # deployment_state:closed + closed_reason + pickup_ready:false to disk
+    # and left them UNCOMMITTED ONLY when it actually applied a write this
+    # call (`applied` True) — this op is the composing caller that authored
+    # that drift, and ONLY in that case. When `already_closed` is True,
+    # `_close` was an idempotent no-op: this call authored no drift, and
+    # whatever is dirty at src is not this call's to sweep — restaging then
+    # would bypass the disk/HEAD drift guard for content a concurrent
+    # session (or an unrelated later write) may own, exactly the failure
+    # mode the guard exists to prevent (review: coordinatorcode-reviewer-
+    # 2d69ff87.md P1). chain mode's own terminal-state precondition reads
+    # fresh on-disk content, but `archive_and_commit`'s plain move re-keys
+    # src's HEAD blob, so the disk/HEAD drift guard (commit 4541069c3)
+    # refuses the move outright and a freshly-authored close is stranded in
+    # state/handoffs/ without the opt-in. Restaging is the sanctioned route
+    # for op-authored pre-move content (Move.restage_src, and
+    # handoff_ship_archive's identical `_ship` + archive composition), and it
+    # is what makes the archival commit carry the terminal state this call
+    # just verified rather than the pre-close blob — but only when this call
+    # is the one that wrote it.
+    archive_params = {
+        "handoff_path": rel_id,
+        "mode": "chain",
+        "restage_src": bool(close_res.get("applied")),
+    }
     if exclude:
         archive_params["exclude"] = exclude
     archive_res = await _archive_transition_handler(archive_params, repo_root)
@@ -476,7 +501,19 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"({retain_reason or 'live-children guard'})"
         )
     else:
-        message = f"closed {rel_id} (reason: {reason}); archival did not move the file"
+        # Carry the mover's own refusal text rather than restating the symptom.
+        # archive_transition surfaces it on failed[]/warnings[]; dropping it here
+        # is what made a drift-guard refusal read as an unexplained no-op.
+        archive_failed = archive_res.get("failed") or []
+        archive_reason = (
+            archive_failed[0].get("reason")
+            if archive_failed and isinstance(archive_failed[0], dict)
+            else None
+        )
+        if archive_reason:
+            message = f"closed {rel_id} (reason: {reason}); not archived: {archive_reason}"
+        else:
+            message = f"closed {rel_id} (reason: {reason}); archival did not move the file"
 
     return {
         "exit_code": 0,

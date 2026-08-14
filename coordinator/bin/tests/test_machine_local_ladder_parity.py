@@ -45,20 +45,20 @@ for _p in (str(_BIN_DIR / "lib"),):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# `claude-machine-local.{sh,ps1}` are coordinator-claude-owned templates
-# (coordinator-claude/coordinator/templates/bin/) -- they are NOT vendored into
+# `claude-machine-local.{sh,ps1}` are DoE-owned templates
+# (DoE-claude/coordinator/templates/bin/) -- they are NOT vendored into
 # claude-klabauter's own tree (same D5-shaped split as canonical-structure.yaml; see
 # coordinator_core/install/scaffold_structure.py module docstring). A prior
 # `Path(__file__).../ "templates" / "bin"` resolution here assumed a
 # monorepo layout that never held on this checkout -- resolve via
 # `coordinator_registry.doe_root()`, the same sibling-repo resolution ladder
 # `test_agent_helper_shim_doe_corpus_coverage.py` uses, and skip (not fail)
-# when the coordinator-claude checkout is unresolvable on this machine/persona.
+# when the DoE-claude checkout is unresolvable on this machine/persona.
 try:
     import coordinator_registry  # noqa: E402
 except Exception as _coordinator_registry_import_exc:  # noqa: E402
     pytest.skip(
-        "coordinator_registry unimportable (coordinator-claude root unresolvable at "
+        "coordinator_registry unimportable (DoE-claude root unresolvable at "
         f"import time): {_coordinator_registry_import_exc}",
         allow_module_level=True,
     )
@@ -68,10 +68,10 @@ def _resolve_doe_templates_bin_dir() -> Path:
     try:
         root = coordinator_registry.doe_root()
     except Exception as exc:  # coordinator_registry._DoeUnresolvable, etc.
-        pytest.skip(f"coordinator-claude root unresolvable via coordinator_registry.doe_root(): {exc}")
+        pytest.skip(f"DoE-claude root unresolvable via coordinator_registry.doe_root(): {exc}")
     p = Path(root) / "coordinator" / "templates" / "bin"
     if not p.is_dir():
-        pytest.skip(f"resolved coordinator-claude root has no coordinator/templates/bin/ at {p}; skipping ladder-parity check")
+        pytest.skip(f"resolved DoE root has no coordinator/templates/bin/ at {p}; skipping ladder-parity check")
     return p
 
 

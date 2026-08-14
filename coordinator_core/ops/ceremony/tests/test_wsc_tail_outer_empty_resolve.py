@@ -165,6 +165,9 @@ def test_outer_empty_clean_resolve_stays_exit_0(outer_empty_repo):
 
     stamp_result = result["tail_results"]["consumed_handoff_stamp"]
     assert not any("outer-empty-degraded" in e for e in stamp_result["failed"]), stamp_result
+    assert "consumed_handoff_stamp:no-consumed-handoff-resolved" in stamp_result["skipped"], (
+        stamp_result
+    )
 
     diagnostics = result["diagnostics"]
     assert any(

@@ -29,9 +29,9 @@ pointing at its own .ps1 set.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Usage: verify-ps51-clean.py <path-or-dir> [<path-or-dir> ...]
 #   Each arg is a .ps1 file OR a directory (recurse for *.ps1, excluding

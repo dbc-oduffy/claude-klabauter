@@ -30,7 +30,7 @@ Six areas under test, mirroring apply_base's own structure:
       (no real git process — the pickup-side `test_pickup_assemble_scoped_
       commit.py` already covers the real-git integration path).
 
-Spec backlink: coordinator-claude docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C2
+Spec backlink: DoE-claude DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C2
 """
 from __future__ import annotations
 

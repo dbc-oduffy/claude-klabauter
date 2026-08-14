@@ -24,7 +24,7 @@ composing fresh. This module reuses exactly one shared primitive,
 ``workflow_scaffold._js_string_literal`` (the JS-escaping helper), and
 composes everything else itself. Neither ``_compose_script`` nor
 ``_normalize_phases`` is edited — both back ``workflow.scaffold``, a
-registered op with its own round-trip test and coordinator-claude veneer.
+registered op with its own round-trip test and DoE veneer.
 
 ``_normalize_phases`` is not called here at all: on an empty/omitted
 ``phases`` list it silently substitutes a single default ``{"title": "Run",
@@ -116,10 +116,24 @@ safe to emit unconditionally.
 ## Permission-mode (contract confirmation, 2026-08-13)
 
 No ``mode:``/permission-mode key is ever placed on an emitted ``agent()``
-call — coordinator-claude's live-tool capture found no permission-mode carrier on the
+call — DoE's live-tool capture found no permission-mode carrier on the
 ``Workflow`` agent-call path at all (options: ``label``, ``phase``,
 ``schema``, ``model``, ``effort``, ``isolation``, ``agentType``, nothing
 else). This module has no code path that emits one.
+
+## Vehicle: EM-dispatched Agent, not a fired-and-forgotten Workflow (live upstream defect)
+
+DoE-claude's ``skills/execute-plan/SKILL.md`` § Vehicle default QUALIFIES
+states that a Workflow ``agent()`` spawn is not an ``Agent`` tool call, so
+injected ``contract_blocks`` never arrive on that path, and that 33 of 34
+coordinator-typed agents carry a ``contract_blocks`` row — so a plan wave of
+coordinator-typed agents belongs on the ``Agent`` path today, not fired
+unattended as a Workflow script. Verified OPEN at DoE-claude HEAD
+(2026-08-14). Until that seam closes, the script this module emits is a
+durable machine-derived wave-map artifact an EM dispatches FROM via
+``Agent``, one phase at a time — not a script to run unattended. A future
+reader whose check shows the seam closed should DELETE this note rather than
+cement it, per the same qualifier in the upstream doctrine text.
 
 Negative-spec:
   - Does NOT derive waves, pathspecs, or the terminal test scope — those are
@@ -138,14 +152,33 @@ from typing import Optional
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec, terminal_test_scope
-from coordinator_core.ops.dispatch_emit.spine_read import read_spine
-from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
+from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
+from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, _normalize_path, build_waves
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
+from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
 
 _MODEL_OPT = "model: 'sonnet'"
 _EXECUTOR_AGENT_TYPE = "coordinator:executor"
+_ENRICHER_AGENT_TYPE = "coordinator:enricher"
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 _TEST_AGENT_TYPE = "coordinator:test-runner"
+
+
+class MixedAgentTypeRowError(ValueError):
+    """Raised when one row's declared ``writes`` span both an immutable
+    body path (``docs/plans/*.md`` or ``docs/problems/*.md``) and an
+    ordinary code/doc path (Defect A).
+
+    Neither ``coordinator:executor`` nor ``coordinator:enricher`` can satisfy
+    both halves of a mixed row: ``write_guards.block_subagent_plan_body_write``
+    hard-denies ``coordinator:executor`` writing a plan body or a ratified
+    problem-set, and routing the whole row to ``coordinator:enricher`` would
+    silently ask an enricher to edit ordinary code it has no charter for.
+    This module's posture is fail-loud refusal over a fabricated dispatch
+    (see ``NoWavesError`` and ``pathspec.NoWritesDeclaredError``) — a mixed
+    row means the spine itself needs splitting into an immutable-body chunk
+    and a code chunk, not a guess here.
+    """
 
 
 class NoWavesError(ValueError):
@@ -167,6 +200,58 @@ def _dedupe_preserve_order(paths: list[str]) -> list[str]:
             seen.add(path)
             ordered.append(path)
     return ordered
+
+
+def _is_immutable_body_path(path: str) -> bool:
+    """True if ``path`` names a ``docs/plans/*.md`` or ``docs/problems/*.md``
+    immutable body file — the exact denial surface of
+    ``write_guards.block_subagent_plan_body_write``'s ``_PLAN_BODY_RE``.
+
+    Imports and matches that guard's own regex directly rather than
+    re-deriving the two prefixes here: the guard is the authority on what
+    it denies, and a local re-derivation would silently drift the next time
+    that surface widens (as it already has once, 2026-07-24, to add
+    ``docs/problems/**``). Matched against the normalized POSIX form
+    (``wave_map._normalize_path``) so case and ``./``/``..`` variance in a
+    declared path can't dodge the check — the same normalization
+    ``_writes_overlap`` already trusts for write-set collision.
+    """
+    normalized = _normalize_path(path)
+    return bool(_PLAN_BODY_RE.search(str(normalized)))
+
+
+def _row_agent_type(row: WaveRow) -> str:
+    """Derive a wave row's ``agentType`` from its declared write targets.
+
+    A row writing ANY ``docs/plans/*.md`` or ``docs/problems/*.md`` path
+    routes to ``coordinator:enricher`` — ``coordinator:executor`` is
+    hard-denied from editing either surface by
+    ``write_guards.block_subagent_plan_body_write`` (Defect A, widened
+    2026-07-24 to also cover ``docs/problems/**``). Every other row stays
+    ``coordinator:executor``. A row whose writes span both kinds raises
+    ``MixedAgentTypeRowError`` — see its docstring.
+
+    ``UNDECLARED`` writes derive to ``coordinator:executor``: an UNDECLARED
+    row is refused downstream by ``pathspec.commit_pathspec`` (raising
+    ``NoWritesDeclaredError``) before this module ever composes a call for
+    it, so no dispatch is ever emitted with this fallback live — the choice
+    only has to be a safe placeholder, not a real routing decision.
+    """
+    if row.writes is UNDECLARED:
+        return _EXECUTOR_AGENT_TYPE
+
+    immutable_body = any(_is_immutable_body_path(p) for p in row.writes)
+    other = any(not _is_immutable_body_path(p) for p in row.writes)
+
+    if immutable_body and other:
+        raise MixedAgentTypeRowError(
+            f"row {row.id!r} declares writes spanning both an immutable "
+            "docs/plans/*.md or docs/problems/*.md body and an ordinary "
+            "path — split the row instead of guessing an agentType"
+        )
+    if immutable_body:
+        return _ENRICHER_AGENT_TYPE
+    return _EXECUTOR_AGENT_TYPE
 
 
 def _wave_phase_title(index: int, wave: list[WaveRow]) -> str:
@@ -204,7 +289,7 @@ def _wave_agent_calls(wave: list[WaveRow], phase_title: str) -> str:
             "{ "
             f"label: {_js_string_literal(f'work:{row.id}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
-            f"agentType: {_js_string_literal(_EXECUTOR_AGENT_TYPE)}, "
+            f"agentType: {_js_string_literal(_row_agent_type(row))}, "
             f"{_MODEL_OPT} "
             "});"
         )
@@ -216,7 +301,7 @@ def _wave_agent_calls(wave: list[WaveRow], phase_title: str) -> str:
         "{ "
         f"label: {_js_string_literal(f'work:{row.id}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(_EXECUTOR_AGENT_TYPE)}, "
+        f"agentType: {_js_string_literal(_row_agent_type(row))}, "
         f"{_MODEL_OPT} "
         "})"
         for row in wave

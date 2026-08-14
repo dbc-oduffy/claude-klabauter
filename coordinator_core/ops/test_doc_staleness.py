@@ -6,7 +6,7 @@ history AND controlled commit dates (`_dated_commit`), per the
 explicitly to `compute_doc_staleness`/`build_doc_staleness_report` so
 assertions never race the wall clock.
 
-Spec backlink: docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C1, AC1, AC4, AC6, AC8
+Spec backlink: DoE-claude:pln-human-facing-doc-staleness-det-d9c047 § C1, AC1, AC4, AC6, AC8
 """
 from __future__ import annotations
 

@@ -1,12 +1,12 @@
 """lint-frontmatter.py — CLI trampoline over coordinator_core.frontmatter.schema_validate.main.
 
 Thin trampoline — lives in claude-klabauter's own coordinator/bin/ (this repo), NOT
-Coordinator-claude's contract surface, per DR-047 (coordinator-claude owns contract/generator,
-Claude-klabauter owns engine). Consumed by coordinator-claude's 3 live callers via the resolved
+DoE-claude's contract surface, per DR-047 (DoE owns contract/generator,
+Claude-klabauter owns engine). Consumed by DoE's 3 live callers via the resolved
 forwarder. Wraps claude-klabauter's frontmatter validator + coordinator_core.dag
-reachability primitives to restore the coordinator-claude-consumed
+reachability primitives to restore the DoE-consumed
 lint-frontmatter CLI after coordinator/bin/lint-frontmatter.js was deleted at
-Claude-klabauter commit c79e66cd (declared "zero live callers" — false; coordinator-claude has 3 live
+Claude-klabauter commit c79e66cd (declared "zero live callers" — false; DoE has 3 live
 callers: workweek-complete.md's Step 2.5 strict referential-integrity gate,
 update-docs.md's Phase 11d drift sweep, and handoff/SKILL.md's write-time
 gate). All CLI logic lives in coordinator_core.frontmatter.schema_validate.main

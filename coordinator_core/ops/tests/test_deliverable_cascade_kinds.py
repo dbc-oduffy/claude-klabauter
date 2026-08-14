@@ -41,7 +41,11 @@ import coordinator_core.ops.cascade_retract  # noqa: F401 — fires @register_op
 import coordinator_core.ops.deliverable_cascade as cascade_mod
 import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_op side effect
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op side effect
-from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+from coordinator_core.frontmatter.primitives import (
+    read_fm_field,
+    read_fm_field_unquoted,
+    split_frontmatter,
+)
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -519,17 +523,17 @@ def test_ac9_planless_sizing_is_unkeyed_not_ambiguous(tmp_path):
 
 def test_ac10_vendored_sizing_schema_version_is_pinned():
     """Discharge for the prohibition (not the prohibition itself): a version
-    bump reds this loudly, with the coordinator-claude coordinate to check named in the
+    bump reds this loudly, with the DoE coordinate to check named in the
     failure message, rather than relying on an executor remembering the
     rule. See the vendored schema's own x-bump-note for the coordinate."""
     schema_path = (
         Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    pinned = "1.14.0"
+    pinned = "1.15.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
-        f"{pinned!r} — check coordinator-claude@1fabbc9c3 "
+        f"{pinned!r} — check DoE-claude@eecbe28ec "
         "(coordinator/schemas/sizing-object.schema.json) for a correspondingly "
         "recorded answer before re-pinning this test."
     )
@@ -538,16 +542,17 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
 # Review: staff-eng — Finding 11: C0 vendored FOUR schemas, but only
 # sizing-object carried a version-pin regression above — roadmap/goal/
 # initiative reopened the identical EQUAL_VERSION_SHAPE_DRIFT silent-divergence
-# hazard C0 exists to close, the moment coordinator-claude bumps any of the other three.
+# hazard C0 exists to close, the moment DoE bumps any of the other three.
 # Table-driven so a future vendored schema is one row, not a new function.
 _VENDORED_SCHEMA_VERSION_PINS = (
-    # Re-pinned 1.8.0 -> 1.14.0 on coordinator-claude's four-field probe/intent widen
-    # (1fabbc9c3), vendored here at f0085198a. The recorded answer AC1 demands
-    # is memo 2026-08-13-coordinator-claude-em-sizing-object-schema-widened-1-14-0.md.
-    ("sizing-object.schema.json", "1.14.0", "coordinator-claude@1fabbc9c3 (coordinator/schemas/sizing-object.schema.json)"),
-    ("roadmap.schema.json", "1.3.0", "coordinator-claude coordinator/schemas/roadmap.schema.json"),
-    ("goal.schema.json", "1.2.0", "coordinator-claude coordinator/schemas/goal.schema.json"),
-    ("initiative.schema.json", "1.1.0", "coordinator-claude coordinator/schemas/initiative.schema.json"),
+    # Re-pinned 1.14.0 -> 1.15.0 on DoE's `detent_discharges` add (eecbe28ec).
+    # The recorded answer AC1 demands is memo
+    # 2026-08-13-doe-claude-em-sizing-object-1-15-0-detent-discharges.md
+    # (actioned, now under cross-repo/archive/).
+    ("sizing-object.schema.json", "1.15.0", "DoE-claude@eecbe28ec (coordinator/schemas/sizing-object.schema.json)"),
+    ("roadmap.schema.json", "1.3.0", "DoE-claude coordinator/schemas/roadmap.schema.json"),
+    ("goal.schema.json", "1.2.0", "DoE-claude coordinator/schemas/goal.schema.json"),
+    ("initiative.schema.json", "1.1.0", "DoE-claude coordinator/schemas/initiative.schema.json"),
 )
 
 
@@ -645,7 +650,7 @@ def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path):
     # the refusal message reads "not consistent with live-and-advanceable"
     # rather than the handoff-only "already terminal" wording this test
     # previously pinned.
-    assert "not consistent with live-and-advanceable" in reason
+    assert "is not live-and-advanceable" in reason
 
 
 def test_ac11_superseded_sizing_target_is_refused_leg_c(tmp_path):
@@ -668,7 +673,7 @@ def test_ac11_superseded_sizing_target_is_refused_leg_c(tmp_path):
     )
 
     assert reason is not None
-    assert "not consistent with live-and-advanceable" in reason
+    assert "is not live-and-advanceable" in reason
 
     # And end to end: the cascade must never flip a superseded sizing to shipped.
     result = _run(
@@ -797,7 +802,7 @@ def test_handoff_kind_two_tuple_wrapper_still_used_by_backstop_sweep(tmp_path):
 
 
 _DOC_NEW_CLI = (
-    Path(__file__).parent.parent.parent.parent / "coordinator" / "bin" / "coordinator-doc-new"
+    Path(__file__).parent.parent.parent.parent / "coordinator" / "bin" / "coordinator-doc-new.py"
 )
 
 
@@ -918,3 +923,465 @@ def test_ac7_reverse_edge_write_precedes_plan_write_and_reverts_on_failure(tmp_p
     mod._revert_sizing_reverse_edge(str(sizing_path), old_text, str(repo))
     after = sizing_path.read_text(encoding="utf-8")
     assert after == before
+
+
+# ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md):
+# the plan trigger no longer hands the cascade its own caller's flip commit
+# as ship evidence -- Position 1 (resolve_source_ship_sha) is gated on
+# source_kind, taken only on the handoff trigger.
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_plan_trigger_never_stamps_source_paths_own_flip_commit_as_shipped_in(tmp_path, monkeypatch):
+    """AC1: on the plan trigger, `_advance_one` must not call
+    `resolve_source_ship_sha` against `source_path` at all. Regression
+    scenario: `source_path` (the plan document) is committed by a
+    bookkeeping flip commit immediately before the cascade fires -- exactly
+    `plan_status_transition._commit_plan_flip`'s own sequencing -- and that
+    flip commit's SHA must never land in `shipped_in`, even though (with a
+    valid Session-Id trailer, so the ownership guard would have cleared it)
+    the old Position-1-first code path would have happily stamped it."""
+    session_id = "55555555-5555-5555-5555-555555555555"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    # Genuine ship evidence -- the handoff's own scope.
+    scoped = repo / "feature.txt"
+    scoped.write_text("feature body\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(
+        repo, "commit", "-m",
+        f"implement the feature this handoff scopes\n\nSession-Id: {session_id}",
+    )
+    feature_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    handoff = repo / "state" / "handoffs" / "20260101-h.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Handoff 20260101-h.md"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-ac1-000000\n"
+        "scope:\n"
+        "  - feature.txt\n"
+    )
+    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(handoff.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add handoff\n\nSession-Id: {session_id}")
+
+    # The plan document: created, then flipped by a bookkeeping commit
+    # immediately before the cascade fires -- mirrors
+    # plan_status_transition._commit_plan_flip's own sequencing.
+    plan = repo / "docs" / "plans" / "2026-01-01-ac1-plan.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("status: draft\n", encoding="utf-8")
+    _git(repo, "add", str(plan.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add plan\n\nSession-Id: {session_id}")
+    plan.write_text("status: implemented\n", encoding="utf-8")
+    _git(repo, "add", str(plan.relative_to(repo)))
+    _git(repo, "commit", "-m", f"flip plan status to implemented\n\nSession-Id: {session_id}")
+    flip_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    assert feature_sha[:8] != flip_sha[:8]
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-ac1-000000",
+            "source_kind": "plan",
+            "source_path": str(plan.relative_to(repo)),
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0
+    assert len(result["advanced"]) == 1
+
+    split = split_frontmatter(handoff.read_text(encoding="utf-8"))
+    assert split is not None
+    shipped_in = read_fm_field_unquoted(split.fm_text, "shipped_in")
+    assert shipped_in is not None
+    assert shipped_in != flip_sha[:8]
+    assert shipped_in == feature_sha[:8]
+
+
+def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_without_shipped_in(tmp_path):
+    """AC3: on the plan trigger, when Position A (scope-derived, against the
+    CANDIDATE's own scope:) resolves nothing, the candidate is refused via
+    the existing named "no commit evidence resolvable" outcome and
+    `shipped_in` is left unset in the written frontmatter -- never a guess,
+    never a proxy."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    handoff = repo / "state" / "handoffs" / "20260101-h.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Handoff 20260101-h.md"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-ac3-000000\n"
+        "scope:\n"
+        "  - never-committed.txt\n"
+    )
+    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(handoff.relative_to(repo)))
+    _git(repo, "commit", "-m", "add handoff")
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-ac3-000000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["advanced"] == []
+    assert result["exit_code"] == 1
+    assert len(result["refused"]) == 1
+    assert "no commit evidence resolvable" in result["refused"][0]["reason"]
+
+    split = split_frontmatter(handoff.read_text(encoding="utf-8"))
+    assert split is not None
+    assert read_fm_field(split.fm_text, "shipped_in") is None
+    assert read_fm_field(split.fm_text, "deployment_state") == "ready_to_fire"
+
+
+def test_ac4_handoff_trigger_still_resolves_source_ship_sha_first(tmp_path, monkeypatch):
+    """AC4: on the handoff trigger, Position 1 (`resolve_source_ship_sha`
+    against `source_path`) must still run and still take priority over
+    Position A (the candidate's own scope-derived evidence) -- byte-
+    identical to pre-C1 behaviour.
+
+    Constructed so this test FAILS if C1's plan-trigger branch were applied
+    unconditionally (i.e. if the handoff trigger were routed to Position A
+    too): the candidate's own scope evidence and the source's own evidence
+    resolve to two DIFFERENT commits, and this test pins `shipped_in` to the
+    SOURCE's sha -- Position A's candidate-scope sha would be a different,
+    wrong value if the branch were misapplied here.
+    """
+    session_id = "77777777-7777-7777-7777-777777777777"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    # Candidate Y's own scope evidence -- deliberately a DIFFERENT commit
+    # from the source's own ship commit below.
+    candidate_scope = repo / "candidate-feature.txt"
+    candidate_scope.write_text("candidate feature body\n", encoding="utf-8")
+    _git(repo, "add", "candidate-feature.txt")
+    _git(
+        repo, "commit", "-m",
+        f"implement candidate Y's own scope\n\nSession-Id: {session_id}",
+    )
+
+    candidate = repo / "state" / "handoffs" / "20260101-y-candidate.md"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Candidate Y"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-ac4-000000\n"
+        "scope:\n"
+        "  - candidate-feature.txt\n"
+    )
+    candidate.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(candidate.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add candidate Y\n\nSession-Id: {session_id}")
+
+    # Source handoff X -- the terminalized handoff whose OWN commit fires
+    # this cascade (handoff trigger). Not itself a schema-valid handoff
+    # record (irrelevant to resolve_source_ship_sha, which only walks the
+    # path's own git history) -- its most-recent commit is DISTINCT from
+    # candidate Y's scope commit above.
+    source = repo / "state" / "handoffs" / "20260101-x-source.md"
+    source.write_text("source handoff marker\n", encoding="utf-8")
+    _git(repo, "add", str(source.relative_to(repo)))
+    _git(repo, "commit", "-m", f"conclude source handoff X\n\nSession-Id: {session_id}")
+    source_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-ac4-000000",
+            "source_kind": "handoff",
+            "source_path": str(source.relative_to(repo)),
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0
+    assert len(result["advanced"]) == 1
+
+    split = split_frontmatter(candidate.read_text(encoding="utf-8"))
+    assert split is not None
+    shipped_in = read_fm_field_unquoted(split.fm_text, "shipped_in")
+    assert shipped_in == source_sha[:8]
+
+
+# ---------------------------------------------------------------------------
+# C2 (2026-08-14) — the cascade commits the terminal writes it makes
+# ---------------------------------------------------------------------------
+
+
+def _head_sha(repo: Path) -> str:
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def _committed_paths(repo: Path, sha: str) -> list:
+    result = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _porcelain_status(repo: Path) -> str:
+    return _git(repo, "status", "--porcelain").stdout
+
+
+def test_ac5_ac6_advanced_candidate_is_committed_scoped_to_exactly_its_path(tmp_path, monkeypatch):
+    """AC5/AC6: a cascade that advances one candidate leaves a clean worktree
+    for that candidate's path, and the follow-up commit's pathspec contains
+    exactly the mutated path -- no `git add -A`/`.`/`-a` sweep of anything
+    else in the tree.
+    """
+    session_id = "88888888-8888-8888-8888-888888888888"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    scoped = repo / "feature.txt"
+    scoped.write_text("feature body\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(
+        repo, "commit", "-m",
+        f"implement the feature this handoff scopes\n\nSession-Id: {session_id}",
+    )
+
+    handoff = repo / "state" / "handoffs" / "20260101-c2.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Handoff 20260101-c2.md"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-c2-advance-000\n"
+        "scope:\n"
+        "  - feature.txt\n"
+    )
+    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(handoff.relative_to(repo)))
+    _git(repo, "commit", "-m", "add handoff")
+
+    head_before = _head_sha(repo)
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-c2-advance-000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0
+    assert len(result["advanced"]) == 1
+    assert "commit_error" not in result
+
+    head_after = _head_sha(repo)
+    assert head_after != head_before, "the cascade's own advanced write must land its own commit"
+
+    rel_handoff = str(handoff.relative_to(repo)).replace("\\", "/")
+    assert _committed_paths(repo, head_after) == [rel_handoff]
+    assert _porcelain_status(repo) == ""
+
+
+def test_ac7_cascade_advancing_nothing_performs_no_commit(tmp_path):
+    """AC7: a cascade that mutates nothing (zero candidates matched) performs
+    no commit and returns cleanly -- HEAD is untouched and no `commit_error`
+    is surfaced.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+
+    head_before = _head_sha(repo)
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-c2-nothing-000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 1
+    assert result["advanced"] == []
+    assert "commit_error" not in result
+    assert _head_sha(repo) == head_before
+
+
+def test_ac6_ac8_refused_candidate_contributes_no_path_advanced_still_commits_exit_0(
+    tmp_path, monkeypatch
+):
+    """AC6/AC8: a cascade advancing one candidate and refusing a second
+    (same deliverable_id) commits only the advanced one's path -- the
+    refused candidate contributes nothing to the commit's pathspec -- and
+    still returns exit_code 0 (refusal-of-some with at least one advanced
+    artifact stays a success, per the original AC6h contract this chunk
+    leaves untouched).
+    """
+    session_id = "99999999-9999-9999-9999-999999999999"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    scoped = repo / "feature.txt"
+    scoped.write_text("feature body\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(
+        repo, "commit", "-m",
+        f"implement the feature this handoff scopes\n\nSession-Id: {session_id}",
+    )
+
+    # Candidate A -- clears every leg, will advance.
+    advances = repo / "state" / "handoffs" / "20260101-c2-advances.md"
+    advances.parent.mkdir(parents=True, exist_ok=True)
+    fm_advances = (
+        'title: "Advances"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-c2-partial-000\n"
+        "scope:\n"
+        "  - feature.txt\n"
+    )
+    advances.write_text(f"---\n{fm_advances}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+
+    # Candidate B -- refused on leg (c): `awaiting_gate` is live-but-blocked,
+    # not consistent with terminal -- never reaches the write path at all.
+    refuses = repo / "state" / "handoffs" / "20260101-c2-refuses.md"
+    fm_refuses = (
+        'title: "Refuses"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: awaiting_gate\n"
+        "deliverable_id: dlv-c2-partial-000\n"
+    )
+    refuses.write_text(f"---\n{fm_refuses}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+
+    _git(repo, "add", str(advances.relative_to(repo)), str(refuses.relative_to(repo)))
+    _git(repo, "commit", "-m", "add both handoffs")
+
+    head_before = _head_sha(repo)
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-c2-partial-000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0
+    assert len(result["advanced"]) == 1
+    assert len(result["refused"]) == 1
+    assert "commit_error" not in result
+
+    head_after = _head_sha(repo)
+    assert head_after != head_before
+
+    rel_advances = str(advances.relative_to(repo)).replace("\\", "/")
+    assert _committed_paths(repo, head_after) == [rel_advances]
+    assert _porcelain_status(repo) == ""
+
+
+def test_ac8_commit_scoped_failure_surfaces_commit_error_without_flipping_exit_code(
+    tmp_path, monkeypatch
+):
+    """AC8: when the follow-up commit itself fails (`commit_scoped` returns
+    `ok=False`), the cascade surfaces `result["commit_error"]` with the
+    failure text -- and `exit_code` is untouched, staying keyed off
+    `advanced` alone (a commit failure never overrides the advanced-artifact
+    success signal, per `_commit_mutated_paths`'s own docstring contract).
+    """
+    session_id = "77777777-7777-7777-7777-777777777777"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    scoped = repo / "feature.txt"
+    scoped.write_text("feature body\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(
+        repo, "commit", "-m",
+        f"implement the feature this handoff scopes\n\nSession-Id: {session_id}",
+    )
+
+    handoff = repo / "state" / "handoffs" / "20260101-c2-commit-fails.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Handoff 20260101-c2-commit-fails.md"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        "deliverable_id: dlv-c2-commit-fails-000\n"
+        "scope:\n"
+        "  - feature.txt\n"
+    )
+    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(handoff.relative_to(repo)))
+    _git(repo, "commit", "-m", "add handoff")
+
+    head_before = _head_sha(repo)
+
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    def _fake_commit_scoped(paths, msg_path, worktree_root):
+        return GitResult(returncode=1, stdout="", stderr="simulated commit failure")
+
+    monkeypatch.setattr(cascade_mod, "commit_scoped", _fake_commit_scoped)
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-c2-commit-fails-000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0, "a commit failure must not flip exit_code"
+    assert len(result["advanced"]) == 1
+    assert "simulated commit failure" in result["commit_error"]
+
+    # The advancing write itself landed (it's a separate `locked_rmw` write,
+    # not part of the follow-up commit) -- only the follow-up commit failed,
+    # so HEAD is untouched but the working tree is dirty.
+    assert _head_sha(repo) == head_before
+    assert _porcelain_status(repo) != ""

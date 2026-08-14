@@ -80,6 +80,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+# Generator-provenance declaration: every write in this module targets
+# state/housekeeping-failures.log, which is gitignored (.gitignore:78,
+# `*.log`) -- never a tracked repo artifact.
+GENERATES = []
+
 _FAILURES_LOG_RELPATH = ("state", "housekeeping-failures.log")
 
 

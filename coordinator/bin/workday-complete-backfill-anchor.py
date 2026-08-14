@@ -3,7 +3,7 @@
 mechanical anchor-injection orchestration for `/workday-complete` Step 3.5.
 
 Native port of the Phase A0 bash block that used to live inline in
-`commands/workday-complete.md` (coordinator-claude): a nested while-loop pairwise
+`commands/workday-complete.md` (coordinator doctrine repo): a nested while-loop pairwise
 `git merge-base --is-ancestor` walk that finds the single per-day "descendant
 tip" (the commit that is a descendant of, or equal to, every other candidate
 tip for that day), followed by a per-date call into
@@ -76,7 +76,7 @@ Spec backlink: docs/plans/2026-07-02-backfill-anchor-injection-contract.md § De
 Spec backlink: pln-de-machine-workday-complete-ba-f1b7e6 § C1
 Spec backlink: cross-repo/inbox/2026-07-02-backfill-scan-legacy-anchor-migration.md (example-game-repo-em)
 Spec backlink: cross-repo/inbox/2026-07-02-workday-backfill-covered-tip.md (cockpit-em)
-Port source: coordinator-claude coordinator/commands/workday-complete.md § Step 3.5 Phase A0
+Port source: coordinator doctrine repo coordinator/commands/workday-complete.md § Step 3.5 Phase A0
   (nested while-loop `_DESC_TIP` walk + `_A0_INJECTED_*` accumulation + the
   scoped `git add -- "${_A0_INJECTED_FILES[@]}"` commit block)
 """

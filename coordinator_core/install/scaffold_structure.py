@@ -1,9 +1,9 @@
 """
 coordinator_core.install.scaffold_structure — Port of:
-``coordinator/bin/scaffold-canonical-structure.sh`` (coordinator-claude 432e3285,
-2026-07-22) [coordinator-claude repo].
+``coordinator/bin/scaffold-canonical-structure.sh`` (DoE 432e3285,
+2026-07-22) [DoE-claude repo].
 
-Purpose: parse the coordinator-claude-owned ``canonical-structure.yaml`` manifest and idempotently
+Purpose: parse the DoE-owned ``canonical-structure.yaml`` manifest and idempotently
 scaffold every ``creation: eager`` directory (+ README/.gitkeep) and eager
 template-backed file entry under a target root, in both a dry-run/check mode
 (never mutates disk) and a live mode. Two call sites use this module:
@@ -12,7 +12,7 @@ template-backed file entry under a target root, in both a dry-run/check mode
 
 Three outcomes per declared ``creation: eager`` entry (DR-116,
 ``docs/decisions/DR-116-creation-eager-declares-lifecycle-not-agency.md``,
-Coordinator-claude repo): (a) creatable here -- a directory, or template-backed file;
+DoE-claude repo): (a) creatable here -- a directory, or template-backed file;
 (b) satisfied-elsewhere -- carries a non-empty ``produced_by:`` naming a
 producer in another repo's onboarding flow (e.g. a ``/coordinator:repo-setup``
 phase); (c) a genuine orphan -- neither ``template:`` nor ``produced_by:``,
@@ -71,8 +71,8 @@ a plugin/bin-tree location itself. Callers resolve their own root once
 (``sibling_bin_dir.parent`` at the probe_p12 call site, ``coord_root`` at the
 maximalist Step 7 call site — see AC D5) and pass it in.
 
-Manifest ownership (AC D5): ``canonical-structure.yaml`` is coordinator-claude-owned
-(``coordinator-claude/coordinator/canonical-structure.yaml``) and is NOT vendored
+Manifest ownership (AC D5): ``canonical-structure.yaml`` is DoE-owned
+(``DoE-claude/coordinator/canonical-structure.yaml``) and is NOT vendored
 here — this module only reimplements the *parse*, locating the file via the
 caller-supplied ``manifest_root``.
 
@@ -98,7 +98,7 @@ only ambers on ``would_create_count() >= 1``. Wiring ``dropped_entries``
 into probe_p12 today would flip the whole fleet's doctor probe to amber
 immediately, because the live manifest currently has six orphan entries
 that are not yet an agreed manifest/parser disagreement so much as
-Coordinator-claude's ``produced_by:`` manifest half not having landed yet. This is
+DoE-claude's ``produced_by:`` manifest half not having landed yet. This is
 gated on that sibling-repo change landing first, at which point wiring
 probe_p12 to ``dropped_entries`` becomes low-blast-radius. A future reader
 must not "fix" this silently without knowing the sequencing.
@@ -165,6 +165,12 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
+
+# Generator-provenance declaration (generator_provenance.py). Scaffolds
+# README/.gitkeep/eager template files under a caller-supplied target root
+# per canonical-structure.yaml (docstring: "scaffold...directory...under a
+# target root") -- the target repo is a parameter, not fixed to claude-klabauter.
+GENERATES = []
 
 # `resolution_journal` is imported lazily (call-time, inside
 # scaffold_canonical_structure) rather than at module level:
@@ -283,7 +289,7 @@ class ScaffoldResult:
 
 
 def locate_manifest(manifest_root: Path) -> Path:
-    """Resolve the coordinator-claude-owned canonical-structure.yaml under ``manifest_root``.
+    """Resolve the DoE-owned canonical-structure.yaml under ``manifest_root``.
 
     Does NOT vendor a copy (AC D5) -- raises ScaffoldError if absent.
     """
@@ -311,7 +317,7 @@ def parse_manifest(text: str) -> ManifestParseResult:
 
     Three outcomes for a ``creation: eager`` entry (DR-116 --
     ``docs/decisions/DR-116-creation-eager-declares-lifecycle-not-agency.md``,
-    coordinator-claude repo -- ``creation:`` alone conflates lifecycle, "when must
+    DoE-claude repo -- ``creation:`` alone conflates lifecycle, "when must
     this exist," with agency, "who creates it"; ``produced_by:`` names the
     agency half):
 

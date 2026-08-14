@@ -11,8 +11,8 @@ NEGATIVE-SPEC — READ BEFORE TOUCHING THIS FILE:
       ``coordinator_core.session.{liveness,claims}`` functions already
       produce for the identical fixture. The comparison target is this
       repo's OWN in-process implementation, never an external artifact.
-    - Do NOT re-label any test/class here "parity". Do NOT add a coordinator-claude oracle,
-      a coordinator-claude path, or a coordinator-claude env var to this file. There is deliberately no
+    - Do NOT re-label any test/class here "parity". Do NOT add a DoE oracle,
+      a DoE path, or a DoE env var to this file. There is deliberately no
       external dependency, and therefore no skip-on-missing-oracle hazard —
       that hazard (28 permanently-skipping assertions across four suites) is
       exactly what the 2026-07-22 parity-retire-fold plan removed; this file

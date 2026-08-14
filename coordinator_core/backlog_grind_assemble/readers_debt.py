@@ -58,10 +58,10 @@ If a future re-run of this grep finds the op has since appeared, that is
 drift on the next reader-authoring pass to wire up, not something this
 module silently absorbs.
 
-Contract: coordinator-claude coordinator/skills/debt-triage/SKILL.md (the surface
+Contract: DoE-claude coordinator/skills/debt-triage/SKILL.md (the surface
 this reader computes for) and coordinator/docs/wiki/computed-skills.md (the
 MECHANICAL/JUDGMENT discriminator this module's split follows).
-Spec backlink: docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Spec backlink: DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C3d.
 
 Negative-spec:

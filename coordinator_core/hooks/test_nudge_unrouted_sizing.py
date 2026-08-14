@@ -35,7 +35,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
 # Fixture content — the real 2026-07-31 incident sizing-object
-# (state/sizings/2026-07-31-quick-wrap-a-lightweight-end-of-work-cer.yaml, coordinator-claude repo),
+# (state/sizings/2026-07-31-quick-wrap-a-lightweight-end-of-work-cer.yaml, DoE-claude repo),
 # reproduced inline per dispatch brief instruction (do not read it at test time).
 # ---------------------------------------------------------------------------
 
@@ -983,7 +983,7 @@ def test_goal_setting_is_never_a_routable_route():
     # AC8 (2026-08-07 sizing-ladder-xxl-notch-and-goal-setting-route plan,
     # C3/C5): `goal-setting` is the sixth notch's terminal room, and it is
     # deliberately excluded from `_ROUTABLE_ROUTES` -- `coordinator:goal-
-    # setting` is PM-GATED (coordinator-claude coordinator/skills/goal-setting/
+    # setting` is PM-GATED (DoE-claude coordinator/skills/goal-setting/
     # SKILL.md frontmatter `description: "PM-GATED. ..."`), so nudging an EM
     # to invoke it unilaterally would nudge them toward something they
     # cannot do without the PM -- the same reason `pm-decision` and `shape`

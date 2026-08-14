@@ -11,7 +11,7 @@ deliverable_id: "dlv-fixture-case-against-000001"
 # Fixture plan — valid task-spine with case_against carry-through
 
 Fixture for coordinator-side tests of the `case_against` harvest carry-through
-(coordinator-claude cross-repo memo, `cross-repo/inbox/2026-08-06-coordinator-claude-em-deferral-both-sides-adopted-three-legs-for-you.md`,
+(DoE cross-repo memo, `cross-repo/inbox/2026-08-06-doe-claude-em-deferral-both-sides-adopted-three-legs-for-you.md`,
 leg 3).
 
 ## Tasks

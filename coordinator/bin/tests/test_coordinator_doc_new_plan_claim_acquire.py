@@ -52,7 +52,7 @@ pytestmark = [pytest.mark.spawns_process]
 
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
-_CLI_PATH = _BIN_DIR / "coordinator-doc-new"
+_CLI_PATH = _BIN_DIR / "coordinator-doc-new.py"
 
 _NO_CONSOLE = no_console_creationflags()
 
@@ -201,7 +201,7 @@ class AuthorThenExecuteReclaimIsNoOpTest(unittest.TestCase):
     ever reached on a genuine re-entry (compaction, a second Phase 1.5
     pass). Author-then-execute in one session now reaches it on the
     first execute, a path with no prior coverage anywhere -- raised by
-    coordinator-claude-em in cross-repo/inbox/2026-08-12-coordinator-claude-em-claim-at-
+    doe-claude-em in cross-repo/inbox/2026-08-12-doe-claude-em-claim-at-
     authorship-widened.md, which correctly noted it had never run.
 
     Guards `claim_artifact`'s plan-class-only re-entrant self-claim
@@ -219,7 +219,7 @@ class AuthorThenExecuteReclaimIsNoOpTest(unittest.TestCase):
             env = dict(os.environ)
             env["COORDINATOR_SESSION_ID"] = "test-session-abc"
             reclaim = subprocess.run(
-                [str(_CLI_PATH.parent / "session-claim-cli"), "claim-plan", stem],
+                [sys.executable, str(_CLI_PATH.parent / "session-claim-cli.py"), "claim-plan", stem],
                 cwd=str(repo), capture_output=True, text=True, timeout=30,
                 env=env, **_NO_CONSOLE,
             )
@@ -248,7 +248,7 @@ class AuthorThenExecuteReclaimIsNoOpTest(unittest.TestCase):
             env = dict(os.environ)
             env["COORDINATOR_SESSION_ID"] = "test-session-different"
             reclaim = subprocess.run(
-                [str(_CLI_PATH.parent / "session-claim-cli"), "claim-plan", stem],
+                [sys.executable, str(_CLI_PATH.parent / "session-claim-cli.py"), "claim-plan", stem],
                 cwd=str(repo), capture_output=True, text=True, timeout=30,
                 env=env, **_NO_CONSOLE,
             )

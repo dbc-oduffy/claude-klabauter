@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """workday-start-cross-repo-memo-surface.py — inbound cross-repo memo staleness surfacer.
 
-Thin coordinator-claude-side (contract) trampoline over claude-klabauter's
+Thin DoE-side (contract) trampoline over claude-klabauter's
 coordinator_core.ops.workday_start_cross_repo_memo_surface. Globs THIS
 repo's cross-repo/inbox/ directory, parses frontmatter, filters to
 status: open / status: in_progress memos, computes staleness, and emits one
@@ -56,9 +56,9 @@ nothing when there are zero qualifying memos.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 
 from __future__ import annotations
 

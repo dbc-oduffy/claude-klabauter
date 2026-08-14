@@ -14,6 +14,9 @@ Negative-spec:
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import coordinator_core.orient_assemble.readers_branch_reconcile as rbr
 
 
@@ -30,6 +33,7 @@ def test_failed_reconcile_entry_surfaces_with_message(monkeypatch):
             "surfaced": [],
             "reconciled": [
                 {
+                    "handoff_id": "h-42",
                     "applied": False,
                     "exit_code": 1,
                     "message": "summary exceeds 140 characters (got 201)",
@@ -44,6 +48,7 @@ def test_failed_reconcile_entry_surfaces_with_message(monkeypatch):
     jp = result.judgment_points[0]
     assert jp["id"] == "j-desync-repair-failed-1"
     assert "summary exceeds 140 characters (got 201)" in jp["evidence"]
+    assert "h-42" in jp["question"]
 
 
 def test_dry_run_clean_entry_does_not_surface(monkeypatch):
@@ -109,3 +114,49 @@ def test_no_surfaced_and_no_reconciled_returns_empty():
         assert result.directives == []
     finally:
         check_auto_reconcile.get_response = orig
+
+
+def test_raised_repair_exception_surfaces_end_to_end(monkeypatch, tmp_path):
+    """`_handle_ledger_mirror_desync`'s exception branch must produce an entry
+    that `_read_auto_reconcile` actually surfaces — pins that `exit_code` stays
+    set to a nonzero value on the raised-exception path (previously unset and
+    silently indistinguishable from a healthy dry-run entry)."""
+    import coordinator_core.ops.handoff_reconcile as handoff_reconcile
+
+    async def _raising_transition_handler(params, repo_root):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        handoff_reconcile, "_handoff_transition_handler", _raising_transition_handler
+    )
+
+    handoff_path = tmp_path / "state" / "handoffs" / "h-99.md"
+    handoff_path.parent.mkdir(parents=True)
+    handoff_path.write_text("---\n---\n")
+    handoff = {"id": "h-99", "_path": str(handoff_path)}
+
+    reconciled: list = []
+    asyncio.run(
+        handoff_reconcile._handle_ledger_mirror_desync(
+            handoff=handoff,
+            ledger_holder="session-abc",
+            ledger_claimed_at="2026-08-13T00:00:00+00:00",
+            worktree_root=tmp_path,
+            repo_root=tmp_path,
+            dry_run=False,
+            reconciled=reconciled,
+        )
+    )
+
+    assert len(reconciled) == 1
+    entry = reconciled[0]
+    assert entry["exit_code"] != 0
+    assert "boom" in entry["message"]
+
+    _patch_response(monkeypatch, {"surfaced": [], "reconciled": reconciled})
+    result = rbr._read_auto_reconcile()
+
+    assert len(result.judgment_points) == 1
+    jp = result.judgment_points[0]
+    assert "h-99" in jp["question"]
+    assert "boom" in jp["evidence"]

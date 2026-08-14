@@ -10,11 +10,11 @@ per-session artifact precedented by ``session-shape.json`` (see
 ``tempfile.mkstemp`` + ``os.replace`` atomicity discipline, same sid
 resolution via ``core.session_dir`` / ``core.resolve_session_id``.
 
-Ownership: this module implements BOTH halves coordinator-claude's spec asked for, because
+Ownership: this module implements BOTH halves DoE's spec asked for, because
 the liveness leg the reader needs (``session_live`` / ``live_session_ids``)
 lives in this repo and nowhere else — see the schema this ports,
-``coordinator/schemas/tier-u-grant.schema.json`` (coordinator-claude-owned, not yet on disk
-at the time this module was written; coordinator-claude also owns the registry manifest
+``coordinator/schemas/tier-u-grant.schema.json`` (DoE-owned, not yet on disk
+at the time this module was written; DoE also owns the registry manifest
 entry). The grant is an AUTHORITY control, not a resource control: it bounds
 *who may ask* to run the full suite, not how many suites run concurrently
 (that is ``coordinator_core.testing.suite_mutex``'s job) or whether the
@@ -51,11 +51,11 @@ Public functions:
                            seam, never a glob. Idempotent: revoking an
                            absent grant is success, not an error. No
                            expiry, no use-counter, no new record field —
-                           the schema is coordinator-claude-owned and stays
+                           the schema is DoE-owned and stays
                            ``schema_version`` 1.
 
 Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-and-layer2-seam.md § Ask 2
-Spec backlink: coordinator-claude docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
+Spec backlink: DoE-claude docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
 
 Negative-spec (path-scoped read — NEVER glob):
     Do NOT enumerate ``.git/coordinator-sessions/*/tier-u-grant.json`` (or
@@ -95,6 +95,11 @@ from coordinator_core.session import core, liveness
 
 #: The only two legal values of the ``granted_by`` field (DR-088 § Decision:
 #: "Authorization is granted two ways" — explicit PM, or implicit ceremony).
+# Generator-provenance declaration (generator_provenance.py). write_tier_u_grant/
+# revoke_tier_u_grant write/unlink only `.git/coordinator-sessions/<sid>/tier-u-
+# grant.json` -- git-internal session-hub state, never a tracked repo artifact.
+GENERATES = []
+
 _VALID_GRANTED_BY = frozenset({"pm", "ceremony"})
 
 _GRANT_FILENAME = "tier-u-grant.json"

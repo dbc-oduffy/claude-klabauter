@@ -83,3 +83,41 @@ class TestNoGuidanceDispositionsUnaffected:
             {"value": "recorded", "resolves": ["d1"]},
             {"value": "nothing-to-record", "resolves": ["d1"]},
         ]
+
+
+class TestTrackerHandCuratedSpinoff:
+    """2026-08-14 fix: `j-tracker-hand-curated` was gated on `kind ==
+    "handoff"` only, so a `/spinoff` never received the tracker obligation
+    as a judgment point -- it survived only as SKILL.md prose slated for a
+    size-reduction cut. Widened to also cover `kind == "spinoff"`, with its
+    own correctly-framed question/evidence (marking the fork in the SOURCE
+    session's tracker, not recording this session's own progress).
+
+    Spec backlink: break-class fix, j-tracker-hand-curated spinoff gate.
+    """
+
+    def test_emitted_for_kind_spinoff(self, tmp_path):
+        points = ba._build_judgment_points(
+            "spinoff", tracker_hand_curated=True, root=tmp_path
+        )
+        assert any(p["id"] == "j-tracker-hand-curated" for p in points)
+
+    def test_still_emitted_for_kind_handoff(self, tmp_path):
+        points = ba._build_judgment_points(
+            "handoff", tracker_hand_curated=True, root=tmp_path
+        )
+        assert any(p["id"] == "j-tracker-hand-curated" for p in points)
+
+    def test_spinoff_evidence_names_source_session_not_this_session(self, tmp_path):
+        points = ba._build_judgment_points(
+            "spinoff", tracker_hand_curated=True, root=tmp_path
+        )
+        jp = next(p for p in points if p["id"] == "j-tracker-hand-curated")
+        assert "source session" in jp["evidence"].lower()
+        assert "this session progressed" not in jp["evidence"].lower()
+
+    def test_not_emitted_for_other_kinds_when_not_hand_curated(self, tmp_path):
+        points = ba._build_judgment_points(
+            "spinoff", tracker_hand_curated=False, root=tmp_path
+        )
+        assert not any(p["id"] == "j-tracker-hand-curated" for p in points)

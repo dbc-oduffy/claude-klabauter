@@ -1,7 +1,7 @@
 """test_handoff_deliverable_carry — pytest coverage for handoff-deliverable-carry.py.
 
 Purpose: exercises the deliverable_id/initiative-FK carry-or-mint cascade ported out
-of coordinator-claude coordinator/skills/handoff/SKILL.md's `# C3d — deliverable_id
+of DoE-claude coordinator/skills/handoff/SKILL.md's `# C3d — deliverable_id
 auto-inheritance (D1 carry-not-remint rule)` bash block, into
 coordinator/bin/handoff-deliverable-carry.py.
 
@@ -25,7 +25,7 @@ Coverage:
      lives in coordinator_core/ops/test_deliverable_carry.py.
 
 Spec backlink: coordinator/skills/handoff/SKILL.md § Deliverable-spine threading
-               (D1 carry-not-remint) — coordinator-claude, C3d
+               (D1 carry-not-remint) — DoE-claude, C3d
                docs/decisions/DR-207-deliverable-spine-initiative-entity.md DD#1
 """
 from __future__ import annotations

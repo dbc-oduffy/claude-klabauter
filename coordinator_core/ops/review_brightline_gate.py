@@ -37,7 +37,7 @@ Exit codes: 0 — verdict printed (incl. vacuous zero-match). 1 — usage error
 (bad --session-id, missing --session-id argument, unresolvable origin/main,
 or a die-silent gate — see negative-spec).
 
-Port of: review-brightline-gate.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: review-brightline-gate.sh (DoE b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 Spec backlink: docs/plans/2026-06-15-brightline-session-scope-fix.md § C3
 
@@ -45,7 +45,7 @@ Cross-repo session scope (XB-6, 2026-07-29) -- the `--from-handoff` `session_ora
 computation (and the tier=A unwalked-repo ruling it feeds) now sums the
 Session-Id-trailer-matched diff across EVERY repo this session actually wrote
 into, not only the repo the ceremony happens to be invoked from. This closes a
-blind spot: a session working under the coordinator-claude standing cross-repo grant
+blind spot: a session working under the DoE-claude standing cross-repo grant
 (global CLAUDE.md section Cross-repo write discipline) commits directly into
 Claude-klabauter (and, per several rows in the 2026-07-29 Windows-viability plan
 family -- MP-8's post-merge/post-checkout hook, MP-9's untracks, WS-5's belts,
@@ -57,7 +57,7 @@ the per-repo sum. A repo in the list that cannot be resolved, or resolves to a
 path absent on disk, is a FAIL-LOUD condition (`CrossRepoResolutionError`),
 never a silently-dropped repo -- silently dropping one reintroduces exactly the
 blind spot this widening exists to close.
-Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md section XB-6
+Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 section XB-6
 
 Negative-spec (pre-existing bash-oracle quirks, faithfully REPRODUCED, not fixed):
     - DIE-SILENT GATE: the bash oracle runs under `set -euo pipefail`. Its
@@ -716,7 +716,7 @@ class CrossRepoResolutionError(RuntimeError):
 
 def _resolve_cross_repo_roots(this_repo_root: Path) -> Dict[str, str]:
     """Resolve every OTHER repo this session may have written into under the
-    coordinator-claude standing cross-repo grant (global CLAUDE.md § Cross-repo write
+    DoE-claude standing cross-repo grant (global CLAUDE.md § Cross-repo write
     discipline) — a NAMED list, never a single hardcoded second entry:
 
       "claude-klabauter" -> coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()

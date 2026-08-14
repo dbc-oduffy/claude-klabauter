@@ -49,7 +49,8 @@ Negative-spec (hard-won):
           invariant (OpClass in coordinator_core/authz/classification.py; DR-208), and any
           disk write from an advisory hook handler is a violation.
 
-      BOOKKEEPING ops (4, pcore-08) — MAY write under .git/coordinator-sessions/ only:
+      BOOKKEEPING ops (5, pcore-08 + receiver-state-sensor) — MAY write under
+      .git/coordinator-sessions/ only:
         - track_touched_files:     writes .git/coordinator-sessions/<sid>/touched.txt
                                    and .git/coordinator-sessions/.agents/<aid>/touched.txt
         - session_heartbeat:       writes last_activity field in
@@ -57,6 +58,8 @@ Negative-spec (hard-won):
         - agent_completion_log:    appends to .git/coordinator-sessions/logs/agent-audit.jsonl
         - track_dispatched_agents: writes .git/coordinator-sessions/<sid>/dispatched-agents.txt
                                    and .git/coordinator-sessions/.agents/<aid>/em-session-id.txt
+        - receiver_state_sensor:   writes .git/coordinator-sessions/<sid>/receiver-state.json
+                                   (NEW sibling file, docs/plans/2026-08-14-receiver-state-sensor.md)
         Write confinement (hard): bookkeeping ops MUST NOT write state/, archive/, or any
         path outside .git/coordinator-sessions/. The write target is session-runtime/liveness
         layer — not coordinator substrate (claude-klabauter's disk-truth custody) and not rag's
@@ -64,7 +67,7 @@ Negative-spec (hard-won):
         docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md; the successor
         substrate-write carve-out DR for this confinement rule is DR-241, now authored —
         docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md).
-        Classification: all four are MUTATING (DR-208, classification.py).
+        Classification: all five are MUTATING (DR-208, classification.py).
 
       FLEET archival ops (3, DR-211) — sanctioned MUTATING archival-writer category
         (deliberate DR-211 carve-out, not a silent exception):
@@ -280,8 +283,8 @@ Negative-spec (hard-won):
                                        state/scratch/artifact-distillation/<run-id>/
           - cartography.chunk_table:  emits a reduced source-file chunk table under
                                        <target_root>/state/scratch/cartography-chunk-table/<run-id>/
-                                       (--emit only; coordinator-claude's cross-tree consumer —
-                                       cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-
+                                       (--emit only; DoE-claude's cross-tree consumer —
+                                       cross-repo/inbox/2026-08-06-doe-claude-em-cartography-
                                        chunk-table-producer-seam.md)
           D6 bounds: write-confined to the op's own named target only; create-or-full-
           rewrite only (never partial in-place mutation); no delete; no commit (landing
@@ -767,7 +770,7 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
 # `_origin_worktree` repo — never the declared path's own containing repo.
 # An earlier version anchored containment on the declared path itself so
 # that `queue.append`'s central `queue_scope` and `queue.promote`'s
-# coordinator-claude central-root writes (genuinely outside the caller's own
+# DoE-claude central-root writes (genuinely outside the caller's own
 # worktree) could still be recorded. That was unsound and was reproduced
 # live: a session id is a REPO-LOCAL namespace key, not a portable identity,
 # and `session.scope.touch()` lazily calls `session.core.init()`, so
@@ -788,11 +791,11 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
 #
 # Consequence, deliberate: a declared path outside the caller's own repo is
 # SKIPPED — never recorded, never written cross-repo. `queue.promote`'s
-# writes into the coordinator-claude central root therefore stay unclaimed orphans
+# writes into the DoE-claude central root therefore stay unclaimed orphans
 # at that sink. This is the CORRECT outcome, not a regression — no claim is
 # always safer than a WRONG claim, and a wrong claim here actively harms a
 # sibling repo claude-klabauter does not own. Do not "fix" this back to declared-path
-# anchoring; the coordinator-claude side has its own adoption path
+# anchoring; the DoE-claude side has its own adoption path
 # (`--include-orphans`) for exactly this residual.
 #
 # Every skip is logged (never silent — see `_record_self_reported_touches`),
@@ -1016,7 +1019,7 @@ def get_op_handler(name: str) -> Optional[Callable]:
     every caller that resolves a sibling op by key (e.g. `cutover.advance`
     resolving `cutover.gate`) whenever it ran as anything other than the directly
     dispatched op. See
-    cross-repo/inbox/2026-07-25-coordinator-claude-em-cutover-advance-cannot-resolve-gate-op.md.
+    cross-repo/inbox/2026-07-25-doe-claude-em-cutover-advance-cannot-resolve-gate-op.md.
 
     Review: code-reviewer F11 — added to allow fleet-op callers to resolve handlers
     via the public op key rather than accessing the op module's private handler
@@ -1617,17 +1620,17 @@ def dispatch_from_hook(
 ) -> dict:
     """Build a JSON-RPC 2.0 envelope, dispatch it in-process, and return the op's result.
 
-    The single engine-side home for the post-import dispatch body that seven coordinator-claude hook
+    The single engine-side home for the post-import dispatch body that seven DoE hook
     shims currently hand-roll identically (build envelope -> asyncio.run(dispatch_message)
-    -> unwrap result). DR-118 rules that a coordinator-claude-resident hook shim is a pointer only —
+    -> unwrap result). DR-118 rules that a DoE-resident hook shim is a pointer only —
     resolve the engine root, hand over the raw payload, translate the verdict into the
     harness channel, and degrade. Transport policy (the envelope shape, the dispatch call,
     error surfacing) is engine-resident, not the shim's to reimplement.
 
-    Spec backlink: cross-repo/archive/2026-07-31-coordinator-claude-em-dr116-seam-contents-and-ipc-hook-dispatch.md
-                   (coordinator-claude's DR-118 — the memo's filename says dr116 because coordinator-claude renumbered
-                   the ruling at execute time; DR-116 in the coordinator-claude tree is an unrelated
-                   record, per 2026-07-31-coordinator-claude-em-dr116-is-now-dr118-citation-correction.md)
+    Spec backlink: cross-repo/archive/2026-07-31-doe-claude-em-dr116-seam-contents-and-ipc-hook-dispatch.md
+                   (DoE's DR-118 — the memo's filename says dr116 because DoE renumbered
+                   the ruling at execute time; DR-116 in the DoE tree is an unrelated
+                   record, per 2026-07-31-doe-claude-em-dr116-is-now-dr118-citation-correction.md)
 
     Args:
         op_name:         the JSON-RPC "method" to dispatch.

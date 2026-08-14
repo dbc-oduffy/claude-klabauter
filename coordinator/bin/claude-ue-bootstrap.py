@@ -11,7 +11,7 @@ Usage:
     python3 bin/claude-ue-bootstrap.py /x/example-game-workbench-repo
     python3 bin/claude-ue-bootstrap.py ~/.claude
 
-Manual, coordinator-claude-owned per-project UE plugin gating helper — see
+Manual, DoE-owned per-project UE plugin gating helper — see
 docs/wiki/per-project-plugin-gating.md. NOT auto-invoked by any hook or
 ceremony (coordinator_core.hooks.ue_knowledge_distrust ported the SessionStart
 auto-bootstrap write/merge logic natively into the control-plane engine's

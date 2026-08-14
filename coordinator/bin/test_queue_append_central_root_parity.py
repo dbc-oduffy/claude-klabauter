@@ -14,8 +14,8 @@ entries land, and they must agree:
      unconditionally.
   2. coordinator/bin/coordinator-queue-append `_output_path` (legacy/strangled
      CLI, State-1 fallback per DR-210) — previously routed the same decision to
-     the coordinator-claude repo via a `doe_root()` call citing a never-ratified plan
-     ([coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md,
+     the DoE repo via a `doe_root()` call citing a never-ratified plan
+     ([DoE-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md,
      `status: draft`, AC1/AC2 `pending`, its own C3 HELD). Fixed to route to
      claude-klabauter, matching (1).
 
@@ -79,7 +79,7 @@ def _repo_root() -> str:
 
 
 def _legacy_cli_path() -> str:
-    return os.path.join(_repo_bin_dir(), "coordinator-queue-append")
+    return os.path.join(_repo_bin_dir(), "coordinator-queue-append.py")
 
 
 def _load_legacy_cli_module():

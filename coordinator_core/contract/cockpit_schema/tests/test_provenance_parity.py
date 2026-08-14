@@ -1,15 +1,15 @@
 """
 test_provenance_parity — cross-package parity: ProvenanceEnvelope semantic equivalence.
 
-Pytest port of coordinator-claude `coordinator/cockpit-contract/test/provenance-parity.test.ts`.
+Pytest port of DoE `coordinator/cockpit-contract/test/provenance-parity.test.ts`.
 
 PURPOSE
 Guards against the two independently-authored ProvenanceEnvelope definitions
 diverging again.
 
-SOURCE A: coordinator-claude coordinator/cockpit-contract/schema/provenance-envelope.schema.json
+SOURCE A: DoE coordinator/cockpit-contract/schema/provenance-envelope.schema.json
   (root IS the ProvenanceEnvelope shape)
-SOURCE B: coordinator-claude coordinator/artifact-shape-contract/artifact-shape-contract.schema.json
+SOURCE B: DoE coordinator/artifact-shape-contract/artifact-shape-contract.schema.json
   → $defs.ProvenanceEnvelope
 
 NORMALIZATION: strips annotation-only fields (title, description, $schema,

@@ -10,9 +10,9 @@ Cover:
   - UNRESOLVED + suggestion — `to` is a near-miss of a registered receiver
     (defect 2, GREEN).
   - setup errors — missing `to`; `dry_run: false`; `repo_root=None`.
-  - defect-1 redirect-MATCH — `to` is a coordinator-claude redirect-alias literal that
+  - defect-1 redirect-MATCH — `to` is a DoE redirect-alias literal that
     resolves (via the manifest's declared central receiver id) to the same
-    repo as self. Coordinator-claude promoted `identity.redirectAliases` into the manifest
+    repo as self. DoE promoted `identity.redirectAliases` into the manifest
     2026-07-21; this is now a real passing assertion, not a gated xfail.
 
 Harness: asyncio.run() in sync test functions — no pytest-asyncio dependency
@@ -63,11 +63,11 @@ def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:
     return claude_home
 
 
-def _registered_example_doctrine_repo(machine_local: Path) -> Path | None:
-    """Return this fixture's `repos.example_doctrine_repo` path, or None if unregistered.
+def _registered_doe_claude(machine_local: Path) -> Path | None:
+    """Return this fixture's `repos.doe_claude` path, or None if unregistered.
 
     Handles both spellings the fixtures use: the flat quoted-dotted key
-    (`"repos.example_doctrine_repo" = "..."`) and the nested `[repos]` table.
+    (`"repos.doe_claude" = "..."`) and the nested `[repos]` table.
     """
     import tomllib
 
@@ -80,7 +80,7 @@ def _registered_example_doctrine_repo(machine_local: Path) -> Path | None:
                 data = tomllib.load(f)
         except Exception:
             continue
-        value = data.get("repos.example_doctrine_repo") or (data.get("repos") or {}).get("example_doctrine_repo")
+        value = data.get("repos.doe_claude") or (data.get("repos") or {}).get("doe_claude")
         if value:
             return Path(str(value))
     return None
@@ -93,13 +93,13 @@ def _write_doe_manifest(
 
     Mirrors test_memo_send.py's `_make_doe_manifest`: the sentinel lands on the
     DR-071 ladder's durable rung (`<settings-home>/machine-local/.doe-root`),
-    and the doe-root defaults to this fixture's own `repos.example_doctrine_repo` when
+    and the doe-root defaults to this fixture's own `repos.doe_claude` when
     registered — the ladder's canonical registry rung outranks the pointer file,
     and on a real machine the two agree.
     """
     machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
     doe_root = (
-        doe_root or _registered_example_doctrine_repo(machine_local) or (tmp_path / "doe-root")
+        doe_root or _registered_doe_claude(machine_local) or (tmp_path / "doe-root")
     )
     schemas_dir = doe_root / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True, exist_ok=True)
@@ -298,7 +298,7 @@ class TestResolverExceptionMapping:
             tmp_path,
             {
                 "central": str(tmp_path / "central-repo"),
-                "example_doctrine_repo": str(tmp_path / "coordinator-claude-repo"),
+                "doe_claude": str(tmp_path / "doe-claude-repo"),
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -308,7 +308,7 @@ class TestResolverExceptionMapping:
             tmp_path,
             {
                 "identity": {
-                    "centralReceiverIds": ["central-em", "coordinator-claude-em"],
+                    "centralReceiverIds": ["central-em", "doe-claude-em"],
                     "repoAliases": [],
                 }
             },
@@ -323,29 +323,29 @@ class TestResolverExceptionMapping:
 
 
 # ===========================================================================
-# 5. defect-1 redirect-MATCH — coordinator-claude promoted identity.redirectAliases 2026-07-21
+# 5. defect-1 redirect-MATCH — DoE promoted identity.redirectAliases 2026-07-21
 # ===========================================================================
 
 class TestRedirectMatchDefect1:
     def test_redirect_alias_matches_central_self(self, tmp_path, monkeypatch):
-        """`to` is a coordinator-claude redirect alias literal; self resolves to the central repo.
+        """`to` is a DoE redirect alias literal; self resolves to the central repo.
 
         Manifest declares `identity.redirectAliases: ["coordinator-claude"]` (the
-        field coordinator-claude promoted 2026-07-21) plus a SINGLE central receiver id,
-        `"coordinator-claude-em"`. read_redirect_aliases() picks up the normalized `to`
+        field DoE promoted 2026-07-21) plus a SINGLE central receiver id,
+        `"doe-claude-em"`. read_redirect_aliases() picks up the normalized `to`
         ("coordinator-claude"), so the redirect branch fires: it takes
-        `sorted(central_ids)[0]` == `"coordinator-claude-em"` and resolves it through
+        `sorted(central_ids)[0]` == `"doe-claude-em"` and resolves it through
         `resolve_receiver_inbox()`, which (via `convention_repo_key`) maps to
-        registry key `repos.example_doctrine_repo` — registered here to the SAME repo as
+        registry key `repos.doe_claude` — registered here to the SAME repo as
         self. Two distinct repo paths (self_root from the git common_dir, to_root
         from the registry) that happen to be the same directory -> MATCH.
         Manifest-driven end to end: no alias or central-id literal is hardcoded
         in the handler, only read declaratively via read_redirect_aliases()/
         read_central_receiver_ids().
         """
-        central_repo = tmp_path / "coordinator-claude-repo"
+        central_repo = tmp_path / "doe-claude-repo"
         central_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": str(central_repo)})
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": str(central_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         _write_doe_manifest(
@@ -355,9 +355,9 @@ class TestRedirectMatchDefect1:
                 "identity": {
                     # Single central id, so sorted(central_ids)[0] is unambiguous
                     # and maps (via convention_repo_key) to the one registered
-                    # repos.example_doctrine_repo key above -> the redirect branch resolves
+                    # repos.doe_claude key above -> the redirect branch resolves
                     # to central_repo, the same repo as self.
-                    "centralReceiverIds": ["coordinator-claude-em"],
+                    "centralReceiverIds": ["doe-claude-em"],
                     "repoAliases": [],
                     "redirectAliases": ["coordinator-claude"],
                 }

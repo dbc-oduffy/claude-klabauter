@@ -9,7 +9,7 @@ tool call into two append-only T-event logs:
     resolving to a known agent shape.)
 
 Port of the retired ~/.claude/plugins/coordinator/hooks/scripts/
-track-touched-files.sh (deleted 2026-07-22, coordinator-claude ``3a561713``).
+track-touched-files.sh (deleted 2026-07-22, DoE ``3a561713``).
 
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.
 Returns no_advisory() (empty dict) on every invocation path.
@@ -70,6 +70,12 @@ if TYPE_CHECKING:
     import asyncio
 
 from coordinator_core.ipc import register_op
+
+# Generator-provenance declaration (generator_provenance.py). Per this
+# module's own "Write confinement (hard)" clause above: writes ONLY under
+# .git/coordinator-sessions/ (touched.txt session/agent logs) -- never
+# state/, archive/, or any tracked repo path.
+GENERATES = []
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
@@ -129,7 +135,7 @@ def _get_lock(path: str) -> "asyncio.Lock":
 
 # ---------------------------------------------------------------------------
 # Agent-id resolution — Port of: coordinator-session.sh::resolve_subagent_identity
-# (coordinator-claude e34f2484, 2026-07-22)
+# (DoE e34f2484, 2026-07-22)
 #
 # Three resolution paths (including the C10 named-teammate
 # extension; docs/plans/2026-06-30-loe-dispatch-undercount-teammate-shape.md § C10):
@@ -323,7 +329,7 @@ def _bootstrap_session(
 # Atomic append (blocking — call via to_thread WHILE holding the per-file
 # asyncio.Lock).
 #
-# Port of: cs_atomic_dedup_append from coordinator-session.sh (coordinator-claude e34f2484,
+# Port of: cs_atomic_dedup_append from coordinator-session.sh (DoE e34f2484,
 # 2026-07-22), made EVENT-AWARE (plan docs/plans/2026-08-03-track-touched-
 # files-emits-t-events.md § C1, matching the EM-ratified precedent already
 # landed for session/claims.py::atomic_dedup_append). The dedup fast-exit that
@@ -424,9 +430,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     matcher is exactly those four tools, a path written **through Bash** — a generator,
     a formatter, ``python bin/*.py``, an engine op rewriting a state file — records NO
     claim here. ``compute_scope`` then sees a dirty file with no record anywhere and,
-    per coordinator-claude's ``scoped-safety-commits.md:131``, joins it to the CALLING session: a
+    per DoE's ``scoped-safety-commits.md:131``, joins it to the CALLING session: a
     co-toucher can take a live peer's Bash-authored content into ``my_scope``. This
-    predates the claim-release workstream and is accepted on coordinator-claude's side too.
+    predates the claim-release workstream and is accepted on DoE's side too.
 
     Do NOT "fix" this by widening the matcher to Bash. Three mechanisms were tried and
     each is unsound in the WIDENING direction, which is the direction this record exists

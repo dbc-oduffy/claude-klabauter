@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.session_hierarchy_query.
 
-Port of: query-session-hierarchy.sh (coordinator-claude b5a4192c, 2026-07-20).
+Port of: query-session-hierarchy.sh (DoE b5a4192c, 2026-07-20).
 """
 from __future__ import annotations
 

@@ -11,8 +11,8 @@ authoritative.
 Output: a one-line summary header + indented bullets per detected stack +
 fixed Notes footer. Exit 0 even when no markers fire.
 
-Port of: detect-project-runtime.sh (coordinator-claude b5a4192c, 2026-07-20, 125 lines)
-Spec backlink: archive/specs/2026-05-06-detect-project-runtime.md (coordinator-claude)
+Port of: detect-project-runtime.sh (DoE b5a4192c, 2026-07-20, 125 lines)
+Spec backlink: archive/specs/2026-05-06-detect-project-runtime.md (DoE-claude)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
 Negative-spec (preserved verbatim from the bash oracle — do NOT "fix"

@@ -33,7 +33,7 @@ from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_
 
 
 def _script_path() -> str:
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "coordinator-harvest-deferrals")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "coordinator-harvest-deferrals.py")
 
 
 def _load_harvest_module():

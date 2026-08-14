@@ -1,9 +1,9 @@
 """
 coordinator_core.ops.cruft_sweep — Layer 1 cruft-pruner engine (T3a-g1a port).
 
-Purpose: claude-klabauter-native port of the four sweep phases in the coordinator-claude-owned
+Purpose: claude-klabauter-native port of the four sweep phases in the DoE-owned
 `coordinator/bin/cruft-sweep.sh` trampoline (DR-047 contract-vs-engine split).
-This module owns the pure, fully-resolved-config sweep logic; the coordinator-claude
+This module owns the pure, fully-resolved-config sweep logic; the DoE
 trampoline owns CLI parsing, machine-local/registry resolution, and the
 frozen `coordinator_state_root` seam — none of that lives here.
 
@@ -67,7 +67,7 @@ Net-new phase — sweep_empty_toplevel_dirs (added 2026-07-28, incident-driven):
   phases' oracle fidelity is asserted via phase-specific behavioral tests,
   not a literal golden-diff runner (`coordinator_core/percolate/tests/
   test_parity_doe.py` is the tree's only "parity" test and targets an
-  unrelated seam, the coordinator-claude percolate mirror). Recorded so a future reader
+  unrelated seam, the DoE percolate mirror). Recorded so a future reader
   neither hunts for a harness that does not exist nor builds one that
   silently swallows this phase: if such a harness is ever added, this phase
   MUST be excluded from it — there is no bash to diff against, and a parity
@@ -94,24 +94,24 @@ Net-new phase — sweep_harness_scratchpads (class "scratchpad"): a thin
 
 Each accepts an optional `emit_fn: Callable[[dict], None]` — defaults to
 `print(json.dumps(rec))` on stdout (bash-parity), but a caller (golden-diff
-test, or the coordinator-claude trampoline in --json mode) may pass a list-appending
+test, or the DoE trampoline in --json mode) may pass a list-appending
 callable to capture records without a subprocess/stdout round-trip.
 
 Self-registration: importing this module calls register_op("cruft_sweep.run",
 _run_handler) as a side-effect — see central-reg fragment
-Coordinator-claude/scratch/subagent-sandbox/bash-to-python-engine-migration/central-reg/T3a-g1a.txt
+DoE-claude/scratch/subagent-sandbox/bash-to-python-engine-migration/central-reg/T3a-g1a.txt
 for the OP_MODULE_MAP / OP_CLASSIFICATION additions this self-registration
 still needs (central-registry deferral — this module does NOT edit those
 shared files itself).
 
-Byte-parity target: cruft-sweep.sh (coordinator-claude 6fb5fb37, 2026-07-22, bash oracle).
+Byte-parity target: cruft-sweep.sh (DoE 6fb5fb37, 2026-07-22, bash oracle).
 
 Design decisions pinned per EM ruling (recipe § cruft-sweep, Q5/Q6/Q8):
-  - Q5: the coordinator-claude-side trampoline keeps the `.sh` extension (72 live doc refs).
+  - Q5: the DoE-side trampoline keeps the `.sh` extension (72 live doc refs).
     Not this module's concern, noted for context only.
   - Q6: this module does NOT resolve COORDINATOR_CONTENT_ROOT /
     resolve-coordinator-clone.sh / coordinator-trusted-root-guard.sh — those
-    stay coordinator-claude-side unchanged; this module is handed fully-resolved paths.
+    stay DoE-side unchanged; this module is handed fully-resolved paths.
   - Q8: `_dir_size_bytes` approximates the bash oracle's `du -sk <dir> * 1024`
     ALLOCATED-disk-usage semantic (not apparent byte size) by summing
     `st_blocks * 512` over the directory root and every file/dir yielded by
@@ -124,14 +124,14 @@ Design decisions pinned per EM ruling (recipe § cruft-sweep, Q5/Q6/Q8):
 Negative-spec:
   - Does NOT resolve `machine-local`, `coordinator_state_root`, or any
     registry/env-config value — every path/threshold argument must already
-    be resolved by the caller (coordinator-claude trampoline, or a test fixture).
+    be resolved by the caller (DoE trampoline, or a test fixture).
   - Does NOT build the UUID blocklist from a `--handoffs-glob` flag string —
     `build_uuid_blocklist` takes an already-resolved handoffs directory Path.
   - Does NOT implement `--parent-root` default-derivation (`_default_parent_roots`
-    in the bash oracle, which shells to `machine-local keys`) — the coordinator-claude
+    in the bash oracle, which shells to `machine-local keys`) — the DoE
     trampoline resolves `parent_roots` and passes the resolved list in.
   - Does NOT read/write the machine-local `parent_whitelist` TOML array —
-    the coordinator-claude trampoline resolves `whitelist` (upgraded to `tomllib.load()`
+    the DoE trampoline resolves `whitelist` (upgraded to `tomllib.load()`
     per recipe) and passes the resolved list in.
   - Does NOT emit the grand-total / run-marker log rows — those span all
     four phases and CLASS dispatch, which is trampoline-owned orchestration,
@@ -140,8 +140,8 @@ Negative-spec:
     and items>0, matching the bash oracle's per-function log-append block).
   - Does NOT invoke `cc_invoke()`'s JSON-RPC subprocess-envelope seam
     internally; the registered `cruft_sweep.run` op is a convenience façade
-    for JSON-RPC callers, not the primary call path (the coordinator-claude trampoline
-    imports and calls the phase functions in-process — see recipe § coordinator-claude-side
+    for JSON-RPC callers, not the primary call path (the DoE trampoline
+    imports and calls the phase functions in-process — see recipe § DoE-side
     work item 5).
 """
 
@@ -365,7 +365,7 @@ def emit_jsonl(
 ) -> None:
     """Mirrors bash `_emit_jsonl`. Default emit_fn prints one JSON line to
     stdout (bash-parity); pass a list-appending callable to capture records
-    in-process (golden-diff tests, or the coordinator-claude trampoline's --json mode)."""
+    in-process (golden-diff tests, or the DoE trampoline's --json mode)."""
     rec = {
         "class": class_,
         "path": path,
@@ -861,7 +861,7 @@ def build_uuid_blocklist(handoffs_dir: Path) -> Tuple[set, bool]:
     handoffs_dir for `predecessor: <uuid>` lines, return the set of UUIDs.
 
     Takes an already-resolved directory Path (NOT a glob string) — glob
-    resolution / --handoffs-glob parsing is the coordinator-claude trampoline's concern.
+    resolution / --handoffs-glob parsing is the DoE trampoline's concern.
     Empty set (not error) when handoffs_dir doesn't exist.
 
     Returns (blocklist, complete). `complete` is False when at least one
@@ -1823,8 +1823,8 @@ def sweep_harness_scratchpads(
 
 # ---------------------------------------------------------------------------
 # Registered op — convenience JSON-RPC façade over the four phase functions.
-# Primary call path remains the coordinator-claude trampoline's in-process import (recipe §
-# coordinator-claude-side work item 5); this registration exists for op-registry parity /
+# Primary call path remains the DoE trampoline's in-process import (recipe §
+# DoE-side work item 5); this registration exists for op-registry parity /
 # any future JSON-RPC caller, per the T3a-g1a build brief's "NEW op" framing.
 # ---------------------------------------------------------------------------
 
@@ -1989,7 +1989,7 @@ async def _run_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Exclusive lock — mirrors cruft-sweep.sh's `mkdir "$LOCK_DIR"` + EXIT-trap
     # rmdir wrapping the ENTIRE invocation (lines 279-285 of the bash oracle).
     # This façade is a legitimate alternate call path into the same mutating
-    # phase functions the coordinator-claude trampoline drives, so it must hold the same
+    # phase functions the DoE trampoline drives, so it must hold the same
     # single-instance-serialization guarantee, not just the trampoline.
     # Review: code-reviewer (ops-records-cruft-hierarchy F3) — try_acquire_lock/
     # release_lock were defined but never called anywhere in this module.

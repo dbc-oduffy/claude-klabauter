@@ -122,6 +122,28 @@ class TestFiletimeConversion:
         assert hr._proc_start_to_epoch("not-a-date-or-number") is None
         assert hr._proc_start_to_epoch("") is None
 
+    def test_float_procstart_falls_through_not_truncated_into_filetime(self):
+        # A JSON float must never silently truncate via int() into the
+        # FILETIME leg (Defect 1) -- it is neither a genuine int nor a
+        # ctime/ISO-8601 string, so it must yield None, not a coincidentally
+        # "valid" epoch from truncated ticks.
+        epoch = time.time() - 60
+        ticks_float = float(_epoch_to_filetime_ticks(epoch))
+        assert hr._proc_start_to_epoch(ticks_float) is None
+
+    def test_numeric_string_procstart_falls_through_to_string_branches(self):
+        # A numeric-looking string (e.g. "133...") must not be swallowed
+        # into the FILETIME leg via int(raw) either -- it isn't a ctime or
+        # ISO-8601 shape, so it must yield None rather than a coincidence.
+        in_band_ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        assert hr._proc_start_to_epoch(str(in_band_ticks)) is None
+
+    def test_bool_procstart_rejected(self):
+        # bool is an int subclass in Python -- must not be admitted to the
+        # FILETIME leg (mirrors _parse_one's own pid bool-rejection).
+        assert hr._proc_start_to_epoch(True) is None
+        assert hr._proc_start_to_epoch(False) is None
+
 
 class TestSnapshotAndLookup:
     def test_matching_record_resolves(self, tmp_path, monkeypatch):
@@ -318,6 +340,32 @@ class TestSelfRecord:
         assert session_id == "sess-self"
         assert record.pid == 4242
         assert record.cwd == str(tmp_path)
+        assert record.stable_pid_capture == "env-hit"
+
+    def test_self_record_threads_reason_onto_record(self, tmp_path, monkeypatch):
+        """C2b — the discarded `reason` leg of `_resolve_claude_pid_from_env()`
+        lands on the returned record's `stable_pid_capture` field, reusing
+        the same vocabulary the other three call sites already write."""
+        sessions_dir = tmp_path / "sessions"
+        epoch = time.time() - 60
+        ticks = _epoch_to_filetime_ticks(epoch)
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sessionId": "sess-self-2",
+            "pid": 4343,
+            "procStart": ticks,
+        }
+        (sessions_dir / "4343.json").write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        monkeypatch.setattr(
+            "coordinator_core.session.core._resolve_claude_pid_from_env",
+            lambda: ((4343, 0.0), "env-miss:name-mismatch"),
+        )
+
+        result = hr.self_record()
+        assert result is not None
+        _session_id, record = result
+        assert record.stable_pid_capture == "env-miss:name-mismatch"
 
     def test_self_record_miss_no_claude_pid(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / "sessions"
@@ -528,3 +576,32 @@ class TestSingleScanInvariant:
 
         assert call_count["n"] == 1
         assert set(result) == {"sess-a", "sess-b"}
+
+
+class TestRegistryRecordFieldContract:
+    """Pins `RegistryRecord`'s full field set against the module docstring's
+    documented list, so a future field addition cannot drift the docstring
+    silently (the exact defect class this module has already been bitten
+    by — added chunk C2b alongside `stable_pid_capture`)."""
+
+    def test_field_set_matches_documented_contract(self):
+        import dataclasses
+
+        field_names = tuple(f.name for f in dataclasses.fields(hr.RegistryRecord))
+        assert field_names == (
+            "pid",
+            "start_epoch",
+            "cwd",
+            "name",
+            "messaging_socket_path",
+            "status",
+            "stable_pid_capture",
+        )
+
+    def test_all_fields_except_pid_and_start_epoch_default_to_none(self):
+        import dataclasses
+
+        for f in dataclasses.fields(hr.RegistryRecord):
+            if f.name in ("pid", "start_epoch"):
+                continue
+            assert f.default is None, f"{f.name} must default to None"

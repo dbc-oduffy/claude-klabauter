@@ -2,7 +2,7 @@
 
 Byte-parity target: coordinator/bin/lib/sentinel-blocks-cli.js (extract command,
 usage/error contract). See sentinel_blocks_cli.py module docstring for the
-"no coordinator-claude-side trampoline" disposition.
+"no DoE-side trampoline" disposition.
 """
 from __future__ import annotations
 

@@ -18,7 +18,7 @@
       {"kind": "literal", "line": "  kind: none  # none | url | claude-session — see schema $defs for the required payload shape of the other two kinds"},
       {"kind": "literal", "line": "  label: \"<call-to-action label>\""},
       {"kind": "literal", "line": "hero_asset: null  # OPTIONAL hero image/screenshot URI — present-as-null when absent, never omit this key"},
-      {"kind": "literal", "line": "# maturity_axis: null  # OPTIONAL, consumer-set-only field — coordinator-claude schema does not interpret its value"},
+      {"kind": "literal", "line": "# maturity_axis: null  # OPTIONAL, consumer-set-only field — DoE schema does not interpret its value"},
       {"kind": "literal", "line": "# depends_on: []  # OPTIONAL, consumer-set-only field — repo_identity tuples this repo depends on"}
     ]
   },

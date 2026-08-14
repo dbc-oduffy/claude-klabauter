@@ -1,5 +1,5 @@
 """misc-session-and-guards.py — small-guard-and-resolver grab-bag, ported off
-Coordinator-claude instruction-file bash fences (M3 chunk C-MISC).
+DoE-claude instruction-file bash fences (M3 chunk C-MISC).
 
 Subcommands (argv[1] selects):
     claim-classify
@@ -75,6 +75,8 @@ _BIN_DIR = Path(__file__).resolve().parent
 _LIB_DIR = _BIN_DIR / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
+
+GENERATES = []  # autonomous-sentinel writes only to the platform tempdir (autonomous_sentinel.sentinel_path); other subcommands only print/shell out
 
 _TRANSPORT_FAIL = 3
 

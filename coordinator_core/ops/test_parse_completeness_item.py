@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.parse_completeness_item.
 
-Mirrors coordinator/tests/completeness-checklist.bats (coordinator-claude) case-for-case,
+Mirrors coordinator/tests/completeness-checklist.bats (DoE-claude) case-for-case,
 plus additional coverage for the stdin-truncation oracle quirk (module docstring
 "Oracle quirk" note) and the CLI main() exit-code/output contract.
 """

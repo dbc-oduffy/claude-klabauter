@@ -27,6 +27,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,87 @@ def test_coordinator_bin_present_but_sentinel_absent_distinct_message(tmp_path: 
     with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="stale or partial claude-klabauter migration") as excinfo:
         resolve_claude_klabauter.resolve_claude_klabauter_bin_dir()
     assert "has no coordinator/bin/ directory" not in str(excinfo.value)
+
+
+def test_sentinel_appearing_mid_rename_resolves_instead_of_raising(tmp_path: Path, monkeypatch):
+    """A sentinel absent on the FIRST probe but present on a re-probe resolves.
+
+    Models the C6 rename window (grind-the-posix-exec-baseline-to-zero): the
+    wave lands `archive-stamp-cli` -> `archive-stamp-cli.py` as delete-then-
+    write, so for an instant neither shape is on disk. A single probe cannot
+    tell that from a genuinely missing sentinel, and because archive-stamp-cli
+    is the sole authorized frontmatter writer, raising there fails every
+    concurrent session's handoff and memo stamping closed. Measured live
+    2026-08-13 from a memo pickup taken mid-wave.
+    """
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    root = tmp_path / "mid-rename-claude-klabauter"
+    (root / "coordinator" / "bin").mkdir(parents=True)
+    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    sentinel_py = root / "coordinator" / "bin" / "archive-stamp-cli.py"
+    real_sleep = time.sleep
+
+    def _write_sentinel_on_first_sleep(seconds):
+        # The write lands during the first backoff — i.e. the file appears
+        # between probe 1 and probe 2, exactly as the rename's second half does.
+        if not sentinel_py.exists():
+            sentinel_py.write_text("# archive-stamp-cli\n", encoding="utf-8")
+        real_sleep(0)
+
+    monkeypatch.setattr(resolve_claude_klabauter.time, "sleep", _write_sentinel_on_first_sleep)
+
+    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir().replace("\\", "/") == (
+        root.as_posix() + "/coordinator/bin"
+    )
+
+
+def test_sentinel_absent_across_reprobe_still_raises(tmp_path: Path, monkeypatch):
+    """The re-probe must not soften a genuinely absent sentinel into a pass.
+
+    Negative-spec for the mid-rename retry above: a sentinel that stays absent
+    across every backoff is a real stale/partial migration and must still fail
+    loud, with the message naming the re-probe so the reader knows the miss was
+    not a single unlucky read.
+    """
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    root = tmp_path / "genuinely-absent-claude-klabauter"
+    (root / "coordinator" / "bin").mkdir(parents=True)
+    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    monkeypatch.setattr(resolve_claude_klabauter.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(
+        resolve_claude_klabauter.ClaudeKlabauterResolutionError,
+        match="stale or partial claude-klabauter migration",
+    ) as excinfo:
+        resolve_claude_klabauter.resolve_claude_klabauter_bin_dir()
+    assert "re-probe" in str(excinfo.value)
+
+
+def test_present_sentinel_never_pays_the_retry_sleep(tmp_path: Path, monkeypatch):
+    """The happy path must not sleep — the retry is failure-path-only cost.
+
+    On a box whose load norm is 50-70 concurrent LLMs, a resolver that slept on
+    every successful resolution would be a real regression; the first probe has
+    to short-circuit.
+    """
+    ml_dir = tmp_path / "machine-local"
+    ml_dir.mkdir()
+    root = tmp_path / "happy-path-claude-klabauter"
+    _make_claude_klabauter_fixture(root)
+    (ml_dir / ".claude-klabauter-root").write_text(str(root), encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
+
+    slept: list = []
+    monkeypatch.setattr(resolve_claude_klabauter.time, "sleep", lambda seconds: slept.append(seconds))
+
+    resolve_claude_klabauter.resolve_claude_klabauter_bin_dir()
+    assert slept == []
 
 
 def test_non_executable_sentinel_rejected(tmp_path: Path, monkeypatch):
@@ -388,7 +470,7 @@ _INSTALLED_SHIM_PATH = _resolve_installed_shim_path()
 
 # ---------------------------------------------------------------------------
 # DR-132 two-tier ladder — `resolve_claude_klabauter_root_with_class()`. Mirrors
-# coordinator-claude `coordinator/hooks/scripts/_engine_root.py`'s
+# DoE-claude `coordinator/hooks/scripts/_engine_root.py`'s
 # `resolve_claude_klabauter_root_with_class()` step order; a conformance fixture
 # (chunk C8) drives both implementations against the same registry-state
 # cases, so drift here WILL be caught cross-repo.
@@ -443,7 +525,7 @@ def test_published_wins_when_gate_returns_false(tmp_path: Path, monkeypatch):
 
     (ml_dir / "registry.local.toml").write_text(
         f'"repos.claude_klabauter" = \'{published_root}\'\n'
-        f'"engine.working_repos.example_doctrine_repo" = \'{other_working_repo}\'\n',
+        f'"engine.working_repos.doe_claude" = \'{other_working_repo}\'\n',
         encoding="utf-8",
     )
 
@@ -536,7 +618,7 @@ def test_working_repo_union_across_both_registry_files(tmp_path: Path, monkeypat
     repo_in_local.mkdir()
 
     (ml_dir / "registry.toml").write_text(
-        f'"engine.working_repos.example_doctrine_repo" = \'{repo_in_tracked}\'\n', encoding="utf-8"
+        f'"engine.working_repos.doe_claude" = \'{repo_in_tracked}\'\n', encoding="utf-8"
     )
     (ml_dir / "registry.local.toml").write_text(
         f'"engine.working_repos.claude_klabauter" = \'{repo_in_local}\'\n', encoding="utf-8"

@@ -1,6 +1,6 @@
 """Parity net for C9's ``envelope._resolve_central_state_root`` native port.
 
-Port of: coordinator-state-root.sh (coordinator-claude 6fb5fb37, 2026-07-22)'s
+Port of: coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22)'s
 ``coordinator_state_root --central`` (Rule 4,
 the backward-compat default: no ``--subject``/``--artifact``) — resolves to
 ``$(_csr_claude_klabauter_root)/state``. The bash lib's own docstring documents ``_csr_claude_klabauter_root``

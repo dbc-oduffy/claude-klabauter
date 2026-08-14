@@ -2,7 +2,7 @@
 
 Port-parity coverage for coordinator/bin/coordinator-renormalize-index (DOE-PORT
 bin-entrypoint variant). Mined from
-test-coordinator-renormalize-index.sh (coordinator-claude 432e3285, 2026-07-22):
+test-coordinator-renormalize-index.sh (DoE 432e3285, 2026-07-22):
 
   - Section A (platform-independent safety filters): real edits, worktree deletions,
     and sibling-staged changes are excluded from the phantom set and never staged;

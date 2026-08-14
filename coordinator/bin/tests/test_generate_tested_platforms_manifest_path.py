@@ -2,7 +2,7 @@
 `generate-tested-platforms::_manifest_path()`'s dual-layout resolution.
 
 Context: `_MANIFEST_RELATIVE` used to be a single hardcoded
-`coordinator/docs/install/agent-install-manifest.json` (coordinator-claude's layout).
+`coordinator/docs/install/agent-install-manifest.json` (DoE-claude's layout).
 In claude-klabauter's own checkout the manifest lives at
 `docs/install/agent-install-manifest.json` (no `coordinator/` prefix), so the
 tool's *default* invocation (no `--repo-root`, defaulting to claude-klabauter's own
@@ -10,7 +10,7 @@ checkout) resolved a path that does not exist. `--repo-root` is explicitly
 designed to let this tool probe a foreign repo, so a single hardcoded
 relative layout cannot serve both shapes.
 
-Tests: coordinator-claude layout resolves, claude-klabauter layout resolves, neither-exists
+Tests: DoE-claude layout resolves, claude-klabauter layout resolves, neither-exists
 raises FileNotFoundError naming both attempted paths.
 
 Spec backlink: slice-3 review carried loose end, claude-klabauter
@@ -27,7 +27,7 @@ import pytest
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
-_HELPER_PATH = _BIN_DIR / "generate-tested-platforms"
+_HELPER_PATH = _BIN_DIR / "generate-tested-platforms.py"
 
 
 def _load_module(path: Path, module_name: str):
@@ -42,7 +42,7 @@ def _load_module(path: Path, module_name: str):
 _helper = _load_module(_HELPER_PATH, "generate_tested_platforms_manifest_path_test")
 
 
-def test_resolves_example_doctrine_repo_layout(tmp_path) -> None:
+def test_resolves_doe_claude_layout(tmp_path) -> None:
     manifest_dir = tmp_path / "coordinator" / "docs" / "install"
     manifest_dir.mkdir(parents=True)
     manifest_file = manifest_dir / "agent-install-manifest.json"
@@ -62,7 +62,7 @@ def test_resolves_claude_klabauter_layout(tmp_path) -> None:
     assert resolved == str(manifest_file)
 
 
-def test_prefers_example_doctrine_repo_layout_when_both_present(tmp_path) -> None:
+def test_prefers_doe_claude_layout_when_both_present(tmp_path) -> None:
     doe_dir = tmp_path / "coordinator" / "docs" / "install"
     doe_dir.mkdir(parents=True)
     doe_file = doe_dir / "agent-install-manifest.json"

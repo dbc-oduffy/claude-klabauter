@@ -15,8 +15,7 @@ Matrix asserted:
     when it does not
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
-`tier-u-grant-cli` is an extensionless polyglot entrypoint, not a `.py`
-module.
+`tier-u-grant-cli.py` doesn't sit on `sys.path` as an importable module.
 
 Converted from a hand-rolled unittest runner to top-level pytest functions
 with a pytest fixture carrying the seam monkeypatch/restore.
@@ -38,7 +37,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "tier_u_grant_cli", str(_BIN_DIR / "tier-u-grant-cli")
+        "tier_u_grant_cli", str(_BIN_DIR / "tier-u-grant-cli.py")
     )
     spec = importlib.util.spec_from_loader("tier_u_grant_cli", loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]

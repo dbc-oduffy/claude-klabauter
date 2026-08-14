@@ -18,7 +18,7 @@ logic — the 8 review-side `judgment_points` named in D-3
 `review-dispatch-vehicle-choice`, `quota-retry-vs-escalate`) belong to
 `judgments.py` (C2f).
 
-Source: coordinator-claude coordinator/skills/workstream-complete/SKILL.md,
+Source: DoE-claude coordinator/skills/workstream-complete/SKILL.md,
 Step 2.9 (lines ~409-566) and Step 2.9b (lines ~568-587).
 
 This module is one of seven siblings (directives_lessons_plan.py,
@@ -127,6 +127,13 @@ from coordinator_core.coverage import (
     _FOREIGN_STRIPPED_SCOPES,
     _record_range_has_stored_head,
 )
+
+#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
+#: record_gate_memo() below writes state/ceremony/wsc-gate-verdict-memo/<hash>.json
+#: (hashed-key filename, one per distinct (gate_id, resolved-inputs) pair) -- a
+#: data-dependent set of tracked artifacts, not a fixed one, so this is a
+#: corpus-mutator declaration rather than GENERATES.
+MUTATES = ["state/ceremony/wsc-gate-verdict-memo/*.json"]
 
 # ---------------------------------------------------------------------------
 # Shared directive-dict helper (same shape as __init__.py's private
@@ -1140,7 +1147,7 @@ def build_write_review_trail_directive(
 
     `reviewer` and `verdict` MUST agree on whether this record is waived
     (docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C14,
-    folded from the coordinator-claude-em memo): `reviewer='waived'` requires
+    folded from the doe-claude-em memo): `reviewer='waived'` requires
     `verdict='waived'`; any other verdict (including `pending`) requires a
     real, non-waived reviewer. Enforced here, fail-loud via `ValueError`
     mirroring the `sha_range` guard above — NOT coerced, because silently
@@ -1295,7 +1302,7 @@ def verify_trail_range_termination(
 # ---------------------------------------------------------------------------
 # chain_partition_verdict_discharged — C13
 # (docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md, AC20/AC21,
-# folded from cross-repo/inbox/2026-08-06-coordinator-claude-em-partition-mandatory-
+# folded from cross-repo/inbox/2026-08-06-doe-claude-em-partition-mandatory-
 # verdict-does-not-refuse-the-cap.md). Pure predicate, no CLI/IO of its own
 # (D-4) — the caller (`wsc-coverage-gate-runner.py::cmd_brightline_gate`)
 # resolves `trail_records` via its own `_load_trail_records()` (live+archive

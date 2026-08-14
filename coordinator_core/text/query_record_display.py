@@ -25,7 +25,7 @@ schema-sidecar parsing), so a renderer for them would be dead code with nothing 
 ever call it. Widening the native reader to cover them is a separate, larger port.
 `research-synthesis`/`gap-report`/`coverage-audit` were in this dropped list until
 2026-07-22 (cross-repo/inbox/2026-07-22-claude-central-em-records-query-excluded-
-types-doe-needs.md — 3 live coordinator-claude runtime consumers) — see records_query.py's own
+types-doe-needs.md — 3 live DoE runtime consumers) — see records_query.py's own
 Negative-spec for the wiring + sibling-exclusion-filter side of that change.
 
 `archived-memo` is a DIFFERENT case, not part of the above SCOPE-DROP list: it

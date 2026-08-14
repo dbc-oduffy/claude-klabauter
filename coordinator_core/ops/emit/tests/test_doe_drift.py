@@ -1,10 +1,10 @@
-"""strang-02 drift-check tests — coordinator-claude-HEAD conformance fixture + version-band gate.
+"""strang-02 drift-check tests — DoE-HEAD conformance fixture + version-band gate.
 
 Covers every acceptance criterion from strang-02:
 
   AC_Q-a-sha:
     - Vendored-pin SHA is recorded; fails loud on SHA mismatch (simulated synthetic advance).
-    - Ref absent on coordinator-claude origin → graceful WARN, no exception (live constraint).
+    - Ref absent on DoE origin → graceful WARN, no exception (live constraint).
 
   AC_Q-a-band:
     - ``contract_version`` bump alone → NO fail-loud (version-band gate, not equality).
@@ -12,27 +12,27 @@ Covers every acceptance criterion from strang-02:
 
   AC_Q-b:
     - Fixture read from ``coordinator/cockpit-contract/conformance/emission-conformance.json``
-      in the coordinator-claude local clone at ``repos.example_doctrine_repo``; NOT co-vendored in claude-klabauter's _vendor/.
+      in the DoE local clone at ``repos.doe_claude``; NOT co-vendored in claude-klabauter's _vendor/.
 
   AC_NORMALIZER:
     - Live run with runtime-varying provenance matches the normalized golden via _normalize.
     - Reuses the EXISTING ``_normalize`` helper from test_emit_parity (not a duplicate).
 
   AC_DRIFT_CHECK:
-    - Drift-check fails loud when pinned version < coordinator-claude min_supported (synthetic lag test).
+    - Drift-check fails loud when pinned version < DoE min_supported (synthetic lag test).
 
   AC_CONFORMANCE:
     - Conformance runs against the strang-01 strangled path (envelope.emit()), not raw bash.
     - Proves the seam conforms: strang-01 output schema_version satisfies the version band.
 
   AC_REF_ABSENT:
-    - When coordinator-claude origin has no ``cockpit-contract-release`` ref, check_freshness issues
+    - When DoE origin has no ``cockpit-contract-release`` ref, check_freshness issues
       a warning and does NOT raise (graceful ref-absent path).
 
 Spec backlink: state/handoffs/2026-07-04_201949_roadmap-strang-02.md
-Oracle: /Users/example-operator/X/coordinator-claude/coordinator/docs/wiki/emission-conformance-contract.md
+Oracle: /Users/example-operator/X/DoE-claude/coordinator/docs/wiki/emission-conformance-contract.md
 
-Note: tests that require a live coordinator-claude clone use ``resolve_doe_clone()`` and skip
+Note: tests that require a live DoE clone use ``resolve_doe_clone()`` and skip
 gracefully when the clone is absent (CI portability).  Tests that call envelope.emit()
 require the vendored cockpit-contract pin and use the ``requires_vendor_pin`` fixture.
 """
@@ -86,11 +86,11 @@ from coordinator_core.ops.emit.normalizers import (
 
 
 # ---------------------------------------------------------------------------
-# Helpers — skip guard for live coordinator-claude clone
+# Helpers — skip guard for live DoE clone
 # ---------------------------------------------------------------------------
 
 def _live_doe_clone() -> Optional[Path]:
-    """Return the live coordinator-claude clone path or None if unavailable on this machine."""
+    """Return the live DoE clone path or None if unavailable on this machine."""
     try:
         return resolve_doe_clone()
     except DoeResolveError:
@@ -101,15 +101,15 @@ _DOE_AVAILABLE = _live_doe_clone() is not None
 
 
 # ---------------------------------------------------------------------------
-# AC_Q-b: fixture read from coordinator-claude clone, not co-vendored
+# AC_Q-b: fixture read from DoE clone, not co-vendored
 # ---------------------------------------------------------------------------
 
 class TestFixtureResolution:
-    """AC_Q-b: fixture lives in the coordinator-claude clone, not co-vendored in claude-klabauter's _vendor/."""
+    """AC_Q-b: fixture lives in the DoE clone, not co-vendored in claude-klabauter's _vendor/."""
 
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_fixture_read_from_doe_clone(self) -> None:
-        """Fixture is read from repos.example_doctrine_repo (not claude-klabauter's _vendor/)."""
+        """Fixture is read from repos.doe_claude (not claude-klabauter's _vendor/)."""
         doe_clone = resolve_doe_clone()
         fixture = read_doe_fixture(doe_clone)
 
@@ -119,7 +119,7 @@ class TestFixtureResolution:
             "fixture must carry min_supported_contract_version (CD-2)"
         )
 
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_fixture_not_in_vendor_tree(self) -> None:
         """The fixture MUST NOT be co-vendored in claude-klabauter's _vendor/ tree.
 
@@ -130,7 +130,7 @@ class TestFixtureResolution:
         co_vendored = _VENDOR_CONTRACT / "conformance" / "emission-conformance.json"
         assert not co_vendored.exists(), (
             f"Fixture must NOT be co-vendored at {co_vendored} — "
-            "it must be read from the coordinator-claude clone at check-time (DR-210 anti-drift invariant)."
+            "it must be read from the DoE clone at check-time (DR-210 anti-drift invariant)."
         )
 
     def test_fixture_parse_failure_raises_doe_resolve_error(self, tmp_path: Path) -> None:
@@ -176,21 +176,21 @@ class TestVersionBand:
     def test_contract_version_bump_alone_does_not_fail(self) -> None:
         """Critical: contract_version advances, min_supported stays trailing → no fail.
 
-        This is the reader-first invariant. Coordinator-claude bumps contract_version first and raises
+        This is the reader-first invariant. DoE bumps contract_version first and raises
         min_supported only after the re-vendor window closes.  claude-klabauter must NOT fail
         during the window (equality-fail-loud is architecturally incompatible with reader-first).
         """
-        # Simulate: coordinator-claude bumps contract_version to 2.6.0 but leaves min_supported at 2.5.0.
+        # Simulate: DoE bumps contract_version to 2.6.0 but leaves min_supported at 2.5.0.
         # claude-klabauter's pin is 2.5.0 — MUST pass.
         check_version_band("2.5.0", self._make_fixture("2.6.0", "2.5.0"))  # must not raise
 
     def test_min_supported_past_pin_fails_loud(self) -> None:
         """min_supported_contract_version > pinned → DriftError (re-vendor required).
 
-        After the re-vendor window closes coordinator-claude raises min_supported.  A still-at-2.5.0
+        After the re-vendor window closes DoE raises min_supported.  A still-at-2.5.0
         claude-klabauter pin must fail loud — the grace window has closed.
         """
-        with pytest.raises(DriftError, match="below the coordinator-claude min_supported_contract_version"):
+        with pytest.raises(DriftError, match="below the DoE min_supported_contract_version"):
             check_version_band("2.5.0", self._make_fixture("2.6.0", "2.6.0"))
 
     def test_significantly_lagging_pin_fails_loud(self) -> None:
@@ -201,7 +201,7 @@ class TestVersionBand:
     def test_missing_min_supported_warns_not_raises(self) -> None:
         """Missing min_supported_contract_version in fixture → WARN, not error.
 
-        coordinator-claude commitment: always publish the field.  Absent means coordinator-claude has not yet;
+        DoE commitment: always publish the field.  Absent means DoE has not yet;
         we warn rather than breaking claude-klabauter (graceful degradation).
         """
         fixture = {"contract_version": "2.5.0"}
@@ -229,11 +229,11 @@ class TestFreshnessRef:
     """AC_Q-a-sha: cockpit-contract-release ref probe; fail loud on SHA mismatch."""
 
     def test_ref_absent_graceful_no_exception(self, tmp_path: Path) -> None:
-        """AC_REF_ABSENT: ref absent on coordinator-claude origin → WARN, no DriftError.
+        """AC_REF_ABSENT: ref absent on DoE origin → WARN, no DriftError.
 
-        Live constraint: coordinator-claude has NOT published refs/tags/cockpit-contract-release at
+        Live constraint: DoE has NOT published refs/tags/cockpit-contract-release at
         strang-02 pickup.  This is the expected path in CI and on live machines until
-        coordinator-claude publishes the ref.  Must NEVER hard-fail on ref absence.
+        DoE publishes the ref.  Must NEVER hard-fail on ref absence.
         """
         # Write a real pin SHA so we get past the 'pin absent' early exit.
         pin_sha = "aabbccddeeff00112233445566778899aabbccdd"
@@ -260,7 +260,7 @@ class TestFreshnessRef:
         """AC_Q-a-sha: SHA mismatch → DriftError (re-vendor required).
 
         Simulates a synthetic SHA advance on origin: the pin records an old SHA but
-        the current coordinator-claude origin returns a different (newer) SHA.  Explicitly exercises
+        the current DoE origin returns a different (newer) SHA.  Explicitly exercises
         the "pin behind tag" (False) path — not the indeterminate-via-non-git-tmp_path
         path that the previous mock gap inadvertently tested.
 
@@ -392,7 +392,7 @@ class TestFreshnessRef:
 
         State (A): both the pin file says ABSENT and the origin has no ref yet.
         Must emit a warning and not raise — the expected path during the initial
-        strang-02 window before coordinator-claude publishes the ref.
+        strang-02 window before DoE publishes the ref.
 
         Review: code-reviewer (F1) — updated to mock probe_freshness_ref returning None
         (ref absent on origin) so the test isolates state (A) cleanly; check_freshness
@@ -425,12 +425,12 @@ class TestFreshnessRef:
     ) -> None:
         """Pin ABSENT but origin now has the ref → DriftWarning, no DriftError.
 
-        State (B): coordinator-claude published the cockpit-contract-release ref but
+        State (B): DoE published the cockpit-contract-release ref but
         ``bin/claude-klabauter-revendor-cockpit-contract.py`` has not been re-run so the pin file
         still contains ABSENT.  The SHA-mismatch gate is disabled; a loud, distinct
         DriftWarning (not DriftError) demands action.
 
-        Rationale for WARN vs ERROR: a hard DriftError the instant coordinator-claude publishes would
+        Rationale for WARN vs ERROR: a hard DriftError the instant DoE publishes would
         break claude-klabauter before bin/claude-klabauter-revendor-cockpit-contract.py can run.  The
         DriftWarning category is
         distinguishable from routine warnings so callers can escalate it in test suites.
@@ -496,9 +496,9 @@ class TestFreshnessRef:
         )
         assert _read_pin_sha() == sha
 
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_probe_freshness_ref_live_ref_absent_returns_none(self) -> None:
-        """Live test: coordinator-claude origin returns None (ref not yet published) → no exception.
+        """Live test: DoE origin returns None (ref not yet published) → no exception.
 
         This is the expected result at strang-02 pickup (live constraint).
         If the ref IS published, this test passes anyway (None or a SHA, no exception).
@@ -603,7 +603,7 @@ class TestProvenanceNormalizerReuse:
 
     The normalizer is NOT duplicated here — we import the existing helper
     (established by strang-01's facade seam tests).  These tests verify that it
-    correctly handles the coordinator-claude fixture's AC5-PROVENANCE paths so both sides of the
+    correctly handles the DoE fixture's AC5-PROVENANCE paths so both sides of the
     conformance comparison can be scrubbed identically.
     """
 
@@ -631,7 +631,7 @@ class TestProvenanceNormalizerReuse:
     def test_all_seven_ac5_provenance_fields_scrubbed(self) -> None:
         """All 7 AC5-PROVENANCE fields normalized to typed sentinels by _normalize.
 
-        Oracle: coordinator-claude emission-conformance-contract.md § AC5-PROVENANCE.
+        Oracle: DoE emission-conformance-contract.md § AC5-PROVENANCE.
         """
         record = self._make_record_with_live_provenance()
         result = _normalize(record)
@@ -721,11 +721,11 @@ class TestProvenanceNormalizerReuse:
             "provenance.derivation must not be normalized"
         )
 
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_doe_fixture_normalizes_consistently(self) -> None:
-        """coordinator-claude fixture normalizes to a consistent state (no runtime-varying residue).
+        """DoE fixture normalizes to a consistent state (no runtime-varying residue).
 
-        The coordinator-claude fixture already uses sentinel values for volatile fields (it was
+        The DoE fixture already uses sentinel values for volatile fields (it was
         generated against a frozen corpus).  After normalization it must be equal to
         itself — i.e., normalizing a pre-normalized fixture is idempotent.
         """
@@ -745,9 +745,9 @@ class TestProvenanceNormalizerReuse:
 class TestRunDriftCheck:
     """AC_DRIFT_CHECK: run_drift_check fail-louds on synthetic version lag."""
 
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_drift_check_passes_with_current_pin(self) -> None:
-        """Current vendored pin (2.5.0) passes the version-band gate against coordinator-claude fixture."""
+        """Current vendored pin (2.5.0) passes the version-band gate against DoE fixture."""
         # This also exercises the full resolution path (registry → fixture → version check).
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
@@ -782,7 +782,7 @@ class TestRunDriftCheck:
                 return_value=None,  # skip freshness in this unit test
             ),
         ):
-            with pytest.raises(DriftError, match="below the coordinator-claude min_supported_contract_version"):
+            with pytest.raises(DriftError, match="below the DoE min_supported_contract_version"):
                 run_drift_check(pinned_version="2.5.0", doe_clone=tmp_path)
 
     def test_drift_check_passes_when_pinned_above_min_supported(self, tmp_path: Path) -> None:
@@ -817,22 +817,22 @@ class TestConformanceViaStrang01Path:
 
     Proves the SEAM conforms:
       - The strang-01 path (envelope.emit() via EmitContext) is used — not raw bash.
-      - The output schema_version satisfies the coordinator-claude version-band gate.
+      - The output schema_version satisfies the DoE version-band gate.
       - Normalize-then-compare uses the shared _normalize helper on both sides.
-      - Full C2 entity coverage: all entity types from the coordinator-claude fixture are structurally
+      - Full C2 entity coverage: all entity types from the DoE fixture are structurally
         present in the strang-01 output (no missing entity type keys).
     """
 
     @pytest.mark.usefixtures("requires_vendor_pin")
     def test_strang01_output_passes_version_band_synthetic(self, tmp_path: Path) -> None:
-        """Synthetic-coordinator-claude variant: strang-01 path conforms against a fixture in tmp_path.
+        """Synthetic-DoE variant: strang-01 path conforms against a fixture in tmp_path.
 
-        CI regression net — runs WITHOUT a live coordinator-claude clone (gated on requires_vendor_pin
+        CI regression net — runs WITHOUT a live DoE clone (gated on requires_vendor_pin
         only, NOT _DOE_AVAILABLE).  Writes a synthetic fixture with a low
         min_supported_contract_version to tmp_path, runs envelope.emit() (strang-01
         strangled path), and verifies the output schema_version satisfies the version band.
 
-        Does NOT prove conformance against coordinator-claude's actual fixture, but DOES prove:
+        Does NOT prove conformance against DoE's actual fixture, but DOES prove:
         (a) the strang-01 path (envelope.emit()) is exercised and produces schema_version,
         (b) check_version_band fires correctly on the strang-01 output.
 
@@ -866,11 +866,11 @@ class TestConformanceViaStrang01Path:
         check_version_band(strang01_version, synthetic_fixture)  # must not raise
 
     @pytest.mark.usefixtures("requires_vendor_pin")
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_strang01_output_passes_version_band(self, tmp_path: Path) -> None:
-        """Strang-01 strangled path (envelope.emit()) output satisfies coordinator-claude version band.
+        """Strang-01 strangled path (envelope.emit()) output satisfies DoE version band.
 
-        Loads coordinator-claude fixture → extracts min_supported → runs envelope.emit() (strang-01
+        Loads DoE fixture → extracts min_supported → runs envelope.emit() (strang-01
         path) → verifies the output schema_version >= min_supported.
 
         This test FAILS if a raw bash call is substituted for envelope.emit() — the
@@ -879,7 +879,7 @@ class TestConformanceViaStrang01Path:
         from coordinator_core.ops.emit import envelope as _envelope
         from coordinator_core.ops.emit.tests.test_emit_parity import build_emit_context
 
-        # Load coordinator-claude fixture for version-band reference.
+        # Load DoE fixture for version-band reference.
         doe_clone = resolve_doe_clone()
         fixture = read_doe_fixture(doe_clone)
         min_supported = fixture["min_supported_contract_version"]
@@ -898,11 +898,11 @@ class TestConformanceViaStrang01Path:
         check_version_band(strang01_version, fixture)  # must not raise
 
     @pytest.mark.usefixtures("requires_vendor_pin")
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_strang01_output_has_c2_entity_types(self, tmp_path: Path) -> None:
-        """Strang-01 output covers the same C2 entity types as the coordinator-claude fixture (structural).
+        """Strang-01 output covers the same C2 entity types as the DoE fixture (structural).
 
-        The coordinator-claude fixture is a round-trip over full C2 entity coverage.  The strang-01
+        The DoE fixture is a round-trip over full C2 entity coverage.  The strang-01
         output (from the frozen fixture tree) must have all the same top-level entity
         array keys — proving the facade produces schema-compatible output structure.
         """
@@ -912,7 +912,7 @@ class TestConformanceViaStrang01Path:
         doe_clone = resolve_doe_clone()
         doe_fixture = read_doe_fixture(doe_clone)
 
-        # C2 entity type keys from the coordinator-claude fixture (top-level list-valued keys, excluding metadata).
+        # C2 entity type keys from the DoE fixture (top-level list-valued keys, excluding metadata).
         _SCALAR_KEYS = {
             "schema_version", "contract_version", "min_supported_contract_version",
             "emitted_at", "emitted_by_machine", "narrative_views", "REPO_NAME",
@@ -936,14 +936,14 @@ class TestConformanceViaStrang01Path:
 
         missing = doe_entity_keys - strang01_entity_keys
         assert not missing, (
-            f"Strang-01 output is missing C2 entity type keys present in coordinator-claude fixture: {missing}.  "
-            "The strang-01 facade must produce all entity types the coordinator-claude fixture covers."
+            f"Strang-01 output is missing C2 entity type keys present in DoE fixture: {missing}.  "
+            "The strang-01 facade must produce all entity types the DoE fixture covers."
         )
 
     @pytest.mark.usefixtures("requires_vendor_pin")
-    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="coordinator-claude clone not available on this machine")
+    @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine")
     def test_both_sides_normalize_identically(self, tmp_path: Path) -> None:
-        """Normalize-then-compare: _normalize applied to strang-01 and coordinator-claude fixture is idempotent.
+        """Normalize-then-compare: _normalize applied to strang-01 and DoE fixture is idempotent.
 
         The key assertion: after normalization, both outputs carry the SAME sentinels
         for AC5-PROVENANCE fields.  This proves the shared normalizer is consistent
@@ -991,7 +991,7 @@ class TestConformanceViaStrang01Path:
         strang01_violations = _check_no_live_values(norm_strang01)
 
         assert not doe_violations, (
-            f"coordinator-claude fixture still has live provenance values after normalization: {doe_violations}"
+            f"DoE fixture still has live provenance values after normalization: {doe_violations}"
         )
         assert not strang01_violations, (
             f"Strang-01 output still has live provenance values after normalization: "

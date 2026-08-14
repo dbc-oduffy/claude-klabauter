@@ -3,7 +3,7 @@ coordinator_core.ops.test_baton_drift_sweep — pytest coverage for
 coordinator_core.ops.baton_drift_sweep (day_coverage_sweep's sibling
 read-only diagnostic — see that module's own docstring).
 
-Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D2d
+Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d § D2d
 """
 from __future__ import annotations
 

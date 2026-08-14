@@ -19,7 +19,7 @@ plan-progress update, the EM's read of an assessment/run-report) before this
 sweep ever runs; the sidecar itself is disposable scaffolding once folded.
 
 Deletion gate — session liveness AND/OR an age floor, NEVER ``status:``
-alone (the hard rule this op and its coordinator-claude-side test
+alone (the hard rule this op and its DoE-side test
 ``coordinator/tests/test_distill_subagent_share_sweep.py`` both encode):
 
   1. LIVENESS (per session directory, not per file). Each top-level child of
@@ -74,9 +74,9 @@ Exit codes:
     2 — internal error (not inside a git repo, or the session-liveness
         engine is not importable)
 
-Spec backlink: docs/plans/2026-07-24-reviewer-sidecar-provisioning-reconciliation.md § C7
+Spec backlink: DoE-claude:pln-reviewer-sidecar-provisioning--6ba704 § C7
 Spec backlink (DR-091 home): docs/decisions/DR-091-agent-citizenship-identity-typed-sidecar-contract.md
-  (repo ROOT of the coordinator-claude tree; a same-numbered archived twin exists —
+  (repo ROOT of the DoE-claude tree; a same-numbered archived twin exists —
   see that plan's C1 body for the disambiguation note).
 
 Negative-spec (RAW-PID-LIVENESS): the liveness gate calls

@@ -1,10 +1,10 @@
 """
 coordinator_core.ops.session.hook_delivery_manifest — reader for the
-hook-delivery manifest block coordinator-claude's carriers embed inside `hooks.json`.
+hook-delivery manifest block DoE's carriers embed inside `hooks.json`.
 
 Purpose: `guard_settings_integrity.detect_hook_delivery_duplication`
 compares hook-delivery surfaces by raw script filename. That comparison
-went blind the moment coordinator-claude's fan-in carriers started delivering many guards
+went blind the moment DoE's fan-in carriers started delivering many guards
 under one filename (`preuse-write-dispatch.py`,
 `postuse-stop-family-dispatch.py`, `postuse-advisory-dispatch.py`) — a
 `settings.json` entry naming a carrier-delivered guard directly shares no

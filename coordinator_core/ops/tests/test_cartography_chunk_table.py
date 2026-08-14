@@ -14,7 +14,7 @@ Coverage:
   (e) version-bump-fires-only-when-threshold-supplied
   (f) key-order — schema_version stays the first key in both cases
 
-Spec backlink: cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-chunk-table-producer-seam.md
+Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table-producer-seam.md
 """
 
 from __future__ import annotations

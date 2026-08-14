@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.generate_exec_summary — Port of: generate-exec-summary.sh
-(coordinator-claude b5a4192c, 2026-07-20).
+(DoE b5a4192c, 2026-07-20).
 
 Purpose: populate the two MANAGED sections (identity, progress) of a per-repo
 docs/exec-summary.md from disk artifacts (README.md/CLAUDE.md,
@@ -76,6 +76,19 @@ from coordinator_core.ops._relative_link import relative_markdown_target
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.state_root import StateRootError
 from coordinator_core.state_root import _claude_klabauter_state as _guarded_claude_klabauter_state
+
+# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# THIS module is the real implementer of the write (main() below) -- `sources`
+# names itself, mirroring the sibling CLI trampoline's own GENERATES entry
+# (coordinator/bin/generate-exec-summary.py), which names this file as its
+# `sources` for the SAME artifact/stamp_key pair.
+GENERATES = [
+    {
+        "artifact": "docs/exec-summary.md",
+        "stamp_key": "generated",
+        "sources": ["coordinator_core/ops/generate_exec_summary.py"],
+    },
+]
 
 _SUBPROCESS_TIMEOUT_SECS = 10
 

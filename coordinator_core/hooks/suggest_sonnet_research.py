@@ -10,7 +10,7 @@ scout" advisory at researcher-altitude. An agent_id that resolves to nothing
 (malformed, absent, or unrecognised shape) is NOT suppressed.
 
 The deep-research plugin conditional message is preserved faithfully from
-Port of: suggest-sonnet-research.sh (coordinator-claude 3a561713, 2026-07-22). If the plugin
+Port of: suggest-sonnet-research.sh (DoE 3a561713, 2026-07-22). If the plugin
 directory is absent, a condensed install-prompt variant is used instead.
 
 Negative-spec:

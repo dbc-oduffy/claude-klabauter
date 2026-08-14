@@ -2,7 +2,7 @@
 coordinator_core.session.tests.test_identity — Python-side equivalent of the
 bash oracle's T38a-k identity matrix (§ T38, 11/11 PASS baseline).
 
-Oracle: test-coordinator-session.sh (coordinator-claude 1be5a573, 2026-07-21).
+Oracle: test-coordinator-session.sh (DoE 1be5a573, 2026-07-21).
 
 This suite is the required pre-cutover Python parity net named by the recipe
 (§ identity.py row: "port MUST have a Python-side equivalent test file

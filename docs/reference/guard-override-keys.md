@@ -239,7 +239,7 @@ deliberate while being reachable, which the env var was not.
 
 So the norm is real even though the enforcement is not: this sentinel exists to
 be typed by a human operator. A dispatched agent writing one on its own behalf
-is defecting, not clever — the same way the coordinator-claude executor that noticed
+is defecting, not clever — the same way the DoE executor that noticed
 `block_dev_repo_sentinel_write` had no `Bash` matcher, and declined to route
 around it anyway, was not being naive. That restraint is the behaviour this
 whole design assumes and depends on.
@@ -458,7 +458,7 @@ operator-facing (marked as such).
 | `COORDINATOR_OVERRIDE_DERIVED_GLOBAL_DOCTRINE_WRITE` | `block-derived-global-doctrine-write` | `coordinator_core/write_guards/block_derived_global_doctrine_write.py` | Rare-use escape hatch permitting a direct Write/Edit/MultiEdit/NotebookEdit to a derived global-doctrine surface that this guard otherwise redirects to the authoring surface |
 | `COORDINATOR_OVERRIDE_SUBAGENT_GRANT_RECORD_WRITE` | `block-subagent-grant-record-write` | `coordinator_core/write_guards/block_subagent_grant_record_write.py` | Rare-use escape hatch permitting a direct Write/Edit/MultiEdit/NotebookEdit to a subagent grant-record file that this guard otherwise blocks |
 | `COORDINATOR_OVERRIDE_POWERSHELL_VIA_BASH_GUARD` | `powershell-via-bash` | `coordinator_core/bash_guards/guard_powershell_via_bash.py` | Bypasses the guard entirely for a Bash call invoking a `powershell`/`pwsh` binary |
-| `COORDINATOR_OVERRIDE_FSIZE_CAP` | shell-init `ulimit -f` cap emitter | `bin/shell-init-guard.py` | Not a guard bypass but a sizing knob: sets the shell's file-size ulimit cap (GiB, or `unlimited`) instead of the 8 GiB default — DR-047 cross-repo seam with coordinator-claude's `~/.bashrc` |
+| `COORDINATOR_OVERRIDE_FSIZE_CAP` | shell-init `ulimit -f` cap emitter | `bin/shell-init-guard.py` | Not a guard bypass but a sizing knob: sets the shell's file-size ulimit cap (GiB, or `unlimited`) instead of the 8 GiB default — DR-047 cross-repo seam with DoE's `~/.bashrc` |
 
 Excluded from the table above (found by the sweep, deliberately not rostered):
 
@@ -561,7 +561,7 @@ here is the defect the register lint (B8/AC-5) catches.
 | Marker | Guard | What it does |
 |---|---|---|
 | `COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE` | `hooks/block_unenumerated_agent_type.py` | A `COORDINATOR-OVERRIDE-UNENUMERATED-AGENT-TYPE: <reason>` line, own line, non-empty reason, read off the dispatch prompt (`tool_input`, never `dispatched-agents.txt`) — short-circuits the unenumerated-`subagent_type` hard deny before the roster lookup runs. Not disclosed in the rendered deny text (2026-08-13): this marker is agent-writable bypass text the denied dispatcher pastes into its own next prompt, so announcing it in the deny message would hand the bypass to the agent in the same breath the guard refused it. |
-| `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD` | `coordinator/hooks/scripts/block-dispatch-suite-invocation.py` (coordinator-claude, peer repo — not present under `coordinator_core/` in this repo) | Same pattern, named in `block_unenumerated_agent_type.py`'s own docstring as the precedent this module's marker reuses ("no new pattern per PM constraint"): a `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD: <reason>` line short-circuits that guard's own dispatch-suite-invocation deny. |
+| `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD` | `coordinator/hooks/scripts/block-dispatch-suite-invocation.py` (DoE-claude, peer repo — not present under `coordinator_core/` in this repo) | Same pattern, named in `block_unenumerated_agent_type.py`'s own docstring as the precedent this module's marker reuses ("no new pattern per PM constraint"): a `COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD: <reason>` line short-circuits that guard's own dispatch-suite-invocation deny. |
 | `.COORDINATOR-OVERRIDE-WORKTREE-GUARD` | `coordinator_core/write_guards/block_worktree_sentinel_write.py` (case-folded basename match; also referenced by `coordinator_core/bash_guards/block_worktree_sentinel_creation.py`'s sibling Bash-leg guard) | An ordinary dotfile sentinel — `_SENTINEL_NAME = ".coordinator-override-worktree-guard"` — whose presence (case-insensitively matched by basename, Windows-safe) short-circuits the guard that otherwise blocks a Write/Edit into the worktree-sentinel path. Same `XREPO_MARKER_IS_ORDINARY_FILE` posture as the cross-repo write markers above: an ordinary file, no identity gating, no expiry — this table adds it to the registry, it does not harden the mechanism. |
 
 Members are resolved by grepping `coordinator_core/` for the literal marker

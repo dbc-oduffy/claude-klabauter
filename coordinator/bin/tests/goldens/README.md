@@ -1,25 +1,25 @@
-# Frozen golden fixtures — DEC-3(c) fallback (coordinator-claude JS oracle capture)
+# Frozen golden fixtures — DEC-3(c) fallback (DoE JS oracle capture)
 
-> Spec backlink: `docs/plans/2026-07-21-depolyglot-coordinator-js-to-python.md` § DEC-3(c),
+> Spec backlink: `DoE-claude:pln-de-polyglot-the-coordinator-mi-119303` § DEC-3(c),
 > chunk A4. Consumes A5's per-oracle map in
 > `docs/architecture/migration-hitlist.md` § Depolyglot repoint surface (b).
 
 ## Why these files exist
 
 Six `claude-klabauter` test suites skip (not fail) when `node` is absent, because they use
-Coordinator-claude's `.js` files as *live differential oracles* — their Python ports are proven
+DoE-claude's `.js` files as *live differential oracles* — their Python ports are proven
 correct by shelling out to the JS at test time and diffing outputs. Deleting the `.js`
 before those suites are converted to frozen goldens silently blinds their correctness
-proof (CI stays green-with-skips). DEC-3 gates coordinator-claude-side JS deletion on claude-klabauter confirming
-that conversion; DEC-3(c) is the fallback that unblocks the wait — coordinator-claude captures the JS
-oracles' output itself (snapshotting coordinator-claude's own JavaScript needs neither claude-klabauter's context
+proof (CI stays green-with-skips). DEC-3 gates DoE-side JS deletion on claude-klabauter confirming
+that conversion; DEC-3(c) is the fallback that unblocks the wait — DoE captures the JS
+oracles' output itself (snapshotting DoE's own JavaScript needs neither claude-klabauter's context
 nor consent) and hands claude-klabauter ready-to-wire fixtures via cross-repo memo. Wiring these
 into the actual pytest suites (replacing the live `node` shell-out with a load of the
 frozen JSON below) remains claude-klabauter's own follow-up — not done here.
 
-Every file below was produced by an **actual run of the real coordinator-claude `.js` oracle** against a
+Every file below was produced by an **actual run of the real DoE `.js` oracle** against a
 fixture tree reconstructed from the reference suite's own fixture-generation code (or, for
-`test_verify_schema_registry_sync`, against coordinator-claude's real live `coordinator/schemas/` tree).
+`test_verify_schema_registry_sync`, against DoE's real live `coordinator/schemas/` tree).
 None of the JSON content in these files was hand-written.
 
 ## Per-golden index
@@ -30,7 +30,7 @@ None of the JSON content in these files was hand-written.
 | `test_records_query_parity.golden.json` | `coordinator/bin/query-records.js` | `node query-records.js --type <t> --where <expr> --format {paths,json} --root <fixture_repo> --limit <n>` | `coordinator_core/ops/tests/test_records_query_parity.py` **and** `coordinator_core/text/test_refresh_queries.py`'s live-bridge leg (per migration-hitlist.md's correction: that suite's node-skip gate is really about `query-records.js`'s liveness via `REFRESH_QUERIES_QUERY_RECORDS_JS`, not `refresh-queries.js` — this same golden covers both) |
 | `test_parity_handoff_ops.golden.json` | `coordinator/bin/handoff-transition.js`, `coordinator/bin/stamp-shipped-in.js`, `coordinator/bin/lint-frontmatter.js` | `node handoff-transition.js <verb> --handoff <path> [--session-id <id>] [--at <iso>]`; `node stamp-shipped-in.js --handoff <path> --sha <sha>`; `node lint-frontmatter.js --file <path> --root <repo> --json` | `coordinator_core/frontmatter/tests/test_parity_handoff_ops.py` (four of its five named oracles — see "Known gap" below for the fifth) |
 | `test_parity_memo_ops.golden.json` | `coordinator/bin/memo-transition.js` | `node memo-transition.js <verb> --memo <path> [--session-id <id>] [--at <iso>] [--decision <v>] [--decision-note <t>] [--realized-by <p>] [--actioned-note <t>]` | `coordinator_core/frontmatter/tests/test_parity_memo_ops.py` |
-| `test_verify_schema_registry_sync.golden.json` | `coordinator/bin/query-records.js` | `node query-records.js --type <t> --format json --limit 1` (once per coordinator-claude schema carrying `applies_to:`) | `coordinator_core/ops/test_verify_schema_registry_sync.py::test_golden_oracle_parity_against_live_doe_repo` |
+| `test_verify_schema_registry_sync.golden.json` | `coordinator/bin/query-records.js` | `node query-records.js --type <t> --format json --limit 1` (once per DoE schema carrying `applies_to:`) | `coordinator_core/ops/test_verify_schema_registry_sync.py::test_golden_oracle_parity_against_live_doe_repo` |
 
 ## Known gap — `normalize-handoff-frontmatter.js`
 
@@ -86,10 +86,10 @@ record rather than a raw diff-target, and why path-shaped substrings are normali
 - **`test_verify_schema_registry_sync`**: re-derives the schema-name → `--type` mapping the
   claude-klabauter module uses (`_schema_to_query_type` / `_extract_applies_to`, reproduced read-only
   in the capture script rather than imported, to avoid a cross-repo coupling), then runs
-  `node coordinator/bin/query-records.js --type <t> --format json --limit 1` once per coordinator-claude
+  `node coordinator/bin/query-records.js --type <t> --format json --limit 1` once per DoE
   schema file (`coordinator/schemas/*.schema.json`) carrying an `applies_to:` field. The
   captured result (`bug-backlog`, `debt-backlog`, `improvement-queue` NOT recognised) matches
   the claude-klabauter suite's own documented expectation of this exact pre-existing drift.
 
 All captures were run against a live `node v24.18.0` on the author's machine, 2026-07-21,
-against coordinator-claude HEAD at commit range starting `b22f543b`.
+against DoE-claude HEAD at commit range starting `b22f543b`.

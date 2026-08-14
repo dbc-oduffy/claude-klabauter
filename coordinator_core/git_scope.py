@@ -18,10 +18,10 @@ moment a caller writes `returncode != 0`. Mapping "could not check" onto
 "checked, and the answer is no" turns an unanswerable probe into a confident
 false claim about somebody else's repo.
 
-Incident of record (2026-08-03, reported by coordinator-claude-em): a cross-repo premise
+Incident of record (2026-08-03, reported by doe-claude-em): a cross-repo premise
 check reported two shas as identically "NOT in their clone". One was genuinely
 dangling; the other resolved cleanly on their branch and on origin. A true
-finding laundered into a coin flip. `coordinator/bin/cross-repo-memo` was the
+finding laundered into a coin flip. `coordinator/bin/cross-repo-memo.py` was the
 first fix; this module is that fix extracted so the remaining cross-repo probes
 share one implementation rather than each re-deriving it.
 
@@ -56,7 +56,7 @@ Negative-spec:
   - Nothing here raises. Every failure is a returned reason string or an
     UNKNOWN verdict; a broken probe must never break its caller's ceremony.
 
-Spec backlink: `coordinator/bin/cross-repo-memo::_git_premise_probe` (the
+Spec backlink: `coordinator/bin/cross-repo-memo.py::_git_premise_probe` (the
 reference implementation this generalizes).
 """
 

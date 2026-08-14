@@ -139,8 +139,8 @@ Negative-spec
     outlet" -- this guard degrades to a generic advisory rather than
     denying toward nothing).
 
-Spec backlink: docs/plans/2026-07-29-windows-viability-stop-the-spawn-storms.md § BX-8
-Spec backlink (shape/verdict primitives): docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md § C2, C5, C6
+Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9 § BX-8
+Spec backlink (shape/verdict primitives): DoE-claude:pln-fleet-wide-bash-spawn-fan-out--2f6552 § C2, C5, C6
 """
 
 from __future__ import annotations
@@ -213,7 +213,7 @@ _EVENT_NAME = "PreToolUse"
 
 #: FOR-LOOP GENERIC FALLBACK -- DECIDED EXPLICITLY, NOT AN OMISSION
 #: (worklist Row P4, `state/audits/2026-07-29-guard-module-ladder-
-#: worklist.md`, coordinator-claude repo; `docs/plans/2026-07-29-bash-guard-
+#: worklist.md`, DoE-claude repo; `docs/plans/2026-07-29-bash-guard-
 #: consolidated-execution.md` row M10 item 2). This bare-glob for-loop
 #: branch is ARCHITECTURALLY CAPPED at an every-platform advisory carrying
 #: a generic (non-command-specific) skeleton -- a recorded stop, not a

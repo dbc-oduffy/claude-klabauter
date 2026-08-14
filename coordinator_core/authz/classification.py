@@ -11,12 +11,12 @@ Dual-write ban (content-invariant on MUTATING ops): a MUTATING op MUST write coo
 substrate (claude-klabauter's disk-truth custody) ONLY. It MUST NOT write into rag's workstate_store —
 a derived, rebuildable projection over claude-klabauter's disk-truth, not a system-of-record claude-klabauter may
 also write. This is the per-op corollary of the dual-write ban drawn under DR-047, the
-governing coordinator-claude/claude-klabauter boundary authority
-Coordinator-claude docs/decisions/DR-047-coordinator-claude-klabauter-boundary-redraw-contract-vs-e.md, reconciled at
+governing DoE/claude-klabauter boundary authority
+DoE-claude docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md, reconciled at
 the custody-vs-projection level by
 docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md — successor to the
 tree-local docs/decisions/2026-07-03-tri-plane-ownership-boundary.md § Design Decision #1,
-which was never ratified into coordinator-claude's tree — see that doc's superseded-by header.
+which was never ratified into DoE's tree — see that doc's superseded-by header.
 
 Spec backlink: pln-pcore-05-invoke-op-write-seman-80eecd § C1
 Decision:      docs/decisions/DR-208-invoke-op-authz-model.md
@@ -241,6 +241,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § D2, C0.
     "hooks.track_touched_files": OpClass.MUTATING,
     "hooks.session_heartbeat": OpClass.MUTATING,
+    # hooks.receiver_state_sensor — MUTATING: writes the receiver-state sibling file
+    # (.git/coordinator-sessions/<sid>/receiver-state.json), same session-runtime write
+    # class as session_heartbeat immediately above, just a different sibling artifact.
+    # Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
+    "hooks.receiver_state_sensor": OpClass.MUTATING,
     "hooks.agent_completion_log": OpClass.MUTATING,
     "hooks.track_dispatched_agents": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use": OpClass.MUTATING,
@@ -289,7 +294,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "orientation.regenerate_cache": OpClass.MUTATING,
     # memo.transition — MUTATING: native Python port (strang-09) that writes memo
     # frontmatter in-place (claim/action/release verbs). No subprocess / node reach-back —
-    # byte-faithful port of the coordinator-claude memo-transition.js oracle, not a delegation to it.
+    # byte-faithful port of the DoE memo-transition.js oracle, not a delegation to it.
     # Review: code-reviewer (F8) — DR-208 five-question affirmation added to match the file's
     # established affirmation discipline (citing ops/memo_transition.py; plan strang-09).
     # DR-208 five-question affirmation:
@@ -862,7 +867,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write (including sentinel creation)?             No.
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?     No.
-    # Spec backlink: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C3
+    # Spec backlink: DoE-claude:pln-per-repo-okr-goal-setting-syst-80bced § C3
     "goal.match_candidates": OpClass.COMPUTE_ONLY,
     # goal.close_day — COMPUTE_ONLY: reads the collapsed goals-log wire via
     # coordinator_core.goals.wire_read.read_and_collapse (no second glob/collapse
@@ -2267,7 +2272,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
     #      check_forwarder_drift/_diff_one_location/_derive_names/_cited_entrypoint_sites
     #      only read directory listings and file contents (settings-home bin/, the
-    #      retired ~/.claude/bin compat mirror, coordinator/bin/, coordinator-claude's prompt-
+    #      retired ~/.claude/bin compat mirror, coordinator/bin/, DoE-claude's prompt-
     #      surface trees); no `open(..., "w")`, no `write_text`, no `mkdir`. Grepped the
     #      module for any write call — none found.
     #   2. Writes into rag's relational store?                                 No.
@@ -2335,7 +2340,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # cartography.churn — COMPUTE_ONLY: thin RPC wrapper over
     # coordinator_core.cartography.churn.compute_emergent_set (ops/cartography_churn.py).
     # Shells out to git for three read-only input path-lists (churned_all/catalogued/
-    # head_present), promoting coordinator-claude survey chunk-K bash into tested Python.
+    # head_present), promoting DoE survey chunk-K bash into tested Python.
     # DR-208 five-question affirmation:
     #   1. Does the handler open any file for write (including append)?          No.
     #      Only reads: subprocess.run(["git", "log", ...]) / (["git", "ls-files"])
@@ -2510,7 +2515,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # memo.triage — COMPUTE_ONLY: deterministic pre-filter over cross-repo/archive/*.md
     # memos (frontmatter score + already-captured cross-check + legacy backfill +
     # observability). Does NOT call Haiku/Sonnet and does NOT decide final promotion —
-    # that judgment belongs to coordinator-claude's C6 background-Workflow LLM triage wave.
+    # that judgment belongs to DoE's C6 background-Workflow LLM triage wave.
     # DR-208 five-question affirmation (citing ops/memo_triage.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?    No.
     #      Every path read is opened read-only (Path.read_text); no write/append call
@@ -2631,7 +2636,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # session_ledger.aggregate_chain_loe — COMPUTE_ONLY: read-only chain walk over
     # state/handoffs + archive/handoffs, no writes/mutation. Byte-parity port
     # (read-only/idempotent per the oracle's own header).
-    # Port of: aggregate-chain-loe.sh (coordinator-claude b644d5a9, 2026-07-22).
+    # Port of: aggregate-chain-loe.sh (DoE b644d5a9, 2026-07-22).
     # Spec: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3d
     "session_ledger.aggregate_chain_loe": OpClass.COMPUTE_ONLY,
     # deferral.detect_orphan_memo — COMPUTE_ONLY: read-only hidden-deferral detector —
@@ -2799,7 +2804,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      resolves this explicitly, now extended to this op's own named
     #      subdirectory).
     #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The written artifact is read by coordinator-claude's
+    #      The written artifact is read by DoE-claude's
     #      /coordinator:architecture-survey consumer
     #      (fanout.poll_scratch_dir) across the LLM-transport + process
     #      boundary — the entire reason this op exists (see module docstring).
@@ -3086,7 +3091,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "updatedocs.gates": OpClass.MUTATING,
     # git.push_failure_verdict — COMPUTE_ONLY: classifies a non-fast-forward push
     # failure into peer_staged / half_applied_merge / simple_lag / resolved_since /
-    # indeterminate so coordinator-claude's Stop-hook advisory renders a verdict we computed
+    # indeterminate so DoE's Stop-hook advisory renders a verdict we computed
     # rather than re-deriving one from a regex. Every git call is a read
     # (`diff --cached --name-only`, `diff --name-only`, `rev-parse`); no write, no
     # index mutation, no recovery action — the op deliberately never runs stash,
@@ -3179,11 +3184,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # self-imposed and NOT DR-094-ratified — see "STILL PROVISIONAL" note
     # above); no rag store write.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5 (classification axis only)
-    # Authority (reserved-noun-write axis): coordinator-claude
+    # Authority (reserved-noun-write axis): DoE-claude
     #   docs/decisions/DR-094-tracker-advance-status-write-target-carveout.md
     #   (write target, as currently built, only — does NOT ratify
     #   handler-issued commit; see "STILL PROVISIONAL" note above)
-    # Spec: coordinator-claude coordinator/skills/enrich-and-review/SKILL.md § Phase 2.5/4.5/6
+    # Spec: DoE-claude coordinator/skills/enrich-and-review/SKILL.md § Phase 2.5/4.5/6
     # ---------------------------------------------------------------------------
     "tracker.advance_status": OpClass.MUTATING,
     # ---------------------------------------------------------------------------

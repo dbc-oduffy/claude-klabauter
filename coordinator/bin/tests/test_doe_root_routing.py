@@ -4,9 +4,9 @@ Tests (AC1, AC2 from gate2-w23-state-seam-caller-switch.md):
   AC1-pos   doe_root() returns env DOE_ROOT override when set.
   AC1-pos   coordinator-lesson-promote._outbox_root() resolves under $(doe_root)/state/lessons-outbox.
   AC1-pos   coordinator-queue-append._output_path() central branch resolves under $(doe_root)/state/improvement-queue.
-  AC2-cold  coordinator-lesson-promote invoked cold (no repos.example_doctrine_repo, no DOE_ROOT):
+  AC2-cold  coordinator-lesson-promote invoked cold (no repos.doe_claude, no DOE_ROOT):
               WARN to stderr, exit 0, no file written anywhere.
-  AC2-cold  coordinator-queue-append invoked cold (no repos.example_doctrine_repo, no DOE_ROOT):
+  AC2-cold  coordinator-queue-append invoked cold (no repos.doe_claude, no DOE_ROOT):
               WARN to stderr, exit 0, no file written anywhere.
 
 Cold-path tests call the CALLING CLI's main() with _cc_route mocked to invoke legacy_fn()
@@ -18,7 +18,7 @@ Converted from a hand-rolled unittest runner to collectable pytest functions.
 
 Run: python3 -m pytest coordinator/bin/tests/test_doe_root_routing.py
 
-Spec backlink: docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md § C1
+Spec backlink: DoE-claude:pln-gate-2-w2-3-live-caller-switch-3e51cf § C1
 """
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ from pathlib import Path
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"
-_LESSON_PROMOTE_PATH = _BIN_DIR / "coordinator-lesson-promote"
-_QUEUE_APPEND_PATH = _BIN_DIR / "coordinator-queue-append"
+_LESSON_PROMOTE_PATH = _BIN_DIR / "coordinator-lesson-promote.py"
+_QUEUE_APPEND_PATH = _BIN_DIR / "coordinator-queue-append.py"
 
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
@@ -70,7 +70,7 @@ _queue_cli = _load_cli(_QUEUE_APPEND_PATH, "coordinator_queue_append")
 
 def test_doe_root_returns_env_override():
     """doe_root() trusts DOE_ROOT env var as-is (§4b idempotency parity)."""
-    fake_root = "/fake/coordinator-claude-root"
+    fake_root = "/fake/doe-claude-root"
     with unittest.mock.patch.dict(os.environ, {"DOE_ROOT": fake_root}, clear=False):
         result = _reg.doe_root()
     assert result == fake_root
@@ -78,10 +78,10 @@ def test_doe_root_returns_env_override():
 
 def test_doe_root_strips_empty_env():
     """doe_root() ignores DOE_ROOT='' (empty string is not a valid override)."""
-    # Also clears REPO_EXAMPLE_DOCTRINE_REPO (rung 1b) so this machine's real ambient
+    # Also clears REPO_DOE_CLAUDE (rung 1b) so this machine's real ambient
     # override doesn't win before the mocked machine-local rung is reached.
     with (
-        unittest.mock.patch.dict(os.environ, {"DOE_ROOT": "", "REPO_EXAMPLE_DOCTRINE_REPO": ""}, clear=False),
+        unittest.mock.patch.dict(os.environ, {"DOE_ROOT": "", "REPO_DOE_CLAUDE": ""}, clear=False),
         unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value="/ml/doe"),
     ):
         result = _reg.doe_root()
@@ -91,7 +91,7 @@ def test_doe_root_strips_empty_env():
 def test_doe_root_raises_when_unresolvable():
     """doe_root() raises _DoeUnresolvable when neither env nor machine-local resolve."""
     env_without_doe = {
-        k: v for k, v in os.environ.items() if k not in ("DOE_ROOT", "REPO_EXAMPLE_DOCTRINE_REPO")
+        k: v for k, v in os.environ.items() if k not in ("DOE_ROOT", "REPO_DOE_CLAUDE")
     }
     with (
         unittest.mock.patch.dict(os.environ, env_without_doe, clear=True),
@@ -132,7 +132,7 @@ def test_outbox_root_env_override_wins():
 def test_outbox_root_raises_doe_unresolvable():
     """_outbox_root() propagates _DoeUnresolvable when doe_root() cannot resolve."""
     env_clean = {k: v for k, v in os.environ.items()
-                 if k not in ("DOE_ROOT", "REPO_EXAMPLE_DOCTRINE_REPO", "LESSON_PROMOTE_OUTBOX_ROOT")}
+                 if k not in ("DOE_ROOT", "REPO_DOE_CLAUDE", "LESSON_PROMOTE_OUTBOX_ROOT")}
     with (
         unittest.mock.patch.dict(os.environ, env_clean, clear=True),
         unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value=None),
@@ -154,7 +154,7 @@ def test_central_improvement_queue_under_doe():
     """Central improvement-queue path lands under $(claude_klabauter_root)/state/improvement-queue.
 
     Rewired (DR-236, 2026-07-25): this test originally asserted DOE_ROOT routing per
-    the [coordinator-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md
+    the [DoE-claude] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md
     proposal — but that plan was never ratified (`status: draft`, AC1/AC2 `pending`,
     its own C3 HELD with recorded disk proof the flip never took effect). The CLI's
     OWN current source (`coordinator-queue-append`'s `_output_path`, negative-spec
@@ -162,7 +162,7 @@ def test_central_improvement_queue_under_doe():
     `_claude_klabauter_root()` unconditionally, per docs/wiki/state-placement-law.md § Taxonomy
     "Central/global state" and `docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md`
     (state/ is claude-klabauter's own disk-truth custody). Only coordinator-lesson-promote's
-    lessons-outbox central write genuinely routes to coordinator-claude (see
+    lessons-outbox central write genuinely routes to DoE-claude (see
     test_outbox_root_under_doe_state below) — the two central-state schemas route to
     different owners, and this test previously conflated them.
     """
@@ -219,14 +219,14 @@ def test_project_scope_unaffected(tmp_path):
 #
 # Tests the CALLING CLI's main() entry point with the CC seam simulated absent
 # (mock _cc_route calls legacy_fn directly) and machine-local stub returning
-# nothing for repos.example_doctrine_repo. This exercises the full entry-point chain —
+# nothing for repos.doe_claude. This exercises the full entry-point chain —
 # main() → legacy_fn() → _write_entry() → _outbox_root() → doe_root() → raise —
 # per lesson state/lessons/2026-07-05-universal-test-the-resolver-entry-point.yaml.
 # ---------------------------------------------------------------------------
 
 
 def _make_cold_env(tmpdir: str) -> dict[str, str]:
-    """Return a minimal env dict with MACHINE_LOCAL_IMPL → stub (no repos.example_doctrine_repo).
+    """Return a minimal env dict with MACHINE_LOCAL_IMPL → stub (no repos.doe_claude).
 
     DOE_ROOT and CLAUDE_KLABAUTER_ROOT are intentionally absent from the returned dict.
     Pass this as `os.environ` replacement so no parent-env leakage occurs.
@@ -312,7 +312,7 @@ def test_lesson_promote_cold_warn_to_stderr(tmp_path):
 
 
 def test_lesson_promote_cold_no_file_written(tmp_path):
-    """Cold path: no file written (neither coordinator-claude nor claude-klabauter path)."""
+    """Cold path: no file written (neither DoE nor claude-klabauter path)."""
     _run_cold_lesson(str(tmp_path))
     written = list(tmp_path.rglob("*.yaml"))
     assert written == [], f"cold-path must write NO files; found: {written}"
@@ -409,7 +409,7 @@ def test_queue_append_cold_no_file_written(tmp_path):
 #
 # Exercises the State-2 (coordinator_core present) skipped:true branch at
 # lesson-promote lines 618-628. coordinator_core returns {"skipped": True}
-# when coordinator-claude is unresolvable from the native side — the CLI must WARN + exit 0
+# when DoE is unresolvable from the native side — the CLI must WARN + exit 0
 # and write nothing, matching the legacy-path _DoeUnresolvable contract.
 # ---------------------------------------------------------------------------
 

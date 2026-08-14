@@ -42,11 +42,21 @@ def forward(name: str, argv: list[str] | None = None) -> None:
     construction rather than by test-author discipline).
 
     NEGATIVE-SPEC: the ``os.execv`` call below is a deliberate isolation
-    boundary and must NEVER be collapsed to an in-process import/call. It
-    is process REPLACEMENT, not a spawn — the current process image is
-    replaced by the resolved binary, so there is no parent process left to
-    return control to an import could substitute for. Reason recorded in
-    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
+    boundary and must NEVER be collapsed to an in-process import/call, on
+    ANY platform. On POSIX, ``os.execv`` is true process REPLACEMENT — the
+    current process image is overwritten by the resolved binary in place,
+    so there is no parent process image left for control to return to.
+    On Windows, CPython implements ``os.execv`` over ``CreateProcess``: a
+    new child process is created and the calling process then exits, so a
+    parent briefly exists rather than being replaced in-place — this is a
+    spawn-then-exit, not an in-place replacement, on that platform. The
+    isolation-boundary rationale this call exists for holds on both
+    platforms regardless of that mechanism difference: the resolved binary
+    always runs as a genuinely separate process, never folded into this
+    one's own import graph. Reason recorded in
+    state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md
+    (that audit does not itself repeat the POSIX-only "process replacement"
+    framing corrected here).
     """
     legacy = os.path.join(str(home_dir()), ".claude", "bin", name)
     settings_home_candidate = os.path.join(str(settings_home()), "bin", name)

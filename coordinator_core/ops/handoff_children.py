@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.handoff_children — JSON-RPC "handoff.has_live_children" operation.
 
-Purpose: Port of: handoff-has-live-children.sh (coordinator-claude 50ec0809, 2026-07-19) into the
+Purpose: Port of: handoff-has-live-children.sh (DoE 50ec0809, 2026-07-19) into the
 coordinator_core resident service.  Replaces the query-records.js double-spawn with
 an in-memory frontmatter-index walk over the handoff DAG, and surfaces the exit-code
 contract (0/1/2) as reply fields for the thin bash veneer (C7) to map back to shell
@@ -293,7 +293,7 @@ def _parse_edge_kinds(raw: object) -> Optional[Set[str]]:
 async def _handoff_has_live_children(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.has_live_children" handler.
 
-    Port of: handoff-has-live-children.sh (coordinator-claude 50ec0809, 2026-07-19) into the
+    Port of: handoff-has-live-children.sh (DoE 50ec0809, 2026-07-19) into the
     coordinator_core resident service.  Accepts the same logical parameters as
     the bash --exclude / --edge-kinds flags and returns reply fields that the
     C7 veneer maps to shell exit codes 0/1/2.
@@ -648,7 +648,7 @@ def _handoff_blocked_by_dependents(params: dict, repo_root: Optional[Path] = Non
     that function's docstring for the resolver's full design rationale, and
     the module docstring's "`blocked_by_dependents`" section for why it is
     homed here rather than archival.py. Registration accepted by
-    coordinator-claude-em (cross-repo/inbox/2026-08-02-coordinator-claude-em-baton-lifecycle-
+    DoE-claude-em (cross-repo/inbox/2026-08-02-doe-claude-em-baton-lifecycle-
     three-asks-reply.md, Ask 3).
 
     Params (all optional except candidate):

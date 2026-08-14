@@ -13,8 +13,8 @@ means ``dispatch.py`` -> ``_advisory_value.py`` is one-directional -- no new
 deferred-import workaround is needed the way ``_blanket_disarm.py`` needs one
 for ``GuardBand``.
 
-Spec backlink: docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md
-(coordinator-claude) row H1.
+Spec backlink: DoE-claude:pln-os-aware-guard-advisory-defaul-060dbe
+(DoE-claude) row H1.
 """
 
 from __future__ import annotations

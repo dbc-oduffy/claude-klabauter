@@ -64,14 +64,14 @@ SKIPS: list[str] = []
 
 def _script_path() -> str:
     """Return the absolute path to cross-repo-memo."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "cross-repo-memo")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "cross-repo-memo.py")
 
 
-def _sibling_example_doctrine_repo_probe() -> str:
-    """Env-independent fallback: locate the sibling coordinator-claude checkout by
+def _sibling_doe_claude_probe() -> str:
+    """Env-independent fallback: locate the sibling DoE-claude checkout by
     walking up from THIS file to the engine repo root, then probing that
     root's own parent directory for the fleet's conventional sibling-clone
-    name, `coordinator-claude` (see project CLAUDE.md "sibling coordinator-claude
+    name, `DoE-claude` (see project CLAUDE.md "sibling DoE-claude
     checkout"). Not a hand-typed absolute path -- portable to any machine
     that clones the fleet repos side-by-side.
 
@@ -97,7 +97,7 @@ def _sibling_example_doctrine_repo_probe() -> str:
         claude_klabauter_root = parent
     else:
         return ""
-    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "coordinator-claude")
+    candidate = os.path.join(os.path.dirname(claude_klabauter_root), "DoE-claude")
     manifest = os.path.join(
         candidate, "coordinator", "schemas", "coordinator-registry.manifest.json"
     )
@@ -105,13 +105,13 @@ def _sibling_example_doctrine_repo_probe() -> str:
 
 
 def _resolve_doe_root_for_tests() -> str:
-    """Best-effort coordinator-claude sibling root, forwarded as DOE_ROOT to every
+    """Best-effort DoE-claude sibling root, forwarded as DOE_ROOT to every
     spawned CLI invocation in this file, AND pinned into this process's own
     `os.environ` (see below `_DOE_ROOT_FOR_TESTS` bootstrap) so any in-process
     import of `coordinator_registry` resolves too.
 
     coordinator/bin/lib/coordinator_registry.py's manifest ladder falls back
-    to a machine-local `repos.example_doctrine_repo` lookup that is itself CLAUDE_HOME/
+    to a machine-local `repos.doe_claude` lookup that is itself CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME-anchored -- every test in this file points those
     at an isolated tmpdir for fixture isolation, which collaterally starves
     that fallback too. Resolving it once here and forwarding it as an
@@ -123,7 +123,7 @@ def _resolve_doe_root_for_tests() -> str:
     Negative-spec: `resolve_doe_root()` alone is NOT sufficient here -- it
     reads CLAUDE_HOME/COORDINATOR_SETTINGS_HOME internally, so it goes empty
     under a whole-process isolated-home run even though the sibling checkout
-    is present on disk; `_sibling_example_doctrine_repo_probe()` is the env-independent
+    is present on disk; `_sibling_doe_claude_probe()` is the env-independent
     fallback that keeps this file hermetic to ambient machine state.
     """
     try:
@@ -134,7 +134,7 @@ def _resolve_doe_root_for_tests() -> str:
         root = ""
     if root and os.path.isdir(root):
         return root
-    return _sibling_example_doctrine_repo_probe()
+    return _sibling_doe_claude_probe()
 
 
 _DOE_ROOT_FOR_TESTS = _resolve_doe_root_for_tests()
@@ -285,7 +285,7 @@ def _write_registry_toml(settings_home: str, entries: dict[str, str]) -> None:
     each repos.<key> -> path — the exact surface claude-klabauter's memo.draft/memo.send
     ops read directly via stdlib tomllib (COORDINATOR_SETTINGS_HOME/machine-local/
     registry.toml). Distinct from MACHINE_LOCAL_IMPL, which only affects this
-    CLI's OWN (coordinator-claude-side) machine-local lookups (sender-identity WARNING,
+    CLI's OWN (DoE-side) machine-local lookups (sender-identity WARNING,
     publish-target mirror enumeration, etc.) — the engine-side classify_receiver/
     resolve_receiver_inbox resolution this fixture needs to satisfy reads this
     file directly, bypassing MACHINE_LOCAL_IMPL entirely.
@@ -594,13 +594,13 @@ def _make_mock_machine_local_keys_and_get(tmpdir: str, key_paths: dict) -> str:
 # classify/setup rejections into a single exit_code:1 setup-error envelope
 # whose reason string is logged daemon-side only (not on the wire) — the 1/2/3
 # split is unreconstructable by design (PM-accepted tradeoff; see _cmd_draft's
-# own "ACCEPTED BEHAVIOR CHANGE" docstring in coordinator/bin/cross-repo-memo).
+# own "ACCEPTED BEHAVIOR CHANGE" docstring in coordinator/bin/cross-repo-memo.py).
 #
 # test_draft_unresolved_receiver_warns_but_creates DELETED 2026-07-21 (same
 # cutover, additional finding beyond the dispatch brief's named list) — it
-# asserted the OLD coordinator-claude-local `_classify_receiver`'s "registered-but-unresolved
+# asserted the OLD DoE-local `_classify_receiver`'s "registered-but-unresolved
 # key -> WARNING, draft still created" fallthrough. That function was DELETED
-# 2026-07-21 (see coordinator/bin/cross-repo-memo:966 "_classify_receiver
+# 2026-07-21 (see coordinator/bin/cross-repo-memo.py:966 "_classify_receiver
 # (draft-time receiver classification) DELETED"); its sole caller now passes
 # classify_receiver:True to claude-klabauter's memo.draft, whose engine-side
 # _classify_receiver_for_draft has NO analogous "warn but proceed" branch — a
@@ -745,7 +745,7 @@ def test_send_consumes_outbox() -> None:
       (e) a stamped copy survives at state/memo-outbox/sent/<topic>.md with
           status: sent, sent_at, and delivered_to naming the receiver-side path
 
-    Realises AC2. (e) pins the fix for the coordinator-claude-em finding that send
+    Realises AC2. (e) pins the fix for the doe-claude-em finding that send
     destroyed the sender's own delivery evidence rather than archiving it —
     see `_send_via_engine`/`_archive_sent_outbox_draft` in cross-repo-memo.
     """

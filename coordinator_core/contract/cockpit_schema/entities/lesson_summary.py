@@ -1,6 +1,6 @@
 """
 LessonSummary — one captured lesson from the full {lessons.md} ∪ {lessons-outbox/}
-∪ {drained/} union surface. Pydantic port of coordinator-claude
+∪ {drained/} union surface. Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/lesson-summary.ts` (Zod source).
 
 Spec backlink: state/roadmap/cockpit-contract-ext-2026-06-22/COORDINATOR-RESOLUTIONS.md § R4
@@ -22,7 +22,7 @@ null-`created` assumption no longer holds for new captures.
 `repo` and `coordinator_root_path` are connector-injected (D4), never in
 on-disk prose. Nullable fields follow D9 (present-as-null, not optional).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

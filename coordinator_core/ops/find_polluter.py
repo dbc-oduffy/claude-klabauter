@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.find_polluter — ported from coordinator/bin/find-polluter.sh
-(DOE-PORT R2-R6, variant #1 — pristine, no registered op, coordinator-claude keeps the .sh filename
+(DOE-PORT R2-R6, variant #1 — pristine, no registered op, DoE keeps the .sh filename
 as a polyglot trampoline over this module).
 
 Purpose: bisection-style test-pollution finder. Given a filesystem path that should
@@ -32,7 +32,7 @@ Resolution / behavior (unchanged from the bash oracle, `coordinator/bin/find-pol
      (path, `ls -la`-style detail line) and returns 1. No hit across the full set
      returns 0 ("all tests clean").
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 Negative-spec (retired bash-only mechanics — NOT reintroduced here):
     - Does NOT use bash `set -euo pipefail` — Python's own exception propagation
@@ -64,7 +64,7 @@ from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
 
-_PROG = "find-polluter.sh"  # literal program-name prefix, matches the coordinator-claude filename
+_PROG = "find-polluter.sh"  # literal program-name prefix, matches the DoE filename
 
 
 def _existence_detail(path: str) -> str:

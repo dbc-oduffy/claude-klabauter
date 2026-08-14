@@ -179,7 +179,7 @@ _REAL_USER_SITE = site.getusersitepackages()
 
 
 def _capture_real_doe_root() -> str:
-    """Resolve the sibling coordinator-claude checkout ONCE, at collection time, under
+    """Resolve the sibling DoE-claude checkout ONCE, at collection time, under
     the real (un-quarantined) HOME — used ONLY to locate the manifest to copy
     into a throwaway stub (see ``_STUB_DOE_ROOT`` below). The real path itself
     is never seeded into a quarantined test's ``.doe-root`` pointer.
@@ -187,7 +187,7 @@ def _capture_real_doe_root() -> str:
     Same capture-before-quarantine shape as ``_REAL_USER_SITE`` above, for the
     same class of reason. ``coordinator/bin/lib/coordinator_registry.py``
     resolves its manifest (``coordinator/schemas/coordinator-registry.manifest
-    .json``, which DR-047 keeps in coordinator-claude while this repo owns the engine)
+    .json``, which DR-047 keeps in DoE-claude while this repo owns the engine)
     at IMPORT time, through a ladder whose every live rung is home-anchored:
     the ``.doe-root`` pointer files, the marketplace-cache probe, the flat
     plugin-layout probe, and the machine-local registry CLI all hang off
@@ -198,7 +198,7 @@ def _capture_real_doe_root() -> str:
     ``baton_assemble.apply._load_doc_new_module`` does, or as a spawned
     subprocess inheriting this environment) dies before reaching its assertion.
 
-    Returns "" when nothing resolves — on a machine with no coordinator-claude checkout
+    Returns "" when nothing resolves — on a machine with no DoE-claude checkout
     the seeding below is skipped and behavior is unchanged.
     """
     try:
@@ -216,44 +216,84 @@ _REAL_DOE_MANIFEST_RELPATH = os.path.join(
     "coordinator", "schemas", "coordinator-registry.manifest.json"
 )
 
+_REAL_DOE_CROSS_REPO_MEMO_SCHEMA_RELPATH = os.path.join(
+    "coordinator", "schemas", "cross-repo-memo.schema.json"
+)
+
+# The explicit, named set of relpaths seeded into the stub DoE-claude root.
+# Membership rule: a file belongs here ONLY if some quarantined test must
+# READ it from the DoE side, and it was added deliberately for that reason —
+# never a whole-tree or whole-directory copy. Keeping this list narrow is
+# load-bearing: the stub's "strictly less exposure than the real repo"
+# isolation guarantee (see docstring below) depends on copying the minimum
+# set of files quarantined tests actually need, not everything that happens
+# to be nearby.
+_STUB_DOE_SEED_RELPATHS = (
+    _REAL_DOE_MANIFEST_RELPATH,
+    _REAL_DOE_CROSS_REPO_MEMO_SCHEMA_RELPATH,
+)
+
 
 def _build_stub_doe_root(base_dir: str) -> str:
-    """Build a throwaway coordinator-claude STUB under ``base_dir`` and return its path.
+    """Build a throwaway DoE-claude STUB under ``base_dir`` and return its path.
 
-    Copies only the one file quarantined tests actually need to READ —
-    ``coordinator/schemas/coordinator-registry.manifest.json`` — out of the
-    real checkout captured by ``_capture_real_doe_root`` above. Nothing else
-    from the real repo is copied or referenced.
+    Copies only the explicitly named files quarantined tests actually need
+    to READ — listed in ``_STUB_DOE_SEED_RELPATHS`` above — out of the real
+    checkout captured by ``_capture_real_doe_root``. Nothing else from the
+    real repo is copied or referenced. A file earns a place in that tuple
+    only when a quarantined test genuinely reads it from the DoE side, added
+    deliberately one at a time — this must never become a whole-tree copy.
 
-    This is the fix for a P1: seeding the REAL coordinator-claude path into a
+    This is the fix for a P1: seeding the REAL DoE-claude path into a
     quarantined test's ``.doe-root`` pointer made the manifest READ succeed,
     but ``coordinator_registry.py::doe_root()`` is also the documented anchor
     other call sites join WRITE targets onto (``state/lessons-outbox``,
     ``state/improvement-queue``) — so any quarantined test that reached a
     ``doe_root()``-anchored write path without its own override could write
     into the LIVE sibling repo, the exact corruption class this fixture
-    exists to prevent. Pointing at a stub instead keeps the manifest read
+    exists to prevent. Pointing at a stub instead keeps the needed reads
     working while making every write land inside the throwaway quarantine
     dir — strictly more isolation than tests had before the real path was
     ever seeded (``16e1c220c``), and strictly less exposure than the real
-    repo.
+    repo. That "strictly less exposure" rationale is why the seed set stays
+    an explicit named tuple rather than a directory copy: every additional
+    file widens the exposure the stub was built to shrink.
 
-    Returns "" if the real manifest cannot be located, mirroring
-    ``_capture_real_doe_root``'s graceful degradation — callers must treat an
-    empty return the same as "nothing to seed".
+    Returns "" if the real DoE root or the REGISTRY MANIFEST cannot be
+    located, mirroring ``_capture_real_doe_root``'s graceful degradation —
+    callers must treat an empty return the same as "nothing to seed". The
+    manifest is deliberately load-bearing rather than one seed among equals:
+    a stub carrying schemas but no registry resolves ``doe_root()`` into a
+    tree that fails its read later and further away, which is worse than
+    degrading here. Any OTHER missing seed file is skipped, not fatal — it
+    surfaces as its own reader's ENOENT, naming the file it wanted.
     """
     if not _REAL_DOE_ROOT:
         return ""
-    real_manifest = os.path.join(_REAL_DOE_ROOT, _REAL_DOE_MANIFEST_RELPATH)
-    if not os.path.isfile(real_manifest):
+    if not os.path.isfile(os.path.join(_REAL_DOE_ROOT, _REAL_DOE_MANIFEST_RELPATH)):
         return ""
 
     import shutil
 
-    stub_root = os.path.join(base_dir, "coordinator-claude-stub")
-    stub_manifest = os.path.join(stub_root, _REAL_DOE_MANIFEST_RELPATH)
-    os.makedirs(os.path.dirname(stub_manifest), exist_ok=True)
-    shutil.copyfile(real_manifest, stub_manifest)
+    stub_root = os.path.join(base_dir, "doe-claude-stub")
+    for relpath in _STUB_DOE_SEED_RELPATHS:
+        real_path = os.path.join(_REAL_DOE_ROOT, relpath)
+        if not os.path.isfile(real_path):
+            continue
+        stub_path = os.path.join(stub_root, relpath)
+        os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+        shutil.copyfile(real_path, stub_path)
+
+    # `coordinator/bin` itself carries no seeded file (bin/lib scripts are
+    # claude-klabauter-side per `_doe_bin_dir()`'s own docstring), but a real DoE-claude
+    # checkout has it on disk, and downstream readers (e.g. `_doe_bin_dir()`'s
+    # callers) join a sibling path back out of it via
+    # `coordinator/bin/../schemas/...`. `..` traversal is resolved by the OS
+    # against the actual directory tree, so `bin` must exist as a real (if
+    # empty) directory here or that join fails with ENOENT before the schema
+    # file it correctly names is ever reached.
+    os.makedirs(os.path.join(stub_root, "coordinator", "bin"), exist_ok=True)
+
     return stub_root
 
 
@@ -360,7 +400,7 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # one read the quarantine would otherwise break outright: the `.doe-root`
     # pointer that `coordinator_registry`'s import-time manifest bootstrap
     # resolves through (see `_capture_real_doe_root` above for the mechanism).
-    # Seeded as a FILE inside the quarantine, not as a `REPO_EXAMPLE_DOCTRINE_REPO` env
+    # Seeded as a FILE inside the quarantine, not as a `REPO_DOE_CLAUDE` env
     # override: the env route outranks the machine-local registry in the
     # ratified DR-071 precedence and would silently mask the rung a test is
     # exercising, whereas the pointer file sits at the same rung a real install

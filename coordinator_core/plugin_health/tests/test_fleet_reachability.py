@@ -3,15 +3,15 @@ coordinator_core.plugin_health.tests.test_fleet_reachability
 
 Coverage for the fleet-reachability delete-safety gate (see
 fleet_reachability.py's own module docstring for the `c79e66cd` regression
-this closes: claude-klabauter deleted `lint-frontmatter.js` while a coordinator-claude skill
+this closes: claude-klabauter deleted `lint-frontmatter.js` while a DoE-claude skill
 still cited `bin/lint-frontmatter`).
 
 Every scenario uses tmp_path fixtures standing in for claude-klabauter's
-coordinator/bin/ and coordinator-claude's coordinator/{skills,commands,hooks,
-pipelines} — never the operator's actual claude-klabauter/coordinator-claude checkouts (see
+coordinator/bin/ and DoE-claude's coordinator/{skills,commands,hooks,
+pipelines} — never the operator's actual claude-klabauter/DoE-claude checkouts (see
 `check_fleet_reachability`'s explicit-override params). The skip-masking
 guard tests use monkeypatch instead of the real machine-local registry, so
-this suite's outcome does not depend on whether `repos.example_doctrine_repo` happens
+this suite's outcome does not depend on whether `repos.doe_claude` happens
 to be registered on the machine running it.
 
 Spec backlink: pln-python-ize-claude-klabauter-bin-oracles--218413 D3
@@ -50,7 +50,7 @@ def _write_claude_klabauter_oracle(agent_bin: Path, filename: str) -> None:
 
 def _write_doe_fence(doe_root: Path, subdir: str, filename: str, body: str) -> None:
     """`filename` may itself be a nested relative path (e.g.
-    `tests/some-doc.md`) to stand in for a real coordinator-claude sub-subdirectory -- the
+    `tests/some-doc.md`) to stand in for a real DoE sub-subdirectory -- the
     parent of the FINAL target path is created, not just `d`, so a nested
     `filename` lands correctly instead of raising on a missing intermediate
     directory."""
@@ -77,7 +77,7 @@ def test_clean_no_missing_qualified_and_extensioned(tmp_path: Path):
 
 def test_regression_fixture_c79e66cd_shape(tmp_path: Path):
     """The exact break shape: claude-klabauter's coordinator/bin/ has no
-    lint-frontmatter oracle in any form, but a coordinator-claude skill still cites
+    lint-frontmatter oracle in any form, but a DoE-claude skill still cites
     `coordinator/bin/lint-frontmatter` — the gate MUST fail loud, not warn."""
     agent_bin = tmp_path / "claude-klabauter-bin"
     doe_root = tmp_path / "doe"
@@ -188,7 +188,7 @@ def test_cmd_extension_normalizes_to_match_claude_klabauter_oracle(tmp_path: Pat
 
 
 def test_missing_doe_subdir_is_not_an_error(tmp_path: Path):
-    """A leaner coordinator-claude checkout missing e.g. pipelines/ entirely must not raise
+    """A leaner DoE checkout missing e.g. pipelines/ entirely must not raise
     — the sweep skips absent subdirs rather than failing."""
     agent_bin = tmp_path / "claude-klabauter-bin"
     doe_root = tmp_path / "doe"
@@ -281,7 +281,7 @@ def test_bare_citation_with_no_qualifier_is_not_demand(tmp_path: Path):
     """2026-07-27 fix (commit b1bc5789's own follow-up): a BARE `bin/<name>`
     citation -- no `coordinator/`, `templates/`, or settings-home-forwarder
     -seam prefix -- is no longer treated as a demand on claude-klabauter's oracle
-    surface. This is the real coordinator-claude-tree shape of `check-fixture-sync`
+    surface. This is the real DoE-tree shape of `check-fixture-sync`
     (`workday-start.md`'s "Repos ... ship a `bin/check-fixture-sync.sh`" --
     a per-consumer-repo convention, never a claude-klabauter oracle): the oracle has
     NO on-disk entry anywhere, yet the gate must NOT fail, because the
@@ -326,7 +326,7 @@ def test_qualified_citation_of_a_truly_absent_oracle_still_fails(tmp_path: Path)
 
 def test_retired_artifact_backlink_bare_citation_is_not_demand(tmp_path: Path):
     """2026-07-27 finding: `ensure-coordinator-venv` and
-    `coordinator-handoff-archive` are both coordinator-claude citing THEIR OWN retired
+    `coordinator-handoff-archive` are both DoE citing THEIR OWN retired
     artifact in a bare, backtick-fenced "no longer exists" / "formerly"
     backlink (`install.md`'s "`bin/ensure-coordinator-venv.sh` no longer
     exists"; `handoff-archival.md`'s "formerly `bin/coordinator-handoff-
@@ -365,9 +365,9 @@ def test_excluded_file_class_citations_are_not_demand(tmp_path: Path):
     /fixture directory, a CHANGELOG, or a `docs/plans/` working doc is
     still not live invocation surface -- see
     `_is_excluded_from_invocation_surface`'s own docstring for the real
-    coordinator-claude-tree instance this closes
+    DoE-tree instance this closes
     (`coordinator/hooks/tests/block-destructive-rm.security-review.md`, a
-    code-review artifact, not a hook coordinator-claude ever tells an agent to invoke)."""
+    code-review artifact, not a hook DoE ever tells an agent to invoke)."""
     agent_bin = tmp_path / "claude-klabauter-bin"
     doe_root = tmp_path / "doe"
 
@@ -392,7 +392,7 @@ def test_excluded_file_class_citations_are_not_demand(tmp_path: Path):
 
 def test_review_named_skill_file_is_not_excluded(tmp_path: Path):
     """Negative-spec companion: the file-class filter must NOT match on a
-    `review` substring in the filename/path -- coordinator-claude's own tree has genuine,
+    `review` substring in the filename/path -- DoE's own tree has genuine,
     live skill/command entrypoints named exactly that shape
     (`commands/parallel-code-review.md`, `commands/enrich-and-review.md`).
     A citation inside one of those must still register as demand."""
@@ -416,7 +416,7 @@ def test_shebang_and_system_path_citations_are_not_demand(tmp_path: Path):
     """2026-07-27 regex-precision defect: `#!/bin/bash`, `#!/usr/bin/env
     python3`, and a bare `/bin/sh` prose mention all match `\\bbin/<name>`
     structurally identically to a genuine `coordinator/bin/<name>` fence
-    citation -- but none of them cite a claude-klabauter oracle. Real coordinator-claude hits:
+    citation -- but none of them cite a claude-klabauter oracle. Real DoE hits:
     install.md's bash-version-probe prose ("`#!/usr/bin/env bash`",
     "`/bin/bash`") and hook test fixtures' "#!/bin/sh" shebang literals."""
     agent_bin = tmp_path / "claude-klabauter-bin"
@@ -440,7 +440,7 @@ def test_shebang_and_system_path_citations_are_not_demand(tmp_path: Path):
 def test_home_dir_bin_citations_are_not_demand(tmp_path: Path):
     """2026-07-27 finding: `$HOME/bin/scc` and `~/bin/scc` cite a
     THIRD-PARTY tool installed into the user's generic PATH bin directory
-    (real coordinator-claude hit: install.md/workday-start.md's `scc`/`shellcheck` PATH
+    (real DoE hit: install.md/workday-start.md's `scc`/`shellcheck` PATH
     probe), not a claude-klabauter `coordinator/bin/` oracle -- structurally
     indistinguishable from a real citation without recognizing the
     canonical `$HOME`/`~` home-directory markers."""
@@ -496,9 +496,9 @@ def test_glob_wildcard_family_reference_is_not_demand(tmp_path: Path):
 
 def test_non_markdown_file_is_not_swept(tmp_path: Path):
     """2026-07-27 finding: a `.py` file's docstring/path-literal embedding
-    `coordinator/bin/foo.sh` (real coordinator-claude hit:
+    `coordinator/bin/foo.sh` (real DoE hit:
     test_nudge_em_code_dispatch.py's own regression-guard docstring) is
-    coordinator-claude-internal test scaffolding, never a fenced Markdown demand -- the
+    DoE-internal test scaffolding, never a fenced Markdown demand -- the
     sweep must not treat arbitrary Python source as a citation surface."""
     agent_bin = tmp_path / "claude-klabauter-bin"
     doe_root = tmp_path / "doe"
@@ -520,7 +520,7 @@ def test_ledger_retired_entry_explains_a_missing_name(tmp_path: Path):
     """2026-07-27: a name with no live claude-klabauter oracle but a `"retired"`
     relocation-ledger entry is deliberately gone, not a fleet-reachability
     failure -- the natural join this gate's dispatch brief named as the
-    likely right fix for a coordinator-claude-side stale citation of a retired artifact."""
+    likely right fix for a DoE-side stale citation of a retired artifact."""
     agent_bin = tmp_path / "claude-klabauter-bin"
     doe_root = tmp_path / "doe"
     ledger_path = tmp_path / "relocation-ledger.json"
@@ -567,7 +567,7 @@ def test_ledger_moved_entry_explains_a_missing_name(tmp_path: Path):
                 "entries": [
                     {
                         "disposition": "moved",
-                        "old_repo": "coordinator-claude (coordinator-claude)",
+                        "old_repo": "coordinator-claude (DoE-claude)",
                         "old_path": "bin/old-name.sh",
                         "new_repo": "claude_klabauter",
                         "new_path": "coordinator/bin/new-name.py",
@@ -639,10 +639,10 @@ def test_skip_when_doe_root_unresolvable(tmp_path: Path, monkeypatch):
     assert result.skipped is True
 
 
-def test_skip_masking_guard_noop_when_example_doctrine_repo_unregistered(monkeypatch):
+def test_skip_masking_guard_noop_when_doe_claude_unregistered(monkeypatch):
     monkeypatch.setattr(fr, "registry_get", lambda key: None)
     # Must not raise, regardless of what check_fleet_reachability would do —
-    # this persona (repos.example_doctrine_repo not registered) legitimately has
+    # this persona (repos.doe_claude not registered) legitimately has
     # nothing to compare.
     fr.assert_registered_implies_no_skip()
 
@@ -672,7 +672,7 @@ def test_skip_masking_guard_passes_when_registered_and_gate_ran(monkeypatch):
     fr.assert_registered_implies_no_skip()
 
 
-@pytest.mark.real_home  # live-tree oracle: resolves repos.example_doctrine_repo via the machine-local
+@pytest.mark.real_home  # live-tree oracle: resolves repos.doe_claude via the machine-local
 # registry, which the suite-root `_quarantine_real_home` autouse fixture would otherwise hide,
 # turning this into an unconditional skip. Read-only (registry lookup + delete-time sweep, no
 # writes), which is the marker's own sanctioned use per conftest.py's docstring.
@@ -682,8 +682,8 @@ def test_ci_no_silent_skip_on_this_machine_when_registered():
     a concurrent chunk mutating coordinator/bin/ elsewhere in this repo)."""
     from coordinator_core.machine_resolver import registry_get as real_registry_get
 
-    if not real_registry_get("repos.example_doctrine_repo"):
-        pytest.skip("repos.example_doctrine_repo not registered on this machine")
+    if not real_registry_get("repos.doe_claude"):
+        pytest.skip("repos.doe_claude not registered on this machine")
 
     fr.assert_registered_implies_no_skip()
 
@@ -691,7 +691,7 @@ def test_ci_no_silent_skip_on_this_machine_when_registered():
 # Marked @pytest.mark.real_home as of 2026-07-27 (commit b1bc5789's own follow-up): the
 # remaining three false positives from the scan-side-widening pass -- check-fixture-sync,
 # coordinator-handoff-archive, ensure-coordinator-venv -- are now resolved and verified,
-# not fabricated. Each was confirmed against coordinator-claude's actual citing lines (not
+# not fabricated. Each was confirmed against DoE-claude's actual citing lines (not
 # guessed) to be a citation this gate SHOULD NOT treat as demand: check-fixture-sync is
 # a per-consumer-repo convention (`workday-start.md`'s "Repos ... ship a
 # `bin/check-fixture-sync.sh`"), and ensure-coordinator-venv / coordinator-handoff-archive
@@ -699,7 +699,7 @@ def test_ci_no_silent_skip_on_this_machine_when_registered():
 # retired claude-klabauter artifacts. All three share one structural property that closes them
 # without interpreting any of that prose: none is ever cited in a NAMESPACE-QUALIFIED
 # form (`coordinator/bin/<name>`, `templates/bin/<name>`, or the settings-home-forwarder
-# -seam expansion) anywhere in coordinator-claude's swept surface -- see
+# -seam expansion) anywhere in DoE's swept surface -- see
 # `_is_namespace_qualified_citation`'s own docstring in fleet_reachability.py for the fix
 # and its accepted coverage trade (a real oracle cited ONLY in bare form is now invisible
 # to this gate; `claude-klabauter-doctor-probe` is the one live instance of that residual today).
@@ -710,21 +710,21 @@ def test_ci_no_silent_skip_on_this_machine_when_registered():
 @pytest.mark.real_home
 def test_live_tree_reachability_ok_on_this_machine_when_registered():
     """Review: code-reviewer (Finding 1) — the ONLY test in this file that
-    asserts `result.ok` against REAL (unmocked) claude-klabauter + coordinator-claude disk
+    asserts `result.ok` against REAL (unmocked) claude-klabauter + DoE-claude disk
     state, closing the gap where every content-asserting test above uses
     synthetic tmp_path fixtures and the pre-existing
     test_ci_no_silent_skip_on_this_machine_when_registered deliberately
     checks only the skip flag, never `result.ok`. Without this, a real
     c79e66cd-shaped regression (an oracle deleted from coordinator/bin/
-    while a real coordinator-claude fence still cites it) would pass this entire suite.
+    while a real DoE fence still cites it) would pass this entire suite.
 
-    Gated on repos.example_doctrine_repo being registered (same skip-cleanly-otherwise
+    Gated on repos.doe_claude being registered (same skip-cleanly-otherwise
     pattern as test_ci_no_silent_skip_on_this_machine_when_registered) so
-    this cannot fail in an OSS-consumer checkout with no coordinator-claude root."""
+    this cannot fail in an OSS-consumer checkout with no DoE-claude root."""
     from coordinator_core.machine_resolver import registry_get as real_registry_get
 
-    if not real_registry_get("repos.example_doctrine_repo"):
-        pytest.skip("repos.example_doctrine_repo not registered on this machine")
+    if not real_registry_get("repos.doe_claude"):
+        pytest.skip("repos.doe_claude not registered on this machine")
 
     result = fr.check_fleet_reachability()
 
@@ -748,6 +748,6 @@ def test_live_tree_reachability_ok_on_this_machine_when_registered():
     # before it could ever reach zero outright.
     assert result.demand_count > 50, (
         f"fleet-reachability demand sweep found only {result.demand_count} citation(s) against "
-        "real coordinator-claude disk state — expected >50; this is the vacuous-pass shape Finding 1 "
+        "real DoE-claude disk state — expected >50; this is the vacuous-pass shape Finding 1 "
         "closes (a demand-filter regression could zero doe_demand and still report ok=True)"
     )

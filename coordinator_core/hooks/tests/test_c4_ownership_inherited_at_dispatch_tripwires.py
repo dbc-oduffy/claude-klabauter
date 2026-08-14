@@ -5,7 +5,7 @@ docs/plans/2026-08-04-ownership-inherited-at-dispatch.md.
 
 The plan's central design (a dispatch-time declared-provenance set, C1/C2/C3/C3b)
 was REFUSED by cross-repo ruling SC-DR-021
-(coordinator-claude `coordinator/docs/wiki/scoped-safety-commits.md` @ `bedc7e0e2927`, token
+(DoE `coordinator/docs/wiki/scoped-safety-commits.md` @ `bedc7e0e2927`, token
 `A-CLAIM-IS-WHAT-YOU-WROTE-NOT-WHAT-YOU-PLANNED`). This chunk (C4) is NOT dead —
 it is the standing tripwire that stops the rejected write-time-attribution
 design from re-entering silently, and is now MORE load-bearing than before the
@@ -26,7 +26,7 @@ Three tripwires:
     below (grepped across `coordinator_core/`, excluding tests/docstrings/the
     definition itself) and asserted exactly — a new caller fails loudly and
     names itself, rather than silently passing a "count didn't change" check.
-    Pinned against coordinator-claude's `scoped-safety-commits.md` SC-DR-001 negative-spec:
+    Pinned against DoE's `scoped-safety-commits.md` SC-DR-001 negative-spec:
     "The architecture never attributes Bash writes at write time and does not
     need to."
 
@@ -553,7 +553,7 @@ _CLAIM_INDEX_PATH = _REPO_ROOT / "coordinator_core" / "session" / "claim_index.p
 #: invocations outside `claim_index.py` itself and outside any tests/ path
 #: are therefore `_warn_recent_edits` and `claims._clear_path_claim_if_dead`
 #: (the dead-holder release path for the PATH-TOUCH claim plane, landed per
-#: cross-repo/archive/2026-08-11-coordinator-claude-em-dead-claim-on-a-non-plan-
+#: cross-repo/archive/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md) -- the decision record this pin's own
 #: docstring asks for before widening.
 _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(

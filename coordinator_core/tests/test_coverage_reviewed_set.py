@@ -1593,7 +1593,7 @@ def test_build_reviewed_set_session_scope_credits_untrailered_commit(tmp_path: P
 def test_build_reviewed_set_stored_head_does_not_grow_with_new_commits(tmp_path: Path) -> None:
     """A record citing '<sha>..HEAD' must not silently credit commits landed
     AFTER the record was written — reproduces the exact live defect
-    (coordinator-claude 2026-07-25, work/machine-a/2026-07-21: chain_commits=70
+    (DoE-claude 2026-07-25, work/machine-a/2026-07-21: chain_commits=70
     covered=70 uncovered=0 off 8 ..HEAD records).
 
     Sequence: C0 (base) -> C1 (reviewed, tip at write time) -> record cites

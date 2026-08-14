@@ -1,18 +1,18 @@
 """
 coordinator_core.install.sandbox_check — sandbox clean-install shape validator.
 
-Port of: ``coordinator/bin/install-sandbox-check.sh`` (coordinator-claude b5a4192c,
-2026-07-20) [coordinator-claude repo] (BIG_PORT Wave C, item ``install-sandbox-check``,
+Port of: ``coordinator/bin/install-sandbox-check.sh`` (DoE b5a4192c,
+2026-07-20) [DoE-claude repo] (BIG_PORT Wave C, item ``install-sandbox-check``,
 971 LOC oracle).
-Purpose (unchanged from bash): exercises the W4.1 install steps (coordinator-claude clone,
+Purpose (unchanged from bash): exercises the W4.1 install steps (DoE clone,
 ``claude-doe`` wrapper, ``gen-settings-hooks`` seeding, ``.doe-root`` pointer,
 ``claude-doe-shim.sh``, resolver cold-tier, publish-repo parameterization)
 against an isolated sandbox ``CLAUDE_HOME`` and asserts the resulting thin-
-``~/.claude`` + cloned-coordinator-claude shape. Validates Tier 1 (filesystem) of the
+``~/.claude`` + cloned-DoE shape. Validates Tier 1 (filesystem) of the
 install-surface-completeness contract; Tier 2 (running-in-Claude-Code) is
 printed as a DEFERRED manual-gate banner, unchanged in spirit from the oracle.
 
-FAMILY-I (fresh-install surface): on a cold machine ``REPO_EXAMPLE_DOCTRINE_REPO`` /
+FAMILY-I (fresh-install surface): on a cold machine ``REPO_DOE_CLAUDE`` /
 ``machine-local`` may be unresolvable — every unresolved-clone branch below
 degrades to a SKIP with actionable remediation text, never a hard crash, and
 :func:`main` prints a dedicated CLAUDE_KLABAUTER_ROOT-resolution remediation block if
@@ -20,11 +20,11 @@ the claude-klabauter link itself cannot be established (the trampoline's own con
 not this module's — this module assumes it is already running IN claude-klabauter).
 
 Of the dependency scripts this validator drives, only ``claude-doe`` remains
-a genuine subprocess-exec of a coordinator-claude-owned artifact: it has no native claude-klabauter
+a genuine subprocess-exec of a DoE-owned artifact: it has no native claude-klabauter
 peer, and its OWN dry-run/exec-line behavior is what checks 7/7b/F5 assert
 on — there is no "port" of a wrapper whose entire job is to be invoked as a
 standalone binary. ``claude-doe`` was PURE BASH on disk at the time this
-module was first ported (confirmed via ``file(1)``); coordinator-claude has since
+module was first ported (confirmed via ``file(1)``); DoE-claude has since
 ported it to python3 (shebang ``#!/usr/bin/env python3``), so the invocation
 below (check 7) uses ``sys.executable`` directly rather than an explicit
 ``bash`` spawn — feeding Python source to a bash interpreter fails outright
@@ -53,20 +53,20 @@ as the subject under test, not the shim's logic in isolation — a distinct
 rationale from (d), not a re-run of it. The shim this probe sources
 (``claude-doe-shim.sh``) is itself emitted by claude-klabauter's own
 :mod:`coordinator_core.ops.gen_claude_doe_shim` op, which copies a
-Coordinator-claude-authored *template*'s bytes verbatim rather than reimplementing the
+DoE-authored *template*'s bytes verbatim rather than reimplementing the
 template body (see that module's own docstring) — so the shim is more
-precisely a claude-klabauter-emitted artifact carrying a coordinator-claude-template body, not
-purely "a coordinator-claude artifact," and this provenance is load-bearing for why the
+precisely a claude-klabauter-emitted artifact carrying a DoE-template body, not
+purely "a DoE artifact," and this provenance is load-bearing for why the
 site qualifies under (e): asserting the live-shell-environment behavior of
 a byte-verbatim-copied template is the thing under test, not a foreign
 script's independent logic. Tracked as the reclassified (was: row #7) entry
 in ``state/audits/2026-07-21-pure-python-bash-spawn-audit.md``.
 
-``gen-settings-hooks.sh`` (coordinator-claude a2078a9b, 2026-07-22),
-``gen-doe-root-pointer.sh`` (coordinator-claude b5a4192c, 2026-07-20),
-``gen-claude-doe-shim.sh`` (coordinator-claude b5a4192c, 2026-07-20), and
-``resolve-coordinator-clone.sh`` (coordinator-claude 290997c7, 2026-07-22)
-[coordinator-claude repo] are the FOUR bridges this module used to subprocess-exec
+``gen-settings-hooks.sh`` (DoE a2078a9b, 2026-07-22),
+``gen-doe-root-pointer.sh`` (DoE b5a4192c, 2026-07-20),
+``gen-claude-doe-shim.sh`` (DoE b5a4192c, 2026-07-20), and
+``resolve-coordinator-clone.sh`` (DoE 290997c7, 2026-07-22)
+[DoE-claude repo] are the FOUR bridges this module used to subprocess-exec
 (``bash <script> ...``, relying on the first three being sh/python polyglot
 trampolines) and now calls **in-process** instead, against claude-klabauter's own
 native peer modules — :mod:`coordinator_core.install.gen_settings_hooks`,
@@ -75,12 +75,12 @@ native peer modules — :mod:`coordinator_core.install.gen_settings_hooks`,
 :mod:`coordinator_core.resolve_coordinator_clone` respectively (see
 :func:`_call_gen_settings_hooks`, :func:`_call_gen_doe_root_pointer`,
 :func:`_call_gen_claude_doe_shim`, :func:`_call_resolve_coordinator_clone`,
-and the paired ``_assert_*_interface`` functions). Each coordinator-claude trampoline's only
+and the paired ``_assert_*_interface`` functions). Each DoE trampoline's only
 job was to import and call the same claude-klabauter-owned module this validator now
 calls directly — subprocess-exec'ing it was a circular, Windows-costly
 (~326ms shim tax measured for gen-settings-hooks.sh alone) round-trip through
 ``bash``/``sh`` PATH-probing back into this repo's own Python, and (for the
-other three) a dependency on coordinator-claude `.sh` files being present/landed at all
+other three) a dependency on DoE `.sh` files being present/landed at all
 before this validator's OWN in-tree logic could be exercised. Repointed per
 ``cross-repo/inbox/2026-07-20-claude-central-em-sandbox-check-execs-doe-shell-blocks-deletion.md``
 and its correction
@@ -90,15 +90,15 @@ and its correction
 ``CLAUDE_HOME`` before that repoint, for a reason the repoint does NOT fix —
 see the correction memo's rc=3 ``CLAUDE_KLABAUTER_ROOT``-resolution finding); the same
 in-process pattern is extended here to the other three bridges as the
-general "reimplement native, do not subprocess a coordinator-claude oracle" doctrine for
+general "reimplement native, do not subprocess a DoE oracle" doctrine for
 this plan (`docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md`
 § Decisions).
 
 Flagged behavioral broadening (not silent): because the pointer/shim/resolver
-calls no longer require the corresponding coordinator-claude ``.sh`` file to exist on disk,
+calls no longer require the corresponding DoE ``.sh`` file to exist on disk,
 checks that used to report FAIL "not found (Cn not yet landed — expected
 RED)" now exercise the real native logic directly and can PASS even against
-a coordinator-claude clone that has not yet shipped those trampolines. This is the intended
+a DoE clone that has not yet shipped those trampolines. This is the intended
 outcome of the port (the native module IS the authoritative implementation
 now, matching :mod:`coordinator_core.resolve_coordinator_clone`'s own
 "reimplement-native" docstring), not a masked regression — the shim/pointer
@@ -175,11 +175,17 @@ from coordinator_core.install import gen_settings_hooks
 from coordinator_core.ops import gen_claude_doe_shim, gen_doe_root_pointer
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
+# Generator-provenance declaration (generator_provenance.py). Every write in
+# this module targets an isolated sandbox CLAUDE_HOME created for the test
+# run (docstring: "exercises...against an isolated sandbox CLAUDE_HOME") --
+# tmp/test fixtures, never tracked claude-klabauter paths.
+GENERATES = []
+
 _DEFAULT_TIMEOUT = 60
 
 
 # ---------------------------------------------------------------------------
-# unit1 — Reporter, subprocess helper, coordinator-claude-clone resolution, arg parse
+# unit1 — Reporter, subprocess helper, DoE-clone resolution, arg parse
 # ---------------------------------------------------------------------------
 
 
@@ -255,18 +261,18 @@ def _which(name: str) -> Optional[str]:
 
 
 def resolve_doe_clone() -> Tuple[str, bool]:
-    """Mirrors bash lines 79-98. Order: ``REPO_EXAMPLE_DOCTRINE_REPO`` env, then
-    ``machine-local get repos.example_doctrine_repo`` (sibling-of-self or PATH). Returns
+    """Mirrors bash lines 79-98. Order: ``REPO_DOE_CLAUDE`` env, then
+    ``machine-local get repos.doe_claude`` (sibling-of-self or PATH). Returns
     ``("", False)`` on total failure — NEVER raises (fresh-install machines
     routinely fail to resolve this; every downstream check degrades to SKIP,
     per the FAMILY-I contract in the module docstring)."""
-    doe_clone = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "")
+    doe_clone = os.environ.get("REPO_DOE_CLAUDE", "")
     if doe_clone:
         return doe_clone, True
 
     ml = _which("machine-local")
     if ml:
-        cp = _run([ml, "get", "repos.example_doctrine_repo"], timeout=15)
+        cp = _run([ml, "get", "repos.doe_claude"], timeout=15)
         if cp.returncode == 0 and cp.stdout.strip():
             return cp.stdout.strip(), True
 
@@ -314,8 +320,8 @@ def _usage_text() -> str:
         "  -h, --help               Show this usage.\n"
         "\n"
         "Environment:\n"
-        "  REPO_EXAMPLE_DOCTRINE_REPO  Path to the resolved clone (primary resolution override).\n"
-        "                   Falls back to: machine-local get repos.example_doctrine_repo.\n"
+        "  REPO_DOE_CLAUDE  Path to the resolved clone (primary resolution override).\n"
+        "                   Falls back to: machine-local get repos.doe_claude.\n"
         "                   At least one must be set for the clone checks to run.\n"
         "\n"
         "Exit codes:\n"
@@ -371,7 +377,7 @@ def _tier1_filesystem_shape(
 
     # 5. wrapper install
     r.section("--- Step 3.5b: wrapper install ---")
-    wrapper_src = os.path.join(coordinator_root, "bin", "claude-doe")
+    wrapper_src = os.path.join(coordinator_root, "bin", "claude-doe.py")
     if not os.path.isfile(wrapper_src):
         r.bad(f"claude-doe wrapper not found at: {wrapper_src}")
     else:
@@ -408,7 +414,7 @@ def _tier1_filesystem_shape(
             **os.environ,
             "CLAUDE_HOME": sandbox,
             "COORDINATOR_SETTINGS_HOME": os.path.join(sandbox, ".coordinator-claude-settings"),
-            "REPO_EXAMPLE_DOCTRINE_REPO": doe_clone,
+            "REPO_DOE_CLAUDE": doe_clone,
         }
         rc, err = _call_gen_settings_hooks(sandbox_settings, env)
         if rc == 0:
@@ -472,9 +478,9 @@ def _tier1_filesystem_shape(
         env = {
             **os.environ,
             "CLAUDE_HOME": sandbox,
-            "REPO_EXAMPLE_DOCTRINE_REPO": doe_clone,
+            "REPO_DOE_CLAUDE": doe_clone,
         }
-        cp = _run([sys.executable, os.path.join(coordinator_root, "bin", "claude-doe"), "--dry-run"], env=env)
+        cp = _run([sys.executable, os.path.join(coordinator_root, "bin", "claude-doe.py"), "--dry-run"], env=env)
         dryrun_err = os.path.join(sandbox, "dryrun-err.txt")
         Path(dryrun_err).write_text(cp.stderr or "", encoding="utf-8")
         if cp.returncode == 0:
@@ -499,7 +505,7 @@ def _tier1_filesystem_shape(
     if doe_clone_resolved and doe_coordinator_present:
         f5_dir = os.path.join(sandbox, "f5-standalone-bin")
         os.makedirs(f5_dir, exist_ok=True)
-        wrapper_src = os.path.join(coordinator_root, "bin", "claude-doe")
+        wrapper_src = os.path.join(coordinator_root, "bin", "claude-doe.py")
         f5_wrapper = os.path.join(f5_dir, "claude-doe")
         shutil.copy2(wrapper_src, f5_wrapper)
         if os.name != "nt":
@@ -513,7 +519,7 @@ def _tier1_filesystem_shape(
             r.bad(f"F5 regression setup broken: siblings unexpectedly present in {f5_dir}")
         else:
             r.ok(f"F5 regression setup: standalone dir has claude-doe ALONE (no siblings): {f5_dir}")
-            env = {**os.environ, "REPO_EXAMPLE_DOCTRINE_REPO": doe_clone}
+            env = {**os.environ, "REPO_DOE_CLAUDE": doe_clone}
             env.pop("CLAUDE_HOME", None)
             cp = _run([f5_wrapper, "--dry-run"], env=env)
             f5_err = os.path.join(sandbox, "f5-dryrun-err.txt")
@@ -569,7 +575,7 @@ def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, s
     ``cross-repo/inbox/2026-07-20-claude-central-em-sandbox-check-doe-fix-blocks-deletion-correction.md``).
     ``generate()`` resolves ``coordinator_root`` via
     :func:`coordinator_core.install._shared.resolve_coordinator_root`, which
-    reads ``CLAUDE_HOME`` / ``REPO_EXAMPLE_DOCTRINE_REPO`` / ``COORDINATOR_ROOT`` from
+    reads ``CLAUDE_HOME`` / ``REPO_DOE_CLAUDE`` / ``COORDINATOR_ROOT`` from
     process environment — there is no subprocess env dict to hand across
     anymore, so this overlays ``env`` onto the current process's
     ``os.environ`` for the duration of the call and restores the prior
@@ -598,7 +604,7 @@ def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, s
 def _assert_gen_doe_root_pointer_interface(r: Reporter) -> None:
     """Real interface assertion against the in-process
     ``coordinator_core.ops.gen_doe_root_pointer`` module — replaces the
-    former ``bash -n``/``py_compile`` syntax checks of the coordinator-claude
+    former ``bash -n``/``py_compile`` syntax checks of the DoE
     ``gen-doe-root-pointer.sh`` polyglot, which become meaningless once the
     call site no longer reads that file at all. Asserts the module exposes
     a callable ``main(argv)`` (the ``--check-only`` contract the call sites
@@ -634,7 +640,7 @@ def _call_gen_doe_root_pointer(argv: List[str], env: Dict[str, str]) -> Tuple[in
 def _assert_gen_claude_doe_shim_interface(r: Reporter) -> None:
     """Real interface assertion against the in-process
     ``coordinator_core.ops.gen_claude_doe_shim`` module — replaces the
-    former ``bash -n``/``py_compile`` syntax checks of the coordinator-claude
+    former ``bash -n``/``py_compile`` syntax checks of the DoE
     ``gen-claude-doe-shim.sh`` polyglot. Asserts the module exposes a
     callable ``main(argv)`` (see :func:`_call_gen_claude_doe_shim`)."""
     main_fn = getattr(gen_claude_doe_shim, "main", None)
@@ -665,7 +671,7 @@ def _call_gen_claude_doe_shim(argv: List[str], env: Dict[str, str]) -> Tuple[int
 def _assert_resolve_coordinator_clone_interface(r: Reporter) -> None:
     """Real interface assertion against the in-process
     ``coordinator_core.resolve_coordinator_clone`` module — replaces the
-    former file-presence check of the coordinator-claude ``resolve-coordinator-clone.sh``
+    former file-presence check of the DoE ``resolve-coordinator-clone.sh``
     (804-line pure-bash oracle, never a polyglot — no ``py_compile`` check
     ever applied to it). Asserts the module exposes both public resolver
     entrypoints (see :func:`_call_resolve_coordinator_clone`)."""
@@ -746,7 +752,7 @@ def _tier1b_pointer_and_shim(
     _assert_gen_doe_root_pointer_interface(r)
 
     if doe_clone_resolved:
-        env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_EXAMPLE_DOCTRINE_REPO": doe_clone}
+        env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_DOE_CLAUDE": doe_clone}
         rc, err = _call_gen_doe_root_pointer([], env)
         gp_err = os.path.join(sandbox, "gen-pointer-err.txt")
         Path(gp_err).write_text(err or "", encoding="utf-8")
@@ -763,7 +769,7 @@ def _tier1b_pointer_and_shim(
             r.ok(f".doe-root pointer present in sandbox: {sandbox_doe_root}")
             pointer_content = Path(sandbox_doe_root).read_text(encoding="utf-8", errors="replace").rstrip("\n")
             if pointer_content == doe_clone:
-                r.ok(f".doe-root content matches registry repos.example_doctrine_repo: {doe_clone}")
+                r.ok(f".doe-root content matches registry repos.doe_claude: {doe_clone}")
             else:
                 r.bad(f".doe-root content mismatch: got '{pointer_content}', expected '{doe_clone}'")
         else:
@@ -810,7 +816,7 @@ def _tier1b_pointer_and_shim(
         sandbox_rc = os.path.join(sandbox, "sandbox-rc.sh")
         Path(sandbox_rc).write_text("# sandbox-rc\n", encoding="utf-8")
 
-        env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_EXAMPLE_DOCTRINE_REPO": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc}
+        env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_DOE_CLAUDE": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc}
         shim_argv = ["--template", shim_tmpl]
         rc, err = _call_gen_claude_doe_shim(shim_argv, env)
         gs_err = os.path.join(sandbox, "gen-shim-err.txt")
@@ -858,7 +864,7 @@ def _tier1b_pointer_and_shim(
         # re.findall() over the whole body over-counts a single, correctly
         # idempotent source line as 2 and would always FALSE-POSITIVE "duplicated
         # source line" (a genuine bug caught while wiring this call in-process;
-        # this assertion never ran against real content before, since the coordinator-claude
+        # this assertion never ran against real content before, since the DoE
         # .sh bridge was always "not found" in every prior fixture run).
         _source_line_re = re.compile(r"claude-doe-shim|claude_doe_shim")
 
@@ -891,7 +897,7 @@ def _tier1b_pointer_and_shim(
         Path(sandbox_rc_check).write_text("# sandbox-rc-checkonly\n", encoding="utf-8")
         rc_bak = os.path.join(sandbox, "sandbox-rc-checkonly.bak")
         shutil.copy2(sandbox_rc_check, rc_bak)
-        env_check = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_EXAMPLE_DOCTRINE_REPO": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc_check}
+        env_check = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_DOE_CLAUDE": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc_check}
         rc_check, _err_check = _call_gen_claude_doe_shim(shim_argv + ["--check-only"], env_check)
         if rc_check == 0:
             if Path(rc_bak).read_bytes() == Path(sandbox_rc_check).read_bytes():
@@ -1020,7 +1026,7 @@ def _tier1b_mirror_and_cold_tier(
         r.skip("resolver cold-tier tests (clone path not resolved)")
 
     # ---- 12. Cold-shell launch ----
-    r.section("--- Cold-shell launch: REPO_EXAMPLE_DOCTRINE_REPO from pointer alone (AC2) ---")
+    r.section("--- Cold-shell launch: REPO_DOE_CLAUDE from pointer alone (AC2) ---")
     sandbox_shim_path = os.path.join(sandbox, ".claude", "shell", "claude-doe-shim.sh")
     if shim_section_ran and os.path.isfile(sandbox_shim_path):
         cold_path = "/usr/bin:/bin"
@@ -1030,17 +1036,17 @@ def _tier1b_mirror_and_cold_tier(
 
         cold_env_vars = {"PATH": cold_path, "CLAUDE_HOME": sandbox, "HOME": home}
         cp = _run(
-            ["bash", "-c", f"source '{sandbox_shim_path}' 2>/dev/null; printf '%s' \"${{REPO_EXAMPLE_DOCTRINE_REPO:-}}\""],
+            ["bash", "-c", f"source '{sandbox_shim_path}' 2>/dev/null; printf '%s' \"${{REPO_DOE_CLAUDE:-}}\""],
             env=cold_env_vars,
         )
         cold_launch_out = cp.stdout.strip()
         if cold_launch_out:
             if cold_launch_out == doe_clone:
-                r.ok(f"AC2 cold-shell: REPO_EXAMPLE_DOCTRINE_REPO resolved from pointer alone: {doe_clone}")
+                r.ok(f"AC2 cold-shell: REPO_DOE_CLAUDE resolved from pointer alone: {doe_clone}")
             else:
-                r.bad(f"AC2 cold-shell: REPO_EXAMPLE_DOCTRINE_REPO='{cold_launch_out}', expected '{doe_clone}'")
+                r.bad(f"AC2 cold-shell: REPO_DOE_CLAUDE='{cold_launch_out}', expected '{doe_clone}'")
         else:
-            r.bad("AC2 cold-shell: REPO_EXAMPLE_DOCTRINE_REPO empty after sourcing shim with cold PATH (pointer-read failed or shim does not export REPO_EXAMPLE_DOCTRINE_REPO)")
+            r.bad("AC2 cold-shell: REPO_DOE_CLAUDE empty after sourcing shim with cold PATH (pointer-read failed or shim does not export REPO_DOE_CLAUDE)")
     elif not shim_section_ran:
         r.bad("AC2 cold-shell: skipped — gen_claude_doe_shim.main() did not produce a sandbox shim")
     else:
@@ -1109,7 +1115,7 @@ def _tier1c_publish_repo_parity(
         **os.environ,
         "CLAUDE_HOME": pub_home,
         "COORDINATOR_SETTINGS_HOME": os.path.join(pub_home, ".coordinator-claude-settings"),
-        "REPO_EXAMPLE_DOCTRINE_REPO": pub_clone,
+        "REPO_DOE_CLAUDE": pub_clone,
     }
     rc, err = _call_gen_doe_root_pointer([], env)
     if rc == 0:
@@ -1125,7 +1131,7 @@ def _tier1c_publish_repo_parity(
             if pub_pointer_content != doe_clone:
                 r.ok("F8: .doe-root pointer does NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
             else:
-                r.bad("F8: .doe-root pointer content equals the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_doe_root_pointer (ignores REPO_EXAMPLE_DOCTRINE_REPO)")
+                r.bad("F8: .doe-root pointer content equals the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_doe_root_pointer (ignores REPO_DOE_CLAUDE)")
         else:
             r.bad(f"F8: .doe-root pointer not created for publish clone (expected at: {pub_doe_root})")
     else:
@@ -1137,7 +1143,7 @@ def _tier1c_publish_repo_parity(
     r.section("--- F8: settings.json hook commands rooted at publish clone ---")
     pub_settings = os.path.join(pub_home, "settings.json")
     Path(pub_settings).write_text("{}", encoding="utf-8")
-    env2 = {**os.environ, "CLAUDE_HOME": pub_home, "REPO_EXAMPLE_DOCTRINE_REPO": pub_clone}
+    env2 = {**os.environ, "CLAUDE_HOME": pub_home, "REPO_DOE_CLAUDE": pub_clone}
     rc2, err2 = _call_gen_settings_hooks(pub_settings, env2)
     if rc2 == 0:
         r.ok("F8: gen_settings_hooks.generate() succeeded against publish clone")
@@ -1161,7 +1167,7 @@ def _tier1c_publish_repo_parity(
             else:
                 r.bad("F8: settings.json hook commands do NOT reference the publish clone's coordinator/hooks/ path")
             if any(f"{doe_clone}/coordinator/hooks/" in c for c in pub_hook_cmds):
-                r.bad("F8: settings.json hook commands leak the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_settings_hooks (ignores REPO_EXAMPLE_DOCTRINE_REPO)")
+                r.bad("F8: settings.json hook commands leak the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_settings_hooks (ignores REPO_DOE_CLAUDE)")
             else:
                 r.ok("F8: settings.json hook commands do NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
     else:
@@ -1247,7 +1253,7 @@ def run_all(
 
     doe_clone, doe_clone_resolved = resolve_doe_clone()
     if not doe_clone_resolved:
-        r.bad("repos.example_doctrine_repo not resolved (set REPO_EXAMPLE_DOCTRINE_REPO or seed via machine-local set repos.example_doctrine_repo)")
+        r.bad("repos.doe_claude not resolved (set REPO_DOE_CLAUDE or seed via machine-local set repos.doe_claude)")
         r.info("Skipping clone-dependent checks.")
     else:
         r.info(f"clone resolved: {doe_clone}")

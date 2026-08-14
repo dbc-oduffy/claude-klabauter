@@ -3,7 +3,7 @@
 
 Validates the plugin-doctrine wiki single-tree invariant: grep-discovers
 `docs/wiki/` citations across plugin files and checks that no dev-side mirror
-exists at `~/.claude/docs/wiki/<name>.md`. Part of the coordinator-claude-owns-contract /
+exists at `~/.claude/docs/wiki/<name>.md`. Part of the DoE-owns-contract /
 Claude-klabauter-owns-engine split (DR-047) — this file is the thin CLI shim, the
 validation logic lives in coordinator_core.
 """
@@ -15,8 +15,8 @@ from __future__ import annotations
 # docs/wiki/ citations across plugin files, checks no dev-side mirror exists at
 # ~/.claude/docs/wiki/<name>.md) has been fully ported to
 # coordinator_core/ops/sync_plugin_wiki.py, with parity tests in
-# coordinator_core/ops/test_sync_plugin_wiki.py. This file is now a thin coordinator-claude-side
-# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+# coordinator_core/ops/test_sync_plugin_wiki.py. This file is now a thin DoE-side
+# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 # contract/generator, claude-klabauter owns engine).
 #
 # Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -26,15 +26,15 @@ from __future__ import annotations
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Exit codes (preserved from the bash oracle): 0 clean, 1 PLUGIN_ROOT unresolvable
 # (fail-loud — this is a doctrine-integrity gate, not a best-effort nudge), 2 usage
 # error (unknown flag), 5 dev-side mirror detected (single-tree invariant broken).
 #
-# Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+# Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 
 import os
 import sys

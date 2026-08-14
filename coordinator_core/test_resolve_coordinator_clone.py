@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.resolve_coordinator_clone — native CLI-mode peer.
 
-Port of: resolve-coordinator-clone.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: resolve-coordinator-clone.sh (DoE 290997c7, 2026-07-22)
 
 Covers: the dev-vs-oss mode selector (passthrough / explicit / marker
 auto-discovery / ambiguity), the 5-rung clone-root ladder, the 7-rung
@@ -40,7 +40,7 @@ def isolated_home(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(home))
-    monkeypatch.setattr(rcc, "_registry_example_doctrine_repo", lambda: None)
+    monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: None)
     monkeypatch.setattr(rcc, "_registry_live_path", lambda: None)
     return home
 
@@ -147,14 +147,14 @@ def test_clone_root_flat_unmarked_no_manifest_resolves(isolated_home):
 
 
 def test_mode_registry_ranks_above_pointer_file(isolated_home, monkeypatch, tmp_path):
-    """DR-071: registry `repos.example_doctrine_repo` must be tried BEFORE the `.doe-root`
+    """DR-071: registry `repos.doe_claude` must be tried BEFORE the `.doe-root`
     pointer file in the marker auto-discovery candidate ladder (inverted
     2026-07-22 from the prior pointer-first order). The registry candidate
     here does not exist on disk (unresolvable), while the pointer candidate
     would resolve cleanly with a dev marker IF it were consulted — proving
     the registry rung wins the race, not merely that "a" candidate resolves.
     """
-    monkeypatch.setattr(rcc, "_registry_example_doctrine_repo", lambda: str(tmp_path / "registry-nonexistent"))
+    monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: str(tmp_path / "registry-nonexistent"))
     monkeypatch.setattr(rcc, "_registry_live_path", lambda: None)
     pointer_candidate = tmp_path / "pointer-candidate"
     pointer_candidate.mkdir()
@@ -366,7 +366,7 @@ def test_resolve_content_root_common_path_spawns_no_subprocess(monkeypatch, tmp_
     home.mkdir()
     monkeypatch.setenv("CLAUDE_HOME", str(home))
     monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "dev")
-    monkeypatch.setattr(rcc, "_registry_example_doctrine_repo", lambda: None)
+    monkeypatch.setattr(rcc, "_registry_doe_claude", lambda: None)
 
     live = tmp_path / "live-content-root"
     live.mkdir()

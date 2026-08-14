@@ -1,11 +1,11 @@
 """
 coverage.py
 
-Port of: review-coverage-core.sh (coordinator-claude c187f5b9, 2026-07-21) — SAFE_RANGE validator,
+Port of: review-coverage-core.sh (DoE c187f5b9, 2026-07-21) — SAFE_RANGE validator,
 JSON/JSONL trail parser, verdict filter (pending excluded; ok/warn/blocked/
 waived/absent included), per-record git rev-list union → reviewed_set, batched
 git calls.
-Port of: review-coverage-gate.sh (coordinator-claude d9ac8232, 2026-07-19) — arg-parse,
+Port of: review-coverage-gate.sh (DoE d9ac8232, 2026-07-19) — arg-parse,
 DAG-vs-flat mode, fixpoint, segment attribution -M100%, asymmetric scope
 filter, INDETERMINATE-fails-verdict, verdict-line emit.
 
@@ -175,7 +175,7 @@ def _record_range_has_stored_head(sha_range: str) -> bool:
 
     Does NOT reject other symbolic refs (branch names, tags, "origin/main")
     — those are not the reproduced/observed shape (100% of the ~20 known-bad
-    on-disk records use literal "HEAD" specifically; see coordinator-claude
+    on-disk records use literal "HEAD" specifically; see DoE-claude
     state/review-trail/*.json), and rejecting them would risk excluding
     legitimately-scoped historical records this fix has no evidence exist.
     """
@@ -4147,7 +4147,7 @@ def _render_dag_ancestry_notes(
 
 #: The four end-state tokens, emitted VERBATIM in the diagnosis note. Consumed
 #: by coordinator/tests/test_review_coverage_gate.py (plan § C4) and by the
-#: outbound cross-repo memo to coordinator-claude-em that this vocabulary was promised
+#: outbound cross-repo memo to doe-claude-em that this vocabulary was promised
 #: to (plan § C5) — renaming one is a cross-repo contract break, not a local
 #: rewording.
 _OPEN_LOOP_NEVER_REVIEWED = "never-reviewed"
@@ -4731,7 +4731,7 @@ def _unresolved_pending_note(pending_entries: List[Dict[str, object]]) -> List[s
 # and _decide_review_scale). That is a distinct verdict over a distinct
 # question (was the REQUIRED review scale discharged at all, not what
 # fraction of commits carry a trail record) with its own live incident
-# (coordinator-claude, 2026-08-05: a workstream reached a clean terminal stamp having
+# (DoE-claude, 2026-08-05: a workstream reached a clean terminal stamp having
 # run zero reviews). Fixing that gap is tracked separately at
 # state/sizings/2026-08-06-partition-mandatory-must-refuse-the-chai.yaml and
 # is explicitly NOT folded into this ratio/warn change.

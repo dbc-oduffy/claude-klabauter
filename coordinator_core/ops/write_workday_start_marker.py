@@ -22,7 +22,7 @@ seam `readers_health_reaper._read_marker_freshness` itself reads through, so
 the writer and the reader agree on "where" by construction rather than by two
 independently-maintained copies drifting apart.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md § Reader-in-process port scoping, chunk C2d
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420 § Reader-in-process port scoping, chunk C2d
                coordinator_core/orient_assemble/readers_health_reaper.py
 
 Negative-spec:
@@ -38,6 +38,8 @@ Negative-spec:
 """
 
 from __future__ import annotations
+
+GENERATES = []  # writes state/.workday-start-marker under the resolved state root; git ls-files confirms no tracked file of that name -- day-cadence bookkeeping, not a tracked artifact
 
 import sys
 from pathlib import Path

@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.refresh_roadmap_callout.
 
-Port of: test-refresh-roadmap-callout.sh (coordinator-claude a1a568d2, 2026-07-22), plus
+Port of: test-refresh-roadmap-callout.sh (DoE a1a568d2, 2026-07-22), plus
 additional negative-corpus coverage (missing arg, invalid roadmap_id,
 traversal, no-callout-marker) captured from the bash oracle during the
 DOE-PORT parity gate.

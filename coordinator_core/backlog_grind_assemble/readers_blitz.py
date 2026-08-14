@@ -68,7 +68,7 @@ Four things live in this module, not one:
    WAVE-VERIFY TIME (Phase 3 step 3), once a DONE summary exists — never
    from `collect()`.
 
-Spec backlink: coordinator-claude docs/plans/2026-07-26-backlog-grind-computed-frontage.md,
+Spec backlink: DoE-claude DoE-claude:pln-b7-backlog-grind-cluster-compu-bebb7c,
 chunk C3a.
 
 Negative-spec:
@@ -412,9 +412,9 @@ def _render_spinoff_handoff_body(
         ),
         "## Acceptance criteria",
         (
-            "The bug described above no longer reproduces, and no change "
-            "lands outside the `scope` pathspecs declared in this "
-            "handoff's frontmatter."
+            "- [ ] The bug described above no longer reproduces.\n"
+            "- [ ] No change lands outside the `scope` pathspecs declared "
+            "in this handoff's frontmatter."
         ),
         "## Recommended next steps",
         (

@@ -1,6 +1,6 @@
 """Characterization + parity tests for coordinator_core.ops.backfill_deliverable_spine.
 
-Port of: backfill-deliverable-spine.sh (coordinator-claude ca30f76c, 2026-07-17)
+Port of: backfill-deliverable-spine.sh (DoE ca30f76c, 2026-07-17)
 Expectations below are independently re-derived from the bash oracle's awk/case logic
 (read directly, not by running the ported module and asserting its own output back at
 itself) — this is the review-integration-doctrine "fresh re-check" posture applied to a
@@ -938,7 +938,7 @@ def test_main_no_root_and_no_default_fails_loud(tmp_path: Path):
     never silently fall back to this module's own coordinator_core/ops/
     directory (a nonsense corpus root with no state/handoffs, docs/plans,
     etc.). Regression guard for the __file__-fallback bug fixed alongside
-    the coordinator/bin/backfill-deliverable-spine trampoline's default-root
+    the coordinator/bin/backfill-deliverable-spine.py trampoline's default-root
     resolution (see that trampoline's _resolve_default_coordinator_root()).
     """
     out, err = io.StringIO(), io.StringIO()

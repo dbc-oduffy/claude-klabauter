@@ -3,7 +3,7 @@ coordinator_core.ops.scan_content_leakage — JSON-RPC
 "percolate.scan_content_leakage_tiers" operation: three-tier (HIGH/MEDIUM/LOW)
 content-leakage regex sweep over an about-to-publish tree.
 
-Purpose: replaces the percolate Step 2c fence (coordinator-claude skills/percolate/SKILL.md
+Purpose: replaces the percolate Step 2c fence (DoE skills/percolate/SKILL.md
 § Step 2c), which ran three ``grep -nIE`` passes over the about-to-publish
 file set. The fence's own in-file rationale for its two-detector split — that
 macOS/BSD ``grep -E`` lacks reliable ``\\b`` word-boundary support — dissolves
@@ -21,7 +21,7 @@ Tier patterns (ported from the fence's shapes, one tier per regex set):
 
 **Two-detector split preserved (settlement B7, binding):** operator-identity
 tokens (machine codenames, home path, org slug — the fence's
-``setup/.percolate-identity`` → ``PERSONAL_REVIEW_PATTERNS`` leg) stay in coordinator-claude
+``setup/.percolate-identity`` → ``PERSONAL_REVIEW_PATTERNS`` leg) stay in DoE
 ``publish.py``'s Phase-4 audit. This op does NOT fold that logic in — it is
 not this repo's surface. Only the generic shapes above ship here; no
 operator-specific literal appears in this module.
@@ -57,11 +57,11 @@ _OP_KEY_SCOPE / _registry_map.py) lands in the separate EM-serial
 registration pass (CC-3).
 
 Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B7
-Port source: coordinator-claude coordinator/skills/percolate/SKILL.md § Step 2c (bash fence)
+Port source: DoE-claude coordinator/skills/percolate/SKILL.md § Step 2c (bash fence)
 
 Negative-spec (hard-won):
   - Does NOT scan for operator-identity tokens (PERSONAL_REVIEW_PATTERNS) —
-    that detector stays in coordinator-claude publish.py by settlement; folding it in here
+    that detector stays in DoE publish.py by settlement; folding it in here
     would collapse the ratified two-detector split.
   - Does NOT spawn grep, xargs, or any subprocess — pure Python ``re``.
   - Does NOT crash on binary content — UnicodeDecodeError skips the file

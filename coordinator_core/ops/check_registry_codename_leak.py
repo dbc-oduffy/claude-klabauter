@@ -12,7 +12,7 @@ use hyphens (`example-cockpit-repo`) — this guard derives and greps BOTH forms
 slug, since grepping only the underscore form would silently miss the exact
 leak class this guard exists to catch.
 
-Port of: check-registry-codename-leak.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: check-registry-codename-leak.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: docs/plans/2026-06-27-genericize-provenance-sweeper.md § C4 / AC11
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -56,8 +56,24 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 # D1 keep-set — prefix-matched against slug (strip repos. prefix first).
 # 'coordinator' matches 'coordinator_claude'; 'deep_research' matches
 # 'deep_research_claude'; 'example_retrieval_repo' matches 'example_retrieval_repo_ue_addon'.
-# 'example_doctrine_repo' kept: OSS resolve-coordinator-clone.sh reads repos.example_doctrine_repo
+# 'doe_claude' kept: OSS resolve-coordinator-clone.sh reads repos.doe_claude
 # at runtime (PM-ratified 2026-07-10).
+# 'example_doctrine_repo' kept: a SECOND machine-local registry alias for the
+# same DoE-claude clone (`machine-local get repos.example_doctrine_repo` ==
+# `machine-local get repos.doe_claude`, both resolving to this machine's
+# DoE-claude clone path, verified 2026-08-13) -- it was this machine's
+# anonymizing scrub placeholder
+# for `doe_claude` before the 2026-08-13 PM ruling (571a4d78f535) stopped
+# scrubbing the DoE family. Removing that `doe_claude -> example_doctrine_repo`
+# depersonalize mapping collaterally removed the ONLY thing that had been
+# excluding this alias's own text from the no-residual-pattern leak-check --
+# `example_doctrine_repo` was never itself KEEPSET, only ever exempted as
+# "this row's own placeholder output". Once nothing produces it as placeholder
+# output anymore, the guard correctly starts treating it as a bare registered
+# `repos.*` slug and flags every source-comment citation of the incident it
+# documents (e.g. coordinator_core/ops/percolate_run.py's own docstring,
+# coordinator_core/ops/coordinator_doe_root.py). Same sibling, same ruling,
+# same disclosure -- KEEPSET is the narrow, named fix; not a pattern loosen.
 KEEPSET: Sequence[str] = (
     "example_retrieval_repo",
     "deep_research",
@@ -66,6 +82,7 @@ KEEPSET: Sequence[str] = (
     "data_science",
     "coordinator",
     "experiments",
+    "doe_claude",
     "example_doctrine_repo",
 )
 
@@ -99,7 +116,7 @@ def _is_kept(slug: str, no_exempt: Sequence[str] = ()) -> bool:
 def _validate_no_exempt(no_exempt: Sequence[str]) -> None:
     """Raise ValueError if any re-admitted slug is not an exact KEEPSET member.
 
-    A silent no-op here would let a `coordinator-claude` (hyphen) vs `example_doctrine_repo`
+    A silent no-op here would let a `doe-claude` (hyphen) vs `doe_claude`
     (underscore) authoring slip through as a no-op re-admission — the target
     would keep its original (unintended) exemption instead of failing loud.
     """

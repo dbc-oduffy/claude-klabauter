@@ -3,8 +3,8 @@ coordinator_core.ops.cmd_autorun_guard — closes the cmd.exe coverage gap in
 coordinator's `claude` interception.
 
 Problem: coordinator guards reach a session only via `claude-doe`
-(coordinator/bin/claude-doe[.cmd]), which execs `claude --plugin-dir
-<coordinator-claude>/coordinator`. Interception of a bare `claude` invocation happens via
+(coordinator/bin/claude-doe.py[.cmd]), which execs `claude --plugin-dir
+<DoE>/coordinator`. Interception of a bare `claude` invocation happens via
 shell FUNCTION shims (pwsh profile, Windows PowerShell 5.1 profile, bash rc —
 see `coordinator_core.install.shell_rc_guard`). None of those load in
 cmd.exe, which has no profile/rc concept at all — a bare `claude` typed in

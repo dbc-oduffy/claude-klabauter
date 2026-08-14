@@ -69,12 +69,12 @@ from coordinator_core.win_portability import no_console_creationflags
 
 def _queue_append_script_path() -> str:
     """Absolute path to coordinator-queue-append."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-queue-append")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-queue-append.py")
 
 
 def _lesson_promote_script_path() -> str:
     """Absolute path to coordinator-lesson-promote."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-promote")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-promote.py")
 
 
 def _python() -> str:

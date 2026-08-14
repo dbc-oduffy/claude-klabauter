@@ -13,6 +13,7 @@ import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import (
+    MixedAgentTypeRowError,
     NoWavesError,
     assert_zero_errors,
     compose_script,
@@ -154,6 +155,78 @@ def test_multi_row_wave_uses_parallel():
     script = compose_script(waves, name="wf", description="parallel wave")
     assert "await parallel([" in script
     assert script.count("agentType: 'coordinator:executor'") == 2
+
+
+def test_plan_body_write_row_derives_enricher_agent_type():
+    waves = [
+        [
+            _wave_row("C1", ["docs/plans/2026-08-13-example.md"]),
+            _wave_row("C2", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
+        ]
+    ]
+    script = compose_script(waves, name="wf", description="plan body row")
+    assert "agentType: 'coordinator:enricher'" in script
+    assert script.count("agentType: 'coordinator:executor'") == 1
+
+
+def test_ordinary_code_row_still_derives_executor_agent_type():
+    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
+    script = compose_script(waves, name="wf", description="code row")
+    assert "agentType: 'coordinator:executor'" in script
+    assert "agentType: 'coordinator:enricher'" not in script
+
+
+def test_mixed_plan_body_and_code_row_raises_mixed_agent_type_error():
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                [
+                    "docs/plans/2026-08-13-example.md",
+                    "coordinator_core/ops/dispatch_emit/spine_read.py",
+                ],
+            )
+        ]
+    ]
+    with pytest.raises(MixedAgentTypeRowError):
+        compose_script(waves, name="wf", description="mixed row")
+
+
+def test_problem_set_write_row_derives_enricher_agent_type():
+    waves = [
+        [
+            _wave_row("C1", ["docs/problems/2026-08-13-example.md"]),
+            _wave_row("C2", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
+        ]
+    ]
+    script = compose_script(waves, name="wf", description="problem-set row")
+    assert "agentType: 'coordinator:enricher'" in script
+    assert script.count("agentType: 'coordinator:executor'") == 1
+
+
+def test_mixed_problem_set_and_code_row_raises_mixed_agent_type_error():
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                [
+                    "docs/problems/2026-08-13-example.md",
+                    "coordinator_core/ops/dispatch_emit/spine_read.py",
+                ],
+            )
+        ]
+    ]
+    with pytest.raises(MixedAgentTypeRowError):
+        compose_script(waves, name="wf", description="mixed problem-set row")
+
+
+def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_matters():
+    # UNDECLARED never reaches agentType derivation in a real run: pathspec's
+    # commit_pathspec refuses it first (NoWritesDeclaredError). Regression
+    # guard for that ordering -- see _row_agent_type's UNDECLARED docstring.
+    waves = [[_wave_row("C1", UNDECLARED)]]
+    with pytest.raises(NoWritesDeclaredError):
+        compose_script(waves, name="wf", description="undeclared row")
 
 
 def test_single_row_wave_is_a_plain_await_agent():

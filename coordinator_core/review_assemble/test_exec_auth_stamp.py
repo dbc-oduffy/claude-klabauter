@@ -4,7 +4,7 @@ coordinator_core.review_assemble.exec_auth_stamp.stamp_execution_authorization.
 
 Run: python -m pytest coordinator_core/review_assemble/test_exec_auth_stamp.py -q
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b8-review-ci-cluster.md, chunk C6
+Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
 """
 from __future__ import annotations
 

@@ -16,7 +16,7 @@ Negative-spec:
       excluded subtree (e.g. a newly-added `.venv/`) is never descended into in
       the first place, not merely filtered out of the result after the fact.
     - Does NOT classify by directory location or full path — family matching is
-      an exact-basename `fnmatch` glob, portable to any repo (not coordinator-claude-hardcoded).
+      an exact-basename `fnmatch` glob, portable to any repo (not DoE-hardcoded).
     - Does NOT invoke `subprocess` — `discover()` never runs a suite, only finds
       and classifies it.
 """
@@ -51,7 +51,7 @@ ALL_FAMILIES: frozenset[str] = frozenset(FAMILY_GLOBS)
 # DEC-2: exact-basename frozenset, matched against directory BASENAMES only
 # (never a path glob), pruned in-place during os.walk so excluded subtrees are
 # never descended. Forward-safe against a newly-added venv and portable to
-# other repos (not a coordinator-claude-specific two-path hardcode).
+# other repos (not a DoE-specific two-path hardcode).
 EXCLUDED_DIRNAMES: frozenset[str] = frozenset(
     {".git", "node_modules", ".venv", "site-packages", ".coordinator-venv"}
 )

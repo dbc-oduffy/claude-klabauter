@@ -3,18 +3,18 @@ coordinator_core.install._shared — shared path/decision seams for the install
 and uninstall hubs.
 
 Port of the resolution logic duplicated (by original bash design) between
-``coordinator/lib/install-substrate.sh`` (coordinator-claude 6fb5fb37, 2026-07-22) and
-``coordinator/lib/uninstall-legs.sh`` (coordinator-claude bd5b5a96, 2026-07-19) [coordinator-claude
+``coordinator/lib/install-substrate.sh`` (DoE 6fb5fb37, 2026-07-22) and
+``coordinator/lib/uninstall-legs.sh`` (DoE bd5b5a96, 2026-07-19) [DoE-claude
 repo]. The bash pairing deliberately kept these hand-synced (uninstall-legs
 re-derived install path decisions rather than sharing code) — the hitlist
 that seeded this port names that as a footgun to FIX, not reproduce, so both
 consumers here import from one module.
 
-Also carries the Port of: ``coordinator/lib/settings-hook-identity.sh`` (coordinator-claude
+Also carries the Port of: ``coordinator/lib/settings-hook-identity.sh`` (DoE
 c187f5b9, 2026-07-21) ``settings_hook_identity_inverse_strip`` (jq-based in
 bash; pure-Python JSON manipulation here — no jq subprocess).
 
-Spec backlink: docs/plans/2026-07-08-coordinator-uninstall.md § C2-C6.
+Spec backlink: DoE-claude:pln-first-class-coordinator-uninst-15db2e § C2-C6.
 
 Negative-spec: does NOT re-implement ``coordinator_settings_home()`` — that
 seam already exists at ``coordinator_core._settings_home.settings_home`` (C1,
@@ -138,17 +138,17 @@ def resolve_coordinator_root(
     """Resolve ``<coordinator_root>`` using the SAME seam the settings.json
     hook generator uses, so a strip's identity-key prefix matches the paths
     actually baked into settings.json. Resolution order (DR-071, 2026-07-22 —
-    the registry ``repos.example_doctrine_repo`` read is now direct-tomllib first, the
+    the registry ``repos.doe_claude`` read is now direct-tomllib first, the
     ``machine-local`` CLI a fallback rung, for reset-safety: the CLI's
     reader/exec bits live under the resettable ``~/.claude/bin/``, so
     "``machine-local get`` works" is not proof the registry itself is
     reachable after a reset):
 
         1. ``COORDINATOR_ROOT`` env var (explicit override).
-        2. machine-local registry ``repos.example_doctrine_repo`` — direct tomllib read
+        2. machine-local registry ``repos.doe_claude`` — direct tomllib read
            via ``machine_resolver.registry_get``, falling back to the
            ``machine-local get`` CLI if that can't resolve -> ``<repo>/coordinator``.
-        3. ``REPO_EXAMPLE_DOCTRINE_REPO`` env var -> ``<repo>/coordinator``.
+        3. ``REPO_DOE_CLAUDE`` env var -> ``<repo>/coordinator``.
         4. ``${CLAUDE_HOME:-$HOME}/.doe-root`` pointer file -> ``<repo>/coordinator``.
 
     Raises :class:`RuntimeError` (fail loud, per the Staff Engineer F7) if no resolution
@@ -162,16 +162,16 @@ def resolve_coordinator_root(
         root = _strip_trailing_sep(env_root)
 
     if not root:
-        example_doctrine_repo = registry_get("repos.example_doctrine_repo")
-        if not example_doctrine_repo:
+        doe_claude = registry_get("repos.doe_claude")
+        if not doe_claude:
             ml = _which("machine-local")
             if ml:
-                example_doctrine_repo = _run_quiet([ml, "get", "repos.example_doctrine_repo"])
-        if example_doctrine_repo:
-            root = os.path.join(_strip_trailing_sep(example_doctrine_repo), "coordinator")
+                doe_claude = _run_quiet([ml, "get", "repos.doe_claude"])
+        if doe_claude:
+            root = os.path.join(_strip_trailing_sep(doe_claude), "coordinator")
 
-    if not root and os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO"):
-        root = os.path.join(_strip_trailing_sep(os.environ["REPO_EXAMPLE_DOCTRINE_REPO"]), "coordinator")
+    if not root and os.environ.get("REPO_DOE_CLAUDE"):
+        root = os.path.join(_strip_trailing_sep(os.environ["REPO_DOE_CLAUDE"]), "coordinator")
 
     if not root:
         try:
@@ -181,27 +181,27 @@ def resolve_coordinator_root(
         doe_root_pointer = Path(claude_home) / ".doe-root"
         if doe_root_pointer.is_file():
             try:
-                example_doctrine_repo = doe_root_pointer.read_text(encoding="utf-8", errors="replace")
+                doe_claude = doe_root_pointer.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
                 print(f"_shared: cannot read {doe_root_pointer}: {exc}", file=sys.stderr)
-                example_doctrine_repo = ""
-            if "\n" in example_doctrine_repo.rstrip("\n"):
+                doe_claude = ""
+            if "\n" in doe_claude.rstrip("\n"):
                 print(
                     f"uninstall-legs: {doe_root_pointer} is malformed (multi-line) "
                     "— expected a single path",
                 )
-                example_doctrine_repo = ""
-            example_doctrine_repo = _strip_trailing_sep(example_doctrine_repo.strip())
-            if example_doctrine_repo:
-                root = os.path.join(example_doctrine_repo, "coordinator")
+                doe_claude = ""
+            doe_claude = _strip_trailing_sep(doe_claude.strip())
+            if doe_claude:
+                root = os.path.join(doe_claude, "coordinator")
 
     if not root or not os.path.isdir(root):
         msg = [
             "uninstall-legs: cannot determine which hook paths are "
             "coordinator-owned — resolve coordinator root or pass --coordinator-root",
-            "  Tried: COORDINATOR_ROOT env, machine-local registry repos.example_doctrine_repo",
+            "  Tried: COORDINATOR_ROOT env, machine-local registry repos.doe_claude",
             "         (direct read, then machine-local CLI fallback),",
-            "         REPO_EXAMPLE_DOCTRINE_REPO env, ${CLAUDE_HOME:-$HOME}/.doe-root pointer.",
+            "         REPO_DOE_CLAUDE env, ${CLAUDE_HOME:-$HOME}/.doe-root pointer.",
         ]
         if root:
             msg.append(f"  Resolved candidate does not exist on disk: {root}")

@@ -33,7 +33,7 @@ coordinator/docs/wiki/computed-skills-conversion-checklist.md, so the
 next converter inherits it deliberately rather than by imitation).
 
 Step 2.96 is the LIVE completeness-checklist advisory WARN gate
-(coordinator-claude coordinator/skills/workstream-complete/SKILL.md, Step 2.96,
+(DoE-claude coordinator/skills/workstream-complete/SKILL.md, Step 2.96,
 ~lines 602-646) and is this module's primary acceptance condition, not a
 peripheral inclusion: a live gate needs a directive/gate home before the
 SKILL body is rewritten (C5), or it silently drops out of the ceremony

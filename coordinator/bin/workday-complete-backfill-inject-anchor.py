@@ -28,7 +28,7 @@ Spec backlink: docs/plans/2026-07-02-backfill-anchor-injection-contract.md § De
 Negative-spec: anchors are bare line-start, NOT blockquoted ('> covered_tip_sha:') — the
   backfill scan greps '^covered_tip_sha:'; a blockquote prefix silently breaks the match.
 
-Port of: workday-complete-backfill-inject-anchor.sh (coordinator-claude 091c0f3e, 2026-07-19).
+Port of: workday-complete-backfill-inject-anchor.sh (DoE 091c0f3e, 2026-07-19).
 The one incidental `python3 -c` JSON-length parse (with grep fallback) is now native json.
 Coordinator_claude_klabauter_root's bash-lib bridge call (workday_ceremony_lib.lib_func) is RETIRED
 (de-bash campaign, docs/2026-07-29-debash-residual-sites-spec.md § Group C) — `_completion_count()`
@@ -44,7 +44,7 @@ bridge call carried (coordinator/tests/test_workday_complete_backfill_inject_anc
 instead of the target repo's — the native call below queries `root` (this function's own
 parameter), not claude_klabauter_root. cs_compute_machine is natively imported from
 coordinator_core.machine_resolver (de-bash campaign, unit "daily-branch" — Port of:
-coordinator-daily-branch.sh, coordinator-claude 2fbe0e77, 2026-07-19).
+coordinator-daily-branch.sh, DoE 2fbe0e77, 2026-07-19).
 """
 from __future__ import annotations
 
@@ -58,6 +58,12 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 import workday_ceremony_lib as wc  # noqa: E402
+
+# Generator-provenance declaration (generator_provenance.py).
+# _rewrite_anchor/_inject_anchor rewrite whichever
+# archive/daily-summaries/<date>-<machine>.md file currently matches the
+# caller's date/machine -- a data-dependent target set, not a fixed artifact.
+MUTATES = ["archive/daily-summaries/*.md"]
 
 _ANCHOR_KEY = "covered_tip_sha:"
 _MACHINE_KEY = "covered_machine:"

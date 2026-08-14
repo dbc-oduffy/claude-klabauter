@@ -5,7 +5,7 @@ Flips a record's frontmatter to match its body's `<!-- consumed: YYYY-MM-DD
 consumed_at/shipped_in insertion, gate_dependency strip. A byte-parity port
 of the retired node oracle's own module; engine logic lives claude-klabauter-side in
 coordinator_core.ops.normalize_claimed_frontmatter (module renamed from
-normalize_consumed_frontmatter per DR-084), and this file is a thin coordinator-claude-side
+normalize_consumed_frontmatter per DR-084), and this file is a thin DoE-side
 trampoline (direct in-process import, no subprocess re-spawn tax).
 """
 from __future__ import annotations
@@ -18,10 +18,10 @@ from __future__ import annotations
 # gate_dependency strip). The engine (claude-klabauter's
 # coordinator_core/ops/normalize_claimed_frontmatter.py, renamed from
 # normalize_consumed_frontmatter per DR-084) is a byte-parity port of the
-# node oracle's own module — this file is a thin coordinator-claude-side
-# (contract) trampoline over that engine module, per DR-047 (coordinator-claude owns
+# node oracle's own module — this file is a thin DoE-side
+# (contract) trampoline over that engine module, per DR-047 (DoE owns
 # contract/generator, claude-klabauter owns engine), following the refresh-queries.py
-# precedent: engine in claude-klabauter, thin coordinator-claude trampoline, no subprocess re-spawn
+# precedent: engine in claude-klabauter, thin DoE trampoline, no subprocess re-spawn
 # tax (direct in-process import via _resolve_claude_klabauter_root, same as
 # refresh-queries.py — NOT a `python -c` bootstrap subprocess like the
 # retired node oracle used).
@@ -48,7 +48,7 @@ from __future__ import annotations
 #   3 — TRANSPORT failure: CLAUDE_KLABAUTER_ROOT resolution or
 #       coordinator_core.ops.normalize_claimed_frontmatter import failed.
 #
-# Spec backlink: docs/plans/2026-07-21-depolyglot-coordinator-js-to-python.md
+# Spec backlink: DoE-claude:pln-de-polyglot-the-coordinator-mi-119303
 #     § Tasks B1 (chunk B1-E2)
 # Port source: coordinator_core/ops/normalize_claimed_frontmatter.py
 #     (claude-klabauter, renamed from normalize_consumed_frontmatter per

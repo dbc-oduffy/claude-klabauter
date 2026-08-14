@@ -88,7 +88,7 @@ uniformly to both branches:
         candidate whose only referencing children are forked_from children
         is RETAINED, not archived, by this branch.
     H3. (FIX 2, 2026-07-22) NOT (kind == "spinoff-roadmap" AND deliverable_id
-        is populated) — mirrors coordinator-claude's reaper predicate P1
+        is populated) — mirrors DoE's reaper predicate P1
         (coordinator/bin/reap-orphaned-in-flight-handoffs.py:67-69;
         documented handoff-tracker-system.md P1). A spinoff-roadmap node
         with a populated deliverable_id belongs to
@@ -112,7 +112,7 @@ uniformly to both branches:
         own branch never runs) — see that section for why both are covered.
     H4. (FIX 1, 2026-07-22) A resolvable shipped_in already exists on the
         candidate's OWN frontmatter — `abandoned` retirement is fleet-wide
-        coordinator doctrine; the reaper-scoped precedent is coordinator-claude
+        coordinator doctrine; the reaper-scoped precedent is DoE
         coordinator/docs/wiki/handoff-tracker-system.md:536-540
         (2026-07-20): "The handoff stays in state/handoffs/ and is NOT
         archived — archival only ever happens after a handoff reaches
@@ -151,7 +151,7 @@ uniformly to both branches:
     (adjacent reaper-side disposition; shares the succession-vs-derivation
     reasoning this branch applies on the archival side).
     Negative-spec (2026-07-22): DR-224's supersede→abandoned disposition is
-    the coordinator-claude REAPER's own disposition (a separate op, a separate repo) and
+    the DoE REAPER's own disposition (a separate op, a separate repo) and
     is deliberately NOT applied by this sweep — this sweep's heir branch
     may only ever produce "shipped" (via H4's ship-evidence gate), never
     "abandoned"; see _resolve_heir_deployment_state (session/boot_sweep.py)
@@ -211,7 +211,7 @@ Negative-spec:
     separate per-family callables (the Staff Engineer F3).
   - Check A2 (deployment_state != "in_flight", Branch A only) is an OPEN
     single-literal exclusion, NOT a closed-enum terminal check (code-reviewer F2,
-    2026-07-10 slice).  If coordinator-claude lvv-04/C3 (lifecycle-vocab roadmap) introduces
+    2026-07-10 slice).  If DoE lvv-04/C3 (lifecycle-vocab roadmap) introduces
     additional non-terminal deployment_state values that can co-occur with
     status:consumed, Check A2 must be extended in lockstep — or inverted to a
     terminal-state allowlist — or this predicate will silently archive them.  This
@@ -296,7 +296,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import AbstractSet, List, Optional
 
 from coordinator_core.archival import reverse_membership
 from coordinator_core.coverage import _get_handoff_consumed_by
@@ -339,7 +339,7 @@ _FAMILY = "handoff"
 # Heir-branch edge-kind subset — SUCCESSION edges only (predecessor,
 # additional_predecessors).  Deliberately excludes forked_from: a spinoff is
 # branch-point/derivation ancestry, not succession — it does NOT retire its
-# origin (DR-224; coordinator-claude/CONTEXT.md:17; coverage.py:771 LoE walk excludes
+# origin (DR-224; DoE-claude/CONTEXT.md:17; coverage.py:771 LoE walk excludes
 # forked_from for the identical reason).  See _classify_heir_children.
 _HEIR_EDGE_KINDS = {"predecessor", "additional_predecessors"}
 
@@ -362,6 +362,12 @@ _HEIR_NOTE_PREFIX = "consumed; succeeded by "
 # the rest of the migration window — see lifecycle_constants.py module
 # docstring for the exit condition (9d00b459 incident of record).
 _HEIR_STATUS_LABELS = frozenset({"consumed", "claimed"})
+
+# Generator-provenance: archives terminal handoffs via git-mv from
+# state/handoffs/ to archive/handoffs/YYYY-MM/, and also stamps
+# deployment_state on a heir candidate's own source frontmatter -- a
+# data-dependent set of tracked handoff files, never one fixed path.
+MUTATES = ["state/handoffs/**/*.md", "archive/handoffs/**/*.md"]
 
 
 # ---------------------------------------------------------------------------
@@ -813,7 +819,7 @@ async def _is_terminal(
         if heir_kind == "error":
             return False, heir_detail, ""
         if heir_kind == "heir":
-            # FIX 2 (2026-07-22) — spinoff-roadmap carve-out, mirroring coordinator-claude's
+            # FIX 2 (2026-07-22) — spinoff-roadmap carve-out, mirroring DoE's
             # reaper predicate P1 (coordinator/bin/reap-orphaned-in-flight-
             # handoffs.py:67-69; documented handoff-tracker-system.md P1): a
             # kind:roadmap-baton node (still-live pre-rename spelling
@@ -841,7 +847,7 @@ async def _is_terminal(
                 )
 
             # FIX 1 (2026-07-22) — `abandoned` retirement is fleet-wide
-            # coordinator doctrine; reaper-scoped precedent, coordinator-claude
+            # coordinator doctrine; reaper-scoped precedent, DoE
             # coordinator/docs/wiki/handoff-tracker-system.md:536-540
             # (2026-07-20): "archival only ever happens after a handoff
             # reaches shipped ... Liveness-based auto-abandonment no longer
@@ -902,7 +908,7 @@ async def _is_terminal(
         # Check A2: deployment_state != "in_flight" — hard exclusion, fires regardless
         # of the Check 4 liveness verdict below.
         # Review: code-reviewer — an in_flight handoff is BY DEFINITION not terminal;
-        # this is the interim forward-compatible subset of the fuller coordinator-claude lvv-04/C3
+        # this is the interim forward-compatible subset of the fuller DoE lvv-04/C3
         # archive-safe predicate (lifecycle-vocab roadmap) — just the in_flight hard
         # exclusion, not the full two-predicate design.  It makes the Check 4
         # heartbeat-windowed liveness race (a genuinely-live session mid-long-tool-call
@@ -913,7 +919,7 @@ async def _is_terminal(
         #
         # Negative-spec (code-reviewer F2, 2026-07-10 slice): this is Check A2, an OPEN
         # single-literal exclusion (deployment_state == "in_flight"), NOT a closed-enum
-        # terminal check.  If coordinator-claude lvv-04/C3 (lifecycle-vocab roadmap) introduces
+        # terminal check.  If DoE lvv-04/C3 (lifecycle-vocab roadmap) introduces
         # additional non-terminal deployment_state values that can co-occur with
         # status:consumed (e.g. a paused/blocked state), Check A2 must be extended in
         # lockstep — or inverted to a terminal-state allowlist — otherwise this
@@ -1253,6 +1259,7 @@ async def _handle_act_handoffs(
     common_dir: Path,
     *,
     dag_incomplete: bool = False,
+    restage_src_ids: Optional[AbstractSet[str]] = None,
 ) -> dict:
     """T3 act: per-candidate D1 re-verify + terminality re-check + git-mv + commit.
 
@@ -1277,7 +1284,30 @@ async def _handle_act_handoffs(
     True, every candidate_id is skipped (reason:"dag-scan-incomplete") rather
     than archived off a partial dag_index. Default False preserves existing
     behavior for callers that do not yet pass this (e.g. session.boot_sweep).
+
+    restage_src_ids: keyword-only, default None — the candidate_ids whose
+    on-disk content a COMPOSING caller wrote ITSELF, in this same logical call,
+    and left uncommitted. Each named candidate's Move is built with
+    restage_src=True (a targeted `git add -- <src>` before the git-mv; see
+    Move.restage_src and archive_and_commit's "op-authored pre-move content"
+    note), so the archival commit carries the caller's fresh bytes rather than
+    src's stale HEAD blob. Without it, archive_and_commit's disk/HEAD drift
+    guard (commit 4541069c3) refuses the move outright and the record is
+    stranded live carrying an uncommitted write —
+    session.boot_sweep._sweep_consumed_handoffs' non-heir shipped_in stamp is
+    the canonical case, mirroring archive_shipped_handoffs._handle_act's
+    single-caller-opt-in restage_src param. Per-candidate rather than a flat
+    bool because that caller stamps only SOME of the ids it passes, and the
+    ones it did not write must keep the guard. Heir candidates are unaffected:
+    _stamp_heir_shipped's own restage_src=True is unconditional below.
+    NEVER name a candidate whose drift this call chain did not author — the
+    guard's refusal is the whole point there, and restaging would sweep a
+    concurrent session's uncommitted work into this archival commit. Default
+    None preserves existing behaviour for every caller (including the
+    standalone fleet.archive_completed_handoffs op, which authors no non-heir
+    pre-move write and must keep the guard).
     """
+    opt_in_ids: AbstractSet[str] = restage_src_ids or frozenset()
     if dag_incomplete:
         # --- Tier 2 (behaviour change -- PM sign-off required) ---
         _LOG.warning(
@@ -1429,10 +1459,18 @@ async def _handle_act_handoffs(
         # read-tree-HEAD blob, not current disk content) would otherwise drop
         # that stamp from the archival commit — see Move.restage_src and
         # archive_and_commit's "op-authored pre-move content" docstring note.
-        # Non-heir candidates carry no pre-move mutation, so restage_src stays
-        # False (default) for them — nothing to pick up, nothing to risk.
+        # Non-heir candidates carry no pre-move mutation OF THIS FUNCTION'S
+        # OWN, so restage_src stays False (default) for them — unless a
+        # composing caller named this candidate in restage_src_ids, meaning
+        # that caller wrote src itself before calling in (boot_sweep's
+        # non-heir shipped_in stamp). See this function's restage_src_ids
+        # param doc: nothing else may name a candidate there.
         moves.append(Move(
-            src=handoff_path, dst=dst, candidate_id=cid, restage_src=is_heir, force=force,
+            src=handoff_path,
+            dst=dst,
+            candidate_id=cid,
+            restage_src=is_heir or cid in opt_in_ids or lookup_key in opt_in_ids,
+            force=force,
         ))
 
     if moves:

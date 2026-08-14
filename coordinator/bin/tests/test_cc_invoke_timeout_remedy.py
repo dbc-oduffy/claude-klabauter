@@ -120,7 +120,7 @@ class TestTimeoutExceededMessageShape(_ComputedCeilingFixture):
 
     def test_names_engine_budget_knob_on_ok_branch(self) -> None:
         """The FLOOR sentence alone misleads on the engine-budget-bound branch (the
-        coordinator-claude-em wsc_tail incident: CC_INVOKE_TIMEOUT_SECS=300 changed nothing
+        doe-claude-em wsc_tail incident: CC_INVOKE_TIMEOUT_SECS=300 changed nothing
         because the binding term was the engine's own op budget). The message must name
         COORDINATOR_DISPATCH_TIMEOUT_SECS as the knob that raises that budget."""
         msg = _mod._timeout_exceeded_message(_OP, _COMPUTED_CEILING)

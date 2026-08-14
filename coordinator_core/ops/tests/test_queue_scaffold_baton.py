@@ -819,7 +819,7 @@ class TestWriteMechanics:
         """out_path's filename already exists under archive/handoffs/ -> error, no write.
 
         Spec backlink: state/audits/2026-07-26-handoff-live-archive-duplication-
-        origin.md (coordinator-claude); coordinator_core.handoff_creation_guard."""
+        origin.md (DoE-claude); coordinator_core.handoff_creation_guard."""
         import coordinator_core.ops.queue_scaffold_baton as mod
 
         repo_root = tmp_path / "repo"

@@ -23,7 +23,7 @@ Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 archive-stamp-cli is an extensionless polyglot entrypoint, not a `.py`
 module — same load idiom as test_archive_stamp_cli_ship_handoff.py.
 
-Spec backlink: docs/plans/2026-07-25-cutover-state-machine.md § C10;
+Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 § C10;
 state/roadmap/lifecycle-vocab/cutovers/closed-reason-terminal.md.
 
 Run:
@@ -45,7 +45,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "archive_stamp_cli_close_handoff_test", str(_BIN_DIR / "archive-stamp-cli")
+        "archive_stamp_cli_close_handoff_test", str(_BIN_DIR / "archive-stamp-cli.py")
     )
     spec = importlib.util.spec_from_loader(
         "archive_stamp_cli_close_handoff_test", loader

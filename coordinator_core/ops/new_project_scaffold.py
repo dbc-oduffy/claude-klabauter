@@ -15,28 +15,28 @@ is the coordinator:new-project SKILL's responsibility (via repo-setup delegation
 this helper's. This boundary is intentional — keep scaffold atomically composable.
 Unchanged from the bash oracle.
 
-Port of: new-project-scaffold.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: new-project-scaffold.sh (DoE 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-06-22-new-project-bootstrap-skill.md § C3
 
-Coordinator-claude-root resolution: the templates/ tree (coordinator/skills/new-project/templates/) still
-lives in the coordinator-claude clone, so a coordinator-claude-root resolution remains needed for that lookup.
+DoE-root resolution: the templates/ tree (coordinator/skills/new-project/templates/) still
+lives in the DoE clone, so a DoE-root resolution remains needed for that lookup.
 render-template-tree.py itself, however, is now co-located in THIS repo's coordinator/bin
 (migrated in the coordinator/bin executable-surface migration) and is resolved there first,
-relative to this repo's own root — no coordinator-claude-root hop needed to find it. Only if the
+relative to this repo's own root — no DoE-root hop needed to find it. Only if the
 co-located sibling is somehow absent does `_find_render_tree` fall back to the legacy
-Coordinator-claude-root lookup. That coordinator-claude-root resolution order (env override, then `machine-local`
+DoE-root lookup. That DoE-root resolution order (env override, then `machine-local`
 registry) mirrors coordinator_core.ops.render_template_tree's `_resolve_doe_root` —
 duplicated rather than imported, per that module's own "kept small and local" convention
 (no shared private-helper import across op modules).
 
 Exit-code contract (matches the bash oracle's own documented table):
     0  Scaffold created successfully.
-    1  Pre-flight failure (occupied dir, bad args, missing coordinator-claude-side siblings), a
+    1  Pre-flight failure (occupied dir, bad args, missing DoE-side siblings), a
        pnpm smoke-step failure, or a claude-klabauter-link resolution failure (machine-local
        registry lookup). A dedicated transport-failure code is NOT used here — this
        module has no registered op / CLAUDE_KLABAUTER_ROOT-import seam of its own (it does not
        shell back into claude-klabauter), and the ONE claude-klabauter-adjacent lookup it performs
-       (machine-local, to locate the coordinator-claude clone) shares exit 1 with pre-flight failure,
+       (machine-local, to locate the DoE clone) shares exit 1 with pre-flight failure,
        consistent with the established precedent in
        coordinator_core.ops.render_template_tree (same collision, same rationale:
        there is no OTHER distinct business failure mode on that path to collide with —
@@ -89,7 +89,11 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 
 _CREATIONFLAGS = no_console_creationflags()
 
-_PROG = "new-project-scaffold.sh"  # literal program-name prefix, matches the coordinator-claude filename
+# writes only into a brand-new project dir under COORDINATOR_PROJECTS_ROOT or
+# $HOME/Code_Projects, always a fresh separate repo outside claude-klabauter's own tree
+GENERATES = []
+
+_PROG = "new-project-scaffold.sh"  # literal program-name prefix, matches the DoE filename
 
 _USAGE = (
     "Usage: new-project-scaffold.sh --name <name> [--parent <dir>] "
@@ -115,12 +119,12 @@ def _resolve_machine_local() -> Optional[str]:
 
 
 def _resolve_doe_root() -> Tuple[Optional[str], int]:
-    """Resolve the coordinator-claude clone root. Returns (root_or_None, exit_code_on_failure).
+    """Resolve the DoE clone root. Returns (root_or_None, exit_code_on_failure).
 
     Tier 1: DOE_ROOT env var (permanent legacy alias — wins first when both
-        DOE_ROOT and REPO_EXAMPLE_DOCTRINE_REPO are set, per coordinator_registry.doe_root()).
-    Tier 2: REPO_EXAMPLE_DOCTRINE_REPO env var (operator override).
-    Tier 3: `machine-local get repos.example_doctrine_repo` (registry).
+        DOE_ROOT and REPO_DOE_CLAUDE are set, per coordinator_registry.doe_root()).
+    Tier 2: REPO_DOE_CLAUDE env var (operator override).
+    Tier 3: `machine-local get repos.doe_claude` (registry).
     Mirrors coordinator_core.ops.render_template_tree's `_resolve_doe_root`
     and coordinator_registry.doe_root()'s precedence.
 
@@ -132,7 +136,7 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
     if doe_root_override:
         return doe_root_override, 0
 
-    env_override = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "")
+    env_override = os.environ.get("REPO_DOE_CLAUDE", "")
     if env_override:
         return env_override, 0
 
@@ -146,7 +150,7 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
 
     try:
         proc = subprocess.run(
-            [ml_bin, "get", "repos.example_doctrine_repo"],
+            [ml_bin, "get", "repos.doe_claude"],
             capture_output=True,
             text=True,
             timeout=_MACHINE_LOCAL_TIMEOUT,
@@ -159,7 +163,7 @@ def _resolve_doe_root() -> Tuple[Optional[str], int]:
 
     value = proc.stdout.strip()
     if proc.returncode != 0 or not value:
-        print(f"{_PROG}: could not resolve repos.example_doctrine_repo via machine-local", file=sys.stderr)
+        print(f"{_PROG}: could not resolve repos.doe_claude via machine-local", file=sys.stderr)
         return None, 1
     return value, 0
 
@@ -168,10 +172,10 @@ def _co_located_render_tree() -> Optional[str]:
     """Locate render-template-tree.py co-located in THIS repo's coordinator/bin.
 
     render-template-tree.py migrated into this repo in the coordinator/bin
-    executable-surface migration (coordinator-claude commit b644d5a9) -- it is now
-    claude-klabauter's OWN sibling executable, not coordinator-claude-resident content, so it is
-    resolved relative to this repo unconditionally, ahead of any coordinator-claude-root
-    lookup (env override or registry alike). The coordinator-claude-root fallback below is
+    executable-surface migration (DoE-claude commit b644d5a9) -- it is now
+    claude-klabauter's OWN sibling executable, not DoE-resident content, so it is
+    resolved relative to this repo unconditionally, ahead of any DoE-root
+    lookup (env override or registry alike). The DoE-root fallback below is
     kept as a compatibility safety net for a checkout where this co-located
     sibling is somehow absent.
     """
@@ -189,7 +193,7 @@ def _co_located_render_tree() -> Optional[str]:
 
 
 def _find_render_tree(doe_root: str) -> Optional[str]:
-    """Locate render-template-tree.py: co-located first, then the coordinator-claude root."""
+    """Locate render-template-tree.py: co-located first, then the DoE root."""
     co_located = _co_located_render_tree()
     if co_located is not None:
         return co_located
@@ -205,7 +209,7 @@ def _register_repo(project_name: str, target: str) -> int:
 
     slug = project_name.lower().replace('-', '_'). Calls `machine-local set
     repos.<slug> <target-abs>` then verifies the round-trip via `machine-local
-    get repos.<slug>`. This is what lets the coordinator-claude new-project skill drop its
+    get repos.<slug>`. This is what lets the DoE new-project skill drop its
     inline Phase 4.5 machine-local fence entirely -- the scaffold now
     self-registers instead of the caller doing it as a separate ceremony step.
     """
@@ -531,7 +535,7 @@ def main(argv: List[str]) -> int:
         print("Smoke checks passed.")
 
     # -----------------------------------------------------------------
-    # Self-register repos.<slug> in machine-local (kills the coordinator-claude-side
+    # Self-register repos.<slug> in machine-local (kills the DoE-side
     # inline Phase 4.5 fence entirely).
     # -----------------------------------------------------------------
     reg_rc = _register_repo(project_name, target)

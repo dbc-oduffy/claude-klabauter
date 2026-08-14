@@ -2,7 +2,7 @@
 coordinator_core.ops.tests.test_handoff_reconcile_close_terminal_defects
 
 Regression coverage for the two break-class defects reported cross-repo
-(cross-repo/inbox/2026-08-10-coordinator-claude-em-reconcile-close-terminal-and-scrub-
+(cross-repo/inbox/2026-08-10-doe-claude-em-reconcile-close-terminal-and-scrub-
 key.md § 1-2), both landing on `handoff.reconcile_close_terminal` and its
 `handoff_transition._close` seam:
 
@@ -436,6 +436,94 @@ def test_close_live_children_recheck_aborts_when_edge_appears_under_lock(repo):
     assert read_fm_field(fm, "deployment_state") == "ready_to_fire", (
         "the write must be aborted before it commits when the recheck "
         "reports a live edge appeared inside the lock"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1 fix (review: coordinatorcode-reviewer-2d69ff87.md) — restage_src must
+# gate on this call having actually authored the close write, not fire
+# unconditionally. Two arms: a fresh close (opts in, terminal state lands
+# in the archival commit) and an already-closed no-op (does NOT opt in, and
+# uncommitted dirt on the src file is not swept into the archival commit).
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_close_terminal_fresh_close_restages_terminal_state(repo):
+    """Fresh close (this call authors the drift): restage_src must opt in,
+    and the archival commit must carry the terminal state this call just
+    wrote, not the pre-close blob."""
+    name = "2026-08-14-fresh-close-restage.md"
+    repo.seed_handoff(name, "open", deployment_state="ready_to_fire", pickup_ready=True)
+
+    result = _run(_reconcile_handler(
+        {"handoff_path": f"state/handoffs/{name}", "reason": "displaced"},
+        repo.common_dir,
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["closed"] is True
+    assert result["already_closed"] is False
+    assert result["archived"] is True
+    archived = repo.archived_copies(name)
+    assert len(archived) == 1
+    committed = subprocess.run(
+        ["git", "show", f"HEAD:{archived[0].relative_to(repo.root).as_posix()}"],
+        cwd=str(repo.root), capture_output=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.decode()
+    split = split_frontmatter(committed)
+    assert read_fm_field(split.fm_text, "deployment_state") == "closed", (
+        "the archival commit must carry the fresh close's terminal state, "
+        "proving restage_src opted in for this call-authored drift"
+    )
+
+
+def test_reconcile_close_terminal_already_closed_noop_does_not_sweep_dirty_src(repo):
+    """already_closed=True (this call authors NO drift): restage_src must
+    NOT opt in. An unrelated uncommitted edit sitting on the src file (as if
+    left by a concurrent session) must NOT be swept into the archival
+    commit — the disk/HEAD drift guard must refuse the move outright rather
+    than restage and commit content this call never authored."""
+    name = "2026-08-14-already-closed-dirty-src.md"
+    repo.seed_handoff(
+        name, "open", deployment_state="closed", closed_reason="displaced",
+        pickup_ready=False,
+    )
+    # Simulate a concurrent session's uncommitted write landing on src AFTER
+    # the committed (already-terminal) state above but BEFORE this call.
+    src_path = repo.root / "state" / "handoffs" / name
+    dirty_marker = "concurrent-session-uncommitted-marker"
+    src_path.write_text(
+        src_path.read_text(encoding="utf-8") + f"\n<!-- {dirty_marker} -->\n",
+        encoding="utf-8",
+    )
+
+    result = _run(_reconcile_handler(
+        {"handoff_path": f"state/handoffs/{name}", "reason": "displaced"},
+        repo.common_dir,
+    ))
+
+    assert result["closed"] is True
+    assert result["already_closed"] is True, (
+        "_close must be a no-op here — deployment_state/closed_reason/"
+        "pickup_ready already match the target state"
+    )
+    assert result["archived"] is False, (
+        "the drift guard must refuse the move rather than restage and "
+        "sweep the concurrent session's uncommitted marker into the "
+        "archival commit"
+    )
+    # src must still be on disk, uncommitted, dirty — not archived, and its
+    # dirty content must never have reached the git object store.
+    assert src_path.exists()
+    show_all = subprocess.run(
+        ["git", "log", "--all", "-p", "--", f"state/handoffs/{name}"],
+        cwd=str(repo.root), capture_output=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.decode()
+    assert dirty_marker not in show_all, (
+        "the concurrent-session marker must never be committed — it was "
+        "never this call's drift to restage"
     )
 
 

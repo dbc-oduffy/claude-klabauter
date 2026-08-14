@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.probe_onboarding_currency.
 
-Port of: test-probe-onboarding-currency.sh (coordinator-claude 894d4bc6, 2026-07-22) — the bash
+Port of: test-probe-onboarding-currency.sh (DoE 894d4bc6, 2026-07-22) — the bash
 suite's 8 cases are the parity oracle for this port, mirrored case for case.
 """
 

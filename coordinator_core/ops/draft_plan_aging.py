@@ -33,15 +33,15 @@ Exit codes (parity-critical — both callers branch on these):
   1 — one or more stale draft plans found (fail loud)
   2 — internal error (missing path, bad frontmatter, unparseable date,
       git-log failure, or unresolvable handoff-read failure)
-  3 — coordinator-claude trampoline transport failure (CLAUDE_KLABAUTER_ROOT resolution / import
+  3 — DoE trampoline transport failure (CLAUDE_KLABAUTER_ROOT resolution / import
       failure) — NEVER returned by this module itself; allocated by
-      coordinator/bin/draft-plan-aging.sh (coordinator-claude) as a dedicated code so
+      coordinator/bin/draft-plan-aging.sh (DoE) as a dedicated code so
       transport failure can't collide with this module's own 0/1/2 business
       codes above, mirroring verify_dist_publish_repo_sync's identical
       resolution.
 
-Port of: draft-plan-aging.sh (coordinator-claude b5a4192c, 2026-07-20)
-Spec backlink: docs/plans/2026-07-09-continuity-artifact-staleness-parity.md § Design Fix #2, § Chunks C1
+Port of: draft-plan-aging.sh (DoE b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-continuity-artifact-staleness--bec61c § Design Fix #2, § Chunks C1
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 
 Negative-spec:
@@ -237,7 +237,7 @@ def _normalize_prefix(path: str) -> str:
     """Strip a leading "plugins/coordinator-claude/" prefix (condition 3a).
 
     So both the published-repo convention and this repo's bare convention
-    resolve against this tree — the coordinator-claude-vs-published prefix trap.
+    resolve against this tree — the DoE-vs-published prefix trap.
     """
     prefix = "plugins/coordinator-claude/"
     if path.startswith(prefix):
@@ -467,7 +467,7 @@ def scan(target: str, today: Optional[date] = None) -> Tuple[List[str], int]:
 # building block. Additive: does NOT touch _has_active_baton/check_one/scan/
 # main above (AC10 — before/after parity depends on that separation).
 #
-# Ownership predicate (spec of record: coordinator-claude
+# Ownership predicate (spec of record: DoE-claude
 # coordinator/docs/wiki/coordinator-tripwires.md § PLAN-ORPHAN-OWNERSHIP):
 #   handoff.deliverable_id == plan.deliverable_id, each side joined through
 #   coordinator_core.ops.deliverable_equivalence.canonicalize (C3b's declared
@@ -920,7 +920,7 @@ def _list_dangling_baton_plan_references(
 
 # ---------------------------------------------------------------------------
 # Sibling op: plan.list_orphaned (JSON-RPC, C2) — the tiered orphan census
-# built on C1's resolve_plan_owner. Spec of record: coordinator-claude
+# built on C1's resolve_plan_owner. Spec of record: DoE-claude
 # coordinator/docs/wiki/coordinator-tripwires.md § PLAN-ORPHAN-OWNERSHIP,
 # implementation plan docs/plans/2026-07-31-plan-orphan-ownership-resolver.md
 # § C2. Advisory only — never blocks (same posture as list_stale_executing).
@@ -939,8 +939,8 @@ def _list_dangling_baton_plan_references(
 # either/or (AC3, AC16).
 #
 # Non-plan exclusion (cross-repo memo
-# cross-repo/inbox/2026-08-03-coordinator-claude-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
-# § 1, coordinator-claude coordinator/docs/wiki/coordinator-tripwires.md §
+# cross-repo/inbox/2026-08-03-doe-claude-em-two-rulings-plan-orphan-population-and-dr088-antiscope.md
+# § 1, DoE-claude coordinator/docs/wiki/coordinator-tripwires.md §
 # PLAN-ORPHAN-OWNERSHIP): a file under docs/plans/ that survives the sidecar
 # exclusions above but carries NO YAML frontmatter block at all (structural
 # presence, via `coordinator_core.frontmatter.primitives.split_frontmatter`
@@ -992,7 +992,7 @@ def _list_dangling_baton_plan_references(
 #     partition is total). Suppressed means COUNTED, never dropped; never
 #     expanded per-plan in the default render (AC6).
 #
-# `legacy_unjoinable` bucket (coordinator-claude ruling 95bf1cc4d, AC1a rescoping): a
+# `legacy_unjoinable` bucket (DoE ruling 95bf1cc4d, AC1a rescoping): a
 # non-terminal, UNOWNED plan authored before the carry-observability fix
 # (C0b) landed is structurally unjoinable — its deliverable_id, and any
 # handoff's, was minted per-artifact rather than per-deliverable pre-fix, so
@@ -1026,7 +1026,7 @@ _CARRY_OBSERVABILITY_FIX_LANDED_ON = date(2026, 7, 31)
 # PARTIALLY reconciled with the schema enum: it carries
 # "shipped"/"complete"/"executed", absent from the enum entirely and retained
 # as documented defensive tolerance. Its "landed" member was struck
-# 2026-08-06 (coordinator-claude ruling 80b0b29fb) because the schema documents that value
+# 2026-08-06 (DoE ruling 80b0b29fb) because the schema documents that value
 # as explicitly non-terminal; "landed" therefore joins the frozenset below,
 # and MUST stay in it — a status that is neither terminal nor listed here
 # lands in the `unrecognized_status` diagnostic bucket, which is the same

@@ -1,6 +1,6 @@
 """Tests for coordinator_core.claude_md_budget.
 
-Spec backlink: docs/plans/2026-07-27-doctrine-envelope-allocation.md § C1(b)(c);
+Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(b)(c);
 C7b (audience manifest + ratchet watermark) per
 docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C7b.
 """
@@ -67,7 +67,7 @@ def test_bare_home_claude_md_without_dotclaude_dir_is_NOT_governed(tmp_path):
 def test_dev_repo_coordinator_claude_md_is_governed(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo_root = tmp_path / "coordinator-claude"
+    repo_root = tmp_path / "DoE-claude"
     repo_root.mkdir(parents=True, exist_ok=True)
     (repo_root / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
     coord_dir = repo_root / "coordinator"
@@ -79,14 +79,14 @@ def test_dev_repo_coordinator_claude_md_is_governed(tmp_path):
 
 
 def test_repo_scoped_claude_md_is_NOT_governed(tmp_path):
-    """coordinator-claude's own repo-root CLAUDE.md is a project file, not the global
+    """DoE-claude's own repo-root CLAUDE.md is a project file, not the global
     or dev-repo-sentinel-marked coordinator/CLAUDE.md — must not share the
     fleet budget. This is the live bug the C1 re-siting exists to close: a
     bare basename match would incorrectly fire on this file.
     """
     home = tmp_path / "home"
     home.mkdir()
-    repo_root = tmp_path / "coordinator-claude"
+    repo_root = tmp_path / "DoE-claude"
     repo_root.mkdir()
     (repo_root / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
     repo_scoped = repo_root / "CLAUDE.md"
@@ -132,7 +132,7 @@ def test_governed_surface_paths_global_only_without_repo_root(tmp_path):
 def test_governed_surface_paths_includes_coordinator_claude_md_with_sentinel(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo_root = tmp_path / "coordinator-claude"
+    repo_root = tmp_path / "DoE-claude"
     repo_root.mkdir()
     (repo_root / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
 
@@ -165,7 +165,7 @@ def test_global_home_claude_md_is_claude_md_class(tmp_path):
 
 
 def test_global_doctrine_mirror_claude_md_is_claude_md_class(tmp_path):
-    repo_root = tmp_path / "coordinator-claude"
+    repo_root = tmp_path / "DoE-claude"
     mirror_dir = repo_root / "global-doctrine"
     mirror_dir.mkdir(parents=True)
     mirror_file = mirror_dir / "CLAUDE.md"
@@ -191,7 +191,7 @@ def test_coordinator_claude_md_is_claude_md_class_even_without_sentinel(tmp_path
 
 
 def test_coordinator_templates_claude_md_tmpl_is_claude_md_class(tmp_path):
-    templates_dir = tmp_path / "coordinator-claude" / "coordinator" / "templates"
+    templates_dir = tmp_path / "DoE-claude" / "coordinator" / "templates"
     templates_dir.mkdir(parents=True)
     tmpl_file = templates_dir / "CLAUDE.md.tmpl"
     tmpl_file.write_text("x", encoding="utf-8")
@@ -271,7 +271,7 @@ def test_template_claude_md_tmpl_is_ledger_scoped(tmp_path):
     """`coordinator/templates/CLAUDE.md.tmpl` — `is_governed_claude_md`
     never recognizes this basename at all; the widened predicate does.
     """
-    templates_dir = tmp_path / "coordinator-claude" / "coordinator" / "templates"
+    templates_dir = tmp_path / "DoE-claude" / "coordinator" / "templates"
     templates_dir.mkdir(parents=True)
     tmpl_file = templates_dir / "CLAUDE.md.tmpl"
     tmpl_file.write_text("x", encoding="utf-8")
@@ -439,7 +439,7 @@ def test_governed_surface_paths_unmanifested_repo_unchanged(tmp_path):
 
 class TestSurfaceSlug:
     def test_slashes_become_hyphens_and_md_suffix_drops(self):
-        # Mirrors coordinator-claude `_claude_md_ledger.surface_slug` exactly: the trailing
+        # Mirrors DoE `_claude_md_ledger.surface_slug` exactly: the trailing
         # ".md" is stripped BEFORE lower-casing, so "CLAUDE.md" collapses to
         # "claude" (not "claude-md") -- verified against the live algorithm,
         # not that module's own illustrative docstring example (which states

@@ -60,6 +60,13 @@ logger = logging.getLogger(__name__)
 #: in the directory name, not in a shared reader).
 CHAIN_ANCESTRY_WAIVER_DIRNAME = "chain-ancestry-waivers"
 
+#: Corpus-mutator declaration (generator-provenance sweep): this module writes
+#: one JSON file per (chain_id, sha) pair under
+#: state/review-trail/chain-ancestry-waivers/<chain_id>/<sha>.json — the
+#: output set is data-dependent (unknown chain_ids/shas ahead of time), so
+#: MUTATES is the correct form, not GENERATES.
+MUTATES = ["state/review-trail/chain-ancestry-waivers/**/*.json"]
+
 #: Directory-name-safety guard for `chain_id` (expected value: the closing
 #: session's UUID — see coverage.py's `_derive_dag_chain_set`'s
 #: `closing_session_id` parameter, the "which derivation minted it" chain

@@ -3,7 +3,7 @@ coordinator_core.frontmatter.consumed_marker
 
 Shared constants and regex for consumed-marker handling.
 
-Spec backlink: coordinator-claude `coordinator/bin/lib/consumed-marker.js` (27 LoC),
+Spec backlink: DoE-claude `coordinator/bin/lib/consumed-marker.js` (27 LoC),
 itself citing docs/plans/2026-05-14-normalize-consumed-frontmatter.md.
 
 TERMINAL_STATUS and TERMINAL_DEPLOYMENT's single source of truth moved to

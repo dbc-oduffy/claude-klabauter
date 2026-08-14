@@ -2,7 +2,7 @@
 coordinator_core.review_assemble.exec_auth_stamp — mutating assembler for the
 `/review` skill's execution-authorization stamp.
 
-Purpose: `/review`'s "Cross-reference exit" gate (coordinator-claude
+Purpose: `/review`'s "Cross-reference exit" gate (DoE-claude
 `coordinator/skills/review/SKILL.md` L197-200) narrates a three-step ORDINAL
 sequence in prose -- land every plan-body edit the approval entails FIRST,
 THEN compute the plan-body hash, THEN write the four
@@ -76,7 +76,7 @@ Negative-spec:
     verified importable as a dispatch-time sanity check (per this chunk's
     spec note) but is not consumed by this module's body.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b8-review-ci-cluster.md, chunk C6
+Spec backlink: DoE-claude:pln-computed-skills-b8-review-ci-c-ffa5ad, chunk C6
 """
 
 from __future__ import annotations
@@ -284,6 +284,13 @@ def main(argv: list[str]) -> int:
     """
     import json
     import sys
+
+    if argv[:1] and argv[0] in ("--help", "-h"):
+        print(
+            "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
+            "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]"
+        )
+        return EXIT_OK
 
     if not argv or argv[0] != "stamp":
         print(

@@ -1,7 +1,7 @@
 """halted_marker — the repo-local `state/cockpit-emission.HALTED.md` writer.
 
 Purpose: `state/cockpit-emission.json` carries no in-band signal that it stopped
-advancing (the in-artifact halt field is blocked behind coordinator-claude's
+advancing (the in-artifact halt field is blocked behind DoE's
 `additionalProperties: false` envelope schema gate), so a co-located filesystem
 marker carries the signal instead. This module owns that marker's content and its
 write/refresh/remove operations for every writer in `coordinator/bin/`.
@@ -81,7 +81,7 @@ def build_halted_marker_content(emitted_at: str | None) -> str:
         "with a `git show <sha>:state/cockpit-emission.json` blob (a checked-out "
         "historical commit will not carry this file's sibling marker). This is "
         "exactly the limitation that motivated requesting an in-artifact halt "
-        "field, which is blocked behind coordinator-claude's `additionalProperties: false` "
+        "field, which is blocked behind DoE's `additionalProperties: false` "
         "envelope schema gate; until that lands, this filesystem marker is the "
         "weaker signal.\n"
     )

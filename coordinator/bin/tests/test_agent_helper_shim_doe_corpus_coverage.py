@@ -1,7 +1,7 @@
 """test_agent_helper_shim_doe_corpus_coverage.py — AC7/AC8 coverage-gate test.
 
 Makes it durable that (a) every `<settings-home>/bin/<cli>`-shaped reference
-found anywhere in the coordinator-claude doctrine corpus (skills/commands/agents/
+found anywhere in the DoE-claude doctrine corpus (skills/commands/agents/
 pipelines/snippets) resolves to a CLI that the real installer (`substrate.py`'s
 `_install_bin_resolvers`) actually produces a forwarder for (AC8 — fail loud
 on a corpus/install drift), and (b) every derived agent-helper forwarder has
@@ -14,14 +14,14 @@ so AC7 now checks the single settings-home location only.
 
 Three install personas this gate must hold for, on macOS AND Windows, at
 arbitrary directories — PM-sharpened constraint, 2026-07-23:
-  1. an OSS `coordinator-claude` consumer — NO coordinator-claude clone, NO claude-klabauter
+  1. an OSS `coordinator-claude` consumer — NO DoE-claude clone, NO claude-klabauter
      source checkout.
-  2. a coordinator-claude developer — this repo is the live plugin source.
+  2. a DoE-claude developer — this repo is the live plugin source.
   3. a claude-klabauter developer — this repo IS where this test runs from.
 
 **AC8's primary assertion is machine-independent by construction — it is
 NOT persona 1's problem to solve, because the corpus this test scans does
-not exist for persona 1** (no coordinator-claude clone at all), so this whole test
+not exist for persona 1** (no DoE-claude clone at all), so this whole test
 module correctly skips for that persona (see `_resolve_doe_root`) rather
 than asserting anything. For personas 2/3, where the corpus IS resolvable,
 ground truth for "what the installer would produce" is obtained by actually
@@ -45,7 +45,7 @@ settings-home directory mirrors the corpus's own
 `${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}`
 ladder: explicit `COORDINATOR_SETTINGS_HOME` env var, then `CLAUDE_HOME`-
 relative default, then `$HOME`/`Path.home()`-relative default. No hardcoded
-`/Users/...`, no assumption coordinator-claude and claude-klabauter are siblings, no
+`/Users/...`, no assumption DoE-claude and claude-klabauter are siblings, no
 home-relative-layout assumption baked into the PRIMARY (AC8) assertion.
 
 AC7's parity assertion likewise validates the INSTALLER ITSELF, into the
@@ -53,7 +53,7 @@ same fresh `tmp_path` scratch directories — never the real machine's
 settings home — so it too runs and passes identically on macOS and
 Windows, rather than merely asserting about Windows artifacts from a Mac.
 
-Invocation-form coverage (empirically discovered against the live coordinator-claude
+Invocation-form coverage (empirically discovered against the live DoE-claude
 corpus, 2026-07-23 — see the four forms below). If this test starts silently
 under-scanning after a future corpus edit introduces a new alias shape, grep
 the corpus for new `="${COORDINATOR_SETTINGS_HOME...}/bin"`-style assignments
@@ -81,7 +81,7 @@ concurrent peer session owns that file as of 2026-07-23.
 
 Spec backlink: M1 (claude-klabauter commit e90904a9, `_derive_agent_helper_target_map` +
   two-location forwarder install), M2 dispatch row of the same cross-repo plan
-  (`coordinator-claude docs/plans/2026-07-23-skills-carry-no-code-extirpation.md`).
+  (`DoE-claude docs/plans/2026-07-23-skills-carry-no-code-extirpation.md`).
 """
 from __future__ import annotations
 
@@ -113,9 +113,9 @@ from coordinator_core.install.substrate import (  # noqa: E402
 
 # `coordinator_registry` raises at IMPORT time (not just when `doe_root()` is
 # called) when its manifest is unresolvable via any rung of its own
-# DOE_ROOT-env / REPO_EXAMPLE_DOCTRINE_REPO-env / machine-local-registry ladder — the
+# DOE_ROOT-env / REPO_DOE_CLAUDE-env / machine-local-registry ladder — the
 # realistic version of persona 3 (a claude-klabauter developer with no
-# coordinator-claude sibling clone and no machine-local registry entry) hits exactly
+# DoE-claude sibling clone and no machine-local registry entry) hits exactly
 # this. A bare `import` would turn that into a collection ERROR for this
 # whole module, not the clean skip the corpus-absent case deserves — so the
 # import itself is wrapped, and an import-time failure short-circuits the
@@ -127,17 +127,17 @@ try:
     import coordinator_registry  # noqa: E402
 except Exception as _coordinator_registry_import_exc:  # noqa: E402
     pytest.skip(
-        "coordinator_registry unimportable (coordinator-claude root unresolvable at "
+        "coordinator_registry unimportable (DoE-claude root unresolvable at "
         f"import time): {_coordinator_registry_import_exc}",
         allow_module_level=True,
     )
 
 
 # ---------------------------------------------------------------------------
-# coordinator-claude root resolution — skip (not fail) when unresolvable on this machine.
+# DoE root resolution — skip (not fail) when unresolvable on this machine.
 # `coordinator_registry.doe_root()` already implements the load-bearing
-# resolution order (env var -> machine-local `repos.example_doctrine_repo` registry ->
-# raise) — persona 1 (no coordinator-claude clone at all) and persona 3 running in CI
+# resolution order (env var -> machine-local `repos.doe_claude` registry ->
+# raise) — persona 1 (no DoE clone at all) and persona 3 running in CI
 # without the sibling checkout correctly land here and skip, never fail.
 # ---------------------------------------------------------------------------
 
@@ -145,10 +145,10 @@ def _resolve_doe_root() -> Path:
     try:
         root = coordinator_registry.doe_root()
     except Exception as exc:  # coordinator_registry._DoeUnresolvable, etc.
-        pytest.skip(f"coordinator-claude root unresolvable via coordinator_registry.doe_root(): {exc}")
+        pytest.skip(f"DoE-claude root unresolvable via coordinator_registry.doe_root(): {exc}")
     p = Path(root)
     if not (p / "coordinator").is_dir():
-        pytest.skip(f"resolved coordinator-claude root {p} has no coordinator/ tree; skipping corpus scan")
+        pytest.skip(f"resolved DoE root {p} has no coordinator/ tree; skipping corpus scan")
     return p
 
 
@@ -168,7 +168,7 @@ _DOE_CORPUS_DIRS = (
 # the scan rather than read-and-reported, per that session's own dispatch.
 _EXCLUDED_RELPATHS = frozenset({"coordinator/skills/pickup/SKILL.md"})
 
-# Settings-home bin-dir alias variable names in live use in the coordinator-claude corpus,
+# Settings-home bin-dir alias variable names in live use in the DoE corpus,
 # discovered via `grep -rhoE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="\$\{COORDINATOR_SETTINGS_HOME[^\n]*\}/bin"'`.
 # Only CC_BIN and _wsc_scc resolve a `.../bin` (not `.../bin/coordinator`,
 # not a bare settings-home) directly from COORDINATOR_SETTINGS_HOME today.
@@ -251,7 +251,7 @@ _AGENT_BIN = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin"
 
 
 def test_every_referenced_cli_is_in_generator_installed_forwarder_set(_doe_root, _installed_dirs) -> None:
-    """AC8: every `<settings-home>/bin/<cli>` reference in the coordinator-claude corpus
+    """AC8: every `<settings-home>/bin/<cli>` reference in the DoE corpus
     must name a CLI the real installer actually writes a forwarder for, per
     a fresh scratch install (never the real machine's settings home — see
     module docstring). Fails loud, naming the missing CLI(s) and the
@@ -285,7 +285,7 @@ def test_every_referenced_cli_is_in_generator_installed_forwarder_set(_doe_root,
             missing[name] = files
 
     assert not missing, (
-        "coordinator-claude corpus references CLI name(s) a fresh installer run would NOT "
+        "DoE corpus references CLI name(s) a fresh installer run would NOT "
         "produce a forwarder for (i.e. these would 127 on a fresh install "
         "on ANY machine/persona): "
         + ", ".join(
@@ -356,7 +356,7 @@ def _install_shims_to_scratch(doe_root: Path, tmp_path: Path) -> Path:
     ml_bin = plugin_root / "templates" / "bin"
     ch_bin = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "lib" / "claude-home"
     if not ml_bin.is_dir():
-        pytest.skip(f"coordinator-claude templates/bin not found at {ml_bin}; skipping corpus scan")
+        pytest.skip(f"DoE templates/bin not found at {ml_bin}; skipping corpus scan")
     if not ch_bin.is_dir():
         pytest.skip(f"claude-klabauter coordinator/lib/claude-home not found at {ch_bin}; skipping corpus scan")
 

@@ -8,7 +8,7 @@ section integrating C1 (git_native), C2 (commit_message), and C3
 
 Coverage (parity-oracle assertions, per the deleted
 `tests/wsc-asic/test-wsc-commit-parity.sh` recovered from
-`coordinator-claude:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`),
+`DoE:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh`),
 reproduced in an isolated temp-repo fixture mirroring the deleted parity
 test's own temp-repo seeding:
   (b) the final commit's tree == the explicit `commit_paths` pathspec --
@@ -679,7 +679,7 @@ def test_explicit_stage_pipe_in_rename_path_not_forwarded(tmp_path):
     """A '|'-containing rename path is NOT forwarded as a swept_rename pair.
 
     Review: code-reviewer 2026-07-08 Finding 6 -- f"{old}|{new}" is ambiguous
-    to the coordinator-claude script's pipe-split '--swept-rename' parser when either side
+    to the DoE script's pipe-split '--swept-rename' parser when either side
     contains a literal '|'.  A path with '|' must fall back to
     skip-classification (missing:<p>) rather than being forwarded as a
     malformed flag, and the fallback must be logged.
@@ -2709,7 +2709,7 @@ def test_explicit_stage_check_ignore_failure_fails_open_not_fatal(tmp_path, monk
 
 
 def test_explicit_stage_untrack_of_gitignored_path_is_not_declined(tmp_path):
-    """2026-08-11 fix (coordinator-claude-em memo `cross-repo/inbox/2026-08-11-doe-
+    """2026-08-11 fix (doe-claude-em memo `cross-repo/inbox/2026-08-11-doe-
     claude-em-two-gaps-that-let-machine-local-files-stay-tracked.md` § 2): a
     `git rm --cached` untrack of a path `.gitignore` now matches must PASS,
     not decline with `"excluded by .gitignore"` -- being gitignored is the

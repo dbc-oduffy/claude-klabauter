@@ -80,7 +80,7 @@ failure — see _shipped_orphan_sha):
   P2 (bounded scan) — the dead consumed_by session must have consumed EXACTLY ONE
     handoff across state/handoffs/ + archive/handoffs/. More than one is ambiguous
     (which consumption does a completion-log entry attest to?) and fails closed.
-  P3 (completion-entry oracle, coordinator-claude-local) — exactly one completion-log entry with
+  P3 (completion-entry oracle, DoE-local) — exactly one completion-log entry with
     authored_by == the dead consumed_by session id (via query-completions.py --where
     "authored_by=<id>"). Zero means no terminal ceremony ran; two+ is ambiguous. Either
     fails closed. This is the ONLY ship-signal source; no claude-klabauter/ceremony coupling.
@@ -88,7 +88,7 @@ failure — see _shipped_orphan_sha):
     SHA with the MAX committer timestamp (git show -s --format=%ct), mirroring the
     best_sha/best_ct idiom in promote-shipped-in-flight-stubs.py:137-151. No resolvable
     SHA fails closed.
-Coordinator-claude-local / no-claude-klabauter-coupling constraint: every P2-P4 signal is a coordinator-claude-repo-local file
+DoE-local / no-claude-klabauter-coupling constraint: every P2-P4 signal is a DoE-repo-local file
 (state/handoffs, archive/handoffs, the completion log) — never state/ceremony/wsc/* or
 any claude-klabauter-owned receipt shape.
 Fail-closed contract: _shipped_orphan_sha returns a SHA iff P1 passed (this node is
@@ -108,11 +108,11 @@ Exit codes:
     0 — normal (including zero orphans found; claim-release is best-effort)
     2 — internal error (not inside a git repo, or state/handoffs/ unresolvable)
 
-Spec backlink: docs/plans/2026-07-08-handoff-spinoff-robustness-hardening.md § C5a
-Spec backlink: docs/plans/2026-07-13-reaper-ship-not-abandon-shipped-orphans.md
-Port of: reap-orphaned-in-flight-handoffs.sh (coordinator-claude e991362e, 2026-07-21,
+Spec backlink: DoE-claude:pln-handoff-spinoff-machinery-robu-0d0f15 § C5a
+Spec backlink: DoE-claude:pln-reaper-ships-not-abandons-ship-6ce32a
+Port of: reap-orphaned-in-flight-handoffs.sh (DoE e991362e, 2026-07-21,
 de-bash campaign chunk A2-c)
-Spec backlink: docs/plans/2026-07-21-depolyglot-coordinator-js-to-python.md § chunk B1
+Spec backlink: DoE-claude:pln-de-polyglot-the-coordinator-mi-119303 § chunk B1
 (node-spawn call sites repointed onto archive-stamp-cli; handoff-transition.js /
 stamp-shipped-in.js deleted 2026-07-22 — claude-klabauter's parity suites froze to committed
 goldens, dissolving the DEC-3 keep-as-oracle hold)
@@ -143,7 +143,7 @@ from handoff_lifecycle import is_claimed_status  # noqa: E402
 from repo_identity import resolve_checked_repo_root  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
-_ARCHIVE_STAMP_CLI = os.path.join(_SCRIPT_DIR, "archive-stamp-cli")
+_ARCHIVE_STAMP_CLI = os.path.join(_SCRIPT_DIR, "archive-stamp-cli.py")
 _QUERY_CLI_DEFAULT = os.path.join(_SCRIPT_DIR, "query-completions.py")
 _HAS_LIVE_CHILDREN_CLI = os.path.join(_SCRIPT_DIR, "handoff-has-live-children.py")
 
@@ -299,7 +299,7 @@ def _handoff_id_archived_twin(handoff_id: str, repo_root: str) -> str:
     """Return the path of an `archive/handoffs/` record sharing `handoff_id`,
     or "" if none exists.
 
-    Defensive guard against the DR-084 C8 incident (coordinator-claude commit
+    Defensive guard against the DR-084 C8 incident (DoE-claude commit
     `339b269a`, cleaned up in `073b6b1f`): a live-path handoff that shares its
     `handoff_id` with an already-archived record is residue from an upstream
     archival-flow bug, never a legitimate live baton -- a handoff cannot
@@ -397,7 +397,7 @@ def _shipped_orphan_candidate(
     if match_count != 1:
         return None
 
-    # P3 — completion-entry oracle (coordinator-claude-local ONLY; no claude-klabauter/ceremony coupling).
+    # P3 — completion-entry oracle (DoE-local ONLY; no claude-klabauter/ceremony coupling).
     # Exactly one completion-log entry authored by the dead session. Zero means
     # no terminal ceremony ran; two+ is ambiguous. Either fails closed.
     where = f"authored_by={consumed_by}"

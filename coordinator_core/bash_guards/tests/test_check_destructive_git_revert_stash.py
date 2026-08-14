@@ -383,7 +383,7 @@ class TestMentionIsNotInvocationOtherVerbs:
 # ---------------------------------------------------------------------------
 # Advisory floor (2026-08-05): `affected` non-empty, `deny_paths` empty --
 # see this function's own "Advisory floor" comment and
-# cross-repo/inbox/2026-08-05-coordinator-claude-em-unscoped-stash-has-no-main-
+# cross-repo/inbox/2026-08-05-doe-claude-em-unscoped-stash-has-no-main-
 # loop-guard.md. Covers `reset --hard`/`checkout .` alongside `stash`, since
 # all three previously fell through the same silent `None` on a dirty-but-
 # not-load-bearing tree.

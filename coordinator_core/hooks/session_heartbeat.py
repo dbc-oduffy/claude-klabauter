@@ -45,7 +45,7 @@ Negative-spec:
     sanctioned for bookkeeping ops (D2, pcore-08).
 
 Intentional engine-context deviation — no fallback writer (Review: code-reviewer F3):
-    Port of: session-heartbeat.sh (coordinator-claude d39ab164, 2026-07-16), whose bash source
+    Port of: session-heartbeat.sh (DoE d39ab164, 2026-07-16), whose bash source
     fell back to an inline sed read-modify-write of meta.json when
     coordinator-session.sh was not found.
     The Python engine does NOT implement that fallback. update_last_activity()

@@ -9,10 +9,10 @@ to the inbox/archive co-located layout:
   - removes the now-empty top-level archive/cross-repo/ directory.
 
 Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
-import from the coordinator-claude polyglot trampoline (template-variant #1, mirrors
+import from the DoE polyglot trampoline (template-variant #1, mirrors
 coordinator-auto-push / handoff-gate-aging / migrate_completion_log_legacy).
 
-Port of: migrate-cross-repo-layout.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: migrate-cross-repo-layout.sh (DoE 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-05-23-cross-repo-inbox-archive-restructure.md § Chunk F
                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 

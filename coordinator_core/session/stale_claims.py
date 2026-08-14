@@ -4,7 +4,7 @@ coordinator_core.session.stale_claims — FACTS-only stale-claim-handoff enumera
 Purpose: enumerate live ``state/handoffs/*.md`` entries whose recorded claimer
 session is NOT live, per ``coordinator_core.session.liveness.session_live`` (the
 single shared liveness key — see that module's docstring). This exists to give
-Coordinator-claude's ``workstream-complete`` Step 0 crash-recovery detector a FACTS answer it
+DoE's ``workstream-complete`` Step 0 crash-recovery detector a FACTS answer it
 can key its own chain-terminal decision on, without duplicating claude-klabauter's
 liveness logic into a bash re-implementation (see
 ``cross-repo/inbox/2026-07-23-claude-klabauter-em-wsc-step0-fails-open-crash-recovery.md``).
@@ -21,10 +21,10 @@ BOUNDARY — load-bearing, read before touching this file: this module reports
 FACTS ONLY and makes NO disposition decision. It does not decide chain-terminal,
 does not rank candidates, does not guess which baton a session is "continuing",
 and MUST NEVER mutate a handoff or any other artifact. Claude-klabauter owns the liveness
-MECHANISM; coordinator-claude owns the POLICY that consumes it (their Step 0 detector). Do NOT
+MECHANISM; DoE owns the POLICY that consumes it (their Step 0 detector). Do NOT
 add a "resolve my baton" / "pick the winner" convenience here — that is the
 exact boundary violation this module exists to prevent. A future caller that
-wants a disposition decision belongs on coordinator-claude's side of the fence, reading this
+wants a disposition decision belongs on DoE's side of the fence, reading this
 module's output as one input among several.
 
 Claimer resolution is ledger-first (C5, 2026-08-07) via

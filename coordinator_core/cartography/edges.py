@@ -150,7 +150,7 @@ inversion; it is wrong as stated, corrected here per
 § "C7's join premise — corrected, and viable".
 
 The four marker labels are transcribed verbatim (predicate meaning, not
-prose) from coordinator-claude's
+prose) from DoE-claude's
 ``coordinator/pipelines/deep-architecture-survey/agent-prompts.md`` §
 "Marker Reference" — this repo does not own that vocabulary, and a future
 reader must not have to re-derive it. That doc's markers are stated from a
@@ -160,7 +160,7 @@ four predicates for a static IMPORT EDGE (caller file -> target module),
 evaluated using BOTH endpoints' system membership — never the target path's
 own basename or shape (an earlier draft of this row used an
 ``__init__.py``-basename heuristic for ``"entry"``; that heuristic
-disagreed with the actual coordinator-claude contract and was removed per EM ruling,
+disagreed with the actual DoE contract and was removed per EM ruling,
 2026-08-06):
 
   - ``"external"``    — the target does NOT invert to any first-party path
@@ -175,11 +175,11 @@ disagreed with the actual coordinator-claude contract and was removed per EM rul
                          to a first-party path in the SAME system.
   - ``"cross-system"`` — the target inverts to a first-party path, AND the
                          caller inverts to a first-party path in a
-                         DIFFERENT system — coordinator-claude's ``[BOUNDARY -> system-
+                         DIFFERENT system — DoE's ``[BOUNDARY -> system-
                          name]``: this call reaches INTO a different system.
   - ``"entry"``       — the target inverts to a first-party path, but the
                          CALLER does not resolve into the mapped system set
-                         at all — coordinator-claude's ``[ENTRY]``: this target is reached
+                         at all — DoE's ``[ENTRY]``: this target is reached
                          from OUTSIDE its own system entirely.
 
 These four are mutually exclusive and total over every ``kind == "import"``
@@ -637,7 +637,7 @@ def _label_boundary(
     caller_system: str | None,
 ) -> str:
     """Label a single import edge's target per the boundary-marker join —
-    predicates transcribed from coordinator-claude's ``deep-architecture-survey/
+    predicates transcribed from DoE-claude's ``deep-architecture-survey/
     agent-prompts.md`` § "Marker Reference"; see module docstring
     "BOUNDARY-MARKER JOIN" for the full mapping and citation. Always
     returns a real string; never ``None``.
@@ -645,7 +645,7 @@ def _label_boundary(
     ``caller_system`` is ``path_system_map.get(<caller file's own path>)``,
     resolved by the caller of this function (``build_edges``) — ``None``
     iff the caller file itself does not resolve into the mapped system set
-    at all, which is exactly coordinator-claude's ``[ENTRY]`` predicate for the target.
+    at all, which is exactly DoE's ``[ENTRY]`` predicate for the target.
     """
     target_path = module_path_table.get(target_module)
     if target_path is None:

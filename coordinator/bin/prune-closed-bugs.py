@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """prune-closed-bugs.py — archive closed bug-backlog entries via fleet.prune_closed_bugs.
 
-Port of: prune-closed-bugs.sh (coordinator-claude f703efad, 2026-07-21). Daily ceremony wrapper — dispatches
+Port of: prune-closed-bugs.sh (DoE f703efad, 2026-07-21). Daily ceremony wrapper — dispatches
 fleet.prune_closed_bugs, which self-enumerates state/bug-backlog/*.yaml
 with status: closed and owns the git-mv + self-commit. Best-effort: errors
 are logged and this script always exits 0 so it never hard-gates
@@ -39,7 +39,7 @@ bash fallback — the op is assumed present; a genuinely seam-absent install
 surfaces as a transport failure (RuntimeError), caught below and logged,
 never propagated.
 
-Spec backlink: docs/plans/2026-07-06-dr215-fleet-ops-ceremony-wiring.md § KD-4 / AC6
+Spec backlink: DoE-claude:pln-wire-claude-klabauter-fleet-archive-prun-8fd552 § KD-4 / AC6
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md § Wave F1 (facade collapse)
 """
 from __future__ import annotations

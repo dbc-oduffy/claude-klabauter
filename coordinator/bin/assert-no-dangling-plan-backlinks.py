@@ -10,8 +10,8 @@ gate asserts ZERO such dangling backlinks in active doctrine surfaces, and
 --fix repoints them to the archive location. The bash implementation (111
 lines, declare -A moved-plan map, perl-based --fix rewrite) has been ported
 to coordinator_core/ops/assert_no_dangling_plan_backlinks.py (13 tests in the
-co-located test_assert_no_dangling_plan_backlinks.py) per DR-047 (coordinator-claude owns
-contract/generator, claude-klabauter owns engine). This file is now a thin coordinator-claude-side
+co-located test_assert_no_dangling_plan_backlinks.py) per DR-047 (DoE owns
+contract/generator, claude-klabauter owns engine). This file is now a thin DoE-side
 trampoline over that claude-klabauter module.
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -21,8 +21,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Exit convention: this is a fail-loud GATE script (asserts zero dangling

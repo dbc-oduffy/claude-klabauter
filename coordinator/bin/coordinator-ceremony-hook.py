@@ -8,7 +8,7 @@ consumer repo can register its own opt-in advisory command (e.g. "publish
 settled end-of-day state to an external store or dashboard") without a
 bespoke terminal step per ceremony.
 
-Spec backlink: docs/plans/2026-07-08-ceremony-post-command-hook-seam.md
+Spec backlink: DoE-claude:pln-generic-per-repo-post-ceremony-25af09
   § "The seam (contract pinned in C1)", § "Helper shape (C1)"
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Wave E3-c)
 
@@ -137,7 +137,7 @@ _KNOWN_CEREMONIES = (
 
 # Read/redact/warn primitives now live in coordinator_resolve_validation_cmd
 # — the naked-python port of the former lib/coordinator-resolve-validation-cmd.sh
-# (coordinator-claude c187f5b9, 2026-07-21) this hook used to source for
+# (DoE c187f5b9, 2026-07-21) this hook used to source for
 # cs_read_local_md_key / _cs_metachar_warn / _cs_redact_for_diag. See
 # that module's read_local_md_key / _metachar_warn / _redact_for_diag.
 

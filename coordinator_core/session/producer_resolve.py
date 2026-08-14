@@ -33,10 +33,10 @@ Contract (settled cross-repo, see backlinks below):
     validation guards against.
 
 Spec backlink: state/sizings/2026-08-12-producer-axis-claude-klabauter-engine-half.yaml
-Spec backlink (cross-repo contract): coordinator-claude
+Spec backlink (cross-repo contract): DoE-claude
     docs/plans/2026-08-12-producer-axis-on-the-baton-contract.md
 Spec backlink (op_identity is ours to resolve, not read back): cross-repo/inbox/
-    2026-08-12-coordinator-claude-em-producer-axis-batch-normalize-back-stamp.md
+    2026-08-12-doe-claude-em-producer-axis-batch-normalize-back-stamp.md
     ("On the machine-vs-human bit: ... It does not belong in session state at
     all — it is a property of *which door minted the record*, known with
     certainty at the creation seam and only inferable from session state.")
@@ -93,8 +93,8 @@ def resolve_producer_for_creation(
     (derived from the shared ``ProducerOpIdentity`` Literal in
     ``coordinator_core.producer_vocab``), raising on anything outside it —
     the drift guard just below this docstring. Separately, ``typed_command``
-    is deliberately NOT validated against coordinator-claude's 46-member command vocabulary:
-    that vocabulary is declared single-point-of-truth in coordinator-claude's own repo with
+    is deliberately NOT validated against DoE's 46-member command vocabulary:
+    that vocabulary is declared single-point-of-truth in DoE's own repo with
     its own parity test, and re-enumerating it here would create a second
     source of truth.
 

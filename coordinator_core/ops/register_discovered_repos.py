@@ -38,7 +38,7 @@ calls the canonical native port (coordinator_core.ops.discover_working_repos.mai
 in-process import, not a subprocess) so there is exactly one implementation of the
 tier-gating logic. Retired the `bash discover-working-repos.sh` subprocess bridge
 (2026-07-21, sh_argv-class retirement, docs/plans/2026-07-21-claude-klabauter-pure-python-shop-
-retire-all-bash.md C18): the coordinator-claude-side `.sh` this used to shell out to is itself only a
+retire-all-bash.md C18): the DoE-side `.sh` this used to shell out to is itself only a
 polyglot trampoline back onto this exact same claude-klabauter module (see that file's own
 header), so the subprocess hop was pure indirection with no logic on the other end to
 preserve. Still shells out to the machine-local CLI (PATH/sibling-dir resolved) — a
@@ -52,7 +52,7 @@ which exits 1 with a usage message.
 
 Spec backlink: F16 (install discovers working repos but never registers them into the
 machine-local repos.* registry).
-Port of: register-discovered-repos.sh (coordinator-claude b644d5a9, 2026-07-22)
+Port of: register-discovered-repos.sh (DoE b644d5a9, 2026-07-22)
 """
 
 from __future__ import annotations

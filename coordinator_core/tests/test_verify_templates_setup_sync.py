@@ -1,11 +1,11 @@
 """Characterization tests for coordinator_core.ops.verify_templates_setup_sync.
 
-Built against the golden-oracle behavior of the coordinator-claude bash script, run
+Built against the golden-oracle behavior of the DoE bash script, run
 against a scratch CLAUDE_HOME/plugin-root pair — OK / MISMATCH /
 LIVE_MISSING / TMPL_MISSING / NOT_PRESENT-for-all-pairs, plus the
 exit-code arbitration rule.
 
-Port of: verify-templates-setup-sync.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: verify-templates-setup-sync.sh (DoE b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 

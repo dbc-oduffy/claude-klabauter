@@ -10,7 +10,7 @@ resolvable repo root, unwritable marker path) fails OPEN toward emitting
 the full paragraph rather than crashing the hook.
 
 Deny-versus-substitution contract (2026-08-11, `TestDenyVersusSubstitutionContract`
-below) -- driven by `cross-repo/inbox/2026-08-11-coordinator-claude-em-guard-unlock-
+below) -- driven by `cross-repo/inbox/2026-08-11-doe-claude-em-guard-unlock-
 banner-still-reads-as-agent-instruction.md` Item 2: dispatched reviewers in a
 sibling repo met real, correct search results under what read as a bare
 denial and had to infer, from position in the text alone, whether "denied"

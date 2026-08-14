@@ -58,8 +58,10 @@ Marker match strips comment lines before scanning, so a stray
 Refuse to guess, don't guess and destroy: `_ensure_hook`'s "stale routed
 form → wholesale rewrite" branch used to be gated on `marker`-presence
 alone, which an append-form body also satisfies (the marker is right there
-in its appended `_T="..."` line) while never satisfying the shim-shape
-`current_predicates` — so a SECOND install call on an append-form hook was
+in its appended `_T="..."` line) while never carrying whatever marks a
+whole-file shim of ours — the hand-listed `current_predicates` substrings at
+the time, `_hook_gen_stamp_line()` since — so a SECOND install call on an
+append-form hook was
 misclassified as "stale shim" and the whole file (foreign prefix included)
 was clobbered on the atomic-write branch. Fixed by positively ruling OUT
 append-form via `_append_markers(header)` BEFORE the rewrite branch is
@@ -83,6 +85,8 @@ from typing import List, Optional
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.py_probe_sh import python_probe_lines
 from coordinator_core.launchable import resolve_launchable
+
+GENERATES = []  # installs/repairs hook bodies only under .git/hooks/, which is untracked
 
 _MARKETPLACE_SUFFIX = ".claude/plugins/coordinator-claude/coordinator/bin"
 
@@ -171,24 +175,51 @@ def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
         return None
 
 
+def _helper_present(dir_path: str, script_name: str) -> bool:
+    """True iff `dir_path` holds an executable target for `script_name` —
+    either the bare extensionless form OR its `<script_name>.py` sibling.
+
+    Shared by every `_resolve_coord_bin` rung's isfile probe and by
+    `_ensure_hook`'s helper gate, so "accept either filename form" is
+    expressed once rather than copy-pasted as an `or` at each call site. A
+    bin/ rename wave (2026-08) retired several extensionless scripts in
+    favor of their `.py` twin — `coordinator-auto-push` is the case that
+    surfaced this: only the `.py` sibling exists on disk now, so a probe
+    that checks only the bare name never finds it and every rung falls
+    through to the marketplace backstop.
+
+    Still an `isfile`-only check on the TARGET, never an `isdir` on the
+    containing directory — see `_resolve_coord_bin`'s docstring for why that
+    distinction is load-bearing.
+    """
+    return os.path.isfile(os.path.join(dir_path, script_name)) or os.path.isfile(
+        os.path.join(dir_path, f"{script_name}.py")
+    )
+
+
 def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     """Resolve the coordinator bin dir to bake into the installed hook body.
 
-    Post-2026-07 executable-surface migration (coordinator-claude commit b644d5a9), the
+    Post-2026-07 executable-surface migration (DoE commit b644d5a9), the
     coordinator-claude *executables* (`coordinator-auto-push`,
     `coordinator-prepare-commit-msg`, ...) live under the engine repo's
     `coordinator/bin/`, while `plugin.mirrors.coordinator-claude.source_path`
-    (coordinator-claude) still correctly means "where is coordinator-claude SOURCE" —
+    (DoE-claude) still correctly means "where is coordinator-claude SOURCE" —
     it is consumed by the OSS-publish target resolution and must NOT be
     repointed at the engine repo. Executable resolution is a genuinely separate
     concern from source resolution, hence the dedicated rung below.
 
-    Every rung validates the TARGET EXECUTABLE (`os.path.isfile`), never just
-    the directory — a rung whose directory exists but lacks `script_name`
-    falls through rather than returning a bin dir with nothing runnable in
-    it. This is the fix for the 2026-07 silent-breakage: the prior isdir-only
-    guards passed against an emptied-out coordinator-claude bin dir and reproduced the dead
-    hook on every regeneration.
+    Every rung validates the TARGET EXECUTABLE via `_helper_present`
+    (`os.path.isfile` on `script_name` OR `<script_name>.py`), never just the
+    directory — a rung whose directory exists but lacks BOTH forms falls
+    through rather than returning a bin dir with nothing runnable in it.
+    This is the fix for the 2026-07 silent-breakage: the prior isdir-only
+    guards passed against an emptied-out DoE bin dir and reproduced the dead
+    hook on every regeneration. The `.py`-sibling acceptance (2026-08) closes
+    a second, narrower gap: a bin/ rename wave retired several extensionless
+    scripts in favor of their `.py` twin, and a bare-name-only probe never
+    finds the survivor, so every rung fell through to the marketplace
+    backstop even though a perfectly good `.py` helper sat right there.
 
     Rung 1: `<bin_dir>/machine-local get plugin.mirrors.coordinator-claude.source_path`
             (or `machine-local` on PATH) → `<source_path>/bin/<script_name>`.
@@ -211,7 +242,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     coord_src = _ml_get(ml_bin, "plugin.mirrors.coordinator-claude.source_path")
     if coord_src:
         cand_bin = os.path.join(coord_src, "bin")
-        if os.path.isfile(os.path.join(cand_bin, script_name)):
+        if _helper_present(cand_bin, script_name):
             return cand_bin
         if not os.path.isdir(coord_src):
             print(
@@ -238,7 +269,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
             continue
         if doe_root:
             cand_bin = os.path.join(doe_root, "coordinator", "bin")
-            if os.path.isfile(os.path.join(cand_bin, script_name)):
+            if _helper_present(cand_bin, script_name):
                 return cand_bin
 
     # Rung 3: machine-local registry — engine-repo path (the
@@ -246,7 +277,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     claude_klabauter_root = _ml_get(ml_bin, "repos.claude_klabauter")
     if claude_klabauter_root:
         cand_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")
-        if os.path.isfile(os.path.join(cand_bin, script_name)):
+        if _helper_present(cand_bin, script_name):
             return cand_bin
 
     # Rung 4: marketplace fallback (unconditional — last resort).
@@ -271,6 +302,54 @@ def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional
     return _sh_path(os.path.join(claude_klabauter_root, "coordinator", "bin", script_name))
 
 
+# ---------------------------------------------------------------------------
+# Generation stamp — currency is decided by reading this stamp back out of an
+# installed body, not by matching a hand-listed set of body substrings.
+#
+# Prior shape (retired here): `_ensure_hook` judged an installed hook
+# "already-current" by testing a hand-maintained `current_predicates` list
+# (e.g. `SCRIPT="<bin>/<script>"`, `exec "$_PY"`, `_py_resolve() {`) against
+# the body on disk. That test is only ever as complete as whatever a human
+# remembered to add the LAST time `_shim_body` grew a new rung — and when
+# they forget, an installed-but-stale hook is certified current and skipped
+# forever, not merely once. Fired twice: first when the `.py`-rung predicate
+# below was needed but `current_predicates` had no entry naming it at all
+# (the marker comment this stamp's own history carries forward, one
+# paragraph down), and again in the session that produced THIS fix, when
+# 9f14ccc3d taught `_shim_body` to probe `<name>.py` at every rung without
+# touching `current_predicates`, so `heal_fleet_hooks` certified all 13 stale
+# fleet `post-commit` hooks "already-current" while the fleet's auto-push sat
+# inert.
+#
+# Fix (mirrors `coordinator_core.ops.install_meta_repo_precommit_hook`'s
+# `_gate_version_line()` / `_gate_is_current()`, the proven in-repo pattern
+# for exactly this problem): `_shim_body` emits a single generation-stamp
+# comment line, `_hook_gen_stamp_line()`. Currency is then "does the body on
+# disk carry TODAY's stamp line", not "does it contain N substrings a human
+# hand-listed". Bumping `_HOOK_GEN_STAMP` is now the ONLY thing a future
+# `_shim_body` change needs to do for `_ensure_hook` to stop certifying the
+# old shape current — see `test_git_hook_install.py`'s checksum coupling
+# test, which fails if the emitted body shape changes without the bump.
+#
+# AC-5 history this stamp's comment carries forward (the FIRST occurrence of
+# this failure class, previously recorded inline in `current_predicates`
+# itself): a body generated before `_py_resolve()` existed (the old
+# single-line `_PY="$(command -v python3 ...)"` probe, predating the
+# WindowsApps-stub-skipping fix, 98f604a7) was certified current forever
+# under a marker-substring test that never distinguished the two probe
+# shapes. The stamp closes that the same way it closes the `.py`-rung gap:
+# neither probe shape nor rung count is inspected directly any more, only
+# whether the body carries the CURRENT stamp.
+#
+# Starts at 2, not 1: generation 1 is the implicit pre-stamp era above, never
+# itself stamped, so no `_HOOK_GEN_STAMP = 1` exists in history to find.
+_HOOK_GEN_STAMP = 2
+
+
+def _hook_gen_stamp_line() -> str:
+    return f"# coordinator-hook-gen: {_HOOK_GEN_STAMP}"
+
+
 def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str = "") -> str:
     """Canonical fresh-install / self-heal shim body for a hook that runs one target.
 
@@ -278,16 +357,38 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
     both hooks now `exec` synchronously at the shell level; any async self-detach
     (post-commit's coordinator-auto-push) is owned by the invoked Python, not the shim.
 
-    The shell fallback chain (baked SCRIPT → .doe-root pointer → engine-repo-bin
-    candidate → marketplace) means an already-installed hook can recover a dead
-    baked path WITHOUT waiting for the next `_resolve_coord_bin` regeneration —
-    self-healing at hook-run time, not only at install time.
+    The shell fallback chain (baked SCRIPT → .doe-root pointer →
+    settings-home forwarder → engine-repo-bin candidate → marketplace) means
+    an already-installed hook can recover a dead baked path WITHOUT waiting
+    for the next `_resolve_coord_bin` regeneration — self-healing at
+    hook-run time, not only at install time.
+
+    Carries `_hook_gen_stamp_line()` immediately after the header comment
+    block — see that function's own comment for why currency is decided by
+    reading this stamp back, not by matching body substrings.
     """
     fallback = _sh_path(os.path.join("$HOME", _MARKETPLACE_SUFFIX, script_name))
     coord_bin_sh = _sh_path(coord_bin)
+    # Settings-home forwarder rung: `${COORDINATOR_SETTINGS_HOME:-...}/bin/<name>`
+    # is a generated forwarder that calls `_resolve_claude_klabauter.exec_cli("<name>")`,
+    # and `exec_cli` itself probes `<target>.py` when the bare name is absent —
+    # so one rung here resolves correctly across a bin/ rename without a
+    # second `.py`-suffixed probe line. Placed after the .doe-root pointer
+    # (an explicit, durable, install-scoped signal) and before the
+    # machine-local-registry-dependent engine-repo-bin candidate: the
+    # forwarder is a plain generated file present on any machine with
+    # coordinator-claude installed, so it does not depend on `machine-local`
+    # being resolvable at hook-run time the way the next rung does.
+    settings_home_script = (
+        '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/'
+        f'{script_name}'
+    )
     claude_klabauter_cand = _resolve_claude_klabauter_bin_sh(bin_dir, script_name) if bin_dir else None
     claude_klabauter_probe = (
-        f'[ -f "$SCRIPT" ] || SCRIPT="{claude_klabauter_cand}"\n' if claude_klabauter_cand else ""
+        f'[ -f "$SCRIPT" ] || SCRIPT="{claude_klabauter_cand}"\n'
+        f'[ -f "$SCRIPT" ] || SCRIPT="{claude_klabauter_cand}.py"\n'
+        if claude_klabauter_cand
+        else ""
     )
     return (
         "#!/bin/sh\n"
@@ -297,21 +398,29 @@ def _shim_body(coord_bin: str, script_name: str, invoke_line: str, bin_dir: str 
         "# Skips Microsoft Store App Execution Alias stubs under WindowsApps (case-\n"
         "# insensitive) -- shared with coordinator_core.ops's two precommit-hook\n"
         "# installers; see coordinator_core.py_probe_sh's module docstring.\n"
+        "# Each SCRIPT rung probes the extensionless name, then <name>.py, so an\n"
+        "# already-installed hook survives a bin/ rename without reinstalling.\n"
+        f"{_hook_gen_stamp_line()}\n"
         f"{python_probe_lines('_PY')}\n"
         '[ -n "$_PY" ] || { echo "[coordinator] WARNING: hook installed but no '
         'python3/python/py interpreter found on PATH — commits are NOT being '
         'auto-pushed / annotated by this hook" 1>&2; exit 0; }\n'
         f'SCRIPT="{coord_bin_sh}/{script_name}"\n'
+        f'[ -f "$SCRIPT" ] || SCRIPT="{coord_bin_sh}/{script_name}.py"\n'
         '[ -f "$SCRIPT" ] || { _dr="$(cat "' + _DOE_ROOT_DURABLE_SH + '" 2>/dev/null || '
         'cat "' + _DOE_ROOT_LEGACY_SH + '" 2>/dev/null)"; '
         f'[ -n "$_dr" ] && [ -f "$_dr/coordinator/bin/{script_name}" ] && '
-        f'SCRIPT="$_dr/coordinator/bin/{script_name}"; }}\n'
+        f'SCRIPT="$_dr/coordinator/bin/{script_name}"; '
+        f'[ -n "$_dr" ] && [ ! -f "$SCRIPT" ] && [ -f "$_dr/coordinator/bin/{script_name}.py" ] && '
+        f'SCRIPT="$_dr/coordinator/bin/{script_name}.py"; }}\n'
+        f'[ -f "$SCRIPT" ] || SCRIPT="{settings_home_script}"\n'
         f"{claude_klabauter_probe}"
         f'[ -f "$SCRIPT" ] || SCRIPT="{fallback}"\n'
+        f'[ -f "$SCRIPT" ] || SCRIPT="{fallback}.py"\n'
         '[ -f "$SCRIPT" ] || { echo "[coordinator] WARNING: hook installed but '
-        f'{script_name} not found (looked in baked path, .doe-root, machine-local '
-        'repos.claude_klabauter, and marketplace) — commits are NOT being auto-pushed / '
-        'annotated by this hook" 1>&2; exit 0; }\n'
+        f'{script_name} not found (looked in baked path, .doe-root, settings-home '
+        'forwarder, machine-local repos.claude_klabauter, and marketplace) — commits '
+        'are NOT being auto-pushed / annotated by this hook" 1>&2; exit 0; }\n'
         f"{invoke_line}\n"
     )
 
@@ -343,24 +452,40 @@ def _append_block(
     """
     fallback = _sh_path(os.path.join("$HOME", _MARKETPLACE_SUFFIX, script_name))
     coord_bin_sh = _sh_path(coord_bin)
+    # Settings-home forwarder rung — matches _shim_body's chain (see that
+    # function's docstring for why this rung is placed here: after the
+    # .doe-root pointer, before the machine-local-registry-dependent
+    # engine-repo-bin candidate).
+    settings_home_script = (
+        '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/'
+        f'{script_name}'
+    )
     claude_klabauter_cand = _resolve_claude_klabauter_bin_sh(bin_dir, script_name) if bin_dir else None
     claude_klabauter_probe = (
-        f'[ -f "$_T" ] || _T="{claude_klabauter_cand}"; ' if claude_klabauter_cand else ""
+        f'[ -f "$_T" ] || _T="{claude_klabauter_cand}"; [ -f "$_T" ] || _T="{claude_klabauter_cand}.py"; '
+        if claude_klabauter_cand
+        else ""
     )
     start_marker, _end_marker = _append_markers(header)
     return (
         f"\n{start_marker}\n"
         "{ " + python_probe_lines("_PY") + "\n"
         f'_T="{coord_bin_sh}/{script_name}"; '
+        f'[ -f "$_T" ] || _T="{coord_bin_sh}/{script_name}.py"; '
         '[ -f "$_T" ] || { _dr="$(cat "' + _DOE_ROOT_DURABLE_SH + '" 2>/dev/null || '
         'cat "' + _DOE_ROOT_LEGACY_SH + '" 2>/dev/null)"; '
         f'[ -n "$_dr" ] && [ -f "$_dr/coordinator/bin/{script_name}" ] && '
-        f'_T="$_dr/coordinator/bin/{script_name}"; }}; '
+        f'_T="$_dr/coordinator/bin/{script_name}"; '
+        f'[ -n "$_dr" ] && [ ! -f "$_T" ] && [ -f "$_dr/coordinator/bin/{script_name}.py" ] && '
+        f'_T="$_dr/coordinator/bin/{script_name}.py"; }}; '
+        f'[ -f "$_T" ] || _T="{settings_home_script}"; '
         f"{claude_klabauter_probe}"
         f'[ -f "$_T" ] || _T="{fallback}"; '
+        f'[ -f "$_T" ] || _T="{fallback}.py"; '
         f'[ -f "$_T" ] || echo "[coordinator] WARNING: hook installed but {script_name} '
-        'not found (looked in baked path, .doe-root, machine-local repos.claude_klabauter, '
-        'and marketplace) — commits are NOT being auto-pushed / annotated by this hook" 1>&2; '
+        'not found (looked in baked path, .doe-root, settings-home forwarder, '
+        'machine-local repos.claude_klabauter, and marketplace) — commits are NOT being '
+        'auto-pushed / annotated by this hook" 1>&2; '
         '[ -n "$_PY" ] || echo "[coordinator] WARNING: hook installed but no '
         'python3/python/py interpreter found on PATH — commits are NOT being '
         'auto-pushed / annotated by this hook" 1>&2; '
@@ -457,7 +582,6 @@ def _ensure_hook(
     marker: str,
     fresh_body: str,
     append_block: str,
-    current_predicates: List[str],
     header: str,
     root: Optional[str] = None,
     outcome: Optional[List[str]] = None,
@@ -489,9 +613,11 @@ def _ensure_hook(
     daily self-heal healed one repo and said the same nothing either way.
     Detection is the actual defect; the install was never the hard part.
 
-    current_predicates: substrings that MUST all be present for the hook to be
-    judged already-current (bash-free form + correct baked path + right invoke
-    shape + a current interpreter probe — see AC-5 note below).
+    Currency is decided by the generation stamp (`_hook_gen_stamp_line()`),
+    not by matching a hand-listed set of body substrings — see that
+    function's own comment for the two occurrences of the substring-list
+    failure class this replaces (the AC-5 stale-probe case, and the
+    fleet-wide `.py`-rung miss that motivated this fix).
 
     Refuse to guess (the fix for the silent-deletion defect this function used
     to have): the "stale routed form" `_atomic_write(hook_path, fresh_body)`
@@ -500,9 +626,9 @@ def _ensure_hook(
     `_marker_in_noncomment(body, marker)` alone gated the rewrite branch, and
     an append-form body (ours OR the user's own hook chain with our block
     spliced on) satisfies that check too — the marker is right there in the
-    appended `_T="..."` line — while never satisfying `current_predicates`
-    (those describe the whole-file SHIM shape: `SCRIPT="..."` + `exec
-    "$_PY"`, substrings an append-form block never contains). So a SECOND
+    appended `_T="..."` line — while never carrying `_hook_gen_stamp_line()`
+    (that stamp is only ever emitted into the whole-file SHIM shape, never
+    into an append block). So a SECOND
     install call on an append-form hook mis-classified it as "stale routed
     shim form" and clobbered the whole file, silently deleting a foreign
     hook chain the FIRST call had correctly preserved. Same principle as the
@@ -531,8 +657,7 @@ def _ensure_hook(
         return _note("skipped-no-root")
 
     coord_bin = _resolve_coord_bin(bin_dir, script_name)
-    helper = os.path.join(coord_bin, script_name)
-    if not os.path.isfile(helper):
+    if not _helper_present(coord_bin, script_name):
         # Broken coordinator install — not this helper's to diagnose. Still
         # classified rather than silently 0: on the fleet path this is the
         # difference between "that repo is fine" and "we could not even try".
@@ -575,7 +700,7 @@ def _ensure_hook(
         # append-form/foreign chain by the start-marker check above, so a
         # wholesale rewrite here can only ever replace content WE generated.
         first_line = body.splitlines()[0] if body else ""
-        if first_line == "#!/bin/sh" and all(p in body for p in current_predicates):
+        if first_line == "#!/bin/sh" and _has_line(body, _hook_gen_stamp_line()):
             _chmod_x(hook_path)
             return _note("already-current")
         # Stale shim form → rewrite atomically to current bash-free form.
@@ -628,13 +753,6 @@ def ensure_post_commit_hook(
         '"$_PY" "$_T" "$@"',
         bin_dir=bin_dir,
     ) + f" || true\n{end_marker}"
-    current = [
-        f'SCRIPT="{_sh_path(coord_bin)}/{script}"',
-        'exec "$_PY"',
-        "_py_resolve() {",  # AC-5: a body with the old single-line _PY= probe
-        # (pre-py_probe_sh.py, no WindowsApps-stub filtering) must never be
-        # certified current forever — it lacks this function entirely.
-    ]
     return _ensure_hook(
         bin_dir,
         hook_name="post-commit",
@@ -642,7 +760,6 @@ def ensure_post_commit_hook(
         marker=script,
         fresh_body=fresh,
         append_block=append,
-        current_predicates=current,
         header=header,
         root=root,
         outcome=outcome,
@@ -677,11 +794,6 @@ def ensure_prepare_commit_msg_hook(
         '"$_PY" "$_T" "$@"',
         bin_dir=bin_dir,
     ) + f" || true\n{end_marker}"
-    current = [
-        f'SCRIPT="{_sh_path(coord_bin)}/{script}"',
-        'exec "$_PY"',
-        "_py_resolve() {",  # AC-5 — see ensure_post_commit_hook's matching note.
-    ]
     return _ensure_hook(
         bin_dir,
         hook_name="prepare-commit-msg",
@@ -689,7 +801,6 @@ def ensure_prepare_commit_msg_hook(
         marker=script,
         fresh_body=fresh,
         append_block=append,
-        current_predicates=current,
         header=header,
         root=root,
         outcome=outcome,
@@ -805,8 +916,8 @@ def ensure_hooks_fleet(bin_dir: str) -> int:
     and independently of the hook, leaving partial coverage that reads as
     healthy on any spot check. Only comparing installed hook CONTENT against
     the generation this installer would write distinguishes the two failure
-    modes from health — which is exactly what `_ensure_hook`'s
-    `current_predicates` already computed and then threw away.
+    modes from health — which is exactly what `_ensure_hook`'s currency
+    check (`_hook_gen_stamp_line()`) already computed and then threw away.
     """
     roots = _registry_repo_roots(bin_dir)
     if not roots:

@@ -1,10 +1,10 @@
 """
 coordinator_core.ops.check_pcli_drift_gate — pcli-04 drift gate: detects
 divergence between the `dispatch_feed` contract
-(coordinator-claude `coordinator/schemas/run-report.schema.json`) and the captured
+(DoE-claude `coordinator/schemas/run-report.schema.json`) and the captured
 live `Workflow` `agent()` option surface
-(coordinator-claude `coordinator/schemas/workflow-tool-api-capture.<date>.json`),
-plus two adjacent failure modes on the same coordinator-claude-owned schema files.
+(DoE-claude `coordinator/schemas/workflow-tool-api-capture.<date>.json`),
+plus two adjacent failure modes on the same DoE-owned schema files.
 
 Purpose: `coordinator_core/ops/dispatch_emit/` (pcli-04) generates real
 Workflow scripts against the `dispatch_feed` contract. If that contract and
@@ -12,9 +12,9 @@ the live `Workflow` `agent()` option surface silently diverge, the failure
 surfaces at execute-plan time — the most expensive dispatch shape in the
 fleet. Only an EM session holding the `Workflow` tool can read the live API,
 so this claude-klabauter-resident gate cannot read it directly; it compares two files
-Coordinator-claude already produced. **The staleness leg (below) is not incidental hygiene
+DoE already produced. **The staleness leg (below) is not incidental hygiene
 — it is the entire live-detection mechanism.** The contract-vs-capture diff
-alone can only catch coordinator-claude editing their own schema; nothing else in this gate
+alone can only catch DoE editing their own schema; nothing else in this gate
 ever causes anyone to look at the live API. A version that treats staleness
 as optional polish detects nothing about the harness and reports green
 forever.
@@ -61,7 +61,7 @@ cannot have one — the second signal lives in another process's tool surface.
 A single-leg 7-day window pinned to a 7-day ceremony FAILs whenever that
 ceremony slips by a day, a false-FAIL treadmill that gets the gate overridden
 as noise. 14 days is two workweeks: refresh pins to `/workweek-complete`,
-where a coordinator-claude EM session holding the `Workflow` tool naturally exists, with one
+where a DoE EM session holding the `Workflow` tool naturally exists, with one
 full ceremony of slack. Named residual: the Workflow API has never been
 OBSERVED changing — exactly one capture exists, so the drift rate is
 unmeasured, not low. The defensible range is 7-21 days; 14 is the
@@ -81,16 +81,16 @@ window: `effective = min(_MAX_AGE_DAYS, capture_value or inf)` — capture-only
 config would let the watched party set its own deadline, the same hole the
 capture's own `$comment` already warns against for hand-editing.
 
-Repo-root / coordinator-claude-clone resolution: this module imports and reuses
+Repo-root / DoE-clone resolution: this module imports and reuses
 `coordinator_core.ops.ensure_doe_clone.resolve_doe_clone()` (env override
-`REPO_EXAMPLE_DOCTRINE_REPO`, then `machine-local get repos.example_doctrine_repo`) rather than
+`REPO_DOE_CLAUDE`, then `machine-local get repos.doe_claude`) rather than
 hardcoding a path or re-implementing the tiering — same division of labor as
-every other coordinator-claude-clone-resolving op in this repo.
+every other DoE-clone-resolving op in this repo.
 
 Negative-spec (deliberately NOT covered here):
     - Does NOT read the live `Workflow` tool API. Only an EM session holds
       that tool; the live-API read leg and refreshing the C3 capture both
-      stay coordinator-claude-owned (see module docstring above).
+      stay DoE-owned (see module docstring above).
     - Does NOT shell out to `claude --version` or any other binary to
       compare harness versions — not in
       `docs/reference/shell-out-carve-outs.md`; would need a named PM
@@ -98,7 +98,7 @@ Negative-spec (deliberately NOT covered here):
     - Does NOT detect a type change on an existing `dispatch_feed`/
       `opts_fields` mirror pair — see "Named limitation" above.
     - Does NOT edit `run-report.schema.json`, the capture, or
-      `subagent-catering-resolution.json` — read-only to this repo, coordinator-claude owns
+      `subagent-catering-resolution.json` — read-only to this repo, DoE owns
       all three wire-for-wire.
     - Does NOT widen into auditing any other cross-repo contract. One gate,
       three FAIL conditions.
@@ -109,7 +109,7 @@ ran clean:
     0   PASS  — all three legs clean.
     1   FAIL  — at least one leg fired. stdout names which leg(s) fired and
                 the threshold applied (leg 2).
-    2   ERROR — cannot run: coordinator-claude clone unresolvable, a cited schema file
+    2   ERROR — cannot run: DoE clone unresolvable, a cited schema file
                 absent, or malformed/unexpected-shape JSON. Distinct from
                 FAIL.
 
@@ -368,7 +368,7 @@ def _extract_capture_opts_fields(capture: Any, capture_path: Path) -> "set[str]"
 
 
 def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[str]:
-    """Runs all three legs against a resolved coordinator-claude clone root (or any
+    """Runs all three legs against a resolved DoE-claude clone root (or any
     directory shaped like one — tests point this at a synthetic tmp_path
     fixture, never the live clone). Returns a flat list of report lines:
     empty == PASS. Raises GateError for any "cannot run" condition."""
@@ -435,10 +435,10 @@ def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[st
 def main(argv: list[str]) -> int:  # noqa: ARG001 — no flags today; argv reserved for CLI parity
     doe_root = resolve_doe_clone()
     if not doe_root:
-        print("ERROR: coordinator-claude clone unresolvable (REPO_EXAMPLE_DOCTRINE_REPO / repos.example_doctrine_repo not set)", file=sys.stderr)
+        print("ERROR: DoE clone unresolvable (REPO_DOE_CLAUDE / repos.doe_claude not set)", file=sys.stderr)
         return EXIT_ERROR
     if not Path(doe_root).is_dir():
-        print(f"ERROR: coordinator-claude clone path does not exist: {doe_root}", file=sys.stderr)
+        print(f"ERROR: DoE clone path does not exist: {doe_root}", file=sys.stderr)
         return EXIT_ERROR
 
     try:

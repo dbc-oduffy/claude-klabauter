@@ -1,6 +1,6 @@
 """
 RoutineSignal — staleness as a typed derived-signal, NOT a scalar (the Data Science Reviewer P1-D3).
-Pydantic port of coordinator-claude `coordinator/cockpit-contract/src/entities/routine-signal.ts`
+Pydantic port of DoE `coordinator/cockpit-contract/src/entities/routine-signal.ts`
 (Zod source).
 
 Staleness is at least six distinct derived quantities, each with different
@@ -11,7 +11,7 @@ dashboard can render "stale (as of 14m ago)" honestly and falsifiably. This is
 NOT full effective-dated revision — only the observed/computed pair on derived
 signals.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

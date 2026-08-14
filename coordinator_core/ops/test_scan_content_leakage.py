@@ -16,7 +16,7 @@ Coverage:
   (g) binary file → skipped with a per-file note, sweep completes (no crash)
   (h) .git tree contents excluded from the sweep
   (i) two-detector split preserved: operator-identity-shaped tokens produce
-      NO finding here (they are coordinator-claude publish.py's PERSONAL_REVIEW_PATTERNS
+      NO finding here (they are DoE publish.py's PERSONAL_REVIEW_PATTERNS
       surface, deliberately NOT folded in — settlement B7 binding)
   (j) idempotency (AC7/CC-4): double invocation over identical content
       returns an identical result (read-only, inherent)
@@ -158,7 +158,7 @@ def test_git_tree_excluded(tmp_path):
 
 
 def test_operator_identity_tokens_not_scanned_here(tmp_path):
-    """Settlement B7 binding: identity-token scanning stays in coordinator-claude publish.py
+    """Settlement B7 binding: identity-token scanning stays in DoE publish.py
     (PERSONAL_REVIEW_PATTERNS) — this op must NOT flag operator-identity-shaped
     content that matches no generic tier shape."""
     root = tmp_path / "pub"

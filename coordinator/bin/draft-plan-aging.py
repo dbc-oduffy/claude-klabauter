@@ -20,9 +20,9 @@ any are found.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Filename note: `.sh` is KEPT (not dropped, unlike coordinator-auto-push /
 # handoff-gate-aging) — three live callers hardcode the `.sh` suffix
@@ -53,9 +53,9 @@ any are found.
 #   3 — CLAUDE_KLABAUTER_ROOT resolution failed, or coordinator_core.ops.draft_plan_aging
 #       was not importable
 #
-# Spec backlink: docs/plans/2026-07-09-continuity-artifact-staleness-parity.md § Design Fix #2, § Chunks C1
+# Spec backlink: DoE-claude:pln-continuity-artifact-staleness--bec61c § Design Fix #2, § Chunks C1
 # Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
-# Port of: draft-plan-aging.sh (coordinator-claude b5a4192c, 2026-07-20)
+# Port of: draft-plan-aging.sh (DoE b5a4192c, 2026-07-20)
 
 from __future__ import annotations
 

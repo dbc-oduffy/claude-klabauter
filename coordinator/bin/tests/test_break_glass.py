@@ -1,6 +1,6 @@
 """test_break_glass — pytest tests for coordinator/bin/break_glass.py.
 
-Spec backlink: coordinator-claude docs/research/2026-07-28-break-glass-recovery-design.md.
+Spec backlink: DoE-claude docs/research/2026-07-28-break-glass-recovery-design.md.
 
 Coverage maps to that design's own acceptance criteria:
   - AC-5 (idempotent/harmless on a healthy machine) — F-clean fixture must
@@ -203,7 +203,7 @@ def test_is_tmp_shaped_positive(value):
 @pytest.mark.parametrize(
     "value",
     [
-        "/Users/alice/X/coordinator-claude",
+        "/Users/alice/X/DoE-claude",
         r"C:\Users\pm\claude-klabauter",
         "/home/ci/repo",
     ],
@@ -259,9 +259,9 @@ def test_end_to_end_wedge_and_recover(tmp_path, monkeypatch, capsys):
     # path itself must be shaped foreign to whichever host actually runs
     # this test, not hardcoded to one platform's shape.
     foreign_command = (
-        "python3 /Users/pm/coordinator-claude/coordinator/hooks/x.py"  # abs-path-ok: synthetic wedge shape, not a real machine path
+        "python3 /Users/pm/DoE-claude/coordinator/hooks/x.py"  # abs-path-ok: synthetic wedge shape, not a real machine path
         if os.name == "nt"
-        else "python3 X:/coordinator-claude/coordinator/hooks/x.py"  # abs-path-ok: synthetic wedge shape, not a real machine path
+        else "python3 X:/DoE-claude/coordinator/hooks/x.py"  # abs-path-ok: synthetic wedge shape, not a real machine path
     )
     settings_path = config_dir / "settings.json"
     settings_path.write_text(

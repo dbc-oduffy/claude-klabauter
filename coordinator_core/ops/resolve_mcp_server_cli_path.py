@@ -2,7 +2,7 @@
 coordinator_core.ops.resolve_mcp_server_cli_path — "mcp.resolve_server_cli_path" op.
 
 Purpose: native replacement for the inline `python3 -c "import json,os; ..."`
-fence pair embedded in `skills/workstream-start/SKILL.md` (coordinator-claude) that
+fence pair embedded in `skills/workstream-start/SKILL.md` (DoE-claude) that
 parses `~/.claude.json`'s `mcpServers.<name>.args` list to recover an MCP
 server's CLI entrypoint path and its project root, so callers stop
 re-deriving that two-line parse inline at every call site (the oracle's own
@@ -37,7 +37,7 @@ Spec backlinks:
   - Oracle: state/audits/2026-07-22-command-payload-inventory/distinct-ops-new.tsv row "resolve-mcp-server-cli-path"
   - Classification: state/audits/2026-07-22-command-payload-inventory/op-classification.tsv row "resolve-mcp-server-cli-path"
   - Fence example (read-only reference, not ported verbatim):
-    coordinator/skills/workstream-start/SKILL.md § "Freshness nudge" (coordinator-claude,
+    coordinator/skills/workstream-start/SKILL.md § "Freshness nudge" (DoE-claude,
     two `python3 -c` lines resolving `_rag_cli` / `_rag_root`)
 
 Idempotency (AC7): read-only parse of a per-user config file, no state

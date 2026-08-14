@@ -1,7 +1,7 @@
 """
 Read-from-disk consumed shapes — the coordinator-artifact summaries the
 connector (tc-4) / emitter (tc-3) extract from each repo's `state/` tree and
-the store (tc-5) ingests for the cross-repo census. Pydantic port of coordinator-claude
+the store (tc-5) ingests for the cross-repo census. Pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/summaries.ts` (Zod source).
 
 These are part of the frozen C5-consumable field set (tc-2 stub §
@@ -17,7 +17,7 @@ health-status-summary.ts) rather than defined here — this module re-exports
 the already-ported sibling modules' symbols for parity, though Python's
 import model does not force the TS split.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ HandoffKind = Literal[
     "session-handoff", "spinoff", "spinoff-roadmap", "recovery",
     "spinoff-goal", "spinoff-roadmap-creator",
     # Retained deliberately after spike-result stopped being a LIVE handoff kind
-    # (coordinator-claude handoff.schema.json 3.0.0). The cockpit `handoffs` array is NOT
+    # (DoE handoff.schema.json 3.0.0). The cockpit `handoffs` array is NOT
     # live-only: it carries archived records too, and an archived record may
     # carry any historical kind — the same reason handoff-archived.schema.json
     # keeps this value permanently. Narrowing it here silently DROPS archived
@@ -141,7 +141,7 @@ inject `"session-handoff"` when `kind:` is absent before emitting a
 HandoffSummary, or the (required, non-optional) `kind` field below will fail
 validation.
 
-Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § D1/C8a.
+Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D1/C8a.
 """
 
 BatonClass = Literal["continuation", "deflection", "intention"]
@@ -159,7 +159,7 @@ from the `x-baton-class` key in the vendored `handoff.schema.json`. There is
 exactly one place a stored copy could disagree with its derivation — nowhere,
 because there is no stored copy.
 
-Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md § D2/C3a.
+Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f § D2/C3a.
 """
 
 
@@ -192,7 +192,7 @@ class ForeignOriginTriple(BaseModel):
     so cockpit can render without a stub-less dangle back to a record it
     doesn't ingest.
 
-    Spec backlink: docs/plans/2026-07-07-spinoff-provenance-ancestry.md § C7;
+    Spec backlink: DoE-claude:pln-structured-originating-session-8b505c § C7;
     shape mirrors cockpit's hand-authored swap seam (example-cockpit-repo
     `src/lib/contract/ancestry-origin.ts` `foreignOriginTripleSchema`).
     """
@@ -420,9 +420,9 @@ class HandoffSummary(BaseModel):
     """
 
     # ── Ancestry-origin fields (D9 present-as-null) ──────────────────────
-    # Spec backlink: docs/plans/2026-07-07-spinoff-provenance-ancestry.md § C7.
+    # Spec backlink: DoE-claude:pln-structured-originating-session-8b505c § C7.
     #
-    # Per-kind residency split (ratified, coordinator-claude contract-shape decision — do not
+    # Per-kind residency split (ratified, DoE contract-shape decision — do not
     # re-open): session/handoff/plan_id are EMITTED kinds (a HandoffSummary
     # row or, for plan_id, a resolvable id already carried elsewhere in this
     # contract) so a bare id suffices for cockpit to resolve. origin_goal_id
@@ -460,7 +460,7 @@ class HandoffSummary(BaseModel):
     `hnd-<slug>-<6hex>` id) or `derived` (synthesized from (repo, basename))."""
 
     # ── Priority-ledger resolution (derived, C6a) ────────────────────────
-    # Spec backlink: docs/plans/2026-07-26-priority-ledger.md § C6a. All four
+    # Spec backlink: DoE-claude:pln-priority-ledger-durable-pm-pri-817d40 § C6a. All four
     # populated by `coordinator_core.ops.emit.priority_resolve.resolve_priority`
     # — the SOLE resolution implementation (see that module's docstring); this
     # section never re-walks the predecessor spine or re-implements the walk.
@@ -488,7 +488,7 @@ class HandoffSummary(BaseModel):
     or a ledger entry — a persisted resolved-from pointer would be a fourth
     lineage axis, and is exactly the shape the rejected priority-stamping
     design would smuggle back in (see priority-ledger.schema.json
-    NEGATIVE-SPEC (2), coordinator-claude repo). This field exists precisely so
+    NEGATIVE-SPEC (2), DoE-claude repo). This field exists precisely so
     that design never needs reviving. D9: nullable, never optional.
     """
     suggested_priority: str | None

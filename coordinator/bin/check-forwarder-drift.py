@@ -47,7 +47,7 @@ Exit codes:
       the one below.
   1 — the cited-but-missing set (forwarder_drift.py's `cited_missing`) is
       non-empty: at least one settings-home/bin forwarder that a live
-      coordinator-claude prompt surface names is missing. Never fires on "could not
+      DoE-claude prompt surface names is missing. Never fires on "could not
       determine" (AC6) — only on a positively-computed non-empty set. The
       CONTENT axis never contributes to this exit code (AC7).
 

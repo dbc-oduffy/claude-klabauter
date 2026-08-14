@@ -5,7 +5,7 @@ AC-C19 coverage for `coordinator_core.ops.ownership_index.build_ownership_index`
 claim-store-first data flow, live+archive union, scan_errors propagation, and
 the structural gate/ownership import separation.
 
-Spec backlink: docs/plans/2026-07-26-gate-resolution-widen-and-migrate.md § C19
+Spec backlink: DoE-claude:pln-gate-resolution-widen-the-engi-690ee0 § C19
 """
 
 from __future__ import annotations

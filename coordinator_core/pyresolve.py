@@ -1,6 +1,6 @@
 """
 coordinator_core.pyresolve -- portable Python interpreter resolver, the naked-Python
-port of ``coordinator/lib/resolve-python.sh`` (bash, [coordinator-claude] repo).
+port of ``coordinator/lib/resolve-python.sh`` (bash, [DoE-claude] repo).
 
 Byte-parity target: ``coordinator/lib/resolve-python.sh``. Behaviors ported
 byte-identically per the T4c build recipe: pin precedence (``COORDINATOR_PYTHON`` env
@@ -26,8 +26,8 @@ No brew-path logic: the bash oracle's non-Windows branch is a bare ``python3`` -
 (verified by a case-insensitive ``grep brew`` of the 323-line source finding zero
 matches; recipe-T4c-resolve-python-bootstrap-cohort.md § 1).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4c;
-recipe-T4c-resolve-python-bootstrap-cohort.md (coordinator-claude
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4c;
+recipe-T4c-resolve-python-bootstrap-cohort.md (DoE-claude
 scratch/subagent-sandbox/bash-to-python-engine-migration/).
 """
 

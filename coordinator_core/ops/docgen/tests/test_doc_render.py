@@ -14,7 +14,7 @@ Covers:
   - defect paths: unknown doc_type, missing required ``value`` field, missing
     placeholder value — all raise ``RenderError``, never a silent KeyError/None
 
-This module does NOT assert byte-identity against the live coordinator-claude oracle (C6's
+This module does NOT assert byte-identity against the live DoE oracle (C6's
 surface) and does NOT assert the no-write/no-subprocess structural property
 formally (C7's surface, a standing test) — it stays inside C4's own contract:
 the render function is correct against the template format for every idiom.

@@ -428,7 +428,7 @@ class TestCloseOutReachesSharedCascadeEntrypoint:
     _run_cascade` for its `implemented` stamp, rather than hand-rolling a
     second cascade trigger of its own (this module's own "Composition, not
     duplication" docstring section) -- so this close-out path and the
-    coordinator-claude-side polyglot trampoline's direct `plan-status-transition
+    DoE-side polyglot trampoline's direct `plan-status-transition
     stamp-implemented` invocation both fire the SAME `deliverable.
     cascade_terminal` op, never two independent implementations that could
     disagree (mirrors `test_cockpit_ground_truth_regression.
@@ -589,7 +589,7 @@ class TestCloseOutReachesSharedCascadeEntrypoint:
 class TestPostCommitTailStubCloseReach:
     """AC4 (docs/plans/2026-08-04-terminal-state-propagation-join-keys.md
     § C5): `/execute-plan`'s close-out and `/mise-en-place`'s per-baton tail
-    both land through `coordinator/bin/close-out-and-stamp` ->
+    both land through `coordinator/bin/close-out-and-stamp.py` ->
     `close_out_and_stamp()` -- the SAME call path -- so exercising that one
     function proves reach for both ceremonies at once. (The third ceremony,
     `ceremony.wsc_tail`, already has its own real-stub coverage in
@@ -912,7 +912,7 @@ class TestCloseOutAndStampContinued:
 # verdict short of MUTATING had no choice but to run the mutating path
 # purely to read it -- and did, stamping/committing/pushing to a shared
 # branch as a side effect of a read (see close_out_and_stamp.py's own
-# docstring and coordinator/bin/close-out-and-stamp's usage text for the
+# docstring and coordinator/bin/close-out-and-stamp.py's usage text for the
 # incident this closes). This suite pins: the dry verdict equals the live
 # verdict, and dry-run writes NOTHING (no stamp, no plan-body disposition
 # backfill, no commit, no push).
@@ -1403,17 +1403,53 @@ class TestDefect2ChunkCommitDetection:
         assert missing == []
         assert shipped is True
 
+    def test_adjacency_dash_tag_does_not_cover_its_spine_id(self, tmp_path):
+        """Defect fix, 2026-08-14 (example-retrieval-repo cross-repo memo
+        `2026-08-14-example-retrieval-repo-em-close-out-adjacency-suffix-covers-spine-row`):
+        rule 2's dash-tag shape read `C8a-pre` as covering spine `C8a`,
+        so a landed PREREQUISITE chunk satisfied the row it was a
+        prerequisite FOR. Live repro: `b58edc057 "C8a-pre: green the
+        posix-exec baseline ..."` on plan
+        `2026-08-11-installer-body-port-to-python`, reporting
+        `missing_chunk_ids: ["C8b"]` when C8a was equally open.
+
+        Variant tags must keep covering -- the exclusion is a closed set
+        of ADJACENCY tags, not a retreat from rule 2.
+        """
+        for tag in ("pre", "prep", "post"):
+            assert coas._committed_id_covers_spine_id(f"C8a-{tag}", "C8a") is False
+        assert coas._committed_id_covers_spine_id("C8a-doe", "C8a") is True
+        assert coas._committed_id_covers_spine_id("C8a-mak", "C8a") is True
+        assert coas._committed_id_covers_spine_id("C1-fix2", "C1") is True
+        # `-press`/`-poster` are ordinary variant tags: the exclusion is on
+        # the whole tag, never a prefix of it.
+        assert coas._committed_id_covers_spine_id("C8a-press", "C8a") is True
+
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C1-pre", deliverable_id=_DLV_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C2a", deliverable_id=_DLV_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C2b", deliverable_id=_DLV_VALID_SPINE)
+
+        shipped, missing, join_provenance, error = coas._determine_shipped(
+            plan_file.read_text(encoding="utf-8"), "plan.md", root
+        )
+        assert error is None
+        assert "C1" in missing
+        assert shipped is False
+
     def test_apostrophe_chunk_id_registers_and_covers_its_own_spine_id(self):
         """Defect fix, 2026-08-06: a review-time chunk split can mint an
         apostrophe-bearing id (`C9'`, from splitting `C9`). Live repro:
         commit `9ffbaa505b54`'s exact subject `C9': deliver the manifest
-        to coordinator-claude ...` was invisible to `missing_chunk_ids` before this fix --
+        to DoE ...` was invisible to `missing_chunk_ids` before this fix --
         `_CHUNK_SUBJECT_RE`'s character class never admitted `'`, so the
         id group before `:` could not match at all and `_extract_chunk_ids`
         returned `[]` for the whole subject.
         """
         ids = coas._extract_chunk_ids(
-            "C9': deliver the manifest to coordinator-claude", spine_ids=["C9'"]
+            "C9': deliver the manifest to DoE", spine_ids=["C9'"]
         )
         assert ids == ["C9'"]
         assert coas._committed_id_covers_spine_id("C9'", "C9'") is True
@@ -1421,7 +1457,7 @@ class TestDefect2ChunkCommitDetection:
     def test_apostrophe_chunk_id_commit_scan_end_to_end(self, tmp_path):
         """Same defect, exercised through the real `_committed_chunk_ids`
         git-log scan this op actually calls -- the live repro's exact
-        subject shape (`C9': deliver the manifest to coordinator-claude ...`) must be
+        subject shape (`C9': deliver the manifest to DoE ...`) must be
         found as evidence, mirroring commit `9ffbaa505b54` on plan
         `2026-08-06-writer-declared-write-surface-manifest`.
         """
@@ -1436,7 +1472,7 @@ class TestDefect2ChunkCommitDetection:
                 "commit",
                 "-q",
                 "-m",
-                "C9': deliver the manifest to coordinator-claude with the correspondence "
+                "C9': deliver the manifest to DoE with the correspondence "
                 "property restated",
                 "-m",
                 f"Deliverable-Id: {_DLV_VALID_SPINE}",
@@ -1699,6 +1735,48 @@ class TestResolutionModel:
         )
         assert coas._stamp_plan_landed(str(executing_plan)) == 0
         assert _read_status(executing_plan) == "landed"
+
+    def test_stamp_plan_landed_write_path_holds_the_cross_process_lock(self, tmp_path):
+        """Review: code-reviewer (P2 #1) -- C1 (`plan_tasks_mutate.resolve`)
+        newly reaches `_stamp_plan_landed` from a hot path, on a machine
+        whose own doctrine names 50-70 concurrent LLM sessions as average
+        load (repo CLAUDE.md § Load norm). A second writer holding the
+        SAME cross-process lock `locked_rmw` would take must block this
+        call until released -- proving the write path is actually gated
+        by the lock, not merely calling a plain open()/write() that
+        happens to sit near lock-using code. A genuine cross-process
+        concurrency test (two real OS processes racing) is impractical in
+        this suite; holding the lock via `locked_write.held_lock` from
+        this same process and asserting `LockTimeout` is the acceptable
+        substitute the review names."""
+        from coordinator_core.locked_write import held_lock
+
+        root = tmp_path
+        _init_repo(root)
+        rows_yaml = (
+            "- id: C1\n"
+            "  title: Ship the widget\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/widget.py\n"
+            "  deferred: false\n"
+            "  body: |\n"
+            "    Ship the widget end to end.\n"
+        )
+        plan = _seed_disposition_plan(root, rows_yaml, status="executing", dest_name="plan.md")
+
+        with held_lock(Path(plan), anchor_root=root, timeout=1.0):
+            # `_stamp_plan_landed` catches `LockTimeout` itself and reports
+            # it as an ordinary rc=1 failure (matching every other error
+            # branch in this function) rather than letting it propagate --
+            # rc=1 plus the status remaining untouched is the externally
+            # observable proof the write never got past the lock.
+            assert coas._stamp_plan_landed(str(plan), timeout=0.2) == 1
+        assert _read_status(plan) == "executing"
+
+        # Released once the external holder above exits -- proves the
+        # timeout above was purely lock contention, not a genuine failure.
+        assert coas._stamp_plan_landed(str(plan)) == 0
+        assert _read_status(plan) == "landed"
 
     def test_stamp_preserves_comments_and_block_scalars_verbatim(
         self, tmp_path, monkeypatch
@@ -2554,14 +2632,16 @@ class TestDeliverableIdMismatchDiagnostic:
     def test_close_out_and_stamp_message_and_result_carry_the_mismatch(
         self, tmp_path, monkeypatch
     ):
-        """Integration: `close_out_and_stamp`'s own `message` string gets
-        the CAUSE-pointed NOTE clause naming both values, and the
-        structured `deliverable_id_mismatch` result key carries the
-        candidate(s) -- the whole point of this fix (a reader should not
-        have to re-derive the cause from a bare `missing_chunk_ids` list).
-        The NOTE clause also names the equivalence-map remedy (2026-08-04
-        Task 3 widening) -- the map path and the earliest-artifact-wins
-        rule, advisory only."""
+        """Integration: `close_out_and_stamp`'s own `message` string gets a
+        generic, register-matched NOTE (2026-08-14, key_mismatch stops
+        naming strangers) -- the structured `deliverable_id_mismatch` result
+        key still carries the candidate(s) (unaffected, `shipped`/AC7
+        invariant), but the human-facing message no longer names a specific
+        foreign id or advises declaring a `state/deliverable-equivalence.
+        yaml` equivalence: the search behind this diagnostic is unscoped by
+        author/session, so naming a stranger's commit as evidence against
+        THIS plan and inviting the reader to declare an equivalence against
+        it is exactly the shared-worktree false-positive this fix closes."""
         root = tmp_path
         _init_repo(root)
         plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
@@ -2577,14 +2657,13 @@ class TestDeliverableIdMismatchDiagnostic:
         assert result["deliverable_id_mismatch"] == [
             {"deliverable_id": other_id, "commit_count": 3}
         ]
+        assert other_id not in result["message"]
+        assert "equivalence" not in result["message"]
+        assert "earliest artifact wins" not in result["message"]
         assert (
-            f"NOTE: 3 commit(s) carry Deliverable-Id '{other_id}' but this "
-            f"plan's frontmatter deliverable_id is '{_DLV_VALID_SPINE}'"
-            in result["message"]
+            "3 commit(s) in range belong to other deliverables (expected on "
+            "a shared tree)" in result["message"]
         )
-        assert "state/deliverable-equivalence.yaml" in result["message"]
-        assert "earliest artifact wins" in result["message"]
-        assert "creation-order evidence" in result["message"]
 
     def test_genuinely_uncommitted_with_no_near_miss_message_unchanged(
         self, tmp_path, monkeypatch
@@ -2687,13 +2766,97 @@ class TestDeliverableIdMismatchDiagnostic:
         assert "still uncommitted" not in result["message"]
 
 
+class TestKeyMismatchStopsNamingStrangers:
+    """docs/plans/2026-08-14-excise-cut-reaches-the-divergence-check.md C4:
+    promoted from `repro_claim_b.py`. `_deliverable_log_records` is the
+    sole `git log` site behind every chunk-evidence reader and bounds only
+    by commit range -- no author, committer, `Session-Id`, or deliverable
+    restriction. On a shared worktree with dozens of concurrent sessions,
+    an unrelated peer's landed commit therefore enters the candidate set
+    and surfaced (pre-fix) in the `key_mismatch` diagnostic as though it
+    were evidence about THIS plan, complete with advice to declare a
+    (false) equivalence against a total stranger."""
+
+    def test_ac6_peers_commit_not_named_and_no_equivalence_advice(
+        self, tmp_path, monkeypatch
+    ):
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        # A single "stranger" commit -- simulating a concurrent peer
+        # session's landed commit on the shared tree -- with a
+        # chunk-shaped subject covering a still-missing spine row (C1) and
+        # trailers naming a completely different Deliverable-Id and a
+        # foreign Session-Id. Nothing else is committed at all -- C1, C2a,
+        # C2b are all still open, all attributable only to this one
+        # foreign commit.
+        stranger_id = "dlv-stranger-foreign999"
+        (root / "stranger.txt").write_text("stranger content\n", encoding="utf-8")
+        _run_git(["add", "stranger.txt"], root)
+        _run_git(
+            [
+                "commit",
+                "-q",
+                "-m",
+                "C1: stranger's own unrelated chunk\n\n"
+                f"Deliverable-Id: {stranger_id}\n"
+                "Session-Id: some-other-concurrent-session\n",
+            ],
+            root,
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is False
+        assert result["join_provenance"] == coas.JOIN_PROVENANCE_KEY_MISMATCH
+        assert result["deliverable_id_mismatch"] == [
+            {"deliverable_id": stranger_id, "commit_count": 1}
+        ]
+        assert stranger_id not in result["message"]
+        assert "equivalence" not in result["message"]
+        assert "earliest artifact wins" not in result["message"]
+        assert (
+            "1 commit(s) in range belong to other deliverables (expected on "
+            "a shared tree)" in result["message"]
+        )
+
+    def test_ac7_shipped_unchanged_from_pre_fix_behaviour(self, tmp_path, monkeypatch):
+        """Same fixture as AC6 -- `shipped` (and the rest of the structured
+        verdict) is IDENTICAL to what pre-fix behaviour computed; only the
+        message/reason presentation moved."""
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        stranger_id = "dlv-stranger-foreign999"
+        (root / "stranger.txt").write_text("stranger content\n", encoding="utf-8")
+        _run_git(["add", "stranger.txt"], root)
+        _run_git(
+            [
+                "commit",
+                "-q",
+                "-m",
+                "C1: stranger's own unrelated chunk\n\n"
+                f"Deliverable-Id: {stranger_id}\n"
+                "Session-Id: some-other-concurrent-session\n",
+            ],
+            root,
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK, result
+        assert result["shipped"] is False
+        assert sorted(result["missing_chunk_ids"]) == ["C1", "C2a", "C2b"]
+
+
 # ===========================================================================
 # Regression: single-chunk-id-only subject parser (Defect fix, 2026-07-27) --
 # multi-chunk commit subjects (`,`/`+`/`/`-joined id-lists) are an
 # established convention on the shared workstream branch; the prior parser
 # only recognized `,` and mis-split nothing at all on a `+`/`/`-joined
 # subject, silently crediting zero of the named ids. Corpus evidence for the
-# separator set (`git log --format='%s'` over both coordinator-claude and
+# separator set (`git log --format='%s'` over both DoE-claude and
 # claude-klabauter, 2026-07-27): `,`, `, ` (comma with trailing space, seen
 # live -- `C2, C7b: ...`), `+` (`C3+C2b: ...`), `/` (`C8a-doe/C8p: ...`).
 # ===========================================================================
@@ -3555,7 +3718,7 @@ class TestScopeSiblingPrefixRegexGrammar:
         """THE FIX, reproduced directly: `<repo-id>:<path>` with NO space
         after the colon -- the form every real plan actually writes (see
         `grep -rhoE '^\\s+- [a-z0-9-]+:[^ ]+' docs/plans/*.md` in
-        coordinator-claude) -- must match."""
+        DoE-claude) -- must match."""
         match = coas._SCOPE_SIBLING_PREFIX_RE.match(
             "claude-klabauter:coordinator_core/dag.py"
         )

@@ -19,10 +19,10 @@ This is not hypothetical -- on 2026-07-28 this exact class of defect broke
 on -- corrupting it into spraying garbage instead of returning a value,
 which in turn made every caller read empty output as "registry key unset"
 and blocked percolation entirely on that machine. That launcher's template
-lives in coordinator-claude (`templates/bin/machine-local.cmd`), not here; this port
+lives in DoE-claude (`templates/bin/machine-local.cmd`), not here; this port
 exists because claude-klabauter independently tracks 353 generated `.cmd` launchers of
 its own (see `coordinator/bin/gen-launcher-shim.py`) with no equivalent gate
-prior to this file. See coordinator-claude's `coordinator/docs/wiki/windows-cmd-
+prior to this file. See DoE-claude's `coordinator/docs/wiki/windows-cmd-
 shims.md` for the full incident writeup.
 
 WHY A WHOLE-LINE SCAN, NOT A SUBSTRING DENYLIST. Any bare `<`, `>`, `|`, or
@@ -37,7 +37,7 @@ false-positive.
 SCOPE. Every tracked `.cmd` in the repo, enumerated via `git ls-files` so a
 new launcher anywhere in the tree is covered the moment it is committed.
 
-Ported from coordinator-claude `coordinator/tests/test_cmd_rem_line_metacharacters.py`
+Ported from DoE-claude `coordinator/tests/test_cmd_rem_line_metacharacters.py`
 (2026-07-28); the checker function and both fixtures are preserved verbatim.
 """
 
@@ -152,7 +152,7 @@ def test_no_cmd_has_rem_line_metacharacters():
         + "\n  ".join(offenders)
         + "\ncmd.exe parses redirection/pipe/background metacharacters and "
         "quote balance INSIDE REM lines too -- this exact shape corrupted "
-        "coordinator-claude's templates/bin/machine-local.cmd in production on "
+        "DoE-claude's templates/bin/machine-local.cmd in production on "
         "2026-07-28. Rephrase the prose to avoid literal angle brackets, "
         "pipes, ampersands, and multi-line quoted phrases; do not "
         "hand-suppress this check."

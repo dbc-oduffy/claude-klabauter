@@ -1,10 +1,10 @@
 """setup-verify.py — imperative logic ported out of the coordinator-claude
-`/coordinator:setup` chain-walk skill (coordinator-claude
+`/coordinator:setup` chain-walk skill (DoE-claude
 `coordinator/skills/setup/SKILL.md`) into a naked-Python CLI.
 
 Purpose: the skill's bash fences carried genuine loops/conditionals/multi-step
 transforms that do not belong hand-duplicated in a `.md` instruction file (see
-Coordinator-claude `CLAUDE.local.md` § "A skill must LINK to an entrypoint, not carry a
+DoE-claude `CLAUDE.local.md` § "A skill must LINK to an entrypoint, not carry a
 command payload for the EM to transcribe" — unlintable, untestable,
 unreachable-by-extension-filtered code search). This CLI is that logic's new
 home; the skill repoints to call it by name (a separate chunk, D2).
@@ -53,7 +53,7 @@ Subcommands (one per ported fence):
         SOURCE checkout with a plugin manifest AND commands/hooks positively
         present there (a live `--plugin-dir` resolution never touches either
         registry file, so route 1 correctly FAILs for it -- e.g. coordinator
-        itself, resolved from coordinator-claude). Neither bare directory presence
+        itself, resolved from DoE-claude). Neither bare directory presence
         nor a dev-repo sentinel alone is ever sufficient evidence. FAIL
         (exit 1) when neither route clears, with the exact `claude plugin
         marketplace add`/`claude plugin install` remediation commands for
@@ -65,7 +65,7 @@ input file is reported to stderr and the subcommand's own failure exit code
 is used — this CLI never silently degrades an input error to exit 0.
 
 Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase-b.md § C4
-Spec backlink: coordinator-claude coordinator/skills/setup/SKILL.md (Steps 1, 3, 4, 6 Probes 2/3)
+Spec backlink: DoE-claude coordinator/skills/setup/SKILL.md (Steps 1, 3, 4, 6 Probes 2/3)
 """
 from __future__ import annotations
 
@@ -83,6 +83,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Step 1 (SKILL.md) — layout detection (flat publish-repo vs. nested working-repo)
 # ---------------------------------------------------------------------------
+
+GENERATES = []  # cmd_visited_init writes the chain-walk visited-set under <settings-home>/coordinator-claude/chain-walk-<uuid>.json (settings-home, outside claude-klabauter's own tree); every other subcommand is read-only
+
 
 def cmd_layout(args: argparse.Namespace) -> int:
     plugin_root = Path(args.plugin_root).resolve()
@@ -430,7 +433,7 @@ def cmd_check_plugin_registered(args: argparse.Namespace) -> int:
     fleet-run false-positive, 2026-07-28): marketplace registration is not
     the actual invariant -- reachability is, and a plugin resolved live via
     Claude Code's `--plugin-dir` (a dev SOURCE checkout, e.g. coordinator
-    itself resolved from coordinator-claude's `coordinator/` tree) is correctly
+    itself resolved from DoE-claude's `coordinator/` tree) is correctly
     unregistered -- the harness never touches either registry JSON for that
     route, yet the plugin works. Without this route the check FAILs on every
     coordinator developer machine in the fleet, which is exactly the
@@ -443,7 +446,7 @@ def cmd_check_plugin_registered(args: argparse.Namespace) -> int:
     with at least one hook entry -- i.e. POSITIVE evidence that real,
     installable content lives at the resolved source (AC-2). This
     deliberately does NOT consult the `.coordinator-dev-repo` sentinel
-    (coordinator-claude CLAUDE.md "Repo-specific gotchas"): that sentinel only
+    (DoE-claude CLAUDE.md "Repo-specific gotchas"): that sentinel only
     exists for one specific repo's dev/OSS discriminant, and AC-2 forbids a
     sentinel alone ever becoming a blanket skip -- the manifest+commands/hooks
     check is the generic, plugin-agnostic stand-in that subsumes the

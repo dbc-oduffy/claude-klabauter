@@ -4,7 +4,7 @@ Golden oracle — ported case-for-case (fresh create, merge-preserving strict
 JSON, JSONC with backup, idempotent second run, unparseable-preserved,
 bad-arg exit 2 x2).
 
-Port of: test-ensure-vscode-readonly.sh (coordinator-claude 894d4bc6, 2026-07-22)
+Port of: test-ensure-vscode-readonly.sh (DoE 894d4bc6, 2026-07-22)
 """
 
 from __future__ import annotations

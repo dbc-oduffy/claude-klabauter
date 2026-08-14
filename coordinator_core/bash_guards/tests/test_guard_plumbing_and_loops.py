@@ -62,7 +62,7 @@ the original command and `_verbatim_head_tail_alternative`'s emitted `python3
 must be checked by actual execution, not by inspecting the generated source.
 
 Spec backlink: coordinator_core/bash_guards/guard_plumbing_and_loops.py
-Spec backlink (verbatim-alternative promotion): docs/plans/2026-07-29-bash-guard-merged-execution-shape.md M3
+Spec backlink (verbatim-alternative promotion): DoE-claude:pln-bash-guard-merged-execution-shape-a71e05 M3
 """
 
 from __future__ import annotations

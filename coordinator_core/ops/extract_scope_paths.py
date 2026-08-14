@@ -19,7 +19,7 @@ Exit codes:
   1 — scope: block missing or empty (stderr diagnostic, no stdout)
   2 — usage error: missing arg or handoff file not found (stderr diagnostic)
 
-Port of: extract-scope-paths.sh (coordinator-claude 894d4bc6, 2026-07-22) — the bash
+Port of: extract-scope-paths.sh (DoE 894d4bc6, 2026-07-22) — the bash
 oracle this module was ported from has since been retired (debash campaign);
 nothing compares this module's output against a live shell implementation
 any more. The 8 fixtures in `test_extract_scope_paths.py` (lifted from that

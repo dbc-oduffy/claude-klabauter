@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.block_home_dir_memo_delivery — hard-deny guard.
 
-Python engine-ification of coordinator-claude's
+Python engine-ification of DoE's
 ``coordinator/hooks/scripts/block-home-dir-memo-delivery.py`` PreToolUse
 (Write|Edit|MultiEdit|NotebookEdit) hook, per the write-guard fan-in
 (write_guards/INTERFACE.md).
@@ -8,8 +8,8 @@ Python engine-ification of coordinator-claude's
 Purpose (ported verbatim from the reference hook): ``~/.claude`` is a
 CONFIG-ONLY tree — harness settings, ``docs/decisions/``, and one coordinator
 bootstrap pointer. It is not a working repo and it is not a valid memo
-receiver. The canonical central receiver is ``coordinator-claude-em`` (registry key
-``repos.example_doctrine_repo``), inbox ``<example_doctrine_repo>/cross-repo/inbox/``.
+receiver. The canonical central receiver is ``doe-claude-em`` (registry key
+``repos.doe_claude``), inbox ``<doe_claude>/cross-repo/inbox/``.
 
 The `cross-repo-memo` CLI is NOT the hole: it already code-pins the
 ``.claude-em``, ``claude-home``, and ``coordinator-claude`` aliases onto
@@ -38,7 +38,7 @@ this guard's scope has no legitimate use, and an advertised env var would
 turn a hard block into a speed bump for precisely the caller it exists to
 stop).
 
-Ported from the coordinator-claude hook
+Ported from the DoE hook
   ``coordinator/hooks/scripts/block-home-dir-memo-delivery.py``.
 
 Negative-spec:
@@ -148,7 +148,7 @@ def _deny_reason(target: str) -> str:
     return (
         f"[home-dir memo guard] DENY {target}: not a memo receiver, goes "
         "unseen by /pickup. Use instead:\n"
-        "  bin/cross-repo-memo --to coordinator-claude-em --topic <slug> "
+        "  bin/cross-repo-memo --to doe-claude-em --topic <slug> "
         '--title "<one line>"'
     )
 

@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.changelog_ops.compute_day_fields (Zone-A build #4).
 
-Port of: workday-complete-step9-append-changelog.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+Port of: workday-complete-step9-append-changelog.sh (DoE 6fb5fb37, 2026-07-22)
 COMPUTE_ONLY sibling of changelog.append_day — see changelog_ops.py module
 comment above `compute_day_fields` for the full negative-spec.
 

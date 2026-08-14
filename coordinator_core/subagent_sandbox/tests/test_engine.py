@@ -19,7 +19,7 @@ coordinator_core.subagent_sandbox.provision_report to consume.
 
 Spec backlink: pln-claude-klabauter-subagent-sandbox-enforc-62cc03
                 (original enforcement engine, now retired)
-Removal: coordinator-claude DR-058, commit 0998c6a6 (write_guards splice excision)
+Removal: DoE DR-058, commit 0998c6a6 (write_guards splice excision)
 Engine under test: coordinator_core/subagent_sandbox/engine.py
 """
 
@@ -365,7 +365,7 @@ def test_load_policy_report_type_map_drops_bad_entries_not_siblings(tmp_path: Pa
 
 def test_load_policy_ignores_dr058_removed_keys(tmp_path: Path) -> None:
     """A YAML that still carries the DR-058-removed confined/exempt/
-    sanctioned_dirs keys (pending coordinator-claude's lockstep strip) must not raise or
+    sanctioned_dirs keys (pending DoE's lockstep strip) must not raise or
     otherwise fail to load report_sidecar -- unknown keys are silently
     ignored."""
     stale_path = tmp_path / "subagent-sandbox-policy.yaml"

@@ -11,7 +11,7 @@ Converted from a hand-rolled unittest runner to collectable pytest functions.
 
 Run: python3 -m pytest coordinator/bin/tests/test_lesson_promote.py
 
-Spec backlink: docs/plans/2026-07-06-strang-08-arm-queue-facade-invoke-retarget.md § C4
+Spec backlink: DoE-claude:pln-strang-08-arm-the-doe-queue-fa-36567b § C4
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
-_CLI_PATH = _BIN_DIR / "coordinator-lesson-promote"
+_CLI_PATH = _BIN_DIR / "coordinator-lesson-promote.py"
 
 # Ensure lib is on sys.path so cc_invoke imports inside the CLI work.
 _LIB_DIR = _BIN_DIR / "lib"
@@ -76,7 +76,7 @@ def test_native_out_path_printed():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", captured_out),
     ):
@@ -97,7 +97,7 @@ def test_native_route_op_is_queue_promote():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):
@@ -132,7 +132,7 @@ def test_native_params_contain_required_fields():
     target_wiki must be a REAL entry in the central wiki inventory: change_kind
     "wiki-append" is one of the WIKI_TARGETING_CHANGE_KINDS (2026-07-23 A7/A9 scope
     fix), so main() runs `_validate_target_wiki` against the actual resolved
-    coordinator-claude wiki inventory (unmocked here) before ever reaching `_cc_route` —
+    DoE-claude wiki inventory (unmocked here) before ever reaching `_cc_route` —
     a fabricated path like the prior "docs/wiki/target.md" is rejected with exit 2
     (argparse SystemExit), never reaching the params assertions below. computed-
     skills.md is the same stable, long-lived doc the sibling test
@@ -152,7 +152,7 @@ def test_native_params_contain_required_fields():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stdout", io.StringIO()),
     ):
@@ -187,7 +187,7 @@ def test_legacy_fn_called_when_seam_absent(tmp_path):
         unittest.mock.patch.object(_cli_mod, "_cc_route", side_effect=_fake_route),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
         unittest.mock.patch.object(_cli_mod, "_outbox_root", return_value=str(outbox)),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
     ):
         rc = _cli_mod.main(_MINIMAL_ARGV)
 
@@ -213,7 +213,7 @@ def test_legacy_fn_returns_int_exit_code(tmp_path):
         unittest.mock.patch.object(_cli_mod, "_cc_route", side_effect=_fake_route),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
         unittest.mock.patch.object(_cli_mod, "_outbox_root", return_value=str(outbox)),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
     ):
         rc = _cli_mod.main(_MINIMAL_ARGV)
 
@@ -238,7 +238,7 @@ def test_legacy_fn_outbox_schema(tmp_path):
         unittest.mock.patch.object(_cli_mod, "_cc_route", side_effect=_fake_route),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
         unittest.mock.patch.object(_cli_mod, "_outbox_root", return_value=str(outbox)),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
     ):
         rc = _cli_mod.main(_MINIMAL_ARGV)
 
@@ -293,7 +293,7 @@ def test_skipped_emits_warn_to_stderr():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stderr", captured_err),
         unittest.mock.patch("sys.stdout", io.StringIO()),
@@ -320,7 +320,7 @@ def test_skipped_no_path_on_stdout():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stderr", io.StringIO()),
         unittest.mock.patch("sys.stdout", captured_out),
@@ -341,7 +341,7 @@ def test_skipped_without_reason_key():
     with (
         unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
         unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-claude"),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
         unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
         unittest.mock.patch("sys.stderr", captured_err),
         unittest.mock.patch("sys.stdout", io.StringIO()),
@@ -351,7 +351,7 @@ def test_skipped_without_reason_key():
     assert rc == _cli_mod._EXIT_DOE_UNRESOLVABLE
     # Review: code-reviewer strang-08-slice3 — (F6) assert the default fallback string is
     # used when reason key is absent; "warn:" alone is nearly unconditional.
-    # C1 (2026-07-06): lesson-promote now routes central writes to coordinator-claude, so the
+    # C1 (2026-07-06): lesson-promote now routes central writes to DoE, so the
     # default fallback is "DOE_ROOT unresolvable" (was "CLAUDE_KLABAUTER_ROOT unresolvable").
     assert "DOE_ROOT unresolvable" in captured_err.getvalue(), (
         "default fallback string must appear when reason key absent"
@@ -389,7 +389,7 @@ def test_write_entry_inside_legacy_fn():
 def test_doe_unresolvable_inside_legacy_fn():
     """Grep-gate: _DoeUnresolvable handler is inside the legacy_fn body.
 
-    C1 (2026-07-06): lesson-promote central writes route to coordinator-claude, so legacy_fn
+    C1 (2026-07-06): lesson-promote central writes route to DoE, so legacy_fn
     catches _DoeUnresolvable (was _ClaudeKlabauterUnresolvable pre-C1).
     """
     source = _source()

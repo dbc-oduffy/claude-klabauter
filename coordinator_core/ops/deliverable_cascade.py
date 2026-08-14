@@ -113,6 +113,15 @@ shipped_in resolution or the deployment_state flip:
      cascade's own provenance fields (`advanced_by`, `advanced_at`) atomically with the
      deployment_state flip — AC6e's provenance is written in the SAME write as the flip it
      describes, not a second racing write.
+  4. Commit (C2, 2026-08-14): every candidate this run itself advanced (both the handoff and
+     sizing per-target writes) is a `locked_rmw` write to the worktree ONLY — steps 1-3 above
+     never touch git. `_handler` accumulates the resolved paths of every `advanced` entry and
+     commits exactly that set, once, via `git_native.commit_scoped` (`_commit_mutated_paths`),
+     before returning. This is the substitute committer the negative-spec below never named:
+     an uncommitted terminal write here is simultaneously too-terminal for the closers
+     (`promote_shipped_in_flight_stubs`/`handoff.close_origin_stub`, both of which exclude a
+     terminal `deployment_state`) and not-terminal-enough for the archiver (the disk/HEAD
+     drift guard in `ops/fleet/_common.py` refuses on an uncommitted mutation).
 
 Idempotency/no-re-entry (AC6i): falls out of construction, not extra bookkeeping. A second
 invocation over the same join-closure re-scans state/handoffs/ and finds every
@@ -159,6 +168,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
@@ -184,6 +194,7 @@ from coordinator_core.liveness import resolve_live_session_ids
 from coordinator_core.ops.cascade_baton_rows import resolve_baton_rows
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.ceremony.git_native import commit_scoped
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 # Vendored handoff schema path — same file every other handoff-mutating op in this
@@ -218,7 +229,7 @@ _SIZING_SCHEMA_PATH: Path = (
 # declined sizing was never a live candidate for this cascade in the first
 # place, not a live one that happens to fail a downstream leg.
 # Review: coordinator:code-reviewer — Finding 5: this file's own hand-copy
-# mirror is `coordinator/bin/coordinator-doc-new::_SIZING_TERMINAL_STATUSES`
+# mirror is `coordinator/bin/coordinator-doc-new.py::_SIZING_TERMINAL_STATUSES`
 # (plural). Not consolidated (EM-adjudicated) — but a future editor of
 # either set should check the other before assuming parity; as of this
 # comment they have already drifted (this set includes `declined`, the
@@ -572,9 +583,14 @@ async def _predicate_refusal(
                     f"own work-state ({kind.lifecycle_field}={lifecycle_value!r}) is not "
                     "consistent with terminal — live-but-blocked-on-something-else, not simply idle"
                 )
+            # `already terminal` was inaccurate for the not-live-but-not-terminal
+            # values (`superseded` is neither in `_SIZING_TERMINAL_STATUS` nor in
+            # `live_values`), so the message asserted a lifecycle fact that was
+            # false for exactly the case leg (c) exists to catch.
             return (
-                f"own work-state ({kind.lifecycle_field}={lifecycle_value!r}) is "
-                "already terminal — refusing to re-advance"
+                f"own work-state ({kind.lifecycle_field}={lifecycle_value!r}) is not "
+                f"live-and-advanceable — advanceable from "
+                f"{sorted(kind.live_values)}"
             )
 
     # Leg (a) — claimed by a live session. Ledger-first (see _claimant) — a
@@ -660,31 +676,40 @@ def _advance_one(
     advanced_at: str,
     repo_root: Path,
     source_path: str = "",
+    source_kind: str = "",
 ) -> tuple[bool, Optional[str]]:
     """Attempt to advance a single candidate that has already cleared the AC6h predicate.
 
     Returns (advanced, refusal_reason). Never raises — every failure mode is folded into
     a named refusal reason instead.
 
-    shipped_in evidence priority (2026-08-04): the artifact that FIRED this cascade
-    (`source_path` — a plan that reached `status: implemented`, or a handoff that
-    concluded terminally-positive) is honest, already-known evidence of what shipped
-    the deliverable — tried FIRST via `archive_stamp.resolve_source_ship_sha` (kind
-    `"ship-commit"`, an explicit caller-supplied sha, never subject to the ownership
-    guard — see that function's docstring for why). Position A's baton-`scope:`
-    self-derivation (`kind="scope-derived"`) is the FALLBACK, tried only when the
-    source yields nothing — never the other way around. This closes both halves of
-    the incident this pass fixes: a baton whose own `scope:` resolves to no commit
-    but whose firing source plainly has one no longer refuses (the false negative);
-    and preferring the source over a coarse-directory `scope:` guess means the
-    scope-derived path — and its own `not_after` plausibility guard, see
-    `stamp_shipped_in`'s docstring — is reached far less often, where the risk of an
-    implausible unrelated-commit match (the false positive) actually lives.
+    shipped_in evidence priority (2026-08-04, revised 2026-08-14 — see
+    docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md § C1): Position 1
+    (`archive_stamp.resolve_source_ship_sha(source_path, ...)`, kind `"ship-commit"`) is
+    trustworthy ONLY on the handoff trigger (`source_kind == "handoff"`), where
+    `source_path` is the handoff that itself concluded terminally-positive and "what last
+    touched it" is the proxy `_advance_one`'s original contract was built around. On the
+    plan trigger (`source_kind == "plan"`), `source_path` is the plan document that
+    `plan_status_transition._commit_plan_flip` commits immediately before calling this
+    cascade — Position 1 would then resolve the caller's own bookkeeping flip commit as
+    ship evidence, which neither of `resolve_source_ship_sha`'s own guards can catch
+    (the flip commit both touches `source_path` most-recently AND predates
+    `advanced_at`). So the plan trigger skips Position 1 entirely and goes straight to
+    Position A — scope-derived self-derivation from the CANDIDATE's own `scope:` paths
+    (`kind="scope-derived"`, `allow_branch_tip_fallback=False`, `not_after=advanced_at`).
+    A genuine no-commit-found result from either position is NOT an error (established
+    contract) — it REFUSES this candidate (named: "no commit evidence resolvable for
+    shipped_in") rather than flipping a handoff to `shipped` with no `shipped_in` or with
+    a proxy commit that never actually shipped it.
     """
     from coordinator_core.archive_stamp import resolve_source_ship_sha, stamp_shipped_in
 
-    source_sha = resolve_source_ship_sha(
-        source_path, not_after=advanced_at, worktree=main_worktree_root(repo_root)
+    source_sha = (
+        resolve_source_ship_sha(
+            source_path, not_after=advanced_at, worktree=main_worktree_root(repo_root)
+        )
+        if source_kind == "handoff"
+        else None
     )
     if source_sha:
         outcome = stamp_shipped_in(
@@ -856,6 +881,65 @@ def _advance_one_sizing(
 
 
 # ---------------------------------------------------------------------------
+# Commit (C2, 2026-08-14) — this op's own writes get a named committer: itself.
+# ---------------------------------------------------------------------------
+
+
+def _compose_cascade_commit_message(deliverable_id: str, mutated_paths: List[str]) -> str:
+    """Commit message for the cascade's own follow-up commit -- names the
+    deliverable and every path it advanced, mirroring
+    `post_commit_tail._compose_origin_stub_close_message`'s shape (subject
+    line + a bulleted path list) rather than inventing a new one.
+    """
+    lines = [
+        f"deliverable.cascade_terminal: advance {len(mutated_paths)} candidate(s) "
+        f"for deliverable_id={deliverable_id}",
+        "",
+    ]
+    for p in mutated_paths:
+        lines.append(f"- {p}")
+    return "\n".join(lines) + "\n"
+
+
+def _commit_mutated_paths(
+    mutated_paths: List[str], worktree_root: Path, deliverable_id: str
+) -> Optional[str]:
+    """Commit exactly `mutated_paths` via `git_native.commit_scoped` -- the
+    substitute committer this op's own negative-spec never named (see module
+    docstring "Negative-spec" and
+    docs/plans/2026-08-14-cascade-ship-evidence-and-write-durability.md § C2).
+
+    Never `git add -A`/`.`/`-a` -- `commit_scoped` is the computed-mechanism
+    selector every other scoped follow-up commit in this package already
+    routes through (`post_commit_tail._commit_and_push_origin_stub_close`,
+    `consumed_handoff_stamp`), and it fails loud on an empty or
+    directory-shaped pathspec rather than silently widening it.
+
+    Returns None on a landed commit, or a human-readable error string on a
+    commit failure -- the caller folds a non-None return into the result's
+    `commit_error` field (AC8: a commit failure must surface, never be
+    swallowed) without touching `exit_code`, which stays keyed off `advanced`
+    alone per this chunk's own hard constraint.
+    """
+    message = _compose_cascade_commit_message(deliverable_id, mutated_paths)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as fh:
+        fh.write(message)
+        msg_path = fh.name
+    try:
+        commit_result = commit_scoped(mutated_paths, msg_path, worktree_root)
+    finally:
+        try:
+            Path(msg_path).unlink()
+        except OSError:
+            pass
+    if not commit_result.ok:
+        return f"deliverable.cascade_terminal: commit failed: {commit_result.stderr}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
 # ---------------------------------------------------------------------------
 
@@ -916,7 +1000,21 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                                                  # kind (sizing); always
                                                                  # [] for handoff.
           "error": <str, present iff exit_code==1>,
+          "commit_error": <str, present iff the follow-up commit of this run's own
+                           mutated paths failed -- see "Commit" below. Independent of
+                           exit_code (AC8: a commit failure surfaces without being
+                           swallowed, but does not override the advanced-artifact
+                           success signal).>,
         }
+
+    Commit (C2, 2026-08-14): every path this run itself mutated -- every `advanced`
+    entry, on both the handoff and sizing kinds -- is committed by this op, in ONE
+    follow-up commit scoped to exactly that path list, before this handler returns
+    (see `_commit_mutated_paths`). Zero advanced candidates -> zero mutated paths ->
+    no commit attempted, no error. A refused or already-advanced candidate
+    contributes no path -- `already_advanced` names a candidate this run did NOT
+    itself write (see its own docstring below), so it is excluded from the commit
+    scope the same way a `refused` candidate is.
 
     Failure posture (see module docstring): exit_code is 1 whenever `advanced` is empty —
     zero candidates matched, or every candidate matched was refused — mirroring C2's
@@ -954,6 +1052,30 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "scan_incomplete": False,
             "unreadable": [],
             "error": "deliverable.cascade_terminal: 'deliverable_id' is required",
+        }
+    # Fail-loud on an unenumerated source_kind (Review: coordinator:code-reviewer
+    # -- an unvalidated value silently fell into `_advance_one`'s `== "handoff"`
+    # gate's else-branch, taking the plan-trigger path and losing Position 1 for
+    # any caller that ever passed something other than the exact literal
+    # "handoff"). Both current callers pass hardcoded literals, so this is
+    # dormant risk today, not a live bug -- validated here so a future third
+    # caller errors instead of quietly losing ship evidence.
+    if source_kind not in ("plan", "handoff"):
+        return {
+            "exit_code": 1,
+            "deliverable_id": deliverable_id,
+            "source_kind": source_kind,
+            "source_path": source_path,
+            "candidates_matched": 0,
+            "advanced": [],
+            "refused": [],
+            "already_advanced": [],
+            "scan_incomplete": False,
+            "unreadable": [],
+            "error": (
+                "deliverable.cascade_terminal: 'source_kind' must be 'plan' or "
+                f"'handoff', got {source_kind!r}"
+            ),
         }
     if repo_root is None:
         return {
@@ -1087,7 +1209,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 )
             else:
                 did_advance, write_refusal = await asyncio.to_thread(
-                    _advance_one, candidate_path, deliverable_id, at, repo_root, source_path
+                    _advance_one, candidate_path, deliverable_id, at, repo_root, source_path, source_kind
                 )
             if did_advance:
                 entry = {
@@ -1153,6 +1275,26 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             }
         )
 
+    # Commit (C2) — every path this run itself mutated (advanced entries only;
+    # a refused or already-advanced candidate contributes none) is committed
+    # in ONE follow-up commit scoped to exactly that list, before this
+    # handler returns. Worktree-relative posix, mirroring the shape
+    # `post_commit_tail`'s own follow-up commit paths already carry.
+    mutated_paths: List[str] = []
+    for entry in advanced:
+        candidate_path = Path(entry["path"])
+        try:
+            rel = candidate_path.resolve().relative_to(worktree_root.resolve()).as_posix()
+        except ValueError:
+            rel = str(candidate_path)
+        mutated_paths.append(rel)
+
+    commit_error: Optional[str] = None
+    if mutated_paths:
+        commit_error = await asyncio.to_thread(
+            _commit_mutated_paths, mutated_paths, worktree_root, deliverable_id
+        )
+
     result = {
         "exit_code": 0 if advanced else 1,
         "deliverable_id": deliverable_id,
@@ -1165,6 +1307,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "scan_incomplete": scan_incomplete,
         "unreadable": unreadable,
     }
+    if commit_error:
+        result["commit_error"] = commit_error
     if not advanced:
         if not candidates:
             # Review: staff-eng — Finding 7: this message was hardcoded to

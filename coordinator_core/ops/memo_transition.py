@@ -1,13 +1,13 @@
 """
 coordinator_core.ops.memo_transition — memo lifecycle transition op (memo.transition op).
 
-Purpose: Native Python port of coordinator-claude coordinator/bin/memo-transition.js — atomic
+Purpose: Native Python port of DoE-claude coordinator/bin/memo-transition.js — atomic
 cross-repo-memo lifecycle frontmatter transitions. Implements ``claim``, ``action``, and
 ``release`` verbs that mutate memo state using the coordinator_core frontmatter primitives,
 byte-faithful to the node oracle. Also implements ``resolve``, a native-only verb with no
 JS mirror (see Parity note below). No subprocess / node reach-back.
 
-Parity oracle: coordinator-claude coordinator/bin/memo-transition.js — covers claim/action/release
+Parity oracle: DoE-claude coordinator/bin/memo-transition.js — covers claim/action/release
 only. ``resolve`` is a native-only composition introduced by C1 of
 docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md; claude-klabauter owns
 cross-repo-memo tooling outright post-strangler-cut (DR-210), so this verb has no JS-side
@@ -412,7 +412,7 @@ def _resume_probe_and_commit(
 # ---------------------------------------------------------------------------
 # Dup-key guard (C5)
 #
-# Port of countStatusKeys from coordinator-claude coordinator/bin/memo-transition.js:136-143.
+# Port of countStatusKeys from DoE-claude coordinator/bin/memo-transition.js:136-143.
 # Boundary lookahead /^status:(?=[ \t]|\r?$)/mg — prevents status:open (no space) from
 # being counted, per the node oracle fix (code-reviewer slice A — F2).
 # Operates on fm_text ONLY (never on the whole document body).
@@ -431,7 +431,7 @@ _STATUS_KEY_RE = re.compile(r'^status:(?=[ \t]|\r?$)', re.MULTILINE)
 def _count_status_keys(fm_text: str) -> int:
     """Count occurrences of ``status:`` lines in frontmatter text.
 
-    Port of countStatusKeys from coordinator-claude coordinator/bin/memo-transition.js:136-143.
+    Port of countStatusKeys from DoE-claude coordinator/bin/memo-transition.js:136-143.
     Uses the boundary lookahead ``(?=[ \\t]|\\r?$)`` so ``status:open`` (no space)
     is not counted — aligning with ``read_fm_field``'s contract, ``\\r?`` half
     included (a CRLF-authored empty ``status:`` must count, or the guard fails open).
@@ -455,7 +455,7 @@ def _demote_kind_enum_finding(errors: list[ErrorDict], fm_dict: dict) -> list[Er
 
     Receiver tolerance ahead of a gate that itself stays strict — the same shape as
     ``_normalize_oversize_summary`` (PM ruling 2026-07-22): the AUTHORING-side enum
-    (``_memo_cf_kind_enum``, both write guards, coordinator-claude's direct-file-path import of
+    (``_memo_cf_kind_enum``, both write guards, DoE's direct-file-path import of
     ``validate_frontmatter_obj``) stays a hard gate; this only softens the RECEIVER's
     post-mutation check so an already-landed memo with an unenumerated ``kind`` isn't
     stranded at claim/action/release/resolve. Unlike ``_normalize_oversize_summary``,
@@ -734,7 +734,7 @@ def _claim_stamp_fields(fm_text: str, session_id: str, at: str) -> str:
 # ---------------------------------------------------------------------------
 # claim verb (sync — dispatched via asyncio.to_thread)
 #
-# Port of claim() from coordinator-claude coordinator/bin/memo-transition.js:230-307.
+# Port of claim() from DoE-claude coordinator/bin/memo-transition.js:230-307.
 # ---------------------------------------------------------------------------
 
 def _claim(memo: str, session_id: str, at: str) -> dict:
@@ -1374,7 +1374,7 @@ def _validate_superseded_by_exists(git_root: Path, superseded_by: str) -> dict |
 # ---------------------------------------------------------------------------
 # action verb (sync — dispatched via asyncio.to_thread)
 #
-# Port of action() from coordinator-claude coordinator/bin/memo-transition.js:311-438.
+# Port of action() from DoE-claude coordinator/bin/memo-transition.js:311-438.
 # ---------------------------------------------------------------------------
 
 def _action(memo: str, params: dict) -> dict:
@@ -1391,7 +1391,7 @@ def _action(memo: str, params: dict) -> dict:
     Cross-field shape (ratification requires in_repo_capture; a ~/.claude path
     fails validation) is enforced by _validate_memo_fm → validate_memo_cross_fields,
     same as every other field this op writes.
-    Spec backlink: docs/plans/2026-07-12-distill-rebuild-claude-klabauter-reliant.md § C3
+    Spec backlink: DoE-claude:pln-rebuild-distill-on-claude-klabauter-engi-9509ac § C3
 
     Already-actioned idempotency: no-op ONLY when status==actioned AND full disposition matches.
     Re-action with different disposition → fail-loud, UNLESS ``params["correct_realization"]``
@@ -1581,7 +1581,7 @@ def _action(memo: str, params: dict) -> dict:
 # ---------------------------------------------------------------------------
 # release verb (sync — dispatched via asyncio.to_thread)
 #
-# Port of release() from coordinator-claude coordinator/bin/memo-transition.js:442-496.
+# Port of release() from DoE-claude coordinator/bin/memo-transition.js:442-496.
 # ---------------------------------------------------------------------------
 
 def _release(memo: str) -> dict:

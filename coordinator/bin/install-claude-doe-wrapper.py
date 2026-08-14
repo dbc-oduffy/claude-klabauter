@@ -3,13 +3,13 @@
 install-claude-doe-wrapper.py — CLI trampoline over claude-klabauter
 coordinator_core.ops.install_claude_doe_wrapper.
 
-Installs the co-located `coordinator/bin/claude-doe` wrapper onto
+Installs the co-located `coordinator/bin/claude-doe.py` wrapper onto
 `${CLAUDE_HOME:-$HOME}/.local/bin/claude-doe`. Collapses the bash fence at
-coordinator/commands/install.md line 892 (coordinator-claude repo) into one call —
+coordinator/commands/install.md line 892 (DoE-claude repo) into one call —
 see coordinator_core.ops.install_claude_doe_wrapper's own docstring for the
 full design rationale and negative-spec.
 
-`--wrapper-src` defaults to this trampoline's own sibling `claude-doe` file
+`--wrapper-src` defaults to this trampoline's own sibling `claude-doe.py` file
 (this script and the wrapper it installs both live under
 `<claude_klabauter_root>/coordinator/bin/`) — no CLAUDE_KLABAUTER_ROOT resolution is needed for
 that default, since it is always co-located.
@@ -29,7 +29,7 @@ from cc_invoke import _resolve_claude_klabauter_root  # noqa: E402
 
 
 def _default_wrapper_src() -> str:
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-doe")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-doe.py")
 
 
 def _resolve_run_op_main():

@@ -246,6 +246,12 @@ MASS_THROTTLE_ACK_MARKER: str = "mass-throttle-ack"
 #: harvest commit's touched-paths set.
 CANONICAL_LOG_RELPATH: str = "state/distillation-log.md"
 
+# Generator-provenance: deletes/rewrites a data-dependent set of tracked
+# handoff files (whichever candidates the disposal manifest names), appends
+# rows to state/distillation-log.md, and rewrites surviving parents'
+# disposed_successors frontmatter under state/handoffs/.
+MUTATES = ["state/distillation-log.md", "state/handoffs/**/*.md", "docs/wiki/**/*.md"]
+
 #: Wiki-tree path prefix (forward-slash) — the OTHER acceptable containment
 #: target for drain-ordering (a harvest commit may touch wiki guides instead
 #: of, or in addition to, the canonical log).

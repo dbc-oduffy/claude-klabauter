@@ -5,16 +5,16 @@
 
 ## Purpose
 
-Coordinator-claude has no repo-wide full-suite runner. Its fast tier is deliberately
-JS-contract-only and covers a small fraction of coordinator-claude's ~271 test files; the
+DoE-claude has no repo-wide full-suite runner. Its fast tier is deliberately
+JS-contract-only and covers a small fraction of DoE's ~271 test files; the
 rest never run at any gate, and `cs_resolve_full_test_cmd` has nothing to
 resolve to because `full_test_cmd:` is unset.
 
 Per DR-059 (engine-tier test-harness authoring on migration-bound `.sh`
-routes to claude-klabauter as Python, not a coordinator-claude bash patch), this package is that
-runner: a pure-Python, repo-generic aggregator that coordinator-claude's `full_test_cmd:`
+routes to claude-klabauter as Python, not a DoE bash patch), this package is that
+runner: a pure-Python, repo-generic aggregator that DoE's `full_test_cmd:`
 invokes directly. It is repo-generic by design (`--repo <path>`, not
-Coordinator-claude-hardcoded) — it doubles as claude-klabauter's own aggregate runner and any
+DoE-hardcoded) — it doubles as claude-klabauter's own aggregate runner and any
 sibling's.
 
 ## The 4 test families
@@ -49,7 +49,7 @@ code, which is **0 on RPC-success regardless of the op's structured
 code would see a green run on a failing test suite. This is a documented,
 recurring hazard class, not a novel claim:
 
-- `[coordinator-claude] coordinator/docs/wiki/named-contracts-vs-incidental-flags.md:47-49`
+- `[DoE-claude] coordinator/docs/wiki/named-contracts-vs-incidental-flags.md:47-49`
   — "the process exit code is not the op's result contract... a bash wrapper
   checking `$?`... silently succeeds on failure."
 - `strangle_route` propagates the transport exit code only; it does not
@@ -66,13 +66,13 @@ The registered op (`testing.full_runner`, see § Registered op below) is a
 *separate* structured-JSON surface for programmatic consumers and is
 explicitly not a substitute for the bare-CLI `full_test_cmd:` path.
 
-## DEC-11 — the exact `full_test_cmd:` value coordinator-claude should set
+## DEC-11 — the exact `full_test_cmd:` value DoE should set
 
 ```
 python3 -m coordinator_core.testing.full_runner --repo . --expect all
 ```
 
-This is the exact, verbatim value. Coordinator-claude owns actually setting
+This is the exact, verbatim value. DoE owns actually setting
 `full_test_cmd:` in its `coordinator.local.md` to this value — that wiring
 step is out of scope for this plan; this README specifies what the value
 must be.
@@ -104,12 +104,12 @@ full-test gate would then silently run a frozen copy of the runner as
 Claude-klabauter's source evolves, rather than tracking it. Editable keeps the
 installed package pointed at claude-klabauter's live source tree.
 
-Once installed, coordinator-claude invokes it with **that environment's own
+Once installed, DoE invokes it with **that environment's own
 interpreter** — there is no `CLAUDE_KLABAUTER_ROOT`/`PYTHONPATH` reach-in and no
 dependency on claude-klabauter's `.venv` being present, on that machine's disk
 layout, or on any particular path at all. This is the same interpreter
 model `cc_invoke.py`'s `[sys.executable, "-m", "coordinator_core.invoke",
-...]` already uses at 13+ coordinator-claude call sites — `full_test_cmd:` follows the
+...]` already uses at 13+ DoE call sites — `full_test_cmd:` follows the
 established fleet standard rather than inventing a second one.
 
 A `PYTHONPATH=<claude-klabauter-root>` source trampoline (running the module
@@ -125,7 +125,7 @@ Why this shape:
   It exists so `coordinator_core` can develop/test itself; it was never
   meant to be a consumption channel other repos reach into. The prior
   `"$CLAUDE_KLABAUTER_ROOT/.venv/bin/python"` invocation reached for claude-klabauter's venv
-  because, before `coordinator_core` was pip-installable, the only way coordinator-claude
+  because, before `coordinator_core` was pip-installable, the only way DoE
   could import it at all was a `sys.path.insert(CLAUDE_KLABAUTER_ROOT)` trampoline —
   and that trampoline only works while the imported code is dep-free.
   `coordinator_core` needs `pydantic`; `sys.path.insert` doesn't install
@@ -133,13 +133,13 @@ Why this shape:
   to run under the one interpreter that already had `pydantic` on its
   `sys.path` — claude-klabauter's own venv. Pip-installability dissolves that
   coupling: `pip install` pulls `pydantic` in as a normal transitive
-  dependency of whatever environment coordinator-claude installs into, so coordinator-claude's own
+  dependency of whatever environment DoE installs into, so DoE's own
   interpreter is sufficient and the reach-in is no longer needed.
 - **Exit-code transparency.** A plain `python -m <module>` invocation
   preserves the child process's exit code transparently to the caller
   (unlike `cc_invoke`, proven empirically) — this is exactly what DEC-1's
   exit-semantics contract requires from the `full_test_cmd:` consumer.
-- **`--expect all`** — coordinator-claude genuinely expects all 4 families to be non-empty
+- **`--expect all`** — DoE genuinely expects all 4 families to be non-empty
   in its own tree (unlike claude-klabauter's self-run, see § `--expect` semantics
   below), so a zero-file glob for any family should fail loud, not warn-only.
 
@@ -153,9 +153,9 @@ EXCLUDED_DIRNAMES = {'.git', 'node_modules', '.venv', 'site-packages', '.coordin
 
 matched against each directory basename during an `os.walk` with in-place
 `dirs[:]` pruning — not a path glob, not a post-filter — so excluded
-subtrees are never descended into. This is coordinator-claude-generic-by-construction: it
+subtrees are never descended into. This is DoE-generic-by-construction: it
 is forward-safe against a newly added venv directory and portable to other
-repos (not a coordinator-claude-only hardcoded exclusion list). In coordinator-claude's tree specifically
+repos (not a DoE-only hardcoded exclusion list). In DoE's tree specifically
 this excludes `.coordinator-venv/` and `coordinator/whoami/.venv/`, the only
 two bundled venvs, each of which otherwise contributes ~15 third-party
 `test_*.py` files that a naive `pytest` collect would wrongly pull in.
@@ -180,7 +180,7 @@ python3 -m coordinator_core.testing.full_runner \
   legitimately empty in claude-klabauter's tree and the run still passes). With
   `--expect all` (or a named family list), a zero-file glob for a
   named/expected family is a **loud warning + non-zero exit** — no silent
-  green. Coordinator-claude's invocation (DEC-11 above) passes `--expect all`.
+  green. DoE's invocation (DEC-11 above) passes `--expect all`.
 - `--timeout N` — per-suite `subprocess.run` timeout in seconds (default
   300). On timeout the suite is surfaced as **FAILED**, never silently
   skipped.
@@ -199,7 +199,7 @@ consumers via `strangle_route "testing.full_runner"`. It takes an explicit
 fleet-generic target-resolution model used by ops that operate against an
 arbitrary caller-supplied repo rather than claude-klabauter's own working tree. See:
 
-- `[coordinator-claude] coordinator/docs/wiki/coordinator-core-engine.md:231-236`
+- `[DoE-claude] coordinator/docs/wiki/coordinator-core-engine.md:231-236`
   for the scope-"none" vs `common_dir` op target-resolution model.
 - `coordinator_core/ops/_path_guard.py`'s `contained_path`/`safe_id` helpers,
   which the op uses to validate the caller-supplied `target_root` stays
@@ -216,7 +216,7 @@ the two-signal contract.
 
 ## Out of scope here
 
-- Actually setting `full_test_cmd:` in coordinator-claude's `coordinator.local.md` — that is
-  coordinator-claude's wiring half, not built or edited by this plan.
+- Actually setting `full_test_cmd:` in DoE's `coordinator.local.md` — that is
+  DoE's wiring half, not built or edited by this plan.
 - `DIRECTORY.md` is auto-regenerated by `/update-docs` — this README does
   not hand-edit it.

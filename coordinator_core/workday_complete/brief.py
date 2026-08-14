@@ -15,8 +15,8 @@ canonical-resolution-engine library (`coordinator_core.resolution.facade`,
 `coordinator_core.contract.decision_object.{envelope,judgment}`) rather than
 reimplementing them — see the negative-spec below.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-b1-ceremony-complete-computed-conversion.md, chunk C2
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54, chunk C2
 
 Consumes-manifest (C1 census, plan § Tasks C1 body) — orchestrates, reimplements
 none of the following existing atomic CLIs (every `directives[].cli` value below
@@ -68,7 +68,7 @@ Negative-spec:
     - `_compute_open_day_goals` never raises and never fails the ceremony —
       an unresolvable repo root or any read error degrades to an empty
       today/stale partition (mirrors `goal.close_day`'s own read-side degrade
-      posture; every claude-klabauter-op consumer in coordinator-claude's commands carries this
+      posture; every claude-klabauter-op consumer in DoE's commands carries this
       "offers, not nags" mandatory degradation clause).
     - Does NOT add a mutating code path — every directive names an existing
       CLI for the apply half (`coordinator_core.workday_complete.apply`) to
@@ -700,7 +700,7 @@ def _build_judgment_points(
 
     2026-08-08 evidence-wording correction (falsifier search: neither this
     module, the Step 4b/4c dispatched-worker bodies (`docs/commands/
-    workday-complete.md` Step 4, coordinator-claude), nor any other producer in this
+    workday-complete.md` Step 4, DoE-claude), nor any other producer in this
     repo computes a "zero new commits AND no agent-driven changes" boolean —
     a grep across `coordinator_core/` returns only this module's own string
     literal and a review-trail diff, and the skill prose at that doc's Step 4
@@ -714,6 +714,15 @@ def _build_judgment_points(
     `_compute_dirty_tree_verdict`) — the Step 4 skip condition is
     deliberately NOT a third; no git-log/session-record producer is wired
     here to feed it, so no such predicate is invented.
+
+    Follow-up correction (2026-08-14): the 2026-08-08 pass missed a sibling
+    instance of the same defect on `jp_step4e_health_ledger_new_rows` — its
+    `evidence` named a "today's touched-systems set" that, like the Step 4
+    skip boolean above, no producer in this repo computes. Same remedy
+    applied: the evidence string now states plainly that no producer
+    computes the set and that which systems get a new row is a disposition,
+    not an observed fact — no touched-systems producer was built, matching
+    the narrow-the-evidence precedent over building a new producer.
 
     round_trip/revalidate_at_dispatch classification (AC14 step 5): the two
     ask-shaped points (`jp_step2_5_dirty_tree_ambiguous`,
@@ -871,7 +880,11 @@ def _build_judgment_points(
                 build_disposition("add_unaudited_rows"),
                 build_disposition("skip_no_new_systems"),
             ],
-            evidence="state/health-ledger.md vs today's touched-systems set",
+            evidence=(
+                "no producer computes today's touched-systems set; which "
+                "systems get a new unaudited row is a disposition, not an "
+                "observed fact"
+            ),
             reason="dispatch-decision",
             revalidate_at_dispatch=True,
             round_trip="terminal",
@@ -991,7 +1004,7 @@ def main(argv: list[str]) -> int:
     """`main()`'s `brief` dispatch — `--for-date DATE`, `--only`, and
     `--scope-summary TEXT` are the only three options (mirrors
     `pickup_assemble.brief`'s CLI shape at its simplest, extended with the
-    flags the coordinator-claude-side `workday-complete.md` Step 2 invocation now threads
+    flags the DoE-side `workday-complete.md` Step 2 invocation now threads
     through for a targeted wrap and for the user's day-summary prose);
     prints the envelope as JSON. A malformed `--for-date` is a parser-level
     usage error here (argparse's own `error()` -> exit 2), same effective

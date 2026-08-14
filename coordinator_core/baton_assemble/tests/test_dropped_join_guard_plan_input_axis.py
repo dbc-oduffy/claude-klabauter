@@ -20,6 +20,7 @@ import pytest
 import coordinator_core.baton_assemble as ba
 from coordinator_core.ops.deliverable_carry import DroppedDeliverableJoinError
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _init_repo, _write_artifact
+from coordinator_core.testing import symlink_capability
 
 # `_init_repo` spawns real git -- see the sibling fan-in-cardinality test
 # file's own comment on why no mock stands in for it.
@@ -88,6 +89,7 @@ class TestPlanInputAxisArmsTheRefusal:
         with pytest.raises(DroppedDeliverableJoinError):
             ba.brief("handoff", str(plan), repo_root=tmp_path)
 
+    @symlink_capability.requires_symlink_capability
     def test_symlinked_plan_input_still_arms_the_guard(self, tmp_path, monkeypatch):
         """2026-08-13 review finding 2, pinned: a `docs/plans/*.md` entry
         that is itself a SYMLINK resolving OUTSIDE `root` must still be

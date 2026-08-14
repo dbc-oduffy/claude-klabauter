@@ -15,9 +15,9 @@ their additionalContext texts merged with a blank-line separator into ONE
 post_advisory() call (a PostToolUse hook must emit at most one JSON object). When none
 fire, no_advisory() is returned.
 
-Port of: postuse-advisory-dispatch.sh (coordinator-claude 2f8b8450, 2026-07-16). The first-Agent-
+Port of: postuse-advisory-dispatch.sh (DoE 2f8b8450, 2026-07-16). The first-Agent-
 dispatch sidecar advisory has no bash-era equivalent — added directly here. The
-unauthorized-handoff nudge is a fan-in of coordinator-claude's separate PostToolUse(Write)
+unauthorized-handoff nudge is a fan-in of DoE's separate PostToolUse(Write)
 registration, whose logic already lived in this engine
 (coordinator_core.hooks.nudge_unauthorized_handoff, still registered as its own op for
 direct callers) — folding it here drops Write's registration count by one.
@@ -80,6 +80,12 @@ def _tempfile():
 # AND guarantees model_id contains no embedded quote. Do not widen to .*.
 # ---------------------------------------------------------------------------
 _MODEL_RE = re.compile(r'"model"\s*:\s*"(claude-[^"]*)"')
+
+#: Generator-provenance declaration: every durable-state write in this
+#: module (advisory-hook-state-<sid>.json, sonnet-generation-monitor-seen
+#: .json, rt-bark-once-<sid>, first-agent-dispatch-advisory-<sid>) lands
+#: under tempfile.gettempdir() — never a tracked repo artifact.
+GENERATES: list = []
 
 # ---------------------------------------------------------------------------
 # Anthropic-side fixed auto-compaction ceiling on the 1M-context tier.
@@ -697,7 +703,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # --- Context window by model family (mirrors :171-197) ---
     context_window = _resolve_context_window(model_id)
 
-    # --- Thresholds (tier-aware — mirrors coordinator-claude 07eb7599's shell-side recalibration) ---
+    # --- Thresholds (tier-aware — mirrors DoE 07eb7599's shell-side recalibration) ---
     #
     # 1M-context tier: _AUTO_COMPACT_CEILING_TOKENS_1M (500K) is a FIXED
     # Anthropic-side ceiling, not a proportion of the window — a flat 50%
@@ -761,7 +767,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     model_str = model_id if model_id else "unknown"
 
     # Tier-aware description of where auto-compaction fires, for the warning
-    # text below. Mirrors coordinator-claude 07eb7599's compact_desc.
+    # text below. Mirrors DoE 07eb7599's compact_desc.
     if context_window >= 1_000_000:
         compact_desc = (
             f"auto-compaction fires at a fixed ~{_AUTO_COMPACT_CEILING_TOKENS_1M // 1000}K"
@@ -1117,7 +1123,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
 #
 # Gate is tool_name == "Agent", not a subagent_type prefix check: the
 # dispatch-time PostToolUse payload this op receives carries no
-# subagent_type field (see the coordinator-claude stub's stdin→params mapping — only
+# subagent_type field (see the DoE stub's stdin→params mapping — only
 # session_id / transcript_path / agent_id / tool_name reach this op), and
 # adding one would require editing hooks.json's `input:` row, which is out
 # of scope here. This fires once on the first Agent-tool dispatch of ANY
@@ -1206,10 +1212,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
                        cp/rt/first-agent-dispatch/unauthorized-handoff order)
         none fire   → no_advisory()
 
-    Folding the fourth check in retires coordinator-claude's separate PostToolUse(Write)
+    Folding the fourth check in retires DoE's separate PostToolUse(Write)
     registration for nudge-unauthorized-handoff.py — one interpreter start per
-    Write instead of two (cross-repo/inbox/2026-08-06-coordinator-claude-em-postuse-fold-
-    nudge-unauthorized-handoff.md). It requires coordinator-claude's dispatcher stub to map
+    Write instead of two (cross-repo/inbox/2026-08-06-doe-claude-em-postuse-fold-
+    nudge-unauthorized-handoff.md). It requires DoE's dispatcher stub to map
     tool_input.file_path and tool_input.content into params; absent those, the
     fourth check stays silent and the other three are unaffected.
 

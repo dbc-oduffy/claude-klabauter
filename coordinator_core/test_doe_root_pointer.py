@@ -1,8 +1,8 @@
 """
-Tests for coordinator_core.doe_root_pointer — coordinator-claude root pointer-file reader.
+Tests for coordinator_core.doe_root_pointer — DoE root pointer-file reader.
 
 Covers all resolution paths (mirrors the bash oracle, Port of:
-read-doe-root-pointer.sh (coordinator-claude 6fb5fb37, 2026-07-22), updated for DR-071
+read-doe-root-pointer.sh (DoE 6fb5fb37, 2026-07-22), updated for DR-071
 registry-first precedence):
   1. CLAUDE_HOME set, pointer file present -> content returned (trailing
      newlines stripped).
@@ -11,7 +11,7 @@ registry-first precedence):
   4. No home resolvable (CLAUDE_HOME/HOME/USERPROFILE all unset) -> "".
   5. Multi-line / whitespace content -> only trailing newlines stripped,
      mirroring bash `$(cat ...)` semantics.
-  6. Registry `repos.example_doctrine_repo` ranks above BOTH pointer-file rungs
+  6. Registry `repos.doe_claude` ranks above BOTH pointer-file rungs
      (DR-071 canonical anchor).
 
 Test hygiene (mandatory — see cross-repo/archive/2026-07-20-claude-central-em-
@@ -21,7 +21,7 @@ HOME, CLAUDE_HOME, and COORDINATOR_SETTINGS_HOME to tmp_path via monkeypatch,
 and never touches the real machine's settings-home or ~/.claude.
 
 Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md [DEAD-CITATION: plan file never committed to this repo]
-DR-071: docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-registry-doe-root-demoted-to-cache.md (coordinator-claude)
+DR-071: docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-registry-doe-root-demoted-to-cache.md (DoE-claude)
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def _isolate_registry_env(monkeypatch):
     """Every test in this file starts with the DR-071 registry rung's own env
     vars cleared, so a registry read never accidentally sees a real ambient
     ``COORDINATOR_SETTINGS_HOME``/``MACHINE_LOCAL_REGISTRY_DIR`` and leaks a
-    real machine's ``repos.example_doctrine_repo`` value into an isolation test. Tests
+    real machine's ``repos.doe_claude`` value into an isolation test. Tests
     that want to exercise the registry rung set these explicitly."""
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
@@ -119,7 +119,7 @@ def test_claude_home_takes_precedence_over_home(monkeypatch, tmp_path):
     assert drp.read_doe_root_pointer() == "/tmp/from-claude-home"
 
 
-# --- DR-071: registry `repos.example_doctrine_repo` ranks above both file rungs --------
+# --- DR-071: registry `repos.doe_claude` ranks above both file rungs --------
 
 
 def test_registry_wins_when_both_pointer_files_absent(monkeypatch, tmp_path):
@@ -128,7 +128,7 @@ def test_registry_wins_when_both_pointer_files_absent(monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home-unused"))
     expected = tmp_path / "from-registry"
-    _write_registry(settings_home_dir, "registry.local.toml", "repos.example_doctrine_repo", str(expected))
+    _write_registry(settings_home_dir, "registry.local.toml", "repos.doe_claude", str(expected))
     assert drp.read_doe_root_pointer() == str(expected)
 
 
@@ -137,7 +137,7 @@ def test_registry_wins_over_durable_and_legacy_with_different_values(monkeypatch
     settings_home_dir = tmp_path / "settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     expected = tmp_path / "from-registry"
-    _write_registry(settings_home_dir, "registry.local.toml", "repos.example_doctrine_repo", str(expected))
+    _write_registry(settings_home_dir, "registry.local.toml", "repos.doe_claude", str(expected))
     (settings_home_dir / "machine-local" / ".doe-root").write_text(str(tmp_path / "from-durable") + "\n")
 
     claude_home = tmp_path / "claude-home"

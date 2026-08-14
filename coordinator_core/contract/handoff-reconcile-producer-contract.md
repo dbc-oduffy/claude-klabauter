@@ -4,24 +4,24 @@
 > the auto-reconcile orchestrator that enumerates every currently-open handoff, evaluates each
 > against the DEC-1 commit-reality matcher (C2) and the unified gate evaluator (C3), and either
 > drives a transition (auto-ship / structured gate-cascade-clear) or surfaces the handoff for EM
-> judgment. This doc pins the op's params/return shape, the DEC-1 policy-as-coordinator-claude-owned-data
+> judgment. This doc pins the op's params/return shape, the DEC-1 policy-as-DoE-owned-data
 > boundary, the C3 clear-predicate spec, and the recommended invocation cadence.
 >
 > **Status: TURNABLE-ON, not yet wired to a live caller.** The op, the `reconcile/` compute
-> package, and the coordinator-claude-owned policy-YAML grammar pin are all shipped and green. There is no
-> `workday-start` (or other) call site invoking this op today — that wiring is coordinator-claude's to land on
+> package, and the DoE-owned policy-YAML grammar pin are all shipped and green. There is no
+> `workday-start` (or other) call site invoking this op today — that wiring is DoE's to land on
 > receipt of the C6 proposal memo (see § 6). The op name `handoff.reconcile_open` is
-> **RATIFIED** by coordinator-claude (2026-07-13, `cross-repo/archive/2026-07-13-claude-central-em-doe-auto-reconcile-ratifications.md`),
+> **RATIFIED** by DoE (2026-07-13, `cross-repo/archive/2026-07-13-claude-central-em-doe-auto-reconcile-ratifications.md`),
 > same path the cartography op names walked from provisional to ratified.
 >
-> **Boundary authority.** `/Users/example-operator/X/coordinator-claude/docs/decisions/DR-047-coordinator-claude-klabauter-boundary-redraw-contract-vs-e.md`
-> is the operative coordinator-claude↔claude-klabauter boundary authority underlying this op's design: **claude-klabauter owns the
-> engine** (the compute — matcher, evaluator, orchestration, the fail-closed reader), **coordinator-claude owns
-> the policy** (the threshold/data — the `auto-reconcile-policy.yaml` file coordinator-claude authors against
+> **Boundary authority.** `/Users/example-operator/X/DoE-claude/docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md`
+> is the operative DoE↔claude-klabauter boundary authority underlying this op's design: **claude-klabauter owns the
+> engine** (the compute — matcher, evaluator, orchestration, the fail-closed reader), **DoE owns
+> the policy** (the threshold/data — the `auto-reconcile-policy.yaml` file DoE authors against
 > claude-klabauter's grammar pin, `coordinator_core/contract/auto-reconcile-policy.grammar.md`). The
 > superseded 2026-07-03 tri-plane-ownership-boundary doc is NOT the citation for this split — DR-047
-> is. Concretely: the DEC-1 conservative auto-ship policy is **coordinator-claude-owned data pinned by the C9
-> grammar**, not a claude-klabauter-hardcoded named constant — a coordinator-claude-side threshold edit (e.g. widening the
+> is. Concretely: the DEC-1 conservative auto-ship policy is **DoE-owned data pinned by the C9
+> grammar**, not a claude-klabauter-hardcoded named constant — a DoE-side threshold edit (e.g. widening the
 > mechanical-commit denylist) changes matcher behavior with zero claude-klabauter code change.
 >
 > **Spec backlinks.**
@@ -30,7 +30,7 @@
 > - Compute engines: `coordinator_core/reconcile/commit_reality.py` (C2, DEC-1),
 >   `coordinator_core/reconcile/gate_eval.py` (C3), `coordinator_core/reconcile/policy_loader.py` (C9)
 > - Policy grammar pin: `coordinator_core/contract/auto-reconcile-policy.grammar.md`
-> - Boundary authority: `/Users/example-operator/X/coordinator-claude/docs/decisions/DR-047-coordinator-claude-klabauter-boundary-redraw-contract-vs-e.md`
+> - Boundary authority: `/Users/example-operator/X/DoE-claude/docs/decisions/DR-047-doe-claude-klabauter-boundary-redraw-contract-vs-e.md`
 > - Batch-orchestration compliance precedent:
 >   `docs/decisions/DR-212-handoff-lifecycle-inplace-frontmatter-mutation-carveout.md` (D2(ii)/Invariant-3)
 > - Cadence rationale: `docs/decisions/DR-215-coordinator-core-command-type-execution-model.md` § 6
@@ -48,7 +48,7 @@
 
 `dry_run` **defaults to `true`** — this is the resolved outcome of the Staff Engineer review finding index 4:
 conservatism parity with DEC-1's surface-never-guess invariant. Auto-mutation of work-state
-warrants opt-in until coordinator-claude ratifies flipping the default via the C6 co-memo (§ 6 below).
+warrants opt-in until DoE ratifies flipping the default via the C6 co-memo (§ 6 below).
 
 ### 1.2 Return shape
 
@@ -90,7 +90,7 @@ are simply, correctly, still waiting would drown the real signal.
 A **prose** `gate_dependency` gate never auto-transitions regardless of its clear/surface verdict
 — `gate_eval`'s structured-vs-prose split already enforces this upstream (§ 4); this op simply
 routes whatever verdict comes back, and the prose path's `clear` verdict is EM judgment per the
-Coordinator-claude alignment reply's item 3.
+DoE alignment reply's item 3.
 
 ---
 
@@ -122,7 +122,7 @@ actually guards against. No new DR is needed for this op on this basis.
 
 1. **SUBJECT MATCH** — `git log --pretty=format:"%H %s" --since=<created> -- <scope-paths>` yields
    a commit whose subject contains a noun token derived from the handoff's scope basenames/title,
-   **excluding** denylisted mechanical-commit-subject prefixes (from the coordinator-claude-owned policy's
+   **excluding** denylisted mechanical-commit-subject prefixes (from the DoE-owned policy's
    `mechanical_commit_denylist`) — a `pickup:`/`memo:`/session-init/`handoff.transition`-family
    commit is never treated as completion evidence on its own.
 2. **DELIVERABLE PRESENT** — the handoff's named deliverable path(s) (its scope pathspecs) exist
@@ -139,7 +139,7 @@ actually belongs to a different open handoff Y with overlapping scope. Governed 
 
 **The matcher encodes no threshold constant itself** — it reads `mechanical_commit_denylist` and
 `cross_handoff_attribution` from the caller-supplied **loaded policy dict** (C9). This is the
-concrete instance of the DR-047 boundary language above: a coordinator-claude-authored denylist edit changes
+concrete instance of the DR-047 boundary language above: a DoE-authored denylist edit changes
 matcher behavior with zero claude-klabauter code change.
 
 ---
@@ -150,14 +150,14 @@ matcher behavior with zero claude-klabauter code change.
 writes) and covers both the STRUCTURED path (`blocked_by:[stub-id,...]` graph edges on
 `kind: spinoff-roadmap` handoffs) and the PROSE fallback path (free-text `gate_dependency`
 one-liner on other handoff kinds). Load-bearing rules, converging with
-`coordinator-claude/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70:
+`DoE-claude/archive/specs/2026-06/2026-06-27-status-propagation-primitive.md` §68-70:
 
 - **All-shipped → `clear`.** ALL `blocked_by` members must be `shipped` SPECIFICALLY — `abandoned`
   is terminal (stops re-evaluation) but never counts toward clearing.
 - **Abandoned-blocker → surface.** A `blocked_by` member that is `abandoned` routes to `surface`
   when it's the *only* unresolved state (no shipped, no still-open) — the dependent's premise is
   now likely-false/moot and needs EM judgment, not a silent auto-flip. **This rule (abandoned→
-  surface) is a claude-klabauter extension flagged to coordinator-claude as a proposed spec addition** — the canonical
+  surface) is a claude-klabauter extension flagged to DoE as a proposed spec addition** — the canonical
   status-propagation-primitive spec (§68-73) covers the shipped/asymmetry/gate_cleared_by rules but
   is silent on the abandoned-blocker case (see the C6 memo, § 6).
 - **Partial-satisfaction → narrow, never fire-on-first-edge.** AND-reduce over EVERY member: when
@@ -165,7 +165,7 @@ one-liner on other handoff kinds). Load-bearing rules, converging with
   `verdict=narrow` (caller stays `awaiting_gate`, `blocked_by` mutates down via C8). This is the
   tc-4 regression guard (`blocked_by:[tc-1, tc-5]` must NOT flip to `ready_to_fire` when only
   `tc-1` shipped), sourced from the tc-4 regression lesson
-  `coordinator-claude/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`.
+  `DoE-claude/archive/lessons/2026-07/2026-06-23-a-gate-reconcile-hook-that-flips-a-depen.yaml`.
 - **`gate_cleared_by` provenance.** Shipped blockers' SHAs (`shipped_in`) are collected as
   `cleared_by_shas` and handed to C8, which appends them to the handoff's `gate_cleared_by:` array
   as the audit trail for which commits cleared which edges.
@@ -184,7 +184,7 @@ caller-supplied `witness_candidates` — zero candidates or >1 candidate both su
 among/without concrete pointers); exactly one candidate resolves to `clear` iff its
 `deployment_state == shipped`, else `surface`. A prose-path `clear` verdict is still never
 auto-transitioned by `handoff.reconcile_open` (§ 1.3) — EM judgment is retained for prose gates
-per the coordinator-claude alignment reply's item 3.
+per the DoE alignment reply's item 3.
 
 Return shape per handoff: `{handoff_id, verdict: "clear"|"narrow"|"surface"|"not-cleared",
 cleared_by_shas: [...], remaining_blockers: [...], evidence: [...], also_surface: bool}`.
@@ -222,18 +222,18 @@ gating to once-daily `workday-start` keeps the op invisible at the cadence DR-21
 than paying a heavier-than-59ms scan on every session boot.
 
 There is **no live caller today** — this is a recommendation for the C6 co-memo (§ 6) to carry to
-Coordinator-claude, who wires the call site on receipt.
+DoE, who wires the call site on receipt.
 
 ---
 
 ## 6. `/pickup` Step 3 partial-retirement — verbatim source passage
 
 Structured `blocked_by` edges evaluated by C3/routed by C8 are intended to retire the equivalent
-manual check in coordinator-claude's `/pickup` skill Step 3d — but only the **structured-edge** portion; prose/
+manual check in DoE's `/pickup` skill Step 3d — but only the **structured-edge** portion; prose/
 cross-repo-memo gates keep EM judgment, and the `awaiting_gate` aging check (14d/7d) is preserved
 regardless (this op computes verdicts, it does not track aging). Quoted **verbatim** (not
-paraphrased) from `coordinator/skills/pickup/SKILL.md` (coordinator-claude repo, ~lines 180-186), sourced
-from `state/lessons.md` commit `a8b2aba0` 2026-06-27 (coordinator-claude repo):
+paraphrased) from `coordinator/skills/pickup/SKILL.md` (DoE-claude repo, ~lines 180-186), sourced
+from `state/lessons.md` commit `a8b2aba0` 2026-06-27 (DoE-claude repo):
 
 > **Deliverable scope paths (REQUIRED — plan doc untouched ≠ deliverable unshipped):** A plan or
 > stub doc can be untouched while its actual output artifacts have already shipped (or vice-versa).
@@ -255,13 +255,13 @@ guarded by the mechanical-commit denylist + cross-handoff attribution demotion t
 
 ---
 
-## 7. What coordinator-claude receives via the C6 proposal memo
+## 7. What DoE receives via the C6 proposal memo
 
 This contract doc is the artifact the C6 cross-repo memo (kind: `proposal`, to `claude-central-em`)
-points at when it asks coordinator-claude to ratify: (1) this op's params/return shape; (2) the
-`auto-reconcile-policy.yaml` grammar pin coordinator-claude authors against; (3) the `gate_eval` clear-predicate
+points at when it asks DoE to ratify: (1) this op's params/return shape; (2) the
+`auto-reconcile-policy.yaml` grammar pin DoE authors against; (3) the `gate_eval` clear-predicate
 spec including the abandoned-surfaces extension flagged as a proposed spec addition (§ 4); plus the
-routing asks — `strangle_route` coordinator-claude's `handoff-transition.js gate-recheck`/`repark` to the new
+routing asks — `strangle_route` DoE's `handoff-transition.js gate-recheck`/`repark` to the new
 Claude-klabauter verbs, and the partial `/pickup` Step 3d retirement described in § 6. See the plan's C6 task
 body for the full memo composition spec; this contract doc is cited by, not a substitute for, that
 memo.
@@ -270,9 +270,9 @@ memo.
 
 ## 8. Out of scope
 
-- **Wiring the `workday-start` call site.** coordinator-claude's to land on receipt of the C6 memo — not part of
+- **Wiring the `workday-start` call site.** DoE's to land on receipt of the C6 memo — not part of
   this op's ship.
-- **Flipping the `dry_run` default to `false`.** Requires coordinator-claude ratification via the C6 co-memo;
+- **Flipping the `dry_run` default to `false`.** Requires DoE ratification via the C6 co-memo;
   this contract pins the current (conservative) default only.
 - **`handoff.transition`'s `gate-recheck`/`repark`/`gate-cascade-clear` verb internals.** Owned by
   `coordinator_core/ops/handoff_transition.py` (C1/C8); this doc describes only how
@@ -283,5 +283,5 @@ memo.
 
 ---
 
-<!-- producer-contract: claude-klabauter handoff.reconcile_open op — turnable-on, op name RATIFIED (coordinator-claude 2026-07-13),
+<!-- producer-contract: claude-klabauter handoff.reconcile_open op — turnable-on, op name RATIFIED (DoE 2026-07-13),
      no live caller yet. Spec backlink: pln-claude-klabauter-auto-reconcile-pass-off-425848 § C5. -->

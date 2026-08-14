@@ -18,14 +18,14 @@ RE-LANDED (2026-07-31) — the 2026-07-30 revert's root cause was wrong:
     stamp, i.e. blocked for its whole run).
 
     That conclusion was wrong. The actual root cause: this op's rewrite was a THIRD
-    updatedInput emitter on coordinator-claude's Agent PreToolUse matcher, racing enforce-agent-dispatch-
+    updatedInput emitter on DoE's Agent PreToolUse matcher, racing enforce-agent-dispatch-
     mode.py's own updatedInput (mode elevation / sidecar / role framing, which fires on
-    essentially every Agent dispatch) via the coordinator-claude-side relay shim nudge-foreground-agent-
+    essentially every Agent dispatch) via the DoE-side relay shim nudge-foreground-agent-
     dispatch.py. Claude Code runs same-event PreToolUse hooks in parallel with undefined
     completion order, and updatedInput is last-writer-wins — so whichever hook finished
-    second silently clobbered the other's rewrite. That race is now closed on the coordinator-claude side
+    second silently clobbered the other's rewrite. That race is now closed on the DoE side
     (2026-07-31): the relay shim is deregistered from hooks.json's Agent matcher entirely,
-    and the foreground-reroute DECISION is a byte-faithful pure-Python port living in coordinator-claude's
+    and the foreground-reroute DECISION is a byte-faithful pure-Python port living in DoE's
     coordinator/hooks/scripts/_foreground_dispatch_strip.py, called directly by
     enforce-agent-dispatch-mode.py (the matcher's sole live updatedInput emitter) and folded
     into its single merged emission. Re-probed live on harness 2.1.220 with the rewrite
@@ -34,8 +34,8 @@ RE-LANDED (2026-07-31) — the 2026-07-30 revert's root cause was wrong:
     of reclaimed control.
 
     This module — the reroute LOGIC — is therefore the reference implementation of the
-    algorithm the coordinator-claude-side pure module ports, not itself wired into any live hooks.json
-    matcher any more (the coordinator-claude relay shim that used to call it, nudge-foreground-agent-
+    algorithm the DoE-side pure module ports, not itself wired into any live hooks.json
+    matcher any more (the DoE relay shim that used to call it, nudge-foreground-agent-
     dispatch.py, stays on disk deregistered, still exercising this op directly via its own
     test suite). Its own semantics are unchanged by the parallel-emitter finding — they were
     never the defect; the emission SITE was. Preserve them exactly here, and keep this
@@ -49,7 +49,7 @@ RE-LANDED (2026-07-31) — the 2026-07-30 revert's root cause was wrong:
     silently pass — that would let the very foreground dispatch this gate exists to prevent
     through unremarked.
 
-Port of: nudge-foreground-agent-dispatch.sh (coordinator-claude d39ab164, 2026-07-16)
+Port of: nudge-foreground-agent-dispatch.sh (DoE d39ab164, 2026-07-16)
 
 Three-state run_in_background logic:
     - present-and-true  → silent pass (already backgrounded — correct shape).
@@ -73,7 +73,7 @@ Calibration (D7 — session-scoped; D7b made it durable 2026-07-29):
     DR-215 retired the resident daemon: every PreToolUse fire is now a fresh interpreter,
     so the set re-initialized empty on every call and NO absent-key dispatch could ever
     find itself calibrated. The whole absent-key leg was dead code that always fell to
-    PASS — the hole coordinator-claude's state/bug-backlog/2026-07-22-nudge-foreground-calibration-not-
+    PASS — the hole DoE's state/bug-backlog/2026-07-22-nudge-foreground-calibration-not-
     cross-process.yaml records. Calibration now also writes
         .git/coordinator-sessions/<session_id>/.harness-bg-capable
     which is what actually survives between processes; the in-memory set is kept as a
@@ -156,9 +156,9 @@ Negative-spec:
     Do NOT re-add a notice-once marker (.foreground-reroute-noticed or any equivalent) — see
     "NOTICE ON EVERY REROUTE" above. That suppression is a standing negative-spec, not a
     style preference.
-    Do NOT re-wire this op's caller back onto a live Agent-matcher hooks.json entry in coordinator-claude
+    Do NOT re-wire this op's caller back onto a live Agent-matcher hooks.json entry in DoE
     without also verifying (AC-1 style) that it remains the sole updatedInput emitter for
-    that matcher — see the module docstring of coordinator-claude's enforce-agent-dispatch-mode.py, Concern
+    that matcher — see the module docstring of DoE's enforce-agent-dispatch-mode.py, Concern
     G, for why the emission site (not this op's logic) was the actual defect.
 
 Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C1 / D6 / D7

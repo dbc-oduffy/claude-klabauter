@@ -51,9 +51,9 @@ Usage:
 Exit codes: 0 clean/fixed, 1 UNMIGRATED site(s) found (verify) or a file
 still fails re-verify after --fix, 2 usage error.
 
-Spec backlink: docs/plans/2026-07-21-durable-coordinator-root-pointer.md § C3, § AC2
 Prior art (script shape mirrored): coordinator/bin/verify-cc-root-source-guard-sync.py (retired 2026-07-23)
 """
+# Spec backlink: DoE-claude:pln-durable-coordinator-root-point-37e1e6 § C3, § AC2
 
 from __future__ import annotations
 
@@ -65,6 +65,8 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 SCRIPT_DIR = SCRIPT_PATH.parent
+
+GENERATES = []  # --fix rewrites discovered `.doe-root` cat-read sites in place, but `--list` against this checkout resolves zero in-scope sites inside claude-klabauter's own tree today (all live matches are under the DoE-claude checkout) — no fixed or currently-realized claude-klabauter artifact
 
 # Defensive self-locate for the coordinator_registry sibling import — mirrors
 # the sys.path.insert convention every bin/ entrypoint already uses (see
@@ -175,7 +177,7 @@ def discover_files(roots: Path | list[Path]) -> list[str]:
     """Discover in-scope `.doe-root` cat-read sites under one or more roots.
 
     Accepts either a single Path (back-compat) or a list of Paths — the
-    latter unions claude-klabauter's own coordinator/ tree with the coordinator-claude-resident
+    latter unions claude-klabauter's own coordinator/ tree with the DoE-resident
     coordinator/ tree (see _resolve_scan_roots()), deduping by resolved
     path so a root nested inside another root's walk is not double-counted.
     """
@@ -310,11 +312,11 @@ def _resolve_scan_roots() -> list[Path]:
 
     (i) claude-klabauter's own coordinator/ tree (via _resolve_plugin_root() — either
     CLAUDE_PLUGIN_ROOT or this script's own parent directory), and (ii) the
-    coordinator-claude-resident coordinator/ tree (<doe_root()>/coordinator), since
+    DoE-resident coordinator/ tree (<doe_root()>/coordinator), since
     coordinator/ content post-migration is split across both repos and a
     `.doe-root` cat-read site can live in either half.
 
-    If doe_root() is unresolvable (no coordinator-claude clone on this machine), the coordinator-claude
+    If doe_root() is unresolvable (no DoE clone on this machine), the DoE
     half is WARN+skipped — this gate must still run standalone on a
     claude-klabauter-only checkout, not hard-fail for lacking a sibling clone.
     """
@@ -323,8 +325,8 @@ def _resolve_scan_roots() -> list[Path]:
         doe_coordinator = Path(doe_root()) / "coordinator"
     except _DoeUnresolvable as exc:
         print(
-            f"verify-doe-root-seam-sync.py: WARNING — coordinator-claude repo root "
-            f"unresolvable ({exc}); skipping the coordinator-claude-resident coordinator/ "
+            f"verify-doe-root-seam-sync.py: WARNING — coordinator doctrine repo root "
+            f"unresolvable ({exc}); skipping the DoE-resident coordinator/ "
             "tree half of the scan.",
             file=sys.stderr,
         )

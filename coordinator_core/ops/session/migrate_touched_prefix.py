@@ -104,6 +104,8 @@ Negative-spec
 
 from __future__ import annotations
 
+GENERATES = []  # rewrites touched.txt files under <git-common-dir>/coordinator-sessions/ and writes a timestamped backup dir under the git common dir; session bookkeeping under .git/, never a tracked path
+
 import argparse
 import json
 import shutil

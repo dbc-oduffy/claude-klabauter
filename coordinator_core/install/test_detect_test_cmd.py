@@ -3,7 +3,7 @@ Tests for coordinator_core.install.detect_test_cmd.
 
 Independently re-derives expected behaviour from the module's own documented
 contract (docstring exit-code table) rather than shelling out to the retired
-bash oracle — the oracle (coordinator/lib/setup-detect-test-cmd.sh, coordinator-claude
+bash oracle — the oracle (coordinator/lib/setup-detect-test-cmd.sh, DoE-claude
 repo) was rewritten in-place to a polyglot trampoline as part of this port, so
 a parity test that shells out to it would compare the port against itself.
 

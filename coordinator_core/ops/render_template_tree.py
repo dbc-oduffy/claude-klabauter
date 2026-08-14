@@ -4,7 +4,7 @@ coordinator_core.ops.render_template_tree — tree-walker over render-template.p
 Purpose: copy <src-tree-dir> to <dst-tree-dir>, preserving structure and dotfiles, then
 substitute {{KEY}} tokens in every file that contains them by delegating each file to
 render-template.py (co-located in this repo's coordinator/bin/ as of the coordinator/bin
-executable-surface migration, coordinator-claude commit b644d5a9 -- this module shells out to it,
+executable-surface migration, DoE-claude commit b644d5a9 -- this module shells out to it,
 exactly as the bash oracle called its sibling script). Files with no {{ tokens are left as
 plain copies.
 
@@ -15,14 +15,14 @@ extend the token substitution logic; that logic lives entirely in render-templat
 is invoked via subprocess exactly as the bash oracle invoked its sibling script by relative
 path.
 
-Port of: render-template-tree.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: render-template-tree.sh (DoE 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-06-22-new-project-bootstrap-skill.md § C2
 
 Sibling-executable resolution: render-template.py is now co-located in THIS repo
 (coordinator/bin/render-template.py) and is resolved there first, relative to this repo's
 own root (`Path(__file__).resolve().parents[2]`) — no subprocess, no registry lookup.
 Only a checkout where the co-located sibling is somehow absent falls back to the legacy
-Coordinator-claude-root resolution (env override, then `machine-local` registry, mirroring
+DoE-root resolution (env override, then `machine-local` registry, mirroring
 coordinator_core.ops.gen_doe_root_pointer's `_resolve_doe_root` tier order) as a
 compatibility safety net.
 
@@ -52,7 +52,7 @@ from coordinator_core.launchable import resolve_launchable
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
 
-_PROG = "render-template-tree.sh"  # literal program-name prefix, matches the coordinator-claude filename
+_PROG = "render-template-tree.sh"  # literal program-name prefix, matches the DoE filename
 
 
 def _resolve_machine_local() -> Optional[str]:
@@ -61,12 +61,12 @@ def _resolve_machine_local() -> Optional[str]:
 
 
 def _resolve_doe_root() -> "tuple[Optional[str], int]":
-    """Resolve the coordinator-claude clone root. Returns (root_or_None, exit_code_on_failure).
+    """Resolve the DoE clone root. Returns (root_or_None, exit_code_on_failure).
 
     Tier 1: DOE_ROOT env var (permanent legacy alias — wins first when both
-        DOE_ROOT and REPO_EXAMPLE_DOCTRINE_REPO are set, per coordinator_registry.doe_root()).
-    Tier 2: REPO_EXAMPLE_DOCTRINE_REPO env var (operator override).
-    Tier 3: `machine-local get repos.example_doctrine_repo` (registry).
+        DOE_ROOT and REPO_DOE_CLAUDE are set, per coordinator_registry.doe_root()).
+    Tier 2: REPO_DOE_CLAUDE env var (operator override).
+    Tier 3: `machine-local get repos.doe_claude` (registry).
     Mirrors coordinator_core.ops.gen_doe_root_pointer's resolution order and
     coordinator_registry.doe_root()'s precedence.
 
@@ -78,7 +78,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     if doe_root_override:
         return doe_root_override, 0
 
-    env_override = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "")
+    env_override = os.environ.get("REPO_DOE_CLAUDE", "")
     if env_override:
         return env_override, 0
 
@@ -92,7 +92,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
 
     try:
         proc = subprocess.run(
-            [ml_bin, "get", "repos.example_doctrine_repo"],
+            [ml_bin, "get", "repos.doe_claude"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -105,7 +105,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     value = proc.stdout.strip()
     if proc.returncode != 0 or not value:
         print(
-            f"{_PROG}: could not resolve repos.example_doctrine_repo via machine-local",
+            f"{_PROG}: could not resolve repos.doe_claude via machine-local",
             file=sys.stderr,
         )
         return None, 1
@@ -117,11 +117,11 @@ def _co_located_render_single() -> Optional[str]:
 
     render-template.py migrated with render-template-tree.py in the
     coordinator/bin executable-surface migration (commit b644d5a9 in
-    coordinator-claude) -- it is now claude-klabauter's OWN sibling executable, not
-    coordinator-claude-resident content, so it is resolved relative to this repo
-    unconditionally, ahead of any coordinator-claude-root lookup (env override or
-    registry alike). REPO_EXAMPLE_DOCTRINE_REPO / the registry still govern
-    coordinator-claude-resident content this module has not itself absorbed (there is
+    DoE-claude) -- it is now claude-klabauter's OWN sibling executable, not
+    DoE-resident content, so it is resolved relative to this repo
+    unconditionally, ahead of any DoE-root lookup (env override or
+    registry alike). REPO_DOE_CLAUDE / the registry still govern
+    DoE-resident content this module has not itself absorbed (there is
     none left here, but the fallback below is kept as a compatibility
     safety net for a checkout where this co-located sibling is somehow
     absent).
@@ -134,7 +134,7 @@ def _co_located_render_single() -> Optional[str]:
 
 
 def _find_render_single() -> Optional[str]:
-    """Locate render-template.py: co-located first, then the coordinator-claude root."""
+    """Locate render-template.py: co-located first, then the DoE root."""
     co_located = _co_located_render_single()
     if co_located is not None:
         return co_located
@@ -228,7 +228,7 @@ def main(argv: List[str]) -> int:
                 token_bearing.append(fpath)
     token_bearing.sort()
 
-    # render-template.py is always a Python script (co-located sibling or coordinator-claude-root
+    # render-template.py is always a Python script (co-located sibling or DoE-root
     # fallback, both resolved above) -- on Windows keep resolve_launchable's shebang
     # sniffing/.cmd-twin preference (a bare path is unexecutable there, WinError 193);
     # on POSIX prefix sys.executable so a bare exec doesn't depend on the target's own

@@ -1,14 +1,36 @@
 """Repo-wide guard: no `coordinator_core` subprocess launch passes a bare
-``.js``/``.sh``/``.cjs``/``.mjs``/``.bash`` script path as ``argv[0]``.
+``.js``/``.sh``/``.cjs``/``.mjs``/``.bash``/``.py`` script path -- or a bare
+extensionless ``coordinator/bin/`` sibling -- as ``argv[0]``.
 
-The defect this guards: three ported ops (``query_completions.py``,
-``render_template_tree.py``, ``verify_no_powershell_flash.py``) launched an
-external script by handing its bare path straight to ``subprocess.run([...])``
-as ``argv[0]``, relying on the POSIX exec loader to honour the script's ``#!``
-line. Windows ``CreateProcess`` has no such loader and refuses the file with
-``OSError: [WinError 193] %1 is not a valid Win32 application`` -- a 100%
-failure rate on that platform. All three were fixed (``0a356897``,
-``5c921625``) by routing through ``coordinator_core.launchable.resolve_launchable``.
+This guard covers TWO distinct bug classes sharing one AST scan:
+
+1. **Windows-launch class (original).** Three ported ops
+   (``query_completions.py``, ``render_template_tree.py``,
+   ``verify_no_powershell_flash.py``) launched an external script by handing
+   its bare path straight to ``subprocess.run([...])`` as ``argv[0]``,
+   relying on the POSIX exec loader to honour the script's ``#!`` line.
+   Windows ``CreateProcess`` has no such loader and refuses the file with
+   ``OSError: [WinError 193] %1 is not a valid Win32 application`` -- a 100%
+   failure rate on that platform. All three were fixed (``0a356897``,
+   ``5c921625``) by routing through ``coordinator_core.launchable.resolve_launchable``.
+   For the extensions this class covers (``.js``/``.cjs``/``.mjs``/``.sh``/
+   ``.bash``), a bare literal argv[0] is a violation and a
+   ``resolve_launchable()`` call is the fix -- and stays classified "safe".
+
+2. **POSIX-bare-after-shebang-strip class (added this chunk).** For ``.py``
+   files and extensionless ``coordinator/bin/`` targets,
+   ``coordinator_core.launchable.resolve_launchable()`` itself returns
+   ``[script_path]`` bare on POSIX -- see its own docstring: "On POSIX the
+   result is always ``[script_path]`` -- the shebang is authoritative
+   there." That is fine while the target still carries a ``#!`` line and its
+   exec bit. It stops being fine once a shebang-stripping migration removes
+   both, at which point the same bare launch fails with ``OSError: [Errno 8]
+   Exec format error`` instead. For THIS class, ``resolve_launchable()`` is
+   NOT a fix and is classified "violation", not "safe" -- the real fix is an
+   explicit interpreter (``sys.executable`` for ``.py``) or restoring the
+   shebang/exec bit. A bare literal argv[0] naming a ``.py`` file, or an
+   extensionless literal naming a real file directly under
+   ``coordinator/bin/``, is a violation of this class.
 
 ``coordinator_core.plugin_health.tests.test_sentinel`` used to carry a guard
 for this exact bug class scoped to four specific sentinel probes (P-9/P-11/
@@ -36,23 +58,38 @@ Negative-spec -- scope of this guard, read before extending it:
       ``subprocess.run`` with fakes and pass literal fixture strings that look
       like script paths but launch nothing real -- scanning them would produce
       noise, not signal.
-    - **Extension-literal detection only -- the extensionless case is
-      deliberately OUT OF SCOPE for this test.** An extensionless bare path
-      (e.g. the ``machine-local`` binary, resolved via ``shutil.which`` or a
-      raw ``~/.claude/bin/machine-local`` join in a couple dozen call sites
-      across this tree) cannot be distinguished, at the pure-syntax level,
-      from a legitimate system-executable literal (``git``, ``bash``, ``node``,
-      ``rg``, ...) without a hand-built allowlist of every command name ever
-      spawned in this codebase -- a maintenance trap that degrades into "the
-      test passed because it stopped looking." The ``machine-local`` /
-      ``resolve-coordinator-clone`` extensionless-binary-resolution convention
-      is a separate, much wider, pre-existing pattern that deserves its own
-      dedicated audit; conflating it with this test's mechanically-decidable
-      extension-literal check would either bury real positives under a pile
-      of allowlist noise or silently narrow the pattern until it stopped
-      finding anything. This test's contract is narrower and unambiguous: literal
-      ``.js``/``.cjs``/``.mjs``/``.sh``/``.bash`` extensions used bare as
-      ``argv[0]``.
+    - **Extension-literal detection, plus one narrow extensionless carve-in.**
+      The general extensionless case is still OUT OF SCOPE: an arbitrary
+      extensionless bare path (e.g. the ``machine-local`` binary, resolved via
+      ``shutil.which`` or a raw ``~/.claude/bin/machine-local`` join in a
+      couple dozen call sites across this tree) cannot be distinguished, at
+      the pure-syntax level, from a legitimate system-executable literal
+      (``git``, ``bash``, ``node``, ``rg``, ...) without a hand-built
+      allowlist of every command name ever spawned in this codebase -- a
+      maintenance trap that degrades into "the test passed because it stopped
+      looking." The ``machine-local`` / ``resolve-coordinator-clone``
+      extensionless-binary-resolution convention is a separate, much wider,
+      pre-existing pattern that deserves its own dedicated audit; conflating
+      it with this test's mechanically-decidable checks would either bury
+      real positives under a pile of allowlist noise or silently narrow the
+      pattern until it stopped finding anything.
+
+      One extensionless shape IS decidable without an allowlist and IS in
+      scope: a literal bare basename (no path separators, no extension) that
+      names a file that actually exists directly under ``coordinator/bin/``
+      right now (``_is_real_coordinator_bin_sibling``). That is a filesystem
+      fact, not a guessed command-name allowlist, and it is exactly the shape
+      the POSIX-bare-after-shebang-strip class (see module docstring) needs:
+      ``coordinator/bin/`` is where C4 strips shebangs. Every other
+      extensionless literal (``git``, ``bash``, ``node``, ``rg``, a
+      ``~/.claude/bin/...`` join, ...) stays out of scope and classifies
+      "safe" exactly as before. This test's contract: literal
+      ``.js``/``.cjs``/``.mjs``/``.sh``/``.bash``/``.py`` extensions used bare
+      as ``argv[0]``, PLUS a bare extensionless literal naming a real
+      ``coordinator/bin/`` sibling, PLUS a ``resolve_launchable()`` call whose
+      traced target is ``.py`` or one of those extensionless siblings (see
+      module docstring class 2 -- ``resolve_launchable()`` does not fix that
+      class).
     - Known PRE-EXISTING violations of the in-scope (extension-literal) check,
       discovered while authoring this test on 2026-07-21, are named in
       ``_KNOWN_PRE_EXISTING_VIOLATIONS`` below with an explicit comment. These
@@ -83,7 +120,18 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCAN_ROOT = Path(__file__).resolve().parent
 
 _SUBPROCESS_ATTRS = {"run", "Popen", "call", "check_call", "check_output"}
-_SCRIPT_EXTS = (".js", ".cjs", ".mjs", ".sh", ".bash")
+
+# Windows-launch class (class 1, see module docstring) -- resolve_launchable()
+# genuinely fixes these; a resolve_launchable() call targeting one of these
+# extensions stays classified "safe".
+_WINDOWS_LAUNCH_SAFE_EXTS = (".js", ".cjs", ".mjs", ".sh", ".bash")
+
+# Both classes' extensions -- used for the bare-literal (argv[0] not wrapped
+# in resolve_launchable() at all) violation check, where a hit is a
+# violation regardless of which class it belongs to.
+_SCRIPT_EXTS = _WINDOWS_LAUNCH_SAFE_EXTS + (".py",)
+
+_COORDINATOR_BIN_DIR = _REPO_ROOT / "coordinator" / "bin"
 
 # (relative-path-from-coordinator_core, enclosing-function-name,
 #  callee ("subprocess.<method>"), call_signature, ordinal) -> reason.
@@ -227,6 +275,31 @@ def _find_top_level_func(tree: ast.AST, name: str) -> Optional[ast.FunctionDef]:
     return None
 
 
+def _trace_literal_segment(node: ast.AST, tree: ast.AST, lineno: int, depth: int = 0) -> Optional[str]:
+    """Trace `node` (a `resolve_launchable(...)` call's first argument) back
+    to its final literal path-segment, or `None` if it isn't statically
+    traceable -- used only to decide which sub-class (see module docstring)
+    a `resolve_launchable()` call's TARGET belongs to, never to decide
+    safe/violation on its own. Handles a string constant directly, an
+    `os.path.join(...)`/pathlib `/` join tail (via `_last_literal_segment`),
+    and one level of local-variable indirection per recursion (capped by
+    `depth`, mirroring `_classify`'s own recursion-depth guard).
+    """
+    if depth > 5:
+        return None
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, (ast.Call, ast.BinOp)):
+        return _last_literal_segment(node)
+    if isinstance(node, ast.Name):
+        scope = _find_enclosing_scope(tree, lineno)
+        assign = _find_assignment(scope, node.id, lineno)
+        if assign is None or assign.value is None:
+            return None
+        return _trace_literal_segment(assign.value, tree, assign.lineno, depth + 1)
+    return None
+
+
 def _last_literal_segment(node: ast.AST) -> Optional[str]:
     """Final literal path-segment for `os.path.join(...)` calls and pathlib `/` chains."""
     if isinstance(node, ast.Call):
@@ -252,14 +325,53 @@ def _ends_in_script_ext(segment: str) -> bool:
     return any(low.endswith(ext) for ext in _SCRIPT_EXTS)
 
 
+def _is_real_coordinator_bin_sibling(segment: str) -> bool:
+    """True if `segment` names a real, extensionless file directly under
+    ``coordinator/bin/`` -- the narrow, allowlist-free extensionless carve-in
+    documented in this module's negative-spec.
+
+    Deliberately conservative: a literal bare basename only (no path
+    separators, no extension) that resolves to an actual file on disk right
+    now. A system-executable name (``git``, ``bash``, ``node``, ``rg``, ...)
+    or a ``coordinator/bin/*.cmd``/``*.py`` sibling never matches here --
+    both are covered by their own tiers (extension check, or "safe, out of
+    scope" for a name with no `coordinator/bin/` file behind it).
+    """
+    if not segment or "/" in segment or "\\" in segment or "." in segment:
+        return False
+    try:
+        return (_COORDINATOR_BIN_DIR / segment).is_file()
+    except OSError:
+        return False
+
+
+def _classify_bare_segment(segment: str, join_kind: str) -> Tuple[str, str]:
+    """Verdict for a literal path SEGMENT used bare as (or as the tail of)
+    argv[0] -- shared by the Constant, pathlib '/' join, and
+    ``os.path.join(...)`` tail cases in `_classify` below. `join_kind`
+    supplies the human-readable provenance phrase for the reason string.
+    """
+    if _ends_in_script_ext(segment):
+        return "violation", f"bare literal '{segment}'{join_kind}"
+    if _is_real_coordinator_bin_sibling(segment):
+        return (
+            "violation",
+            f"bare literal '{segment}'{join_kind} -- extensionless coordinator/bin sibling",
+        )
+    return "safe", f"extensionless/non-script literal '{segment}' (out of scope, see module docstring)"
+
+
 def _classify(node: ast.AST, tree: ast.AST, call_lineno: int, depth: int = 0) -> Tuple[str, str]:
     """Return ("safe" | "violation" | "unknown", reason) for the argv[0] expression."""
     if depth > 5:
         return "unknown", "recursion-depth-exceeded"
 
     if isinstance(node, ast.Starred):
-        if "resolve_launchable(" in _unparse(node.value):
-            return "safe", "starred resolve_launchable() unpack"
+        # Delegate straight into node.value's own classification -- a
+        # starred resolve_launchable() unpack is a Call node with
+        # fname == "resolve_launchable", handled (and correctly split by
+        # target extension) in the Call branch below. No separate
+        # string-sniff special-case needed.
         return _classify(node.value, tree, call_lineno, depth)
 
     if isinstance(node, ast.IfExp):
@@ -269,7 +381,24 @@ def _classify(node: ast.AST, tree: ast.AST, call_lineno: int, depth: int = 0) ->
         f = node.func
         fname = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
         if fname == "resolve_launchable":
-            return "safe", "resolve_launchable() call"
+            if not node.args:
+                return "unknown", "resolve_launchable() call with no traceable argument"
+            target = _trace_literal_segment(node.args[0], tree, node.lineno, depth + 1)
+            if target is None:
+                return "unknown", "resolve_launchable() target argument not statically traceable"
+            ext = os.path.splitext(target)[1].lower()
+            if ext == ".py":
+                return "violation", (
+                    f"resolve_launchable('{target}') -- its POSIX branch is bare argv[0] "
+                    "(see launchable.py docstring); a .py target needs sys.executable "
+                    "dispatch, not resolve_launchable()"
+                )
+            if not ext and _is_real_coordinator_bin_sibling(target):
+                return "violation", (
+                    f"resolve_launchable('{target}') -- extensionless coordinator/bin "
+                    "sibling; its POSIX branch is bare argv[0]"
+                )
+            return "safe", "resolve_launchable() call (Windows-launch class)"
         if fname == "which":
             return "safe", "shutil.which() call"
         if fname in ("str", "fspath") and node.args:
@@ -277,9 +406,7 @@ def _classify(node: ast.AST, tree: ast.AST, call_lineno: int, depth: int = 0) ->
 
         seg = _last_literal_segment(node)
         if seg is not None:
-            if _ends_in_script_ext(seg):
-                return "violation", f"bare literal '{seg}' via os.path.join(...)"
-            return "safe", f"extensionless join tail '{seg}' (out of scope, see module docstring)"
+            return _classify_bare_segment(seg, " via os.path.join(...)")
 
         if fname:
             fn_def = _find_top_level_func(tree, fname)
@@ -294,15 +421,11 @@ def _classify(node: ast.AST, tree: ast.AST, call_lineno: int, depth: int = 0) ->
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
         seg = _last_literal_segment(node)
         if seg is not None:
-            if _ends_in_script_ext(seg):
-                return "violation", f"bare literal '{seg}' via pathlib '/' join"
-            return "safe", f"extensionless '/' join tail '{seg}' (out of scope, see module docstring)"
+            return _classify_bare_segment(seg, " via pathlib '/' join")
         return "unknown", f"opaque binop: {_unparse(node)}"
 
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        if _ends_in_script_ext(node.value):
-            return "violation", f"bare literal '{node.value}'"
-        return "safe", f"extensionless/non-script literal '{node.value}' (out of scope, see module docstring)"
+        return _classify_bare_segment(node.value, "")
 
     if isinstance(node, ast.Attribute):
         txt = _unparse(node)
@@ -400,8 +523,10 @@ def _group_key(entry_key: Tuple[str, str, str, str, int]) -> Tuple[str, str, str
 def test_no_new_bare_script_argv0_beyond_known_pre_existing_violations():
     """The class-level guard: every bare-script-extension argv[0] found by the
     scan must already be named in `_KNOWN_PRE_EXISTING_VIOLATIONS` (a tracked,
-    reported gap) -- any OTHER hit is a new (or reintroduced) instance of the
-    exact bug class the 2026-07-20 fix addressed, and fails the build.
+    reported gap) -- any OTHER hit is a new (or reintroduced) instance of one
+    of the two bug classes this guard covers (see module docstring): the
+    2026-07-20 Windows-launch class, or the POSIX-bare-after-shebang-strip
+    class, and fails the build.
     """
     found = _scan_violations()
     found_keys = set(found.keys())
@@ -409,8 +534,11 @@ def test_no_new_bare_script_argv0_beyond_known_pre_existing_violations():
 
     unexpected = found_keys - known_keys
     assert not unexpected, (
-        "New bare-script-argv[0] launch(es) detected -- route through "
-        "coordinator_core.launchable.resolve_launchable() instead:\n"
+        "New bare-script-argv[0] launch(es) detected. .js/.cjs/.mjs/.sh/.bash: "
+        "route through coordinator_core.launchable.resolve_launchable(). "
+        ".py or an extensionless coordinator/bin sibling: use sys.executable "
+        "(or an explicit interpreter) directly -- resolve_launchable() is "
+        "bare on POSIX for these and is not the fix:\n"
         + "\n".join(
             f"  {rel} in {func}() [{callee}, {sig!r}#{ordinal}] -- {found[(rel, func, callee, sig, ordinal)]}"
             for rel, func, callee, sig, ordinal in sorted(unexpected)
@@ -587,6 +715,116 @@ def test_scanner_accepts_explicit_interpreter_prefix(tmp_path):
     mod = tmp_path / "probe_mod4.py"
     mod.write_text(src)
     tree = ast.parse(src, filename=str(mod))
+    call = next(n for n in ast.walk(tree) if _is_subprocess_call(n))
+    elt0 = call.args[0].elts[0]
+    cls, _reason = _classify(elt0, tree, call.lineno)
+    assert cls == "safe"
+
+
+# ---------------------------------------------------------------------------
+# Self-tests for this chunk's coverage: .py extension, and the extensionless
+# coordinator/bin sibling carve-in (module docstring class 2).
+# ---------------------------------------------------------------------------
+
+
+def test_scanner_flags_a_bare_py_launch_literal(tmp_path):
+    src = (
+        "import subprocess\n"
+        "def f():\n"
+        "    subprocess.run(['query-completions.py', '--since', 'x'])\n"
+    )
+    mod = tmp_path / "probe_mod5.py"
+    mod.write_text(src)
+    tree = ast.parse(src, filename=str(mod))
+    call = next(n for n in ast.walk(tree) if _is_subprocess_call(n))
+    elt0 = call.args[0].elts[0]
+    cls, _reason = _classify(elt0, tree, call.lineno)
+    assert cls == "violation"
+
+
+def test_scanner_flags_a_bare_extensionless_coordinator_bin_sibling(monkeypatch, tmp_path):
+    real_bin = tmp_path / "coordinator-bin"
+    real_bin.mkdir()
+    (real_bin / "my-tool").write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(
+        "coordinator_core.test_no_bare_argv0_script_launch._COORDINATOR_BIN_DIR", real_bin
+    )
+    src = (
+        "import subprocess\n"
+        "def f():\n"
+        "    subprocess.run(['my-tool', '--check'])\n"
+    )
+    mod = tmp_path / "probe_mod6.py"
+    mod.write_text(src)
+    tree = ast.parse(src, filename=str(mod))
+    call = next(n for n in ast.walk(tree) if _is_subprocess_call(n))
+    elt0 = call.args[0].elts[0]
+    cls, _reason = _classify(elt0, tree, call.lineno)
+    assert cls == "violation"
+
+
+def test_scanner_accepts_bare_extensionless_non_bin_sibling(monkeypatch, tmp_path):
+    real_bin = tmp_path / "coordinator-bin"
+    real_bin.mkdir()
+    monkeypatch.setattr(
+        "coordinator_core.test_no_bare_argv0_script_launch._COORDINATOR_BIN_DIR", real_bin
+    )
+    src = (
+        "import subprocess\n"
+        "def f():\n"
+        "    subprocess.run(['git', 'status'])\n"
+    )
+    mod = tmp_path / "probe_mod7.py"
+    mod.write_text(src)
+    tree = ast.parse(src, filename=str(mod))
+    call = next(n for n in ast.walk(tree) if _is_subprocess_call(n))
+    elt0 = call.args[0].elts[0]
+    cls, _reason = _classify(elt0, tree, call.lineno)
+    assert cls == "safe"
+
+
+def test_scanner_flags_resolve_launchable_call_on_py_target():
+    src = (
+        "import subprocess\n"
+        "from coordinator_core.launchable import resolve_launchable\n"
+        "def f():\n"
+        "    subprocess.run([*resolve_launchable('query-completions.py'), '--since', 'x'])\n"
+    )
+    tree = ast.parse(src)
+    call = next(n for n in ast.walk(tree) if _is_subprocess_call(n))
+    elt0 = call.args[0].elts[0]
+    cls, _reason = _classify(elt0, tree, call.lineno)
+    assert cls == "violation"
+
+
+def test_scanner_flags_resolve_launchable_call_on_extensionless_bin_sibling(monkeypatch, tmp_path):
+    real_bin = tmp_path / "coordinator-bin"
+    real_bin.mkdir()
+    (real_bin / "my-tool").write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(
+        "coordinator_core.test_no_bare_argv0_script_launch._COORDINATOR_BIN_DIR", real_bin
+    )
+    src = (
+        "import subprocess\n"
+        "from coordinator_core.launchable import resolve_launchable\n"
+        "def f():\n"
+        "    subprocess.run([*resolve_launchable('my-tool'), '--check'])\n"
+    )
+    tree = ast.parse(src)
+    call = next(n for n in ast.walk(tree) if _is_subprocess_call(n))
+    elt0 = call.args[0].elts[0]
+    cls, _reason = _classify(elt0, tree, call.lineno)
+    assert cls == "violation"
+
+
+def test_scanner_still_accepts_resolve_launchable_call_on_sh_target():
+    src = (
+        "import subprocess\n"
+        "from coordinator_core.launchable import resolve_launchable\n"
+        "def f():\n"
+        "    subprocess.run([*resolve_launchable('guard.sh'), '--check'])\n"
+    )
+    tree = ast.parse(src)
     call = next(n for n in ast.walk(tree) if _is_subprocess_call(n))
     elt0 = call.args[0].elts[0]
     cls, _reason = _classify(elt0, tree, call.lineno)

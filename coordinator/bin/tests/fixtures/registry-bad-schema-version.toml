@@ -5,7 +5,7 @@
 # coordinator_core/snippet_sync/registry.py — it was `3` until that tuple grew
 # to (1, 2, 3), at which point this fixture became valid-but-incomplete and
 # tripped the v3 `delivery` requirement instead of the over-ceiling path, then
-# `4` until the tuple grew again to (1, 2, 3, 4) for coordinator-claude's v4 excluded_consumer
+# `4` until the tuple grew again to (1, 2, 3, 4) for DoE's v4 excluded_consumer
 # / eligible_glob bump. The snippet row below therefore carries every field
 # required at v3 too, so the next ceiling bump surfaces as a plain rc mismatch
 # rather than a silently relocated diagnostic.

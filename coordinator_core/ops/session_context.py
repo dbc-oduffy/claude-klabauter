@@ -30,7 +30,7 @@ Negative-spec:
       (``coordinator_core/bash_guards/guard_inprocess_search.py`` ~L84), which is unsound
       under this fleet's ~18 concurrent sessions on one shared worktree — even a freshly
       written sentinel can hand a session the id of whichever session wrote last. Its sole
-      writer, ``session-init.py`` (coordinator-claude ``SessionStart`` hook), was deleted by PM
+      writer, ``session-init.py`` (DoE-claude ``SessionStart`` hook), was deleted by PM
       directive 2026-07-15, so the file has no production writer and is frozen residue.
     - Do NOT add tier-4 ambiguity detection — daemon context always supplies session_id via
       env so tier-4 is never reached in practice.

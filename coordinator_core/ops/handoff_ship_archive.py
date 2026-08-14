@@ -50,14 +50,17 @@ THIS branch, unlike the archived outcome above, the deployment_state:shipped
 frontmatter mutation is left UNCOMMITTED in the working tree — there is no archival
 commit this call to carry it. Per the disk/HEAD drift guard in archive_and_commit
 (coordinator_core/ops/fleet/_common.py, commit 4541069c3), a batch session.boot_sweep
-pass CANNOT archive it from this state: its restage_src=False call would re-verify
-terminality against fresh disk content but git-mv from the HEAD-seeded private index,
-so the guard refuses the move rather than commit HEAD's stale pre-stamp blob. The
-stamp must first be COMMITTED (by any means) before boot_sweep's batch path can act
-on it. The only call that tolerates a fresh, still-uncommitted stamp on THIS handoff
-is a SUBSEQUENT handoff.ship_and_archive call once a shipped_in lands — its own step 3
-passes restage_src=True, which stages src's on-disk content immediately before the
-move so the stamp rides into that call's own archival commit.
+pass CANNOT archive it from this state: its restage_src=False call re-verifies
+terminality against fresh disk content but git-mv's from the HEAD-seeded private
+index, so the guard HARD-REFUSES the move (exit_code:2, a per-item failure — not the
+soft skip this paragraph described pre-guard) rather than commit HEAD's stale
+pre-stamp blob. The stamp must first be COMMITTED (by any means) before boot_sweep's
+batch path can act on it — until then the record sits in state/handoffs/, its
+attempted archival landing in failed[], not skipped[]. The only call that tolerates a
+fresh, still-uncommitted stamp on THIS handoff is a SUBSEQUENT handoff.ship_and_archive
+call once a shipped_in lands — its own step 3 passes restage_src=True, which stages
+src's on-disk content immediately before the move so the stamp rides into that call's
+own archival commit.
 
 Self-registration: importing this module fires register_op("handoff.ship_and_archive").
 Add to coordinator_core/ops/__init__.py and register its scope ("common_dir") in

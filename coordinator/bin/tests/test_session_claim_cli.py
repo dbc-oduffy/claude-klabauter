@@ -11,8 +11,8 @@ Matrix asserted (per docs/plans/2026-07-21-claim-lock-trampoline-flip.md AC2):
     usage error (missing/unknown subcommand, wrong arity) -> exit 2
 
 Loaded by file path (`importlib.util.spec_from_file_location`) since
-`session-claim-cli` is an extensionless polyglot entrypoint, not a `.py`
-module — same load idiom as sibling bin/ unit tests (e.g.
+`session-claim-cli.py` doesn't sit on `sys.path` as an importable module —
+same load idiom as sibling bin/ unit tests (e.g.
 test_check_install_divergence.py's `_load_divergence_module`).
 
 Converted from a hand-rolled unittest runner to top-level pytest functions
@@ -34,12 +34,12 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_cli_module():
-    # session-claim-cli is an extensionless polyglot entrypoint (no .py
-    # suffix), so spec_from_file_location can't infer a loader from the
-    # filename — an explicit SourceFileLoader is required (same idiom as
+    # session-claim-cli.py doesn't sit on sys.path as an importable module,
+    # so spec_from_file_location can't infer a loader from the filename —
+    # an explicit SourceFileLoader is required (same idiom as
     # coordinator/bin/tests/test_lesson_add.py).
     loader = importlib.machinery.SourceFileLoader(
-        "session_claim_cli", str(_BIN_DIR / "session-claim-cli")
+        "session_claim_cli", str(_BIN_DIR / "session-claim-cli.py")
     )
     spec = importlib.util.spec_from_loader("session_claim_cli", loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]

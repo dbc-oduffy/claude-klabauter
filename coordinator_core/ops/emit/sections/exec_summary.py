@@ -10,7 +10,7 @@ are always the injected META-REPO slug (``ctx.repo_name``); a read/parse failure
 into ``malformed_records.exec_summaries``. Graceful absent — no ``docs/exec-summary.md`` →
 ``([], [])``, never a failure.
 
-Port of: emit-cockpit-snapshot.sh (coordinator-claude 07eedcfb, 2026-07-19) — § SECTION 8.17,
+Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) — § SECTION 8.17,
   ExecSummary (the embedded python3 heredoc). Byte/semantic parity port — the heredoc's
   frontmatter parse, fence extraction, record shape, and quarantine rule are reproduced
   in-process here.

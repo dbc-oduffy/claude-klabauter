@@ -8,7 +8,7 @@ docs_staleness.py` (cockpit_schema/tests/) only validates hand-built
 fixtures, which is precisely why the gap shipped unnoticed; this file
 exercises the REAL producer.
 
-Spec backlink: docs/plans/2026-07-28-human-facing-doc-staleness-detector.md § C6
+Spec backlink: DoE-claude:pln-human-facing-doc-staleness-det-d9c047 § C6
 """
 from __future__ import annotations
 

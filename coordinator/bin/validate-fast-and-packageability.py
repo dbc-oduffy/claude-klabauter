@@ -1,6 +1,6 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 """validate-fast-and-packageability.py -- naked-Python port of the two bash
-fences embedded in coordinator-claude's coordinator/skills/validate/SKILL.md ("How to
+fences embedded in DoE-claude's coordinator/skills/validate/SKILL.md ("How to
 Run" and "Packageability-contract check").
 
 Purpose: single self-contained CLI exposing the two independently-reported
@@ -12,7 +12,7 @@ no cwd dependence beyond the repo root each check is scoped to run against
 (the caller's cwd, exactly as the ported bash fences ran against the
 invoking shell's cwd).
 
-Why this exists as one file, not two: the coordinator-claude ceremony step (/validate)
+Why this exists as one file, not two: the DoE ceremony step (/validate)
 always runs both checks back-to-back and reports them as two independent
 lines (`Validation: <x>` / `Packageability: <y>`) -- a single CLI with two
 subcommands mirrors that pairing without forcing two separate bin/ entries
@@ -37,7 +37,7 @@ Subcommands:
       `tier-u-refused` (the resolved
       command classifies Tier U -- unscoped/full-suite shape -- and the
       calling session holds no live Tier-U grant; R3+R4,
-      cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-
+      cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-
       ruling.md). This is an ADDED contract beyond the ported bash fence
       (which never itself exited non-zero -- callers parsed the printed
       line) -- see the "Divergence from the bash fence" note below.
@@ -64,13 +64,13 @@ that only greps the printed line (as the current /validate SKILL.md fence
 does). This is a deliberate, noted improvement -- not a silent behavior
 change to the printed contract.
 
-Port source: coordinator/skills/validate/SKILL.md (coordinator-claude) -- "How to
+Port source: coordinator/skills/validate/SKILL.md (DoE-claude) -- "How to
 Run" fence (mktemp diagnostic capture + rc==2/126/other-nonzero/0 ladder)
 and "Packageability-contract check" fence (validate-install-contract.py
 loud-skip-vs-silent-pass guard). The resolve-claude-klabauter-bin resolver block, the
 _cc_trusted/_cc_root guard preamble, and the thin single-CLI-invocation
 shape of `python3 "${_mkb_bin}/validate-install-contract.py"` are NOT ported
-here -- those are the D1/D2 repoint's concern (the coordinator-claude-side caller resolves
+here -- those are the D1/D2 repoint's concern (the DoE-side caller resolves
 this CLI's own location the same way it resolved the two bash fences'
 targets, then invokes this CLI by name).
 
@@ -96,7 +96,7 @@ Negative-spec:
     that repo's own request (docs/wiki/agent-install-contract.md §
     Packageability).
   - The `fast` subcommand NEVER calls ``write_tier_u_grant`` -- R4
-    (cross-repo/inbox/2026-07-25-coordinator-claude-em-validate-tier-u-shape-
+    (cross-repo/inbox/2026-07-25-doe-claude-em-validate-tier-u-shape-
     ruling.md) requires /validate to gate on shape and REFUSE, never to
     write or consume-by-granting a Tier-U grant. It only READS one via
     ``coordinator_core.session.tier_u_gate.enforce_tier_u_gate``.

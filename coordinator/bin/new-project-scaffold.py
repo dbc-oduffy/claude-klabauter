@@ -5,7 +5,7 @@ Deterministic greenfield-scaffold helper backing the coordinator:new-project
 skill: directory creation, `git init` pinned to branch `main`, optional
 template render via render-template-tree.py, seed-file writes, and an
 optional pnpm smoke pass. Scaffold logic lives claude-klabauter-side in
-coordinator_core.ops.new_project_scaffold; this file is a thin coordinator-claude-side
+coordinator_core.ops.new_project_scaffold; this file is a thin DoE-side
 trampoline forwarding argv to it.
 """
 # new-project-scaffold.py — CLI trampoline over claude-klabauter
@@ -17,8 +17,8 @@ trampoline forwarding argv to it.
 # optional template render via render-template-tree.py, seed-file writes,
 # optional pnpm smoke pass) has been ported to
 # coordinator_core/ops/new_project_scaffold.py, co-located test
-# test_new_project_scaffold.py. This file is now a thin coordinator-claude-side (contract)
-# trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+# test_new_project_scaffold.py. This file is now a thin DoE-side (contract)
+# trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 # contract/generator, claude-klabauter owns engine).
 #
 # Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -28,12 +28,12 @@ trampoline forwarding argv to it.
 # is the right interpreter. Caution: callers must invoke via the extensionless
 # name or a resolved-interpreter prefix, never a bareword `.py` through git-
 # bash — git-bash DOES honor the shebang and would exec-127 with no `python3`
-# present. See the carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-
+# present. See the carve-out in DoE-claude's coordinator/docs/wiki/bash-on-
 # windows-gotchas.md § Carve-out (cross-repo — this wiki lives in the
-# coordinator-claude repo, not here).
+# DoE-claude repo, not here).
 #
 # Fail-loud convention (unchanged from the bash oracle): pre-flight failures
-# (bad args, occupied target dir), a missing/unresolvable coordinator-claude-side template
+# (bad args, occupied target dir), a missing/unresolvable DoE-side template
 # sibling, or a pnpm smoke-step failure all exit 1. A claude-klabauter-link failure
 # (CLAUDE_KLABAUTER_ROOT unresolvable, or the op module not importable) is treated the
 # same way — sys.exit(1) — because callers (coordinator:new-project skill)

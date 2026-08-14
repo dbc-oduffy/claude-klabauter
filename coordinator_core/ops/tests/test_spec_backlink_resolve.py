@@ -95,7 +95,9 @@ def test_null_and_no_id_records_are_not_indexed(spec_backlink_corpus):
     index = build_index(root)
     # plan_null_ids / plan_no_ids / archived_no_ids carry no real id by construction;
     # confirm the index has no entry mapping to those paths at all.
-    all_paths = set(index.plan_id_to_path.values())
+    all_paths: set = set()
+    for paths in index.plan_id_to_paths.values():
+        all_paths.update(paths)
     for paths in index.deliverable_id_to_paths.values():
         all_paths.update(paths)
     assert str(spec_backlink_corpus["plan_null_ids"]) not in all_paths
@@ -131,6 +133,48 @@ def test_duplicate_dlv_id_resolves_via_pln_instead(spec_backlink_corpus):
     hit_b = resolve_id(index, "pln-fixture-plan-ambiguous-b-111111")
     assert hit_b["outcome"] == "hit"
     assert hit_b["path"] == str(spec_backlink_corpus["plan_ambiguous_b"])
+
+
+def test_duplicate_plan_id_is_ambiguity_not_last_write_wins(tmp_path):
+    """Review: code-reviewer P3 — a `plan_id` collision (two records
+    carrying the same `plan_id`, a genuine duplicate/copy-paste on this
+    supposedly per-file-identity field) must be a typed AMBIGUITY, exactly
+    like a `deliverable_id` collision — never last-write-wins on whichever
+    path an unordered directory traversal happens to visit last."""
+    docs_plans = tmp_path / "docs" / "plans"
+    docs_plans.mkdir(parents=True)
+
+    shared_pln = "pln-uncovered-shared-abcdef"
+
+    def _write(name: str) -> Path:
+        p = docs_plans / name
+        p.write_text(
+            "\n".join(
+                [
+                    "---",
+                    f'title: "{name}"',
+                    "created: 2026-08-13",
+                    f'plan_id: "{shared_pln}"',
+                    "scope_mode: feature",
+                    "---",
+                    "",
+                    f"# {name}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return p
+
+    path_a = _write("2026-08-13-duplicate-plan-a.md")
+    path_b = _write("2026-08-13-duplicate-plan-b.md")
+
+    index = build_index(tmp_path)
+    outcome = resolve_id(index, shared_pln)
+    assert outcome["outcome"] == "ambiguity"
+    assert outcome["outcome"] != "hit"
+    assert outcome["outcome"] != "miss"
+    assert set(outcome["candidates"]) == {str(path_a), str(path_b)}
 
 
 def test_ambiguity_outcome_is_distinct_from_hit_and_miss(spec_backlink_corpus):
@@ -226,10 +270,11 @@ def test_ambiguous_dlv_with_no_covering_pln_is_ambiguity_not_hit_or_miss(tmp_pat
 
 
 def test_peer_qualified_hit_uses_doe_root(tmp_path, monkeypatch):
-    """A `<repo>:pln-...` query must trigger a lazy peer-repo index build
-    rooted at whatever coordinator_registry.doe_root() resolves to — never
-    the local worktree_root — and never build the peer index for a local-only
-    query."""
+    """A `<repo>:pln-...` query, using the one recognized qualifier
+    (`DoE-claude:`, matching `rewrite_spec_backlinks._PEER_REPO_NAME`'s fixed
+    emit literal), must trigger a lazy peer-repo index build rooted at
+    whatever coordinator_registry.doe_root() resolves to — never the local
+    worktree_root — and never build the peer index for a local-only query."""
     peer_root = tmp_path / "peer-repo"
     peer_docs_plans = peer_root / "docs" / "plans"
     peer_docs_plans.mkdir(parents=True)
@@ -267,10 +312,10 @@ def test_peer_qualified_hit_uses_doe_root(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sbr, "build_index", _tracking_build_index)
 
-    outcome = sbr.resolve(local_root, "doeclaude:pln-peer-fixture-plan-999999")
+    outcome = sbr.resolve(local_root, "DoE-claude:pln-peer-fixture-plan-999999")
     assert outcome["outcome"] == "hit"
     assert outcome["path"] == str(peer_plan)
-    assert outcome["queried_id"] == "doeclaude:pln-peer-fixture-plan-999999"
+    assert outcome["queried_id"] == "DoE-claude:pln-peer-fixture-plan-999999"
     # Only the peer root was indexed for this query — the local root was
     # never scanned (lazy peer resolution, local index untouched).
     assert peer_root in build_calls
@@ -284,8 +329,60 @@ def test_peer_qualified_miss_when_doe_root_unresolvable(tmp_path, monkeypatch):
     local_root = tmp_path / "local-repo"
     (local_root / "docs" / "plans").mkdir(parents=True)
 
-    outcome = sbr.resolve(local_root, "doeclaude:pln-whatever-000000")
+    outcome = sbr.resolve(local_root, "DoE-claude:pln-whatever-000000")
     assert outcome["outcome"] == "miss"
+
+
+def test_unrecognized_repo_qualifier_is_typed_miss_not_silent_peer_hit(tmp_path, monkeypatch):
+    """Review: code-reviewer P2 — a queried_id carrying any qualifier OTHER
+    than the one recognized peer name (`DoE-claude`) must be a typed miss
+    naming the unrecognized-repo condition, never silently routed to the
+    DoE-claude peer index. This is the case `test_peer_qualified_hit_uses_doe_root`
+    used to (accidentally) certify as a HIT before it was corrected to use
+    the real qualifier."""
+    import coordinator_core.ops.spec_backlink_resolve as sbr
+
+    peer_root = tmp_path / "peer-repo"
+    peer_docs_plans = peer_root / "docs" / "plans"
+    peer_docs_plans.mkdir(parents=True)
+    (peer_docs_plans / "2026-08-13-peer-fixture-plan.md").write_text(
+        "\n".join(
+            [
+                "---",
+                'title: "peer fixture plan"',
+                "created: 2026-08-13",
+                'plan_id: "pln-peer-fixture-plan-999999"',
+                "scope_mode: feature",
+                "---",
+                "",
+                "# peer fixture plan",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    local_root = tmp_path / "local-repo"
+    (local_root / "docs" / "plans").mkdir(parents=True)
+
+    monkeypatch.setattr(sbr, "_doe_root_path", lambda: peer_root)
+
+    build_calls = []
+    real_build_index = sbr.build_index
+
+    def _tracking_build_index(root):
+        build_calls.append(root)
+        return real_build_index(root)
+
+    monkeypatch.setattr(sbr, "build_index", _tracking_build_index)
+
+    outcome = sbr.resolve(local_root, "doeclaude:pln-peer-fixture-plan-999999")
+    assert outcome["outcome"] == "miss"
+    assert outcome["path"] is None
+    assert outcome["reason"] == "unrecognized_repo_qualifier"
+    # The unrecognized qualifier must be refused before any index build --
+    # never build the peer index just to discover it wasn't the right repo.
+    assert build_calls == []
 
 
 # ---------------------------------------------------------------------------

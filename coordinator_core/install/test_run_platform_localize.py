@@ -1,6 +1,6 @@
 """
 Co-located pytest for coordinator_core.install.run_platform_localize
-(install.md § Step 9 native port, coordinator-claude repo). Covers: --check-only
+(install.md § Step 9 native port, DoE-claude repo). Covers: --check-only
 never invokes platform_localize.main() nor mutates anything; a live run
 that completes with rc 0 emits the "ran" status row and (when a validator
 + known_marketplaces.json are both present) runs the schema-validation
@@ -8,7 +8,7 @@ branch; a live run with an empty/absent plugins dir emits the maximalist
 "no local plugin dirs" variant (install.md F9); and a non-zero
 platform_localize.main() rc surfaces as the "error (see stderr)" row.
 
-Spec backlink: coordinator/commands/install.md § Step 9 [coordinator-claude repo]
+Spec backlink: coordinator/commands/install.md § Step 9 [DoE-claude repo]
 """
 
 from __future__ import annotations

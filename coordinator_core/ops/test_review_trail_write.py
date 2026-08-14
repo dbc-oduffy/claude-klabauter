@@ -1,7 +1,7 @@
 """Characterization tests for coordinator_core.ops.review_trail_write.
 
-Port of: coordinator-write-review-trail.sh (coordinator-claude 30f4c5fc, 2026-07-19) — the
-Coordinator-claude-side artifact was already a thin strangler-facade veneer over this
+Port of: coordinator-write-review-trail.sh (DoE 30f4c5fc, 2026-07-19) — the
+DoE-side artifact was already a thin strangler-facade veneer over this
 module's registered ``review_trail.write`` op (dispatched via cc_invoke);
 this module carries the full write-path logic (session-id/workstream
 resolution, validation, atomic write).
@@ -11,8 +11,8 @@ DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carve
 
 This test file fills a pre-existing coverage gap: the module was fully landed and
 registered (T2-g1 finish-strangler) but had no co-located pytest — only an indirect
-bash-level facade-routing test (coordinator-write-review-trail-facade.test.sh, coordinator-claude
-a2fe06f8, 2026-07-22) on the coordinator-claude side, which fakes coordinator_core.invoke and never
+bash-level facade-routing test (coordinator-write-review-trail-facade.test.sh, DoE
+a2fe06f8, 2026-07-22) on the DoE side, which fakes coordinator_core.invoke and never
 exercises this module's actual write-path logic.
 """
 

@@ -4,7 +4,7 @@ coordinator_core.roadmap.audit, ported from the bash oracle's two test files:
   - coordinator/bin/tests/test-audit-roadmap-dependency-order.sh (Scenarios A/B/C)
   - coordinator/bin/tests/test-audit-roadmap-verdict-regex.sh (2nd-cell false-positive)
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3e
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g3e
 """
 
 from __future__ import annotations

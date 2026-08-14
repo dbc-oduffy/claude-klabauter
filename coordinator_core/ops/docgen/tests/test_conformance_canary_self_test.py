@@ -1,7 +1,7 @@
 """coordinator_core.ops.docgen.tests.test_conformance_canary_self_test — proves
 ``test_conformance_canary``'s own escalation logic across the full
-(coordinator-claude present/absent) x (env var set/unset) matrix, without depending on the
-running machine's actual coordinator-claude-clone presence.
+(DoE present/absent) x (env var set/unset) matrix, without depending on the
+running machine's actual DoE-clone presence.
 
 Purpose: the canary (`test_conformance_canary.py`) exists specifically to turn
 a silent skip into a loud failure when it should have run and didn't — a bug
@@ -11,7 +11,7 @@ purpose while still reporting green, exactly the class of problem the canary
 exists to catch one level up. This module exercises the canary's decision
 function directly with monkeypatched env vars and a synthetic resolver (never
 the real `resolve_doe_clone`/`doe_root_and_present`), so it is deterministic on
-every machine — including this repo's own dev boxes, which DO have coordinator-claude
+every machine — including this repo's own dev boxes, which DO have DoE
 resolvable and would otherwise make the "absent" cells of the matrix
 unreachable without a mock.
 
@@ -34,7 +34,7 @@ from coordinator_core.ops.docgen.tests import test_conformance_canary as canary
 def _resolver(doe_present: bool):
     def _resolve() -> None:
         if not doe_present:
-            raise RuntimeError("synthetic: coordinator-claude clone not resolvable")
+            raise RuntimeError("synthetic: DoE clone not resolvable")
 
     return _resolve
 

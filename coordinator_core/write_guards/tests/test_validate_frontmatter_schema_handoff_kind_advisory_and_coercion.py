@@ -19,7 +19,7 @@ but two gaps from the backlog item remained uncovered by that class:
    JSON-schema type check name the real defect.
 
 This file is new (not an edit to the existing suites) per this fix wave's
-footprint; it exercises both guards directly against a live coordinator-claude
+footprint; it exercises both guards directly against a live DoE-claude
 schema checkout, mirroring the existing suites' `_pin_doe_root` /
 `_payload` conventions.
 
@@ -40,7 +40,7 @@ _doe_root, _doe_present = doe_root_and_present()
 @pytest.fixture(autouse=True)
 def _pin_doe_root(monkeypatch):
     if not _doe_present:
-        pytest.skip("sibling coordinator-claude checkout not found")
+        pytest.skip("sibling DoE-claude checkout not found")
     monkeypatch.setattr(deny_guard, "coordinator_doe_root", lambda: _doe_root)
     monkeypatch.setattr(advisory_guard, "coordinator_doe_root", lambda: _doe_root)
 

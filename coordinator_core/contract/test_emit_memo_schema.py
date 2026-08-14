@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.contract.emit_memo_schema — the generate-from-SSOT
 memo schema emitter (Decision-0, plan
-docs/plans/2026-07-24-cross-repo-memo-ownership-and-redesign.md § C5).
+pln-take-ownership-of-the-cross-re-ac97ef § C5).
 
 Five invariants under test:
   (a) Lenient-receiver invariant preserved — a foreign memo missing a
@@ -72,8 +72,8 @@ class TestEmitSchemas:
             )
 
     def test_bump_class_and_note_stamped(self, tmp_path: Path) -> None:
-        """coordinator-claude bump-class annotation (memo
-        2026-07-27-coordinator-claude-em-bump-class-shipped-and-a-correction.md):
+        """DoE bump-class annotation (memo
+        2026-07-27-doe-claude-em-bump-class-shipped-and-a-correction.md):
         x-bump-class/x-bump-note sit immediately alongside x-schema-version
         on both entities so a future emitter edit cannot silently drop
         them and re-open the vendored-schema drift commit 5140d176 closed."""
@@ -211,10 +211,10 @@ class TestByKindNeverArmedAtRealDeliveryShape:
 
 
 class TestToRepoFieldPresentAndOptional:
-    """coordinator-claude parity (2026-07-27): `to_repo` was a coordinator-claude-local vendored
+    """DoE-claude parity (2026-07-27): `to_repo` was a DoE-local vendored
     extension on both schemas that claude-klabauter's generation permanently
     re-drifted every regen. The field now comes home to the emitter, byte-
-    identical to coordinator-claude's carried copy, on both entities — and stays optional
+    identical to DoE's carried copy, on both entities — and stays optional
     (historical memos and archived memos predate it and must keep
     validating)."""
 

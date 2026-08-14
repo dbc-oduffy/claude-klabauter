@@ -11,7 +11,8 @@ Public surface (pinned contract — do not change without updating consumers):
     def lookup(session_id: str) -> RegistryRecord | None
     def self_record() -> tuple[str, RegistryRecord] | None
     class RegistryRecord: pid: int; start_epoch: float; cwd: str | None;
-                           name: str | None; messaging_socket_path: str | None
+                           name: str | None; messaging_socket_path: str | None;
+                           status: str | None; stable_pid_capture: str | None
 
 `name` and `messaging_socket_path` (added
 `state/handoffs/2026-08-13-session-owner-reachability-registry.md` § 1) are
@@ -25,8 +26,8 @@ Like every other field here, reading them attaches no liveness meaning:
 `start_epoch` only.
 
 `self_record()` (added `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
-§ C1, spike-verified anchor; cite `coordinator-claude@642195ba` / follow-up
-`coordinator-claude@88929bea` — the wrongful-takeover shape this module's
+§ C1, spike-verified anchor; cite `DoE-claude@642195ba` / follow-up
+`DoE-claude@88929bea` — the wrongful-takeover shape this module's
 negative-spec defends against) is the O(1) leg over the pid-keyed
 `<registry_dir>/<CLAUDE_PID>.json` file: it resolves `CLAUDE_PID` via
 `coordinator_core.session.core._resolve_claude_pid_from_env` (the one
@@ -70,7 +71,7 @@ Negative-spec:
       existing fallback stack decides what `None` means. An executor
       "simplifying" a `None` return into a dead verdict reintroduces a
       wrongful-takeover failure this fleet has already suffered twice
-      (coordinator-claude 642195ba, follow-up 88929bea).
+      (DoE 642195ba, follow-up 88929bea).
     - `updatedAt` and `statusUpdatedAt` are read NOWHERE in this module, at
       any call site, forever. They track busy/idle transitions, not process
       liveness: a continuously-working session was measured carrying a
@@ -81,7 +82,66 @@ Negative-spec:
       attached) — it must NEVER be read as an input to any liveness,
       reachability, or claim-verdict computation anywhere in this tree. The
       1465-second measurement above is the reason why, and that finding
-      stands unchanged. A grep for `updatedAt`/`statusUpdatedAt` inside
+      stands unchanged, not superseded by anything below.
+
+      A larger spike (DoE-claude:state/audits/2026-08-13-session-stop-reason-spike.md)
+      independently re-measured this: 390 consecutive-tick transitions
+      across 30 live sessions over 17 ticks, using monotonic process
+      CPU-time delta as independent ground truth, excluding an ambiguous
+      CPU band. Result: `busy` → 80 actually-working / 0 quiet (80/80
+      precision); `idle` → 2 working / 202 quiet. Status AGE ran to
+      24,958s (6.9h), median 540s, p90 18,802s. Reading: `busy` is a
+      trustworthy POSITIVE, but `idle` is NOT a trustworthy negative — it
+      means unknown, not quiet. THE BAN STANDS ANYWAY: status age is
+      UNBOUNDED (p90 5.2h, max 6.9h), so no freshness gate can rescue
+      `status` as a verdict input even for the `busy` positive. DoE's own
+      offered correction: their sampling threshold sits near the CPU noise
+      floor, so the 2 `idle`-but-working cases are borderline rather than
+      clean errors — the `busy` precision figure and the staleness
+      distribution do not depend on that threshold.
+
+      RULING (EM ruling, claude-klabauter-em, 2026-08-14, in response to DoE's
+      memo `cross-repo/inbox/2026-08-13-doe-claude-em-session-state-surface-findings.md`):
+      DoE's observation was correct — the ban IS broader than the 1465s
+      `updatedAt` measurement alone supports — and it is kept broad
+      deliberately, not by oversight. Both questions DoE raised are now
+      decided.
+
+      Ruling 1 — the ban's scope stays as written: liveness, reachability,
+      AND claim-verdicts, all three. This is a cost asymmetry, not a
+      preference. `status` is display-only: no computation in this tree
+      needs it as a verdict input, so the breadth of the ban costs exactly
+      nothing in capability. Narrowing it to liveness-only would buy no
+      capability while reopening the failure class the DEAD-arm
+      negative-spec above exists to prevent. The 80/80 `busy` precision is
+      the TRAP here, not a counter-argument: precision is measured at the
+      instant of write, and status age is unbounded (p90 5.2h, max 6.9h) —
+      a 6.9h-old `busy` is precisely the shape of a session that has since
+      stopped. A future reader who sees "busy is a trustworthy positive"
+      and narrows the ban on that basis reintroduces wrongful-takeover.
+      Over-banning a field nobody needs costs zero; under-banning costs the
+      failure this fleet has already suffered twice (DoE 642195ba,
+      follow-up 88929bea).
+
+      Ruling 2 — enforcement moves from a described grep to a test:
+      `coordinator_core/session/tests/test_status_ban_enforcement.py` is
+      the executable form of this negative-spec block; that file and this
+      prose are meant to be read together, and this prose remains
+      authoritative over it.
+
+      A cost signal attached to the scope question settled above, supplied
+      by DoE 2026-08-14 as evidence and explicitly NOT as clearance to widen:
+      `pickup_assemble`'s competing-claim gate emits, per candidate,
+      `holder_live` plus `liveness_basis: "harness-registry"`, so every
+      DoE pickup that stands down on a live peer — or takes over an
+      apparently-orphaned claim — rests that mutual-exclusion verdict on
+      this module's basis. Their live sample: 18 candidates, 9 live-peer,
+      9 stale-claim, the takeover-authorizing half. Corroborated the same
+      day by a claude-klabauter pickup brief carrying the same two fields. Second
+      named cross-repo consumer after C1's; whether the ban widens to
+      cover it stays a PM scope call, unchanged by this note.
+
+      A grep for `updatedAt`/`statusUpdatedAt` inside
       `coordinator_core/session/` must return hits only in this block; a
       grep for `status` may additionally hit `_parse_one`'s parse line,
       `RegistryRecord.status`'s field, and a display-only consumer (e.g.
@@ -148,7 +208,7 @@ from __future__ import annotations
 import calendar
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -163,7 +223,9 @@ _SANITY_BAND_FUTURE_SEC = 3600
 
 @dataclass(frozen=True)
 class RegistryRecord:
-    """A parsed `(pid, start_epoch, cwd)` triple — NOT a liveness verdict.
+    """A parsed seven-field record — pid, start_epoch, cwd, name,
+    messaging_socket_path, status, stable_pid_capture — NOT a liveness
+    verdict.
 
     `start_epoch` is a Unix epoch (seconds, float) already converted from the
     registry's raw `procStart` — a POSIX ctime/ISO-8601 string on macOS, a
@@ -196,6 +258,17 @@ class RegistryRecord:
     liveness/reachability/claim-verdict computation must never read it — see
     this module's own negative-spec above for why `status` is measured worse
     than the existing liveness window.
+
+    `stable_pid_capture` (added chunk C2b, threading the previously-discarded
+    `reason` leg of `core._resolve_claude_pid_from_env()` out of
+    `self_record()`) carries the SAME `env-hit` / `env-miss:<...>` /
+    `psutil-absent` vocabulary that module's docstring defines and that
+    `core.cs_init`'s own `stable_pid_capture` breadcrumb already writes at
+    its three call sites — reused verbatim here, never a new vocabulary. Only
+    `self_record()` populates it (`snapshot()`/`lookup()` leave it `None`,
+    since neither calls `_resolve_claude_pid_from_env`); it is display/
+    diagnostic only, no verdict meaning, same no-liveness contract as `cwd`/
+    `name`/`status`.
     """
 
     pid: int
@@ -204,6 +277,7 @@ class RegistryRecord:
     name: str | None = None
     messaging_socket_path: str | None = None
     status: str | None = None
+    stable_pid_capture: str | None = None
 
 
 def _proc_start_to_epoch(raw) -> float | None:
@@ -218,20 +292,22 @@ def _proc_start_to_epoch(raw) -> float | None:
     the machine's UTC offset — do NOT swap this back to `time.mktime`) or
     ISO-8601 (naive treated as UTC via `.replace(tzinfo=timezone.utc)`,
     tz-aware converted via `.timestamp()`). The FILETIME leg is tried first
-    and is UNCHANGED from the original integer-only implementation.
+    and requires a genuine, non-bool `int` — mirroring `_parse_one`'s own
+    `pid` check (`isinstance(raw, bool)` rejected, `isinstance(raw, int)`
+    required) — never a bare `int(raw)`, which would silently truncate a
+    JSON float into the FILETIME leg and would just as silently swallow a
+    numeric string (e.g. `"133..."`) into it before the string branches
+    below ever get a chance to try it as ctime/ISO-8601. A float or a
+    string always falls through to the string branches.
 
     Raises nothing — every failure mode (non-numeric, non-date string,
     overflow, out of the `[now - 90d, now + 1h]` sanity band) returns None
     so the caller skips the record rather than propagating.
     """
     epoch = None
-    try:
-        ticks = int(raw)
-    except (TypeError, ValueError, OverflowError):
-        ticks = None
-    if ticks is not None:
+    if isinstance(raw, int) and not isinstance(raw, bool):
         try:
-            epoch = ticks / _FILETIME_TICKS_PER_SEC - _FILETIME_EPOCH_OFFSET_SEC
+            epoch = raw / _FILETIME_TICKS_PER_SEC - _FILETIME_EPOCH_OFFSET_SEC
         except OverflowError:
             return None
     elif isinstance(raw, str) and raw:
@@ -402,11 +478,20 @@ def self_record() -> tuple[str, RegistryRecord] | None:
     Never raises: any unexpected internal exception is caught at this
     boundary and degrades to None (AC11-shaped boundary, matching
     `snapshot()`/`lookup()`).
+
+    The `reason` leg of `_resolve_claude_pid_from_env()`'s `(match, reason)`
+    return is threaded onto the returned record's `stable_pid_capture` field
+    (chunk C2b) rather than discarded, mirroring the breadcrumb the other
+    three `_resolve_claude_pid_from_env` call sites already write. This is
+    additive record data only — it changes no early-return branch and no
+    liveness verdict; when `match` is `None` this function still returns a
+    bare `None` exactly as before, since there is no record to attach a
+    reason to.
     """
     try:
         from coordinator_core.session.core import _resolve_claude_pid_from_env
 
-        match, _reason = _resolve_claude_pid_from_env()
+        match, reason = _resolve_claude_pid_from_env()
         if match is None:
             return None
         pid, _create_time = match
@@ -415,6 +500,10 @@ def self_record() -> tuple[str, RegistryRecord] | None:
         if directory is None:
             return None
 
-        return _parse_one(directory / f"{pid}.json")
+        parsed = _parse_one(directory / f"{pid}.json")
+        if parsed is None:
+            return None
+        session_id, record = parsed
+        return session_id, replace(record, stable_pid_capture=reason)
     except Exception:
         return None

@@ -53,7 +53,7 @@ pairs come from `baton_class._PRE_RENAME_ALIASES` itself. Hardcoding either
 list in this test would make the test a fourth copy of the vocabulary — the
 exact drift this whole migration exists to close.
 
-Spec backlink: docs/plans/2026-07-29-baton-kind-vocabulary-one-axis-per-field.md
+Spec backlink: DoE-claude:pln-baton-kind-vocabulary-one-axis-d1ce8f
                § D1, D2, C2, C3, AC4.
 """
 

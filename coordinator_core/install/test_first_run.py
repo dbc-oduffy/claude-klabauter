@@ -103,7 +103,7 @@ def _oracle_derive_key(repo_base: str) -> str:
     "repo_base",
     [
         "claude-klabauter",
-        "coordinator-claude",
+        "DoE-claude",
         "example_retrieval_repo-ue-addon",
         "My.Weird--Repo!!Name",
         "_leading_underscore",
@@ -646,7 +646,7 @@ def test_seed_registry_happy_path_registers_discovered_repos(monkeypatch, tmp_pa
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
-        print("/x/coordinator-claude")
+        print("/x/DoE-claude")
         return 0
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
@@ -663,14 +663,14 @@ def test_seed_registry_happy_path_registers_discovered_repos(monkeypatch, tmp_pa
 
     out = capsys.readouterr().out
     assert "Registering repos.claude_klabauter = /x/claude-klabauter" in out
-    assert "Registering repos.example_doctrine_repo = /x/coordinator-claude" in out
+    assert "Registering repos.doe_claude = /x/DoE-claude" in out
     set_calls = [c for c in calls if "set" in c]
     keys_and_values = [
         (c[c.index("set") + 1], c[c.index("set") + 2]) for c in set_calls
     ]
     assert keys_and_values == [
         ("repos.claude_klabauter", "/x/claude-klabauter"),
-        ("repos.example_doctrine_repo", "/x/coordinator-claude"),
+        ("repos.doe_claude", "/x/DoE-claude"),
     ]
 
 
@@ -766,7 +766,7 @@ def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_en
 
     def _fake_discover(argv):
         print("/x/claude-klabauter")
-        print("/x/coordinator-claude")
+        print("/x/DoE-claude")
         return 0
 
     monkeypatch.setattr(fr, "_discover_working_repos_main", _fake_discover)
@@ -781,7 +781,7 @@ def test_journal_records_registered_repo_keys(monkeypatch, tmp_path, _journal_en
     resolution = _resolved(_journal_env)
     assert resolution is not None
     keys = {e.key for e in resolution.entries}
-    assert keys == {"repos.claude_klabauter", "repos.example_doctrine_repo"}
+    assert keys == {"repos.claude_klabauter", "repos.doe_claude"}
     assert all(e.kind == "machine-local-key" for e in resolution.entries)
 
 

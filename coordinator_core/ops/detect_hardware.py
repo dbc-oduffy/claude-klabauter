@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.detect_hardware — ported from coordinator/lib/detect-hardware.sh
-(DOE-PORT R2-R6, variant #1 — pristine, no registered op, coordinator-claude keeps the .sh filename as
+(DOE-PORT R2-R6, variant #1 — pristine, no registered op, DoE keeps the .sh filename as
 a polyglot trampoline over this module).
 
 Purpose: cross-platform hardware audit for the machine-local registry. Detects CPU
@@ -35,7 +35,7 @@ MACHINE_LOCAL_REGISTRY_DIR may override the default registry location for testin
 (consumed by the `machine-local` CLI itself, not read directly here — mirrors the bash
 oracle, which never reads this var either).
 
-Port source: coordinator/lib/detect-hardware.sh (coordinator-claude)
+Port source: coordinator/lib/detect-hardware.sh (DoE-claude)
 Spec backlink: docs/plans/2026-06-23-coordinator-install-surface-dogfood-hardening.md §C4
 
 Negative-spec:
@@ -101,7 +101,7 @@ _DISPLAY_CLASS_GUID = (
     r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
 )
 
-_PROG = "detect-hardware"  # literal program-name prefix, matches the coordinator-claude oracle's echo prefix
+_PROG = "detect-hardware"  # literal program-name prefix, matches the DoE oracle's echo prefix
 
 _BYTES_PER_GB = 1073741824  # 1024**3
 _ROUND_HALF_GB = 536870912  # _BYTES_PER_GB // 2, for round-to-nearest-GB

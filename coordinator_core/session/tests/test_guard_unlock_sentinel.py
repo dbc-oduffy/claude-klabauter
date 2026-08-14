@@ -133,7 +133,7 @@ class TestConsumeOneShotSemantics:
 
 class TestAnnotateDenyDoesNotNameACodename:
     """AC6/register: the rendered deny text names no private-repo codename —
-    the coordinator-claude-source pointer branch is gone (§ EM ruling, branch B) and the
+    the DoE-source pointer branch is gone (§ EM ruling, branch B) and the
     settings-root pointer is unconditional and codename-free.
 
     UPDATED 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-
@@ -148,10 +148,10 @@ class TestAnnotateDenyDoesNotNameACodename:
         out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
         return gus.annotate_deny(out, SID, GUARD, "doc-display-text", **kwargs)
 
-    def test_no_example_doctrine_repo_codename(self):
+    def test_no_doe_claude_codename(self):
         out = self._fire()
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "coordinator-claude" not in reason
+        assert "DoE-claude" not in reason
 
     def test_no_placeholder_codename(self):
         out = self._fire()
@@ -159,12 +159,12 @@ class TestAnnotateDenyDoesNotNameACodename:
         assert "example-doctrine-repo" not in reason
 
     def test_doe_checkout_present_no_longer_changes_the_pointer(self, tmp_path, monkeypatch):
-        """The coordinator-claude-checkout-present branch is gone: presence of a coordinator-claude
+        """The DoE-checkout-present branch is gone: presence of a DoE
         checkout on disk must not change the rendered text (now unchanged
         either way, per item 9)."""
         import coordinator_core.doe_root_pointer as doe_root_pointer_mod
 
-        doe_root = tmp_path / "coordinator-claude"
+        doe_root = tmp_path / "doe-claude"
         (doe_root / "coordinator" / "docs" / "wiki").mkdir(parents=True)
         monkeypatch.setattr(
             doe_root_pointer_mod, "read_doe_root_pointer", lambda: str(doe_root)

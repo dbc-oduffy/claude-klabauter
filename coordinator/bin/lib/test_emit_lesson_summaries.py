@@ -34,7 +34,7 @@ import pytest
 _THIS_DIR = Path(__file__).resolve().parent
 _EMITTER = _THIS_DIR / "emit-lesson-summaries.py"
 # Locate the byte-frozen contract schema. coordinator/cockpit-contract/ lives in the
-# coordinator-claude repo, not the engine repo (DR-047: contract/data lives with coordinator-claude, engine
+# DoE-claude repo, not the engine repo (DR-047: contract/data lives with DoE, engine
 # with the engine repo) — a __file__ two-up walk off this test file's own location
 # resolves to the engine repo's coordinator/, which has no cockpit-contract/ dir at
 # all. Route through
@@ -425,7 +425,7 @@ def test_schema_validation(base_fixture):
     """
     titles, records, by_key = base_fixture
     if _SCHEMA_PATH is None:
-        pytest.skip("coordinator-claude repo root unresolvable, skipping schema validation")
+        pytest.skip("DoE-claude repo root unresolvable, skipping schema validation")
     assert _SCHEMA_PATH.is_file(), f"SCHEMA: contract schema not found at {_SCHEMA_PATH}"
     with open(_SCHEMA_PATH, encoding="utf-8") as f:
         _schema = json.load(f)

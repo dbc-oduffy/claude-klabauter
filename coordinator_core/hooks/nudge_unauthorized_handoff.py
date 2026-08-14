@@ -217,7 +217,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         session_id is not yet in the pinned inputs, the silence check is skipped
         entirely until D6 lands.
         STAYS REGISTERED after the postuse fold — the standalone op is the
-        contract for any caller dispatching this method directly; only coordinator-claude's
+        contract for any caller dispatching this method directly; only DoE's
         separate hooks.json registration retires.
 
     Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C6

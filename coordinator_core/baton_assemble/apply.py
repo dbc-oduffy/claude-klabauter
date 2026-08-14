@@ -20,7 +20,7 @@ to the existing atomic CLI/op it names, `_run_git` (the in-process git
 read-model), and the `apply()` orchestration (brief-recompute, session
 identity, scoped commit).
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
 Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md,
 chunk C1
 
@@ -151,7 +151,7 @@ def _dispatch_coordinator_doc_new(args: list[str], repo_root: Path) -> dict[str,
     from coordinator_core.resolution.facade import resolve_operator_config
 
     claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
-    cli = str(Path(claude_klabauter_bin) / "coordinator-doc-new")
+    cli = str(Path(claude_klabauter_bin) / "coordinator-doc-new.py")
     proc = subprocess.run(
         [sys.executable, cli, *args], cwd=repo_root, capture_output=True, text=True, **_NO_CONSOLE
     )
@@ -177,7 +177,7 @@ def _dispatch_session_claim_cli(args: list[str], repo_root: Path) -> dict[str, A
     from coordinator_core.resolution.facade import resolve_operator_config
 
     claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
-    cli = str(Path(claude_klabauter_bin) / "session-claim-cli")
+    cli = str(Path(claude_klabauter_bin) / "session-claim-cli.py")
     proc = subprocess.run(
         [sys.executable, cli, *args], cwd=repo_root, capture_output=True, text=True, **_NO_CONSOLE
     )
@@ -250,7 +250,7 @@ def _dispatch_handoff_stamp_phase(args: list[str], repo_root: Path) -> dict[str,
     emit this directive for `kind=handoff` -- d1's scaffold stamps
     `handoff_phase:continuation` itself), but the handler stays registered in
     `_CLI_DISPATCH`, one emission decision away from live. Reported by
-    coordinator-claude-em, 2026-07-29 cross-repo memo."""
+    doe-claude-em, 2026-07-29 cross-repo memo."""
     artifact_path = args[0] if args else ""
     result = _invoke_op_in_process(
         "handoff.stamp_phase", {"handoff_path": artifact_path}, repo_root
@@ -544,7 +544,7 @@ def _dispatch_render_project_tracker(args: list[str], repo_root: Path) -> dict[s
     )
 
     claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
-    cli = str(Path(claude_klabauter_bin) / "render-project-tracker")
+    cli = str(Path(claude_klabauter_bin) / "render-project-tracker.py")
     proc = subprocess.run(
         [sys.executable, cli, *args], cwd=repo_root, capture_output=True, text=True, **_NO_CONSOLE
     )
@@ -1128,7 +1128,7 @@ def _load_doc_new_module() -> Any:
     import importlib.machinery
     import importlib.util
 
-    script_path = _resolve_claude_klabauter_bin() / "coordinator-doc-new"
+    script_path = _resolve_claude_klabauter_bin() / "coordinator-doc-new.py"
     module_name = "_baton_assemble_coordinator_doc_new"
     loader = importlib.machinery.SourceFileLoader(module_name, str(script_path))
     spec = importlib.util.spec_from_file_location(module_name, script_path, loader=loader)
@@ -1153,7 +1153,7 @@ def _render_pristine_scaffold(doc_type: str, fm_text: str) -> Optional[str]:
 
     Why this composes rather than duplicates. The generator's scaffold output is
     a pure function of its scaffolder parameters plus `_today()` -- no hidden
-    state, no I/O (see `coordinator/bin/coordinator-doc-new`'s
+    state, no I/O (see `coordinator/bin/coordinator-doc-new.py`'s
     `_scaffold_handoff`/`_scaffold_spinoff`). Every one of those parameters is
     emitted verbatim into a field of the very frontmatter it produces, so a
     PRISTINE scaffold carries, on its own face, the complete argument vector

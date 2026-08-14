@@ -141,16 +141,44 @@ not add a dialect detector (Anti-scope), and does not change a single
 guard's own body (that is C4/C5's job) -- it only builds the capability
 those chunks wire in.
 
+DURABLE OBSERVABILITY FOR THE ImportError BRANCH (residual fix, this
+session): `_powershell_tokens`'s three SILENT-routing cases are NOT
+equivalent. `has_error=True` and the generic-exception branch are both
+per-command grammar residue -- expected, and correctly silent-only, exactly
+like every other guard's `record_silent` call, because `record_silent` is a
+no-op unless a caller opens `collecting()` (see `_verdict.py`'s own
+docstring: "inert in production ... observable only to a caller that
+deliberately opens it"), and `dispatch.py` never opens one (Anti-scope).
+The ImportError branch is different in kind: it is not a property of any
+one command, it is a property of the INSTALL -- `tree-sitter`/
+`tree-sitter-pwsh` missing disables PowerShell command classification for
+EVERY guard, machine-wide, and with only `record_silent`, that fires with
+zero observable signal in production. So the ImportError branch alone also
+writes a durable, out-of-band record (`_log_dialect_parser_unavailable`,
+mirroring `block_subagent_destructive_action._log_fail_open`'s settings-
+home-rooted, never-raise, best-effort append) -- `record_silent` is kept
+alongside it unchanged (tests still rely on the SILENT channel), and no
+allow/deny verdict changes as a result of either.
+
 Spec backlink: pln-guards-reach-a-verdict-on-powe-0e4bc3 § C2
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional
 
 from . import _command_tokenizer
 from ._verdict import record_silent
+from coordinator_core._settings_home import settings_home
+
+# Generator-provenance declaration (generator_provenance.py).
+# _log_dialect_parser_unavailable appends to
+# settings_home()/state/dialect-parser-unavailable.log -- settings-home
+# rooted, never a tracked claude-klabauter repo artifact.
+GENERATES = []
 
 __all__ = [
     "Dialect",
@@ -232,6 +260,71 @@ _ATOMIC_ARGUMENT_NODE_TYPES = frozenset({
 })
 
 _parser_cache = None
+
+
+# ---------------------------------------------------------------------------
+# DURABLE ImportError OBSERVABILITY (OBSERVABILITY ONLY -- it never changes
+# an allow/deny verdict). Mirrors `block_subagent_destructive_action.py`'s
+# `_FAIL_OPEN_LOG_RELPATH` / `_log_fail_open` precedent: settings-home-
+# rooted (machine-scoped, like that log -- this is about the INSTALL, not
+# any one target repo), best-effort append, NEVER raises. A separate file
+# from that guard's own log (not folded in) for the same reason that log
+# gives for staying separate from ITS sibling: different grammar/verbs, a
+# different failure class (grammar-package absence vs. identity-resolution
+# fail-open).
+#
+# Deliberately NOT gated behind `_parser_cache` for de-duplication: unlike
+# the SUCCESS path (`_parser()` sets `_parser_cache` once and reuses it),
+# an ImportError is raised BEFORE `_parser_cache` is ever assigned, so this
+# branch re-raises and re-enters on every single PowerShell-dialect call for
+# the life of the process, not once (verified by reading `_parser()` below --
+# do not assume otherwise). Left unbounded per-call would make a broken
+# install's log grow once per PowerShell command; `_LOGGED_PARSER_UNAVAILABLE`
+# below bounds it to one durable write per process, matching this module's
+# own "record once per process, not once per call" intent while still
+# guaranteeing the FIRST occurrence -- the one that matters for detection --
+# is never lost.
+# ---------------------------------------------------------------------------
+_DIALECT_PARSER_UNAVAILABLE_LOG_RELPATH = ("state", "dialect-parser-unavailable.log")
+_LOGGED_PARSER_UNAVAILABLE = False
+
+
+def _dialect_parser_unavailable_log_path() -> Path:
+    """Settings-home-rooted path for the durable ImportError record -- see
+    module-level comment above for why this mirrors, but does not share,
+    `block_subagent_destructive_action._fail_open_log_path`."""
+    return settings_home() / Path(*_DIALECT_PARSER_UNAVAILABLE_LOG_RELPATH)
+
+
+def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
+    """Best-effort, once-per-process durable append recording that the
+    PowerShell grammar package could not be imported -- i.e. PowerShell
+    command classification is disabled machine-wide, not merely undecided
+    for one command. NEVER raises (mirrors `_log_fail_open`'s own
+    never-raise contract one layer up: a guard hot path must never fail
+    because its observability write failed).
+
+    OBSERVABILITY ONLY -- it never changes an allow/deny verdict.
+
+    Agent-facing register (`docs/wiki/guard-messaging.md` § Register): the
+    remedy line names `/coordinator:install`, never an override key.
+    """
+    global _LOGGED_PARSER_UNAVAILABLE
+    if _LOGGED_PARSER_UNAVAILABLE:
+        return
+    try:
+        log_path = _dialect_parser_unavailable_log_path()
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        line = (
+            f"[{timestamp}] PARSER-UNAVAILABLE guard={guard_name!r} "
+            f"reason={reason!r} remedy='/coordinator:install rebuilds the venv'\n"
+        )
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+        _LOGGED_PARSER_UNAVAILABLE = True
+    except Exception:  # noqa: BLE001 -- observability must never raise into a guard
+        pass
 
 
 def _parser():
@@ -336,7 +429,9 @@ def _powershell_tokens(cmd_text: str, *, guard_name: str) -> Optional[List[str]]
     try:
         tree = _parse_powershell(cmd_text)
     except ImportError as exc:
-        record_silent(guard_name, "tree-sitter-pwsh not importable: %r" % (exc,))
+        reason = "tree-sitter-pwsh not importable: %r" % (exc,)
+        record_silent(guard_name, reason)
+        _log_dialect_parser_unavailable(guard_name, reason)
         return None
     except Exception as exc:  # pragma: no cover - defensive, mirrors record_silent's own contract
         record_silent(guard_name, "PowerShell parse raised %r" % (exc,))

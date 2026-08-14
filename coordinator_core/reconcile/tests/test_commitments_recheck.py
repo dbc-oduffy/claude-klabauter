@@ -74,8 +74,8 @@ def _make_commit(repo: Path, message: str) -> str:
 
 @pytest.fixture
 def sibling_repo(tmp_path: Path) -> Path:
-    """A real git repo standing in for the coordinator-claude clone, one commit deep."""
-    root = tmp_path / "coordinator-claude-sibling"
+    """A real git repo standing in for the DoE-claude clone, one commit deep."""
+    root = tmp_path / "doe-claude-sibling"
     root.mkdir()
     _init_repo(root)
     _make_commit(root, "first")
@@ -83,8 +83,8 @@ def sibling_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def as_example_doctrine_repo(monkeypatch: pytest.MonkeyPatch, sibling_repo: Path) -> Path:
-    """Route `repo: example_doctrine_repo` at `sibling_repo` via the same monkeypatch
+def as_doe_claude(monkeypatch: pytest.MonkeyPatch, sibling_repo: Path) -> Path:
+    """Route `repo: doe_claude` at `sibling_repo` via the same monkeypatch
     seam `test_sibling_fact.py` uses — never a registry file write."""
     monkeypatch.setattr(sibling_fact, "read_doe_root_pointer", lambda: str(sibling_repo))
     return sibling_repo
@@ -110,15 +110,15 @@ def _write_record(directory: Path, name: str, **fields: object) -> Path:
 
 
 def test_stale_title_status_mismatch_surfaces_actionable_without_auto_flip(
-    ledger_dir: Path, as_example_doctrine_repo: Path
+    ledger_dir: Path, as_doe_claude: Path
 ) -> None:
-    sha = _make_commit(as_example_doctrine_repo, "second")
+    sha = _make_commit(as_doe_claude, "second")
     record_path = _write_record(
         ledger_dir,
         "stale.yaml",
-        title='"coordinator-claude to clear the gate (now satisfied)"',
+        title='"DoE to clear the gate (now satisfied)"',
         status="open",
-        committed_by="coordinator-claude-em",
+        committed_by="doe-claude-em",
         evidence=f'"commit-sha:{sha}"',
     )
     before = record_path.read_text(encoding="utf-8")
@@ -150,7 +150,7 @@ def test_evidence_unset_is_not_yet_resolvable_not_resolved_false(ledger_dir: Pat
         "no-evidence.yaml",
         title="Some open commitment with no evidence yet",
         status="open",
-        committed_by="coordinator-claude-em",
+        committed_by="doe-claude-em",
     )
 
     result = recheck_commitments(commitments_dir=ledger_dir)
@@ -171,7 +171,7 @@ def test_evidence_null_is_also_not_yet_resolvable(ledger_dir: Path) -> None:
         "null-evidence.yaml",
         title="Open commitment with an explicit null evidence",
         status="open",
-        committed_by="coordinator-claude-em",
+        committed_by="doe-claude-em",
         evidence="null",
     )
 
@@ -186,8 +186,8 @@ def test_evidence_null_is_also_not_yet_resolvable(ledger_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_file_evidence_resolves_true_when_present(ledger_dir: Path, as_example_doctrine_repo: Path) -> None:
-    target = as_example_doctrine_repo / "coordinator" / "docs" / "wiki"
+def test_file_evidence_resolves_true_when_present(ledger_dir: Path, as_doe_claude: Path) -> None:
+    target = as_doe_claude / "coordinator" / "docs" / "wiki"
     target.mkdir(parents=True)
     (target / "tripwires.md").write_text("content\n", encoding="utf-8")
 
@@ -207,19 +207,19 @@ def test_file_evidence_resolves_true_when_present(ledger_dir: Path, as_example_d
 
 
 def test_file_evidence_strips_known_leading_repo_name_segment(
-    ledger_dir: Path, as_example_doctrine_repo: Path
+    ledger_dir: Path, as_doe_claude: Path
 ) -> None:
-    target = as_example_doctrine_repo / "coordinator" / "hooks" / "scripts"
+    target = as_doe_claude / "coordinator" / "hooks" / "scripts"
     target.mkdir(parents=True)
     (target / "enforce-agent-dispatch-mode.py").write_text("# stub\n", encoding="utf-8")
 
     _write_record(
         ledger_dir,
         "prefixed-file-evidence.yaml",
-        title="coordinator-claude to land the consuming half",
+        title="DoE to land the consuming half",
         status="open",
         committed_by="claude-central-em",
-        evidence='"file:coordinator-claude/coordinator/hooks/scripts/enforce-agent-dispatch-mode.py"',
+        evidence='"file:DoE-claude/coordinator/hooks/scripts/enforce-agent-dispatch-mode.py"',
     )
 
     result = recheck_commitments(commitments_dir=ledger_dir)
@@ -234,18 +234,18 @@ def test_file_evidence_strips_known_leading_repo_name_segment(
 
 
 def test_symbol_evidence_resolves_via_module_file_existence(
-    ledger_dir: Path, as_example_doctrine_repo: Path
+    ledger_dir: Path, as_doe_claude: Path
 ) -> None:
-    target = as_example_doctrine_repo / "coordinator_core" / "reconcile"
+    target = as_doe_claude / "coordinator_core" / "reconcile"
     target.mkdir(parents=True)
     (target / "gate_eval.py").write_text("def evaluate_gate(): ...\n", encoding="utf-8")
 
     _write_record(
         ledger_dir,
         "symbol-evidence.yaml",
-        title="coordinator-claude-em to land evaluate_gate",
+        title="doe-claude-em to land evaluate_gate",
         status="open",
-        committed_by="coordinator-claude-em",
+        committed_by="doe-claude-em",
         evidence='"symbol:coordinator_core.reconcile.gate_eval.evaluate_gate"',
     )
 
@@ -291,9 +291,9 @@ def test_unresolvable_sibling_repo_is_not_yet_resolvable(
     _write_record(
         ledger_dir,
         "unresolvable-sibling.yaml",
-        title="No coordinator-claude clone on this machine",
+        title="No DoE clone on this machine",
         status="open",
-        committed_by="coordinator-claude-em",
+        committed_by="doe-claude-em",
         evidence='"commit-sha:deadbeef"',
     )
 
@@ -311,15 +311,15 @@ def test_unresolvable_sibling_repo_is_not_yet_resolvable(
 
 
 def test_fulfilled_record_with_resolving_evidence_is_not_actionable(
-    ledger_dir: Path, as_example_doctrine_repo: Path
+    ledger_dir: Path, as_doe_claude: Path
 ) -> None:
-    sha = _make_commit(as_example_doctrine_repo, "second")
+    sha = _make_commit(as_doe_claude, "second")
     _write_record(
         ledger_dir,
         "already-fulfilled.yaml",
         title="Already closed out",
         status="fulfilled",
-        committed_by="coordinator-claude-em",
+        committed_by="doe-claude-em",
         evidence=f'"commit-sha:{sha}"',
     )
 

@@ -9,7 +9,7 @@ the full `ceremony.wsc_tail` op level. This is the C10 chunk of the
 the AC4/AC14 "port-or-retire the parity tests -> reconstruct" resolution.
 
 Provenance: the deleted bash oracle recovered from
-`coordinator-claude:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh` (the
+`DoE:85006468^:coordinator/tests/wsc-asic/test-wsc-commit-parity.sh` (the
 kill commit's parent). Its fixture data (SUBJECT/PROSE_BODY/DELETED_PATHS/
 KEPT_ENTRIES/COMMIT_PATHS below) is reproduced VERBATIM so the golden message
 this file asserts against is byte-identical to the one the bash oracle
@@ -154,7 +154,7 @@ def _unique_session_id() -> str:
 
 # ---------------------------------------------------------------------------
 # Assertions (a) + (b) -- golden fixture, reproduced VERBATIM from the
-# deleted bash oracle (coordinator-claude:85006468^:coordinator/tests/wsc-asic/
+# deleted bash oracle (DoE:85006468^:coordinator/tests/wsc-asic/
 # test-wsc-commit-parity.sh).
 # ---------------------------------------------------------------------------
 
@@ -271,6 +271,75 @@ def test_assertions_a_and_b_end_to_end_through_pipeline(tmp_path):
     # nothing more, nothing less.
     committed = set(_committed_files_at_head(repo))
     assert committed == set(_COMMIT_PATHS) | set(_DELETED_PATHS)
+
+
+# ---------------------------------------------------------------------------
+# R4 regression -- a `Deliverable-Id:` trailer stranded inside the message
+# body by Step-2.67 blocks/footer splicing in AFTER it must land in git's
+# own machine-readable trailer set, not merely appear as a substring of the
+# body text (docs/plans/2026-08-14-clear-the-windows-first-class-residuals.md
+# § R4; observed on ac60f31970c4 and 3bd2738f4869, 10 commits total on
+# 2026-08-14 -- `git log --format='%(trailers:key=Deliverable-Id,valueonly)'`
+# returned empty on all ten despite `Deliverable-Id:` being visibly present
+# in `--format=%B`).
+# ---------------------------------------------------------------------------
+
+
+def test_ac5_prose_embedded_trailer_survives_step267_blocks_via_git_trailer_parse(tmp_path):
+    """Reproduces the exact shape observed on ac60f31970c4: `prose` closes
+    with a `Deliverable-Id:` trailer line (the C7a caller-embedded case),
+    and Step-2.67 Deleted block + footer follow, and an explicit `trailers`
+    param (`Session-Id:`) is ALSO supplied. Before the R4 fix, `compose_message`
+    spliced the Deleted block + `_STEP267_FOOTER` in between the embedded
+    `Deliverable-Id:` line and the message's true end, leaving it stranded
+    mid-body -- invisible to `git log --format=%(trailers)`, which only reads
+    a message's LAST paragraph as trailers. This test invokes real `git` (the
+    repo's own git binary, via this file's `_git` helper -- the same
+    subprocess route every other test in this module already uses) rather
+    than modelling the rule, so a regression here is caught by git's own
+    trailer parser, not a hand-rolled approximation of it.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    message = compose_message(
+        subject="C4d: retire a dead shim",
+        prose="179 passed, 4 skipped.\n\nDeliverable-Id: dlv-repro-r4-9f2c1a",
+        deleted_paths=["coordinator/lib/dead-shim.sh"],
+        trailers="Session-Id: repro-session-abc123",
+    )
+
+    _seed_file(repo, "coordinator/lib/dead-shim.sh", "dead")
+    _git(["add", "--", "coordinator/lib/dead-shim.sh"], repo)
+    _git(["commit", "-q", "-m", "seed the shim to be deleted"], repo)
+    _git(["rm", "-q", "coordinator/lib/dead-shim.sh"], repo)
+
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text(message, encoding="utf-8")
+    _git(["commit", "-q", "-F", str(msg_file)], repo)
+
+    deliverable_id = _git(
+        ["log", "-1", "--format=%(trailers:key=Deliverable-Id,valueonly)"], repo
+    ).stdout.strip()
+    session_id = _git(
+        ["log", "-1", "--format=%(trailers:key=Session-Id,valueonly)"], repo
+    ).stdout.strip()
+
+    assert deliverable_id == "dlv-repro-r4-9f2c1a", (
+        "Deliverable-Id must be git-trailer-parseable, not merely present in "
+        f"the body text -- got {deliverable_id!r} from full message:\n{message}"
+    )
+    assert session_id == "repro-session-abc123"
+
+    # The footer stays ABOVE the (now-terminal, contiguous) trailer
+    # paragraph -- never interleaved with it.
+    footer_idx = message.index("--- end Step 2.67 blocks ---")
+    deliverable_idx = message.index("Deliverable-Id:")
+    assert footer_idx < deliverable_idx
+    tail = message[footer_idx:].split("--- end Step 2.67 blocks ---\n", 1)[1]
+    assert tail.strip("\n") == "Deliverable-Id: dlv-repro-r4-9f2c1a\nSession-Id: repro-session-abc123"
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +507,7 @@ def test_kpi_spawn_count_git_only_and_collapsed(tmp_path, monkeypatch):
     from OBSERVED state and picks the commit mechanism accordingly, rather
     than trusting an operator to pick `git commit -- <paths>` vs. a bare
     `git commit` by hand (the shape of two real incidents -- claude-klabauter
-    506748a0, coordinator-claude 726925b2). That correctness costs one
+    506748a0, DoE-claude 726925b2). That correctness costs one
     `diverging_paths()` call (2 `git diff` subprocesses) in the AGREE case
     this test exercises -- `commit_pipeline.explicit_stage()` needs it to
     decide what is safe to `git add` without destroying a
@@ -927,7 +996,7 @@ def test_chain_terminal_stamp_all_skipped_surfaces_tail_item_not_silent_exit_0(
 def test_single_session_close_lands_but_names_no_flip_due_in_diagnostics(
     wsc_tail_repo,
 ):
-    """Regression for cross-repo/inbox/2026-08-10-coordinator-claude-em-wsc-tail-
+    """Regression for cross-repo/inbox/2026-08-10-doe-claude-em-wsc-tail-
     silent-noop-and-gate-rewalk.md finding 1: a landed commit whose step-1
     resolve found no consumed handoff for this sid (`chain_terminal=False`,
     the ordinary single-session-close shape -- same fixture pattern as
@@ -963,6 +1032,11 @@ def test_single_session_close_lands_but_names_no_flip_due_in_diagnostics(
         "chain_terminal=False" in d and sid in d and "no terminal flip was due" in d
         for d in diagnostics
     ), diagnostics
+
+    stamp_result = result["tail_results"]["consumed_handoff_stamp"]
+    assert "consumed_handoff_stamp:no-consumed-handoff-resolved" in stamp_result["skipped"], (
+        stamp_result
+    )
 
 
 def test_chain_terminal_commit_abort_stamps_never_evaluated_and_labels_nodes(

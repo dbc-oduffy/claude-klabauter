@@ -9,9 +9,9 @@ Purpose: these four steps each wrap an ALREADY-native sibling CLI
 (stitch-observer-sidecar.py, workday-complete-step9-append-changelog.py,
 coordinator-ceremony-hook.py, emit-cadence.py) with a small amount of genuine
 imperative logic -- path construction, `--only`-mode gating, and exit-code-to-message
-dispatch ladders -- that was still living as inline bash in coordinator-claude's
+dispatch ladders -- that was still living as inline bash in DoE-claude's
 commands/workday-complete.md. This CLI concentrates that residual logic into one
-naked-Python, idempotent, self-resolving entrypoint so the coordinator-claude ceremony body can
+naked-Python, idempotent, self-resolving entrypoint so the DoE ceremony body can
 call it by subcommand name instead of carrying the bash.
 
 This file does NOT re-implement any of the four sibling CLIs' own logic -- it only
@@ -27,11 +27,11 @@ Subcommands:
       stitch-observer-sidecar.py against them. A non-zero exit from the sidecar
       stitcher is a HARD FAIL here (exit 1) -- the sidecar is left in place and the
       caller must NOT re-run blind (mirrors the bash oracle's `exit 1` on
-      `_stitch_rc != 0`, coordinator-claude workday-complete.md Step 4d).
+      `_stitch_rc != 0`, DoE workday-complete.md Step 4d).
 
   step9-dispatch [SCOPE_SUMMARY] [--only-mode] [--no-push] [--dry-run]
                  [--commit-span RANGE] [--for-date DATE]
-      Step 9's dispatch gate. Under `--only-mode` (coordinator-claude `$_ONLY_MODE=1`), the
+      Step 9's dispatch gate. Under `--only-mode` (DoE `$_ONLY_MODE=1`), the
       today-scoped changelog block is a no-op -- prints the skip note and returns 0
       without invoking the changelog-append CLI at all (the targeted block was
       already written via Step 3.5 Phase B). Otherwise forwards SCOPE_SUMMARY and
@@ -81,12 +81,12 @@ Subcommands:
 
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Windows de-bash
     campaign, M3 chunk WDC-4)
-Spec backlink: commands/workday-complete.md (coordinator-claude) § Step 4d / Step 9 /
-    Step 10.5 / Step 10.6 -- the bash this file replaces; the coordinator-claude repoint (D2) is a
+Spec backlink: commands/workday-complete.md (DoE-claude) § Step 4d / Step 9 /
+    Step 10.5 / Step 10.6 -- the bash this file replaces; the DoE repoint (D2) is a
     later wave and is out of scope for this port.
-Prior bash form: see coordinator-claude git history for commands/workday-complete.md's
+Prior bash form: see DoE-claude git history for commands/workday-complete.md's
     inline Step 4d / Step 9 dispatch / Step 10.5 / Step 10.6 blocks (this port lifts
-    that logic out; the coordinator-claude file itself is not edited here).
+    that logic out; the DoE file itself is not edited here).
 """
 from __future__ import annotations
 

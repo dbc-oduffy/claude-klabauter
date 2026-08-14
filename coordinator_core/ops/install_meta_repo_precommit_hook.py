@@ -51,7 +51,7 @@ If a pre-commit hook already exists with content other than this gate chain
 (custom hooks, Git LFS prefix, etc.), the installer appends whatever gates
 are still missing after the existing block rather than clobbering it.
 
-Port of: install-meta-repo-precommit-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: install-meta-repo-precommit-hook.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: cross-repo/inbox/2026-06-08-exec-bit-drift-runtime-tripwire-tests.md
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -167,6 +167,8 @@ Negative-spec (still-intentional behavior, not a residual bug):
 
 from __future__ import annotations
 
+GENERATES = []  # writes only $HOME/.claude's .git/hooks/pre-commit (and post-merge/post-checkout), never tracked
+
 import os
 import re
 import subprocess
@@ -183,6 +185,12 @@ from coordinator_core.install.write_surface import (
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core import meta_repo_identity as _meta_repo_identity
 from coordinator_core import py_probe_sh as _py_probe_sh
+# Cross-package import of the SSOT doc-pointer display string (same
+# precedent write_guards already uses for operator_override_note itself) --
+# emitted hook-body remediation text points readers at the doc that
+# enumerates these keys, never names a key inline (B6/B8, see
+# docs/wiki/guard-messaging.md § Register).
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 
 _PROG = "install-meta-repo-precommit-hook"
 
@@ -636,10 +644,10 @@ def _bash_group_lines(bash_gates: List["_Gate"], bin_dir: Path) -> List[str]:
         "# escape hatch) rather than silently exiting the whole hook (D2).",
         "if ! command -v bash >/dev/null 2>&1; then",
         f"  if {override_test}; then",
-        f'    echo "pre-commit: bash-kind gate(s) SKIPPED -- no bash interpreter found on PATH ({_BASH_MISSING_OVERRIDE_ENV}=1 set)." >&2',
+        '    echo "pre-commit: bash-kind gate(s) SKIPPED -- no bash interpreter found on PATH (override set)." >&2',
         "  else",
         '    echo "pre-commit: BLOCKED -- bash-kind gate(s) cannot run: no bash interpreter found on PATH." >&2',
-        f'    echo "pre-commit: remediation: install bash, or set {_BASH_MISSING_OVERRIDE_ENV}=1 to bypass (PM-authorized only)." >&2',
+        f'    echo "pre-commit: remediation: install bash. See {OVERRIDE_KEYS_DOC_DISPLAY} for override options." >&2',
         "    exit 1",
         "  fi",
         "else",
@@ -689,10 +697,10 @@ def _gate_block(gate: _Gate, bin_dir: Path) -> List[str]:
     def _cannot_run_branch(reason: str, remediation: str) -> List[str]:
         return [
             f"  if {override_test}; then",
-            f'    echo "pre-commit: gate [{gate.label}] ({gate.marker}) SKIPPED -- {reason} ({gate.override_env}=1 set)." >&2',
+            f'    echo "pre-commit: gate [{gate.label}] ({gate.marker}) SKIPPED -- {reason} (override set)." >&2',
             "  else",
             f'    echo "pre-commit: BLOCKED -- gate [{gate.label}] ({gate.marker}) cannot run: {reason}." >&2',
-            f'    echo "pre-commit: remediation: {remediation}, or set {gate.override_env}=1 to bypass (PM-authorized only)." >&2',
+            f'    echo "pre-commit: remediation: {remediation}. See {OVERRIDE_KEYS_DOC_DISPLAY} for override options." >&2',
             "    exit 1",
             "  fi",
         ]
@@ -935,7 +943,7 @@ def _default_target() -> Optional[str]:
     a working repo, so the ONE surface whose whole job is to be installed was
     the one surface a bare invocation never installed — and the skip was
     indistinguishable from success to `/coordinator:install` and `/repo-setup`
-    (coordinator-claude `state/bug-backlog/2026-07-29-meta-repo-gate-installer-is-cwd-gated-so-3763de751e55.yaml`;
+    (DoE `state/bug-backlog/2026-07-29-meta-repo-gate-installer-is-cwd-gated-so-3763de751e55.yaml`;
     it is why `~/.claude/.git/hooks` held only `pre-commit` on 2026-07-29 even
     though the `main_install_all` call site had already landed). Resolving the
     subject rather than inferring it from where the caller happens to stand is

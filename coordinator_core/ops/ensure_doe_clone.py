@@ -1,25 +1,25 @@
 """
-coordinator_core.ops.ensure_doe_clone — coordinator-claude-clone resolution + idempotent
+coordinator_core.ops.ensure_doe_clone — DoE-clone resolution + idempotent
 clone-if-absent, ported from coordinator/commands/install.md Step 3.5a
-(the two literal bash fences at lines 731 and 747 of the coordinator-claude source).
+(the two literal bash fences at lines 731 and 747 of the DoE-claude source).
 
-Purpose: resolve the local coordinator-claude clone path (``REPO_EXAMPLE_DOCTRINE_REPO`` env
-override, then ``machine-local get repos.example_doctrine_repo``) and, if the resolved
+Purpose: resolve the local DoE-claude clone path (``REPO_DOE_CLAUDE`` env
+override, then ``machine-local get repos.doe_claude``) and, if the resolved
 directory does not yet contain a ``.git`` (i.e. is not actually cloned),
 perform the clone. Emits the exact ``doe_clone: <status>`` contract row the
-Coordinator-claude doc's Phase 7 status table expects on every exit path — this collapses
+DoE doc's Phase 7 status table expects on every exit path — this collapses
 install.md's own status-row echo/if wrapper into the CLI (M3/D9 pattern,
 docs/plans/2026-07-23-skills-carry-no-code-extirpation.md).
 
-Division of labor (unchanged from every other coordinator-claude-clone-resolving op in this
+Division of labor (unchanged from every other DoE-clone-resolving op in this
 slice, e.g. ``gen_doe_root_pointer``): resolution order is env override,
 then the ``machine-local`` registry. This module additionally resolves a
-clone URL (``REPO_EXAMPLE_DOCTRINE_REPO_URL`` env override, then ``machine-local get
-repos.example_doctrine_repo_url``) — a widening over the coordinator-claude doc block's own literal
+clone URL (``REPO_DOE_CLAUDE_URL`` env override, then ``machine-local get
+repos.doe_claude_url``) — a widening over the DoE doc block's own literal
 text, which read ``DOE_REPO_URL="<operator-supplied or coordinated from
-repos.example_doctrine_repo_url registry key>"`` (a placeholder comment, not runnable
+repos.doe_claude_url registry key>"`` (a placeholder comment, not runnable
 shell). A real CLI has to resolve an actual URL to invoke ``git clone``, so
-this module implements the ``repos.example_doctrine_repo_url`` half of that comment
+this module implements the ``repos.doe_claude_url`` half of that comment
 literally and fails loud (a distinct ``doe_clone: failed`` row) when no URL
 is resolvable — see docs/plans/2026-07-23-skills-carry-no-code-extirpation.md
 port notes for this repo's disposition of the gap.
@@ -80,19 +80,19 @@ def _registry_get(key: str) -> str:
 
 
 def resolve_doe_clone() -> str:
-    """Tier 1: REPO_EXAMPLE_DOCTRINE_REPO env. Tier 2: machine-local get repos.example_doctrine_repo."""
-    env_override = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO", "")
+    """Tier 1: REPO_DOE_CLAUDE env. Tier 2: machine-local get repos.doe_claude."""
+    env_override = os.environ.get("REPO_DOE_CLAUDE", "")
     if env_override:
         return env_override
-    return _registry_get("repos.example_doctrine_repo")
+    return _registry_get("repos.doe_claude")
 
 
 def resolve_doe_clone_url() -> str:
-    """Tier 1: REPO_EXAMPLE_DOCTRINE_REPO_URL env. Tier 2: machine-local get repos.example_doctrine_repo_url."""
-    env_override = os.environ.get("REPO_EXAMPLE_DOCTRINE_REPO_URL", "")
+    """Tier 1: REPO_DOE_CLAUDE_URL env. Tier 2: machine-local get repos.doe_claude_url."""
+    env_override = os.environ.get("REPO_DOE_CLAUDE_URL", "")
     if env_override:
         return env_override
-    return _registry_get("repos.example_doctrine_repo_url")
+    return _registry_get("repos.doe_claude_url")
 
 
 def main(argv: List[str]) -> int:
@@ -106,12 +106,12 @@ def main(argv: List[str]) -> int:
 
     if not doe_clone:
         if check_only:
-            print("doe_clone: skipped (repos.example_doctrine_repo not set)")
+            print("doe_clone: skipped (repos.doe_claude not set)")
             return 0
         if non_interactive:
             msg = (
-                "doe_clone: failed (repos.example_doctrine_repo not set — pre-seed the registry or set "
-                "REPO_EXAMPLE_DOCTRINE_REPO before running --non-interactive install)"
+                "doe_clone: failed (repos.doe_claude not set — pre-seed the registry or set "
+                "REPO_DOE_CLAUDE before running --non-interactive install)"
             )
             print(msg, file=sys.stderr)
             print(msg)
@@ -121,8 +121,8 @@ def main(argv: List[str]) -> int:
         # "skipped" disposition so install.md's interactive prose can prompt
         # then re-invoke.
         print(
-            "doe_clone: skipped (repos.example_doctrine_repo not set — run the interactive "
-            "coordinator-claude-clone prompt, then re-invoke)"
+            "doe_clone: skipped (repos.doe_claude not set — run the interactive "
+            "DoE-clone prompt, then re-invoke)"
         )
         return 1
 
@@ -139,8 +139,8 @@ def main(argv: List[str]) -> int:
     url = resolve_doe_clone_url()
     if not url:
         msg = (
-            f"doe_clone: failed (repos.example_doctrine_repo_url not resolvable — set REPO_EXAMPLE_DOCTRINE_REPO_URL "
-            f"or `machine-local set repos.example_doctrine_repo_url <url>` for target {doe_clone})"
+            f"doe_clone: failed (repos.doe_claude_url not resolvable — set REPO_DOE_CLAUDE_URL "
+            f"or `machine-local set repos.doe_claude_url <url>` for target {doe_clone})"
         )
         print(msg, file=sys.stderr)
         print(msg)

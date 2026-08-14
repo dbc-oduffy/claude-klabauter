@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.guard_memory_store_cap — advisory guard.
 
-Discharges AC14 of coordinator-claude's
+Discharges AC14 of DoE-claude's
 ``docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md`` (chunk C12).
 ``MEMORY.md`` is the one always-on boot surface previously governed by pure
 prose (``coordinator/commands/update-docs.md``'s "a pointer index, not a
@@ -71,9 +71,9 @@ the one both the C12 spec's own worked example (the boot-payload plan's C8
 survivor rewrite landing before this guard arms) and its own body ask for
 by name ("a shrinking edit to an over-cap file is PERMITTED").
 
-Spec backlink: coordinator-claude
+Spec backlink: DoE-claude
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C12, AC14.
-Sibling guards this module's idiom is copied from (coordinator-claude repo, no
+Sibling guards this module's idiom is copied from (DoE-claude repo, no
   ``.sh``/``.py`` reference hook of its own — C12 is a net-new guard, not a
   port):
   ``coordinator_core/write_guards/block_home_dir_memo_delivery.py`` (home

@@ -1,6 +1,6 @@
 """Tests for coordinator_core.ops.measure_token_envelope.
 
-Spec backlink: docs/plans/2026-07-27-doctrine-envelope-allocation.md § C1(a)(c)
+Spec backlink: DoE-claude:pln-always-loaded-doctrine-envelop-cd5932 § C1(a)(c)
 """
 
 from __future__ import annotations

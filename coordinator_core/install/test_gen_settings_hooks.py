@@ -2,18 +2,18 @@
 coordinator_core.install.test_gen_settings_hooks — parity tests for
 coordinator_core.install.gen_settings_hooks.
 
-Port of: gen-settings-hooks.sh (coordinator-claude a2078a9b, 2026-07-22).
+Port of: gen-settings-hooks.sh (DoE a2078a9b, 2026-07-22).
 
 Independently re-derives expected behavior from the bash oracle's OWN test
 fixtures (``hooks.json`` and ``expected-generated.json``, co-located under
 ``coordinator/bin/fixtures/gen-settings-hooks/`` as of the 2026-07-22
 executable-surface migration — see the fixture-location block below) rather
 than re-asserting this port's own transcription — mirrors
-gen-settings-hooks.test.sh (coordinator-claude c3322493, 2026-07-22) tests (a)-(g) 1:1 by
+gen-settings-hooks.test.sh (DoE c3322493, 2026-07-22) tests (a)-(g) 1:1 by
 assertion intent, re-derived against the ported Python entrypoints, not
 copy-pasted jq queries.
 
-Spec backlink: docs/plans/2026-07-04-doe-maximalist-execution-plugin-dir.md § M1
+Spec backlink: DoE-claude:pln-doe-maximalist-execution-plugi-6d808d § M1
 Port backlink: docs/plans/2026-07-16-clean-slate-residual-migration.md
     (BIG_PORT Wave B, item gen-settings-hooks)
 """
@@ -53,7 +53,7 @@ from coordinator_core.testing.doe_root import resolve_doe_root
 
 # Matches a Windows drive-letter absolute path (``C:\`` or ``C:/``) anywhere
 # in a string — the portability regression this whole test module guards
-# against (2026-07-28 incident: `X:/coordinator-claude/...` baked into a macOS
+# against (2026-07-28 incident: `X:/DoE-claude/...` baked into a macOS
 # host's settings.json).
 _DRIVE_LETTER_RE = re.compile(r"[A-Za-z]:[\\/]")
 
@@ -114,9 +114,9 @@ _PORTABLE_EXPR = hook_root_env_expr(windows=(os.name == "nt"))
 # ---------------------------------------------------------------------------
 # fixture location — co-located first (the oracle fixtures moved TO claude-klabauter
 # as part of the 2026-07-22 executable-surface migration:
-# coordinator/bin/fixtures/gen-settings-hooks/), coordinator-claude-resident sibling
+# coordinator/bin/fixtures/gen-settings-hooks/), DoE-resident sibling
 # checkout second (pre-migration / alternate layouts). This mirrors the
-# co-located -> coordinator-claude-resident two-rung shape used elsewhere for the split
+# co-located -> DoE-resident two-rung shape used elsewhere for the split
 # repo layout (coordinator_core.data_root, coordinator/bin/lib/
 # coordinator_data_root.py) — no silent skip: a caller with neither rung
 # resolved gets a hard, informative failure, not a quietly-skipped suite.
@@ -135,7 +135,7 @@ else:
     raise RuntimeError(
         "test_gen_settings_hooks: oracle fixture not found. "
         f"Co-located (claude-klabauter) tried: {_COLOCATED_FIXTURES}. "
-        f"coordinator-claude-resident tried: {_DOE_FIXTURES}."
+        f"DoE-resident tried: {_DOE_FIXTURES}."
     )
 
 _ORACLE_HOOKS_JSON = _ORACLE_FIXTURES / "hooks.json"
@@ -1016,7 +1016,7 @@ def test_resolve_settings_out_path_uses_home_when_set(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------------------
 # Portability regression suite (2026-07-28) — a POSIX host's settings.json
-# was silently overwritten with a Windows peer's baked `X:/coordinator-claude/...`
+# was silently overwritten with a Windows peer's baked `X:/DoE-claude/...`
 # hook-command paths by a cross-machine sync of the file, killing every
 # coordinator hook there with no error surfaced anywhere. These tests assert
 # the structural invariant that makes that class of failure impossible:
@@ -1111,7 +1111,7 @@ def test_assert_portable_command_fails_loud_on_residual_cpr():
 def test_assert_portable_command_fails_loud_on_drive_letter():
     with pytest.raises(GenSettingsHooksError, match=r"[Dd]rive-letter"):
         _assert_portable_command(
-            "python3 X:/coordinator-claude/coordinator/hooks/scripts/x.py", event="SessionStart"
+            "python3 X:/DoE-claude/coordinator/hooks/scripts/x.py", event="SessionStart"
         )
 
 
@@ -1636,7 +1636,7 @@ def test_cross_surface_pin_detect_foreign_platform_paths_clean_for_posix_shape(
 def test_cross_surface_pin_detect_foreign_platform_paths_clean_for_windows_shape():
     # Illustrative Windows-shaped placeholder paths for a detector fixture,
     # never a real host -- see the module-level comment above.
-    windows_root = "C:/Users/Jane/coordinator-claude/coordinator"  # abs-path-ok: illustrative placeholder, not a real host
+    windows_root = "C:/Users/Jane/DoE-claude/coordinator"  # abs-path-ok: illustrative placeholder, not a real host
     windows_python = "C:/Users/Jane/.venv/Scripts/python.exe"  # abs-path-ok: illustrative placeholder, not a real host
     windows_settings = {
         "env": {

@@ -7,7 +7,7 @@ main()/_run(), same fixtures/assertions/expected exit codes as the bash
 oracle's 13 subprocess tests. Parity verified against the bash oracle on
 matching fixtures during this port's parity gate.
 
-Port of: test-list-reverse-drift-scoping.sh (coordinator-claude 290997c7, 2026-07-22)
+Port of: test-list-reverse-drift-scoping.sh (DoE 290997c7, 2026-07-22)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 Spec backlink: cross-repo/inbox/2026-06-01-reverse-drift-gate-per-repo-scoping.md
 

@@ -21,7 +21,7 @@ layer and would skip the persistent write if the operator already has
 MACHINE_LOCAL_FAN_OUT_LARGE_WAVE_THRESHOLD exported (the clean-install hole
 The Staff Engineer F1/F7 flagged). Never clobbers an operator's manual registry value.
 
-Port source: coordinator/bin/capture-fan-out-threshold.sh (coordinator-claude)
+Port source: coordinator/bin/capture-fan-out-threshold.sh (DoE-claude)
 Spec backlink: docs/plans/2026-05-30-organic-ramp-concurrency-doctrine.md §C6
 
 Negative-spec (deliberate divergence from the bash oracle):

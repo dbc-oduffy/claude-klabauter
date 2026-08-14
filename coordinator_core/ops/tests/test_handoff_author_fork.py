@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
+import yaml
 
 # ---------------------------------------------------------------------------
 # Import guard — fires ALL @register_op(...) side-effects (CBR #12).
@@ -73,6 +74,7 @@ from coordinator_core.ops.handoff_author_fork import (
     _resolve_stamp_match_text,
     _stamp_fork_provenance,
 )
+from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops.match_core import ResolutionReason
 
 # ---------------------------------------------------------------------------
@@ -132,6 +134,19 @@ def _make_git_repo(root: Path) -> Path:
         creationflags=_NO_WIN,
     )
     return (root / ".git").resolve()
+
+
+def _load_frontmatter(path: Path) -> dict:
+    """Decode a handoff's frontmatter block into a dict.
+
+    Asserts on the DECODED value rather than on raw on-disk text, because the
+    140-char cap the claim gate enforces (``schema_validate._cf_summary_length_cap``)
+    measures the ``yaml.safe_load``-decoded value — a raw-text length assertion
+    would drift from the thing under test.
+    """
+    split = split_frontmatter(path.read_text(encoding="utf-8"))
+    assert split is not None, f"no frontmatter block in {path}"
+    return yaml.safe_load(split.fm_text) or {}
 
 
 def _seed_plan(plans_dir: Path, filename: str, *, title: str, plan_id: str) -> None:
@@ -1369,7 +1384,7 @@ class TestArchivedTwinGuard:
     already-archived record's filename — see
     coordinator_core.handoff_creation_guard for the shared invariant this
     delegates to. Spec backlink: state/audits/2026-07-26-handoff-live-archive-
-    duplication-origin.md (coordinator-claude)."""
+    duplication-origin.md (DoE-claude)."""
 
     def test_refuses_when_filename_collides_with_archived_record(self, tmp_path, monkeypatch):
         """out_path's filename already exists under archive/handoffs/ -> error, no write."""
@@ -2080,3 +2095,161 @@ class TestStampMode:
         )
         assert result.get("status") != "ok"
         assert "origin_plan_id" in result.get("error", "")
+
+
+# ---------------------------------------------------------------------------
+# Tests: the stamp door composes handoff_normalize._normalize_one_text
+#
+# The module docstring's "Write mechanics" section has always declared this
+# composition, and the from-scratch author path has always honoured it.  The
+# stamp door did not — and spinoff authoring (`baton-assemble apply` d1 mints
+# via `coordinator-doc-new --type=spinoff`, d3 always passes `handoff_path`)
+# routes through the stamp door unconditionally, so no normalizer had ever
+# measured a spinoff artifact.  These pin the composition at the op boundary.
+# ---------------------------------------------------------------------------
+
+
+class TestStampModeComposesNormalize:
+    """Stamp mode runs `_normalize_one_text` AFTER the five origin_* fields are
+    written — the ordering the module docstring declares, and the same one the
+    author path uses."""
+
+    @staticmethod
+    def _seed_bare(handoffs_dir: Path, filename: str, *, summary: str) -> Path:
+        """A spinoff-shaped target carrying NO `category`/`deliverable_id`/
+        `initiative` and the caller's `summary` verbatim — the fields the
+        normalize pass is responsible for."""
+        handoffs_dir.mkdir(parents=True, exist_ok=True)
+        content = (
+            "---\n"
+            'title: "Normalize Composition Fixture"\n'
+            "created: 2026-08-14\n"
+            'branch: "none"\n'
+            "status: open\n"
+            "predecessor: none\n"
+            "kind: spinoff\n"
+            f'summary: "{summary}"\n'
+            "---\n\n# Body\n"
+        )
+        path = handoffs_dir / filename
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_over_cap_summary_is_capped_at_the_stamp_door(self, tmp_path, monkeypatch):
+        """The live defect: a 207-char `summary:` on the stamp door's target
+        used to reach disk unmeasured and was then refused by the claim gate's
+        140-char cap.  The composed normalize pass truncates ahead of the gate.
+
+        Note the scope limit this does NOT close — a summary typed by hand
+        AFTER this op runs (`/spinoff` Step 2 does exactly that) is still
+        unmeasured.  See DoE wiki
+        `coordinator-tripwires/normalize-at-creation-does-not-cover-a-later-hand-edit.md`.
+        """
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        handoffs_dir = repo_root / "state" / "handoffs"
+        long_summary = "x" * 207
+        target = self._seed_bare(
+            handoffs_dir, "2026-08-14-over-cap.md", summary=long_summary
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-cap-at-stamp")
+
+        result = _run(
+            _handler({"handoff_path": str(target)}, repo_root=common_dir)
+        )
+        assert result.get("status") == "ok", f"unexpected: {result}"
+
+        parsed = _load_frontmatter(target)
+        assert len(str(parsed["summary"])) == 140, parsed["summary"]
+        assert str(parsed["summary"]).endswith("…")
+
+    def test_absent_normalize_fields_are_backfilled_at_the_stamp_door(
+        self, tmp_path, monkeypatch
+    ):
+        """`category` / `deliverable_id` / `initiative` — the three the module
+        docstring names alongside `summary` — are backfilled on the stamp
+        door's target, not only on the author path's fresh file."""
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        handoffs_dir = repo_root / "state" / "handoffs"
+        target = self._seed_bare(
+            handoffs_dir, "2026-08-14-backfill.md", summary="short enough"
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-backfill-at-stamp")
+
+        result = _run(
+            _handler(
+                {"handoff_path": str(target), "origin_plan_id": "pln-x"},
+                repo_root=common_dir,
+            )
+        )
+        assert result.get("status") == "ok", f"unexpected: {result}"
+
+        parsed = _load_frontmatter(target)
+        assert parsed.get("category"), parsed
+        assert parsed.get("deliverable_id"), parsed
+        assert "initiative" in parsed, parsed
+        # Ordering: normalize ran AFTER the provenance stamp, so both survive.
+        assert parsed["origin_plan_id"] == "pln-x", parsed
+
+    def test_present_in_shape_values_are_carried_not_rewritten(
+        self, tmp_path, monkeypatch
+    ):
+        """The normalize pass is absence- and cap-triggered.  A target that
+        already carries in-shape values keeps them byte-for-byte, so adding
+        this pass cannot regress a caller whose artifact was already clean."""
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        handoffs_dir = repo_root / "state" / "handoffs"
+        handoffs_dir.mkdir(parents=True, exist_ok=True)
+        target = handoffs_dir / "2026-08-14-already-clean.md"
+        target.write_text(
+            "---\n"
+            'title: "Already Clean"\n'
+            "created: 2026-08-14\n"
+            'branch: "none"\n'
+            "status: open\n"
+            "predecessor: none\n"
+            "kind: spinoff\n"
+            "category: process\n"
+            'summary: "a perfectly ordinary summary"\n'
+            'deliverable_id: "dlv-pre-existing-abc123"\n'
+            "initiative: null\n"
+            "---\n\n# Body\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-carry-at-stamp")
+
+        result = _run(_handler({"handoff_path": str(target)}, repo_root=common_dir))
+        assert result.get("status") == "ok", f"unexpected: {result}"
+
+        parsed = _load_frontmatter(target)
+        assert parsed["category"] == "process"
+        assert parsed["summary"] == "a perfectly ordinary summary"
+        assert parsed["deliverable_id"] == "dlv-pre-existing-abc123"
+        assert parsed["initiative"] is None
+
+    def test_second_stamp_pass_is_a_fixed_point_not_progressive_truncation(
+        self, tmp_path, monkeypatch
+    ):
+        """The stamp door can fire more than once on one artifact (a retried
+        directive, a resumed run).  A second normalize pass must be a no-op —
+        in particular the 140-char truncation must be a fixed point, never
+        shaving another character off each time."""
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        handoffs_dir = repo_root / "state" / "handoffs"
+        target = self._seed_bare(
+            handoffs_dir, "2026-08-14-fixed-point.md", summary="y" * 300
+        )
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-fixed-point")
+        params = {"handoff_path": str(target), "origin_plan_id": "pln-fp"}
+
+        assert _run(_handler(params, repo_root=common_dir)).get("status") == "ok"
+        after_first = target.read_text(encoding="utf-8")
+        assert len(str(_load_frontmatter(target)["summary"])) == 140
+
+        assert _run(_handler(params, repo_root=common_dir)).get("status") == "ok"
+        after_second = target.read_text(encoding="utf-8")
+
+        assert after_second == after_first, "second stamp+normalize pass was not a no-op"

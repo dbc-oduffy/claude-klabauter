@@ -2,7 +2,7 @@
 test_goal_authoring_wire_projection — executable spec fixtures for the
 authoring→wire projection (C11's field map) and fleet-keying (C12).
 
-Pytest port of coordinator-claude `coordinator/cockpit-contract/test/goal-authoring-wire-projection.test.ts`.
+Pytest port of DoE `coordinator/cockpit-contract/test/goal-authoring-wire-projection.test.ts`.
 
 This package does not host the emit engine (DR-047: claude-klabauter's `artifact.emit`
 is the engine-tier producer — this same package, DR-047 post-boundary-redraw).

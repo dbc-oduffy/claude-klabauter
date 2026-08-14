@@ -1,6 +1,6 @@
 """coordinator_core.write_guards.nudge_prose_queue_creation — advisory guard.
 
-Spec: coordinator-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec: DoE-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 part 3 ("Row 4's guard: creation-deny, append-silent") — the deny half of
 that ruling. Its sibling module, ``nudge_prose_queue_append.py``, carries the
 append half, which DR-115's later § PM direction (A) amended from silent to
@@ -105,7 +105,7 @@ Negative-spec:
   - Does NOT return ``permissionDecision: "deny"`` — ``CLASS = "advisory"``
     per DR-277; the write always proceeds, even on a positive match.
 
-Spec backlink: coordinator-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
+Spec backlink: DoE-claude docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 """
 
 from __future__ import annotations

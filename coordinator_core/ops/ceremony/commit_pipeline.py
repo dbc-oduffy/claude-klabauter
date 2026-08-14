@@ -97,6 +97,14 @@ Negative-spec (hard-won):
 from __future__ import annotations
 import sys
 
+# Generator-provenance declaration (generator_provenance.py's AST reader):
+# this module's only file write is a PID-scoped commit-message temp file
+# under the git common dir (_write_commit_message_tempfile, via tempfile) --
+# never a tracked repo-relative artifact. Commit/push effects land through
+# git subprocess calls (git_native), not a Python-level file write this
+# sweep can see.
+GENERATES = []
+
 import os
 import re
 import tempfile
@@ -449,8 +457,8 @@ def explicit_stage(
                                           pipe-delimited forwarding value).
       `p` is a staged deletion source (2026-08-04 fix, defect B -- see
       "Deletion staging" below) -> checked BEFORE the plain `exists()` test
-      above (2026-08-11 fix, coordinator-claude-em memo `cross-repo/inbox/2026-08-11-
-      coordinator-claude-em-two-gaps-that-let-machine-local-files-stay-tracked.md`
+      above (2026-08-11 fix, doe-claude-em memo `cross-repo/inbox/2026-08-11-
+      doe-claude-em-two-gaps-that-let-machine-local-files-stay-tracked.md`
       § 2 -- see "Untrack vs. add" below for why the ordering itself is the
       fix) ->
         `p` not in `caller_paths`     -> skipped `"swept-deleted:<p>"`
@@ -507,8 +515,8 @@ def explicit_stage(
                                           staged before this call and is not
                                           staged now.
 
-    Untrack vs. add (2026-08-11 fix, coordinator-claude-em memo `cross-repo/inbox/
-    2026-08-11-coordinator-claude-em-two-gaps-that-let-machine-local-files-stay-
+    Untrack vs. add (2026-08-11 fix, doe-claude-em memo `cross-repo/inbox/
+    2026-08-11-doe-claude-em-two-gaps-that-let-machine-local-files-stay-
     tracked.md` § 2 "`scoped-git-commit` cannot perform an untrack commit, by
     construction"): a `git rm --cached` untrack leaves the file's CONTENT on
     disk (only the index entry is removed), so `(worktree_root / p).exists()`
@@ -1095,7 +1103,7 @@ def commit(
     private-index branch (builds the commit tree under a throwaway index
     copy, preserving each diverged path's staged content verbatim, and lands
     via a compare-and-swap `update-ref`). See `commit_scoped`'s own
-    docstring for the two incidents (claude-klabauter 506748a0, coordinator-claude
+    docstring for the two incidents (claude-klabauter 506748a0, DoE-claude
     726925b2) neither commit form is safe against alone. Unlinks the temp
     file in a `finally` regardless of outcome.
 
@@ -1767,7 +1775,7 @@ def push_with_retry(
     non-`work/*` branch. NEVER ambient (no env var, no module-level flag --
     see the plan's Anti-scope); the caller must pass it explicitly on the
     one call that needs it. The ONE sanctioned consumer, as of this chunk,
-    is coordinator-claude's `merging-to-main` SKILL, Step 10 item 5 (the
+    is DoE-claude's `merging-to-main` SKILL, Step 10 item 5 (the
     post-merge, on-`main`, release-notes bookkeeping commit) -- see
     `run_commit_pipeline`'s own docstring for the full citation. No op in
     this repo passes it. Every exercised override -- the gate actually
@@ -2227,7 +2235,7 @@ def run_commit_pipeline(
     naming the branch and `protected_branch_override_reason`. Never an env
     var or a module-level flag (see the plan's Anti-scope) -- the ONE
     sanctioned consumer of this argument, as of this chunk, is
-    coordinator-claude's `merging-to-main` SKILL (`coordinator/skills/merging-to-
+    DoE-claude's `merging-to-main` SKILL (`coordinator/skills/merging-to-
     main/SKILL.md`), Step 10 ("Completion-Log Status Flip") item 5: the
     post-merge, on-`main`, release-notes bookkeeping commit that runs
     AFTER a PR has already merged via `gh pr merge` -- never the work
@@ -2837,7 +2845,7 @@ def run_commit_pipeline(
         #
         # Review: code-reviewer -- Finding 1 (verified, not just softened):
         # this is now a two-halves fix, both landed. The SessionEnd hook
-        # (`coordinator-claude coordinator/hooks/scripts/sessionend-auto-commit.py`,
+        # (`DoE-claude coordinator/hooks/scripts/sessionend-auto-commit.py`,
         # `a762df6f9888`) no longer hard-kills on timeout: it soft-
         # terminates this pipeline's own CLI (`coordinator/bin/safe-
         # commit-offer.py`), waits a 5s grace window, and only hard-kills

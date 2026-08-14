@@ -1,7 +1,7 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
-"""read_doe_root_pointer.py — shared substrate for reading the coordinator-claude repo root pointer.
+"""read_doe_root_pointer.py — shared substrate for reading the DoE repo root pointer.
 
-Shared substrate: read the coordinator-claude repo root from the durable pointer file under
+Shared substrate: read the DoE repo root from the durable pointer file under
 settings-home (${settings-home}/machine-local/.doe-root), falling back to the
 legacy cold-readable pointer (~/.claude/.doe-root) during the transition
 window. Neutral helper — NOT owned by resolve-coordinator-clone.py; shared by
@@ -20,13 +20,13 @@ private mirror of this same read — see that file's `_read_doe_root_pointer()`.
 
 Provides:
   coordinator_read_doe_root_pointer() -> str
-    Returns the coordinator-claude repo root path (a single line, stripped) or "" if
+    Returns the DoE repo root path (a single line, stripped) or "" if
     neither pointer file is present or readable. Does NOT validate whether
     the path exists on disk — callers apply that gate themselves.
 
 CLI (for shell callers that cannot import Python in-process):
   read_doe_root_pointer.py --print
-    Prints the resolved coordinator-claude root (or nothing) to stdout. Always exits 0.
+    Prints the resolved DoE root (or nothing) to stdout. Always exits 0.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _resolve_settings_home() -> str:
 
 
 def coordinator_read_doe_root_pointer() -> str:
-    """Read the coordinator-claude repo root from the durable pointer, legacy fallback.
+    """Read the DoE repo root from the durable pointer, legacy fallback.
 
     Read order:
       1. ${settings-home}/machine-local/.doe-root  (durable — DR-072)

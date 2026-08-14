@@ -23,7 +23,7 @@ Covered:
   - no-write proof
 
 Spec backlink: cross-repo/inbox/2026-07-28-example-retrieval-repo-em-inbox-blitz-proven-pattern.md;
-  coordinator-claude state/handoffs/2026-07-28-fold-inbox-blitz-into-workday-start-as-a.md
+  DoE state/handoffs/2026-07-28-fold-inbox-blitz-into-workday-start-as-a.md
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _write_memo(
         "---",
         f'title: "{title}"',
         f'from: "{sender}"',
-        'to: "coordinator-claude-em"',
+        'to: "doe-claude-em"',
         f"created: {created}",
         f"status: {status}",
         "delivery_mode: receiver-repo",
@@ -564,14 +564,14 @@ class TestSupersessionCandidates:
         inbox.mkdir()
         dated = inbox / "2026-07-25-a-em-dated.md"
         dated.write_text(
-            '---\ntitle: "t"\nfrom: "a-em"\nto: "coordinator-claude-em"\n'
+            '---\ntitle: "t"\nfrom: "a-em"\nto: "doe-claude-em"\n'
             'created: 2026-07-25\nstatus: open\ndelivery_mode: receiver-repo\n'
             'kind: "ask"\n---\n\nsee foo.py\n',
             encoding="utf-8",
         )
         undated = inbox / "no-date-prefix-a-em-file.md"
         undated.write_text(
-            '---\ntitle: "t"\nfrom: "a-em"\nto: "coordinator-claude-em"\n'
+            '---\ntitle: "t"\nfrom: "a-em"\nto: "doe-claude-em"\n'
             'status: open\ndelivery_mode: receiver-repo\nkind: "ask"\n---\n\n'
             'see foo.py\n',
             encoding="utf-8",
@@ -808,7 +808,7 @@ class TestTrigger:
         inbox.mkdir()
         path = inbox / "2026-07-12-a-em-x.md"
         path.write_text(
-            '---\ntitle: "t"\nfrom: "a-em"\nto: "coordinator-claude-em"\n'
+            '---\ntitle: "t"\nfrom: "a-em"\nto: "doe-claude-em"\n'
             'status: open\ndelivery_mode: receiver-repo\nkind: "ask"\n---\n\nbody\n',
             encoding="utf-8",
         )
@@ -825,7 +825,7 @@ class TestTrigger:
         inbox.mkdir()
         path = inbox / "2026-07-12-a-em-x.md"
         path.write_text(
-            '---\ntitle: "t"\nfrom: "a-em"\nto: "coordinator-claude-em"\n'
+            '---\ntitle: "t"\nfrom: "a-em"\nto: "doe-claude-em"\n'
             'created: not-a-date\nstatus: open\ndelivery_mode: receiver-repo\n'
             'kind: "ask"\n---\n\nbody\n',
             encoding="utf-8",

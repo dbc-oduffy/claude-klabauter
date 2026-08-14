@@ -969,6 +969,106 @@ class TestExplicitShipClaimPlanImplemented:
         assert result["verdict"] == "no-match"
 
 
+class TestExplicitShipClaimPlanLanded:
+    """C2 (AC8) — `landed` is a distinct, WEAKER corroboration tier than
+    `implemented`, added to `_evaluate_explicit_ship_claim`'s no-`shipped_in`
+    branch: a handoff linked to a `landed` plan with no `shipped_in` must
+    surface for reconciliation (verdict:surface) rather than returning None
+    (silently dropped) — the AC8 defect this chunk fixes. The tier must also
+    stay distinguishable from `implemented`, not merged into it (this plan's
+    Key decision / AC6): `plan_implemented` is never widened to include
+    `landed`."""
+
+    def test_plan_landed_alone_with_no_shipped_in_surfaces(self, repo: Path) -> None:
+        _write_plan(repo, "docs/plans/2026-01-01-plan-landed.md", "landed")
+
+        handoff = {
+            "id": "h-plan-landed",
+            "scope": ["docs/plans/2026-01-01-plan-landed.md"],
+            "title": "Plan Landed",
+            "created": "2020-01-01",
+        }
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        # Pre-fix, this returned None from `_evaluate_explicit_ship_claim`
+        # (no shipped_in, plan_implemented False) and fell through to the
+        # generic no-candidates no-match verdict -- a landed-but-unshipped
+        # handoff was silently not surfaced. Post-fix it must surface.
+        assert result["verdict"] == "surface"
+        assert any("status:landed" in e for e in result["evidence"])
+
+    def test_landed_evidence_text_is_distinguishable_from_implemented(
+        self, repo: Path
+    ) -> None:
+        """Landed and implemented must not share the same evidence string --
+        proves the two tiers are genuinely distinct code paths, not one
+        condition reading two status values the same way."""
+        _write_plan(repo, "docs/plans/2026-01-01-plan-landed-2.md", "landed")
+        handoff_landed = {
+            "id": "h-plan-landed-2",
+            "scope": ["docs/plans/2026-01-01-plan-landed-2.md"],
+            "title": "Plan Landed Two",
+            "created": "2020-01-01",
+        }
+        result_landed = evaluate_commit_reality(
+            handoff_landed, repo, _DEFAULT_POLICY, []
+        )
+
+        _write_plan(repo, "docs/plans/2026-01-01-plan-implemented-2.md", "implemented")
+        handoff_implemented = {
+            "id": "h-plan-implemented-2",
+            "scope": ["docs/plans/2026-01-01-plan-implemented-2.md"],
+            "title": "Plan Implemented Two",
+            "created": "2020-01-01",
+        }
+        result_implemented = evaluate_commit_reality(
+            handoff_implemented, repo, _DEFAULT_POLICY, []
+        )
+
+        landed_evidence = " ".join(result_landed["evidence"])
+        implemented_evidence = " ".join(result_implemented["evidence"])
+        assert "status:landed" in landed_evidence
+        assert "status:implemented" not in landed_evidence
+        assert "status:implemented" in implemented_evidence
+        assert "status:landed" not in implemented_evidence
+        # Both surface (neither has a shipped_in), but via distinct evidence.
+        assert result_landed["verdict"] == "surface"
+        assert result_implemented["verdict"] == "surface"
+
+    def test_plan_landed_with_verified_shipped_in_still_auto_ships(
+        self, repo: Path
+    ) -> None:
+        """A landed plan corroborates a shipped_in SHA the same way an
+        implemented plan does -- it just isn't sufficient evidence alone
+        (see the no-shipped_in test above)."""
+        sha = _commit_file(
+            repo,
+            "landed_backed_module/core.py",
+            "print('landed backed module')\n",
+            "memo: seed landed backed module (mechanical)",
+        )
+        _write_plan(repo, "docs/plans/2026-01-01-landed-backed.md", "landed")
+
+        handoff = {
+            "id": "h-landed-backed",
+            "scope": [
+                "landed_backed_module/core.py",
+                "docs/plans/2026-01-01-landed-backed.md",
+            ],
+            "title": "Landed Backed Module",
+            "created": "2020-01-01",
+            "shipped_in": sha,
+            "shipped_in_kind": "ship-commit",
+        }
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "auto-ship"
+        assert result["candidate_sha"] == sha
+        assert any("status:landed" in e for e in result["evidence"])
+
+
 class TestCrossHandoffScopeOverlap:
     def test_shared_file_level_scope_overlap_demotes_both_to_surface(self, repo: Path) -> None:
         # File-level (non-directory) scope overlap, post-Defect-2b -- the shared

@@ -1541,7 +1541,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     # ADVISORY_REWRITE registration (`dispatch.py`, `bump-foreign-repo-write`'s
     # own registration comment block) -- landed uncommitted in this tree by a
     # concurrent session (docs/plans/2026-08-02-write-confinement-guards.md,
-    # coordinator-claude repo) after this block was last written, and the
+    # DoE-claude repo) after this block was last written, and the
     # module-level sanity assert below (comparing against the LIVE chain)
     # failed on import until this row existed.
     CorpusRow(
@@ -1706,7 +1706,7 @@ class WriteGuardRow:
     expected_speaker: bool
     payload_factory: Callable[[Path, pytest.MonkeyPatch], Dict[str, Any]]
     #: Rows for a guard whose real trigger needs environment/registry state
-    #: this corpus does not stand up (a sibling coordinator-claude checkout, a real
+    #: this corpus does not stand up (a sibling DoE-claude checkout, a real
     #: publish-mirror registry entry, real session-start bookkeeping) are
     #: marked here with a written reason and excluded from the fire-
     #: verification test below -- registered (AC2) but not fire-asserted,
@@ -2403,7 +2403,7 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         False,
         _wg_benign,
         unverified_reason=(
-            "AC2-registration-only: this guard's real fire reads coordinator-claude's live schema "
+            "AC2-registration-only: this guard's real fire reads DoE-claude's live schema "
             "corpus/registry manifest off a sibling checkout (coordinator_doe_root()) -- not "
             "reproducible from a synthetic scratch dir without standing up that sibling tree, "
             "which is more environment state than this row is worth per the plan's own "
@@ -2465,7 +2465,7 @@ def _hook_envelope_from_message(message: Optional[Dict[str, Any]]) -> Optional[D
     `hookSpecificOutput.additionalContext`-shaped dict `_message_size.
     measure_envelope` reads -- `op()` already strips the envelope down to
     the bare message string (C6b routed it through `_hook_envelope` and
-    then unwrapped it back out for its own coordinator-claude-side consumer), so this is
+    then unwrapped it back out for its own DoE-side consumer), so this is
     the inverse of that unwrap, not a new envelope shape."""
     if not message:
         return None
@@ -3175,22 +3175,22 @@ def fire_hook_row(row: HookRow) -> HookCapture:
 #
 # Spec backlink: pln-runtime-measured-message-size--0669ac,
 # chunk C10. § Problem claims the cap governs "the 73 modules above PLUS the
-# message content behind those 19 [coordinator-claude-side, coordinator/hooks/scripts/]
+# message content behind those 19 [DoE-side, coordinator/hooks/scripts/]
 # DR-118 pointer shims" because that prose is composed in coordinator_core
-# and relayed verbatim by a shim coordinator-claude cannot edit (no policy, no composition
+# and relayed verbatim by a shim DoE cannot edit (no policy, no composition
 # -- DR-116's "resolve the engine root, hand over the raw payload... and
 # degrade unconditionally"). This is neither a clean verification pass NOR a
 # simple new-rows close -- it is PARTIAL, and both halves are recorded here
 # so the split does not get flattened into a wrong number in C9's memo.
 #
-# Every coordinator_core entrypoint an engine-importing coordinator-claude shim can reach is
+# Every coordinator_core entrypoint an engine-importing DoE shim can reach is
 # one of exactly two shapes (grep-verified against coordinator_core/hooks/):
 #
 #   (1) Stop-hook direct-call shape -- a plain `def op(payload) -> dict |
-#       None` with NO `@register_op` handler, called by a coordinator-claude-resident
+#       None` with NO `@register_op` handler, called by a DoE-resident
 #       stdin/stderr shim importing the module directly (confirmed by
 #       em_report_altitude.py's own docstring: "Stop events are not routed
-#       through the IPC daemon path... Transport here is the coordinator-claude-resident
+#       through the IPC daemon path... Transport here is the DoE-resident
 #       stdin/stderr shim calling `op(payload)` directly"). Exactly four
 #       modules carry this shape: `em_report_altitude`,
 #       `nudge_harness_directive_dispatch`, `nudge_unrouted_sizing`,
@@ -3231,16 +3231,16 @@ def fire_hook_row(row: HookRow) -> HookCapture:
 #       17-module population is real, uncovered DR-118-shim-relayed prose
 #       surface -- closing it is new capture-harness work outside this
 #       chunk's declared `change_kind: test-edit` / "C3's schema" framing,
-#       not a same-shaped corpus-row addition. C9's report to coordinator-claude should
+#       not a same-shaped corpus-row addition. C9's report to DoE should
 #       state coverage as "4 of the shim-reachable modules measured
 #       end-to-end; 17 async-handler modules identified but not yet
 #       captured," not claim the full 19-shim population is measured.
 #
 # Reconciling counts: 4 + 17 = 21 coordinator_core modules reachable by an
-# engine-importing coordinator-claude shim, against coordinator-claude's own runtime-classified count of
+# engine-importing DoE shim, against DoE's own runtime-classified count of
 # 19 pointer shims. The two counts are close but not proven identical --
-# coordinator-claude's shim inventory lives in their tree (out of reach this session, per
-# the plan's own review sidecar: "could not verify coordinator-claude-side claims (the 19
+# DoE's shim inventory lives in their tree (out of reach this session, per
+# the plan's own review sidecar: "could not verify DoE-side claims (the 19
 # shims...) -- cross-repo, out of tree"). This module's 21-module inventory
 # is therefore the claude-klabauter-side upper bound on the shim-relayed surface, not
 # a claim of an exact 19-to-21 name-for-name mapping.

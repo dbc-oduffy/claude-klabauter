@@ -1,11 +1,11 @@
 """Tests for coordinator_core.ops.verify_schema_registry_sync.
 
-Port of: verify-schema-registry-sync.sh (coordinator-claude b5a4192c, 2026-07-20),
-snapshotted 2026-07-16. Positive corpus = the coordinator-claude repo's live
+Port of: verify-schema-registry-sync.sh (DoE b5a4192c, 2026-07-20),
+snapshotted 2026-07-16. Positive corpus = the DoE repo's live
 schemas/ dir. Negative corpus = missing schemas dir.
 
 `test_golden_oracle_parity_against_live_doe_repo` (the file's one
-live-coordinator-claude-repo test) was frozen to a committed golden via
+live-DoE-repo test) was frozen to a committed golden via
 `coordinator_core.testing.golden` (2026-07-22 de-node Gate A, C5), then
 re-frozen the same day for the false-positive fix documented in
 verify_schema_registry_sync's module docstring: the port's own
@@ -34,7 +34,7 @@ from coordinator_core.testing.golden import assert_matches_golden, is_capturing,
 _GOLDEN_NAMESPACE = "verify_schema_registry_sync"
 
 # Corpus-size pin: a golden captured over a directory-derived corpus (the
-# coordinator-claude sibling's live schemas/ dir) silently covers less and less of
+# DoE-claude sibling's live schemas/ dir) silently covers less and less of
 # that corpus as the directory shrinks, without the golden ever failing --
 # the drift-entry content alone is not a high enough bar. Bumping this
 # constant is a deliberate acknowledgment that the corpus changed; a
@@ -152,7 +152,7 @@ def test_resolve_plugin_root_delegates_to_data_root(tmp_path, monkeypatch):
     PARENT -- the coordinator root run() expects as plugin_root. Regression
     guard for the split-repo fix: this used to fall back to Path.cwd(), which
     silently pointed at the wrong (or a merely-coincidental) directory once
-    schemas/ moved to a coordinator-claude-resident split-repo layout."""
+    schemas/ moved to a DoE-resident split-repo layout."""
     schemas_dir = tmp_path / "coordinator" / "schemas"
     schemas_dir.mkdir(parents=True)
     monkeypatch.setattr(vsrs, "data_root", lambda name: schemas_dir)
@@ -191,7 +191,7 @@ def test_main_no_argv_success_path(tmp_path, monkeypatch, capsys):
 
 
 def _find_doe_root() -> Optional[Path]:
-    """Resolve the coordinator-claude sibling repo's coordinator/ dir via the pointer-file
+    """Resolve the DoE-claude sibling repo's coordinator/ dir via the pointer-file
     mechanism (coordinator_core.doe_root_pointer, DR-072) -- the established
     sibling-resolution convention used across claude-klabauter's other suites, not an
     author-machine hardcoded path.
@@ -231,26 +231,26 @@ def test_golden_oracle_parity_against_live_doe_repo():
     That was two rename maps disagreeing, not real drift: this port
     single-sources on the shared map, so all three now derive their correct
     registry type and PASS. The golden below freezes exit_code=0 / zero
-    MISSING entries against the live coordinator-claude schemas/ corpus -- the 3
+    MISSING entries against the live DoE-claude schemas/ corpus -- the 3
     old MISSING entries were rename-map false positives, not a real gap.
 
     Frozen to a committed golden (2026-07-22 de-node Gate A, C5; re-frozen
     same day for the false-positive fix above): the golden was captured ONCE
-    from a live `vsrs.run()` against the coordinator-claude sibling checkout and
+    from a live `vsrs.run()` against the DoE-claude sibling checkout and
     committed under `coordinator_core/ops/_goldens/verify_schema_registry_sync/`.
     Ordinary runs load that golden and assert its frozen content -- no live
-    coordinator-claude checkout needed at test time. `vsrs.run()` itself is now fully
+    DoE-claude checkout needed at test time. `vsrs.run()` itself is now fully
     native (no node subprocess at all, post de-node port), so recapture no
-    longer needs `node` on PATH either -- only the coordinator-claude sibling
+    longer needs `node` on PATH either -- only the DoE-claude sibling
     checkout, to read its live schemas/ dir as the recapture input. Regenerate
     deliberately via:
         CAPTURE_GOLDENS=1 python3 -m pytest \
             coordinator_core/ops/test_verify_schema_registry_sync.py -q
-    (requires the coordinator-claude sibling checkout to be resolvable via the
+    (requires the DoE-claude sibling checkout to be resolvable via the
     .doe-root pointer file -- see coordinator_core.doe_root_pointer -- not
     needed for an ordinary run).
 
-    Negative-spec: does NOT `pytest.skip` when the live coordinator-claude repo is
+    Negative-spec: does NOT `pytest.skip` when the live DoE-claude repo is
     unavailable -- that was the exact silent-green hazard this conversion
     closes (see docs/plans/2026-07-21-parity-suites-freeze-to-goldens.md).
 
@@ -266,7 +266,7 @@ def test_golden_oracle_parity_against_live_doe_repo():
         doe_root = _find_doe_root()
         if doe_root is None:
             raise RuntimeError(
-                "CAPTURE_GOLDENS=1 recapture requires the coordinator-claude sibling "
+                "CAPTURE_GOLDENS=1 recapture requires the DoE-claude sibling "
                 "checkout (resolvable via the .doe-root pointer file) to be "
                 "present -- not needed for an ordinary (non-capture) run."
             )

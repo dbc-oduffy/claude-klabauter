@@ -23,11 +23,11 @@ determined the same way ``provision_report`` determines run-report
 eligibility -- via ``Policy.report_sidecar`` set membership -- because DR-058
 left exactly one surviving policy field and this module does not invent a
 second one; a dedicated ``subagent-sidecar``-specific policy key (if the
-Coordinator-claude-owned ``coordinator/subagent-sandbox-policy.yaml`` schema needs one) is a
-Coordinator-claude-side follow-up, not authored here (this repo is engine-only for that
+DoE-owned ``coordinator/subagent-sandbox-policy.yaml`` schema needs one) is a
+DoE-side follow-up, not authored here (this repo is engine-only for that
 policy file).
 
-Sidecar shape (schema-of-record: coordinator-claude's ``schemas/decision-object.schema.json``
+Sidecar shape (schema-of-record: DoE's ``schemas/decision-object.schema.json``
 ``$defs/subagent_sidecar``): dispatch frontmatter (plan/chunk/dispatched_at/
 dispatched_by/status/agent_type/spawned_at/commits/sidecar_schema -- the same
 shape ``coordinator-doc-new``'s ``_scaffold_subagent_sidecar`` emits) plus the
@@ -86,18 +86,18 @@ Claude-klabauter-side engine consumer it can reach directly:
     `guard-encounter-preamble`, `quota-self-detect-preamble`) get injected
     into a dispatch prompt; a miss means NO injection at all, the sharpest
     instance of "less governed AND less instructed" this plan names. This
-    map lives in coordinator-claude-owned `coordinator/subagent-sandbox-policy.yaml` and is
-    read by a coordinator-claude-side doctrine hook on the Agent-tool spawn path -- outside
+    map lives in DoE-owned `coordinator/subagent-sandbox-policy.yaml` and is
+    read by a DoE-side doctrine hook on the Agent-tool spawn path -- outside
     this module's write surface. C1's `PreToolUse(Agent)` deny already
     blocks the spawn before this lookup runs, so with C1 in place this miss
     is unreachable in practice; the actual fix (closing the miss so an
     unenumerated type gets SOME contract-block set, or is denied before
-    injection is consulted) stays coordinator-claude's to make.
-    RULED 2026-08-10 (coordinator-claude `DR-151`, commit `8592f0592`): the fail-open miss
+    injection is consulted) stays DoE's to make.
+    RULED 2026-08-10 (DoE `DR-151`, commit `8592f0592`): the fail-open miss
     STAYS -- these maps are catering, not governance, so failing closed
     would either veto an EM's dispatch or force catering nobody chose. The
     governance half closes at C1's roster deny guard instead. The same pass
-    fixed a real coordinator-claude-side defect: `enforce-agent-dispatch-mode.py` resolved
+    fixed a real DoE-side defect: `enforce-agent-dispatch-mode.py` resolved
     `contract_blocks` INSIDE its `report_sidecar`-eligibility branch,
     collapsing a decoupling their own policy header mandates -- so
     `coordinator:atlassian-worker` / `coordinator:drive-worker` silently got
@@ -105,7 +105,7 @@ Claude-klabauter-side engine consumer it can reach directly:
     provision_report.py's independent `if`s + per-leg try/except); no
     claude-klabauter-side change is owed.
   - `dispatch_tier` -- classifies `exploration` vs `review-execution` tier.
-    CORRECTED 2026-08-10 (coordinator-claude reply to the C6 memo): this map has NO runtime
+    CORRECTED 2026-08-10 (DoE reply to the C6 memo): this map has NO runtime
     consumer at all -- not a documented-fallback gap, and not downstream of
     anything. Its only readers are `coordinator/tests/test_dispatch_tier.py`
     and prose, and those tests already enforce total coverage of every
@@ -125,13 +125,13 @@ sanctioned_dirs enforcement grammar -- that grammar is dead (see
 ``coordinator_core/subagent_sandbox/CONTRACT.md``); this module builds only
 against the SURVIVING resolver/policy-load halves.
 Negative-spec: does NOT edit ``coordinator/subagent-sandbox-policy.yaml`` --
-that policy file is coordinator-claude-owned; a policy opt-in entry for ``subagent-sidecar``
+that policy file is DoE-owned; a policy opt-in entry for ``subagent-sidecar``
 eligibility (if the shared ``report_sidecar`` key is judged insufficient) is
-flagged as a coordinator-claude-side follow-up, not authored here.
+flagged as a DoE-side follow-up, not authored here.
 
-Spec backlink: docs/plans/2026-07-24-canonical-resolution-engine.md § W2-B3, R7 Addendum
+Spec backlink: DoE-claude:pln-canonical-resolution-engine-6eea37 § W2-B3, R7 Addendum
 Sibling seam: coordinator_core/subagent_sandbox/provision_report.py (run-report provisioner)
-Schema-of-record: schemas/decision-object.schema.json $defs/subagent_sidecar (coordinator-claude clone)
+Schema-of-record: schemas/decision-object.schema.json $defs/subagent_sidecar (DoE clone)
 """
 
 from __future__ import annotations

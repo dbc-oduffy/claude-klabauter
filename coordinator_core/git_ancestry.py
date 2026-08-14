@@ -22,7 +22,7 @@ naively re-merging ranges into a single combined rev-list. This module's
 callers needing coverage.py's batched multi-range performance should keep
 using coverage.py directly.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b5-planning-cluster.md § C1
+Spec backlink: DoE-claude:pln-computed-skills-b5-planning-cl-a28764 § C1
 
 Promotion note (2026-07-26, docs/plans/2026-07-26-structured-sibling-evidence-gates.md
 § C2, the Staff Engineer F7): `_is_ancestor`'s bare-bool return collapsed "not an ancestor",

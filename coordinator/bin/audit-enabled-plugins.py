@@ -7,8 +7,8 @@ Finish-strangler port (DR-047/DR-059): the bash implementation (drift-check this
 repo's `.claude/settings.json` enabledPlugins against `coordinator.local.md`
 project_type / stack_tags — state/lessons.md:302, claude-central 2026-05-14) has
 been fully ported to coordinator_core/ops/audit_enabled_plugins.py (co-located
-test: test_audit_enabled_plugins.py). This file is now a thin coordinator-claude-side (contract)
-trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+test: test_audit_enabled_plugins.py). This file is now a thin DoE-side (contract)
+trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -18,8 +18,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Usage:
@@ -30,7 +30,7 @@ Always exits 0 — advisory only, never propagated to ceremony exit
 this internally; this trampoline mirrors that on CLAUDE_KLABAUTER_ROOT/import failure too
 (fail-open, matching the oracle's unconditional `exit 0`).
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
 Prior bash implementation: see git log (audit-enabled-plugins.py, 122 lines,
 retired on this cutover).
 """

@@ -12,8 +12,8 @@ actually running it.
 
 Responsibilities:
   1. Step Zero system prerequisite checks (Python 3.11+, behavior-verified).
-  2. Coordinator-claude sibling-dep check (hard — PM ruling 2026-08-03: "klabauter-claude-klabauter
-     is useless without coordinator-claude/coordinator-claude to wire into, it's a 100% hard dep for
+  2. coordinator-claude sibling-dep check (hard — PM ruling 2026-08-03: "klabauter-claude-klabauter
+     is useless without DoE/coordinator-claude to wire into, it's a 100% hard dep for
      us"). Fails loud (exit 90) when missing/broken, unless the
      --skip-dep-check + --accept-missing-deps-risk override pair is supplied.
   3. AUTHORITATIVE idempotent registration, branched on `resolve_repo_identity`:
@@ -82,7 +82,7 @@ Negative-spec:
   Does NOT hardcode CLAUDE_KLABAUTER_ROOT — resolves via flag -> env -> repo-root ladder.
   Does NOT hardcode the coordinator-claude sibling-dir — resolves via
   --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared .doe-root
-  pointer -> engine.working_repos.example_doctrine_repo registry key -> settings-home
+  pointer -> engine.working_repos.doe_claude registry key -> settings-home
   .doe-root sentinel -> sibling-dir default, so a packaging installer (e.g.
   example-os-repo) can inject the location instead of relying on side-by-side git
   clone placement. The sibling-dir default is the only rung that guesses, and
@@ -477,7 +477,7 @@ def provision_deps(claude_klabauter_root: Path, py: str, break_system_packages: 
     same command with the real HOME, for the identical interpreter. Any real
     entry point invoked under a HOME other than the one active at install
     time (a hooked/sandboxed subprocess, a CI runner, a service account —
-    the production trampoline is coordinator-claude's cc_invoke.py, which spawns
+    the production trampoline is DoE's cc_invoke.py, which spawns
     `[sys.executable, "-m", "coordinator_core.invoke", ...]` using whatever
     HOME the CALLING process has) would resolve an EMPTY site-packages dir
     and crash with ModuleNotFoundError on a machine where `--user` had
@@ -902,11 +902,11 @@ def _is_publish_mirror(path: Path) -> bool:
         return False
 
 
-#: Structural markers under a coordinator-claude dev-clone's ``coordinator/`` that identify it as
+#: Structural markers under a DoE dev-clone's ``coordinator/`` that identify it as
 #: a real coordinator-claude source checkout. ANY one matching is sufficient.
 #:
 #: negative-spec: do NOT narrow this back to a single path. It was
-#: ``coordinator/CLAUDE.md`` alone until coordinator-claude retired that file (`e8f9051db`,
+#: ``coordinator/CLAUDE.md`` alone until DoE retired that file (`e8f9051db`,
 #: "finish the coordinator/CLAUDE.md retirement and re-point every citation"), at
 #: which point the real dev clone stopped being recognised as a source checkout at
 #: all, `_resolve_coordinator_claude_root` fell through to a sibling-dir guess that
@@ -941,9 +941,9 @@ def _looks_like_coordinator_claude_source(path: Path) -> bool:
     either shape: the OSS mirror/source-clone shape (`.claude-plugin/
     plugin.json` PLUS at least one of `commands/`, `hooks/` — plugin.json
     alone does not distinguish a real source clone from a publish mirror,
-    which also ships plugin.json), or the coordinator-claude dev-clone shape (see
+    which also ships plugin.json), or the DoE dev-clone shape (see
     `_DEV_CLONE_DISTINCTIVE_MARKERS`/`_DEV_CLONE_GENERIC_MARKERS` above —
-    NOT `coordinator/CLAUDE.md`, which coordinator-claude retired; see the negative-spec
+    NOT `coordinator/CLAUDE.md`, which DoE retired; see the negative-spec
     on those constants)."""
     has_oss_shape = (path / ".claude-plugin" / "plugin.json").is_file() and (
         (path / "commands").is_dir() or (path / "hooks").is_dir()
@@ -966,7 +966,7 @@ def _coordinator_root_from_settings_home() -> "Path | None":
 
     The settings home is the standing read surface for every resolved path (it
     is durable and Anthropic-independent, unlike `~/.claude`), and it already
-    carries `machine-local/.doe-root` naming the coordinator-claude dev clone. This rung reads
+    carries `machine-local/.doe-root` naming the DoE dev clone. This rung reads
     it so the resolver stops guessing a sibling directory that was never where
     the checkout lives on this machine.
 
@@ -1096,7 +1096,7 @@ def _coordinator_root_from_doe_root_pointer() -> "Path | None":
 
 
 def _coordinator_root_from_registry() -> "Path | None":
-    """Read `engine.working_repos.example_doctrine_repo` — the DR-132-ratified registry
+    """Read `engine.working_repos.doe_claude` — the DR-132-ratified registry
     namespace each repo's own installer writes as an identity assertion for
     "where is a coordinator-claude WORKING checkout" — via
     `coordinator_core.machine_resolver.registry_get` (never a `machine-local`
@@ -1129,12 +1129,12 @@ def _coordinator_root_from_registry() -> "Path | None":
     try:
         from coordinator_core.machine_resolver import registry_get
 
-        registry_val = registry_get("engine.working_repos.example_doctrine_repo")
+        registry_val = registry_get("engine.working_repos.doe_claude")
         if not registry_val:
             return None
         return _resolve_plugin_root_for_machine_local(Path(registry_val))
     except Exception as exc:
-        print(f"[ADVISORY] registry resolution failed ({exc}); skipping engine.working_repos.example_doctrine_repo rung.", file=sys.stderr)
+        print(f"[ADVISORY] registry resolution failed ({exc}); skipping engine.working_repos.doe_claude rung.", file=sys.stderr)
         return None
 
 
@@ -1191,7 +1191,7 @@ class CoordSourceResolution:
 def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path, CoordSourceResolution]:
     """Resolve the coordinator-claude sibling root and describe the source
     used: --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared
-    .doe-root pointer (durable + legacy) -> engine.working_repos.example_doctrine_repo
+    .doe-root pointer (durable + legacy) -> engine.working_repos.doe_claude
     registry key -> settings-home .doe-root sentinel -> sibling-dir default
     (now honesty-gated, see below). Shared by `check_coordinator_claude_dep`
     and `register_claude_klabauter_root` so both resolve the SAME candidate root
@@ -1211,7 +1211,7 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
     established between the registry rung and the settings-home sentinel
     rung; those two keep their relative order below it.
 
-    Registry rung (2026-08-07, DR-132): `engine.working_repos.example_doctrine_repo` is
+    Registry rung (2026-08-07, DR-132): `engine.working_repos.doe_claude` is
     the generic, cross-fleet answer to "where is a coordinator-claude WORKING
     checkout" — each repo's own installer writes it as an identity assertion.
     It outranks the `.doe-root` sentinel (a locally-recorded breadcrumb) and
@@ -1267,7 +1267,7 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
         if doe_root_pointer_root is not None:
             candidate, rung, display = doe_root_pointer_root, CoordSourceRung.DOE_ROOT_POINTER, "shared .doe-root pointer"
         elif registry_root is not None:
-            candidate, rung, display = registry_root, CoordSourceRung.REGISTRY, "engine.working_repos.example_doctrine_repo registry key"
+            candidate, rung, display = registry_root, CoordSourceRung.REGISTRY, "engine.working_repos.doe_claude registry key"
         elif settings_home_root is not None:
             candidate, rung, display = settings_home_root, CoordSourceRung.SETTINGS_HOME, "settings-home .doe-root sentinel"
         else:
@@ -1340,7 +1340,7 @@ def resolve_repo_identity(repo_root: Path) -> str | None:
     manifest check runs second and is scoped by `_CLAUDE_KLABAUTER_MANIFEST_REPO_ID`
     rather than mere file presence for the same reason.
 
-    Spec backlink: cross-repo/inbox/2026-08-05-coordinator-claude-em-klabauter-
+    Spec backlink: cross-repo/inbox/2026-08-05-doe-claude-em-klabauter-
     location-belongs-in-the-registry-not-a-pointer-file.md
     """
     agents_md = repo_root / "AGENTS.md"
@@ -1390,7 +1390,7 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
         print("  the real coordinator-claude SOURCE checkout, never a mirror.", file=sys.stderr)
         print(file=sys.stderr)
         print("  Point --coordinator-root / $COORDINATOR_CLAUDE_ROOT at the actual working checkout", file=sys.stderr)
-        print("  (an OSS source clone not registered under publish.mirrors.*.path, or a coordinator-claude-style", file=sys.stderr)
+        print("  (an OSS source clone not registered under publish.mirrors.*.path, or a DoE-style", file=sys.stderr)
         print("  dev clone with the coordinator/ dev-clone markers -- see _looks_like_coordinator_claude_source).", file=sys.stderr)
         print(file=sys.stderr)
         print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
@@ -1404,10 +1404,10 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
     #     a real source clone from a publish mirror, which also ships
     #     plugin.json — the mirror-rejection check above is what actually
     #     closes that gap; this shape check is the positive-evidence floor for
-    #     everything else), or (b) a coordinator-claude dev-clone (e.g. Coordinator-claude), where the
+    #     everything else), or (b) a DoE dev-clone (e.g. DoE-claude), where the
     #     coordinator plugin source lives under a coordinator/ subdir and the
     #     _DEV_CLONE_*_MARKERS constants mark it (NOT coordinator/CLAUDE.md,
-    #     which coordinator-claude retired -- see the negative-spec on those constants).
+    #     which DoE retired -- see the negative-spec on those constants).
     #     Both are valid, functioning coordinator-claude roots -- PASS if
     #     either shape matches. A single hardcoded probe path here previously
     #     false-WARNed on the dev-clone shape (F9).
@@ -1520,7 +1520,7 @@ def register_claude_klabauter_root(
         neither claude_klabauter key is written, and the dual-boot auto-arm
         above does NOT apply here — this branch is unchanged in behaviour
         and output. Per the agreed cross-repo contract
-        (cross-repo/inbox/2026-08-05-coordinator-claude-em-klabauter-location-
+        (cross-repo/inbox/2026-08-05-doe-claude-em-klabauter-location-
         belongs-in-the-registry-not-a-pointer-file.md), the registry
         carries the published engine's location and an absent key makes a
         consumer fall open to the live-tree rung — writing a claude_klabauter
@@ -1559,7 +1559,7 @@ def register_claude_klabauter_root(
     `repos.claude_klabauter` is a separate registration with its own
     fallback — each is a further write inside the same guard.
 
-    `engine.working_repos.*` is coordinator-claude's key-namespace (schema authored on their
+    `engine.working_repos.*` is DoE's key-namespace (schema authored on their
     plane, `machine-local-registry.md` §324); our half is this install-time
     write of our own key, nothing else. See
     state/memo-outbox/sent/working-repos-adopted-count-confirmed-12-not-13.md
@@ -1638,7 +1638,7 @@ def register_claude_klabauter_root(
             print(f"    machine-local set {key} {key_values[key]}")
         return claude_klabauter_root_resolved
 
-    # machine-local IS present -> coordinator-claude is installed; the coordinator-claude command
+    # machine-local IS present -> coordinator-claude is installed; the DoE command
     # veneers resolve CLAUDE_KLABAUTER_ROOT through this key to locate coordinator_core. Fail
     # loud so a missing key surfaces at install time rather than breaking the
     # veneers later. Every key in `keys` sits inside the same guard — a failure

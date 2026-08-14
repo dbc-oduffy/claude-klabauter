@@ -20,8 +20,8 @@ env var; this module falls back to `Path.cwd()` when the env var is absent
 (direct/test invocation, matching the bash oracle's own `cd`-relative
 resolution when sourced ad hoc).
 
-Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (coordinator-claude)
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
+Port source: coordinator/dist/publish-repo-setup/dev-sync.sh (DoE-claude)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292
 
 Exit codes (parity-critical, preserved from the bash oracle):
     0 — sync completed (including all-SKIP runs — missing source dir, missing
@@ -42,7 +42,7 @@ Negative-spec (retired/never-had patterns — do NOT reintroduce):
       validate the marker's contents, only preserves the byte string.
     - Does NOT reproduce the bash oracle's `find ... | wc -l` leading-space
       padding on the SYNC line's file count — BSD-vs-GNU-`wc`-width-
-      dependent cosmetic noise, never parsed downstream; see the coordinator-claude-side
+      dependent cosmetic noise, never parsed downstream; see the DoE-side
       trampoline's matching negative-spec note.
 """
 
@@ -56,6 +56,10 @@ from pathlib import Path
 from typing import List, Optional
 
 MARKETPLACE = "coordinator-claude"
+
+# Generator-provenance: writes only into ~/.claude/plugins/cache/<marketplace>/
+# <plugin>/<version>/ under Path.home() -- outside claude-klabauter's own tracked tree.
+GENERATES = []
 
 
 def _read_version(plugin_json: Path) -> Optional[str]:

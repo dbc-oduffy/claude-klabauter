@@ -4,7 +4,7 @@ Spec backlink: pln-spawn-storm-culprit-taxonomy-p-805aa9,
 chunk D9 / AC11.
 
 Targets one entrypoint per hook family, each a cold interpreter spawned by a
-Coordinator-claude `coordinator/hooks/scripts/*.py` PLUMBING wrapper on every matching
+DoE-claude `coordinator/hooks/scripts/*.py` PLUMBING wrapper on every matching
 tool call:
 
     1. `preuse-bash-dispatch.py`      -> coordinator_core.bash_guards.dispatch.evaluate_payload_json
@@ -34,7 +34,7 @@ the package's default-eager path: all 15 `hooks.*` modules import and register
 their ops (not 7 -- the wrapper script's own inline comment undercounts this;
 verified by reading `coordinator_core/hooks/__init__.py::_EAGER_HOOK_MODULES`
 directly rather than trusting that comment). Arming the lazy channel in that
-wrapper is a real available fix but is coordinator-claude-tree territory (this claude-klabauter
+wrapper is a real available fix but is DoE-claude-tree territory (this claude-klabauter
 session is read-only there) and out of scope for this gate.
 
 Shape: mirrors `coordinator_core.tests.test_pickup_assemble_import_perf`

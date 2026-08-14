@@ -101,22 +101,22 @@ class TestFiresOnDerivedLiveCopy:
 
 class TestSilentOnEverythingElse:
     def test_authoring_surface_allowed(self):
-        """coordinator-claude's own authoring copy — writes here are correct."""
-        _allow("/Users/alice/repos/coordinator-claude/global-doctrine/CLAUDE.md")
+        """DoE-claude's own authoring copy — writes here are correct."""
+        _allow("/Users/alice/repos/DoE-claude/global-doctrine/CLAUDE.md")
 
     def test_repo_root_project_claude_md_allowed(self):
         _allow("/Users/alice/repos/some-project/CLAUDE.md")
 
     def test_dev_repo_coordinator_claude_md_allowed(self):
-        """coordinator-claude's own coordinator/CLAUDE.md plugin-doctrine authoring
+        """DoE's own coordinator/CLAUDE.md plugin-doctrine authoring
         surface — a DIFFERENT CLAUDE.md-class surface, not derived."""
-        _allow("/Users/alice/repos/coordinator-claude/coordinator/CLAUDE.md")
+        _allow("/Users/alice/repos/DoE-claude/coordinator/CLAUDE.md")
 
     def test_snippet_surface_allowed(self):
-        _allow("/Users/alice/repos/coordinator-claude/coordinator/snippets/em-operating-doctrine.md")
+        _allow("/Users/alice/repos/DoE-claude/coordinator/snippets/em-operating-doctrine.md")
 
     def test_other_snippet_surface_allowed(self):
-        _allow("/Users/alice/repos/coordinator-claude/coordinator/snippets/agent-role-dispatched.md")
+        _allow("/Users/alice/repos/DoE-claude/coordinator/snippets/agent-role-dispatched.md")
 
     def test_settings_json_allowed(self):
         _allow("/Users/alice/.claude/settings.json")
@@ -135,7 +135,7 @@ class TestDenyTextNamesAlternativeAndConsequence:
         monkeypatch.setattr(
             guard,
             "registry_get",
-            lambda key: "/opt/some/root" if key == "repos.example_doctrine_repo" else None,
+            lambda key: "/opt/some/root" if key == "repos.doe_claude" else None,
         )
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -157,7 +157,7 @@ class TestDenyTextNamesAlternativeAndConsequence:
         which asserted the override-doc pointer WAS present). The deny text
         for this default (unregistered-root) payload shape is now a wholly
         different narrative — "not the authoring source — the authoring
-        root is unregistered here — `machine-local set repos.example_doctrine_repo
+        root is unregistered here — `machine-local set repos.doe_claude
         <path>`" — with no override-doc pointer and no key at all.
         Positively asserts both the absence of any override-note fragment
         AND the presence of the real, current unregistered-root remediation
@@ -166,15 +166,15 @@ class TestDenyTextNamesAlternativeAndConsequence:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "guard-override-keys.md" not in reason
         assert guard._OVERRIDE_ENV_VAR not in reason
-        assert "machine-local set repos.example_doctrine_repo" in reason
+        assert "machine-local set repos.doe_claude" in reason
 
     def test_deny_text_resolves_authoring_root_via_registry(self, monkeypatch):
         monkeypatch.setattr(
-            guard, "registry_get", lambda key: "/opt/some/coordinator-claude" if key == "repos.example_doctrine_repo" else None
+            guard, "registry_get", lambda key: "/opt/some/doe-claude" if key == "repos.doe_claude" else None
         )
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "/opt/some/coordinator-claude/global-doctrine/CLAUDE.md" in reason
+        assert "/opt/some/doe-claude/global-doctrine/CLAUDE.md" in reason
 
     def test_unregistered_root_names_the_key_not_a_fabricated_path(self, monkeypatch):
         """An unresolvable root renders the registry key the operator sets,
@@ -184,5 +184,5 @@ class TestDenyTextNamesAlternativeAndConsequence:
         monkeypatch.setattr(guard, "registry_get", lambda key: None)
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "machine-local set repos.example_doctrine_repo" in reason
+        assert "machine-local set repos.doe_claude" in reason
         assert "global-doctrine/CLAUDE.md" not in reason

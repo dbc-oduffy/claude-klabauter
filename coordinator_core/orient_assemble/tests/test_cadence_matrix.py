@@ -7,7 +7,7 @@ these tests isolate the cadence-sensitive branch point in each reader
 family with monkeypatched siblings, so a fixture drift in one reader
 can't mask a cadence regression in another.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C3
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
 
 Negative-spec: does NOT invoke any reader's real I/O (git, disk, network,
 subprocess) — every underlying read is monkeypatched to a deterministic

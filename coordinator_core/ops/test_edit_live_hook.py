@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.edit_live_hook.
 
-Port of: edit-live-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: edit-live-hook.sh (DoE b5a4192c, 2026-07-20)
 """
 
 from __future__ import annotations

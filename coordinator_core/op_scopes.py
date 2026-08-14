@@ -72,13 +72,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Same class as handoff.has_live_children above — reads from the main-
     # worktree-rooted state/handoffs + archive/handoffs subtrees.
     "handoff.blocked_by_dependents":         "common_dir",
-    # Reference implementation only — deregistered from coordinator-claude's Agent PreToolUse matcher
-    # (2026-07-31 parallel-emitter race); the live reroute is coordinator-claude's
+    # Reference implementation only — deregistered from DoE's Agent PreToolUse matcher
+    # (2026-07-31 parallel-emitter race); the live reroute is DoE's
     # _foreground_dispatch_strip.py port. A scope entry here is not a liveness claim.
     "hooks.nudge_foreground_agent_dispatch": "common_dir",
     "hooks.nudge_em_code_dispatch":          "common_dir",
     "hooks.track_touched_files":             "common_dir",
     "hooks.session_heartbeat":               "common_dir",
+    # hooks.receiver_state_sensor — common_dir, same reason as session_heartbeat
+    # immediately above: repo_root resolves the session dir under
+    # .git/coordinator-sessions/ for the receiver-state sibling-file write.
+    "hooks.receiver_state_sensor":           "common_dir",
     "hooks.agent_completion_log":            "common_dir",
     "hooks.track_dispatched_agents":         "common_dir",
     "hooks.subagent_zero_tool_use":          "common_dir",
@@ -180,7 +184,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: cross-repo memo, 2026-08-06 architecture survey.
     "cartography.op_edges":                  "none",
     # goals.reassess_krs — no repo_root-derived state access, all paths (goals_dir,
-    # bin_dir, signal_repo_root) are explicit caller-supplied params from the coordinator-claude-side
+    # bin_dir, signal_repo_root) are explicit caller-supplied params from the DoE-side
     # trampoline, which resolves them itself exactly as the original bash script
     # derived SCRIPT_DIR/REPO_ROOT from its own BASH_SOURCE location.
     "goals.reassess_krs":                    "none",
@@ -334,7 +338,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # handoff.archive_transition — the 4-mode (chain/stamp_shipped/stamp_only/
     # supersede) archive-ceremony op;
     # derives worktree via main_worktree_root(common_dir), same as handoff.stamp/
-    # handoff.transition/handoff.ship_and_archive. Spec: cross-repo coordinator-claude 7-bug
+    # handoff.transition/handoff.ship_and_archive. Spec: cross-repo DoE 7-bug
     # route item 7. Position A (PM-ratified 2026-07-15): no branch-tip fallback,
     # no Session-Id correction walk — item-7 eliminated at source, not patched.
     "handoff.archive_transition":            "common_dir",
@@ -582,7 +586,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main-worktree-rooted docs/, state/ and the bundled plugin wiki, the same
     # surfaces records.query and memo.triage resolve through. show_top would be
     # wrong — none of the eight gates reads per-worktree git state the way
-    # coverage.gate does. Memo: coordinator-claude-em updatedocs-gates-structured-verdicts.
+    # coverage.gate does. Memo: doe-claude-em updatedocs-gates-structured-verdicts.
     "updatedocs.gates":                       "common_dir",
     # distill.scope — keyed on git_common_dir: composes harvest_debt/ripe_filter/
     # sidecar_sweep over the CALLER's own main-worktree-rooted archive/specs,
@@ -885,7 +889,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # doctrine.assert_cross_reference_counts — common_dir: reads the CALLER's own
     # skills/**/*.md + docs/wiki/**/*.md doctrine tree; must resolve
     # main_worktree_root(common_dir) or the count assertion silently reads claude-klabauter's
-    # own tree instead of the caller's (coordinator-claude/coordinator-claude).
+    # own tree instead of the caller's (coordinator-claude/DoE).
     "doctrine.assert_cross_reference_counts": "common_dir",
     # percolate.check_inverse_drift — "none": dest_dir/marker_path are explicit
     # caller-supplied params (the publish target), matching the percolate.run/
@@ -918,7 +922,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # cartography-chunk-table/<run_id>/ — DR-228 § D6 (amended) sanctions the
     # write; scope classification is unaffected by that (still "none", since
     # no repo-specific _origin_worktree state is read).
-    # Spec: cross-repo/inbox/2026-08-06-coordinator-claude-em-cartography-chunk-table-producer-seam.md
+    # Spec: cross-repo/inbox/2026-08-06-doe-claude-em-cartography-chunk-table-producer-seam.md
     "cartography.chunk_table":                 "none",
     # ceremony.chunk_commits — "none": same cartography.* / workflow.validate
     # target-resolution model (explicit caller-supplied plan_path, any repo,
@@ -933,7 +937,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # caller-cwd defect (d4d429d21) was fixed in the bin/ forwarder rather
     # than by resolving against a forwarded --repo, which would have made the
     # op's answer depend on where it was dispatched from.
-    # Spec: cross-repo/inbox/2026-08-10-coordinator-claude-em-chunk-commits-forwarder-relative-path.md
+    # Spec: cross-repo/inbox/2026-08-10-doe-claude-em-chunk-commits-forwarder-relative-path.md
     "ceremony.chunk_commits":                  "none",
     # install.detect_python3_appx_stub — "none": inspects the operator's own machine
     # (PATH-resolved python3 interpreter), not any repo state; mirrors engine.drift/
@@ -959,7 +963,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # coverage.gate op it wraps (reads per-worktree git log state), not common_dir.
     "coverage.halt_on_uncovered":              "show_top",
     # ceremony.init_anchor_injection_state — "none": resolves coordinator-claude/
-    # coordinator-claude root via coordinator_doe_root(), a fixed cross-repo target, not the
+    # DoE root via coordinator_doe_root(), a fixed cross-repo target, not the
     # caller's own worktree.
     "ceremony.init_anchor_injection_state":    "none",
     # install.write_shell_rc_guard_block / install.wrapper_onto_path — "none": both
@@ -1006,7 +1010,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # git commit history (most recent commit on the branch being merged), which is
     # per-worktree state, same class as coverage.gate.
     "merge.quiet_activity_gate":               "show_top",
-    # schema.drift_gate — "none": resolves the coordinator-claude sibling clone (env var /
+    # schema.drift_gate — "none": resolves the DoE-claude sibling clone (env var /
     # registry pointer, same ladder as the advisory probe) and claude-klabauter's own fixed
     # vendored-schemas dir; touches no per-worktree/per-repo caller state.
     "schema.drift_gate":                       "none",
@@ -1169,7 +1173,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # git-provenance under the caller's repo git_common_dir, same class as
     # handoff.match_candidates and session.boot_sweep; omitting this would
     # classify claude-klabauter's own handoffs instead of the caller's when invoked
-    # cross-repo from a coordinator-claude fence.
+    # cross-repo from a DoE fence.
     "session.resolve_chain_terminal_disposition": "common_dir",
     # session.rotate_orphan_sweep_log — common_dir: must match
     # session.boot_sweep's existing common_dir entry for the SAME
@@ -1248,7 +1252,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # plugin_health.forwarder_drift — "none": inspects the operator's OWN
     # settings-home/claude-klabauter install state (settings-home bin/, the retired
     # ~/.claude/bin compat mirror, coordinator/bin/ via the claude-klabauter-root
-    # resolver, coordinator-claude's own prompt-surface trees) — never the caller's
+    # resolver, DoE-claude's own prompt-surface trees) — never the caller's
     # repo_root. The handler's own docstring says so explicitly: "repo_root is
     # accepted for handler-signature parity but IGNORED". Same "none" class as
     # plugin_health.drift/plugin_health.scan.
@@ -1281,7 +1285,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
 # Public parity surface (cross-repo contract) — DR § AC-1b
 #
 # OP_KEY_SCOPE       — read-only view of the op→scope keying table. A consumer
-#                      (e.g. Coordinator-claude's coordinator-core-shim) imports this to keep its
+#                      (e.g. DoE's coordinator-core-shim) imports this to keep its
 #                      _origin_worktree-injection allowlist in lock-step with the
 #                      engine's registered scopes, instead of hand-mirroring it
 #                      (which drifts silently the next time an op's scope changes).

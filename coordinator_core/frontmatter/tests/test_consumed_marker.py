@@ -1,6 +1,6 @@
 """Tests for coordinator_core.frontmatter.consumed_marker.
 
-Spec backlink: coordinator-claude coordinator/bin/lib/consumed-marker.js.
+Spec backlink: DoE-claude coordinator/bin/lib/consumed-marker.js.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from coordinator_core.frontmatter.consumed_marker import (
 
 # DR-084 dual-read, intentionally permanent: these constants re-export the
 # widened lifecycle_constants SSOT, so they admit old ∪ new vocabulary and now
-# diverge DELIBERATELY from the JS original (coordinator-claude lib/consumed-marker.js),
+# diverge DELIBERATELY from the JS original (DoE lib/consumed-marker.js),
 # which stays old-vocabulary-only until the fleet cutover. The divergence is
 # the point -- claude-klabauter must treat a `claimed` / `continued` / `closed` record
 # as terminal today. Narrowing is gated on the consumer-corpus exit condition

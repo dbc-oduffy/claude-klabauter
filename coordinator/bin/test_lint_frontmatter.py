@@ -2,7 +2,7 @@
 Self-test for coordinator/bin/lint-frontmatter.py's CLI logic
 (coordinator_core.frontmatter.schema_validate.main).
 
-Asserts exit code + JSON shape for each of the three flag shapes coordinator-claude's live
+Asserts exit code + JSON shape for each of the three flag shapes DoE's live
 callers consume: whole-tree --json (update-docs.md Phase 11d), whole-tree
 --strict-refs --json (workweek-complete.md Step 2.5), and --file (handoff/
 SKILL.md's write-time gate). Builds a synthetic --root fixture tree per test

@@ -4,7 +4,7 @@ bin/sweep-actioned-memos.py — thin CLI over the cross-repo actioned-memo sweep
 Purpose: give ``fleet.archive_actioned_memos`` a claude-klabauter-owned, Windows-first,
 naked-Python entry point.  The op itself has always worked; until this CLI
 landed its ONLY caller was the composite ``session.boot_sweep``, which in turn
-was only ever invoked by coordinator-claude's bash ``session-init.sh`` SessionStart hook.  That
+was only ever invoked by DoE's bash ``session-init.sh`` SessionStart hook.  That
 hook is not registered on this machine (``~/.claude/settings.json`` carries an
 empty ``hooks`` object), so the sweep last fired on 2026-07-14 (``2bad853c``)
 and actioned memos accreted in ``cross-repo/inbox/`` from then on — making the

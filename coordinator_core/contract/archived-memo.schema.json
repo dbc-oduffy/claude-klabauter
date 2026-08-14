@@ -25,7 +25,7 @@
     },
     "to_repo": {
       "type": "string",
-      "description": "OPTIONAL machine-local registry key of the receiver repo, in `repos.<key>` form (e.g. repos.example_doctrine_repo, repos.claude_klabauter, repos.example_retrieval_repo). Sibling of the cross-repo-memo schema's `to_repo` field, carried through to archival so a memo bearing it still validates after `git mv` to cross-repo/archive/. `to:` remains the human-readable addressee; `to_repo` disambiguates, it does not replace. Never required — historical archived memos predate this field and must keep validating. A receiver-repo-local extension, not (yet) emitted by claude-klabauter's memo_send."
+      "description": "OPTIONAL machine-local registry key of the receiver repo, in `repos.<key>` form (e.g. repos.doe_claude, repos.claude_klabauter, repos.example_retrieval_repo). Sibling of the cross-repo-memo schema's `to_repo` field, carried through to archival so a memo bearing it still validates after `git mv` to cross-repo/archive/. `to:` remains the human-readable addressee; `to_repo` disambiguates, it does not replace. Never required — historical archived memos predate this field and must keep validating. A receiver-repo-local extension, not (yet) emitted by claude-klabauter's memo_send."
     },
     "status": {
       "type": "string",
@@ -50,15 +50,15 @@
     },
     "campaign_id": {
       "type": "string",
-      "description": "Optional shared correlation id stamped by memo.send's 1->N fan-out (DEC-3/C7, 2026-07-24 memo-ownership-and-redesign plan). Present only on memos delivered via a to:[] fan-out send; identical across every receiver in the same campaign, persisted to disk on every successful per-receiver write (coordinator_core.ops.fleet.memo_send._memo_send_fan_out) so a rag-side compliance query over this field can distinguish not-yet-acted (delivered, no disposition) from never-delivered (write failed) receivers. Absent on ordinary single-receiver memos. Additive field (DEC-1 discipline) — never required."
+      "description": "Optional shared correlation id stamped by memo.send's 1->N fan-out (DEC-3/C7, per the memo-ownership-and-redesign plan). Present only on memos delivered via a to:[] fan-out send; identical across every receiver in the same campaign, persisted to disk on every successful per-receiver write (coordinator_core.ops.fleet.memo_send._memo_send_fan_out) so a rag-side compliance query over this field can distinguish not-yet-acted (delivered, no disposition) from never-delivered (write failed) receivers. Absent on ordinary single-receiver memos. Additive field (DEC-1 discipline) — never required."
     },
     "in_reply_to": {
       "type": "string",
-      "description": "Optional linkage field (2026-07-25 write-side addition): the basename of an inbound memo this memo replies to. Normalized to a bare basename at send time and, for a receiver-repo delivery, existence-checked against the SENDER's own cross-repo/inbox/ or cross-repo/archive/ before anything is written (coordinator_core.ops.fleet.memo_send._validate_in_reply_to_exists) — never required, never emitted when absent. Consumed by coordinator_core.pickup_assemble._candidate_is_linked (matches by basename or basename-minus-'.md', case-insensitive) as reply-closure evidence, alongside the existing prose-citation fallback."
+      "description": "Optional linkage field: the basename of an inbound memo this memo replies to. Normalized to a bare basename at send time and, for a receiver-repo delivery, existence-checked against the SENDER's own cross-repo/inbox/ or cross-repo/archive/ before anything is written (coordinator_core.ops.fleet.memo_send._validate_in_reply_to_exists) — never required, never emitted when absent. Consumed by coordinator_core.pickup_assemble._candidate_is_linked (matches by basename or basename-minus-'.md', case-insensitive) as reply-closure evidence, alongside the existing prose-citation fallback."
     },
     "space": {
       "type": "string",
-      "description": "Optional sender-declared thread / problem-space hint (2026-07-28 addition, a sibling repo's inbox-blitz proposal). EXPLICITLY NON-AUTHORITATIVE: the receiver may override or ignore it, and nothing validates it against a controlled vocabulary — it is a grouping hint, not a taxonomy. Its value is that reconstructing threads from memo bodies is the single most expensive judgment step in a batch inbox pass, and a sender-declared hint collapses that step to a GROUP BY (a sibling repo's 16-memo dominant correspondent was five threads to the sender and expensively so to the receiver). Consumed by coordinator_core.ops.fleet.memo_blitz_buckets as the preferred space key. Never required — the entire pre-2026-07-28 corpus lacks it and must keep validating."
+      "description": "Optional sender-declared thread / problem-space hint, per a sibling repo's inbox-blitz proposal. EXPLICITLY NON-AUTHORITATIVE: the receiver may override or ignore it, and nothing validates it against a controlled vocabulary — it is a grouping hint, not a taxonomy. Its value is that reconstructing threads from memo bodies is the single most expensive judgment step in a batch inbox pass, and a sender-declared hint collapses that step to a GROUP BY (a sibling repo's 16-memo dominant correspondent was five threads to the sender and expensively so to the receiver). Consumed by coordinator_core.ops.fleet.memo_blitz_buckets as the preferred space key. Never required — the entire pre-2026-07-28 corpus lacks it and must keep validating."
     },
     "supersedes": {
       "oneOf": [
@@ -72,7 +72,7 @@
           }
         }
       ],
-      "description": "Sender-declared supersession — points FROM new TO old. Accepts either a single memo reference (string, the original 'set on a new memo when re-issuing a pre-lifecycle memo' shape) OR a list of references (widened 2026-07-28 so one memo can retire several earlier ones, which is the observed shape of a running thread that ends in a correction). A reference is a memo basename or topic ref. Sender-declared rather than receiver-inferred because the sender usually knows: two of the three supersessions a sibling repo inferred during their 2026-07-28 blitz were memos whose own bodies said 'this corrects my earlier one' in prose. memo.send's same-day re-delivery filename disambiguator (memo_send._redelivery_filename) slugs the FIRST reference when a list is supplied — the list form does not change that filename's shape."
+      "description": "Sender-declared supersession — points FROM new TO old. Accepts either a single memo reference (string, the original 'set on a new memo when re-issuing a pre-lifecycle memo' shape) OR a list of references, supporting one memo retiring several earlier ones — the observed shape of a running thread that ends in a correction. A reference is a memo basename or topic ref. Sender-declared rather than receiver-inferred because the sender usually knows: a sibling repo's inbox-blitz sweep found two of three inferred supersessions were memos whose own bodies said 'this corrects my earlier one' in prose. memo.send's same-day re-delivery filename disambiguator (memo_send._redelivery_filename) slugs the FIRST reference when a list is supplied — the list form does not change that filename's shape."
     },
     "superseded_by": {
       "type": "string",

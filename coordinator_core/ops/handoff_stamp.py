@@ -127,7 +127,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _LOG = logging.getLogger(__name__)
 
-# shipped_in_kind discriminant (DR-096, coordinator-claude 2026-07-26 ruling) — the
+# shipped_in_kind discriminant (DR-096, DoE-claude 2026-07-26 ruling) — the
 # enum tagging WHICH sanctioned resolution produced a shipped_in value. Kept
 # here (not just in archive_stamp.py) because this handler is the one
 # structural point THREE of the four current writers already converge on:
@@ -740,7 +740,7 @@ async def _repair_archived_shipped_in_handler(
 # as the shipped_in repair verb — called directly in-process by
 # coordinator_core.archive_stamp.cs_repair_archived_deployment_state.
 #
-# Added 2026-07-26 after a coordinator-claude cross-repo memo (13 archived handoffs
+# Added 2026-07-26 after a DoE-claude cross-repo memo (13 archived handoffs
 # stuck at deployment_state: in_flight, hand-edited because ship-handoff's
 # state/handoffs/-only containment refuses archive/handoffs/ paths — the
 # same problem the shipped_in repair verb solved for shipped_in on
@@ -761,7 +761,7 @@ _ARCHIVED_DEPLOYMENT_STATES = frozenset(
 )
 _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 
-# Terminal deployment_states (E1, coordinator-claude 2026-07-26/27 follow-up memo).
+# Terminal deployment_states (E1, DoE-claude 2026-07-26/27 follow-up memo).
 # A record sitting at one of these three is VALIDLY archived — its lifecycle
 # is over, same as the freeze this handler already respects for every other
 # field. Repairing a record's deployment_state is legitimate ONLY when the
@@ -780,7 +780,7 @@ _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 _TERMINAL_DEPLOYMENT_STATES = frozenset({"shipped", "continued", "closed"})
 
 # Cross-repo continued_into reference shape (e.g. "claude-klabauter:docs/plans/x.md")
-# — observed in the live corpus (coordinator-claude handoff 2026-07-24_112615_c0bd4682.md).
+# — observed in the live corpus (DoE-claude handoff 2026-07-24_112615_c0bd4682.md).
 # A colon-prefixed segment of 3+ word chars, not a URL scheme and not a
 # single-letter Windows drive ("C:\..."), signals a sibling-repo path this
 # handler has no filesystem access to verify. Detected so it routes to the
@@ -800,7 +800,7 @@ def _resolve_continued_into(worktree: Path, value: str) -> bool:
     """Return True iff ``value`` resolves to a real file under ``worktree``.
 
     Existence-and-identity check for the ``continued_into`` cross-field, added
-    2026-07-26 after a coordinator-claude repair session wrote a *guessed* successor
+    2026-07-26 after a DoE-claude repair session wrote a *guessed* successor
     slug into an archived handoff's ``continued_into`` and this verb accepted
     it silently (rc=0) — the error was only caught by an independent
     cross-check against the successor's real ``handoff_id``. The verb caught
@@ -810,7 +810,7 @@ def _resolve_continued_into(worktree: Path, value: str) -> bool:
 
     The live corpus uses several shapes for ``continued_into`` (see
     ``coordinator_core/ops/tests/test_handoff_stamp.py``'s resolution-gap
-    tests for concrete examples pulled from coordinator-claude's actual archive):
+    tests for concrete examples pulled from DoE-claude's actual archive):
       - a bare synthetic id (``hnd-<slug>-<hex6>``) matching another
         handoff's own ``handoff_id:`` frontmatter field, live or archived
       - a worktree-relative path (``state/handoffs/<file>.md``,

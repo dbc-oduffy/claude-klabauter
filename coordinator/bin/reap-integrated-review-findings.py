@@ -85,7 +85,7 @@ otherwise.
 #   leg (a) of review-findings sidecar auto-sweep — reap integrated
 #   (## Integrator Dispositions) findings sidecars; PM-directed 2026-07-14
 #   docs/plans/2026-07-06-dr215-fleet-ops-ceremony-wiring.md (DR-215: this
-#   facade's own coordinator-claude-resident sanction)
+#   facade's own DoE-resident sanction)
 #   claude-klabauter tree: docs/decisions/DR-218-review-trail-aged-unintegrated-reap-boundary.md
 #   (C0-amended entry sanctioning fleet.reap_integrated_findings op-side;
 #   lives ONLY in claude-klabauter's docs/decisions/, not in this repo — context
@@ -127,7 +127,7 @@ otherwise.
 #     parity is unaffected.
 #
 # Review: code-reviewer — Finding 6 (pre-port bash oracle): DR-218 is a
-# claude-klabauter-tree citation, not a coordinator-claude-relative path; qualified above per
+# claude-klabauter-tree citation, not a DoE-relative path; qualified above per
 # cross-repo-citation-conventions.md.
 # Portability (DR-148): pure Python + subprocess git calls; no shell-only
 # constructs. sys.executable used for the CC_INVOKE spawn (via cc_invoke.py),

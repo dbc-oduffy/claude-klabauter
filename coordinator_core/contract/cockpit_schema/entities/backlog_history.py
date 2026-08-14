@@ -1,11 +1,11 @@
 """
-backlog_history time-series block — pydantic port of coordinator-claude
+backlog_history time-series block — pydantic port of DoE
 `coordinator/cockpit-contract/src/entities/backlog-history.ts` (Zod source).
 Cockpit's producer-emitted backlog-trend charts; a nested singular object on
 SnapshotEnvelope.
 
-Spec backlink: docs/plans/2026-07-06-cockpit-contract-v270-backlog-history-block.md
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
+Spec backlink: DoE-claude:pln-land-backloghistory-contract-b-7d3f40
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
 """
 from __future__ import annotations
 

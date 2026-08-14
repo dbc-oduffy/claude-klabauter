@@ -59,7 +59,7 @@ _VALID_MODES = frozenset({"already-terminal"})
 # deployment_state values that qualify a handoff as terminal regardless of status
 # (archive_handoffs.py's terminal-deployment_state branch — active+shipped/abandoned
 # off-baton handoffs are schema-valid terminal states; see archive_handoffs.py module
-# docstring).  The coordinator-claude lvv-03 single-terminal-vocab consolidation has now happened
+# docstring).  The DoE lvv-03 single-terminal-vocab consolidation has now happened
 # (DR-084 plan C3): coordinator_core.lifecycle_constants is the SSOT for this
 # vocabulary, and handoff_reconcile._CLOSED_DEPLOYMENT_STATES and
 # reconcile.gate_eval._TERMINAL_STATES are expected to import from it too.
@@ -111,7 +111,7 @@ def _is_identical_duplicate(src: Path, dst: Path) -> bool:
 # GIT_* vars that are safe to forward (identity / signing passthrough).
 _GIT_ENV_IDENTITY_PREFIXES: tuple = ("GIT_AUTHOR_", "GIT_COMMITTER_")
 
-# Session-identity env vars consumed by the coordinator-claude prepare-commit-msg hook to
+# Session-identity env vars consumed by the DoE prepare-commit-msg hook to
 # resolve the Session-Id: commit trailer (env-only ladder:
 # COORDINATOR_SESSION_ID -> CLAUDE_SESSION_ID -> CLAUDE_CODE_SESSION_ID; the
 # `.current-session-id` sentinel tier was removed KS-1, 2026-08-07).  This
@@ -1003,7 +1003,7 @@ async def _resync_main_index_for_moves(
     this now converts that lesson into engine behaviour via the lesson's own
     literal invocation — a single `git restore --staged -- <src> <dst>` covering
     BOTH paths in one call, rather than the two-step `--remove` / `--cacheinfo`
-    approximation this comment used to describe. See also coordinator-claude coordinator/docs/wiki/
+    approximation this comment used to describe. See also DoE-claude coordinator/docs/wiki/
     concurrent-em-hazards.md and coordinator/docs/wiki/scoped-safety-commits.md
     for "staged = claimed, unstaged = contestable" on a shared tree — the framing
     this resync's guarantee is built to preserve.

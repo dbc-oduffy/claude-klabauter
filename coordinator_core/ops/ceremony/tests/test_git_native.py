@@ -1054,3 +1054,56 @@ def test_validate_explicit_deliverable_id_accepts_archived_spec_only(tmp_path):
         f"expected acceptance (None) for a deliverable_id resolving only from "
         f"archive/specs, got rejection: {result!r}"
     )
+
+
+def test_validate_explicit_deliverable_id_accepts_pln_prefix(tmp_path):
+    """C10b leg (c): the citation convention now PREFERS citing a plan by its
+    own `pln-` id (§ PM rulings, docs/plans/2026-08-13-spec-backlinks-cite-a-
+    stable-deliverable-id.md; DoE's ratified doctrine at their commit
+    fa72d1642). An author who follows that convention and passes the
+    resulting `pln-` id to `--deliverable-id` must be ACCEPTED, not rejected
+    for doing what the convention instructs."""
+    root = tmp_path / "repo"
+    plans_dir = root / "docs" / "plans"
+    plans_dir.mkdir(parents=True)
+    (plans_dir / "2026-08-13-pln-guard.md").write_text(
+        "---\nplan_id: pln-guard-accepts-pln-prefix\n---\n\n# plan\n",
+        encoding="utf-8",
+    )
+
+    result = git_native._validate_explicit_deliverable_id(
+        "pln-guard-accepts-pln-prefix", root
+    )
+
+    assert result is None, (
+        f"expected acceptance (None) for a resolvable pln- id, got rejection: {result!r}"
+    )
+
+
+def test_validate_explicit_deliverable_id_rejects_bogus_prefix(tmp_path):
+    """Regression: a shape neither `dlv-` nor `pln-` is STILL rejected before
+    any existence scan -- widening the shape check to admit `pln-` must not
+    also admit an arbitrary prefix."""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    result = git_native._validate_explicit_deliverable_id(
+        "bogus-neither-prefix", root
+    )
+
+    assert result is not None
+    assert "'dlv-' or 'pln-' shape convention" in result
+
+
+def test_validate_explicit_deliverable_id_rejects_unresolvable_pln(tmp_path):
+    """Regression: a `pln-`-shaped id that resolves to no real artifact is
+    STILL rejected -- shape acceptance does not bypass the existence scan."""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    result = git_native._validate_explicit_deliverable_id(
+        "pln-does-not-exist-anywhere", root
+    )
+
+    assert result is not None
+    assert "does not resolve to any real artifact" in result

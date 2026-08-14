@@ -1,17 +1,17 @@
 """workweek-start-goal-and-priorities.py — imperative logic ported OUT of
-Coordinator-claude's coordinator/commands/workweek-start.md Step 5/6/6.5 bash fences
+DoE-claude's coordinator/commands/workweek-start.md Step 5/6/6.5 bash fences
 (M3 chunk C-WWS, 2026-07 bash-kill campaign).
 
 Self-contained, self-resolving (Path(__file__)-relative — never cwd-dependent)
 naked-Python CLI, co-located with (and shelling out to) its sibling bin/
 CLIs — coordinator-doc-new, append-goal-event.py, coordinator-current-branch.py,
 coordinator-ceremony-hook.py — via Path(__file__).parent, so it needs NO
-resolve-claude-klabauter-bin ladder of its own (that ladder stays on the coordinator-claude-side calling
+resolve-claude-klabauter-bin ladder of its own (that ladder stays on the DoE-side calling
 fence, whose job is to locate THIS script; once invoked, this script already
 knows where its own siblings live).
 
 Subcommands (one per ported concern — see each function's docstring for the
-Coordinator-claude-side bash fence it replaces):
+DoE-side bash fence it replaces):
     scaffold-goal        — Step 5: author a period=week goal .yaml via
                             coordinator-doc-new, then fill the scaffolder's
                             placeholder gap (period_value/weekly_perceptible/
@@ -30,12 +30,12 @@ Coordinator-claude-side bash fence it replaces):
     ceremony-hook         — Step 6.5: run coordinator-ceremony-hook.py
                             workweek-start, non-blocking on failure.
 
-NEGATIVE SPEC — do NOT port here (stays on the coordinator-claude-side calling fence, per the
+NEGATIVE SPEC — do NOT port here (stays on the DoE-side calling fence, per the
 M3 C-WWS dispatch brief): the resolve-claude-klabauter-bin resolver block, the
 _cc_trusted/_cc_root guard preamble, the _cc_claude_klabauter CLAUDE_KLABAUTER_ROOT resolution
 ladder, or any thin single-CLI-invocation fence. Those are D1/D2's concern.
 
-Spec backlink: coordinator-claude coordinator/commands/workweek-start.md §§ Step 5,
+Spec backlink: DoE-claude coordinator/commands/workweek-start.md §§ Step 5,
 Step 6 (Reset-or-Update Decision), Step 6.5 (Project Post-Ceremony Command Hook).
 """
 from __future__ import annotations
@@ -57,6 +57,17 @@ except ImportError:  # pragma: no cover - venv-resident dep, see install-surface
 
 _HERE = Path(__file__).resolve().parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# Generator-provenance declaration (generator_provenance.py).
+# cmd_scaffold_goal writes state/goals/<date>-<slug>-<sid>.yaml;
+# cmd_commit_priorities/cmd_commit_archive_reset commit
+# state/week-changelog/HEADER*.md and archive/week-changelogs/<prior-week>/ --
+# a data-dependent per-session/per-week target set, not a fixed artifact.
+MUTATES = [
+    "state/goals/*.yaml",
+    "state/week-changelog/*.md",
+    "archive/week-changelogs/**",
+]
 
 
 def _no_console_passthrough_kw() -> dict:
@@ -266,7 +277,7 @@ def cmd_scaffold_goal(args: argparse.Namespace) -> int:
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    doc_new = _HERE / "coordinator-doc-new"
+    doc_new = _HERE / "coordinator-doc-new.py"
     proc = subprocess.run(
         [
             os.environ.get("COORDINATOR_PYTHON", sys.executable),
@@ -321,7 +332,7 @@ def cmd_emit_goal_event(args: argparse.Namespace) -> int:
     objective/period_value legitimately take.
 
     Review: A-F9 (workweek-start.md) — single-emission point per goal
-    artifact: the coordinator-claude-side caller invokes this subcommand exactly once per
+    artifact: the DoE-side caller invokes this subcommand exactly once per
     priority, from either the reset branch or the update-in-place branch
     (never both), so no double-emit guard is needed here.
 

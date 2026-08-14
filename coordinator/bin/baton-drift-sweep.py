@@ -30,7 +30,7 @@ Exit codes:
 
 NEVER writes anything — read-only diagnostic.
 
-Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D2d
+Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d § D2d
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Characterization tests for coordinator_core.ops.validate_install_contract.
 
-Port of: validate-install-contract.sh (coordinator-claude b5a4192c, 2026-07-20), 303 lines,
+Port of: validate-install-contract.sh (DoE b5a4192c, 2026-07-20), 303 lines,
 bash + jq — see the module's own Negative-spec docstring for what is
 deliberately preserved vs. deliberately different.
 

@@ -1,1 +1,1 @@
-"""Text-transform utilities ported from coordinator-claude-side coordinator/lib/*.sh helpers."""
+"""Text-transform utilities ported from DoE-side coordinator/lib/*.sh helpers."""

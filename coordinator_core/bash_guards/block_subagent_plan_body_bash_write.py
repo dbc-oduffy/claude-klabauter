@@ -1,8 +1,8 @@
 """
 coordinator_core.bash_guards.block_subagent_plan_body_bash_write -- Python
-engine-ification of coordinator-claude's retired
+engine-ification of DoE's retired
 ``coordinator/hooks/scripts/block-subagent-plan-body-bash-write.sh``
-PreToolUse(Bash) hook (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
+PreToolUse(Bash) hook (deleted 2026-07-16, DoE ``2f8b8450``).
 
 Purpose: closes the Bash escape from the Write/Edit/MultiEdit/NotebookEdit-only
 deny in the sibling hook ``block-subagent-plan-body-write.sh`` (ported at
@@ -66,12 +66,12 @@ returns `permissionDecision: "allow"` with the same reason text surfaced via
 "hard-deny"` above is dead metadata on the bash-guard side (nothing reads
 it) and is left as historical record, not the load-bearing signal.
 
-Spec backlink: docs/plans/2026-07-09-dispatch-sidecar-executor-confinement.md
+Spec backlink: DoE-claude:pln-dispatch-sidecar-contract-exec-5e045c
   section D-BASH, AC4, chunk C-BASH.
 Spec backlink (ADVISORY_REWRITE conversion):
   docs/plans/2026-08-06-apply-guard-class-census.md, chunk C14.
-Ported from the retired coordinator-claude bash guard ``block-subagent-plan-body-bash-write.sh``
-  (deleted 2026-07-16, coordinator-claude ``2f8b8450``).
+Ported from the retired DoE bash guard ``block-subagent-plan-body-bash-write.sh``
+  (deleted 2026-07-16, DoE ``2f8b8450``).
 Recipe: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md
   section (b) fold-candidate 1.
 """
@@ -131,6 +131,12 @@ def _resolve_roster_accessor():
 CLASS = "hard-deny"
 MATCHERS = ("Bash",)
 PRIORITY = 40
+
+# Generator-provenance declaration (generator_provenance.py). _write_block_log
+# appends to <git_root>/.git/coordinator-sessions/<session_id>/plan-body-
+# bash-write-block.log -- inside .git, an untracked per-session audit log,
+# never a tracked repo artifact.
+GENERATES = []
 
 #: Escape-hatch env var -- checked BEFORE identity resolution (reference hook
 #: line 65), so it also bypasses the AMBIGUOUS unconditional-deny branch.

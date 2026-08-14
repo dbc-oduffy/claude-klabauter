@@ -1,8 +1,8 @@
 """Characterization tests for coordinator_core.ops.ensure_doe_clone.
 
-Port source: coordinator/commands/install.md (coordinator-claude) Step 3.5a, the two
+Port source: coordinator/commands/install.md (DoE-claude) Step 3.5a, the two
 literal bash fences at lines 731 and 747.
-Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9
+Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3/D9
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from coordinator_core.testing.fake_machine_local import write_fake_executable
 
 
 def _make_fake_bin(tmp_path: Path, *, get_value: str = "", get_rc: int = 0) -> Path:
-    """Fake `machine-local` that answers `get repos.example_doctrine_repo` and
-    `get repos.example_doctrine_repo_url` from env-driven fixture values.
+    """Fake `machine-local` that answers `get repos.doe_claude` and
+    `get repos.doe_claude_url` from env-driven fixture values.
 
     Fabricated via `write_fake_executable` (extensionless POSIX,
     `.cmd`-wrapped-Python on Windows) rather than a raw `#!/bin/sh` script:
@@ -31,10 +31,10 @@ def _make_fake_bin(tmp_path: Path, *, get_value: str = "", get_rc: int = 0) -> P
     ml_body = (
         "import os, sys\n"
         "args = sys.argv[1:]\n"
-        "if len(args) >= 2 and args[0] == 'get' and args[1] == 'repos.example_doctrine_repo':\n"
+        "if len(args) >= 2 and args[0] == 'get' and args[1] == 'repos.doe_claude':\n"
         f"    sys.stdout.write({get_value!r})\n"
         f"    sys.exit({get_rc})\n"
-        "if len(args) >= 2 and args[0] == 'get' and args[1] == 'repos.example_doctrine_repo_url':\n"
+        "if len(args) >= 2 and args[0] == 'get' and args[1] == 'repos.doe_claude_url':\n"
         "    sys.stdout.write(os.environ.get('FAKE_DOE_URL', ''))\n"
         "    sys.exit(0)\n"
         "sys.exit(9)\n"
@@ -69,8 +69,8 @@ def _fake_git_clone(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO", raising=False)
-    monkeypatch.delenv("REPO_EXAMPLE_DOCTRINE_REPO_URL", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE_URL", raising=False)
     monkeypatch.delenv("COORDINATOR_NON_INTERACTIVE", raising=False)
     monkeypatch.setenv("PATH", "")
 
@@ -78,7 +78,7 @@ def _isolated_env(monkeypatch):
 def test_env_override_ready_when_git_dir_present(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
 
     rc = main([])
 
@@ -89,33 +89,33 @@ def test_env_override_ready_when_git_dir_present(tmp_path, monkeypatch, capsys):
 def test_check_only_skips_when_unresolved(capsys):
     rc = main(["--check-only"])
     assert rc == 0
-    assert "doe_clone: skipped (repos.example_doctrine_repo not set)" in capsys.readouterr().out
+    assert "doe_clone: skipped (repos.doe_claude not set)" in capsys.readouterr().out
 
 
 def test_non_interactive_fails_loud_when_unresolved(capsys):
     rc = main(["--non-interactive"])
     assert rc == 1
     out = capsys.readouterr().out
-    assert "doe_clone: failed (repos.example_doctrine_repo not set" in out
+    assert "doe_clone: failed (repos.doe_claude not set" in out
 
 
 def test_non_interactive_env_var_form(monkeypatch, capsys):
     monkeypatch.setenv("COORDINATOR_NON_INTERACTIVE", "1")
     rc = main([])
     assert rc == 1
-    assert "doe_clone: failed (repos.example_doctrine_repo not set" in capsys.readouterr().out
+    assert "doe_clone: failed (repos.doe_claude not set" in capsys.readouterr().out
 
 
 def test_interactive_unresolved_reports_skip_and_nonzero(capsys):
     rc = main([])
     assert rc == 1
     out = capsys.readouterr().out
-    assert "doe_clone: skipped (repos.example_doctrine_repo not set — run the interactive" in out
+    assert "doe_clone: skipped (repos.doe_claude not set — run the interactive" in out
 
 
 def test_check_only_would_clone_when_resolved_but_absent(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone-not-yet"
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
 
     rc = main(["--check-only"])
 
@@ -128,20 +128,20 @@ def test_check_only_would_clone_when_resolved_but_absent(tmp_path, monkeypatch, 
 
 def test_live_clone_fails_loud_without_resolvable_url(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone-not-yet"
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
 
     rc = main([])
 
     assert rc == 1
-    assert "doe_clone: failed (repos.example_doctrine_repo_url not resolvable" in capsys.readouterr().out
+    assert "doe_clone: failed (repos.doe_claude_url not resolvable" in capsys.readouterr().out
 
 
 def test_live_clone_succeeds_with_resolved_url(tmp_path, monkeypatch, capsys, _fake_git_clone):
     clone = tmp_path / "doe-clone-not-yet"
     bin_dir = _make_fake_bin(tmp_path)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/bin" + os.pathsep + "/usr/bin")
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(clone))
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO_URL", "https://example.invalid/coordinator-claude.git")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE_URL", "https://example.invalid/doe-claude.git")
 
     rc = main([])
 
@@ -165,7 +165,7 @@ def test_registry_tier_resolves_clone_path(tmp_path, monkeypatch, capsys):
 def test_trailing_slash_stripped(tmp_path, monkeypatch, capsys):
     clone = tmp_path / "doe-clone"
     (clone / ".git").mkdir(parents=True)
-    monkeypatch.setenv("REPO_EXAMPLE_DOCTRINE_REPO", str(clone) + "/")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(clone) + "/")
 
     rc = main([])
 

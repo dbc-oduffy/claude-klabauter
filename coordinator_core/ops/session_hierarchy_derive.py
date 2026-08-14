@@ -25,14 +25,14 @@ central-registry edits are DEFERRED to the EM per the concurrent-build-wave
 central-registry-deferral convention; see this chunk's
 ``central-reg/T3a-g3c.txt`` fragment.
 
-CLI entrypoint: ``main(argv)`` is the direct-import target for the coordinator-claude trampoline
+CLI entrypoint: ``main(argv)`` is the direct-import target for the DoE trampoline
 (``coordinator/bin/derive-session-hierarchy``, mirrors the ``handoff-gate-aging`` /
 ``scope-warning-resolve`` shape) — a plain synchronous call, NOT routed through the
 JSON-RPC handler (no event loop needed for a CLI invocation with no repo_root
 router to consult).
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T3a-g3c
-Port of: derive-session-hierarchy.sh (coordinator-claude f0aa2d56, 2026-07-16)
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T3a-g3c
+Port of: derive-session-hierarchy.sh (DoE f0aa2d56, 2026-07-16)
 
 Negative-spec:
 - Does NOT re-implement the query-records enumeration/frontmatter-parse — reuses
@@ -46,6 +46,8 @@ Negative-spec:
 """
 
 from __future__ import annotations
+
+MUTATES = ["state/session-hierarchy.*.json"]  # per-machine full-rebuild shard; filename varies by machine_slug(), e.g. state/session-hierarchy.machine-b-local.json / state/session-hierarchy.machine-a.json (both tracked)
 
 import asyncio
 import json

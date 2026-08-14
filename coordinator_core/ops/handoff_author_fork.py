@@ -6,7 +6,7 @@ provenance auto-populated at spawn time — the only moment ``origin_session`` /
 ``origin_handoff`` / ``origin_plan_id`` / ``origin_goal_id`` are cheaply knowable (an
 hour later you are backfilling null).
 
-This is the primitive the (coordinator-claude-owned) ``/spinoff`` skill invokes.  It does NOT enforce
+This is the primitive the (DoE-owned) ``/spinoff`` skill invokes.  It does NOT enforce
 the PM spinoff gate (that responsibility stays skill-layer); it is a MUTATING primitive
 reachable over the UDS whose caller is responsible for any gate-checking.
 
@@ -50,7 +50,7 @@ PROVENANCE_FIELD_MAP
 ---------------------
 Module-level dict mapping logical names → ratified frontmatter key names, cardinality,
 and serialisation type.  Field names and cardinalities are ratified per the
-spinoff-provenance-ancestry contract (coordinator-claude C6 ratification memo
+spinoff-provenance-ancestry contract (DoE C6 ratification memo
 ``cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md``).  No key swap
 needed — the current ``origin_*`` names match the ratified shape exactly.
 
@@ -60,8 +60,21 @@ New fork handoff file created under ``{worktree}/state/handoffs/`` via ``locked_
 ``missing_ok=True`` (atomic mkstemp + os.replace under flock).  Frontmatter populated via
 ``coordinator_core.frontmatter.primitives`` (no reimplemented frontmatter I/O).
 After the provenance fields are written, ``handoff_normalize._normalize_one_text`` is
-composed inline to fill in ``category``, ``summary``, ``deliverable_id``, ``initiative``.
+composed inline to fill in ``category``, ``summary``, ``deliverable_id``, ``initiative``
+(and, per that function's own full normalization list, ``created``/``pickup_ready``
+shape plus the ``minted_by``/``producer`` creation stamps).
 ``predecessor: none`` — fork handoffs are not a continuation.
+
+BOTH doors compose it, in that same after-the-provenance-fields order: the from-scratch
+author path (``_handler``) and the stamping path (``_handle_stamp``).  The stamp door did
+not, for its first three weeks, and the divergence was invisible precisely because this
+section already declared the behaviour — spinoff authoring routes through stamp mode
+unconditionally, so no normalizer had ever measured a spinoff artifact.  Note the scope
+limit that remains (DoE wiki
+``coordinator-tripwires/normalize-at-creation-does-not-cover-a-later-hand-edit.md``):
+normalization at this seam is a floor for machine-minted values only.  ``/spinoff``'s own
+Step 2 has the EM hand-edit the scaffolded file AFTER this op has run, and nothing here
+measures what is typed then.
 
 MUTATING op: writes ONLY ``state/handoffs/`` in the caller's worktree.
 No git commit from the handler.
@@ -75,14 +88,15 @@ DR authority:  docs/decisions/DR-208-invoke-op-authz-model.md § 5
 
 Negative-spec:
     - Does NOT enforce the PM spinoff gate — this is a primitive; gate-enforcement is the
-      calling skill's responsibility (``/spinoff`` SKILL.md, coordinator-claude-owned).
+      calling skill's responsibility (``/spinoff`` SKILL.md, DoE-owned).
     - Does NOT git-commit.  Pure new-file creation only.
     - Does NOT write outside ``state/handoffs/`` in the caller's worktree.
     - Does NOT use ``liveness.resolve_live_session_ids()`` to resolve origin_session —
       that returns a FrozenSet of ALL live sessions (liveness probe), not the current
       session identity.  See ``session_context.py`` for the correct chain.
     - Does NOT reimplement frontmatter parse/write — uses frontmatter.primitives and
-      composes handoff_normalize._normalize_one_text.
+      composes handoff_normalize._normalize_one_text on BOTH doors (author and stamp),
+      never on only one of them.
     - Does NOT overwrite an existing handoff file — the generated filename is
       timestamp-keyed + uuid-suffixed; a collision triggers MutateAbort.
     - Does NOT surface plan and goal ambiguity simultaneously — plan resolved first;
@@ -155,10 +169,10 @@ _LOG = logging.getLogger(__name__)
 # PROVENANCE_FIELD_MAP
 #
 # RATIFIED field names and cardinalities — spinoff-provenance-ancestry contract
-# (coordinator-claude C6 ratification memo: cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md).
+# (DoE C6 ratification memo: cross-repo/inbox/2026-07-07-spinoff-provenance-claude-klabauter-ratified.md).
 # The current ``origin_*`` keys already match the ratified shape — that part needed no
 # rename.  It DID leave a gap, though: ``origin_handoff_id``, the C2 ID-companion for
-# ``origin_handoff`` (coordinator-claude schema, ``docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md``
+# ``origin_handoff`` (DoE schema, ``docs/plans/2026-07-08-lifecycle-vocab-c2-durable-links-rollup.md``
 # § C2), is included below because this op is the schema-designated author-time stamp
 # point — ``origin_handoff`` is a path and paths are mutable (every baton is eventually
 # archived to ``archive/handoffs/YYYY-MM/``); ``origin_handoff_id`` is the path-independent
@@ -594,6 +608,25 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
     so the caller can report or log it. Absence (zero candidates,
     ``ResolutionReason.NO_CANDIDATES``) is not reported as degraded; it
     resolves to ``null`` exactly as it always has.
+
+    Normalization: after the five fields are stamped (never before — see the
+    module docstring's "Write mechanics"), ``handoff_normalize
+    ._normalize_one_text`` is composed inline over the rebuilt text, exactly as
+    the from-scratch author path composes it.  Consequences for a caller whose
+    target previously passed through untouched: an absent ``category`` /
+    ``deliverable_id`` / ``initiative`` is backfilled, a present over-cap
+    ``summary`` is truncated to 140 chars ahead of the claim gate, and
+    ``minted_by`` / ``producer`` are stamped when absent.  All of these are
+    absence-triggered or cap-triggered — a value already present and in-shape is
+    carried byte-for-byte, so a second stamp pass over the same artifact is a
+    no-op (``_normalize_one_text`` returns ``None`` when it finds no drift, and
+    the 140-char truncation is fixed-point, never progressive).
+
+    Negative-spec:
+    - Does NOT normalize a hand-edit made AFTER this op runs.  ``/spinoff``'s
+      Step 2 does exactly that; a summary typed there reaches the claim gate
+      unmeasured.  DoE wiki
+      ``coordinator-tripwires/normalize-at-creation-does-not-cover-a-later-hand-edit.md``.
     """
     handoff_path_raw = (params.get("handoff_path") or "").strip()
     if not handoff_path_raw:
@@ -711,6 +744,12 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
         "origin_goal_id": origin_goal_id,
     }
 
+    # Same once-per-invocation resolution the author path performs in its own
+    # enclosing scope (DR-207 DD#1 second door) — `_normalize_one_text` never
+    # resolves this itself, and stamp mode reaches it through the same creation
+    # seam, so the value must be threaded in here too.
+    carried_deliverable_id = _resolve_claimed_plan_deliverable_id(worktree_root)
+
     def _mutate(old_text: str) -> str:
         if not old_text:
             raise MutateAbort(
@@ -737,7 +776,27 @@ async def _handle_stamp(params: dict, repo_root: Optional[Path]) -> dict:
                 f"handoff.author_fork (stamp mode): cannot stamp fork "
                 f"provenance onto {contained}: {exc}"
             ) from exc
-        return rebuild(split, new_fm_text)
+        stamped = rebuild(split, new_fm_text)
+        # Compose handoff.normalize AFTER the provenance fields are written —
+        # the ordering the module docstring's "Write mechanics" section declares
+        # for this seam, and the one the from-scratch author path already
+        # follows. Until this composition existed, the stamp door was the ONLY
+        # creation seam that reached disk with no normalizer having measured the
+        # artifact: an over-cap `summary:`, an absent `category`/`deliverable_id`
+        # /`initiative`, and an unstamped `minted_by`/`producer` all rode
+        # straight through to a record the downstream claim gate then refused.
+        # Ordering is load-bearing only in the weak direction (normalize reads
+        # none of the five origin_* keys), but running it second also means the
+        # normalizer measures the bytes that actually land, never a pre-stamp
+        # snapshot.
+        minted_by = resolve_operating_person().get("github")
+        producer = resolve_producer_for_creation(op_identity="machine-minted")
+        norm = _normalize_one_text(
+            stamped, contained, carried_deliverable_id, minted_by, producer
+        )
+        if norm is not None and norm is not _NO_FRONTMATTER:
+            return norm["rebuilt"]
+        return stamped
 
     try:
         await asyncio.to_thread(locked_rmw, contained, _mutate, repo_root=repo_root)

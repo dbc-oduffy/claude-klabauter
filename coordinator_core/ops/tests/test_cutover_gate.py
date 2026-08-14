@@ -18,7 +18,7 @@ Assertion style follows house convention (test_block_reviewer_bash_outside_
 allowlist.py:143-149): assert on the verdict AND on load-bearing substrings
 of the refusal reason, not the verdict alone.
 
-Spec backlink: docs/plans/2026-07-25-cutover-state-machine.md § C6 (Review:
+Spec backlink: DoE-claude:pln-cutover-state-machine-a-phase--96db57 § C6 (Review:
 The Director of Engineering-cutover-review F9).
 """
 
@@ -45,7 +45,7 @@ def _write_record(
             "kind": "value-vocabulary",
             "pattern": "TARGET_TOKEN",
             "paths": ["sub"],
-            "repos": [{"repo": "coordinator-claude", "foreign": False}],
+            "repos": [{"repo": "doe-claude", "foreign": False}],
         },
     }
     fm_text = yaml.safe_dump(fm, default_flow_style=False, sort_keys=False)
@@ -78,7 +78,7 @@ def test_derived_consumer_absent_from_confirmed_refuses(tmp_path: Path) -> None:
     assert "VERDICT=REFUSE" in result["verdict_line"]
     refusal_notes = [n for n in result["notes"] if "no matching" in n.lower()]
     assert refusal_notes, result["notes"]
-    assert "coordinator-claude:sub/unconfirmed_writer.py" in refusal_notes[0]
+    assert "doe-claude:sub/unconfirmed_writer.py" in refusal_notes[0]
     assert "confirmed_consumers entry" in refusal_notes[0]
 
 
@@ -95,7 +95,7 @@ def test_derived_consumer_absent_from_confirmed_refuses_even_with_other_confirme
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/confirmed_writer.py",
+                "id": "doe-claude:sub/confirmed_writer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }
@@ -108,7 +108,7 @@ def test_derived_consumer_absent_from_confirmed_refuses_even_with_other_confirme
     assert "VERDICT=REFUSE" in result["verdict_line"]
     refusal_notes = [n for n in result["notes"] if "no matching" in n.lower()]
     assert refusal_notes, result["notes"]
-    assert "coordinator-claude:sub/unconfirmed_writer.py" in refusal_notes[0]
+    assert "doe-claude:sub/unconfirmed_writer.py" in refusal_notes[0]
 
 
 def test_fully_covered_record_passes(tmp_path: Path) -> None:
@@ -119,7 +119,7 @@ def test_fully_covered_record_passes(tmp_path: Path) -> None:
         tmp_path,
         confirmed_consumers=[
             {
-                "id": "coordinator-claude:sub/writer.py",
+                "id": "doe-claude:sub/writer.py",
                 "verified_by": {"kind": "probe-op-key", "ref": "ping"},
                 "verified_at": "2026-07-25",
             }

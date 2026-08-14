@@ -159,6 +159,15 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
+# Cross-package import of the SSOT doc-pointer display string -- the same
+# precedent `write_guards` already uses for `operator_override_note` itself
+# (see docs/reference/guard-override-keys.md's "Override keys, by guard"
+# section). Never hand-copy the "claude-klabauter <path>" string here; both
+# checks' remediation text below must point readers at the one doc that
+# actually enumerates these two keys, not name them inline (B6/B8, see
+# docs/wiki/guard-messaging.md § Register).
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
+
 # Bound on how far back (in commits touching a given path) this module will
 # search for a matching blob. 40 is deep enough to catch every rollback shape
 # seen in practice (the 2026-07-28 incident's deepest single-path match was 5
@@ -208,7 +217,7 @@ OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PRECOMMIT_STAGED_ROLLBACK"
 # pre-commit tree, matching what this module measures at commit time), found
 # exactly one commit at ratio 1.0 (the incident itself, 18,506/18,506) and a
 # clear runner-up at ratio 0.505 (1,709/3,382 — `e6783a68bd0`, "prune(reclaim):
-# drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by coordinator-claude", a deliberate,
+# drop 1,709 pre-July example-doctrine-mirror-repo files reclaimed by DoE", a deliberate,
 # legitimate bulk prune). Every other commit with >=15 deletions in the same
 # sweep sits at ratio <= 0.102. There is no commit anywhere between 0.505 and
 # 1.0 — the two shapes (largest legitimate prune vs. the incident) are not
@@ -342,8 +351,18 @@ def _staged_blobs(
         parts = rawline[1:].split(" ")
         if len(parts) != 5:
             continue
-        _old_mode, _new_mode, _old_sha, new_sha, status = parts
+        _old_mode, _new_mode, old_sha, new_sha, status = parts
         if status.startswith("D"):
+            continue
+        if old_sha == new_sha:
+            # Mode-only change: the content is byte-identical to HEAD, so the
+            # only thing staged is a permission-bit flip. Such a path ALWAYS
+            # matches an older commit's blob — that is what "content unchanged"
+            # means — so scanning it can only ever produce a false positive.
+            # Observed live: `chmod -x` on a stray-exec-bit `.cmd` blocked with
+            # "1 staged path(s) exactly match an older commit's blob", naming a
+            # months-old commit as the thing being restored. A mode flip cannot
+            # roll content back, because it does not touch content.
             continue
         blobs[path] = new_sha
     return blobs
@@ -719,13 +738,12 @@ def _mass_deletion_report(finding: MassDeletionFinding, overridden: bool) -> str
         lines.append(f"  ... and {remaining} more")
     if overridden:
         lines.append(
-            f"{_PROG}: {MASS_DELETION_OVERRIDE_ENV} is set — proceeding despite the above "
-            "(deliberate mass deletion)."
+            f"{_PROG}: override is set — proceeding despite the above (deliberate mass deletion)."
         )
     else:
         lines.append(
             f"{_PROG}: if this IS a deliberate mass deletion (archival sweep, bulk prune), "
-            f"set {MASS_DELETION_OVERRIDE_ENV}=1 and re-run."
+            f"see {OVERRIDE_KEYS_DOC_DISPLAY} for override options."
         )
     return "\n".join(lines)
 
@@ -748,11 +766,12 @@ def _report(candidates: Sequence[RollbackCandidate], overridden: bool) -> str:
                 lines.append(f"      {s.commit[:12]} {s.subject}")
     if overridden:
         lines.append(
-            f"{_PROG}: {OVERRIDE_ENV} is set — proceeding despite the above (deliberate mass revert)."
+            f"{_PROG}: override is set — proceeding despite the above (deliberate mass revert)."
         )
     else:
         lines.append(
-            f"{_PROG}: if this IS a deliberate mass revert, set {OVERRIDE_ENV}=1 and re-run."
+            f"{_PROG}: if this IS a deliberate mass revert, see {OVERRIDE_KEYS_DOC_DISPLAY} "
+            "for override options."
         )
     return "\n".join(lines)
 
@@ -772,9 +791,8 @@ exit codes:
   2  usage error
 
 overrides:
-  {rollback_override}  bypasses a rollback finding (deliberate mass revert)
-  {mass_override}  bypasses a mass-deletion finding (deliberate bulk prune)
-""".format(rollback_override=OVERRIDE_ENV, mass_override=MASS_DELETION_OVERRIDE_ENV)
+  see {doc} for this CLI's override keys
+""".format(doc=OVERRIDE_KEYS_DOC_DISPLAY)
 
 
 def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:

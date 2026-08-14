@@ -299,7 +299,7 @@ def _reject_path_shaped_message(message: str) -> Optional[str]:
     """Return a rejection reason if `message` is a FILE PATH rather than a
     subject line, or `None` if it reads as prose.
 
-    Landed 2026-08-04 on a coordinator-claude-em FYI memo (`2026-08-04-coordinator-claude-em-
+    Landed 2026-08-04 on a doe-claude-em FYI memo (`2026-08-04-doe-claude-em-
     zero-join-amendment-in-force-and-your-commit-messages.md`): commits
     `fdbff578b7dc` and `40bf1064a124` on `work/machine-b/2026-07-21to26` have
     a `/private/tmp/.../scratchpad/*.txt` path as their subject line and an
@@ -803,7 +803,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         lands the sha yields `PUSH_STATE_PUSHED`, because from every
         caller's point of view the commit IS on the remote. Rendering that
         case as a failure is the false negative this tri-state exists to
-        kill (coordinator-claude-em memo, 2026-07-30).
+        kill (doe-claude-em memo, 2026-07-30).
 
         Conditionally present (only when "committed" is False):
           "commit_failed": bool,       # True iff a gate or the commit step

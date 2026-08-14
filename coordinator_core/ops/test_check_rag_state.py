@@ -1,8 +1,8 @@
 """
 coordinator_core.ops.test_check_rag_state — parity tests for the naked-Python
-port of the coordinator-claude-owned bash script.
+port of the DoE-owned bash script.
 
-Port of: check-rag-state.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: check-rag-state.sh (DoE b5a4192c, 2026-07-20)
 
 Golden oracle captured by running the bash script directly (positive: RAG_STATE
 env fast-path for each valid token + each marker-file token; negative: garbage

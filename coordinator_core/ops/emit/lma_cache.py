@@ -5,7 +5,7 @@ Purpose: make ``envelope._stamp_lma`` cheap on a repeat emission. ``enrich``'s s
 ``git log --cc --name-only`` walk is already the minimal *fresh* derivation, but it costs a
 near-full-history read on every run: the walk's early exit only fires once EVERY requested
 path has resolved, so one legitimately-old (or never-committed) live record drags the walk
-back through the whole corpus. Measured ~0.86s of a 3.5s emit on the coordinator-claude corpus
+back through the whole corpus. Measured ~0.86s of a 3.5s emit on the DoE-claude corpus
 (8264 commits). This module caches the derivation so a run whose git history has not moved
 does not re-derive it, and a run whose history has only fast-forwarded re-derives from the
 new commits alone.
@@ -77,7 +77,7 @@ Cache location: ``<coordinator-settings-home>/claude-klabauter/emit-lma-cache/<s
 the contract-sanctioned consumer durable-data plane (CLAUDE.md § Durable-data plane —
 forward-binding: ``coordinator_core`` persistence outside the repo tree MUST use this
 plane, never an ad-hoc ``~/`` path). Deliberately NOT in-repo: ``repo_root`` here is the
-EMITTING repo, which is routinely a sibling clone (claude-klabauter emits for coordinator-claude), and a
+EMITTING repo, which is routinely a sibling clone (claude-klabauter emits for DoE-claude), and a
 cache write must not dirty another repo's working tree. Paths are pathlib-only, so the
 layout is identical on Windows and macOS.
 
@@ -103,6 +103,12 @@ from coordinator_core._settings_home import settings_home
 _CACHE_VERSION = 2
 
 _CACHE_SUBDIR = ("claude-klabauter", "emit-lma-cache")
+
+# Generator-provenance: writes only to the durable-data-plane cache file under
+# settings_home()/claude-klabauter/emit-lma-cache/<slug>.json -- deliberately
+# not in-repo (see module docstring "Cache location") -- never into claude-klabauter's
+# own tracked tree.
+GENERATES = []
 
 
 def _run_git(repo_root: Path, *args: str) -> Optional[subprocess.CompletedProcess]:

@@ -36,7 +36,7 @@ Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-p
 
 Spec backlink: docs/plans/2026-05-20-coordinator-doctor-wiki.md § Chunk 10 (MISSED-2:
     hardcoded single-machine paths + vacuous-pass on missing dirs)
-Port of: verify-ue-overrides.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: verify-ue-overrides.sh (DoE b5a4192c, 2026-07-20)
 """
 from __future__ import annotations
 
@@ -150,8 +150,8 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     kept for trampoline-call symmetry with other ported ops).
 
     `script_dir` is the THIRD rung of the ML_BIN resolver — a `machine-local` binary
-    co-located next to the calling coordinator-claude script (coordinator/bin/machine-local), mirroring
-    the bash oracle's `$SCRIPT_DIR/machine-local` fallback. The coordinator-claude trampoline passes its
+    co-located next to the calling DoE script (coordinator/bin/machine-local), mirroring
+    the bash oracle's `$SCRIPT_DIR/machine-local` fallback. The DoE trampoline passes its
     own directory here; this module's own file location (inside claude-klabauter) is NOT a valid
     substitute and must never be used for this rung — defaults to None (rung skipped)
     when called without it, e.g. directly from a test or a bare `python -m` invocation.

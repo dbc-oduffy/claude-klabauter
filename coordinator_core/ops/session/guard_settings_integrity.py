@@ -7,10 +7,10 @@ is silently truncated to a near-empty stub, dropping the entire
 ``enabledPlugins``/``extraKnownMarketplaces`` blocks and running the session dark
 (no coordinator doctrine, no MCP, no domain agents). Direct Python port of the retired
 ``coordinator/hooks/scripts/guard-settings-integrity.sh`` (deleted 2026-07-16,
-Coordinator-claude ``d39ab164``; naked-Python direct-port disposition, W4a-sessionstart-recipe.md
+DoE ``d39ab164``; naked-Python direct-port disposition, W4a-sessionstart-recipe.md
 § 2.3) — pure JSON read/diff/atomic-copy logic, no bash-specific behavior relied on.
 
-Callers: the coordinator-claude thin Shape-P1 stub
+Callers: the DoE thin Shape-P1 stub
 (``coordinator/hooks/scripts/guard-settings-integrity.py``) imports
 ``evaluate_settings_integrity`` DIRECTLY and calls it in-process — same shape as
 ``preuse-write-dispatch.py`` importing ``evaluate_payload_json`` directly rather
@@ -24,7 +24,7 @@ Preserved-exactly semantics (do not "clean up" without re-reading the oracle):
     "truthy" by a naive ``bool(...)`` check — mirrors the oracle's jq
     ``objects | length > 0`` filter, which is load-bearing.
 
-Hook-layer reachability (added 2026-07-28, coordinator-claude dispatch
+Hook-layer reachability (added 2026-07-28, DoE-claude dispatch
 ``state/subagent-share/78b683cd-1b62-4a25-904d-954cb3c69412/
 coordinatorexecutor-8cc51fd5.md``): ``_is_healthy`` used to classify a machine
 as healthy solely on ``enabledPlugins`` shape, with zero awareness of whether
@@ -87,12 +87,15 @@ and therefore no jq-absent skip branch — it runs unconditionally. This is a
 genuine behavior IMPROVEMENT (works on machines without jq) but is a parity
 DIVERGENCE from the bash oracle, per W4a-sessionstart-recipe.md 2.3 (L168-170).
 
-Spec backlink: coordinator-claude repo scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md 2.3
+Spec backlink: DoE repo scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md 2.3
 Source: retired coordinator/hooks/scripts/guard-settings-integrity.sh
-  (coordinator-claude repo, deleted 2026-07-16, coordinator-claude ``d39ab164``)
+  (DoE repo, deleted 2026-07-16, DoE ``d39ab164``)
 """
 
 from __future__ import annotations
+
+GENERATES = []  # writes settings.json/.settings-last-good.json/.settings-clobbered.bak/known-good backups under the operator's ~/.claude config dir, never a tracked path in claude-klabauter's own tree
+
 import sys
 
 import asyncio
@@ -331,7 +334,7 @@ def _hook_layer_reachable(settings_data: dict) -> bool:
 
 
 def is_inline_install(config_dir: Path) -> bool:
-    """A coordinator-claude `--plugin-dir` install has no `enabledPlugins` legitimately.
+    """A DoE `--plugin-dir` install has no `enabledPlugins` legitimately.
 
     Reads the `.doe-root` pointer off one of two rungs, migrated rung
     first:
@@ -362,7 +365,7 @@ def is_inline_install(config_dir: Path) -> bool:
 
     Strips ONLY a trailing CR/LF from whichever rung answers — NOT a
     blanket whitespace strip, which would clobber embedded spaces in a
-    Windows path like "C:\\Users\\me\\OneDrive - Company Name\\coordinator-claude".
+    Windows path like "C:\\Users\\me\\OneDrive - Company Name\\DoE-claude".
 
     Public because it is a cross-module seam, not an internal helper:
     `guard_hook_generation_self_probe` imports it at module scope to
@@ -377,7 +380,7 @@ def is_inline_install(config_dir: Path) -> bool:
     False, which is what keeps the probe's true-positive (destroyed clone)
     detection intact — on EITHER rung.
 
-    Spec backlink: DR-117 (coordinator-claude, maintainer signals may classify,
+    Spec backlink: DR-117 (DoE-claude, maintainer signals may classify,
     never diagnose) — this predicate CLASSIFIES an install shape
     (`.doe-root` present and live); the caller's job, not this function's,
     is to never read its `False` branch as a health verdict.
@@ -509,7 +512,7 @@ def _reconcile_enabled_plugins(settings_data: dict, config_dir: Path) -> list[st
     if not declared_true:
         return []
 
-    # A coordinator-claude inline (--plugin-dir) install legitimately serves its plugin live
+    # A DoE inline (--plugin-dir) install legitimately serves its plugin live
     # from a dev-source checkout with no marketplace/installed_plugins.json
     # registration — same carve-out precedent as the clobber lens above.
     # There is no per-key way to tell "this key IS the inline plugin" apart
@@ -618,7 +621,7 @@ def _banner_unreachable_plugins(keys: list[str], settings_data: dict | None = No
 # regenerates anything. A human/PM call is required to pick which surface to
 # retire on which machine.
 #
-# Spec backlink: coordinator-claude dispatch state/subagent-share/
+# Spec backlink: DoE-claude dispatch state/subagent-share/
 # 78b683cd-1b62-4a25-904d-954cb3c69412/coordinatorexecutor-8166967b.md
 # (2026-07-28).
 # ---------------------------------------------------------------------------
@@ -1504,7 +1507,7 @@ _BANNER_NO_RESTORE_SOURCE = """
 #      -- while ambient env vars still resolve `home` to THIS machine's
 #      real settings home no longer restores from it; rung 3 simply
 #      reports no candidate. This was a real defect, not a hypothetical:
-#      two coordinator-claude tests
+#      two DoE-claude tests
 #      (`test_case_a2_bogus_doe_root_falls_through_to_clobber`,
 #      `test_case_b_genuine_clobber_no_sentinel`) ran the hook with only
 #      `CLAUDE_CONFIG_DIR` pointed at a tmp dir and got AUTO-RESTORED from a
@@ -1792,7 +1795,7 @@ def evaluate_settings_integrity(config_dir: Optional[Path] = None) -> str:
 # `Since`/`Expires` are the only two lines this parser requires; `Reason`/
 # `Disarm condition` are surfaced verbatim when present, never required.
 #
-# Spec backlink: coordinator-claude dispatch state/subagent-share/
+# Spec backlink: DoE-claude dispatch state/subagent-share/
 # 78b683cd-1b62-4a25-904d-954cb3c69412/coordinatorexecutor-dcbed68d.md
 # (2026-07-28/29).
 # ---------------------------------------------------------------------------
@@ -1805,7 +1808,7 @@ _KS_DISARM_RE = re.compile(r"(?im)^\s*disarm condition:\s*(.+)$")
 
 # Historical fact, not derived from the marker's own (possibly un-migrated)
 # text: the disarm condition this marker carried when first armed
-# (2026-07-14, per coordinator-claude archive/daily-summaries/2026-07-14-machine-a.md
+# (2026-07-14, per DoE-claude archive/daily-summaries/2026-07-14-machine-a.md
 # and state/2026-07-28-machine-a-install-dogfood-friction-log.md) was "delete
 # once the naked-Python hook migration lands". That migration is COMPLETE
 # (37/37 hook scripts are Python, verified 2026-07-28 on the machine-a
@@ -2107,7 +2110,7 @@ def evaluate_hooks_kill_switch_announcement(config_dir: Optional[Path] = None) -
     """Convenience wrapper -- read + format (routine, `verbose=False`) in
     one call, mirroring `evaluate_settings_integrity`/
     `evaluate_hook_delivery_duplication`'s own shape. This is the hot path
-    the coordinator-claude SessionStart stub (`coordinator/hooks/scripts/guard-settings-
+    the DoE SessionStart stub (`coordinator/hooks/scripts/guard-settings-
     integrity.py`) imports directly. Never writes to the marker or to
     `settings.json` under any circumstance, including an expired marker --
     see module section docstring."""
@@ -2139,7 +2142,7 @@ def evaluate_hooks_kill_switch_full_detail(config_dir: Optional[Path] = None) ->
 
 # ---------------------------------------------------------------------------
 # Registered op handler — IPC-daemon completeness / test-harness parity.
-# NOT the coordinator-claude stub's hot path (it imports evaluate_settings_integrity directly).
+# NOT the DoE stub's hot path (it imports evaluate_settings_integrity directly).
 # ---------------------------------------------------------------------------
 
 

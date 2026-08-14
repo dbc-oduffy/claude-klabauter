@@ -8,7 +8,7 @@ assert the reader's translation is a faithful (never lossy, never
 re-derived) wrap of the original's output — not a re-implementation of
 its query/format logic.
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C3
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C3
 """
 
 from __future__ import annotations

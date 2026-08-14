@@ -1,6 +1,6 @@
 # Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
 # wsc-session-disposition — naked-Python port of the workstream-complete Step 0
-# "Session-Shape Detection" block (coordinator-claude
+# "Session-Shape Detection" block (DoE-claude
 # coordinator/skills/workstream-complete/SKILL.md, the `<!-- VERBATIM -->`
 # fence at its Step 0). No cc_invoke/IPC hop — this is pure resolution logic
 # operating on git and the filesystem, plus one subprocess call out to the
@@ -14,9 +14,9 @@
 # Ported under docs/plans/2026-07-23-skills-carry-no-code-extirpation.md
 # (M3 chunk WSC-1) — moves the 5-way session-id resolution + 3-detector
 # (live-consume / archive-provenance / crash-recovery scope-intersection)
-# chain-terminal disposition resolver out of the coordinator-claude skill's bash fence and
+# chain-terminal disposition resolver out of the DoE skill's bash fence and
 # into a single naked-Python CLI the skill can call by name. The D2 repoint
-# (a later plan wave) rewrites the coordinator-claude skill's Step 0 fence to invoke this
+# (a later plan wave) rewrites the DoE skill's Step 0 fence to invoke this
 # CLI instead of running the resolver logic inline; this file lands first so
 # that repoint has something to call.
 #
@@ -73,7 +73,7 @@
 #   cross-repo/inbox/2026-07-23-claude-klabauter-em-liveness-primitive-landed.md
 #   cross-repo/inbox/2026-07-23-claude-klabauter-em-wsc-step0-fails-open-crash-recovery.md
 #   DR-084 remainder baton: state/handoffs/2026-07-22_152437_dr084-skill-layer-dual-read.md
-#   (coordinator-claude repo; these inbox/state paths do not resolve in this repo —
+#   (DoE-claude repo; these inbox/state paths do not resolve in this repo —
 #   quoted here only as provenance, not as a live citation).
 #
 # Exit codes: 0 on a completed resolution (chain-terminal OR single-session —
@@ -137,7 +137,7 @@ def resolve_session_id(repo_root: Path) -> str:
     REMOVED (KS-3, 2026-08-07): unsound under concurrency (documented
     last-writer-wins across concurrent sessions sharing one worktree — see
     coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND its
-    sole writer (session-init.py, the coordinator-claude SessionStart hook) was
+    sole writer (session-init.py, the DoE-claude SessionStart hook) was
     deleted by PM directive 2026-07-15 — no production writer survives.
 
     The hex-timestamp fallback that used to sit BELOW the sentinel was
@@ -308,7 +308,7 @@ _FIELD_SEP = "\x1f"
 # handoff(s)` commit carried THIS session's Session-Id trailer purely
 # because the sweep ran inside it. Detector B read that trailer as "I did
 # this" and misattributed the archival. Verified against the literal
-# emitted text (coordinator-claude coordinator_core/ops/fleet/archive_handoffs.py,
+# emitted text (DoE-claude coordinator_core/ops/fleet/archive_handoffs.py,
 # archive_shipped_handoffs.py, session/boot_sweep.py), not paraphrased; no
 # distinguishing automation trailer exists beyond the ambient Session-Id
 # trailer already consulted above, so subject text is the only signal
@@ -528,8 +528,8 @@ def find_session_claim_cli() -> Path | None:
     ${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin`) for callers
     invoking an installed copy of this CLI from outside the claude-klabauter repo,
     mirroring the ported bash's resolution order."""
-    sibling = Path(__file__).resolve().parent / "session-claim-cli"
-    if sibling.is_file() and _is_executable(sibling):
+    sibling = Path(__file__).resolve().parent / "session-claim-cli.py"
+    if sibling.is_file():
         return sibling
     settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(
         os.environ.get("CLAUDE_HOME")
@@ -547,23 +547,26 @@ def find_session_claim_cli() -> Path | None:
 def _session_claim_cli_argv(cli_path: Path) -> list[str]:
     """Build the invocation argv for ``session-claim-cli``.
 
-    ``session-claim-cli`` is extensionless and carries a POSIX shebang;
-    CreateProcess cannot exec such a file on Windows (WinError 193 — "%1 is
-    not a valid Win32 application"), and it does not interpret ``#!`` lines
-    at all. Route through this interpreter explicitly rather than depend on
-    a ``.cmd`` sibling existing next to a path resolved by
-    ``find_session_claim_cli`` (which may be either the in-repo sibling or
-    the settings-home shim). Mirrors ``workday-complete-reconcile.py``'s
-    ``_cruft_sweep_argv`` — the same interpreter-invocation rung, not the
-    ``.cmd``-sibling rung.
+    ``find_session_claim_cli`` resolves either the in-repo
+    ``session-claim-cli.py`` sibling or the settings-home installed shim
+    (the bare ``session-claim-cli`` name the install chain maps ``.py``
+    sources onto) — neither carries a shebang or an exec bit post-C6/C4, so
+    a bare-path launch fails on POSIX (no exec permission) exactly as it
+    fails on Windows (CreateProcess WinError 193 — "%1 is not a valid Win32
+    application", which also does not interpret ``#!`` lines). Route through
+    this interpreter explicitly on both platforms; a ``.cmd`` sibling (never
+    produced by ``find_session_claim_cli`` today, kept for forward
+    compatibility) IS directly executable and stays bare. Mirrors
+    ``workday-complete-reconcile.py``'s ``_cruft_sweep_argv`` — the same
+    interpreter-invocation rung, not the ``.cmd``-sibling rung.
 
     Detector C reads this call's exit code as a real signal (a non-zero rc
     makes the disposition indeterminate), so an unrunnable CLI here does not
     fail open — it surfaced as a hard brief() crash before this fix.
     """
-    if os.name == "nt" and not os.path.splitext(str(cli_path))[1]:
-        return [sys.executable, str(cli_path)]
-    return [str(cli_path)]
+    if os.path.splitext(str(cli_path))[1] == ".cmd":
+        return [str(cli_path)]
+    return [sys.executable, str(cli_path)]
 
 
 def list_stale_claim_handoffs(cli_path: Path, repo_root: Path) -> tuple[list[tuple[str, str]] | None, int]:

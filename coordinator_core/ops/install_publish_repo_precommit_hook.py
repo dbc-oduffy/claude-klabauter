@@ -3,7 +3,7 @@ coordinator_core.ops.install_publish_repo_precommit_hook — OSS publish-repo
 pre-commit exec-bit drift gate + illegal-path gate installer.
 
 Purpose: writes (or upgrades) `.git/hooks/pre-commit` in the OSS
-Coordinator-claude publish repo with a POSIX-sh shim that runs two gates on
+coordinator-claude publish repo with a POSIX-sh shim that runs two gates on
 every commit: (1) the exec-bit drift gate (node --test against
 coordinator/tests/plugin-ecosystem/exec-bit.test.js), and (2) the
 NTFS-illegal-path gate (coordinator/bin/check-no-illegal-paths.sh).
@@ -19,7 +19,7 @@ Upgrade-path handling: if the exec-bit gate is already installed but the
 illegal-path gate is absent (hook written before D4), the paths check is
 appended to the existing hook without regenerating it.
 
-Port of: install-publish-repo-precommit-hook.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: install-publish-repo-precommit-hook.sh (DoE b5a4192c, 2026-07-20)
 Spec backlinks:
     docs/plans/2026-06-11-exec-bit-install-surface-completion.md § Chunk 5
     docs/plans/2026-06-30-cross-platform-file-naming-helper.md § Wave D4
@@ -102,6 +102,16 @@ import subprocess
 import sys
 
 from coordinator_core.session.declared_writes import declare_write
+# Cross-package import of the SSOT doc-pointer display string (same
+# precedent write_guards already uses for operator_override_note itself) --
+# emitted hook-body remediation text points readers at the doc that
+# enumerates these keys, never names a key inline (B6/B8, see
+# docs/wiki/guard-messaging.md § Register). Repo-qualified ("claude-klabauter
+# <path>"), so it stays fleet-addressable when this hook fires inside the
+# OSS publish repo's own tree, not just claude-klabauter's.
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
+
+GENERATES = []  # writes only the OSS publish repo's own .git/hooks/pre-commit, never tracked
 
 _PROG = "install-publish-repo-precommit-hook"
 
@@ -122,10 +132,10 @@ _APPEND_TEMPLATE = """
 _paths_check="$_cur/coordinator/bin/check-no-illegal-paths.sh"
 if ! command -v bash >/dev/null 2>&1; then
   if [ "${COORDINATOR_OVERRIDE_PRECOMMIT_BASH_MISSING:-}" = "1" ]; then
-    echo "pre-commit: illegal-path gate SKIPPED -- no bash interpreter found on PATH (COORDINATOR_OVERRIDE_PRECOMMIT_BASH_MISSING=1 set)." >&2
+    echo "pre-commit: illegal-path gate SKIPPED -- no bash interpreter found on PATH (override set)." >&2
   else
     echo "pre-commit: BLOCKED -- illegal-path gate cannot run: no bash interpreter found on PATH." >&2
-    echo "pre-commit: remediation: install bash, or set COORDINATOR_OVERRIDE_PRECOMMIT_BASH_MISSING=1 to bypass (PM-authorized only)." >&2
+    echo "pre-commit: remediation: install bash. See __OVERRIDE_DOC_POINTER__ for override options." >&2
     exit 1
   fi
 else
@@ -133,10 +143,10 @@ else
     bash "$_paths_check" || exit $?
   elif [ -e "$_paths_check" ]; then
     if [ "${COORDINATOR_OVERRIDE_PRECOMMIT_ILLEGAL_PATHS:-}" = "1" ]; then
-      echo "pre-commit: illegal-path gate SKIPPED -- helper exists but is not a runnable file: $_paths_check (COORDINATOR_OVERRIDE_PRECOMMIT_ILLEGAL_PATHS=1 set)." >&2
+      echo "pre-commit: illegal-path gate SKIPPED -- helper exists but is not a runnable file: $_paths_check (override set)." >&2
     else
       echo "pre-commit: BLOCKED -- illegal-path gate cannot run: helper exists but is not a runnable file: $_paths_check." >&2
-      echo "pre-commit: remediation: replace $_paths_check with a regular file, or set COORDINATOR_OVERRIDE_PRECOMMIT_ILLEGAL_PATHS=1 to bypass (PM-authorized only)." >&2
+      echo "pre-commit: remediation: replace $_paths_check with a regular file. See __OVERRIDE_DOC_POINTER__ for override options." >&2
       exit 1
     fi
   else
@@ -175,13 +185,13 @@ fi
 # Gate 1: exec-bit drift (skipped entirely, loudly or per override, if node
 # is unresolvable — never silently disables gate 2 below as well).
 if [ "${{COORDINATOR_OVERRIDE_PRECOMMIT_EXEC_BIT:-}}" = "1" ]; then
-  echo "pre-commit: exec-bit check skipped (COORDINATOR_OVERRIDE_PRECOMMIT_EXEC_BIT=1)." >&2
+  echo "pre-commit: exec-bit check skipped (override set)." >&2
 elif ! command -v node >/dev/null 2>&1; then
   if [ "${{COORDINATOR_OVERRIDE_PRECOMMIT_NODE_MISSING:-}}" = "1" ]; then
-    echo "pre-commit: exec-bit gate SKIPPED -- no node interpreter found on PATH (COORDINATOR_OVERRIDE_PRECOMMIT_NODE_MISSING=1 set)." >&2
+    echo "pre-commit: exec-bit gate SKIPPED -- no node interpreter found on PATH (override set)." >&2
   else
     echo "pre-commit: BLOCKED -- exec-bit gate cannot run: no node interpreter found on PATH." >&2
-    echo "pre-commit: remediation: install node, or set COORDINATOR_OVERRIDE_PRECOMMIT_NODE_MISSING=1 to bypass (PM-authorized only)." >&2
+    echo "pre-commit: remediation: install node. See __OVERRIDE_DOC_POINTER__ for override options." >&2
     exit 1
   fi
 else
@@ -193,7 +203,7 @@ else
       # duplicated stderr to current stdout (tty) before redirecting stdout to stderr.
       echo "" >&2
       echo "pre-commit: exec-bit drift detected (above). Fix and re-commit." >&2
-      echo "Override (PM-authorized only): COORDINATOR_OVERRIDE_PRECOMMIT_EXEC_BIT=1 git commit ..." >&2
+      echo "See __OVERRIDE_DOC_POINTER__ for override options." >&2
       exit 1
     fi
   fi
@@ -207,10 +217,10 @@ fi
 _paths_check="$_cur/coordinator/bin/check-no-illegal-paths.sh"
 if ! command -v bash >/dev/null 2>&1; then
   if [ "${{COORDINATOR_OVERRIDE_PRECOMMIT_BASH_MISSING:-}}" = "1" ]; then
-    echo "pre-commit: illegal-path gate SKIPPED -- no bash interpreter found on PATH (COORDINATOR_OVERRIDE_PRECOMMIT_BASH_MISSING=1 set)." >&2
+    echo "pre-commit: illegal-path gate SKIPPED -- no bash interpreter found on PATH (override set)." >&2
   else
     echo "pre-commit: BLOCKED -- illegal-path gate cannot run: no bash interpreter found on PATH." >&2
-    echo "pre-commit: remediation: install bash, or set COORDINATOR_OVERRIDE_PRECOMMIT_BASH_MISSING=1 to bypass (PM-authorized only)." >&2
+    echo "pre-commit: remediation: install bash. See __OVERRIDE_DOC_POINTER__ for override options." >&2
     exit 1
   fi
 else
@@ -218,10 +228,10 @@ else
     bash "$_paths_check" || exit $?
   elif [ -e "$_paths_check" ]; then
     if [ "${{COORDINATOR_OVERRIDE_PRECOMMIT_ILLEGAL_PATHS:-}}" = "1" ]; then
-      echo "pre-commit: illegal-path gate SKIPPED -- helper exists but is not a runnable file: $_paths_check (COORDINATOR_OVERRIDE_PRECOMMIT_ILLEGAL_PATHS=1 set)." >&2
+      echo "pre-commit: illegal-path gate SKIPPED -- helper exists but is not a runnable file: $_paths_check (override set)." >&2
     else
       echo "pre-commit: BLOCKED -- illegal-path gate cannot run: helper exists but is not a runnable file: $_paths_check." >&2
-      echo "pre-commit: remediation: replace $_paths_check with a regular file, or set COORDINATOR_OVERRIDE_PRECOMMIT_ILLEGAL_PATHS=1 to bypass (PM-authorized only)." >&2
+      echo "pre-commit: remediation: replace $_paths_check with a regular file. See __OVERRIDE_DOC_POINTER__ for override options." >&2
       exit 1
     fi
   else
@@ -356,7 +366,7 @@ def main(argv: list[str]) -> int:
     # ------------------------------------------------------------------
     if os.path.isfile(hook_path) and _GATE_MARKER in existing:
         with open(hook_path, "a", encoding="utf-8") as fh:
-            fh.write(_APPEND_TEMPLATE)
+            fh.write(_APPEND_TEMPLATE.replace("__OVERRIDE_DOC_POINTER__", OVERRIDE_KEYS_DOC_DISPLAY))
         # DR-276: declared AFTER the write lands, at the FINAL destination.
         declare_write(hook_path)
         print(
@@ -381,7 +391,9 @@ def main(argv: list[str]) -> int:
     # Fresh-install path: write the canonical OSS shim.
     # ------------------------------------------------------------------
     os.makedirs(os.path.dirname(hook_path), exist_ok=True)
-    hook_body = _FRESH_HOOK_TEMPLATE.format(expected_repo_root=canonical_expected)
+    hook_body = _FRESH_HOOK_TEMPLATE.format(expected_repo_root=canonical_expected).replace(
+        "__OVERRIDE_DOC_POINTER__", OVERRIDE_KEYS_DOC_DISPLAY
+    )
     with open(hook_path, "w", encoding="utf-8") as fh:
         fh.write(hook_body)
     os.chmod(hook_path, 0o755)

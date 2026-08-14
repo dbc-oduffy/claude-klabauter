@@ -1,5 +1,5 @@
 """
-cockpit_schema — pydantic port of coordinator-claude `coordinator/cockpit-contract` (Zod source).
+cockpit_schema — pydantic port of DoE `coordinator/cockpit-contract` (Zod source).
 
 Foundation modules (`provenance`, `common`, `emission_scope`) land first per the
 T4e-a build recipe — `provenance` proves the hardest patterns (chained
@@ -7,8 +7,8 @@ superRefine → chained model_validator, present-as-null vs. optional, inline
 non-$ref JSON-Schema emission) before the remaining 27 entity schemas (T4e-b)
 and the `emit-schema.ts`-equivalent entrypoint (T4e-c) port against it.
 
-Spec backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
-Freeze: coordinator-claude scratch/subagent-sandbox/bash-to-python-engine-migration/freeze-provenance-envelope.md
+Spec backlink: DoE-claude:pln-bash-to-naked-python-engine-mi-c09292 § T4e
+Freeze: DoE scratch/subagent-sandbox/bash-to-python-engine-migration/freeze-provenance-envelope.md
 Negative-spec: this package holds pydantic MODELS only — it does not register
 Claude-klabauter ops (no `register_op` call anywhere in this tree) and central-reg
 deferral does not apply to it.
@@ -67,9 +67,9 @@ from coordinator_core.contract.cockpit_schema.provenance import ProvenanceEnvelo
 # top-of-file `from .emit_schema import CONTRACT_VERSION`. An eager import
 # pulls `emit_schema` into `sys.modules` as a side effect of importing THIS
 # package, which collides with `python -m coordinator_core.contract.
-# cockpit_schema.emit_schema` (coordinator-claude's `regen-cockpit-schema.py:208`
+# cockpit_schema.emit_schema` (DoE's `regen-cockpit-schema.py:208`
 # invocation shape) — runpy finds the submodule already imported under its
-# real name and emits a `RuntimeWarning` on coordinator-claude's release-critical
+# real name and emits a `RuntimeWarning` on DoE's release-critical
 # regeneration console, straight past their "verify no unexpected drift"
 # line. Lazy attribute access defers the import until `CONTRACT_VERSION` is
 # actually read, so plain `import cockpit_schema` (what happens first during

@@ -4,7 +4,7 @@ cross-repo, Bash outside-repo, and the `Write`/`Edit`/`MultiEdit` tool
 surface) so the clear-once property holds identically across every surface a
 session can write through.
 
-Spec backlink: docs/plans/2026-08-02-write-confinement-guards.md, chunk C3,
+Spec backlink: DoE-claude:pln-write-confinement-guards-cross-996567, chunk C3,
 "Marker -- session-scoped, ordinary file, gitdir resolved not composed".
 
 THIS IS A SPEED BUMP, NOT A SECURITY BOUNDARY. Read the plan's "Design
@@ -26,7 +26,7 @@ creates this marker to route around an explicit "check with your PM first"
 message is not the well-meaning, mid-task agent this bump targets, and
 building unforgeability machinery to chase that agent is the iron-law
 posture the PM explicitly rejected for this plan. This decision is also
-registered in `coordinator/docs/wiki/coordinator-tripwires.md` (coordinator-claude,
+registered in `coordinator/docs/wiki/coordinator-tripwires.md` (DoE-claude,
 landed by chunk C1) -- restated here because this module's own docstring is
 where the next maintainer actually looks before "helpfully" hardening it.
 

@@ -93,16 +93,30 @@ def _cross_repo_payload(session_id, repos):
 class TestBashCrossRepoDenyIsSentinelClearable:
     """The chunk-2 claim: a real ``bump-foreign-repo-write`` deny (a
     ``fail_closed=False`` guard's OWN normal-path deny, not a crash) is
-    now (a) annotated with the in-session-unlock line and (b) actually
-    clearable by dropping the sentinel, mirroring every hard-deny guard."""
+    (a) reachable through ``guard_unlock_sentinel`` and (b) actually
+    clearable by dropping the sentinel, mirroring every hard-deny guard.
 
-    def test_deny_advertises_the_sentinel_unlock_line(self, repos, monkeypatch):
+    2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-stop-handing-
+    agents-the-keys.md AC-2): the deny reason itself no longer prints a
+    pasteable unlock recipe (the ``guard-unlock-<session-id>`` sentinel
+    filename/touch command) for EITHER audience -- see
+    ``_write_bump_message.render_em_message``'s docstring. The message
+    register contract (docs/wiki/guard-messaging.md) is now: one fact,
+    stated once ("check with your PM"), plus a terse alternative
+    (cross-repo-memo) -- never the override key. Sentinel-clearability
+    itself (b) is unaffected and still covered by
+    ``test_sentinel_clears_the_deny_and_is_consumed_once`` below."""
+
+    def test_deny_advertises_the_pm_escalation_not_the_unlock_recipe(self, repos, monkeypatch):
         _set_anchor(monkeypatch, repos, "sess-deny-1")
         decision, out = _decision(_cross_repo_payload("sess-deny-1", repos))
         assert decision == "deny"
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "guard-unlock-" in reason
-        assert "bump-foreign-repo-write" in reason
+        assert "check with your PM" in reason
+        assert "cross-repo-memo" in reason
+        assert "guard-unlock-" not in reason, (
+            "deny reason must never hand out a pasteable unlock recipe (AC-2)"
+        )
 
     def test_sentinel_clears_the_deny_and_is_consumed_once(self, repos, monkeypatch):
         _set_anchor(monkeypatch, repos, "sess-deny-2")

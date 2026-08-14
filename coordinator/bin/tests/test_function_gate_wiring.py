@@ -225,7 +225,7 @@ def _write_bare_engine_mirror_gate_tree(root: Path) -> None:
     and `read_doe_root_pointer.py` + `settings_home.py` at the co-located
     `coordinator/lib/` layout `_mp_doe_root_pointer_rung` probes first) -- but
     never ships `coordinator/schemas/coordinator-registry.manifest.json`
-    itself, since that artifact is coordinator-claude's, delivered only via a
+    itself, since that artifact is DoE-claude's, delivered only via a
     coordinator-claude plugin install. Every OTHER top-level dependency
     `coordinator_registry.py` reaches for (`coordinator_core.*`) is imported
     LAZILY inside functions wrapped in a swallow-and-return-empty contract,
@@ -614,7 +614,7 @@ def _write_bare_engine_mirror_entrypoint_tree(root: Path) -> None:
     CLI uses (e.g. `coordinator-doc-new`) -- so `--help` still triggers the
     import before argparse ever runs, exactly like the real CLIs this
     fixture stands in for. Never ships `coordinator/schemas/coordinator-
-    registry.manifest.json` itself -- that artifact is coordinator-claude's,
+    registry.manifest.json` itself -- that artifact is DoE-claude's,
     delivered only via a coordinator-claude plugin install."""
     bin_dir = root / "coordinator" / "bin"
     bin_lib_dir = bin_dir / "lib"

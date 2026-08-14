@@ -16,12 +16,12 @@ reasoning from a document about a generic install; it cannot answer "does
 this machine have this entry to remove."
 
 This module generalizes `coordinator.installed_repos` — the shape
-precedent coordinator-claude's `commands/uninstall.md:141` names ("install records what it
+precedent DoE's `commands/uninstall.md:141` names ("install records what it
 touched, uninstall drives off the record") — rather than sitting beside it.
 That key has ZERO writers on our engine path today (verified this session:
 `grep -rn "installed_repos"` across `coordinator_core/` returns no source
 hits, only docs/plan prose describing it as unwritten; independently
-confirmed absent when this was relayed to coordinator-claude, see
+confirmed absent when this was relayed to DoE, see
 `state/memo-outbox/sent/uninstall-reverse-legs-accepted.md`). So this module
 is not generalizing a live mechanism — it is building the recording leg the
 design presupposes, honouring `installed_repos` only as a shape precedent

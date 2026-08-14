@@ -36,8 +36,8 @@ consumes the same shared resolver rather than a second independent ladder). On a
 resolution failure, `_resolve_plugin_root` returns "" — the caller treats this as the
 oracle's own fail-loud ERROR path.
 
-Spec backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
-Port of: sync-plugin-wiki.sh (coordinator-claude b5a4192c, 2026-07-20)
+Spec backlink: DoE-claude:pln-bash-polyglot-clean-slate-full-5c71ee
+Port of: sync-plugin-wiki.sh (DoE b5a4192c, 2026-07-20)
 
 Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-port):
     - `--check-only` is accepted but is a pure no-op (kept only for caller

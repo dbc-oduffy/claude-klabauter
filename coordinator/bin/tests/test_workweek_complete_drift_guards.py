@@ -3,7 +3,7 @@
 
 Purpose: unit tests for coordinator/bin/workweek-complete-drift-guards.py —
 the M3 chunk WWC-3 port of five genuine bash-logic fences out of
-Coordinator-claude's `coordinator/commands/workweek-complete.md`:
+DoE-claude's `coordinator/commands/workweek-complete.md`:
 description-length/enabledPlugins-drift advisory dispatch, the change-aware
 dep-manifest CVE-recheck (manifest-presence gate + 14-day window), the
 schema-drift-gate three-way rc branch, the repo-wide ShellCheck sweep loop,
@@ -183,21 +183,21 @@ def _install_fake_sibling(bin_dir: Path, name: str, rc: int, message: str = "") 
 
 
 def test_schema_drift_gate_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate", 0, "PASS\n")
+    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 0, "PASS\n")
     monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
     rc = _mod.main(["schema-drift-gate"])
     assert rc == 0
 
 
 def test_schema_drift_gate_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate", 1, "drift found\n")
+    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 1, "drift found\n")
     monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
     rc = _mod.main(["schema-drift-gate"])
     assert rc == 1
 
 
 def test_schema_drift_gate_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate", 2, "transport failure\n")
+    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 2, "transport failure\n")
     monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
     rc = _mod.main(["schema-drift-gate"])
     assert rc == 2
@@ -206,7 +206,7 @@ def test_schema_drift_gate_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_schema_drift_gate_unexpected_rc_treated_as_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _install_fake_sibling(tmp_path, "schema-drift-gate", 7, "")
+    _install_fake_sibling(tmp_path, "schema-drift-gate.py", 7, "")
     monkeypatch.setattr(_mod, "_BIN_DIR", str(tmp_path))
     rc = _mod.main(["schema-drift-gate"])
     assert rc == 2

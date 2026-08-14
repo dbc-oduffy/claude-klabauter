@@ -6,8 +6,8 @@ Claude-klabauter-native ops. All are MUTATING (DR-208) and write coordinator sub
 DR-216 is the reserved-noun-write carve-out authority for this op family.
 
 Three ops registered here, byte-parity ports of claude-klabauter-owned CLI writers:
-    changelog.append_day     ← Port of: workday-complete-step9-append-changelog.sh (coordinator-claude 6fb5fb37, 2026-07-22)
-    changelog.backfill_gaps  ← Port of: backfill-week-changelog-gaps.sh (coordinator-claude b5a4192c, 2026-07-20)
+    changelog.append_day     ← Port of: workday-complete-step9-append-changelog.sh (DoE 6fb5fb37, 2026-07-22)
+    changelog.backfill_gaps  ← Port of: backfill-week-changelog-gaps.sh (DoE b5a4192c, 2026-07-20)
     changelog.inject_anchor  ← Port of (injection path only): coordinator/bin/
         workday-complete-backfill-inject-anchor.py — the archive/daily-summaries/ anchor
         writer, sanctioned as a second D2(iv) archive/ sub-noun by the 2026-07-28 DR-216
@@ -37,11 +37,18 @@ Negative-spec:
 
 Spec backlink: pln-strang-10-residual-writer-clus-b67ff8 § C1
 DR authority: docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md
-Oracle parity: [coordinator-claude] coordinator/bin/ (append_day/backfill_gaps oracles);
+Oracle parity: [DoE] coordinator/bin/ (append_day/backfill_gaps oracles);
     coordinator/bin/workday-complete-backfill-inject-anchor.py (inject_anchor oracle, in-repo)
 """
 
 from __future__ import annotations
+
+# Generator-provenance declaration: append_day()/backfill_gaps() write
+# per-date files under state/week-changelog/{date}.md and
+# state/week-changelog/{date}-{host}-backfill.md -- an unbounded,
+# date/host-dependent output set of already-tracked/newly-appended files,
+# not a single fixed artifact.
+MUTATES = ["state/week-changelog/*.md"]
 
 import asyncio
 import datetime
@@ -809,7 +816,7 @@ async def _backfill_gaps_handler(
 # discipline) and list_review_trail_records._collect for review-trail file
 # enumeration, rather than re-deriving either.
 #
-# Port of: workday-complete-step9-append-changelog.sh (coordinator-claude 6fb5fb37, 2026-07-22)
+# Port of: workday-complete-step9-append-changelog.sh (DoE 6fb5fb37, 2026-07-22)
 #   (commit collection, TRIVIAL_PATTERN/SELF_COMMIT_REGEX, plans-touched,
 #   handoffs enumeration, Decisions:/Blockers: extraction — BOTH the
 #   python3 YAML-aware primary path and the grep -E fallback path — and the
@@ -1411,7 +1418,7 @@ def upsert_reviewed(*, worktree: Path, date: str, machine: str) -> dict:
     Write behaviour:
       - No `state/week-changelog/{date}.md` file yet → no-op ("no_match").
       - File exists but has no `## {date} — {machine}` section → no-op
-        ("no_match"). Both are legitimate probes (the coordinator-claude-side caller scans
+        ("no_match"). Both are legitimate probes (the DoE-side caller scans
         many (date, machine) pairs at /workweek-complete), NOT errors.
       - Section exists, derived Reviewed: block already matches what is on
         disk → no-op ("unchanged") — idempotent re-run.
@@ -2416,7 +2423,7 @@ async def _compute_day_fields_handler(
 def main(argv: List[str]) -> int:
     """CLI entrypoint for the `backfill-week-changelog-gaps.sh` polyglot trampoline.
 
-    Port of: backfill-week-changelog-gaps.sh (coordinator-claude b5a4192c, 2026-07-20). The
+    Port of: backfill-week-changelog-gaps.sh (DoE b5a4192c, 2026-07-20). The
     cc_invoke/JSON-RPC veneer (T2-g1 strangler-facade) is retired on this
     cutover — direct in-process call replaces the subprocess round trip,
     matching the coordinator-auto-push / handoff-gate-aging direct-import

@@ -10,7 +10,7 @@ test_op_registration.py per the established pattern), covering:
   (a) one case per pattern: emitted text contains a pure-literal meta,
       matching phase() titles (both the phase()-call and agent-options
       `phase:` surfaces), and the chosen pattern's template text.
-  (b) pattern omitted -> "pipeline-default" (coordinator-claude consult note 3).
+  (b) pattern omitted -> "pipeline-default" (DoE consult note 3).
   (c) unknown pattern -> descriptive ValueError.
   (d) missing name/description -> descriptive ValueError.
   (e) ROUND-TRIP drift guard (AC7): for EACH of the four patterns, scaffold
@@ -109,7 +109,7 @@ def test_each_pattern_emits_conformant_shape(pattern):
 
 
 # ---------------------------------------------------------------------------
-# (b) pattern omitted -> pipeline-default (coordinator-claude consult note 3)
+# (b) pattern omitted -> pipeline-default (DoE consult note 3)
 # ---------------------------------------------------------------------------
 
 

@@ -1,9 +1,9 @@
 """Tests for coordinator_core.ops.check_auto_reconcile.
 
-Golden oracle (Port of: check-auto-reconcile.sh, coordinator-claude b5a4192c, 2026-07-20),
+Golden oracle (Port of: check-auto-reconcile.sh, DoE b5a4192c, 2026-07-20),
 snapshotted 2026-07-16 -- this module owns only the dispatch slice (repo-root
 resolution + in-process handoff.reconcile_open call); the envelope-parsing and
-rendering slice stays coordinator-claude-side (see that repo's own bin test), so these tests
+rendering slice stays DoE-side (see that repo's own bin test), so these tests
 cover get_response()'s infrastructure-failure silent-skip contract and main()'s
 stdout passthrough, not rendering.
 """

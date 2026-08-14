@@ -2,7 +2,7 @@
 coordinator_core.roadmap.tests.test_number_stubs — independent parity regression
 net for coordinator_core.roadmap.number_stubs, re-derived from the CLI-smoke
 acceptance criteria (AC9) in the oracle's own test file
-(coordinator/bin/tests/test-roadmap-graph.js, coordinator-claude) plus a direct oracle run
+(coordinator/bin/tests/test-roadmap-graph.js, DoE-claude) plus a direct oracle run
 (``node coordinator/bin/roadmap-number-stubs.js <fixture>``) whose stdout was
 captured and hardcoded below as the expected byte-parity output — not derived by
 re-reading this port's own source.

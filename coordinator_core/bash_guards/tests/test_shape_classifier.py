@@ -1,6 +1,6 @@
 """Tests for coordinator_core.bash_guards._shape_classifier.
 
-Three failure classes this pins, per coordinator-claude
+Three failure classes this pins, per DoE
 ``docs/plans/2026-07-29-fleet-wide-bash-spawn-fan-out.md`` C2's own test
 requirement:
 

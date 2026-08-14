@@ -19,7 +19,7 @@ Cadence tunes severity/depth only (day = --red-and-stale; session/week =
 a different reader call per cadence (Approach § "Cadence is a parameter,
 not three code paths").
 
-Spec backlink: docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md, chunk C2a
+Spec backlink: DoE-claude:pln-computed-skills-b2-ceremony-st-e82420, chunk C2a
 
 Negative-spec:
     - Does NOT call any mutating entrypoint of the ported readers — no

@@ -1,9 +1,9 @@
 """
 coordinator_core.tests.test_async_hook_status — parity coverage for the
-Python port of Port of: async-hook-status.sh (coordinator-claude c187f5b9, 2026-07-21)
+Python port of Port of: async-hook-status.sh (DoE c187f5b9, 2026-07-21)
 (DOE-PORT R1, sourced-lib shape).
 
-Mirrors Port of: async-hook-status.test.sh (coordinator-claude c187f5b9, 2026-07-21)'s
+Mirrors Port of: async-hook-status.test.sh (DoE c187f5b9, 2026-07-21)'s
 AC5 sub-properties:
   (a) happy path — record -> surface (operator line emitted) -> cleared
   (b) no-renag idempotency — second surface_and_clear with no intervening

@@ -27,7 +27,7 @@ to be configured for the append-goal-event.py leg — CLAUDE_KLABAUTER_ROOT IS r
 read-frontmatter-field's in-process import (emit-goal-from-artifact.py's own frontmatter
 reads), which every assertion below implicitly exercises.
 
-Spec backlink: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C7
+Spec backlink: DoE-claude:pln-per-repo-okr-goal-setting-syst-80bced § C7
 Spec backlink: docs/plans/2026-07-19-debash-coordinator-windows.md (Plan C, Wave E3-d)
 """
 from __future__ import annotations
@@ -114,7 +114,7 @@ key_results:
 created: "2026-07-07"
 owner: doe-em
 period: repo
-period_value: "coordinator-claude-2026"
+period_value: "DoE-2026"
 """
 
 FIXTURE_TOOLING = """schema: goal
@@ -252,7 +252,7 @@ def test_emit_goal_from_artifact(tmp_path):
     # --- T3/T4/T5: invocation carries period / period_value / identity-chain text ---
     inv = lines1[0]
     assert "--period repo" in inv, inv
-    assert "coordinator-claude-2026" in inv, inv
+    assert "DoE-2026" in inv, inv
     assert "goal-legibility" in inv, inv
 
     # --- T6: two goal artifacts -> two invocations ---

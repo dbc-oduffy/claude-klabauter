@@ -2,7 +2,7 @@
 """bin/tests/test_workweek_complete_advisories.py
 
 Purpose: unit tests for coordinator/bin/workweek-complete-advisories.py — the
-M3 chunk WWC-1 port of four genuine bash-logic fences out of coordinator-claude's
+M3 chunk WWC-1 port of four genuine bash-logic fences out of DoE-claude's
 `coordinator/commands/workweek-complete.md` (tripwire fire-log summarization,
 improvement-queue depth counting, cruft-sweep last-run parsing, and the
 ubt-unresolved CLI dispatch over the already-ported

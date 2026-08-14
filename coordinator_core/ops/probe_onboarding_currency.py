@@ -10,7 +10,7 @@ coordinator source's current schema version and prints one of four statuses:
     inconclusive(...)    — probe could not run (schema constant unreadable, etc.)
     source_is_live        — repo IS the coordinator source itself; missing stamp expected
 
-Port of: probe-onboarding-currency.sh (coordinator-claude 894d4bc6, 2026-07-22), which also
+Port of: probe-onboarding-currency.sh (DoE 894d4bc6, 2026-07-22), which also
 inlined lib/coordinator-currency.sh::coordinator_currency_probe (that shared bash lib
 was not itself ported here — its read/write/probe logic is reproduced standalone below
 so this module has no bash dependency).
@@ -43,7 +43,7 @@ Interface — env-only (mirrors the original script; no CLI args):
                                             resolves via coordinator_registry.doe_root()
                                             + "/coordinator").
     COORDINATOR_CURRENCY_SCRIPT_DIR      — the CALLING trampoline's own directory.
-                                            coordinator-claude-side contract fact (path resolution
+                                            DoE-side contract fact (path resolution
                                             specific to where the trampoline file
                                             lives on disk) that this engine module
                                             cannot derive itself — the trampoline sets
@@ -54,11 +54,11 @@ Interface — env-only (mirrors the original script; no CLI args):
                                             plugin_root when PLUGIN_ROOT is unset —
                                             that fallback assumes the calling script
                                             and coordinator-schema-version are
-                                            co-located (true of the retired coordinator-claude
+                                            co-located (true of the retired DoE-claude
                                             layout, NOT of the current trampoline,
                                             which migrated to claude-klabauter while
                                             coordinator-schema-version stayed in
-                                            coordinator-claude's coordinator/ tree — see that
+                                            DoE-claude's coordinator/ tree — see that
                                             trampoline's module docstring "Plugin-root
                                             resolution note"). No known caller relies
                                             on this fallback today (the trampoline and
@@ -76,7 +76,7 @@ Negative-spec:
       `inconclusive(probe-infra: lib/coordinator-currency.sh not found ...)` when that
       file was missing does not apply here (no such file dependency exists post-port);
       this is not a behavior regression since that branch only fired on a broken
-      install where the coordinator-claude bin/lib layout itself was corrupt.
+      install where the DoE bin/lib layout itself was corrupt.
     - Forward-dated stamps (stamped_version > current_version) are classified
       inconclusive, NOT drift or current — reproduces the bash oracle's stated
       "probe cannot validate forward stamps" behavior verbatim, not a bug to fix.

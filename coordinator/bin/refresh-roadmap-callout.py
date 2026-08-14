@@ -2,7 +2,7 @@
 """refresh-roadmap-callout.py — refreshes a roadmap-callout sentinel block in place.
 
 CLI trampoline over claude-klabauter coordinator_core.ops.refresh_roadmap_callout, per
-DR-047 (coordinator-claude owns contract/generator, claude-klabauter owns engine). Validates a
+DR-047 (DoE owns contract/generator, claude-klabauter owns engine). Validates a
 roadmap_id against the STUB-INDEX allowlist, checks the invoking coordinator
 root is trusted, and delegates the actual markdown rewrite to
 refresh-queries.py's --files mode. Invoked at /pickup and
@@ -10,12 +10,12 @@ refresh-queries.py's --files mode. Invoked at /pickup and
 """
 from __future__ import annotations
 # Finish-strangler port: the bash implementation (refresh-roadmap-callout.sh,
-# coordinator-claude a1a568d2, 2026-07-22 — CLI arg parse, roadmap_id allowlist/quote-strip
+# DoE a1a568d2, 2026-07-22 — CLI arg parse, roadmap_id allowlist/quote-strip
 # validation, STUB-INDEX resolution, trust-guard, and the
 # `refresh-queries.js --files` node delegate) has been fully ported to
 # coordinator_core/ops/refresh_roadmap_callout.py, with a co-located pytest
-# (test_refresh_roadmap_callout.py). This file is now a thin coordinator-claude-side
-# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+# (test_refresh_roadmap_callout.py). This file is now a thin DoE-side
+# (contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 # contract/generator, claude-klabauter owns engine).
 #
 # Exit convention: this is a fail-loud wrapper (missing/invalid roadmap_id,
@@ -24,7 +24,7 @@ from __future__ import annotations
 # trampoline layer must exit 1 too, not swallow the error at exit 0 (unlike
 # the never-block auto-push shape).
 #
-# Spec backlink: docs/plans/2026-07-09-roadmap-callout-refresh-at-pickup-and-wsc.md § C1
+# Spec backlink: DoE-claude:pln-refresh-roadmap-query-callout--d3d748 § C1
 #                docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md (R1 DOE-PORT)
 import os
 import sys

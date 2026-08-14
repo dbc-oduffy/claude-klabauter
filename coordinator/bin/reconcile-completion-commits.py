@@ -154,6 +154,8 @@ _ID_ALLOWLIST_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
 _USAGE = "Usage: reconcile-completion-commits.py [--append] [--session-id <id>] <entry-path>"
 
+GENERATES = []  # writes only to `entry_path`, an arbitrary caller-supplied completion-entry file (commits:/late_commits: frontmatter fold) — no fixed repo artifact
+
 
 def _resolve_session_id_env() -> str:
     """Tiers 1-3 of the 4-tier chain — see module docstring for the tier-4 carve-out."""

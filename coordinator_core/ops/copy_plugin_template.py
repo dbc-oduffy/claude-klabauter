@@ -5,7 +5,7 @@ coordinator_core.ops.copy_plugin_template — JSON-RPC
 Purpose: content-idempotent install of the coordinator-standard
 console-subprocess tripwire test into a consuming repo, then a direct pytest
 verification run — the native port of the repo-setup fence
-(coordinator-claude coordinator/skills/repo-setup/SKILL.md:1103 "Install steps": trusted-root
+(DoE coordinator/skills/repo-setup/SKILL.md:1103 "Install steps": trusted-root
 bash preamble + `cp` + `pytest`). The bash oracle's `cp` overwrites
 unconditionally, clobbering hand-customized PREFIXES/EXACT_FILES allowlist
 edits on rerun — the exact hazard the C0a manifest names. Settlement A6
@@ -31,14 +31,14 @@ byte-identical to the template and performs zero writes, returning
 verification run. The double-invocation test asserts exactly this no-op
 shape and that the destination bytes are untouched.
 
-Cross-repo resolution: the template lives in the coordinator-claude / coordinator-claude
+Cross-repo resolution: the template lives in the DoE / coordinator-claude
 tree and is resolved EXCLUSIVELY via the mandated resolver
 `coordinator_core.ops.coordinator_doe_root.coordinator_doe_root()` (parent
 plan § Mandated resolvers) — never a literal path, never a `parents[n]` walk
-across the repo boundary. Unresolvable coordinator-claude root → structured error, fail
+across the repo boundary. Unresolvable DoE root → structured error, fail
 loud (CC-7).
 
-Fail-loud (CC-7): missing target repo root, unresolvable coordinator-claude root, missing
+Fail-loud (CC-7): missing target repo root, unresolvable DoE root, missing
 template file, and a destination that exists but is not a regular file each
 raise a structured TripwireCopyError naming the offending path — the op
 never picks a side silently.
@@ -84,7 +84,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._pytest_child_env import pytest_child_env
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
-# Template location inside the coordinator-claude / coordinator-claude tree (repo-relative;
+# Template location inside the DoE / coordinator-claude tree (repo-relative;
 # joined off the resolver's root per DEC-1 resolve-root-once-then-join).
 _TEMPLATE_REL = Path("coordinator") / "tests" / "templates" / "test_no_bare_console_subprocess.py"
 
@@ -96,25 +96,25 @@ class TripwireCopyError(RuntimeError):
     """Structured failure for repo_setup.copy_console_subprocess_tripwire (CC-7).
 
     Raised — never silently absorbed — when a premise fails: target repo root
-    missing, coordinator-claude root unresolvable, template file missing, or destination
+    missing, DoE root unresolvable, template file missing, or destination
     present but not a regular file. The message names every offending path.
     """
 
 
 def _resolve_template_path() -> Path:
-    """Resolve the tripwire template via the mandated coordinator-claude-root resolver.
+    """Resolve the tripwire template via the mandated DoE-root resolver.
 
     Raises TripwireCopyError when the resolver returns None (rung-4 hard
     failure) — remediation is the resolver's own documented story
-    (re-run coordinator:install / set REPO_EXAMPLE_DOCTRINE_REPO).
+    (re-run coordinator:install / set REPO_DOE_CLAUDE).
     """
     doe_root = coordinator_doe_root()
     if not doe_root:
         raise TripwireCopyError(
-            "repo_setup.copy_console_subprocess_tripwire: coordinator-claude / coordinator-claude "
+            "repo_setup.copy_console_subprocess_tripwire: DoE / coordinator-claude "
             "root unresolvable via coordinator_doe_root() — cannot locate the "
             f"tripwire template ({_TEMPLATE_REL.as_posix()}). Re-run "
-            "coordinator:install or set REPO_EXAMPLE_DOCTRINE_REPO."
+            "coordinator:install or set REPO_DOE_CLAUDE."
         )
     return Path(doe_root) / _TEMPLATE_REL
 

@@ -21,6 +21,7 @@ import pytest
 
 import coordinator_core.ops.install_publish_repo_precommit_hook as _mod
 from coordinator_core.ops.install_publish_repo_precommit_hook import main
+from coordinator_core.testing import symlink_capability
 
 # Declared, not excused: this file behaviorally executes the emitted pre-commit
 # hook via real `sh`/`git` (per the D2 fix's own contract) to prove the hook's
@@ -436,6 +437,11 @@ def _make_tool_bindir(tmp_path: Path, tools: dict) -> str:
     resolvable-vs-not per binary independent of which real directory each
     one happens to live in.
     """
+    if not symlink_capability.CAN_CREATE_SYMLINK:
+        pytest.skip(
+            "host cannot create symlinks (missing Windows Developer Mode / "
+            "SeCreateSymbolicLink privilege)"
+        )
     bindir = tmp_path / "tool-bindir"
     bindir.mkdir(exist_ok=True)
     for name, real_path in tools.items():

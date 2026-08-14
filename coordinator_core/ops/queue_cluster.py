@@ -68,7 +68,7 @@ ALL_SIGNALS: tuple[str, ...] = (SIGNAL_TAG, SIGNAL_DIRECTORY, SIGNAL_KEYWORD)
 """The closed signal enum, in output-ordering order (tag, directory, keyword).
 
 Pinned by coordinator_core/ops/tests/test_queue_cluster.py::test_signal_enum_pinned --
-Coordinator-claude's `/debt-triage` Step 6b suppresses the "directory" signal by literal
+DoE's `/debt-triage` Step 6b suppresses the "directory" signal by literal
 string comparison against this exact value. Renaming or re-casing a member
 here does not raise on their side; it silently stops matching, and the next
 triage run hands their ceremony one un-suppressed, oversized cluster as a

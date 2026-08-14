@@ -18,8 +18,8 @@ tree (D-4/F6 of the same plan); every submodule is a pure, `__init__`-
 independent builder, and this module is the ONLY one that reads the
 CONSUMES_MANIFEST, assembles the 8-key envelope, and exposes the CLI.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-Branches computed against: coordinator-claude coordinator/skills/workstream-complete/SKILL.md
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Branches computed against: DoE-claude coordinator/skills/workstream-complete/SKILL.md
 Spec backlink: docs/plans/2026-07-26-workstream-complete-computed-frontage.md,
 chunk C3 (wiring the manifest/submodules/apply-verb landed here). Original
 compute-only convert: docs/plans/2026-07-21-canonical-resolution-engine.md,
@@ -1079,7 +1079,7 @@ def build_directives(
     # disposition), but substituting nothing left the close that caps an
     # entire lineage's diff as the ONE close with no brightline gate at all,
     # strictly less gated than an ordinary mid-chain session (2026-08-03
-    # coordinator-claude-em memo, `cross-repo/inbox/2026-08-03-coordinator-claude-em-wsc-
+    # doe-claude-em memo, `cross-repo/inbox/2026-08-03-doe-claude-em-wsc-
     # chain-terminal-brightline-gate-never-fires.md`). The chain gate's
     # machinery was already live — `wsc-coverage-gate-runner brightline-gate
     # --from-handoff` and its two-oracle plan/chain compute — only the call
@@ -1145,7 +1145,7 @@ def build_directives(
     # operation. Emitting it here archived a still-live session mid-session,
     # destroying once-per-session sentinels and the dispatch-evidence file.
     # Archival now belongs to session END, not workstream close — wired via
-    # a SessionEnd hook (coordinator-claude repo) rather than this assembly. The
+    # a SessionEnd hook (DoE-claude repo) rather than this assembly. The
     # `wsc-close archive-session` CLI subcommand remains in place for that
     # caller; the directive builder that used to construct this call
     # (`directives_commit_tail.build_archive_session_claim_directive`) has
@@ -1202,7 +1202,7 @@ def build_coverage_judgment_point(gate: SessionShapeGate, directives: list[dict[
     # judgment point or on `d-coverage-gate`, and none of the dispositions
     # below resolve it. See `state/lessons/2026-07-27-verify-a-gate-
     # actually-enforces-before-s-a20579f1aa06.yaml` (evidence 87578a31 in
-    # claude-klabauter, e5f7b47c in coordinator-claude) — do not re-derive this as a
+    # claude-klabauter, e5f7b47c in DoE-claude) — do not re-derive this as a
     # bug or wire a dependency edge here without a fresh PM decision.
     return build_judgment_point(
         {
@@ -1236,7 +1236,7 @@ def build_review_scale_judgment_point(
     verdict_presence: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Surfaces `decide_review_scale`'s verdict — otherwise dead code with
-    no call site (source memo 2026-08-03-coordinator-claude-em-wsc-chain-terminal-
+    no call site (source memo 2026-08-03-doe-claude-em-wsc-chain-terminal-
     brightline-gate-never-fires.md). Sits BESIDE `review-partition-strategy`
     / `reviewer-count-on-oracle-disagreement` (the Staff Engineer finding 13): it does
     not feed their inputs and is not gated on `review_relevant` — read only
@@ -1246,7 +1246,7 @@ def build_review_scale_judgment_point(
     the same ruling `build_coverage_judgment_point` carries): the commit
     tail (`d-run-wsc-tail`) carries no dependency edge on this judgment
     point. See DR-068 ("Commit-Time Coverage Gate — ... Advisory-Not-
-    Blocking") and coordinator-claude coordinator/docs/wiki/workstream-complete-
+    Blocking") and DoE-claude coordinator/docs/wiki/workstream-complete-
     review.md, section "The gate is an oracle, not a lock" — do not
     re-derive this as a bug or wire a dependency edge here without a fresh
     PM decision. (The lesson file a sibling comment cites,
@@ -1288,7 +1288,7 @@ def build_review_scale_judgment_point(
     recommendation and closes a chain terminal on one reviewer." This is
     STILL advisory, not a new block: `d-run-wsc-tail` carries no dependency
     edge on `jp-review-scale` either way, per DR-068 (2026-07-27,
-    "Commit-Time Coverage Gate — ... Advisory-Not-Blocking") and coordinator-claude
+    "Commit-Time Coverage Gate — ... Advisory-Not-Blocking") and DoE-claude
     coordinator/docs/wiki/workstream-complete-review.md, section "The gate
     is an oracle, not a lock" — do not re-derive this as a bug or wire a
     dependency edge here without a fresh PM decision. Removing the
@@ -1750,8 +1750,8 @@ def _resolve_session_handoff_plan_by_deliverable_id(root: Path, deliverable_id: 
 
 def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> dict[str, Any]:
     """Leg A for `kind: session-handoff` batons only — that kind is not
-    built to carry its own `## Acceptance criteria` (0/34 in coordinator-claude's
-    corpus, 0/22 in claude-klabauter's; cross-repo/inbox/2026-08-03-coordinator-claude-em-
+    built to carry its own `## Acceptance criteria` (0/34 in DoE-claude's
+    corpus, 0/22 in claude-klabauter's; cross-repo/inbox/2026-08-03-doe-claude-em-
     wsc-leg-a-session-handoff-kind-blind.md): its acceptance criteria live
     in the PLAN it was executing. Joins on the handoff's own
     `deliverable_id` frontmatter to that plan's `deliverable_id`
@@ -1845,6 +1845,143 @@ def _evaluate_session_handoff_leg_a(root: Path, frontmatter: dict[str, Any]) -> 
         "open": None,
         "total": None,
     }
+
+
+# ---------------------------------------------------------------------------
+# gates.landed_reconciliation — C3, pln-landed-fires-at-spine-resoluti-ac7e89:
+# a session's OWN governing plan sitting at `status: landed` (this repo's
+# only writer: `execute_plan_assemble.close_out_and_stamp._stamp_plan_
+# landed`, per that plan's C1) with unreconciled `## Acceptance Criteria`
+# checkboxes. Read-only, advisory-only, never a blocker (AC9 of that plan):
+# leg A above already retains standing on a `landed` plan (`landed` is
+# deliberately absent from `_LEG_A_TERMINAL_PLAN_STATUS`), so a landed-but-
+# unreconciled predecessor already surfaces on THAT seam when it is a
+# session-handoff's own consumed predecessor. This gate covers the
+# complementary case — the CURRENT session's own governing plan — which leg
+# A does not evaluate at all (leg A only ever looks at a *consumed*
+# handoff's joined plan, never at `governing_plan` above).
+#
+# Deliberately NOT merged with `directives_spine_worklist.
+# compute_open_spine_row_gate` just above: that gate fires on an OPEN
+# plan-tasks spine row, and `landed` is stamped (this plan's own C1) only
+# once every spine row has LEFT `open` — the two conditions are close to
+# mutually exclusive on the same plan, not overlapping, so collapsing them
+# would mostly render one gate permanently silent on any plan the other
+# fires on rather than saving a nudge.
+# ---------------------------------------------------------------------------
+
+_LANDED_PLAN_STATUS = "landed"
+
+_LANDED_RECONCILIATION_NOT_APPLICABLE_SUMMARY = (
+    "Landed-plan reconciliation: not applicable — governing plan is not landed, "
+    "or every acceptance criterion is ticked"
+)
+
+_LANDED_RECONCILIATION_INDETERMINATE_SUMMARY = (
+    "Landed-plan reconciliation: INDETERMINATE — {reason}; this is not a clean-close "
+    "signal, check by hand whether this session's governing plan is landed with open ACs"
+)
+
+_LANDED_RECONCILIATION_WARN_TEMPLATE = """WARN [landed-plan-reconciliation]: {plan_ref} is status: landed with {open} of {total} acceptance criteria unticked.
+Reconcile and stamp now: tick each remaining AC once its work is verified landed, or resolve the outstanding item via `python3 coordinator/bin/plan-tasks-resolve`.
+
+Reference: docs/plans/2026-08-14-landed-fires-at-spine-resolution-and-clo.md"""
+
+
+class LandedReconciliationGate(NamedTuple):
+    applies: bool
+    open_count: int
+    total_count: int
+    warn_text: Optional[str]
+    summary_line: str
+    #: Same three-way split as `OpenSpineRowGate.verdict` — "applicable"
+    #: (landed, at least one AC unticked), "not-applicable" (not landed, or
+    #: landed with every AC ticked), "indeterminate" (no governing plan
+    #: resolved, the plan file unreadable, or a landed plan with no
+    #: parseable `## Acceptance Criteria` section to reconcile against).
+    verdict: str = "not-applicable"
+
+
+def _landed_reconciliation_indeterminate(reason: str) -> LandedReconciliationGate:
+    return LandedReconciliationGate(
+        applies=False,
+        open_count=0,
+        total_count=0,
+        warn_text=None,
+        summary_line=_LANDED_RECONCILIATION_INDETERMINATE_SUMMARY.format(reason=reason),
+        verdict="indeterminate",
+    )
+
+
+def compute_landed_reconciliation_gate(
+    governing_plan_slug: Optional[str],
+    governing_plan_path: Optional[Path],
+) -> LandedReconciliationGate:
+    """AC9 (pln-landed-fires-at-spine-resoluti-ac7e89, C3) — surfaces "this
+    session's governing plan is `landed` and its ACs are not reconciled" as
+    a read-only OFFER, never a blocker: no judgment point, no directive
+    dependency edge, no exit code. Mirrors `directives_spine_worklist.
+    compute_open_spine_row_gate`'s degrade-never-raise shape and its
+    `applies`/`verdict` split (see that function's own docstring for the
+    rationale behind splitting `not-applicable` from `indeterminate`).
+
+    Reads `status:` via the same `parse_frontmatter` this module already
+    uses for leg A (`_evaluate_session_handoff_leg_a`) and reuses
+    `directives_session_hygiene.parse_consumed_handoff_acceptance_criteria`
+    for the checkbox count — no second frontmatter reader, no second
+    checkbox parser.
+
+    Degrades to `indeterminate`, never raises, on: no governing plan
+    resolved, an unreadable/non-UTF-8 plan file, or a `landed` plan whose
+    body carries no parseable `## Acceptance Criteria` section (no heading,
+    or a heading with zero checkboxes) — there is nothing to reconcile
+    against, and that is a fact worth flagging by hand, not a clean close.
+    A NON-landed plan, or a landed plan with every AC ticked, is the
+    ordinary `not-applicable` case."""
+    if not governing_plan_slug or governing_plan_path is None:
+        return _landed_reconciliation_indeterminate("no governing plan resolved for this session")
+
+    try:
+        source = governing_plan_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return _landed_reconciliation_indeterminate(f"governing plan {governing_plan_slug} could not be read")
+
+    frontmatter = parse_frontmatter(source).get("frontmatter")
+    status = frontmatter.get("status") if isinstance(frontmatter, dict) else None
+    if status != _LANDED_PLAN_STATUS:
+        return LandedReconciliationGate(
+            applies=False, open_count=0, total_count=0, warn_text=None,
+            summary_line=_LANDED_RECONCILIATION_NOT_APPLICABLE_SUMMARY, verdict="not-applicable",
+        )
+
+    parsed = directives_session_hygiene.parse_consumed_handoff_acceptance_criteria(source)
+    if parsed is None:
+        return _landed_reconciliation_indeterminate(
+            f"governing plan {governing_plan_slug} is status: landed but carries no "
+            "## Acceptance Criteria heading"
+        )
+    if parsed["total"] == 0:
+        return _landed_reconciliation_indeterminate(
+            f"governing plan {governing_plan_slug} is status: landed but its Acceptance "
+            "Criteria heading has no checkboxes"
+        )
+    if parsed["open"] == 0:
+        return LandedReconciliationGate(
+            applies=False, open_count=0, total_count=parsed["total"], warn_text=None,
+            summary_line=_LANDED_RECONCILIATION_NOT_APPLICABLE_SUMMARY, verdict="not-applicable",
+        )
+
+    warn_text = _LANDED_RECONCILIATION_WARN_TEMPLATE.format(
+        plan_ref=governing_plan_slug, open=parsed["open"], total=parsed["total"],
+    )
+    summary_line = (
+        f"Landed-plan reconciliation: {parsed['open']} of {parsed['total']} ACs unticked on "
+        f"{governing_plan_slug} (status: landed) — WARN emitted"
+    )
+    return LandedReconciliationGate(
+        applies=True, open_count=parsed["open"], total_count=parsed["total"], warn_text=warn_text,
+        summary_line=summary_line, verdict="applicable",
+    )
 
 
 def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -> dict[str, Any]:
@@ -2626,7 +2763,8 @@ def _split_tracked(root: Path, paths: list[str]) -> Optional[tuple[list[str], li
     treat `None` here the same as any other measurement failure."""
     if not paths:
         return [], []
-    listed = _run_git_read_only(["ls-files", "--", *paths], root)
+    normalized_paths = [p.replace("\\", "/") for p in paths]
+    listed = _run_git_read_only(["ls-files", "--", *normalized_paths], root)
     if listed is None:
         return None
     known = {line.strip() for line in listed.splitlines() if line.strip()}
@@ -3425,6 +3563,15 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         decisions=decisions,
     )
 
+    # C3, pln-landed-fires-at-spine-resoluti-ac7e89 (AC9) — advisory only,
+    # same non-blocking contract as `open_spine_row_gate` just above: this
+    # gate contributes no judgment point and no directive dependency edge
+    # anywhere in this module, only `gates.landed_reconciliation` below.
+    landed_reconciliation_gate = compute_landed_reconciliation_gate(
+        governing_plan.slug if governing_plan else None,
+        governing_plan.path if governing_plan else None,
+    )
+
     narration, next_move = _narration_and_next_move(gate, directives, judgment_points)
 
     # `detection` defaults to `None` (no shared mutable default); the wire
@@ -3460,6 +3607,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "session_shape": session_shape_fact,
             "completeness_checklist": completeness_gate._asdict(),
             "open_spine_row_worklist": open_spine_row_gate._asdict(),
+            "landed_reconciliation": landed_reconciliation_gate._asdict(),
             "consumed_handoff_completeness": consumed_handoff_completeness_gate._asdict(),
             "review_scale": review_scale_decision._asdict(),
             "stage_paths_candidates": stage_paths_candidates,
@@ -3560,6 +3708,12 @@ def _main_apply(rest: list[str]) -> int:
 def main(argv: list[str]) -> int:
     if not argv:
         return _usage("workstream-complete-assemble")
+
+    if argv[0] in ("--help", "-h"):
+        print("usage: workstream-complete-assemble brief [--decisions <json>]")
+        print("       workstream-complete-assemble apply [--decisions <json>]")
+        return EXIT_OK
+
     subcmd, rest = argv[0], argv[1:]
 
     if subcmd == "brief":

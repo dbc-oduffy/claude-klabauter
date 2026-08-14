@@ -20,8 +20,8 @@ branch-delete (`git branch -D`) over the default safe delete (`git branch
 module's own mechanics differ from a bare default, and it is expressed as
 an env-var-selected argv flag, never a judgment bypass.
 
-Contract (frozen, reviewed): coordinator-claude coordinator/docs/wiki/computed-skills.md
-Spec backlink: docs/plans/2026-07-24-computed-skills-b4-baton-branch-lifecycle.md, chunk C8
+Contract (frozen, reviewed): DoE-claude coordinator/docs/wiki/computed-skills.md
+Spec backlink: DoE-claude:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C8
 
 Negative-spec:
     - Do NOT add a dispatch entry that resolves `cli` via `getattr`,

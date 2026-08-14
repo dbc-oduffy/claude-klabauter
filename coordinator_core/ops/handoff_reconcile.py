@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.handoff_reconcile — "handoff.reconcile_open" op (name RATIFIED by
-Coordinator-claude 2026-07-13, cross-repo/archive/2026-07-13-claude-central-em-doe-auto-reconcile-ratifications.md).
+DoE 2026-07-13, cross-repo/archive/2026-07-13-claude-central-em-doe-auto-reconcile-ratifications.md).
 
 Purpose: the auto-reconcile orchestrator. Enumerates every currently-open handoff,
 runs the C2 commit_reality matcher and the C3 gate_eval evaluator per handoff, and
@@ -8,7 +8,7 @@ either drives a transition (auto-ship / structured gate-cascade-clear) or append
 handoff to `surfaced[]` for EM judgment. `dry_run` defaults to `true` — the caller
 must pass `dry_run=false` explicitly to transition anything (the Staff Engineer review, finding
 index 4 — resolved in-plan: conservatism parity with DEC-1's surface-never-guess
-invariant; auto-mutation of work-state warrants opt-in until coordinator-claude ratifies flip-to-false
+invariant; auto-mutation of work-state warrants opt-in until DoE ratifies flip-to-false
 via the C6 co-memo).
 
 Chain-walk reaper (C6, reconcile-open-consumed-in-flight-dead-zone plan): when a
@@ -151,7 +151,7 @@ Negative-spec:
     handoff.transition's gate-cascade-clear verb (C8), which independently
     re-verifies each blocker's live deployment_state at act-time before writing.
   - Does NOT auto-transition a PROSE gate_dependency verdict — surfaces only,
-    regardless of the C3 verdict value, per coordinator-claude alignment reply #3 (EM judgment
+    regardless of the C3 verdict value, per DoE alignment reply #3 (EM judgment
     retained for prose gates).
   - (PM ruling 2026-08-01) Does NOT let a `clear`/`narrow` verdict reach
     `_handle_gate_cascade` for ANY handoff carrying a `gate_evidence` block —
@@ -345,13 +345,13 @@ schema declaration nor a writer verb exists yet for `_DISPOSITION_FIELD`/
 pair as clearing a violation. Both gaps are DELIBERATE scope cuts for THIS
 integration pass, not oversights:
   - Schema declaration: `handoff.schema.json`'s grammar SSOT is
-    `coordinator/schemas/handoff.schema.json` in coordinator-claude, one-way vendored
+    `coordinator/schemas/handoff.schema.json` in DoE-claude, one-way vendored
     into this repo's `coordinator_core/frontmatter/schemas/` copy (see that
     vendored file's own tamper-check test,
     `test_handoff_schema_matches_doe_head_after_dr084_revendor` in
     `coordinator_core/frontmatter/tests/test_schema_validate.py`) — editing
-    the vendored copy in place without a matching coordinator-claude-side SSOT edit +
-    re-vendor makes the vendored copy diverge from coordinator-claude HEAD and fails that
+    the vendored copy in place without a matching DoE-side SSOT edit +
+    re-vendor makes the vendored copy diverge from DoE HEAD and fails that
     tamper-check outright (confirmed: attempted in this integration pass,
     reverted once the drift test failed). Declaring the fields is therefore a
     cross-repo change this claude-klabauter-scoped integration pass cannot land alone.
@@ -420,7 +420,7 @@ caller-supplied) is the only place a human-meaningful label may appear, kept out
 idempotence-bearing body precisely so supplying it cannot itself defeat the no-op property.
 
 D2(b) — DELIBERATELY NOT DONE HERE: this chunk does NOT flip
-`coordinator/auto-reconcile-policy.yaml`'s `dry_run` to `false` in coordinator-claude.
+`coordinator/auto-reconcile-policy.yaml`'s `dry_run` to `false` in DoE-claude.
 `docs/plans/2026-07-26-push-side-write-discipline.md`'s third amendment (and
 the sibling `2026-07-26-gate-resolution-widen-and-migrate.md` AC26/AC26b)
 ratifies a property gate on arming that is independent of D2(a) landing:
@@ -433,7 +433,7 @@ discrimination). As of this commit `_resolve_scope_sha` is still live
 (`coordinator_core/archive_stamp.py`) and no schema declares
 `shipped_in_kind` anywhere in this tree — AC22/AC23 are still `pending` in
 both plans' own tracking tables. D2(a) makes the policy's `dry_run`
-load-bearing so that THIS precondition is enforceable by a plain coordinator-claude-side
+load-bearing so that THIS precondition is enforceable by a plain DoE-side
 YAML edit once it clears; it does not itself clear the precondition.
 """
 
@@ -702,7 +702,7 @@ def _build_dry_run_report(
     / "loaded" apart, and see which path was resolved (under
     `CLAUDE_PLUGIN_ROOT`, the SHARED PLUGIN TREE — not this repo's own tree),
     without a cross-repo round-trip
-    (`cross-repo/inbox/2026-07-28-coordinator-claude-em-handoff-terminal-starvation-
+    (`cross-repo/inbox/2026-07-28-doe-claude-em-handoff-terminal-starvation-
     answers.md`).
 
     Deliberately a PURE function of its list arguments — no wall-clock
@@ -826,7 +826,7 @@ def _resolve_dry_run(policy: Dict[str, Any], params: Dict[str, Any]) -> "tuple[b
     `policy_loader._conservative_policy()` hard-codes `dry_run: True` on both
     the absent AND malformed branches (never both False), so an absent/
     malformed policy yields `dry_run=True` here with ZERO caller involvement.
-    Arming is therefore only ever an explicit, present, valid, coordinator-claude-authored
+    Arming is therefore only ever an explicit, present, valid, DoE-authored
     `dry_run: false` in the policy file — never an accident of a missing one.
 
     A caller-supplied `params["dry_run"]` that AGREES with the policy value is
@@ -835,7 +835,7 @@ def _resolve_dry_run(policy: Dict[str, Any], params: Dict[str, Any]) -> "tuple[b
     is an override attempt, which requires a non-empty
     `params[_DRY_RUN_OVERRIDE_REASON_PARAM]` string:
       - reason present and non-empty -> override APPLIED, logged at WARNING
-        (this is an exceptional escape from a coordinator-claude-declared posture — it
+        (this is an exceptional escape from a DoE-declared posture — it
         should be visible in logs, mirroring handoff_stamp.py's
         `_repair_archived_shipped_in_handler` mandatory-`reason` precedent).
       - reason absent/empty -> override REFUSED, logged at WARNING, policy
@@ -869,7 +869,7 @@ def _resolve_dry_run(policy: Dict[str, Any], params: Dict[str, Any]) -> "tuple[b
     _LOG.warning(
         "handoff.reconcile_open: dry_run override REFUSED — caller requested "
         "dry_run=%s against policy's dry_run=%s with no non-empty %r reason; "
-        "deferring to policy (coordinator-claude owns rules, not a bypassable precedence "
+        "deferring to policy (DoE owns rules, not a bypassable precedence "
         "convention)",
         caller_dry_run, policy_dry_run, _DRY_RUN_OVERRIDE_REASON_PARAM,
     )
@@ -897,8 +897,8 @@ def _is_open(meta: Dict[str, Any]) -> bool:
     handoffs in any OTHER deployment_state (`awaiting_gate`, `ready_to_fire`, unset,
     ...) stay EXCLUDED here; only deployment_state==in_flight is admitted.
 
-    # coordinator-claude lvv-04/C3 forward-compat — lockstep-update when consumed->claimed lands:
-    # if coordinator-claude's lifecycle-vocab roadmap (lvv-04/C3) renames consumed->claimed or adds
+    # DoE lvv-04/C3 forward-compat — lockstep-update when consumed->claimed lands:
+    # if DoE's lifecycle-vocab roadmap (lvv-04/C3) renames consumed->claimed or adds
     # new non-terminal deployment_state values that can co-occur with the renamed
     # status, this predicate (and archive_handoffs.py's Branch A it complements) must
     # be extended in lockstep — otherwise the two predicates silently drift apart and
@@ -1360,7 +1360,7 @@ async def _reconcile_ancestor_chain(
     The SHA stamped into an archived ancestor's `shipped_in` is the SUCCESSOR's
     sha under gate (a), or the ancestor's OWN candidate_sha under gate (b) — never
     conflated (see `_ancestor_evidence` docstring / plan body laundering-risk note).
-    DR-096 (coordinator-claude 2026-07-26 ruling) makes that distinction visible on disk,
+    DR-096 (DoE-claude 2026-07-26 ruling) makes that distinction visible on disk,
     not just in this code path's control flow: gate (a) stamps
     `shipped_in_kind: successor`, gate (b) stamps `shipped_in_kind: ship-commit`.
 
@@ -1496,7 +1496,7 @@ async def _reconcile_ancestor_chain(
                 continue
 
             gate = evidence["gate"]
-            # DR-096 (coordinator-claude 2026-07-26 ruling): gate (a) stamps the SUCCESSOR's
+            # DR-096 (DoE-claude 2026-07-26 ruling): gate (a) stamps the SUCCESSOR's
             # sha onto this ancestor -> kind="successor"; gate (b) stamps the
             # ancestor's OWN candidate_sha -> kind="ship-commit". Never conflated
             # (see this function's own docstring, "laundering-risk note") — the two
@@ -1878,7 +1878,8 @@ async def _handle_ledger_mirror_desync(
         )
     except Exception as exc:
         entry["applied"] = False
-        entry["error"] = f"handoff.transition raised: {exc}"
+        entry["exit_code"] = 1
+        entry["message"] = f"handoff.transition raised: {exc}"
         reconciled.append(entry)
         return
 
@@ -1907,7 +1908,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 gate-cascade-clear call).
         dry_run_override_reason (str, optional) — required, non-empty, ONLY when
                 `dry_run` is supplied and disagrees with the loaded policy's own
-                `dry_run` value; a named, logged escape from coordinator-claude's declared
+                `dry_run` value; a named, logged escape from DoE's declared
                 posture (mirrors handoff_stamp.py's
                 `_repair_archived_shipped_in_handler` mandatory-`reason`
                 pattern). See `_resolve_dry_run`.
@@ -2188,7 +2189,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 # facts and the concrete discharge verb without needing to
                 # know it exists. Does NOT auto-transition anything -- see
                 # this module's negative-spec on prose gate_dependency
-                # verdicts (surfaces only, per coordinator-claude alignment reply #3).
+                # verdicts (surfaces only, per DoE alignment reply #3).
                 contradiction = gate_verdict.get("contradiction")
                 if contradiction is not None:
                     entry["contradiction"] = contradiction

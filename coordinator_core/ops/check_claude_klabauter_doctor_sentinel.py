@@ -23,7 +23,7 @@ Output: zero or one line of the form
 Exit 0 always (advisory, never gating) — matches check-plugin-drift.sh /
 scan-addon-health.sh convention of "probe never fails the ceremony".
 
-Port of: check-claude-klabauter-doctor-sentinel.sh (coordinator-claude b5a4192c, 2026-07-20)
+Port of: check-claude-klabauter-doctor-sentinel.sh (DoE b5a4192c, 2026-07-20)
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 Spec backlink: cross-repo/inbox/2026-07-04-workday-start-claude-klabauter-doctor-sentinel.md
 
@@ -37,12 +37,12 @@ Negative-spec:
     over time — e.g. the `vendor_drift` public key added 2026-07-26 (see
     `bin/claude-klabauter-doctor-probe.py::_write_doctor_sentinel`). A sentinel from before
     that key existed, and one from after, both parse identically here. If this
-    module ever needs to read `vendor_drift` (a future coordinator-claude-side ask), do so via
+    module ever needs to read `vendor_drift` (a future DoE-side ask), do so via
     `.get("vendor_drift")` with the same absent-key tolerance, never a strict
     key-membership assertion — a sentinel this module fails to parse degrades to
     the "sentinel unreadable" line, never a crash.
   - Does NOT re-derive CLAUDE_KLABAUTER_ROOT via the shell resolution ladder — this
-    module IS running from inside the resolved claude-klabauter root (the coordinator-claude-side
+    module IS running from inside the resolved claude-klabauter root (the DoE-side
     trampoline already resolved it to reach this import), so CLAUDE_KLABAUTER_ROOT is
     simply this file's own repo root, three parents up
     (ops/ -> coordinator_core/ -> <claude_klabauter_root>).
@@ -51,7 +51,7 @@ Negative-spec:
     binary from bash to do this) — this module already runs under Python, so
     it uses the stdlib `json` module directly.
   - A sentinel-unreadable CLAUDE_KLABAUTER_ROOT (resolution itself failing) is not this
-    module's concern — that failure mode is caught by the coordinator-claude-side trampoline
+    module's concern — that failure mode is caught by the DoE-side trampoline
     before this module is ever imported, and degrades silently there (fail
     loud on stderr, exit 0), mirroring the original .sh's fully-silent
     `coordinator_claude_klabauter_root 2>/dev/null || exit 0` skip.

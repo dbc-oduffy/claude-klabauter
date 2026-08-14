@@ -234,7 +234,7 @@ def test_tail_args_parser_accepts_every_flag_the_directive_builder_emits():
 
 
 def test_reviewer_evidence_survives_all_three_argv_hops():
-    """Regression (coordinator-claude memo 2026-08-13 § 2): the value was supplied in
+    """Regression (DoE-claude memo 2026-08-13 § 2): the value was supplied in
     `decisions["review"]`, accepted by `wsc-tail.py`'s parser, and forwarded by
     the op — but neither intermediate argv layer carried it, so the op-side
     delegate-reviewer gate never saw the correlation it checks. Pins all three

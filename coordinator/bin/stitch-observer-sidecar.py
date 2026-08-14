@@ -9,7 +9,7 @@ that sidecar onto the main summary and delete the sidecar, so the sidecar
 never survives past one ceremony run.
 
 Replaces the inline `cat "$OBSERVER_SIDECAR" >> "$DAILY_SUMMARY"; rm
-"$OBSERVER_SIDECAR"` in coordinator-claude's workday-complete.md Step 4d, which had no
+"$OBSERVER_SIDECAR"` in DoE's workday-complete.md Step 4d, which had no
 existence check, no idempotency, and no failure surface: a missing daily
 summary made `cat` fail while `rm` ran anyway, silently discarding the
 sidecar's content with no error visible to the operator. Confirmed on disk
@@ -105,7 +105,7 @@ Exit codes (--scan form):
   1 — one or more orphaned sidecars found (reported to stderr, one line each).
   2 — usage error (e.g. directory does not exist).
 
-Spec backlink: coordinator/commands/workday-complete.md § Step 4d (coordinator-claude)
+Spec backlink: coordinator/commands/workday-complete.md § Step 4d (DoE-claude)
 """
 from __future__ import annotations
 
@@ -113,10 +113,12 @@ import glob
 import os
 import sys
 
+GENERATES = []  # writes only to `<daily_summary_path>`, an arbitrary CLI positional argument (archive/daily-summaries/... in whichever repo invokes it) — caller-supplied, not a fixed claude-klabauter artifact
+
 _HEADING = "## Strategic Review"
 _SIDECAR_SUFFIX = ".observer.md"
 
-#: The analyst's stand-in for the section this script appends, per coordinator-claude
+#: The analyst's stand-in for the section this script appends, per DoE-claude
 #: coordinator/docs/wiki/daily-summary-procedure.md's summary template. Its
 #: presence proves the stitch has NOT run, regardless of what headings the
 #: summary carries.

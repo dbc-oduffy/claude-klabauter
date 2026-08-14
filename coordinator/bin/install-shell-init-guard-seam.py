@@ -3,12 +3,12 @@
 install-shell-init-guard-seam.py — CLI trampoline over claude-klabauter
 coordinator_core.ops.install_shell_init_guard_seam.
 
-Collapses coordinator/commands/install.md (coordinator-claude repo) Step 3.5b.1's two
+Collapses coordinator/commands/install.md (DoE-claude repo) Step 3.5b.1's two
 literal bash fences (lines 932 and 950 of the source doc) into one call —
 see coordinator_core.ops.install_shell_init_guard_seam's own docstring for
 the full design rationale and negative-spec.
 
-Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9
+Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3/D9
 
 DR-276: routed through `coordinator_core.cli_entry.run_op_main` rather than a
 bare in-process `main` call, so the rc block this seam writes becomes a

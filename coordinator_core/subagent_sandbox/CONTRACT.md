@@ -9,9 +9,9 @@ write-confinement DENY enforcement; DR-058 removed that enforcement as friction-
 was gutted from this package in lockstep). This note now pins only the surviving
 provision-and-emit contract below.
 
-Coordinator-claude (`~/.claude`, source repo `coordinator-claude`) owns the **policy contract**
+DoE (`~/.claude`, source repo `DoE-claude`) owns the **policy contract**
 (`coordinator/subagent-sandbox-policy.yaml`) and the **spawn-hook plumbing** that invokes this
-package; claude-klabauter owns the **provisioning engine** itself. A drift on coordinator-claude's side of this
+package; claude-klabauter owns the **provisioning engine** itself. A drift on DoE's side of this
 surviving surface is a detectable break here, not a silent divergence.
 
 ## Provision-and-emit contract
@@ -86,7 +86,7 @@ inherently hierarchical (e.g. a `<plan-slug>/<chunk-id>` pair) MUST pre-flatten 
 token (e.g. join the components on `.`) *before* passing it as `provision_key`. This flattening is
 the caller's responsibility, not this module's — the module only ever sanitizes and writes one
 segment, it does not construct nested directories from a compound key. As with the
-`report_sidecar` policy key below: **coordinator-claude owns the VALUES/call-sites** (which callers pass a
+`report_sidecar` policy key below: **DoE owns the VALUES/call-sites** (which callers pass a
 `provision_key`, and what they derive it from); **claude-klabauter owns this GRAMMAR** (single-segment
 shape, the sanitizer, the idempotent-reopen semantics, the path template).
 
@@ -135,7 +135,7 @@ question, it does not invent or reorder the prompts.
 
 `status`/`agent_type`/`spawned_at`/`divergence` are the original narrow field set; `commits: []`,
 `dispatch_feed`, and `lead_session_id` are SUBSUME additions that make this scaffold a
-**superset** of what the flight-recorder and coordinator-claude's spawn-hook migration expect to find on a
+**superset** of what the flight-recorder and DoE's spawn-hook migration expect to find on a
 freshly-provisioned doc — `commits` is a plain accumulator list (empty at spawn time, appended to
 over the agent's lifetime). `dispatch_feed` is now the **live field**: the pcli-04 emitter
 (`coordinator_core/ops/dispatch_emit/`) has landed, and an emitted Workflow script may dispatch
@@ -155,28 +155,28 @@ never happens via `_provision` since `session_id` is required for eligibility in
 place). `lead_session_id` is a **distinct identity from `agent_id`**: `agent_id` (consumed via
 `resolve_effective_types`, never itself written into frontmatter) identifies the SPAWNED agent;
 `lead_session_id` identifies who dispatched it — the two must never be conflated by a downstream
-reader. **coordinator-claude owns the authoritative run-report doc-schema doctrine** (what each field means, how
+reader. **DoE owns the authoritative run-report doc-schema doctrine** (what each field means, how
 `divergence`/`commits`/`dispatch_feed`/`lead_session_id` get consumed downstream); **the engine
 only writes these starter placeholders conforming to that doctrine** — it does not interpret or
 validate them past writing the literal scaffold above. This whole contract (provision_key grammar
-+ this superset scaffold) is the wire-for-wire target coordinator-claude hard-binds their spawn-hook +
++ this superset scaffold) is the wire-for-wire target DoE hard-binds their spawn-hook +
 flight-recorder migration to — a field rename, reorder, or removal here is exactly as much
 breaking drift as a `report_sidecar` policy-key change (see § Drift detection below).
 `divergence` is object-typed (`{diverged: <bool>, summary?, detail?}`, `diverged` required) per
-Coordinator-claude's `run-report.schema.json` — the block-style `divergence:\n  diverged: false` placeholder
-asserts "no divergence yet"; an empty array would fail coordinator-claude's object-schema validation, so do not
+DoE's `run-report.schema.json` — the block-style `divergence:\n  diverged: false` placeholder
+asserts "no divergence yet"; an empty array would fail DoE's object-schema validation, so do not
 revert it to a list. **Emit block style, never flow style (`{diverged: false}` on one line)** —
 `coordinator_core.frontmatter.schema_validate.parse_yaml` (this repo's restricted YAML parser,
 which is what actually gates schema validation downstream) does not support flow-style mappings
 and parses one as a raw string instead of a dict, silently tripping the object-shaped check on
-every provisioned sidecar (see `cross-repo/inbox/2026-07-25-coordinator-claude-em-provision-report-
+every provisioned sidecar (see `cross-repo/inbox/2026-07-25-doe-claude-em-provision-report-
 divergence-flow-style.md`).
 
 **Shipped rule — commit-phase pathspec provenance.** The pcli-04 emitter has landed and
 `dispatch_feed` is live: an emitted Workflow interleaves `coordinator:git-commit-agent` phases
 between executor waves — one commit phase immediately following each executor wave, per the
-emitter's own composition (`coordinator_core/ops/dispatch_emit/emit.py`). Coordinator-claude took the "not yet
-dispatchable" banner down 2026-08-12 (DR-153, coordinator-claude `79be06759`), discharging SC-DR-021's
+emitter's own composition (`coordinator_core/ops/dispatch_emit/emit.py`). DoE took the "not yet
+dispatchable" banner down 2026-08-12 (DR-153, DoE-claude `79be06759`), discharging SC-DR-021's
 consumer-repo condition, and their `execute-plan` RACI now names the EM Accountable for every
 commit with the Responsible keystroke delegable. **Every emitted commit phase's pathspec MUST
 carry real provenance** — the preceding wave's executor-reported touched-file set, or the chunk's
@@ -185,7 +185,7 @@ survey, never an invented set. This binds harder here than in a consumer repo be
 population (c) is unchanged: **a path written by a raw Bash heredoc carries no session claim and is
 denied at runtime.** An emitted commit phase whose pathspec covers engine-authored state will be
 refused, correctly. The executor-wave case works only because executors author via `Write`/`Edit`.
-Source: `cross-repo/inbox/2026-08-12-coordinator-claude-em-emitter-emits-commit-phases.md`.
+Source: `cross-repo/inbox/2026-08-12-doe-claude-em-emitter-emits-commit-phases.md`.
 
 **`--type` axis / template registry (SUBSUME):** the CLI grows an optional `--type` argument
 (`choices=["run-report", "review-findings", "assessment", "staff-eng-review"]`, `default:
@@ -197,7 +197,7 @@ varies by type. Every template body ends with the same universal `## Exit interv
 
 | `type` | Body shape |
 |---|---|
-| *(absent)* | **Frozen legacy shape** — `## Run notes` / `## Observations` / `## Exit interview`, byte-for-byte identical to the pre-SUBSUME scaffold above. This is the path a payload with no `type` key takes — chiefly coordinator-claude's `fan-out-dispatch.py`, which calls `_provision()` directly (not the CLI's `main()`) and predates this axis entirely. |
+| *(absent)* | **Frozen legacy shape** — `## Run notes` / `## Observations` / `## Exit interview`, byte-for-byte identical to the pre-SUBSUME scaffold above. This is the path a payload with no `type` key takes — chiefly DoE's `fan-out-dispatch.py`, which calls `_provision()` directly (not the CLI's `main()`) and predates this axis entirely. |
 | `run-report` (explicit, or the CLI's own `--type` default) | Legacy body **plus** a `## Divergence from plan` body section (a prose companion to the existing `divergence` frontmatter field — no new frontmatter) and a `## Completion` section carrying a single markdown checkbox line as a grep-able completion marker (the frontmatter `status:` field remains the authoritative status; the checkbox is a human-facing marker layered on top, not a schema change). |
 | `review-findings` | `## Findings` — one entry per finding, each with a severity, an accepted/rejected/deferred disposition, and a rationale. |
 | `assessment` | `## Questions` — one entry per question, each a Q/A pair. |
@@ -213,9 +213,9 @@ axis existed.** An unrecognized `type` string (a value outside the four above) f
 the `run-report` template rather than raising, consistent with this module's fail-open posture
 everywhere else.
 
-**coordinator-claude owns the VALUES** (which callers pass which `type`, and what each template's prose
+**DoE owns the VALUES** (which callers pass which `type`, and what each template's prose
 questions mean downstream); **claude-klabauter owns the GRAMMAR** (the argument name, the choices set, the
-per-type body shape, and the absent-key/legacy-shape back-compat guarantee) — the same coordinator-claude/claude-klabauter
+per-type body shape, and the absent-key/legacy-shape back-compat guarantee) — the same DoE/claude-klabauter
 split as every other axis in this contract. A `type`-shaped change on either side (new type
 added, a template's body reshaped, the back-compat guarantee weakened) is exactly as much
 breaking drift as a `report_sidecar` policy-key change (see § Drift detection below).
@@ -241,7 +241,7 @@ not apply when `provision_key` is supplied — that path has no nonce and instea
 re-opens on collision, per **Optional `provision_key` (deterministic path mode)** above.
 
 **`report_sidecar` policy key:** a top-level list in the policy YAML — `list[str]` of
-`agent_type`/`subagent_type` values, exact-string-match membership, no globbing. **coordinator-claude owns the
+`agent_type`/`subagent_type` values, exact-string-match membership, no globbing. **DoE owns the
 VALUES** (which agent/subagent types opt into a report sidecar); **claude-klabauter owns the GRAMMAR** (the
 key name, the match semantics, the path template, and the sanitizer) — the same split as the rest
 of this contract. (DR-058 removed this package's other policy fields — `confined`, `exempt`,
@@ -258,7 +258,7 @@ lock, and rewrite, so `locked_rmw`'s flock-guarded RMW semantics do not apply he
 create-or-fail atomicity is the correct (and cheaper) primitive for this shape.
 
 **This whole package is ONE pinned contract surface.** § Drift detection below covers this
-provision-and-emit contract in full. A `report_sidecar`-shaped change on coordinator-claude's side (key rename,
+provision-and-emit contract in full. A `report_sidecar`-shaped change on DoE's side (key rename,
 value-grammar change, emit-shape change) is a breaking drift. The SUBSUME additions above — the
 optional `provision_key` grammar (single-segment shape, sanitizer reuse, idempotent-reopen
 semantics), the superset starter-doc field set (`commits`/`dispatch_feed`/`lead_session_id`
@@ -271,7 +271,7 @@ change.
 ## Plan-derivable `report_sidecar` for five named emitters (SUBSUME)
 
 Additive refinement of the **provision-and-emit contract** above (canonical spec
-`state/subagent-share/conductor/seam-adjudication.md` § 2.7, coordinator-claude, absorbed from G2's
+`state/subagent-share/conductor/seam-adjudication.md` § 2.7, DoE-claude, absorbed from G2's
 D0/Z2). This is **not** part of the `contract_blocks` injection seam below — it changes the
 *value* an already-eligible `subagent_type` resolves for `report_sidecar`, not the grammar of
 a new key. It is documented here because it lands in the same engine function and collides in
@@ -292,21 +292,21 @@ identity the emitted finding-set carries. Every value above emits findings keyed
 consumed against that plan by `review-integrator`, routinely in a later session — for which a
 session-keyed home is precisely where the next reader will not look. The Opus reviewer PERSONAS
 are excluded because their output is a session judgment on work in flight, keyed to the session
-that asked — not because "review" appears in the role. `coordinator:plan-reviewer` (coordinator-claude DR-133,
+that asked — not because "review" appears in the role. `coordinator:plan-reviewer` (DoE DR-133,
 the M-tier rung between the mechanical pre-flights and the personas) sits on the durable side and
-was added 2026-08-06 on that reading; see `cross-repo/archive/2026-08-05-coordinator-claude-em-plan-reviewer-lens-registration.md`
+was added 2026-08-06 on that reading; see `cross-repo/archive/2026-08-05-doe-claude-em-plan-reviewer-lens-registration.md`
 (that `coordinator:plan-coverage-checker` already resolves to a `review-findings`-shaped
 `report_type_map` entry — the same template family `plan-review-check` joins — is the load-bearing
 precedent, pinned in-repo by `_G2_LENS_EXPECTED_TEMPLATE_TYPES` in
 `coordinator_core/subagent_sandbox/tests/test_g2_c13_lens_template_fit.py:71-77`).
 
 **Lens spelling — `plan-review-check`, deliberately not `plan-review`.** The sender proposed the
-bare `plan-review`; claude-klabauter owns the lens spelling (see the coordinator-claude/claude-klabauter split below) and narrowed it
+bare `plan-review`; claude-klabauter owns the lens spelling (see the DoE/claude-klabauter split below) and narrowed it
 on two grounds. First, `plan-review` is ALREADY a live `kind:` value on a different artifact class
 — persona plan reviews written as `<stem>.review.md`, enumerated in
 `coordinator_core/ops/docgen/templates/review.json` — so the bare token would name two disjoint
 sets depending on whether a reader keys off filename suffix or off frontmatter `kind:`. Second,
-`-check` is the established suffix for every checker-tier emitter in this map, and coordinator-claude's own sizing
+`-check` is the established suffix for every checker-tier emitter in this map, and DoE's own sizing
 ladder places `plan-reviewer` on the checker side of it (XS/S grab-n-go → **M plan-reviewer** →
 L/XL named persona). The rename costs the sender nothing: the dispatching skill consumes the
 RETURNED `report_sidecar` path and never re-derives the formula.
@@ -341,7 +341,7 @@ this, and both are correct by construction:
 
 - `docs-checker`'s code-review dispatch, which reviews a diff rather than a plan (see D4 in the
   absorbed G2 plan).
-- Run-scoped callers whose only identity is a synthetic label — e.g. Coordinator-claude's `/bug-sweep` Track C
+- Run-scoped callers whose only identity is a synthetic label — e.g. DoE's `/bug-sweep` Track C
   (`{run-id}-{chunk-name}`) and Phase 3.5 (`{run-id}-postfix`). These labels are scratch-directory
   names; they are NOT passed as `plan_path` and MUST NOT be. A caller that substituted such a
   label into `plan_path` would sanitize cleanly and land a run-scoped file in
@@ -349,11 +349,11 @@ this, and both are correct by construction:
   ephemeral, run-scoped output. The absence of a stem is the correct signal here, not a gap to
   fill.
 
-<!-- The preceding block was widened 2026-07-25 after coordinator-claude-em read the older wording — which
+<!-- The preceding block was widened 2026-07-25 after doe-claude-em read the older wording — which
      illustrated the plan-less case with docs-checker's code-review dispatch alone — as leaving
      plan-less provisioning an unstated case, and asked whether their two /bug-sweep sites were
      silently broken. They are not. The rule was always general; only the illustration was narrow.
-     Reply memo: coordinator-claude cross-repo/inbox/2026-07-25-claude-klabauter-em-planless-dispatch-sidecar-answer.md -->
+     Reply memo: DoE-claude cross-repo/inbox/2026-07-25-claude-klabauter-em-planless-dispatch-sidecar-answer.md -->
 
 Regression coverage for the plan-less fallback:
 `coordinator_core/subagent_sandbox/tests/test_provision_report.py`
@@ -367,11 +367,11 @@ succeeded. Archiving a STALE prior sidecar (rename-don't-delete, feeding the
 false-positive-arbitration feedback loop these agents' own doctrine describes) stays an
 agent-side concern — this engine leg never renames or deletes an existing plan-sidecar file.
 
-**coordinator-claude owns the VALUES** (which dispatching skill/command passes `plan_path`, and what it
+**DoE owns the VALUES** (which dispatching skill/command passes `plan_path`, and what it
 derives it from — the skill/command consumes the RETURNED `report_sidecar` path, it never
 re-derives the `<plan-stem>.<lens>.md` formula itself); **claude-klabauter owns the GRAMMAR** (the
 `plan_path` key name, the five-emitter/lens map, the stem-derivation + sanitization rule, the
-`state/plan-sidecars/` path template, and the idempotent-reopen semantics) — the same coordinator-claude/claude-klabauter
+`state/plan-sidecars/` path template, and the idempotent-reopen semantics) — the same DoE/claude-klabauter
 split as every other axis in this contract. A change to either side (a sixth emitter added, the
 lens spelling changed, the path template moved) is exactly as much breaking drift as a
 `report_sidecar`-shaped change (see § Drift detection below).
@@ -379,15 +379,15 @@ lens spelling changed, the path template moved) is exactly as much breaking drif
 ## `contract_blocks` / `injected_prompt_blocks` — dispatch-time prompt-block injection (SUBSUME)
 
 Additive second seam alongside the provision-and-emit contract above, per the canonical
-spec (`state/subagent-share/conductor/seam-adjudication.md` § 2.3, coordinator-claude). Where
+spec (`state/subagent-share/conductor/seam-adjudication.md` § 2.3, DoE-claude). Where
 `report_sidecar` provisions a per-session doc, this seam assembles a **pre-resolved chunk
-of dispatch-prompt text** the coordinator-claude spawn-hook appends verbatim to a subagent's brief — the
+of dispatch-prompt text** the DoE spawn-hook appends verbatim to a subagent's brief — the
 engine-side collapse of what used to be N independently-pasted, sentinel-synced copies of
 the same block across N agent `.md` files.
 
 **Input axis.** The stdin payload the hook already feeds this module grows an optional
 top-level `contract_blocks` key: a JSON list of `coordinator/snippets/<name>.md` block
-names, in emission order. **coordinator-claude resolves this list**, coordinator-claude-side, from
+names, in emission order. **DoE resolves this list**, DoE-side, from
 `subagent-sandbox-policy.yaml`'s `contract_blocks:` map — this module never re-reads that
 policy file itself, only the already-resolved list the caller supplies on the payload.
 Absent or empty → no assembly attempted, no output key emitted.
@@ -398,7 +398,7 @@ Absent or empty → no assembly attempted, no output key emitted.
 {"report_sidecar": "<path>", "injected_prompt_blocks": "<assembled text>"}
 ```
 
-`injected_prompt_blocks` is always a single pre-joined **string**, never a list — the coordinator-claude
+`injected_prompt_blocks` is always a single pre-joined **string**, never a list — the DoE
 hook stays a dumb transport, appending it verbatim rather than iterating or reformatting
 it. Blocks are joined in input order with exactly `"\n\n"`; the engine adds no wrapper,
 header, or delimiter text of its own around any individual block.
@@ -455,11 +455,11 @@ pre-existing generic `TEMPLATE_TYPES[0]` CLI default rather than any consumer-sp
 value. A caller-family name (a reviewer-persona slug, an emitter subagent_type) must never
 appear in this module's source.
 
-**coordinator-claude owns the VALUES** (which `subagent_type`s carry a `contract_blocks` entry, which
+**DoE owns the VALUES** (which `subagent_type`s carry a `contract_blocks` entry, which
 block names, in what order); **claude-klabauter owns the GRAMMAR** (the stdin key name, the
 `header_style` dialect table, the placeholder set, the join rule, the all-or-nothing
 degraded-mode contract) — the same split as every other axis in this contract. This
-grammar is pinned in lockstep with coordinator-claude's `coordinator/subagent-sandbox-policy.yaml`
+grammar is pinned in lockstep with DoE's `coordinator/subagent-sandbox-policy.yaml`
 `contract_blocks:` key comment — a change on either side without a matching change on the
 other is exactly as much breaking drift as a `report_sidecar`-shaped change (see § Drift
 detection below).
@@ -471,10 +471,10 @@ form: `- <kind>: `<name>`` per line, `<kind>` one of `stdin`/`cli`/`stdout`) and
 equality, **in both directions**, against every payload key `provision_report.py` actually
 reads, every non-plumbing CLI flag it accepts, and every key it writes to stdout. Adding an
 axis to the code without a matching row here (or vice versa) fails that test — this is what
-makes the coordinator-claude/claude-klabauter grammar coupling in this file discharge-by-test rather than
+makes the DoE/claude-klabauter grammar coupling in this file discharge-by-test rather than
 discharge-by-remembering. `--policy`/`--cwd` are deliberately excluded: pure invocation
 plumbing (where to find the policy file / what cwd to resolve the git root from), not part
-of the coordinator-claude<->claude-klabauter wire grammar this file pins.
+of the DoE<->claude-klabauter wire grammar this file pins.
 
 - stdin: `agent_type`
 - stdin: `subagent_type`
@@ -517,16 +517,16 @@ authorization-neutral at this layer (the loader makes no ALLOW/DENY decision).
 **Generality:** a second (or Nth) `subagent_type` row is a plain additional map entry — no code
 change, no new key, no schema bump.
 
-**coordinator-claude owns the VALUES** (which `subagent_type`s carry a `bash_policy` row, and what each row's
+**DoE owns the VALUES** (which `subagent_type`s carry a `bash_policy` row, and what each row's
 allowed-surface shape means to the consumer that reads it); **claude-klabauter owns the GRAMMAR** (the key
 name, the exact-match subagent_type keying, the Bash-only scope, and this loader's fail-open
-contract) — the same coordinator-claude/claude-klabauter split as every other axis in this contract. A `bash_policy`-shaped
+contract) — the same DoE/claude-klabauter split as every other axis in this contract. A `bash_policy`-shaped
 change on either side (key rename, value-grammar change, fail-open weakened) is exactly as much
 breaking drift as a `report_sidecar`-shaped change (see § Drift detection below).
 
 ## Drift detection
 
-This is a **pinned** contract, not a living spec re-derived per session. If coordinator-claude's
+This is a **pinned** contract, not a living spec re-derived per session. If DoE's
 `subagent-sandbox-policy.yaml` comment header changes the `report_sidecar` key name or its value
 grammar, or the provision-and-emit stdin/stdout shape above changes — that is a **breaking drift**
 against this note — the engine must be updated in lockstep, not silently left to fail-open past

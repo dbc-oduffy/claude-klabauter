@@ -43,7 +43,7 @@ Invocation:
     --dump-op-timeouts — Read-only surface: print
                          {"<op>": <float>, ..., "__default__": <live
                          DISPATCH_TIMEOUT_SECS>} to stdout and exit 0. No <op>
-                         required. Lets an external caller (e.g. Coordinator-claude's
+                         required. Lets an external caller (e.g. DoE's
                          cc_invoke, which applies a flat 10s cap) read
                          claude-klabauter's real per-op dispatch-timeout budgets instead
                          of guessing. Source of truth is
@@ -401,7 +401,7 @@ def main() -> None:
     #     something. Example-market-data-repo-em ran the survey end-to-end and
     #     reported in good faith that "both --repo forms work — we tested" —
     #     true, and carrying zero information, because neither form does
-    #     anything on a "none"-scoped op. Coordinator-claude nearly planned against that line.
+    #     anything on a "none"-scoped op. DoE nearly planned against that line.
     #     See docs/decisions/DR-279-repo-on-a-none-scoped-op-fails-loud.md.
     if args.repo is not None and args.op not in WORKTREE_SCOPED_OPS:
         from coordinator_core.op_scopes import OP_KEY_SCOPE

@@ -19,7 +19,7 @@ business logic (harvest/ripeness/guard computation stays in the op modules that
 compose coordinator_core/distill/*, per DEC-5). Every manifest shape below carries
 ``schema_version`` as its FIRST key; an unknown FORWARD version (newer than this
 module knows) is a fail-loud consumption error, a matching (or older, known)
-version is silent — mirrors coordinator-claude's own disposal-manifest schema_version precedent
+version is silent — mirrors DoE's own disposal-manifest schema_version precedent
 (artifact-distillation-harvest.md, itself mirroring DR-082).
 
 Canonical-body sha: the disposal manifest is JSON, not markdown-with-frontmatter,

@@ -43,7 +43,7 @@ Exit codes:
 NEVER writes anything — read-only diagnostic. See day_coverage_sweep's own
 docstring for the full negative-spec.
 
-Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § C2
+Spec backlink: DoE-claude:pln-push-side-write-discipline-for-05c30d § C2
 """
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 coordinator_core.session.liveness — the coordinator session hub's LIVENESS
 module.
 
-Port of: liveness.sh (coordinator-claude 6aa77d4b, 2026-07-21).
+Port of: liveness.sh (DoE 6aa77d4b, 2026-07-21).
 
 This is a PURE IN-PROCESS LIBRARY, not an IPC op — it self-registers nothing
 and touches none of the shared op-registry files. It provides the two-layer
@@ -98,7 +98,7 @@ Negative-spec:
       ``live_session_ids``' hot consumers.
     - Do NOT let a meta-less/unparseable-meta session dir read confirmed-DEAD
       by defaulting its recency to epoch-0 — that let a peer wrongfully take
-      over a session that was merely mid-write (coordinator-claude 642195ba, follow-up
+      over a session that was merely mid-write (DoE 642195ba, follow-up
       88929bea; ``_dir_recency_fallback_epoch``, ``session_live``'s Layer 2).
       This is a recency-SOURCE substitution, not a threshold change — a
       genuinely stale meta-less dir must still read DEAD.
@@ -114,6 +114,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -121,6 +122,54 @@ from typing import FrozenSet, Optional
 
 from coordinator_core.session import core
 from coordinator_core.session import harness_registry
+
+logger = logging.getLogger(__name__)
+
+#: Rollback lever for Layer 1 (docs/reference/layer1-liveness-activation.md):
+#: when set to a truthy value, ``session_live`` skips the Layer 1
+#: PPID-authoritative check entirely and falls straight through to Layer 2,
+#: the same recency-window path every session took before C3. C3
+#: (``73b21f35b``) has landed -- Layer 1 now gates a LIVE code path, and
+#: sessions on this box already carry a non-empty ``stable_pid``
+#: (docs/reference/layer1-liveness-activation.md § 4). Comment authored
+#: pre-C3, when the harness-process name check rejected every session and
+#: reading this lever changed nothing; that history is preserved for
+#: context only -- do not read it as describing current behavior. Truthy
+#: values: "1", "true", "yes" (case-insensitive); anything else (including
+#: unset) is falsy.
+_LAYER1_DISABLE_ENV = "COORDINATOR_SESSION_LAYER1_DISABLE"
+_LAYER1_DISABLE_TRUTHY = frozenset({"1", "true", "yes"})
+
+#: Process-local counter for the Layer 1 fail-open ("unknown" basis) arm --
+#: see ``docs/reference/layer1-liveness-activation.md`` § Observability. Never
+#: persisted, never influences a verdict; a later reader can read it directly
+#: off this module (``coordinator_core.session.liveness.layer1_unknown_count``)
+#: for a process-lifetime tally, e.g. from a health-check op or test.
+layer1_unknown_count = 0
+
+#: Process-local counter for the SIBLING fail-open arm -- ``_verdict_for_sdir``'s
+#: own ``"unknown"``-basis except-arm (C4a-2, closing the gap C4a's § Scope
+#: note left open; see ``docs/reference/layer1-liveness-activation.md``
+#: § Observability). Deliberately a SEPARATE counter from
+#: ``layer1_unknown_count`` rather than sharing it: this arm feeds a distinct
+#: consumer surface (``live_session_verdicts``/``session_verdict``, which
+#: render into pickup briefs) from ``session_live``'s arm (the claim layer),
+#: so a reader who sees one counter moving and not the other can tell WHICH
+#: path degraded -- a shared counter would collapse that distinction into a
+#: single fleet-health number that cannot answer "is it the claim layer or
+#: the verdict/pickup surface that's seeing psutil pressure".
+verdict_layer1_unknown_count = 0
+
+
+def _layer1_disabled() -> bool:
+    """Read the Layer 1 rollback lever (see ``_LAYER1_DISABLE_ENV`` above).
+
+    A fresh ``os.environ.get`` read per call, matching every other env-toggle
+    seam in this package (e.g. ``shape._CS_SHAPE_LOCK_STALE_SEC``) -- no
+    caching, so a fleet-wide flip via env is visible to the next call, not
+    just the next process.
+    """
+    return os.environ.get(_LAYER1_DISABLE_ENV, "").strip().lower() in _LAYER1_DISABLE_TRUTHY
 
 #: Thirty minutes in seconds — the recency liveness boundary (Layer 2).
 _THIRTY_MIN = 30 * 60
@@ -222,7 +271,7 @@ def is_session_live(pid="", elapsed_sec=0) -> bool:
 
 def _dir_recency_fallback_epoch(sdir: str) -> int:
     """Meta-less/unparseable recency fallback for ``session_live``'s Layer 2
-    (coordinator-claude 642195ba, follow-up 88929bea) -- see the call site's comment for the
+    (DoE 642195ba, follow-up 88929bea) -- see the call site's comment for the
     wrongful-takeover rationale this closes.
 
     Returns the newest mtime among ``sdir``'s top-level REGULAR files (reusing
@@ -289,7 +338,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
         EMPTY (no meta.json, unparseable meta.json, or the field itself is
         missing/null -- ``read_meta_field`` returns "" on all three),
         ``last_epoch`` is substituted via ``_dir_recency_fallback_epoch``
-        (coordinator-claude 642195ba / 88929bea) rather than defaulting to epoch-0 -- see
+        (DoE 642195ba / 88929bea) rather than defaulting to epoch-0 -- see
         that helper's docstring. A ``last_activity`` value that IS present
         but fails ISO parsing (e.g. corrupt-but-non-empty) is NOT covered by
         this fallback and still reads DEAD, unchanged from before.
@@ -334,7 +383,12 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
             pass
 
     # Layer 1: PPID-authoritative process check (when stable_pid captured at init).
-    stable_pid = core.read_meta_field(sdir, "stable_pid")
+    # Rollback lever (docs/reference/layer1-liveness-activation.md): when set,
+    # skip Layer 1 entirely and fall through to Layer 2. C3 (73b21f35b) has
+    # landed, so this now gates a live code path -- Layer 1 actually engages
+    # for sessions carrying a non-empty stable_pid (was inert pre-C3, when
+    # stable_pid was empty fleet-wide).
+    stable_pid = "" if _layer1_disabled() else core.read_meta_field(sdir, "stable_pid")
     if stable_pid:
         stable_pid_lstart = core.read_meta_field(sdir, "stable_pid_lstart")
         stable_pid_start_epoch = core.read_meta_field(sdir, "stable_pid_start_epoch")
@@ -355,7 +409,30 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
                 return core.stable_pid_alive(
                     stable_pid, stable_pid_lstart, stable_pid_start_epoch
                 )
-            except Exception:
+            except Exception as exc:
+                # Fail open, but never silently (docs/reference/
+                # layer1-liveness-activation.md § Observability): a
+                # fleet-wide psutil failure must be DETECTABLE, not silently
+                # read as universal liveness. Process-local counter + a single
+                # debug log line -- no file write, no lock, no verdict
+                # change. Never raises; never alters the returned verdict.
+                # Non-atomic read-modify-write; safe under the current
+                # spawn-per-call, single-threaded-per-process model. A future
+                # caller adding a thread pool or async loop around this
+                # function would need to make this atomic to avoid
+                # under-counting.
+                global layer1_unknown_count
+                layer1_unknown_count += 1
+                try:
+                    logger.debug(
+                        "coordinator_core.session.liveness: Layer 1 fail-open "
+                        "(unknown basis) for sid=%s: %s (count=%d)",
+                        sid,
+                        exc,
+                        layer1_unknown_count,
+                    )
+                except Exception:
+                    pass
                 return True
         # Neither witness present — fall through to Layer 2.
 
@@ -364,7 +441,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     last_iso = core.read_meta_field(sdir, "last_activity")
     last_epoch = core.iso_to_epoch(last_iso)
     if not last_iso:
-        # Wrongful-takeover fallback (coordinator-claude 642195ba, follow-up 88929bea): a
+        # Wrongful-takeover fallback (DoE 642195ba, follow-up 88929bea): a
         # session dir with NO meta.json, an unparseable meta.json, or a
         # meta.json missing ``last_activity`` makes ``read_meta_field``
         # return "" -> ``iso_to_epoch("")`` returns 0 -> elapsed would be
@@ -556,7 +633,17 @@ def _verdict_for_sdir(
     -- callers own how they obtained it (a batch ``snapshot()`` for the loop,
     a single ``lookup(sid)`` for the per-sid path), so this helper performs no
     registry I/O itself. See ``live_session_verdicts``'s own docstring for the
-    full per-arm derivation this reproduces exactly."""
+    full per-arm derivation this reproduces exactly.
+
+    Rollback-lever scope (C4a-2, docs/reference/layer1-liveness-activation.md
+    § Scope): ``_layer1_disabled()`` is deliberately NOT consulted here.
+    ``COORDINATOR_SESSION_LAYER1_DISABLE`` gates ``session_live``'s Layer 1
+    arm ONLY -- setting it truthy does not skip this function's equivalent
+    stable-pid check. Wiring both would need a second-order decision this
+    chunk did not take on (whether the two seams sharing one lever value is
+    even the right shape, given they already keep separate fail-open
+    counters -- see ``verdict_layer1_unknown_count`` above); left for a
+    follow-up if the counters show this arm firing at fleet scale."""
     if record is not None:
         try:
             if core.stable_pid_alive(
@@ -578,9 +665,32 @@ def _verdict_for_sdir(
                     stable_pid, stable_pid_lstart, stable_pid_start_epoch
                 )
                 basis = "stable-pid"
-            except Exception:
+            except Exception as exc:
+                # Fail open, but never silently (C4a-2, docs/reference/
+                # layer1-liveness-activation.md § Observability) -- the
+                # sibling arm to session_live's Layer 1 except-arm (C4a).
+                # Same ruling (§ 2 of that doc): never raise, never change
+                # the returned verdict, no file write, no lock.
                 live = True
                 basis = "unknown"
+                # Non-atomic read-modify-write; safe under the current
+                # spawn-per-call, single-threaded-per-process model. A future
+                # caller adding a thread pool or async loop around this
+                # function would need to make this atomic to avoid
+                # under-counting.
+                global verdict_layer1_unknown_count
+                verdict_layer1_unknown_count += 1
+                try:
+                    logger.debug(
+                        "coordinator_core.session.liveness: "
+                        "_verdict_for_sdir Layer 1 fail-open (unknown basis) "
+                        "for sid=%s: %s (count=%d)",
+                        sid,
+                        exc,
+                        verdict_layer1_unknown_count,
+                    )
+                except Exception:
+                    pass
             return (live, basis, None)
         # stable_pid present, neither witness present -- session_live's
         # Layer-2 fallthrough (A-F1): CLAMPED elapsed.
@@ -648,7 +758,7 @@ def live_session_verdicts(
         fallthrough (A-F1), using ``session_live``'s CLAMPED elapsed
         arithmetic (``elapsed = max(now - last_epoch, 0)``), with the
         meta-less/mid-write recency-SOURCE substitution
-        (``_dir_recency_fallback_epoch``, coordinator-claude 642195ba/88929bea) when
+        (``_dir_recency_fallback_epoch``, DoE 642195ba/88929bea) when
         ``last_activity`` is empty/unparseable.
       - ``stable_pid`` absent -> ``live_session_ids``'s OWN Layer-2 arm, using
         the SAME UNCLAMPED ``elapsed = now - last_epoch`` it uses today (the

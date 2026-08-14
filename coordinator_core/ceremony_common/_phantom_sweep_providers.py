@@ -35,7 +35,7 @@ static source-text scan of `residue.py` asserting it always emits
 `directives=[]` and never passes a non-empty `resolves=`. That pin was
 honest only while `residue.py`'s only judgment point ever built a
 `resolves`-free disposition — an approved, part-executed plan
-(coordinator-claude `docs/plans/2026-07-26-review-skill-computed-residue.md`; its
+(DoE-claude `docs/plans/2026-07-26-review-skill-computed-residue.md`; its
 C3/C4/C5/C13 rows landed here in `0859fb56`, the rest are outstanding)
 will change that, and a static pin cannot notice its own premise going
 stale. `sweep_review_assemble` below replaces it with a real dynamic
@@ -44,7 +44,7 @@ actually emits rather than asserting today's shape — exactly the standing
 this file's other providers hold.
 
 Spec backlink: cross-repo/inbox/2026-07-27-… "Generalize seam guards
-fleet-wide" dispatch (coordinator-claude, 2026-07-27).
+fleet-wide" dispatch (DoE-claude, 2026-07-27).
 """
 
 from __future__ import annotations
@@ -54,6 +54,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from coordinator_core.ceremony_common.phantom_resolves_sweep import PhantomSweepResult
+
+# Generator-provenance declaration (generator_provenance.py).
+# sweep_review_assemble writes fixture .md files only under pytest's
+# tmp_path -- test-scoped scratch, never a tracked repo artifact.
+GENERATES = []
 
 
 def _collect(directives: list[dict[str, Any]], judgment_points: list[dict[str, Any]]) -> PhantomSweepResult:

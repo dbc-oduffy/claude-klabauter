@@ -7,10 +7,10 @@ binding, assess MCP health, and apply a UE enrichment layer when a Unreal
 Engine project is detected. Emits zero or more human-readable lines to
 stdout. Exit 0 always — advisory, never gating.
 
-Port of: probe-cwd-example-retrieval-repo-relevance.sh (coordinator-claude b5a4192c, 2026-07-20), 342 lines
+Port of: probe-cwd-example-retrieval-repo-relevance.sh (DoE b5a4192c, 2026-07-20), 342 lines
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
 Spec backlink (behavior): docs/plans/2026-05-20-portable-code-substrate.md § Chunk 3
-Coordinator-claude-side test oracle: coordinator/tests/test_probe_cwd_example_retrieval_repo_relevance.sh
+DoE-side test oracle: coordinator/tests/test_probe_cwd_example_retrieval_repo_relevance.sh
 
 Output format (zero or more lines):
     [example-retrieval-repo-relevance] <tag>: <message>
@@ -28,7 +28,7 @@ Testability: respects COORDINATOR_TEST_HOME for the ~ base path (bridged to
 COORDINATOR_SETTINGS_HOME the same way the bash oracle bridges it), and
 COORDINATOR_TEST_PWD to override the directory scanned for .uproject / git
 top-level detection — mirroring the bash script's test seams exactly so the
-Coordinator-claude-side bats-style test suite runs unchanged against this port.
+DoE-side bats-style test suite runs unchanged against this port.
 
 Negative-spec (do NOT "fix" while porting — preserve byte-for-byte parity
 with the bash oracle, INCLUDING its known quirk):
@@ -36,7 +36,7 @@ with the bash oracle, INCLUDING its known quirk):
       `_coordinator_settings_home()/machine-local`, which — under the
       COORDINATOR_TEST_HOME bridge — is `${COORDINATOR_TEST_HOME}/
       .coordinator-claude-settings/machine-local`, NOT
-      `${COORDINATOR_TEST_HOME}/.claude/machine-local` (where the coordinator-claude test's
+      `${COORDINATOR_TEST_HOME}/.claude/machine-local` (where the DoE test's
       `write_registry_with_rag()` fixture actually writes). This mismatch is
       a PRE-EXISTING bash-oracle quirk (verified: the bash oracle itself
       fails its own Test 2 for exactly this reason) — reproduce it, don't
@@ -44,7 +44,7 @@ with the bash oracle, INCLUDING its known quirk):
       contract, not this port.
     - The whoami project_kind probe MUST go through a subprocess call to a
       resolved Python interpreter (COORDINATOR_PYTHON env var, else python3,
-      else python) — NOT a direct in-process import — because the coordinator-claude test's
+      else python) — NOT a direct in-process import — because the DoE test's
       Test 7 mocks this exact subprocess seam via COORDINATOR_PYTHON to
       inject project_kind=ue without requiring coordinator_whoami to be
       installed. An in-process import would silently break that test seam.

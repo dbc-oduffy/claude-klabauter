@@ -1,8 +1,8 @@
 """Characterization tests for coordinator_core.ops.install_claude_doe_wrapper.
 
-Port source: coordinator/commands/install.md (coordinator-claude) Step 3.5b, the
+Port source: coordinator/commands/install.md (DoE-claude) Step 3.5b, the
 literal bash fence at line 892.
-Spec backlink: docs/plans/2026-07-23-skills-carry-no-code-extirpation.md § M3/D9
+Spec backlink: DoE-claude:pln-extirpate-pasted-code-from-em--0f42e9 § M3/D9
 """
 from __future__ import annotations
 
@@ -43,6 +43,9 @@ def test_wrapper_src_not_found_fails_loud(tmp_path, capsys):
 
 
 def test_fresh_install_copies_and_chmods(tmp_path, monkeypatch, capsys):
+    if os.name == "nt":
+        pytest.skip("NTFS has no POSIX exec bit; S_IEXEC is never observably set on Windows.")
+        return
     src = _make_wrapper_src(tmp_path)
     home = Path(os.environ["HOME"])
 

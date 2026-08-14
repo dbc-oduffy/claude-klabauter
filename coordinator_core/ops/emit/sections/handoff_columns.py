@@ -52,7 +52,7 @@ def _coerce_legacy_abandoned(fm: dict) -> tuple[str, Optional[str], Optional[str
     C5's writer cutover stamps on positive succession proof). Any other legacy ``abandoned``
     record — the overwhelming majority, with no successor reference of its own — maps to
     ``closed`` + ``closed_reason: stale``, the same mapping C8's mechanical archive migration
-    used for successor-less records (coordinator-claude-blessed, plan § C8).
+    used for successor-less records (DoE-blessed, plan § C8).
 
     Returns ``(deployment_state, continued_into, closed_reason)``.
     """

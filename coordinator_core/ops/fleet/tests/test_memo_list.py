@@ -109,13 +109,13 @@ def _write_doe_manifest(
     """Write a .doe-root sentinel + coordinator-registry.manifest.json fixture.
 
     Mirrors test_memo_check_addressee.py's `_write_doe_manifest` pattern —
-    a hermetic tmp_path-scoped manifest, never the real machine's coordinator-claude tree.
+    a hermetic tmp_path-scoped manifest, never the real machine's DoE tree.
 
     The sentinel lands on the DR-071 ladder's durable rung
     (`<settings-home>/machine-local/.doe-root`), not the pre-2026-07-28
     `<CLAUDE_HOME>/.doe-root` — a location no writer has written since
     `ops.gen_doe_root_pointer` moved the pointer under the settings home.
-    A caller whose registry fixture registers `repos.example_doctrine_repo` must pass
+    A caller whose registry fixture registers `repos.doe_claude` must pass
     that path as `doe_root`; the registry rung outranks the pointer file.
     """
     doe_root = doe_root or (tmp_path / "doe-root")
@@ -333,7 +333,7 @@ class TestEnumerationAliasesAndCentral:
     def test_is_central_from_settings_home_sentinel_with_no_legacy_pointer(
         self, tmp_path, monkeypatch
     ):
-        """The coordinator-claude receiver is flagged is_central when the ONLY doe-root pointer
+        """The DoE receiver is flagged is_central when the ONLY doe-root pointer
         on the machine is the durable `<settings-home>/machine-local/.doe-root`.
 
         This is the exact shape of every machine installed since
@@ -342,15 +342,15 @@ class TestEnumerationAliasesAndCentral:
         clone paths fought over one synced file). The three manifest readers in
         `_memo_resolver` still read only that retired legacy location, so
         `read_central_receiver_ids()` came back empty and `--list-receivers`
-        rendered "repos.example_doctrine_repo not registered on this machine" on a machine
+        rendered "repos.doe_claude not registered on this machine" on a machine
         where the receiver was registered and delivery to it worked.
         """
-        doe_repo = tmp_path / "coordinator-claude-repo"
+        doe_repo = tmp_path / "doe-claude-repo"
         doe_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_doctrine_repo": str(doe_repo)})
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": str(doe_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         # `doe_root=doe_repo` is required, per _write_doe_manifest's own contract:
-        # this fixture registers `repos.example_doctrine_repo`, and the registry rung outranks
+        # this fixture registers `repos.doe_claude`, and the registry rung outranks
         # the pointer file. Omitting it wrote the manifest under `tmp_path/doe-root`
         # while the winning rung resolved to `doe_repo` — a mismatch that stayed
         # latent only while the reader ignored the ladder entirely and consulted
@@ -358,7 +358,7 @@ class TestEnumerationAliasesAndCentral:
         _write_doe_manifest(
             claude_home,
             tmp_path,
-            {"identity": {"centralReceiverIds": ["central-em", "coordinator-claude-em"]}},
+            {"identity": {"centralReceiverIds": ["central-em", "doe-claude-em"]}},
             doe_root=doe_repo,
         )
         # The legacy rungs must be genuinely absent — both the retired location
@@ -370,7 +370,7 @@ class TestEnumerationAliasesAndCentral:
 
         assert result["exit_code"] == 0
         receivers = _receivers(result["candidates"])
-        doe = [c for c in receivers if c["repo_key"] == "repos.example_doctrine_repo"]
+        doe = [c for c in receivers if c["repo_key"] == "repos.doe_claude"]
         assert len(doe) == 1
         assert doe[0]["is_central"] is True
 

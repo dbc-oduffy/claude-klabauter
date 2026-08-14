@@ -7,8 +7,8 @@ Finish-strangler port (clean-slate migration): the bash implementation
 (union reader for state/review-trail/**/*.json and archive/review-trail/**/*.json,
 sorted by basename) has been fully ported to
 coordinator_core/ops/list_review_trail_records.py, with a co-located pytest
-(test_list_review_trail_records.py). This file is now a thin coordinator-claude-side
-(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (coordinator-claude owns
+(test_list_review_trail_records.py). This file is now a thin DoE-side
+(contract) trampoline over that claude-klabauter (engine) module, per DR-047 (DoE owns
 contract/generator, claude-klabauter owns engine).
 
 Shebang note: the SHEBANG line above is `#!/usr/bin/env python3`, generator-
@@ -18,8 +18,8 @@ a bareword, so the shebang is never read there; on macOS/Linux `python3` is the
 right interpreter. Caution: callers must invoke via the extensionless name or a
 resolved-interpreter prefix, never a bareword `.py` through git-bash — git-bash
 DOES honor the shebang and would exec-127 with no `python3` present. See the
-carve-out in coordinator-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
-Carve-out (cross-repo — this wiki lives in the coordinator-claude repo, not
+carve-out in DoE-claude's coordinator/docs/wiki/bash-on-windows-gotchas.md §
+Carve-out (cross-repo — this wiki lives in the DoE-claude repo, not
 here).
 
 Exit convention: this is a FAIL-LOUD reader — the original oracle exits 1 on

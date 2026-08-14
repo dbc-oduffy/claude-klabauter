@@ -10,7 +10,7 @@ These drive the real CLI as a subprocess rather than calling the op directly. In
 part of what is under test: the trampoline resolves its own claude-klabauter root and the whole point is
 that it runs with no Claude Code process involved.
 
-Fixtures point `REPO_EXAMPLE_DOCTRINE_REPO` at a throwaway tree. Never at the live one — a health check
+Fixtures point `REPO_DOE_CLAUDE` at a throwaway tree. Never at the live one — a health check
 tested against live shared config is the thing it is meant to catch.
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _run_doctor(doe_root: Path, *args: str) -> subprocess.CompletedProcess:
         # assertion about the hook layer ends up hostage to an unrelated one.
         env=dict(
             os.environ,
-            REPO_EXAMPLE_DOCTRINE_REPO=str(doe_root),
+            REPO_DOE_CLAUDE=str(doe_root),
             REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),
             CLAUDE_KLABAUTER_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
         ),
@@ -58,7 +58,7 @@ def _run_doctor(doe_root: Path, *args: str) -> subprocess.CompletedProcess:
 
 @pytest.fixture
 def doe_root(tmp_path: Path) -> Path:
-    root = tmp_path / "coordinator-claude"
+    root = tmp_path / "DoE-claude"
     (root / "coordinator" / "hooks" / "scripts").mkdir(parents=True)
     return root
 

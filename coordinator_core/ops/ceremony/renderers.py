@@ -48,7 +48,7 @@ Negative-spec (C8c, refresh_roadmap_callout):
     apart.
 
 Negative-spec (C8b, render_repo_section):
-  - Does NOT implement the node CLI's ``--all-repos`` coordinator-claude-aggregation mode,
+  - Does NOT implement the node CLI's ``--all-repos`` DoE-aggregation mode,
     machine-local repo enumeration, or output-path resolution
     (``resolvePerRepoStateRoot`` / ``resolveCentralStateRoot``) — those are
     CLI/dispatch concerns for whichever tail op wires this renderer to disk
@@ -71,6 +71,13 @@ Negative-spec (C8b, render_repo_section):
 from __future__ import annotations
 import sys
 
+# Generator-provenance declaration: every render function in this module is
+# pure and returns a markdown string with no disk I/O of its own (see
+# render_repo_section's own negative-spec above: "never writes a file"). The
+# only file writes attributed to this rendering population live in the C9
+# disk seam, coordinator_core.ops.ceremony.render_handoff_tracker.
+GENERATES = []
+
 import os
 import re
 from pathlib import Path
@@ -92,7 +99,7 @@ from coordinator_core.ops.records_query import _apply_consumed_marker
 from coordinator_core.ops._relative_link import relative_markdown_target
 
 # roadmap_id is attacker-influenceable frontmatter on a shared work/* branch and is
-# interpolated into a subprocess arg -- mirrors the coordinator-claude pickup skill's allowlist guard.
+# interpolated into a subprocess arg -- mirrors the DoE pickup skill's allowlist guard.
 # Canonical single copy (see module docstring C8c negative-spec) — originally ported
 # from the OLD wsc_commit.py, which no longer exists; ``tail_ops.py`` imports this
 # name rather than compiling its own copy.
@@ -576,7 +583,7 @@ def refresh_roadmap_callout(worktree_root: Path, roadmap_id: str) -> dict[str, A
 # ---------------------------------------------------------------------------
 # Active-state filter (mirrors render-handoff-tracker.js TERMINAL_DEPLOYMENT /
 # TERMINAL_STATUS). Values now SSOT in lifecycle_constants, still mirroring
-# coordinator-claude lib/consumed-marker.js.
+# DoE lib/consumed-marker.js.
 # ---------------------------------------------------------------------------
 _TERMINAL_DEPLOYMENT = HANDOFF_TERMINAL_DEPLOYMENT
 _TERMINAL_STATUS = HANDOFF_TERMINAL_STATUS
@@ -1483,8 +1490,8 @@ def _join_plans_to_handoffs(
 #
 # ``gate_dependency`` is DELIBERATELY EXCLUDED (design decision D1, stated
 # again in the commit message): it is free text, not a path, by schema
-# (``type: string``, no pattern) AND by live coordinator-claude doctrine, which forbids
-# file-pathed values outright — ``coordinator-claude coordinator/skills/
+# (``type: string``, no pattern) AND by live DoE doctrine, which forbids
+# file-pathed values outright — ``DoE-claude coordinator/skills/
 # roadmap-planning/SKILL.md:590`` requires ``gate_dependency:`` be
 # subsystem-named ("consumer_runner retry telemetry policy"), never
 # file-pathed, precisely because a file-pathed value goes stale on
@@ -1494,7 +1501,7 @@ def _join_plans_to_handoffs(
 # enforcement-mechanism choice — deferred to July 2026"); the 15th points at
 # a PLAN (docs/plans/...), a doctrine violation to surface, not a link to
 # resolve. Path-shaped guidance survives only in the stale OSS publish
-# mirror ``coordinator-claude/skills/spinoff/SKILL.md:114`` — coordinator-claude's own
+# mirror ``coordinator-claude/skills/spinoff/SKILL.md:114`` — DoE's own
 # tree has no such line. Resolving it here would report 14-15 fabricated
 # broken links against a field that is free text de jure and in practice.
 # It stays excluded for free: ``gate_dependency`` is not a member of

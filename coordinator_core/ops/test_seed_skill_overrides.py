@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.test_seed_skill_overrides — parity tests for the
 naked-Python port of coordinator/bin/install-health/seed-skill-overrides.sh
-(coordinator-claude-owned bash drop-in).
+(DoE-owned bash drop-in).
 
 Golden oracle captured by running the bash script directly against a fresh
 CLAUDE_HOME (with .doe-root planted to satisfy the trusted-root guard):

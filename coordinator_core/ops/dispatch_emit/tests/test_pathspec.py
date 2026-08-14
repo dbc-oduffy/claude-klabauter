@@ -159,7 +159,7 @@ def test_terminal_test_scope_refuses_when_every_written_path_is_doc_only():
     # empty scope as green.
     waves = [
         [_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])],
-        [_wave_row("C2", ["coordinator/bin/coordinator-doc-new"])],
+        [_wave_row("C2", ["coordinator/bin/coordinator-doc-new.py"])],
     ]
     with pytest.raises(NoTestTargetError) as excinfo:
         terminal_test_scope(waves)
