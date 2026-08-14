@@ -431,6 +431,18 @@ def _run_resolved_command(cmd: str) -> int:
     in-line. Reason recorded in
     state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md.
 
+    NOT wired to state/test-red/<machine>.yaml (deliberate, not forgotten).
+    stdout/stderr are inherited with no pipe (see `spawn_kwargs` below), so
+    this site has no captured output to parse into a test-red record --
+    piping it would be a live-streaming change to a hot path, ruled out by
+    this module's own negative-spec. The sibling site,
+    `coordinator/bin/workday-complete-step1-validate.py`, IS wired (commit
+    e0fc9a2fd) because it already captures the run's own output. The
+    cross-repo test-red commitment (state/cross-repo-commitments/2026-07-25-
+    claude-klabauter-to-answer-the-test-red-record-con-bff3653a45f8.yaml) stays OPEN
+    as long as this site remains one of the two live callers and is unwired
+    -- a /validate cadence run through THIS CLI still writes nothing.
+
     Spawned in its own process group (`_add_process_group_spawn_kwargs`)
     with a SIGTERM/SIGINT teardown installed for the duration of the wait
     (`_install_group_teardown`) and, on Windows, a kill-on-close Job

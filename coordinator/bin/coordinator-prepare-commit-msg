@@ -20,7 +20,7 @@ Behaviour:
      module's — a change to one must be mirrored in the other):
        (1) $COORDINATOR_SESSION_ID                              (explicit test override)
        (2) $CLAUDE_SESSION_ID                                   (legacy var)
-       (3) $CLAUDE_CODE_SESSION_ID                              (platform-injected)
+       (3) $CLAUDE_CODE_SESSION_ID                               (platform-injected)
      A former tier-4 ``<git-dir>/coordinator-sessions/.current-session-id`` sentinel
      fallback (liveness-gated as of 2026-08-07) was REMOVED entirely on
      2026-08-07 (KS-1) — unsound by construction under this fleet's
@@ -101,7 +101,7 @@ Behaviour:
      (``session_holds_multiple_plan_claims`` — a session holding 2+ plan
      claims with neither tier 0 nor this scope-match tier disambiguating
      OMITS rather than guesses, since every tier below is session-keyed and
-     cannot tell which held claim a given commit is for) are IMPORTED, not
+     cannot tell which held claim a given commit is actually for) are IMPORTED, not
      re-mirrored, from ``coordinator_core.git.commit_trailers`` — C2's
      REQUIRED INTERFACE, its sole two new exports. Verified live at C4 time:
      importing them triggers ZERO ``coordinator_core.ops`` module imports

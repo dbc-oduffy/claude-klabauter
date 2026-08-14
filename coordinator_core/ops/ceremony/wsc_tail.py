@@ -1191,7 +1191,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
           "commit_failed":           bool,
           "empty_consumed_set":      bool,           # R2 loud-report
           "stamped":                 list[str],
-          "follow_up_committed_sha": str | None,
+          "follow_up_committed_sha": str | None,     # the LAST follow-up
+                                          # commit (branch tip after the stamp
+                                          # leg).
+          "follow_up_committed_shas": list[str],     # every follow-up commit
+                                          # -- one per deliverable_id in the
+                                          # stamped set; length 1 on the
+                                          # ordinary single-deliverable close.
           "follow_up_pushed":        bool | None,    # None when the follow-up
                                           # commit's push was deferred/skipped.
           "tail_results":            dict,           # {label: {acted,skipped,failed}}
@@ -1985,6 +1991,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "empty_consumed_set": stamp_outcome.empty_consumed_set,
         "stamped": stamp_outcome.stamped,
         "follow_up_committed_sha": stamp_outcome.follow_up_committed_sha,
+        "follow_up_committed_shas": stamp_outcome.follow_up_committed_shas,
         "follow_up_pushed": stamp_outcome.follow_up_pushed,
         "tail_results": tail_results,
         "receipt_path": rel_id(receipt_path, worktree_root),

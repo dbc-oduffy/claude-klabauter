@@ -1166,3 +1166,78 @@ def test_ac4_genuinely_empty_session_still_resolves_indeterminate(tmp_path, caps
     out = capsys.readouterr()
     assert rc == 0
     assert "VERDICT=indeterminate" in out.out
+
+
+# ---------------------------------------------------------------------------
+# bug-backlog 2026-08-14-review-scale-uncommitted-leg-attributes-peer-work:
+# `_measure_session_review_scale_inputs`'s DEFAULT `uncommitted_paths=None`
+# derivation (never exercised above — every prior test in this file passes
+# `uncommitted_paths` explicitly) chains `classify_session_authored_files`
+# with `resolve_known_concurrent_paths` exactly as `brief()` does in
+# production. `resolve_known_concurrent_paths`'s peer-exclusion set is built
+# ONLY from (1) a peer's `state/subagent-share/<sid>/` claim surface and (2)
+# paths touched by that peer's own LANDED commits — it has no visibility
+# into a peer's untracked, not-yet-committed working file that sits outside
+# its claim surface and whose owning session has not yet registered a claim
+# dir under `coordinator-sessions/`. `classify_session_authored_files`
+# predicate (b) ("untracked, mtime after session start, not a known-
+# concurrent path") then affirmatively misattributes that file to THIS
+# session — an absence-of-a-peer-claim inference, not a positive authorship
+# signal, on a 50-70-concurrent-session shared worktree where a peer's claim
+# frequently has not landed yet when this session measures.
+#
+# No positive authorship signal for an untracked, unclaimed peer file exists
+# anywhere in this codebase today (confirmed: `resolve_known_concurrent_
+# paths`'s only two producers are the claim-dir hub and commit-trailer
+# attribution, both point-in-time and both silent on a peer's still-private
+# working file) — so this is pinned as an OPEN reproduction, not a fixed
+# regression guard. See state/bug-backlog/2026-08-14-review-scale-
+# uncommitted-leg-attributes-peer-work.yaml.
+# ---------------------------------------------------------------------------
+
+
+def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_file():
+    """Pins the CURRENT (buggy) value: a peer's untracked, uncommitted file
+    — created after THIS session's `session_start_time`, with no claim dir
+    under `coordinator-sessions/` and no landed commit naming it — is not
+    excludable by `resolve_known_concurrent_paths` and so is counted into
+    this session's own `gross_loc`/`code_loc`/`surface_count` via the
+    default `uncommitted_paths=None` derivation path. Exercises the SAME
+    code path `brief()` uses in production (unlike every other test in this
+    file, which passes `uncommitted_paths` explicitly and so never reaches
+    `classify_session_authored_files`/`resolve_known_concurrent_paths` at
+    all)."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_git_repo(root)
+        session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+        # This session's own genuine work: one small tracked commit.
+        (root / "mine.py").write_text("m = 1\n", encoding="utf-8")
+        _run_git(["add", "mine.py"], str(root))
+        _commit_as(root, "my commit", _SESSION_ID)
+
+        # A peer session's own in-progress work: an untracked file, mtime
+        # necessarily after session_start_time (just written), with NO
+        # coordinator-sessions/ claim dir and no commit — i.e. genuinely
+        # unclaimed at measurement time, the exact race this bug reproduces.
+        peer_lines = "\n".join(f"p{i} = {i}" for i in range(30)) + "\n"
+        (root / "peer_unclaimed.py").write_text(peer_lines, encoding="utf-8")
+
+        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+            root, session_start_time, _SESSION_ID, uncommitted_paths=None
+        )
+
+        assert commit_count == 1
+        # BUG, pinned: the peer's 30-line unclaimed file is swept into this
+        # session's own measurement (1 own line + 30 peer lines), not the
+        # correct gross_loc == 1 a genuine positive-authorship signal would
+        # produce. If this assertion ever starts failing because gross_loc
+        # == 1, a fix landed — replace this test with a real regression
+        # guard (assert == 1) and close the bug-backlog entry above rather
+        # than loosening this assertion.
+        assert gross_loc == 31
+        assert code_loc == 31
+        assert surface_count == 1

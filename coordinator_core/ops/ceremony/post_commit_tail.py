@@ -804,7 +804,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         push_mode            (str, optional, default PUSH_MODE_SYNC).
 
     Returns `{exit_code, stamped, empty_consumed_set, follow_up_committed_sha,
-    follow_up_pushed, origin_stub_close, deliverable_cascade}` on success;
+    follow_up_committed_shas, follow_up_pushed, origin_stub_close,
+    deliverable_cascade}` on success (`follow_up_committed_shas` carries every
+    follow-up commit the stamp leg landed -- one per `deliverable_id` in the
+    stamped set, so a multi-baton close reports all of them rather than only
+    the tip named by `follow_up_committed_sha`);
     `{exit_code: 1, error}` on a setup error (missing required param,
     unregistered `handoff.close_origin_stub`, no `repo_root`).
     `deliverable.cascade_terminal` (C6b) is resolved on a best-effort basis --
@@ -860,6 +864,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "stamped": outcome.stamp_outcome.stamped,
         "empty_consumed_set": outcome.stamp_outcome.empty_consumed_set,
         "follow_up_committed_sha": outcome.stamp_outcome.follow_up_committed_sha,
+        "follow_up_committed_shas": outcome.stamp_outcome.follow_up_committed_shas,
         "follow_up_pushed": outcome.stamp_outcome.follow_up_pushed,
         "origin_stub_close": outcome.origin_stub_result,
         "deliverable_cascade": outcome.deliverable_cascade_result,

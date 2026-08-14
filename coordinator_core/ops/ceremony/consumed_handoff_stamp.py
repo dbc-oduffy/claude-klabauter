@@ -28,9 +28,14 @@ liveness re-check — the closes-the-race step), applies R3's future-dated
 rejection, applies the R4(a) live-children guard, and — for each eligible
 candidate — stamps `shipped_in: <committed_sha>` (the REAL post-commit SHA;
 Position A: no branch-tip fallback, no Session-Id sibling-correction walk)
-THEN flips `deployment_state -> shipped`, both landing in ONE explicit
+THEN flips `deployment_state -> shipped`, both landing in an explicit
 follow-up commit (AC17) so the op never exits with the stamp left as an
-unswept dirty working-tree edit.
+unswept dirty working-tree edit. AC17's "one commit" is one commit PER
+`deliverable_id` present in the stamped set, not one for the whole set --
+a single-deliverable close (the ordinary shape) still lands exactly one,
+while a two-baton `/pickup a AND b` close lands one per baton, because a
+commit carrying two deliverables has no answerable `Deliverable-Id`
+trailer (see `group_stamped_by_deliverable_id`).
 
 DEVIATION FROM THE PLAN'S LITERAL C5 BODY TEXT (documented, in-scope
 correction — see Negative-spec "stamp-before-ship ordering" below): the plan
@@ -177,12 +182,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.git.commit_trailers import _read_deliverable_id_from_frontmatter
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.commit_pipeline import (
+    PUSH_MODE_NONE,
     PUSH_MODE_SYNC,
     PUSH_STATUS_FAILED,
     PUSH_STATUS_NOT_ATTEMPTED,
@@ -717,6 +724,14 @@ class StampOutcome:
     errors: list[dict[str, str]] = field(default_factory=list)
     empty_consumed_set: bool = False  # R2 loud-report flag (AC7)
     follow_up_committed_sha: Optional[str] = None
+    #: Every follow-up commit this leg landed, in the order it landed them --
+    #: one per distinct `deliverable_id` in the stamped set (see
+    #: `group_stamped_by_deliverable_id`). `follow_up_committed_sha` is the
+    #: LAST of these (the branch tip); on the ordinary single-deliverable
+    #: close the two agree and this list holds exactly one entry. Non-empty
+    #: even when `follow_up_error` is set, when an earlier group's commit
+    #: landed before a later one failed.
+    follow_up_committed_shas: list[str] = field(default_factory=list)
     #: True/False under `push_mode="sync"` (today's contract); None under
     #: "deferred"/"none" (DEC-1) -- no push was attempted here, not a
     #: not-yet-determined failure.
@@ -747,6 +762,45 @@ def _compose_follow_up_message(stamped: list[str], committed_sha: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def group_stamped_by_deliverable_id(
+    worktree_root: Path, stamped_paths: list[str]
+) -> list[tuple[str, list[str]]]:
+    """Partition the stamped set into one group per `deliverable_id`, so the
+    follow-up commit leg can emit one commit per deliverable rather than one
+    commit for all of them.
+
+    Why this exists (`state/bug-backlog/2026-08-14-wsc-tail-cannot-stamp-a-
+    two-baton-pickup.yaml`): `/coordinator:pickup a AND b` is a documented,
+    supported shape — "N independent dispositions, not one" — and it mints
+    one baton per artifact, each with its OWN `deliverable_id`. The close
+    then consumed all of them and asked for ONE follow-up commit naming
+    every stamped handoff, whose trailer resolution (`commit_trailers.
+    _resolve_deliverable_id_from_paths`, tier 0) correctly refuses to guess
+    which of two differing `deliverable_id` values applies and raises
+    `DivergentDeliverableIdError`. That refusal is right and stays: the
+    contradiction was upstream, in asking one commit to carry two
+    deliverables. Grouping removes the ask.
+
+    Reads each artifact's `deliverable_id` through the SAME leaf-read the
+    trailer resolver's tier 0 uses (`commit_trailers.
+    _read_deliverable_id_from_frontmatter`), imported rather than
+    re-implemented — a second copy could disagree with the resolver about
+    what a given artifact's id is, and a disagreement here reproduces the
+    exact divergent-pathspec raise this grouping exists to prevent.
+
+    Artifacts carrying no `deliverable_id` at all collect into the `""`
+    group: tier 0 abstains on them exactly as before, and their commit falls
+    through to the untouched session-keyed tiers. Groups are returned sorted
+    by id (`""` first) purely for determinism — the order carries no
+    meaning, and no group's commit depends on another's.
+    """
+    groups: dict[str, list[str]] = {}
+    for relpath in stamped_paths:
+        deliverable_id = _read_deliverable_id_from_frontmatter(worktree_root / relpath)
+        groups.setdefault(deliverable_id, []).append(relpath)
+    return [(deliverable_id, groups[deliverable_id]) for deliverable_id in sorted(groups)]
+
+
 async def post_commit_stamp_and_ship(
     worktree_root: Path,
     repo_root: Path,
@@ -764,9 +818,12 @@ async def post_commit_stamp_and_ship(
     No-op (empty result, `empty_consumed_set=False`) when ``chain_terminal``
     is False.
 
-    On a non-empty stamped set, commits ONLY the stamped frontmatter files in
-    one explicit-pathspec follow-up commit (AC17) — never left as an unswept
-    dirty working-tree edit. The commit ALWAYS happens (AC17's commit leg is
+    On a non-empty stamped set, commits ONLY the stamped frontmatter files,
+    in explicit-pathspec follow-up commit(s) (AC17) — never left as an unswept
+    dirty working-tree edit. One commit per distinct `deliverable_id` in that
+    set (`group_stamped_by_deliverable_id`): one commit total on the ordinary
+    single-deliverable close, one per baton on a multi-baton
+    `/pickup a AND b` close. The commit ALWAYS happens (AC17's commit leg is
     unconditionally synchronous, per plan anti-scope). The PUSH half is
     gated by ``push_mode`` (wsc-tail-sub-2s-invoke-budget DEC-1): `"sync"`
     (default) pushes the follow-up commit directly, as before; `"deferred"`/
@@ -890,9 +947,59 @@ async def post_commit_stamp_and_ship(
             errors=outcome_errors,
         )
 
-    follow_up_sha, pushed, follow_up_push_status, follow_up_error = await asyncio.to_thread(
-        _commit_and_push_follow_up, worktree_root, outcome_stamped, committed_sha, push_mode, session_id
-    )
+    # One follow-up commit PER deliverable_id, not one for the whole stamped
+    # set (see `group_stamped_by_deliverable_id`'s docstring for the two-baton
+    # pickup this fixes). The single-deliverable close -- every close before
+    # this fix, and the overwhelming majority after it -- yields exactly one
+    # group and lands byte-for-byte the same single commit it always did.
+    #
+    # The PUSH leg runs once, on the LAST group only: `push_with_retry` pushes
+    # the BRANCH, so one push carries every group's commit. Pushing per group
+    # would be N pushes of the same ref for no gain, and would make the
+    # reported `push_status` the last one's by accident rather than by design.
+    groups = group_stamped_by_deliverable_id(worktree_root, outcome_stamped)
+
+    follow_up_shas: list[str] = []
+    follow_up_sha: Optional[str] = None
+    pushed: Optional[bool] = None
+    follow_up_push_status = PUSH_STATUS_NOT_ATTEMPTED
+    follow_up_error: Optional[str] = None
+
+    for index, (_deliverable_id, group_paths) in enumerate(groups):
+        is_last = index == len(groups) - 1
+        (
+            group_sha,
+            group_pushed,
+            group_push_status,
+            group_error,
+        ) = await asyncio.to_thread(
+            _commit_and_push_follow_up,
+            worktree_root,
+            group_paths,
+            committed_sha,
+            push_mode if is_last else PUSH_MODE_NONE,
+            session_id,
+        )
+        if group_sha:
+            follow_up_shas.append(group_sha)
+        if group_error:
+            # A commit failure stops the remaining groups: every group after
+            # this one would commit into a tree whose earlier group did not
+            # land, and the error must not be overwritten by a later group's
+            # success. Groups that DID land stay landed and are reported --
+            # they are correct commits, not a partial write to unwind. Their
+            # push is left to the tail's own deferred push.
+            follow_up_error = group_error
+            follow_up_sha = follow_up_shas[-1] if follow_up_shas else None
+            pushed = group_pushed
+            follow_up_push_status = group_push_status
+            break
+        # `follow_up_committed_sha` reports the branch TIP after this leg --
+        # the last group's commit. `follow_up_committed_shas` carries the
+        # full set, since with more than one group no single sha names them.
+        follow_up_sha = group_sha
+        pushed = group_pushed
+        follow_up_push_status = group_push_status
 
     return StampOutcome(
         stamped=outcome_stamped,
@@ -902,6 +1009,7 @@ async def post_commit_stamp_and_ship(
         skipped_already_terminal=outcome_already_terminal,
         errors=outcome_errors,
         follow_up_committed_sha=follow_up_sha,
+        follow_up_committed_shas=follow_up_shas,
         follow_up_pushed=pushed,
         follow_up_push_status=follow_up_push_status,
         follow_up_error=follow_up_error,
@@ -917,7 +1025,21 @@ def _commit_and_push_follow_up(
 ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """Computed-mechanism commit (`git_native.commit_scoped`) of ONLY the
     stamped paths (AC17) — the commit leg is unconditional (anti-scope: never
-    weakened). The push leg is gated
+    weakened).
+
+    ``stamped_paths`` is ONE deliverable's group, not the whole stamped set:
+    the caller partitions by `deliverable_id` first
+    (`group_stamped_by_deliverable_id`) and calls this once per group, with
+    ``push_mode`` forced to `"none"` on every group but the last so the branch
+    is pushed once rather than per group. This function itself is unchanged by
+    that — it commits whatever pathspec it is handed — but handing it a
+    pathspec spanning two `deliverable_id` values makes `commit_scoped`'s
+    trailer resolution raise `DivergentDeliverableIdError` (correctly: no one
+    `Deliverable-Id` trailer applies), which is exactly the two-baton-pickup
+    failure the grouping exists to prevent. Do not reintroduce a call site
+    that passes the ungrouped set.
+
+    The push leg is gated
     by ``push_mode`` (DEC-1): `"sync"` pushes here directly (today's
     contract); `"deferred"`/`"none"` skip the push and return `pushed=None`
     (no attempt, not a failure) — the caller spawns ONE detached push for the

@@ -17,6 +17,8 @@ Spec backlink: DoE-claude:pln-b1-ceremony-complete-computed--9ffa54 § AC10
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from coordinator_core.workweek_complete import brief as wwc_brief
@@ -122,12 +124,53 @@ def test_drift_guards_bundle_split_carries_correct_per_directive_hard_block() ->
 def test_no_directive_bundles_drift_guards_with_empty_args() -> None:
     """The pre-split single `d_step4b_4k_drift_guards` directive named the
     bundling CLI with `args=[]` -- an argparse-required-subcommand CLI
-    cannot dispatch on that shape. No directive should reintroduce it."""
+    cannot dispatch on that shape. No directive should reintroduce it.
+
+    Introspects `workweek-complete-drift-guards.py`'s real `argparse` config
+    (`build_parser()`) rather than hand-listing its subcommand names --
+    <!-- Review: coordinatorcode-reviewer-fa856c15 -- prior version only
+    asserted `d["args"]` truthiness against a hand-maintained expectation,
+    which would not catch the next bundled-subcommand CLI shipped with
+    `args=[]` against a `required=True` subparser. This walks the CLI's own
+    parser so a future regression of this shape fails here too. -->
+    a directive naming a bundling CLI with an unrecognized or empty leading
+    arg fails against the CLI's own declared subcommand set, not a copy of
+    it."""
+    import importlib.util
+
+    bin_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "coordinator", "bin",
+    )
+    script = os.path.join(bin_dir, "workweek-complete-drift-guards.py")
+    spec = importlib.util.spec_from_file_location(
+        "workweek_complete_drift_guards_cli", script
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    parser = module.build_parser()
+    subparsers_action = next(
+        action for action in parser._subparsers._group_actions
+        if action.dest == "subcommand"
+    )
+    real_subcommands = set(subparsers_action.choices.keys())
+    assert subparsers_action.required is True, (
+        "workweek-complete-drift-guards.py's subcommand subparser is no "
+        "longer required=True -- this test's premise (args=[] cannot "
+        "dispatch) needs re-checking"
+    )
+
     for d in wwc_brief._build_directives():
         if d["cli"] == "workweek-complete-drift-guards":
             assert d["args"], (
                 f"directive {d['id']!r} names workweek-complete-drift-guards "
                 "with no subcommand in args"
+            )
+            assert d["args"][0] in real_subcommands, (
+                f"directive {d['id']!r} names subcommand {d['args'][0]!r}, "
+                f"not one of the CLI's real declared subcommands "
+                f"{sorted(real_subcommands)!r}"
             )
 
 

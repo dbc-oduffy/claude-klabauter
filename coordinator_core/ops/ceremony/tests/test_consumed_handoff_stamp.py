@@ -356,6 +356,122 @@ def test_redrive_liveness_recheck_finds_archived(repo):
 # ---------------------------------------------------------------------------
 
 
+def _add_deliverable_id(repo, relpath: str, deliverable_id: str) -> None:
+    """Append a `deliverable_id` to an already-seeded handoff's frontmatter --
+    `seed_handoff` has no parameter for it, and this is the one property a
+    multi-baton close turns on."""
+    path = repo.root / relpath
+    text = path.read_text(encoding="utf-8")
+    head, rest = text.split("---\n", 2)[1], text.split("---\n", 2)[2]
+    path.write_text(
+        f"---\n{head}deliverable_id: {deliverable_id}\n---\n{rest}", encoding="utf-8"
+    )
+    repo._git("add", "-A")
+    repo._git("commit", "-q", "-m", f"seed deliverable_id {deliverable_id}")
+
+
+def test_post_commit_two_batons_commit_once_per_deliverable_id(monkeypatch, repo):
+    """`state/bug-backlog/2026-08-14-wsc-tail-cannot-stamp-a-two-baton-
+    pickup.yaml`: a `/pickup a AND b` close consumes two batons carrying
+    DIFFERENT `deliverable_id` values, and one commit cannot carry both (its
+    `Deliverable-Id:` trailer has no answerable value -- see
+    `group_stamped_by_deliverable_id`). Asserts the stamp leg emits one
+    follow-up commit per deliverable, each with only that deliverable's own
+    paths, and that only the LAST group carries the push (one `push_with_retry`
+    pushes the branch, so per-group pushes would be N pushes of one ref)."""
+    sid = "sess-two-batons"
+    repo.seed_handoff("2026-07-15_100000_alpha.md", claimed_by=sid)
+    repo.seed_handoff("2026-07-15_100001_beta.md", claimed_by=sid)
+    _add_deliverable_id(repo, "state/handoffs/2026-07-15_100000_alpha.md", "dlv-alpha-01")
+    _add_deliverable_id(repo, "state/handoffs/2026-07-15_100001_beta.md", "dlv-beta-02")
+
+    calls: list = []
+
+    def _fake_commit(worktree_root, paths, committed_sha, push_mode, session_id):
+        calls.append((list(paths), push_mode))
+        return f"sha{len(calls)}", True, m.PUSH_STATUS_PUSHED, None
+
+    monkeypatch.setattr(m, "_commit_and_push_follow_up", _fake_commit)
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root, repo.common_dir, sid, repo.head_sha(), chain_terminal=True
+        )
+    )
+
+    assert len(calls) == 2, calls
+    assert [paths for paths, _mode in calls] == [
+        ["state/handoffs/2026-07-15_100000_alpha.md"],
+        ["state/handoffs/2026-07-15_100001_beta.md"],
+    ]
+    assert [mode for _paths, mode in calls] == [PUSH_MODE_NONE, PUSH_MODE_SYNC]
+
+    assert outcome.follow_up_committed_shas == ["sha1", "sha2"]
+    assert outcome.follow_up_committed_sha == "sha2"
+    assert outcome.follow_up_error is None
+    assert outcome.errors == []
+
+
+def test_post_commit_single_deliverable_still_lands_one_commit(monkeypatch, repo):
+    """The ordinary close is untouched by the grouping: one group, one commit,
+    the caller's own `push_mode` -- byte-for-byte the pre-fix call."""
+    sid = "sess-one-baton"
+    repo.seed_handoff("2026-07-15_100000_pred.md", claimed_by=sid)
+    _add_deliverable_id(repo, "state/handoffs/2026-07-15_100000_pred.md", "dlv-solo-01")
+
+    calls: list = []
+
+    def _fake_commit(worktree_root, paths, committed_sha, push_mode, session_id):
+        calls.append((list(paths), push_mode))
+        return "sha1", True, m.PUSH_STATUS_PUSHED, None
+
+    monkeypatch.setattr(m, "_commit_and_push_follow_up", _fake_commit)
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root, repo.common_dir, sid, repo.head_sha(), chain_terminal=True
+        )
+    )
+
+    assert calls == [(["state/handoffs/2026-07-15_100000_pred.md"], PUSH_MODE_SYNC)]
+    assert outcome.follow_up_committed_shas == ["sha1"]
+    assert outcome.follow_up_committed_sha == "sha1"
+
+
+def test_post_commit_group_commit_failure_stops_later_groups_and_reports(
+    monkeypatch, repo
+):
+    """A group's commit failure must not be overwritten by a later group's
+    success, and the groups that DID land stay reported -- they are correct
+    commits, not a partial write to unwind."""
+    sid = "sess-two-batons-fail"
+    repo.seed_handoff("2026-07-15_100000_alpha.md", claimed_by=sid)
+    repo.seed_handoff("2026-07-15_100001_beta.md", claimed_by=sid)
+    _add_deliverable_id(repo, "state/handoffs/2026-07-15_100000_alpha.md", "dlv-alpha-01")
+    _add_deliverable_id(repo, "state/handoffs/2026-07-15_100001_beta.md", "dlv-beta-02")
+
+    calls: list = []
+
+    def _fake_commit(worktree_root, paths, committed_sha, push_mode, session_id):
+        calls.append(list(paths))
+        if len(calls) == 1:
+            return "sha1", None, m.PUSH_STATUS_NOT_ATTEMPTED, None
+        return None, False, m.PUSH_STATUS_NOT_ATTEMPTED, "git commit failed: index.lock"
+
+    monkeypatch.setattr(m, "_commit_and_push_follow_up", _fake_commit)
+
+    outcome = _run(
+        m.post_commit_stamp_and_ship(
+            repo.root, repo.common_dir, sid, repo.head_sha(), chain_terminal=True
+        )
+    )
+
+    assert len(calls) == 2
+    assert outcome.follow_up_committed_shas == ["sha1"]
+    assert outcome.follow_up_committed_sha == "sha1"
+    assert outcome.follow_up_error == "git commit failed: index.lock"
+
+
 def test_post_commit_happy_path_stamps_and_ships(repo):
     """Real handoff.stamp + handoff.transition ship verb, stamp-BEFORE-ship
     ordering (see module docstring 'DEVIATION' / Negative-spec)."""

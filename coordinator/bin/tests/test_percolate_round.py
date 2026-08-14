@@ -1145,6 +1145,93 @@ def test_dest_ahead_count_genuine_zero_is_distinguished(tmp_path, monkeypatch):
     assert _mod._dest_ahead_count(str(tmp_path)) == 0
 
 
+def test_dest_ahead_probe_distinguishes_no_upstream_from_probe_failure():
+    """`_dest_ahead_probe` is the three-way source of truth
+    `_reconcile_dest_discard` acts on (PM ruling, 2026-08-14): no-upstream
+    is `(None, False, True)` -- definite, probe succeeded -- never
+    conflated with a genuine probe failure `(None, False, False)`."""
+    def _fake_run_no_upstream(cmd, **kwargs):
+        return _completed(0, "# branch.oid deadbeef\n? untracked.txt\n", "")
+
+    def _fake_run_failure(cmd, **kwargs):
+        return _completed(128, "", "fatal: not a git repository")
+
+    import unittest.mock as mock
+
+    with mock.patch.object(_mod.subprocess, "run", _fake_run_no_upstream):
+        ahead, has_upstream, probe_ok = _mod._dest_ahead_probe("/fake/dest")
+    assert ahead is None
+    assert has_upstream is False
+    assert probe_ok is True
+
+    with mock.patch.object(_mod.subprocess, "run", _fake_run_failure):
+        ahead, has_upstream, probe_ok = _mod._dest_ahead_probe("/fake/dest")
+    assert ahead is None
+    assert has_upstream is False
+    assert probe_ok is False
+
+
+def test_reconcile_dest_discard_function_no_upstream_proceeds_permissively(tmp_path, monkeypatch):
+    """PM ruling, 2026-08-14: no upstream tracking ref is a definite,
+    non-error state (a fresh mirror never pushed) -- discard must PROCEED,
+    not refuse, and must report the no-upstream state distinguishably from
+    both the ahead-by-N and probe-failure reports."""
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "rev-parse" in cmd:
+            return _completed(0, "cafef00d\n", "")
+        if "status" in cmd and "--porcelain=v2" in cmd:
+            return _completed(0, "# branch.oid cafef00d\n? untracked.txt\n", "")
+        if "reset" in cmd or "clean" in cmd:
+            return _completed(0, "", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    ok, message = _mod._reconcile_dest_discard(str(tmp_path), " M a.md\n")
+    assert ok is True
+    assert "no upstream tracking ref" in message
+    assert "could not determine" not in message
+    assert any("reset" in c and "--hard" in c for c in calls)
+    assert any("clean" in c and "-fd" in c for c in calls)
+
+
+def test_reconcile_dest_discard_real_repo_no_upstream_proceeds_and_resets(tmp_path):
+    """Real-git-repo coverage (no mocking of the git boundary itself): a
+    freshly `git init`-ed dest with a commit but no `git push`/upstream
+    configured at all is the literal 'fresh mirror, never pushed' case the
+    PM ruling names -- discard must run `git reset --hard` + `git clean
+    -fd` against it and leave the repo's committed history intact."""
+    dest = tmp_path / "fresh-mirror"
+    dest.mkdir()
+    run = lambda *args: subprocess.run(  # noqa: E731 -- local test helper
+        ["git", "-C", str(dest), *args], check=True, capture_output=True, text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    run("init", "-q")
+    run("config", "user.email", "test@example.com")
+    run("config", "user.name", "test")
+    (dest / "tracked.txt").write_text("v1\n")
+    run("add", "tracked.txt")
+    run("commit", "-q", "-m", "initial")
+
+    (dest / "tracked.txt").write_text("dirty uncommitted edit\n")
+    (dest / "untracked.txt").write_text("stray\n")
+
+    ok, message = _mod._reconcile_dest_discard(str(dest), " M tracked.txt\n?? untracked.txt\n")
+
+    assert ok is True
+    assert "no upstream tracking ref" in message
+    assert (dest / "tracked.txt").read_text() == "v1\n"
+    assert not (dest / "untracked.txt").exists()
+    log = subprocess.run(
+        ["git", "-C", str(dest), "log", "--oneline"], check=True, capture_output=True, text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert "initial" in log.stdout
+
+
 # ---------------------------------------------------------------------------
 # state/audits/2026-08-13-percolate-round-race-repro.md — Step 4's real-run
 # subprocess and the scoped-git-commit subprocess must be held under one

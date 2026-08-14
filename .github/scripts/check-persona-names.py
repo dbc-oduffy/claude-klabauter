@@ -154,15 +154,20 @@ BANNED: list[tuple[str, re.Pattern[str]]] = [
     ("fleet codename", re.compile(_tok("holo", "deck"), re.IGNORECASE)),
     ("fleet codename", re.compile(_tok("del", r"phi(?:pro)?"), re.IGNORECASE)),
     ("fleet codename", re.compile(rf"{_LEAD}project[-_ ]rag(?![A-Za-z0-9])", re.IGNORECASE)),
-    # The meta-repo codename, in every delimiter form INCLUDING the hyphenated
-    # role-id suffixes (`...-em`, `...-lead`) that the upstream glued-identifier
-    # rewrite does not match. This is the specific residue the publish-side
-    # guard's exemption set lets through.
-    ("fleet codename", re.compile(
-        rf"{_LEAD}doe[-_ ]claude(?:[-_][A-Za-z]+)*(?![A-Za-z0-9])", re.IGNORECASE)),
-    # Bare capitalised org abbreviation, case-SENSITIVE — distinctive enough to
-    # match safely, and it is how the codename appears in possessive prose.
-    ("fleet codename", re.compile(_tok(r"DoE"))),
+    # `DoE-claude` (all delimiter/case forms, including the hyphenated role-id
+    # suffixes `...-em`/`...-lead`) and bare `DoE` -- DELETED 2026-08-13 (PM
+    # ruling: "stop scrubbing DoE-claude ... be transparent & forthcoming as
+    # to what it is"; makima-side reconciliation in commits c40c6f8f11e5 and
+    # 571a4d78f535, which removed the equivalent `substitute`/`depersonalize`
+    # entries from setup/percolate-hooks/percolate-store.yaml). Verified
+    # (state/audits/2026-08-13-doe-claude-vocabulary-remap-investigation.md
+    # § Q5): the sibling's own public mirror already ships 792 compound
+    # `doe-claude`/`doe_claude` occurrences and 1330 bare `DoE` in tracked
+    # files, and this mirror already ships the `coordinator-claude` name
+    # 1774 times declaring the same dependency -- banning the name here while
+    # it ships from the other side is the incoherence the ruling resolves,
+    # not a privacy boundary. Do not re-add either pattern without a new
+    # ruling naming this file specifically.
     # --- operator identity (see THE IDENTITY SPLIT above) -------------------
     ("operator identity", re.compile(_tok(r"o['’]?duffy"), re.IGNORECASE)),
 ]
