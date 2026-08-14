@@ -378,6 +378,130 @@ def test_rename_cycle_surfaces_loudly_not_as_declined_path():
         _mod._build_commit_pathspec(dest, change_lines, rename_pairs)
 
 
+# ---------------------------------------------------------------------------
+# Pathspec pre-filtering (docs/plans/2026-08-14-the-publish-round-commits-
+# the-names-it-a.md follow-up): the 100-declined-path deadlock. Fix 2 drops
+# two knowable-before-committing benign-decline classes from the derived
+# pathspec so `scoped-git-commit` is never asked to land a path that cannot.
+# `_run` is monkeypatched at module scope (never a real subprocess) per this
+# file's own Anti-scope ("do not re-run a real publish to test").
+# ---------------------------------------------------------------------------
+
+
+def test_gitignored_path_dropped_from_pathspec(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    change_lines = [("NEW", "__pycache__/foo.pyc")]
+
+    def _fake_run(cmd, **kwargs):
+        if "check-ignore" in cmd:
+            return _mod.subprocess.CompletedProcess(
+                cmd, 0, "__pycache__/foo.pyc\n", ""
+            )
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod, "_run", _fake_run)
+    pathspec = _mod._build_commit_pathspec(str(dest), change_lines)
+    assert pathspec == []
+
+
+def test_already_absent_deletion_intent_dropped_from_pathspec(tmp_path, monkeypatch):
+    """A `DELETE`/`REMOVE` tag for a path absent from both dest's worktree
+    and its index has nothing left to commit -- the desired end state
+    (absent) already holds."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    change_lines = [("REMOVE", "gone-already.sh")]
+
+    def _fake_run(cmd, **kwargs):
+        if "check-ignore" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 1, "", "")
+        if "ls-files" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 1, "", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod, "_run", _fake_run)
+    pathspec = _mod._build_commit_pathspec(str(dest), change_lines)
+    assert pathspec == []
+
+
+def test_real_add_update_delete_still_appears_in_pathspec(tmp_path, monkeypatch):
+    """A genuine deletion (still index-tracked, only worktree-removed by the
+    real publish run) must NOT be filtered -- only the class of deletion
+    whose path is absent from BOTH worktree and index is dropped."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    change_lines = [
+        ("NEW", "added.md"),
+        ("UPDATE", "changed.md"),
+        ("REMOVE", "still-tracked.sh"),
+    ]
+
+    def _fake_run(cmd, **kwargs):
+        if "check-ignore" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 1, "", "")
+        if "ls-files" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 0, "still-tracked.sh\n", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod, "_run", _fake_run)
+    pathspec = _mod._build_commit_pathspec(str(dest), change_lines)
+    assert pathspec == [
+        str(dest / "added.md"),
+        str(dest / "changed.md"),
+        str(dest / "still-tracked.sh"),
+    ]
+
+
+def test_filter_summary_printed_to_stderr(tmp_path, monkeypatch, capsys):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    change_lines = [
+        ("NEW", "__pycache__/foo.pyc"),
+        ("REMOVE", "gone-already.sh"),
+        ("NEW", "kept.md"),
+    ]
+
+    def _fake_run(cmd, **kwargs):
+        if "check-ignore" in cmd:
+            return _mod.subprocess.CompletedProcess(
+                cmd, 0, "__pycache__/foo.pyc\n", ""
+            )
+        if "ls-files" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 1, "", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod, "_run", _fake_run)
+    pathspec = _mod._build_commit_pathspec(str(dest), change_lines)
+    assert pathspec == [str(dest / "kept.md")]
+    err = capsys.readouterr().err
+    assert "filtered 2 path(s)" in err
+    assert "1 gitignored" in err
+    assert "1 deletion-intent" in err
+
+
+def test_pathspec_filter_fails_open_on_undeterminable_dest_state(tmp_path, monkeypatch):
+    """A path this filter cannot actually verify (probe failure, e.g. `dest`
+    is not a git repo in this stub) is left in the pathspec -- a real change
+    that should land is the failure mode this filter must never cause, so
+    an uncertain case surfaces through `scoped-git-commit`'s own decline
+    instead of being silently dropped here."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    change_lines = [("REMOVE", "maybe-gone.sh")]
+
+    def _fake_run(cmd, **kwargs):
+        if "check-ignore" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 128, "", "fatal: not a git repository")
+        if "ls-files" in cmd:
+            return _mod.subprocess.CompletedProcess(cmd, 128, "", "fatal: not a git repository")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod, "_run", _fake_run)
+    pathspec = _mod._build_commit_pathspec(str(dest), change_lines)
+    assert pathspec == [str(dest / "maybe-gone.sh")]
+
+
 def test_no_pathspec_element_names_a_directory():
     """AC7: every entry `_build_commit_pathspec` emits names a specific
     file, never a directory — the function trusts its inputs to already be

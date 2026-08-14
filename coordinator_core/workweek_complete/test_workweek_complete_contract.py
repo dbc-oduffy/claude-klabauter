@@ -72,6 +72,75 @@ def test_step2_directive_names_the_validate_gate_cli_fast_subcommand() -> None:
     assert directive["args"] == ["fast"]
 
 
+def test_step4c_ubt_directive_exists_and_hard_blocks() -> None:
+    """The Step 4c UBT pending-record merge gate must exist and emit
+    `hard_block: true` -- DoE's PM cut the compensating ceremony prose on the
+    premise this directive exists and is trustworthy; a silently-missing or
+    silently-advisory 4c directive leaves the merge gate dark on a live
+    release ceremony (see brief.py's `_build_directives` docstring)."""
+    directive = next(
+        d for d in wwc_brief._build_directives()
+        if d["id"] == "d_step4c_ubt_pending_merge_gate"
+    )
+    assert directive["cli"] == "workweek-complete-advisories"
+    assert directive["args"][0] == "ubt-unresolved"
+    assert len(directive["args"]) == 2, (
+        "ubt-unresolved takes exactly one positional repo-root argument"
+    )
+    assert directive["hard_block"] is True
+
+
+def test_only_scan_unresolved_ubt_records_caller_is_the_4c_directive() -> None:
+    """Ground-truth pin (prior investigation, dispatch brief): the ONLY
+    directive naming `ubt-unresolved` must be the 4c gate -- catches a
+    future accidental duplicate/second invocation."""
+    ubt_directives = [
+        d for d in wwc_brief._build_directives()
+        if d["cli"] == "workweek-complete-advisories" and d["args"] and d["args"][0] == "ubt-unresolved"
+    ]
+    assert [d["id"] for d in ubt_directives] == ["d_step4c_ubt_pending_merge_gate"]
+
+
+def test_drift_guards_bundle_split_carries_correct_per_directive_hard_block() -> None:
+    """`workweek-complete-drift-guards` bundles subcommands of differing
+    severity (Task 2) -- each split-out directive must carry the severity
+    correct for ITS OWN subcommand, not a single shared boolean."""
+    directives = {d["id"]: d for d in wwc_brief._build_directives()}
+    expected = {
+        "d_step4b_4k_description_length": ("description-length", False),
+        "d_step4b_4k_enabled_plugins": ("enabled-plugins", False),
+        "d_step4b_4k_cve_recheck": ("cve-recheck", False),
+        "d_step4b_4k_schema_drift": ("schema-drift-gate", True),
+    }
+    for directive_id, (subcommand, hard_block) in expected.items():
+        directive = directives[directive_id]
+        assert directive["cli"] == "workweek-complete-drift-guards"
+        assert directive["args"] == [subcommand]
+        assert directive["hard_block"] is hard_block
+
+
+def test_no_directive_bundles_drift_guards_with_empty_args() -> None:
+    """The pre-split single `d_step4b_4k_drift_guards` directive named the
+    bundling CLI with `args=[]` -- an argparse-required-subcommand CLI
+    cannot dispatch on that shape. No directive should reintroduce it."""
+    for d in wwc_brief._build_directives():
+        if d["cli"] == "workweek-complete-drift-guards":
+            assert d["args"], (
+                f"directive {d['id']!r} names workweek-complete-drift-guards "
+                "with no subcommand in args"
+            )
+
+
+def test_pcli_drift_gate_is_never_a_directive() -> None:
+    """The ceremony doc's own prose: pcli-04 drift gate runs by hand at
+    Step 5, no directive emits its subcommand."""
+    for d in wwc_brief._build_directives():
+        assert d["args"][:1] != ["pcli-drift-gate"], (
+            f"directive {d['id']!r} emits pcli-drift-gate, which must stay a "
+            "by-hand Step 5 invocation per the ceremony doc"
+        )
+
+
 @pytest.mark.real_home
 def test_brief_envelope_preflight_consumes_manifest_matches_module_constant() -> None:
     """The 8-key envelope's `preflight.consumes_manifest` field must be

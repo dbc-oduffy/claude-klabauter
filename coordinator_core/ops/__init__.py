@@ -196,6 +196,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         '`shipped` terminal status when no plan was ever minted for the routed work)',
     ),
     (
+        "coordinator_core.ops.sizing_spike_verdict",
+        'registers "sizing.record_spike_verdict" (2026-08-14, single-target applier for '
+        'the sizing-object `premise.spike_verdict` pointer — the missing producer for the '
+        '`plan⇄spike` back-edge\'s trampoline gate)',
+    ),
+    (
         "coordinator_core.ops.cascade_backstop_sweep",
         'registers "deliverable.cascade_backstop_sweep" (C6c read-only backstop sweep, AC6d)',
     ),

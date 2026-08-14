@@ -362,12 +362,57 @@ def _build_directives(
     `CONSUMES_MANIFEST`.
 
     The 4b-4k guard battery (10 lettered advisory/drift gates per C4's
-    census) collapses to one directive per underlying CLI rather than one
-    per lettered step — `hard_block` marks the three gates C4 identified as
-    hard-blocking (UBT merge, reverse-drift, schema/version-drift); the rest
-    are advisory. All Tier-1 directives here are ungated (`depends_on=None`)
-    — unlike C2's workday assembler, no Tier-1 workweek step was named in
-    this chunk's spec as gated on a specific judgment point.
+    census, DoE-claude coordinator/commands/workweek-complete.md § Step
+    4b-4k guard-sweep census) collapses to one directive per underlying
+    CLI/subcommand rather than one per lettered step — `hard_block` marks
+    the four gates the census identified as hard-blocking (4c UBT pending-
+    record merge, 4g reverse-drift, 4k vendored-schema drift, plus the
+    Step-10 version-consistency check); the rest are advisory. All Tier-1
+    directives here are ungated (`depends_on=None`) — unlike C2's workday
+    assembler, no Tier-1 workweek step was named in this chunk's spec as
+    gated on a specific judgment point.
+
+    `workweek-complete-drift-guards` bundles several 4b-4k subcommands
+    behind one CLI whose per-subcommand severity differs (`description-
+    length`/`enabled-plugins`/`cve-recheck` are advisory-only,
+    `schema-drift-gate` is 4k's hard-blocking gate) — per DoE's own
+    per-subcommand exit-code docstring (coordinator/bin/workweek-complete-
+    drift-guards.py), a single `hard_block` boolean covering the whole CLI
+    cannot be correct for both sides of that bundle. This module therefore
+    emits ONE directive per subcommand (`d_step4b_4k_description_length`,
+    `d_step4b_4k_enabled_plugins`, `d_step4b_4k_cve_recheck`,
+    `d_step4b_4k_schema_drift`) rather than a single `args=[]` directive
+    naming the bundling CLI with no subcommand at all — `pcli-drift-gate`
+    is deliberately NOT one of them (the ceremony doc's own prose: "no
+    directive emits its subcommand" — it stays a by-hand Step 5 invocation)
+    and neither is `shellcheck-sweep`/`console-flash-guard`/`multi-event-
+    hook-guard` (Step 6 concerns, outside the 4b-4k census).
+
+    `d_step4c_ubt_pending_merge_gate` (4c, hard-blocking) delegates to
+    `workweek-complete-advisories`'s `ubt-unresolved <repo-root>`
+    subcommand — the only caller of `scan_unresolved_ubt_records`
+    (coordinator_core.ops.scan_unresolved_ubt_records). Repo-root is
+    resolved via `_resolve_repo_root_for_doc_staleness()` (the same
+    git-common-dir + main-worktree-root ladder every other repo-root-
+    needing directive in this module reuses), falling back to `"."`
+    on resolution failure — never omitting the required positional arg.
+    Non-UE-repo degradation is intentionally NOT special-cased here:
+    `scan_unresolved_ubt_records` already returns `[]` for a repo with no
+    `state/review-trail/` tree (absent-dir-safe, per that module's own
+    negative-spec), and the CLI subcommand always exits 0 regardless of
+    finding count (`hard_block` is render-time metadata only, per this
+    function's own comment below — apply.py's halt contract never reads
+    it), so a non-UE repo silently no-ops through the same code path a UE
+    repo with zero unresolved markers takes — no separate no-op branch to
+    write or test. No override-env plumbing is added here: neither this
+    CLI nor `scan_unresolved_ubt_records` reads a
+    `COORDINATOR_OVERRIDE_UBT_GATE`-shaped variable today (unlike
+    `workweek-complete-reverse-drift-gate.py`'s own
+    `COORDINATOR_OVERRIDE_REVERSE_DRIFT`, which that CLI reads directly,
+    not via a directive-threaded arg) — inventing one here would be a new
+    convention this chunk was not asked to build; the ceremony doc's
+    `COORDINATOR_OVERRIDE_UBT_GATE=1` line is a Step-5 human-procedure
+    escape hatch, not something a directive's `args[]` carries.
 
     Doc-staleness gate (plan `docs/plans/2026-07-28-human-facing-doc-
     staleness-detector.md`, chunk C5) — composes the two existing
@@ -443,9 +488,29 @@ def _build_directives(
         ),
         _directive("d_step4_counts_goal_krs", cli="reassess-goal-krs", args=[]),
         _directive(
-            "d_step4b_4k_drift_guards",
+            "d_step4b_4k_description_length",
             cli="workweek-complete-drift-guards",
-            args=[],
+            args=["description-length"],
+        ),
+        _directive(
+            "d_step4b_4k_enabled_plugins",
+            cli="workweek-complete-drift-guards",
+            args=["enabled-plugins"],
+        ),
+        _directive(
+            "d_step4b_4k_cve_recheck",
+            cli="workweek-complete-drift-guards",
+            args=["cve-recheck"],
+        ),
+        _directive(
+            "d_step4b_4k_schema_drift",
+            cli="workweek-complete-drift-guards",
+            args=["schema-drift-gate"],
+        ),
+        _directive(
+            "d_step4c_ubt_pending_merge_gate",
+            cli="workweek-complete-advisories",
+            args=["ubt-unresolved", _resolve_repo_root_for_doc_staleness() or "."],
         ),
         _directive(
             "d_step4b_4k_reverse_drift",
@@ -518,6 +583,8 @@ def _build_directives(
     # hard-block-vs-advisory granularity per AC9/C8 (see C4's census note on
     # which of the 4b-4k gates are hard-blocking).
     hard_block_ids = {
+        "d_step4c_ubt_pending_merge_gate",
+        "d_step4b_4k_schema_drift",
         "d_step4b_4k_reverse_drift",
         "d_step4b_4k_version_consistency",
     }

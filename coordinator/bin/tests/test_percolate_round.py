@@ -73,7 +73,10 @@ class _SubprocessSpy:
                  dest_ahead_returncode=0,
                  reset_returncode=0,
                  clean_returncode=0,
-                 rev_parse_stdout="deadbeef1234\n"):
+                 rev_parse_stdout="deadbeef1234\n",
+                 check_ignore_stdout="",
+                 check_ignore_returncode=1,
+                 ls_files_returncode=0):
         self.calls: List[List[str]] = []
         self._dryrun_stdout = dryrun_stdout
         self._real_stdout = real_stdout
@@ -102,6 +105,14 @@ class _SubprocessSpy:
         self._reset_returncode = reset_returncode
         self._clean_returncode = clean_returncode
         self._rev_parse_stdout = rev_parse_stdout
+        # `_build_commit_pathspec`'s pathspec-filter leg (§ gitignored /
+        # already-absent deletion-intent drops) probes `git check-ignore`
+        # and `git ls-files` at dest -- default to "nothing ignored" /
+        # "tracked" so existing fixtures (no DELETE/REMOVE tags in the
+        # default real-run stdout) stay unaffected.
+        self._check_ignore_stdout = check_ignore_stdout
+        self._check_ignore_returncode = check_ignore_returncode
+        self._ls_files_returncode = ls_files_returncode
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
@@ -121,6 +132,12 @@ class _SubprocessSpy:
 
         if cmd and str(cmd[0]) == "git" and "rev-parse" in cmd:
             return _completed(0, self._rev_parse_stdout, "")
+
+        if cmd and str(cmd[0]) == "git" and "check-ignore" in cmd:
+            return _completed(self._check_ignore_returncode, self._check_ignore_stdout, "")
+
+        if cmd and str(cmd[0]) == "git" and "ls-files" in cmd:
+            return _completed(self._ls_files_returncode, "", "")
 
         if "status" in cmd and "--porcelain=v2" in cmd:
             return _completed(self._dest_ahead_returncode, self._dest_ahead_stdout, "")
@@ -180,7 +197,9 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
                 dest_status_returncode=0, no_publish=False, push_returncode=0,
                 dest_ahead_stdout="", dest_ahead_returncode=0, percolate_root=None,
                 reconcile_dest=None, reset_returncode=0, clean_returncode=0,
-                rev_parse_stdout="deadbeef1234\n", no_delta=False):
+                rev_parse_stdout="deadbeef1234\n", no_delta=False,
+                check_ignore_stdout="", check_ignore_returncode=1,
+                ls_files_returncode=0):
     dest = tmp_path / "dest"
     dest.mkdir()
     if ci_exists:
@@ -211,6 +230,9 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
         reset_returncode=reset_returncode,
         clean_returncode=clean_returncode,
         rev_parse_stdout=rev_parse_stdout,
+        check_ignore_stdout=check_ignore_stdout,
+        check_ignore_returncode=check_ignore_returncode,
+        ls_files_returncode=ls_files_returncode,
     )
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
@@ -939,7 +961,11 @@ def test_reconcile_dest_discard_clears_residue_and_proceeds(tmp_path, monkeypatc
     assert "deadbeef1234" in out
 
 
-def test_reconcile_dest_discard_refuses_when_dest_ahead_of_remote(tmp_path, monkeypatch, capsys):
+def test_reconcile_dest_discard_ahead_of_remote_resets_and_preserves_commit(tmp_path, monkeypatch):
+    """The old ahead-count refusal was specified in error: `git reset --hard
+    HEAD` never destroys commits, only uncommitted working-tree/index state
+    -- an unpushed commit survives a reset to HEAD intact. Discard now
+    resets and proceeds, reporting the ahead count rather than refusing."""
     rc, out, spy, dest = _run_round(
         tmp_path,
         monkeypatch,
@@ -947,11 +973,29 @@ def test_reconcile_dest_discard_refuses_when_dest_ahead_of_remote(tmp_path, monk
         reconcile_dest="discard",
         dest_ahead_stdout="# branch.ab +2 -0\n",
     )
+    assert rc == _mod._EXIT_OK
+    reset_calls = [c for c in spy.calls if str(c[0]) == "git" and "reset" in c and "--hard" in c]
+    assert len(reset_calls) == 1
+    assert "ahead of remote by 2 commit(s)" in out
+    assert "reset to HEAD preserves them" in out
+
+
+def test_reconcile_dest_discard_ahead_probe_failure_still_refuses(tmp_path, monkeypatch, capsys):
+    """The one remaining refusal condition: an undeterminable ahead count
+    (the probe itself failed) is refused under an unknown state, never
+    treated as zero."""
+    rc, out, spy, dest = _run_round(
+        tmp_path,
+        monkeypatch,
+        dest_status_stdout=" M pre-existing.md\n",
+        reconcile_dest="discard",
+        dest_ahead_returncode=128,
+    )
     assert rc == _mod._EXIT_FAIL
     reset_calls = [c for c in spy.calls if str(c[0]) == "git" and "reset" in c and "--hard" in c]
     assert reset_calls == []
     err = capsys.readouterr().err
-    assert "ahead of its remote" in err
+    assert "could not determine" in err
     assert "refusing to discard" in err
 
 
@@ -991,6 +1035,31 @@ def test_reconcile_dest_discard_function_direct(tmp_path, monkeypatch):
     assert "discarded 2 path(s)" in message
     assert any("reset" in c and "--hard" in c for c in calls)
     assert any("clean" in c and "-fd" in c for c in calls)
+
+
+def test_reconcile_dest_discard_function_ahead_of_remote_succeeds_and_preserves_commit(tmp_path, monkeypatch):
+    """A reset to HEAD never destroys commits -- only uncommitted
+    working-tree/index state. `dest` carrying 3 unpushed commits must not
+    refuse the discard; the reset preserves them, and the report names the
+    count."""
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "rev-parse" in cmd:
+            return _completed(0, "abc123\n", "")
+        if "status" in cmd and "--porcelain=v2" in cmd:
+            return _completed(0, "# branch.ab +3 -0\n", "")
+        if "reset" in cmd or "clean" in cmd:
+            return _completed(0, "", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    ok, message = _mod._reconcile_dest_discard(str(tmp_path), " M a.md\n")
+    assert ok is True
+    assert "ahead of remote by 3 commit(s)" in message
+    assert "reset to HEAD preserves them" in message
+    assert any("reset" in c and "--hard" in c for c in calls)
 
 
 def test_reconcile_dest_discard_function_refuses_on_ahead_probe_failure(tmp_path, monkeypatch):

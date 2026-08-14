@@ -128,6 +128,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.cascade_terminal":            "coordinator_core.ops.deliverable_cascade",
     "sizing.decline":                          "coordinator_core.ops.sizing_decline",
     "sizing.ship":                              "coordinator_core.ops.sizing_ship",
+    "sizing.record_spike_verdict":              "coordinator_core.ops.sizing_spike_verdict",
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "ceremony.wsc_tail":                      "coordinator_core.ops.ceremony.wsc_tail",

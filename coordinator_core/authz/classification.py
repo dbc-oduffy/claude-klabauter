@@ -3069,6 +3069,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # sizing.ship — MUTATING: writes `status: shipped` under locked_rmw
     # (2026-08-13, PM ruling; see coordinator_core/ops/sizing_ship.py docstring).
     "sizing.ship": OpClass.MUTATING,
+    # sizing.record_spike_verdict — MUTATING: writes `premise.spike_verdict` under
+    # locked_rmw (2026-08-14; see coordinator_core/ops/sizing_spike_verdict.py docstring).
+    "sizing.record_spike_verdict": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # distill.curate_clusters — COMPUTE_ONLY: a pure structural verdict over a
     # caller-supplied {system_tag: count} map. Reads no file, opens no path, and
