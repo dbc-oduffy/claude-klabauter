@@ -76,8 +76,11 @@ class _SubprocessSpy:
                  rev_parse_stdout="deadbeef1234\n",
                  check_ignore_stdout="",
                  check_ignore_returncode=1,
-                 ls_files_returncode=0):
+                 ls_files_returncode=0,
+                 toplevel_stdout=None,
+                 toplevel_returncode=0):
         self.calls: List[List[str]] = []
+        self.call_kwargs: List[dict] = []
         self._dryrun_stdout = dryrun_stdout
         self._real_stdout = real_stdout
         self._parse1_stdout = parse1_stdout
@@ -113,9 +116,20 @@ class _SubprocessSpy:
         self._check_ignore_stdout = check_ignore_stdout
         self._check_ignore_returncode = check_ignore_returncode
         self._ls_files_returncode = ls_files_returncode
+        # Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
+        # `_resolve_repo_root`'s `git rev-parse --show-toplevel` probe.
+        # Defaults to `None` so the caller (`_run_round`) can bind it to the
+        # fixture's own `dest`, preserving today's "dest is already the
+        # worktree root" behaviour for every existing test unchanged.
+        self._toplevel_stdout = toplevel_stdout
+        self._toplevel_returncode = toplevel_returncode
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
+        # Review: coordinatorcode-reviewer-c58be590 -- kwargs were
+        # discarded, so no test could assert `timeout=` actually reaches
+        # the two `publish.py` legs.
+        self.call_kwargs.append(dict(kwargs))
         joined = " ".join(str(c) for c in cmd)
 
         if "machine-local" in joined:
@@ -129,6 +143,19 @@ class _SubprocessSpy:
 
         if cmd and str(cmd[0]) == "git" and "clean" in cmd:
             return _completed(self._clean_returncode, "", "")
+
+        if cmd and str(cmd[0]) == "git" and "rev-parse" in cmd and "--show-toplevel" in cmd:
+            # Default (no explicit `toplevel_stdout`): echo back the `-C
+            # <path>` argument itself, matching every existing fixture's
+            # "dest is already the worktree root" shape unchanged.
+            if self._toplevel_stdout is not None:
+                return _completed(self._toplevel_returncode, self._toplevel_stdout, "")
+            dash_c_path = ""
+            for i, tok in enumerate(cmd):
+                if str(tok) == "-C" and i + 1 < len(cmd):
+                    dash_c_path = str(cmd[i + 1])
+                    break
+            return _completed(self._toplevel_returncode, f"{dash_c_path}\n", "")
 
         if cmd and str(cmd[0]) == "git" and "rev-parse" in cmd:
             return _completed(0, self._rev_parse_stdout, "")
@@ -199,7 +226,8 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
                 reconcile_dest=None, reset_returncode=0, clean_returncode=0,
                 rev_parse_stdout="deadbeef1234\n", no_delta=False,
                 check_ignore_stdout="", check_ignore_returncode=1,
-                ls_files_returncode=0):
+                ls_files_returncode=0, toplevel_stdout=None,
+                toplevel_returncode=0):
     dest = tmp_path / "dest"
     dest.mkdir()
     if ci_exists:
@@ -233,6 +261,8 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
         check_ignore_stdout=check_ignore_stdout,
         check_ignore_returncode=check_ignore_returncode,
         ls_files_returncode=ls_files_returncode,
+        toplevel_stdout=toplevel_stdout,
+        toplevel_returncode=toplevel_returncode,
     )
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
@@ -354,10 +384,15 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
     dash_idx = commit_cmd.index("--")
     pathspec = commit_cmd[dash_idx + 1 :]
 
-    assert str(dest / "added-file.md") in pathspec
-    assert str(dest / "changed-file.md") in pathspec
+    # Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
+    # `5858489a8` (repo-relative pathspec entries) predates these
+    # assertions; `_run_round`'s default `repo_root` echoes `dest` itself
+    # (§ `_SubprocessSpy`'s `--show-toplevel` stub), so entries are
+    # `dest`-relative, not absolute.
+    assert "added-file.md" in pathspec
+    assert "changed-file.md" in pathspec
     # The dry-run-only file must NOT leak into the pathspec.
-    assert str(dest / "dryrun-only-file.md") not in pathspec
+    assert "dryrun-only-file.md" not in pathspec
 
     # Review: code-reviewer — `Path(entry).suffix` is not a valid file-ness
     # proxy (an extensionless tracked file like LICENSE would fail it); test
@@ -754,6 +789,11 @@ def test_noop_dryrun_reports_pass_noop(tmp_path, monkeypatch):
         real_stdout="",
         parse1_stdout=_parse1_stdout(),
         parse2_stdout=_parse2_stdout(),
+        # Review: coordinatorcode-reviewer-c58be590 -- `_dest_ahead_count`
+        # now returns `None` (undetermined), not `0`, when the
+        # `branch.ab` line is absent; this fixture needs an explicit
+        # genuinely-in-sync line to exercise the "already in sync" leg.
+        dest_ahead_stdout="# branch.ab +0 -0\n",
     )
     monkeypatch.setattr(_mod.subprocess, "run", spy)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
@@ -1072,6 +1112,37 @@ def test_reconcile_dest_discard_function_refuses_on_ahead_probe_failure(tmp_path
     ok, message = _mod._reconcile_dest_discard(str(tmp_path), " M a.md\n")
     assert ok is False
     assert "could not determine" in message
+
+
+def test_dest_ahead_count_no_upstream_line_is_undetermined_not_zero(tmp_path, monkeypatch):
+    """Review: coordinatorcode-reviewer-c58be590 -- git omits the
+    `# branch.ab` line entirely when the checked-out branch has no
+    upstream tracking ref (or dest is detached HEAD). That must return
+    `None` (undetermined), the same as a probe failure -- never fall
+    through to `ahead = 0`, which is indistinguishable from a real
+    zero-ahead dest to every consumer."""
+    def _fake_run(cmd, **kwargs):
+        if "status" in cmd and "--porcelain=v2" in cmd:
+            # Exit 0, but no `# branch.ab` line at all -- the real shape
+            # git emits for a branch with no upstream configured.
+            return _completed(0, "# branch.oid deadbeef\n? untracked.txt\n", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    assert _mod._dest_ahead_count(str(tmp_path)) is None
+
+
+def test_dest_ahead_count_genuine_zero_is_distinguished(tmp_path, monkeypatch):
+    """The real +0 case (upstream configured, genuinely in sync) must
+    still return `0`, not `None` -- this and the no-upstream case above
+    must be distinguishable."""
+    def _fake_run(cmd, **kwargs):
+        if "status" in cmd and "--porcelain=v2" in cmd:
+            return _completed(0, "# branch.ab +0 -0\n", "")
+        raise AssertionError(f"unhandled: {cmd!r}")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    assert _mod._dest_ahead_count(str(tmp_path)) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1735,6 +1806,22 @@ def _publish_calls(spy):
     return [c for c in spy.calls if str(_mod._PUBLISH) in " ".join(str(x) for x in c)]
 
 
+def _publish_call_kwargs(spy):
+    return [
+        kw
+        for c, kw in zip(spy.calls, spy.call_kwargs)
+        if str(_mod._PUBLISH) in " ".join(str(x) for x in c)
+    ]
+
+
+def _non_publish_call_kwargs(spy):
+    return [
+        kw
+        for c, kw in zip(spy.calls, spy.call_kwargs)
+        if str(_mod._PUBLISH) not in " ".join(str(x) for x in c)
+    ]
+
+
 def test_delta_is_passed_to_publish_by_default(tmp_path, monkeypatch):
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
@@ -1753,3 +1840,65 @@ def test_no_delta_flag_suppresses_delta_on_every_publish_call(tmp_path, monkeypa
     assert publish_calls, "expected at least one publish.py invocation"
     for call in publish_calls:
         assert "--delta" not in call, call
+
+
+def test_publish_legs_use_heavier_timeout_other_legs_keep_default(tmp_path, monkeypatch):
+    """Review: coordinatorcode-reviewer-c58be590 -- `_SubprocessSpy` previously
+    discarded `**kwargs`, so no test asserted `timeout=_PUBLISH_LEG_TIMEOUT_SECS`
+    actually reached the two `publish.py` legs (`519cc8baf7`'s whole point).
+    Pins both the heavier bound on the publish legs and the shared default
+    on every other leg."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
+
+    assert rc == _mod._EXIT_OK
+    publish_kwargs = _publish_call_kwargs(spy)
+    assert len(publish_kwargs) == 2, publish_kwargs
+    for kw in publish_kwargs:
+        assert kw.get("timeout") == _mod._PUBLISH_LEG_TIMEOUT_SECS, kw
+
+    other_kwargs = _non_publish_call_kwargs(spy)
+    assert other_kwargs, "expected at least one non-publish.py invocation"
+    for kw in other_kwargs:
+        assert kw.get("timeout") == _mod._SUBPROCESS_TIMEOUT_SECS, kw
+
+
+# ---------------------------------------------------------------------------
+# Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
+# `dest` can be a subdirectory of the mirror's actual git worktree root;
+# `--repo` and the pathspec's `repo_root` must resolve to, and share, that
+# worktree root rather than `dest` itself.
+# ---------------------------------------------------------------------------
+
+def test_commit_uses_resolved_worktree_root_not_dest(tmp_path, monkeypatch):
+    """`dest` is a `dest_subdir` beneath the worktree root -- `--repo` on
+    the `scoped-git-commit` invocation must be the RESOLVED root, not
+    `dest`, and it must be the identical value used to build the
+    pathspec."""
+    # `_run_round`'s own fixture `dest` is `tmp_path / "dest"` -- bind the
+    # fake worktree root to its parent so `dest` genuinely resolves beneath
+    # it, matching the real `dest_subdir` shape this finding describes.
+    worktree_root = tmp_path
+    rc, out, spy, _dest = _run_round(
+        tmp_path, monkeypatch,
+        toplevel_stdout=f"{worktree_root}\n",
+    )
+    # `_run_round` hard-codes its own fixture `dest`; re-derive the commit
+    # call directly rather than relying on its returned `dest`.
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert commit_calls, "expected a scoped-git-commit invocation"
+    commit_cmd = commit_calls[0]
+    repo_idx = commit_cmd.index("--repo")
+    assert commit_cmd[repo_idx + 1] == str(worktree_root)
+    assert rc == _mod._EXIT_OK
+
+
+def test_repo_root_resolution_failure_returns_fail(tmp_path, monkeypatch):
+    """`git rev-parse --show-toplevel` failing (e.g. dest not inside a git
+    worktree) must fail the round loudly rather than fall back to `dest`
+    silently."""
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch,
+        toplevel_stdout="",
+        toplevel_returncode=1,
+    )
+    assert rc == _mod._EXIT_FAIL

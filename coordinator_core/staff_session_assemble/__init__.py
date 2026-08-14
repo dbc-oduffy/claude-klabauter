@@ -313,13 +313,14 @@ EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
 
-def _usage(prog: str) -> int:
+def _usage(prog: str, stream=None) -> int:
     import sys
 
+    stream = sys.stderr if stream is None else stream
     print(
         f"{prog}: usage: {prog} --session-mode <plan|review> "
         "(--domain-signal <str> | --slug <slug> [--slug <slug> ...])",
-        file=sys.stderr,
+        file=stream,
     )
     return EXIT_USAGE
 
@@ -337,7 +338,7 @@ def main(argv: list[str]) -> int:
     while i < len(argv):
         tok = argv[i]
         if tok in ("--help", "-h"):
-            _usage(prog)
+            _usage(prog, stream=sys.stdout)
             return EXIT_OK
         if tok == "--domain-signal" and i + 1 < len(argv):
             domain_signal = argv[i + 1]

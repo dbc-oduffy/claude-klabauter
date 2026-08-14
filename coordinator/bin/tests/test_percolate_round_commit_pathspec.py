@@ -520,3 +520,191 @@ def test_no_pathspec_element_names_a_directory():
     for entry in pathspec:
         assert not entry.endswith("/") and not entry.endswith("\\")
         assert Path(entry).suffix, f"pathspec entry looks directory-shaped: {entry!r}"
+
+
+# ---------------------------------------------------------------------------
+# Real-shape regression (docs/plans/2026-08-14-the-publish-round-commits-
+# the-names-it-a.md follow-up, the 83-decline defect): a REAL git repo, with
+# `dest` a `dest_subdir` beneath the actual `scoped-git-commit --repo` root
+# (§ `_build_commit_pathspec`'s `repo_root` docstring) -- the shape
+# `test_already_absent_deletion_intent_dropped_from_pathspec` above did NOT
+# exercise (flat `tmp_path/"dest"`, mocked `_run`, no outer repo root at
+# all). A REAL subprocess `git` is used deliberately here (never mocked) --
+# the defect is in exactly what a real `git ls-files`/`git diff --cached`
+# reports for a `dest_subdir`, which a hand-rolled `_fake_run` cannot stand
+# in for without begging the question.
+# ---------------------------------------------------------------------------
+
+
+import subprocess as _subprocess
+
+_NO_WINDOW = {"creationflags": getattr(_subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+def _git_run(args, **kwargs):
+    return _subprocess.run(args, capture_output=True, text=True, **_NO_WINDOW, **kwargs)
+
+
+def _init_real_repo(repo_root: Path) -> None:
+    _git_run(["git", "init", "-q"], cwd=str(repo_root), check=True)
+    _git_run(
+        ["git", "-c", "user.email=a@b.c", "-c", "user.name=a", "commit", "-q",
+         "--allow-empty", "-m", "init"],
+        cwd=str(repo_root), check=True,
+    )
+
+
+def test_already_absent_deletion_intent_dropped_from_pathspec_real_repo_subdir(tmp_path):
+    """Real-shape fidelity fix: `dest` is a `dest_subdir` under a real repo
+    ROOT that never itself received the removed file (never existed at
+    dest, matching one of the two `_dest_path_exists` "already gone"
+    causes) -- `not _dest_path_exists(...)` must still resolve to True (drop
+    it) when probed via a real `git`, not just a mocked one."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_real_repo(repo_root)
+    dest_subdir = repo_root / "coordinator_core"
+    dest_subdir.mkdir()
+    _git_run(
+        ["git", "-c", "user.email=a@b.c", "-c", "user.name=a", "commit", "-q",
+         "--allow-empty", "-m", "second"],
+        cwd=str(repo_root), check=True,
+    )
+
+    change_lines = [("REMOVE", "ops/ceremony/tests/never_existed.py")]
+    pathspec = _mod._build_commit_pathspec(str(dest_subdir), change_lines)
+    assert pathspec == []
+
+
+def test_unstaged_worktree_deletion_kept_but_repo_root_relative(tmp_path):
+    """The other `_dest_path_exists` truth (still index-tracked, only
+    worktree-removed): `_filter_commit_pathspec` must still KEEP it (§
+    `test_real_add_update_delete_still_appears_in_pathspec` above, semantics
+    unchanged by this fix) -- but with `repo_root` given, the kept entry
+    must be `repo_root`-relative, not absolute under `dest_subdir`.
+
+    Why this matters (the actual 83-decline root cause, not the filter's
+    own drop/keep call): `scoped_git_commit.commit_pipeline.explicit_stage`
+    classifies an unstaged deletion via `git_native.ls_files_deleted`, which
+    runs with `cwd=worktree_root` (the `--repo` value, i.e. this test's
+    `repo_root`) and reports matches CWD-relative. An absolute pathspec
+    entry can never equality-match that CWD-relative name -- this is
+    reproduced directly below via the same real-git call `explicit_stage`
+    depends on, without touching `commit_pipeline.py` itself."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_real_repo(repo_root)
+    dest_subdir = repo_root / "coordinator_core"
+    tests_dir = dest_subdir / "ops" / "ceremony" / "tests"
+    tests_dir.mkdir(parents=True)
+    target_file = tests_dir / "test_claim_cli_remedy_invocations.py"
+    target_file.write_text("x\n")
+    _git_run(["git", "add", "-A"], cwd=str(repo_root), check=True)
+    _git_run(
+        ["git", "-c", "user.email=a@b.c", "-c", "user.name=a", "commit", "-q",
+         "-m", "seed"],
+        cwd=str(repo_root), check=True,
+    )
+
+    # The real publish swap: physically removed, never staged (§ `publish.py
+    # ::_swap_publish_staging_into_dest` -- a filesystem-level rename, never
+    # a `git rm`).
+    target_file.unlink()
+
+    change_lines = [("REMOVE", "ops/ceremony/tests/test_claim_cli_remedy_invocations.py")]
+    pathspec = _mod._build_commit_pathspec(
+        str(dest_subdir), change_lines, repo_root=str(repo_root)
+    )
+    assert pathspec == ["coordinator_core/ops/ceremony/tests/test_claim_cli_remedy_invocations.py"]
+
+    # Reproduces the actual downstream classification `explicit_stage` runs
+    # (`git_native.ls_files_deleted`) -- confirms the entry this call
+    # produces is the form that probe will actually recognize.
+    result = _git_run(["git", "-C", str(repo_root), "ls-files", "--deleted", "--", *pathspec])
+    assert result.stdout.strip() == pathspec[0]
+
+    # Pins the actual regression: an ABSOLUTE pathspec entry still scopes
+    # `git ls-files --deleted` to the right file (git accepts an absolute
+    # pathspec argument fine), but the reported match is ALWAYS CWD-relative
+    # -- never byte-equal to the absolute input that named it. This is
+    # exactly why `commit_pipeline.explicit_stage`'s `p in worktree_deleted`
+    # containment check (comparing its caller's own pathspec string against
+    # this CWD-relative output set) can never succeed for an absolute `p`,
+    # regardless of whether the file is genuinely, unambiguously deleted.
+    absolute_form = str(target_file)
+    result_absolute = _git_run(
+        ["git", "-C", str(repo_root), "ls-files", "--deleted", "--", absolute_form]
+    )
+    assert result_absolute.stdout.strip() == pathspec[0]
+    assert result_absolute.stdout.strip() != absolute_form
+
+
+def test_repo_root_relative_pathspec_uses_forward_slashes(tmp_path):
+    """Review: coordinatorcode-reviewer-c58be590 -- `os.path.relpath` emits
+    OS-native separators (backslash on Windows), which never byte-match
+    git's own always-forward-slash CWD-relative output. Pins the expected
+    string explicitly (never derived from `os.sep`) so this holds on any
+    host, not just a Windows one."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_real_repo(repo_root)
+    dest_subdir = repo_root / "coordinator_core" / "ops"
+    tests_dir = dest_subdir / "ceremony" / "tests"
+    tests_dir.mkdir(parents=True)
+    target_file = tests_dir / "test_nested_deletion.py"
+    target_file.write_text("x\n")
+    _git_run(["git", "add", "-A"], cwd=str(repo_root), check=True)
+    _git_run(
+        ["git", "-c", "user.email=a@b.c", "-c", "user.name=a", "commit", "-q",
+         "-m", "seed"],
+        cwd=str(repo_root), check=True,
+    )
+    target_file.unlink()
+
+    change_lines = [("REMOVE", "ceremony/tests/test_nested_deletion.py")]
+    pathspec = _mod._build_commit_pathspec(
+        str(dest_subdir), change_lines, repo_root=str(repo_root)
+    )
+    assert pathspec == ["coordinator_core/ops/ceremony/tests/test_nested_deletion.py"]
+    assert "\\" not in pathspec[0]
+
+
+def test_sibling_row_subtree_resolves_without_dotdot(tmp_path):
+    """Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
+    a real multi-row round's per-row loop calls `_build_commit_pathspec`
+    once per row, each row's `dest` a DIFFERENT subtree of the same
+    worktree (e.g. one row's dest is `<root>/coordinator_core`, another's
+    is `<root>/coordinator/bin`). Passing the actual worktree `<root>` as
+    `repo_root` (§ `_resolve_repo_root`) must resolve every row's entries
+    relative to that shared root, never walking above it with `..`."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_real_repo(repo_root)
+
+    row_a_dest = repo_root / "coordinator_core"
+    row_a_dest.mkdir()
+    row_b_dest = repo_root / "coordinator" / "bin"
+    row_b_dest.mkdir(parents=True)
+    (row_a_dest / "existing.py").write_text("x\n")
+    (row_b_dest / "existing-tool").write_text("x\n")
+    _git_run(["git", "add", "-A"], cwd=str(repo_root), check=True)
+    _git_run(
+        ["git", "-c", "user.email=a@b.c", "-c", "user.name=a", "commit", "-q",
+         "-m", "seed"],
+        cwd=str(repo_root), check=True,
+    )
+
+    row_a_changes = [("NEW", "new-file.py")]
+    row_b_changes = [("NEW", "new-tool")]
+
+    pathspec_a = _mod._build_commit_pathspec(
+        str(row_a_dest), row_a_changes, repo_root=str(repo_root)
+    )
+    pathspec_b = _mod._build_commit_pathspec(
+        str(row_b_dest), row_b_changes, repo_root=str(repo_root)
+    )
+    combined = pathspec_a + pathspec_b
+
+    assert combined == ["coordinator_core/new-file.py", "coordinator/bin/new-tool"]
+    for entry in combined:
+        assert ".." not in entry.split("/"), entry

@@ -8218,29 +8218,30 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
     return None
 
 
-def _usage(prog: str) -> int:
-    print(f"usage: {prog} brief <artifact-path> [--decisions <json>]", file=sys.stderr)
+def _usage(prog: str, stream=None) -> int:
+    stream = sys.stderr if stream is None else stream
+    print(f"usage: {prog} brief <artifact-path> [--decisions <json>]", file=stream)
     print(
         f"       {prog} apply <artifact-path> [--session-id <id>] [--decisions <json>]",
-        file=sys.stderr,
+        file=stream,
     )
-    print(f"       {prog} drop <artifact-path> [--session-id <id>]", file=sys.stderr)
-    print(f"       {prog} stamp-check <plan-path>", file=sys.stderr)
+    print(f"       {prog} drop <artifact-path> [--session-id <id>]", file=stream)
+    print(f"       {prog} stamp-check <plan-path>", file=stream)
     print(
         '       --decisions is a JSON object: {"<jp-id>": {"disposition": "<value>", ...}}',
-        file=sys.stderr,
+        file=stream,
     )
     print(
         '       ("value" is accepted as an exact equivalent of "disposition" -- brief\'s own',
-        file=sys.stderr,
+        file=stream,
     )
     print(
         "        output uses that key). Legal <value>s for a given jp-id are that judgment",
-        file=sys.stderr,
+        file=stream,
     )
     print(
         "        point's own dispositions[].value entries from this run's `brief` output.",
-        file=sys.stderr,
+        file=stream,
     )
     return EXIT_USAGE
 
@@ -8250,7 +8251,7 @@ def main(argv: list[str]) -> int:
         return _usage("pickup-assemble")
 
     if argv[0] in ("--help", "-h"):
-        _usage("pickup-assemble")
+        _usage("pickup-assemble", stream=sys.stdout)
         return EXIT_OK
 
     subcmd, rest = argv[0], argv[1:]

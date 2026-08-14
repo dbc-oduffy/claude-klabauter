@@ -207,6 +207,38 @@ def test_tier_medium_reserved_test_domain_exempted(tmp_path):
     assert "test@notexempt-domain.io" in out
 
 
+def test_tier_medium_reserved_domain_exemption_is_suffix_anchored(tmp_path):
+    """RFC 2606 exemption must anchor `test`/`invalid`/`localhost` to the
+    domain's complete final label, never a bare-word prefix match (regression
+    introduced by commit 1e99fb2b194f, fixed here). Domains that merely
+    START with a reserved word are real-looking and must still be flagged;
+    only a genuine reserved TLD suffix, or the exact example.com/.net/.org
+    forms, is exempt."""
+    target_file = tmp_path / "test_fixture.py"
+    target_file.write_text(
+        '_git(repo, "config", "user.email", "user@test-domain.com")\n'
+        '_git(repo, "config", "user.email", "user@invalid-corp.io")\n'
+        '_git(repo, "config", "user.email", "user@localhost.internal.example")\n'
+        '_git(repo, "config", "user.email", "user@foo.test")\n'
+        '_git(repo, "config", "user.email", "user@sub.example.test")\n'
+        '_git(repo, "config", "user.email", "user@bar.invalid")\n',
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    # Prefix-only matches of a reserved word must still be flagged.
+    assert "user@test-domain.com" in out
+    assert "user@invalid-corp.io" in out
+    assert "user@localhost.internal.example" in out
+    # Genuine reserved-TLD suffixes remain exempt.
+    assert "user@foo.test" not in out
+    assert "user@sub.example.test" not in out
+    assert "user@bar.invalid" not in out
+
+
 def test_scan_secrets_clean(tmp_path):
     target_file = tmp_path / "clean.md"
     target_file.write_text("nothing sensitive here\n", encoding="utf-8")

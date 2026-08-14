@@ -619,6 +619,154 @@ def test_explicit_stage_genuinely_missing_caller_path_escalates(tmp_path):
     assert "missing-caller:never/existed.md" in outcome.skipped
 
 
+# ---------------------------------------------------------------------------
+# explicit_stage -- absolute vs. repo-relative caller path forms
+# (bug-2026-08-14-explicit-stage-absolute-deletion-path)
+#
+# Every git probe in explicit_stage runs with cwd=worktree_root and PRINTS
+# CWD-relative names whatever pathspec form it was queried with, so before
+# the fix an absolute caller path matched none of the git-derived sets. The
+# existing coverage above all feeds RELATIVE paths -- the fidelity gap that
+# let percolate-round's own filter test pass while production dropped 83
+# genuine deletions from each publish round.
+# ---------------------------------------------------------------------------
+
+
+def _staged_name_status(repo: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-status"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def test_explicit_stage_absolute_path_worktree_deletion_is_staged(tmp_path):
+    """The live defect: a tracked file `rm`'d from the worktree and named by
+    ABSOLUTE path was classified "genuinely absent" -- so the deletion never
+    reached `to_stage`, the commit landed without it, and the call reported
+    success. The deletion must be staged and reported exactly as it is for
+    the repo-relative form.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "docs/gone.md", "content")
+    _git(["add", "--", "docs/gone.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    (repo / "docs/gone.md").unlink()
+    absolute = str(repo / "docs/gone.md")
+
+    outcome = explicit_stage(repo, [absolute], caller_paths={absolute})
+
+    assert outcome.exit_code == 0
+    assert outcome.missing_caller_paths == []
+    assert outcome.deletion_paths == [absolute]
+    assert outcome.staged_paths == [absolute]
+    assert absolute in outcome.acted
+    assert f"deleted:{absolute}" in outcome.skipped
+    # The deletion actually reached the index -- not merely reported.
+    assert _staged_name_status(repo) == ["D\tdocs/gone.md"]
+
+
+def test_explicit_stage_absolute_path_already_staged_deletion_is_included(tmp_path):
+    """Same path-form defect against the STAGED-deletion arm (`swept_delete`,
+    from `git diff --cached --name-status`): an absolute caller path missed
+    it too, so a `git rm`-staged deletion the caller owns was dropped from
+    `staged_paths`/`deletion_paths` and the message block that
+    `deletion_block_gate` Assertion 3 requires was never composed for it.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "docs/staged-gone.md", "content")
+    _git(["add", "--", "docs/staged-gone.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _git(["rm", "-q", "docs/staged-gone.md"], repo)
+    absolute = str(repo / "docs/staged-gone.md")
+
+    outcome = explicit_stage(repo, [absolute], caller_paths={absolute})
+
+    assert outcome.exit_code == 0
+    assert outcome.missing_caller_paths == []
+    assert outcome.staged_paths == [absolute]
+    assert outcome.deletion_paths == [absolute]
+    assert f"already-staged-deleted:{absolute}" in outcome.skipped
+
+
+def test_explicit_stage_absolute_path_rename_source_is_swept(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "docs/old-name.md", "renamed content")
+    _git(["add", "--", "docs/old-name.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _git(["mv", "docs/old-name.md", "docs/new-name.md"], repo)
+    absolute = str(repo / "docs/old-name.md")
+
+    outcome = explicit_stage(repo, [absolute], caller_paths={absolute})
+
+    assert outcome.exit_code == 0
+    assert outcome.missing_caller_paths == []
+    assert outcome.swept_renames == [(absolute, "docs/new-name.md")]
+
+
+def test_explicit_stage_absolute_diverged_path_not_readded(tmp_path):
+    """`diverging_paths()` reports CWD-relative names as well, so the same
+    path-form miss silently re-`git add`-ed a deliberately-staged partial
+    hunk -- the 506748a0 clobber shape, reachable through any caller passing
+    absolute paths.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "docs/notes.md", "seed\n")
+    _git(["add", "--", "docs/notes.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _seed_file(repo, "docs/notes.md", "STAGED HUNK\n")
+    _git(["add", "--", "docs/notes.md"], repo)
+    _seed_file(repo, "docs/notes.md", "LATER EDIT\n")
+    absolute = str(repo / "docs/notes.md")
+
+    outcome = explicit_stage(repo, [absolute], caller_paths={absolute})
+
+    assert outcome.exit_code == 0
+    assert outcome.staged_paths == [absolute]
+    assert absolute not in outcome.acted
+    assert f"diverged:{absolute}" in outcome.skipped
+    assert _staged_blob(repo, "docs/notes.md") == "STAGED HUNK\n"
+
+
+def test_explicit_stage_absolute_genuinely_missing_still_escalates(tmp_path):
+    """Negative control for the normalization: a path that never existed
+    still escalates as a missing caller path when named absolutely --
+    normalizing the membership key must not fabricate a deletion.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    absolute = str(repo / "never/existed.md")
+    outcome = explicit_stage(repo, [absolute], caller_paths={absolute})
+
+    assert outcome.exit_code == 2
+    assert outcome.missing_caller_paths == [absolute]
+    assert f"missing-caller:{absolute}" in outcome.skipped
+
+
+def test_explicit_stage_absolute_path_outside_worktree_is_missing(tmp_path):
+    """A caller path outside the worktree cannot correspond to any git-
+    reported name -- `_worktree_key` returns it unchanged and it classifies
+    as missing, never as some same-suffix path inside the repo.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "x")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    outsider = str(tmp_path / "elsewhere" / "README.md")
+    outcome = explicit_stage(repo, [outsider], caller_paths={outsider})
+
+    assert outcome.exit_code == 2
+    assert outcome.missing_caller_paths == [outsider]
+
+
 def test_explicit_stage_genuinely_missing_generated_path_benign(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "x")

@@ -408,6 +408,41 @@ def _parse_rename_line(line: str) -> Optional[Tuple[str, str]]:
     return parts[1], parts[2]
 
 
+def _worktree_key(root: Path, p: str) -> str:
+    """Return `p` in the CWD-relative, forward-slashed form git reports it in.
+
+    Every git probe in `explicit_stage` runs with `cwd=worktree_root`, and git
+    prints its matches relative to that cwd no matter which form the pathspec
+    was written in -- `git ls-files --deleted -- /abs/path/f` scopes correctly
+    and prints `f`. A caller-supplied ABSOLUTE path therefore never matches
+    `worktree_deleted` / `swept_delete` / `swept_rename` by raw string equality,
+    and a real deletion falls through to "genuinely absent"
+    (`bug-2026-08-14-explicit-stage-absolute-deletion-path`: a partial commit
+    that reports success, not an error).
+
+    Only the membership KEY is normalized -- classification results keep the
+    caller's own path form, which `git add` accepts either way, so a caller
+    reconciling `staged_paths`/`deletion_paths` against its own pathspec still
+    sees the strings it passed in.
+
+    A path outside `root` (or one that resolves outside it) is returned
+    unchanged: it cannot correspond to a git-reported name anyway, and the
+    fallthrough to "missing" is the correct classification for it.
+    """
+    candidate = Path(p)
+    if not candidate.is_absolute():
+        return p
+    for base in (root, root.resolve()):
+        try:
+            return candidate.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    try:
+        return candidate.resolve().relative_to(root.resolve()).as_posix()
+    except (ValueError, OSError):
+        return p
+
+
 def explicit_stage(
     worktree_root: Union[str, Path],
     paths: Sequence[str],
@@ -542,6 +577,25 @@ def explicit_stage(
     resolves via `exists()` into `existing`, still hits the ignore pre-filter,
     still declines with the unchanged `"excluded by .gitignore"` reason.
 
+    Path form (2026-08-14 fix, `bug-2026-08-14-explicit-stage-absolute-
+    deletion-path`): `paths` may be absolute or repo-relative -- the two are
+    equivalent inputs. Every git probe here runs with `cwd=worktree_root` and
+    reports CWD-relative names regardless of the pathspec form it was queried
+    with, so each membership test against a git-derived set (`swept_delete`,
+    `swept_rename`, `worktree_deleted`, `diverged`, the post-failure residue
+    set) goes through `_worktree_key`. Before this, an absolute path matched
+    none of them: a real tracked deletion was classified "genuinely absent",
+    dropped from the commit set, and the commit landed WITHOUT it while
+    reporting success -- a partial commit that reads as clean (observed as 83
+    declined deletion-intents per `percolate-round` publish round). The
+    `check_ignore` pre-filter is deliberately NOT normalized: `git check-ignore
+    -v -z --stdin` echoes back the pathname exactly as supplied, so its output
+    is already in the caller's own form.
+
+    Classification RESULTS keep the caller's path form (`git add` accepts
+    either), so a caller reconciling `staged_paths`/`deletion_paths`/`acted`
+    against its own pathspec gets back the strings it passed in.
+
     `caller_paths` defaults to the empty set -- treat none as caller-supplied
     (every path classified as a benign GENERATED-path skip on miss).
 
@@ -663,6 +717,11 @@ def explicit_stage(
     to_delete: List[str] = []
 
     for p in paths:
+        # Membership against the three git-derived sets goes through the
+        # CWD-relative key, never `p` itself -- see `_worktree_key`'s own
+        # docstring for why an absolute caller path otherwise misses every one
+        # of them and gets reported as genuinely absent.
+        key = _worktree_key(root, p)
         # `swept_delete` membership is checked BEFORE `exists()` (2026-08-11
         # fix, see this function's own docstring "Untrack vs. add"): a
         # `git rm --cached` untrack leaves the file's content on disk, so
@@ -675,7 +734,7 @@ def explicit_stage(
         # deletion correctly regardless of whether its content still sits on
         # disk -- and an ADD/MODIFY path (never a `swept_delete` member) is
         # completely unaffected by this reordering.
-        if p in swept_delete:
+        if key in swept_delete:
             if p in caller_paths:
                 # This IS the caller's own deletion, already staged (e.g. a
                 # prior `git rm`) -- no `git add` needed, but it belongs in
@@ -687,8 +746,8 @@ def explicit_stage(
                 skipped.append(f"swept-deleted:{p}")
         elif (root / p).exists():
             existing.append(p)
-        elif p in swept_rename:
-            new = swept_rename[p]
+        elif key in swept_rename:
+            new = swept_rename[key]
             if "|" in p or "|" in new:
                 # Ambiguous to the pipe-delimited forwarding value -- cannot
                 # safely report this as a rename. Falls through to "missing",
@@ -709,7 +768,7 @@ def explicit_stage(
             else:
                 skipped.append(f"swept:{p}->{new}")
                 swept_renames.append((p, new))
-        elif p in worktree_deleted:
+        elif key in worktree_deleted:
             if p in caller_paths:
                 skipped.append(f"deleted:{p}")
                 to_delete.append(p)
@@ -815,9 +874,14 @@ def explicit_stage(
             ignored_caller_paths=ignored_caller_paths,
         )
 
+    # `diverging_paths()` reports CWD-relative names too (it is `git diff
+    # --name-only` under `cwd=root`), so this membership test goes through
+    # `_worktree_key` for the same reason the deletion/rename sets above do --
+    # missing here would silently re-`git add` a deliberately-diverged path,
+    # the 506748a0 shape this check exists to prevent.
     to_stage: List[str] = []
     for p in existing:
-        if p in diverged:
+        if _worktree_key(root, p) in diverged:
             skipped.append(f"diverged:{p}")
         else:
             to_stage.append(p)
@@ -923,7 +987,11 @@ def explicit_stage(
     residue_result = git_native.diff_cached_name_only(root, paths=to_stage, nul_separated=True)
     if residue_result.ok:
         residue = set(residue_result.stdout.split("\0")) - {""}
-        reconciled_acted = [p for p in to_stage if p in residue]
+        # `_worktree_key` for the same reason the classification sets use it:
+        # `git diff --cached --name-only` reports CWD-relative names, so a raw
+        # membership test under-reports residue for an absolute caller path --
+        # the invisible-residue shape this reconciliation exists to close.
+        reconciled_acted = [p for p in to_stage if _worktree_key(root, p) in residue]
         failed_entries = [f"git add: {reason}"]
     else:
         reconciled_acted = []

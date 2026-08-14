@@ -1078,7 +1078,8 @@ EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
 
-def _usage(prog: str) -> int:
+def _usage(prog: str, stream=None) -> int:
+    stream = __import__("sys").stderr if stream is None else stream
     print(
         f"{prog}: usage: {prog} --tshirt <XS|S|M|L|XL|XXL> "
         "[--appetite small|medium|large] "
@@ -1091,7 +1092,7 @@ def _usage(prog: str) -> int:
         "[--intent <str>] [--intent-source pm-verbatim|em-elaborated] "
         "[--precedent shipped-before|novel] "
         "[--probe-raise-basis ask-scope|substrate-condition|breadth]",
-        file=__import__("sys").stderr,
+        file=stream,
     )
     return EXIT_USAGE
 
@@ -1120,7 +1121,7 @@ def main(argv: list[str]) -> int:
     while i < len(argv):
         tok = argv[i]
         if tok in ("--help", "-h"):
-            _usage(prog)
+            _usage(prog, stream=sys.stdout)
             return EXIT_OK
         if tok == "--appetite" and i + 1 < len(argv):
             appetite = argv[i + 1]
