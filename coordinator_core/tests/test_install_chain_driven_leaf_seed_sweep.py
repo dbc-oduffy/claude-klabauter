@@ -64,6 +64,13 @@ import pytest
 from coordinator_core._settings_home import settings_home as _real_settings_home
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _TEMPLATE_REL = "coordinator/templates/handoffs/continue-onboarding-and-installation.md"

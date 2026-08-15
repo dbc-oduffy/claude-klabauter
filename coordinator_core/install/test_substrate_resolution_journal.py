@@ -31,6 +31,13 @@ from coordinator_core.install import substrate
 from coordinator_core.install.receipt import derive_receipt_entries
 from coordinator_core.install.write_surface import ShapedClause, WriteSurfaceEntry
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _SHAPED_CLAUSE_INDICES = (

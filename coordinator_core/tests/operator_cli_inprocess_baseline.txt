@@ -90,7 +90,23 @@ coordinator/bin/check-shipped-on-main.py
 coordinator/bin/check-surface-inline-budget.py
 coordinator/bin/coordinator-fold-execution-record.py
 coordinator/bin/coordinator-prepare-commit-msg
-coordinator/bin/coordinator-safe-commit
+coordinator/bin/coordinator-prepare-commit-msg.py
+coordinator/bin/coordinator-safe-commit.py
+# `cross-repo-memo.py` (added 2026-08-14, C5b): its ONE in-process op reach
+# that this gate credits is `_commit_archived_outbox_draft`'s
+# `from coordinator_core.ops.ceremony import git_native` (line ~3234) —
+# `git_native.commit_scoped`, called to best-effort commit the just-archived
+# outbox draft into the SENDING repo immediately after the send. This is not
+# an op with a `main(argv)` to route through `run_op_main`: `git_native` is a
+# low-level commit primitive, and the call site already performs its own
+# scoped `git commit` synchronously rather than staging a path for the
+# session's later batched `scoped_git_commit` — there is nothing for
+# `declare_write`/`recording_declared_writes` to claim, since the write is
+# already committed by the time this function returns. (The file's other
+# `coordinator_core.ops` reference, `ops.fleet._outbox_frontmatter_rules`, is
+# already exempt under `_is_private_ops_module` — every bound name there is
+# private — and is not why this entry exists.)
+coordinator/bin/cross-repo-memo.py
 coordinator/bin/day-coverage-sweep.py
 coordinator/bin/detect-staged-rollback.py
 coordinator/bin/dirty-tree-gate.py
@@ -102,6 +118,32 @@ coordinator/bin/list-orphaned-plans.py
 coordinator/bin/migrate-branch-canonical-case.py
 coordinator/bin/orphan-branch-sweep.py
 coordinator/bin/probe-cwd-example-retrieval-repo-relevance.py
+# `query-file-attribution.py` (added 2026-08-15): its ONE in-process op reach
+# this gate credits is `_resolve_repo_name_or_exit`'s `from
+# coordinator_core.ops.emit.context import resolve_repo_name` — a pure data
+# producer (the canonical owner-qualified repo-slug lookup), not an op with a
+# `main(argv)` for `run_op_main` to route to. The CLI is structurally
+# read-only end to end (see its own module docstring's Negative-spec: "Do NOT
+# write to state/ or any other disk location — read-only consumer"), so there
+# is no write for `declare_write`/`recording_declared_writes` to claim.
+# Routing this import through the seam would buy an import hop and a
+# permanently-empty declaration list, the same shape as the
+# `orphan-branch-sweep.py`/`day-coverage-sweep.py` pair above.
+coordinator/bin/query-file-attribution.py
+# `query-routine-signals.py` (added 2026-08-15): its ONE in-process op reach
+# this gate credits is `main()`'s `from coordinator_core.ops.emit.sections
+# import routine_signals` — `routine_signals.collect(ctx)` is a plain
+# in-process function (an emit *section*), not a registered op with a
+# `main(argv)` for `run_op_main` to route to; the file's own module docstring
+# explains at length why it deliberately does NOT use
+# `coordinator/bin/lib/op_trampoline.py`'s `run()` for this call, and that
+# minting a registered op for `routine_signals.collect` is explicitly the
+# engine change this porter's plan (`docs/plans/
+# 2026-08-11-three-trampolines-and-the-bare-repo-producer.md` § C4) rules out.
+# The CLI is read-only — it prints the six computed RoutineSignal records to
+# stdout and writes nothing to disk — so there is no write for
+# `declare_write`/`recording_declared_writes` to claim.
+coordinator/bin/query-routine-signals.py
 coordinator/bin/probe-onboarding-currency.py
 coordinator/bin/prune-closed-improvements.py
 coordinator/bin/publish.py

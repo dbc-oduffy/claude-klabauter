@@ -2434,3 +2434,55 @@ def test_coverage_gate_directive_still_dispatches_when_plan_claim_producer_faile
         "incidental, never an enforced block"
     )
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
+
+
+# ---------------------------------------------------------------------------
+# Per-directive progress signal (cross-repo memo, example-retrieval-repo-em 2026-08-15,
+# "why EMs don't cap the wsc ceremony", Finding 3): `_dispatch_directive`
+# captures each CLI's streams for the whole call, so without these lines a
+# slow directive is indistinguishable from a hang from outside the process.
+# ---------------------------------------------------------------------------
+
+
+def test_execute_directives_emits_progress_before_and_after_each_dispatch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def ok_main(argv: list[str]) -> int:
+        return 0
+
+    modules = {"fake-a": _fake_module(ok_main, "fake_a"), "fake-b": _fake_module(ok_main, "fake_b")}
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    directives = [_directive("d_a", "fake-a"), _directive("d_b", "fake-b")]
+    ws_apply._execute_directives(directives, [], {})
+
+    err = capsys.readouterr().err
+    # The pre-dispatch line is the whole point: it must be present for a
+    # directive that has not returned yet, so assert on it per directive.
+    assert "wsc-apply: d_a (fake-a)" in err
+    assert "wsc-apply: d_b (fake-b)" in err
+    assert "wsc-apply: d_a exited 0 in " in err
+    assert "wsc-apply: d_b exited 0 in " in err
+    # stdout carries the report JSON only -- progress never contaminates it.
+    assert "wsc-apply:" not in capsys.readouterr().out
+
+
+def test_execute_directives_progress_survives_a_directive_writing_its_own_stderr(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Negative-spec guard: the progress writes must land OUTSIDE
+    `_dispatch_directive`'s `redirect_stderr`, never inside it."""
+
+    def noisy_main(argv: list[str]) -> int:
+        sys.stderr.write("cli-internal-noise\n")
+        return 0
+
+    monkeypatch.setattr(
+        ws_apply, "_load_cli_module", lambda cli_name: _fake_module(noisy_main, "noisy")
+    )
+
+    ws_apply._execute_directives([_directive("d_noisy", "fake-a")], [], {})
+
+    err = capsys.readouterr().err
+    assert err.index("wsc-apply: d_noisy (fake-a)") < err.index("cli-internal-noise")
+    assert "wsc-apply: d_noisy exited 0 in " in err

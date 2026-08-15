@@ -35,6 +35,13 @@ from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.envelope import _empty_skeleton, emit
 from coordinator_core.ops.emit.validate import _VENDOR_CONTRACT, read_schema_version
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _SNAPSHOT_ENVELOPE_SCHEMA = _VENDOR_CONTRACT / "schema" / "snapshot-envelope.schema.json"
 
 

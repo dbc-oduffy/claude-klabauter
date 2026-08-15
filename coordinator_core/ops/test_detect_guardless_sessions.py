@@ -5,7 +5,7 @@ process-table guardless-session detector.
 Spec backlink: dispatch brief "guardless-session-detector" (2026-08-10).
 
 Mirrors the module's own three-way verdict contract: cannot-determine is
-never collapsed into a clean verdict, exactly one PowerShell subprocess call
+never collapsed into a clean verdict, exactly one `_run_process_probe` call
 is made per `detect()` invocation, and `--plugin-dir` presence/absence in the
 command line is the sole guarded/guardless discriminator.
 """
@@ -13,25 +13,18 @@ command line is the sole guarded/guardless discriminator.
 from __future__ import annotations
 
 import json
-import subprocess
 
+import psutil
 import pytest
 
 from coordinator_core.ops.detect_guardless_sessions import (
     ProcessObservation,
+    _CommandLineUnavailable,
     _is_guarded,
-    _parse_probe_output,
     _plugin_dir_value,
     detect,
     main,
 )
-
-# Declared, not excused: this file spawns a real process (git/python) because
-# the property under test is that binary's own behaviour, which no fixture
-# stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
-# residue and is explicitly not the route for a new file --
-# coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
@@ -45,12 +38,6 @@ def _default_unresolved_plugin_dir(monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.ops.detect_guardless_sessions._resolved_coordinator_plugin_dir",
         lambda: None,
-    )
-
-
-def _completed(stdout: str, returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(
-        args=["powershell"], returncode=returncode, stdout=stdout, stderr=stderr
     )
 
 
@@ -141,62 +128,15 @@ def test_plugin_dir_value_last_wins_on_repeated_flag():
     assert _plugin_dir_value(command_line) == "P:\\second\\coordinator"  # abs-path-ok: fixture-only placeholder command line, not a real host path
 
 
-def test_parse_probe_output_empty_string_is_zero_processes():
-    assert _parse_probe_output("") == []
-
-
-def test_parse_probe_output_null_is_zero_processes():
-    assert _parse_probe_output("null") == []
-
-
-def test_parse_probe_output_single_object_not_list():
-    # PowerShell's ConvertTo-Json emits a bare object (not a list) for a
-    # single matching row — this is the real-world shape, not an edge case.
-    out = json.dumps({"ProcessId": 123, "CommandLine": 'claude --plugin-dir "P:\\fixture-repo\\coordinator"'})  # abs-path-ok: synthetic command-line fixture, not a real host path
-    parsed = _parse_probe_output(out)
-    assert parsed == [
-        ProcessObservation(
-            pid=123,
-            command_line='claude --plugin-dir "P:\\fixture-repo\\coordinator"',  # abs-path-ok: synthetic command-line fixture, not a real host path
-            guarded=True,
-        )
+def test_detect_windows_clean_when_all_guarded(monkeypatch):
+    observed = [
+        ProcessObservation(pid=1, command_line='claude --plugin-dir "P:\\fixture-repo\\coordinator"', guarded=True),  # abs-path-ok: synthetic command-line fixture, not a real host path
+        ProcessObservation(pid=2, command_line='claude --plugin-dir "P:\\fixture-repo\\coordinator"', guarded=True),  # abs-path-ok: synthetic command-line fixture, not a real host path
     ]
 
-
-def test_parse_probe_output_list_mixed_guarded_and_guardless():
-    out = json.dumps(
-        [
-            {"ProcessId": 1, "CommandLine": 'claude --plugin-dir "P:\\fixture-repo\\coordinator"'},  # abs-path-ok: synthetic command-line fixture, not a real host path
-            {"ProcessId": 2, "CommandLine": "claude --dangerously-skip-permissions"},
-        ]
-    )
-    parsed = _parse_probe_output(out)
-    assert parsed[0].guarded is True
-    assert parsed[1].guarded is False
-
-
-def test_parse_probe_output_malformed_json_returns_none():
-    assert _parse_probe_output("{not json") is None
-
-
-def test_parse_probe_output_missing_pid_returns_none():
-    out = json.dumps([{"CommandLine": "claude"}])
-    assert _parse_probe_output(out) is None
-
-
-def test_detect_windows_clean_when_all_guarded(monkeypatch):
-    out = json.dumps(
-        [
-            {"ProcessId": 1, "CommandLine": 'claude --plugin-dir "P:\\fixture-repo\\coordinator"'},  # abs-path-ok: synthetic command-line fixture, not a real host path
-            {"ProcessId": 2, "CommandLine": 'claude --plugin-dir "P:\\fixture-repo\\coordinator"'},  # abs-path-ok: synthetic command-line fixture, not a real host path
-        ]
-    )
-
-    def fake_run(*args, **kwargs):
-        return _completed(out)
-
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
     )
     result = detect(platform_system="Windows")
     assert result.cannot_determine is False
@@ -205,18 +145,14 @@ def test_detect_windows_clean_when_all_guarded(monkeypatch):
 
 
 def test_detect_windows_reports_guardless(monkeypatch):
-    out = json.dumps(
-        [
-            {"ProcessId": 1, "CommandLine": 'claude --plugin-dir "P:\\fixture-repo\\coordinator"'},  # abs-path-ok: synthetic command-line fixture, not a real host path
-            {"ProcessId": 2, "CommandLine": "claude --dangerously-skip-permissions"},
-        ]
-    )
-
-    def fake_run(*args, **kwargs):
-        return _completed(out)
+    observed = [
+        ProcessObservation(pid=1, command_line='claude --plugin-dir "P:\\fixture-repo\\coordinator"', guarded=True),  # abs-path-ok: synthetic command-line fixture, not a real host path
+        ProcessObservation(pid=2, command_line="claude --dangerously-skip-permissions", guarded=False),
+    ]
 
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
     )
     result = detect(platform_system="Windows")
     assert result.cannot_determine is False
@@ -228,11 +164,9 @@ def test_detect_windows_zero_processes_is_cannot_determine(monkeypatch):
     # Zero observed claude.exe processes is impossible (this detector runs
     # from inside a live claude session) and must not collapse into clean —
     # this replaces the previous (defective) assertion of clean-on-zero.
-    def fake_run(*args, **kwargs):
-        return _completed("")
-
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: [],
     )
     result = detect(platform_system="Windows")
     assert result.cannot_determine is True
@@ -249,102 +183,131 @@ def test_detect_non_windows_zero_processes_is_cannot_determine_for_platform_reas
     assert "Windows-only" in result.reason
 
 
-def test_detect_probe_nonzero_exit_is_cannot_determine(monkeypatch):
-    def fake_run(*args, **kwargs):
-        return _completed("", returncode=1, stderr="access denied")
+def test_detect_probe_enumeration_error_is_cannot_determine(monkeypatch):
+    def fake_probe():
+        raise psutil.Error("enumeration failed")
 
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe", fake_probe
     )
     result = detect(platform_system="Windows")
     assert result.cannot_determine is True
     assert result.guardless == []
-    assert "access denied" in result.reason
+    assert "enumeration failed" in result.reason
 
 
-def test_detect_probe_timeout_is_cannot_determine(monkeypatch):
-    def fake_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd="powershell", timeout=20)
+def test_detect_cmdline_access_denied_is_cannot_determine(monkeypatch):
+    # A claude.exe process whose command line cannot be read (AccessDenied,
+    # e.g. running as another user) must not silently read as clean or
+    # guarded -- it surfaces as cannot_determine (module negative-spec).
+    def fake_probe():
+        raise _CommandLineUnavailable(pid=4242)
 
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe", fake_probe
     )
     result = detect(platform_system="Windows")
     assert result.cannot_determine is True
     assert result.guardless == []
-    assert "did not complete" in result.reason
-
-
-def test_detect_probe_missing_powershell_is_cannot_determine(monkeypatch):
-    def fake_run(*args, **kwargs):
-        raise FileNotFoundError()
-
-    monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
-    )
-    result = detect(platform_system="Windows")
-    assert result.cannot_determine is True
-    assert result.guardless == []
-
-
-def test_detect_probe_undecodable_output_is_cannot_determine(monkeypatch):
-    def fake_run(*args, **kwargs):
-        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
-
-    monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
-    )
-    result = detect(platform_system="Windows")
-    assert result.cannot_determine is True
-    assert result.guardless == []
-    assert "could not be decoded" in result.reason
-
-
-def test_detect_malformed_probe_output_is_cannot_determine(monkeypatch):
-    def fake_run(*args, **kwargs):
-        return _completed("not json at all")
-
-    monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
-    )
-    result = detect(platform_system="Windows")
-    assert result.cannot_determine is True
-    assert result.guardless == []
+    assert "4242" in result.reason
 
 
 def test_detect_calls_probe_exactly_once(monkeypatch):
     call_count = {"n": 0}
 
-    def fake_run(*args, **kwargs):
+    def fake_probe():
         call_count["n"] += 1
-        return _completed("")
+        return []
 
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe", fake_probe
     )
     detect(platform_system="Windows")
     assert call_count["n"] == 1
 
 
-def test_main_returns_0_on_clean(monkeypatch, capsys):
+def test_run_process_probe_filters_by_name_and_joins_cmdline(monkeypatch):
+    # Smoke-tests the psutil.process_iter-based probe itself: filters to
+    # claude.exe (case-insensitively matched via .lower()), and joins the
+    # list[str] cmdline into the single string the existing --plugin-dir
+    # matcher (_is_guarded / _plugin_dir_value) expects.
+    class _FakeProc:
+        def __init__(self, pid, name, cmdline):
+            self.info = {"pid": pid, "name": name}
+            self.pid = pid
+            self._cmdline = cmdline
+
+        def cmdline(self):
+            return self._cmdline
+
+    fake_procs = [
+        _FakeProc(1, "claude.exe", ["claude.exe", "--plugin-dir", "P:\\fixture-repo\\coordinator"]),  # abs-path-ok: fixture-only placeholder command line, not a real host path
+        _FakeProc(2, "notepad.exe", ["notepad.exe"]),
+    ]
+
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions.platform.system", lambda: "Linux"
+        "coordinator_core.ops.detect_guardless_sessions._resolved_coordinator_plugin_dir",
+        lambda: None,
     )
-    # Force a deterministic Windows-path clean run instead of relying on host
-    # platform. A clean verdict requires at least one observed process (zero
-    # is cannot_determine, not clean — see
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs: iter(fake_procs))
+
+    from coordinator_core.ops.detect_guardless_sessions import _run_process_probe
+
+    observed = _run_process_probe()
+    assert len(observed) == 1
+    assert observed[0].pid == 1
+    assert observed[0].command_line == 'claude.exe --plugin-dir P:\\fixture-repo\\coordinator'  # abs-path-ok: fixture-only placeholder command line, not a real host path
+
+
+def test_run_process_probe_skips_process_that_exits_before_cmdline_read(monkeypatch):
+    # A claude.exe process that exits between enumeration and the cmdline()
+    # read (NoSuchProcess) is silently skipped -- it is not an observation
+    # this module failed to make, so it must NOT surface as
+    # cannot_determine/_CommandLineUnavailable the way AccessDenied does
+    # (see test_detect_cmdline_access_denied_is_cannot_determine). A process
+    # that exited is not a process we failed to observe.
+    class _FakeProc:
+        def __init__(self, pid, name, cmdline_effect):
+            self.info = {"pid": pid, "name": name}
+            self.pid = pid
+            self._cmdline_effect = cmdline_effect
+
+        def cmdline(self):
+            if isinstance(self._cmdline_effect, Exception):
+                raise self._cmdline_effect
+            return self._cmdline_effect
+
+    fake_procs = [
+        _FakeProc(1, "claude.exe", psutil.NoSuchProcess(1)),
+        _FakeProc(2, "claude.exe", ["claude.exe", "--plugin-dir", "P:\\fixture-repo\\coordinator"]),  # abs-path-ok: fixture-only placeholder command line, not a real host path
+    ]
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions._resolved_coordinator_plugin_dir",
+        lambda: None,
+    )
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs: iter(fake_procs))
+
+    from coordinator_core.ops.detect_guardless_sessions import _run_process_probe
+
+    observed = _run_process_probe()
+    assert len(observed) == 1
+    assert observed[0].pid == 2
+
+
+def test_main_returns_0_on_clean(monkeypatch, capsys):
+    # A clean verdict requires at least one observed process (zero is
+    # cannot_determine, not clean — see
     # test_detect_windows_zero_processes_is_cannot_determine), so use one
     # guarded process.
-    out = json.dumps([{"ProcessId": 1, "CommandLine": 'claude --plugin-dir "P:\\fixture-repo\\coordinator"'}])  # abs-path-ok: synthetic command-line fixture, not a real host path
-
-    def fake_run(*args, **kwargs):
-        return _completed(out)
+    observed = [
+        ProcessObservation(pid=1, command_line='claude --plugin-dir "P:\\fixture-repo\\coordinator"', guarded=True)  # abs-path-ok: synthetic command-line fixture, not a real host path
+    ]
 
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
     )
-    # main() calls detect() with no explicit platform_system, so force Windows
-    # via platform.system() patch above being overridden here instead.
     monkeypatch.setattr(
         "coordinator_core.ops.detect_guardless_sessions.platform.system", lambda: "Windows"
     )
@@ -357,13 +320,13 @@ def test_main_returns_0_on_clean(monkeypatch, capsys):
 
 
 def test_main_returns_1_when_guardless_present(monkeypatch, capsys):
-    out_json = json.dumps([{"ProcessId": 9, "CommandLine": "claude --dangerously-skip-permissions"}])
-
-    def fake_run(*args, **kwargs):
-        return _completed(out_json)
+    observed = [
+        ProcessObservation(pid=9, command_line="claude --dangerously-skip-permissions", guarded=False)
+    ]
 
     monkeypatch.setattr(
-        "coordinator_core.ops.detect_guardless_sessions._run_powershell_probe", fake_run
+        "coordinator_core.ops.detect_guardless_sessions._run_process_probe",
+        lambda: observed,
     )
     monkeypatch.setattr(
         "coordinator_core.ops.detect_guardless_sessions.platform.system", lambda: "Windows"

@@ -49,6 +49,13 @@ import pytest
 
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 #: Every segment is a recognized probe form for
 #: `check_multiprobe_banner_rewrite` (echo banner, `pwd`, `whoami`, bare
 #: `git status`, `git rev-parse` HEAD-form) -- the sibling rewrite chain

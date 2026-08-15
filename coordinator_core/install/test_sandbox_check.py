@@ -262,9 +262,13 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
         "AC5: resolve_coordinator_clone.resolve_content_root()" in line and "returned expected" in line
         for line in r.lines
     )
-    # Empty hooks.json (no hook entries in this fixture) is the one
-    # legitimately-still-red gen_settings_hooks assertion -- not caused by
-    # bash removal, a pre-existing fixture limitation.
-    assert any("settings.json hooks array empty" in line for line in r.lines)
-    assert r.fail_count > 0
+    # The synthetic sandbox has no positive hook-generation marker, so
+    # gen_settings_hooks DECLINES to write — reported as a SKIP, not a FAIL.
+    # Until 2026-08-14 this was asserted as "settings.json hooks array empty",
+    # i.e. the validator called the generator's correct refusal a defect.
+    assert any(
+        "hook seed declined by the generator" in line and "skipped" in line
+        for line in r.lines
+    )
+    assert not any("settings.json hooks array empty" in line for line in r.lines)
     assert r.pass_count > 0  # and the fixture's own present pieces PASS

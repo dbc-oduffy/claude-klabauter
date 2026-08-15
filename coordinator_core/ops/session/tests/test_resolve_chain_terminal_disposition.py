@@ -38,7 +38,10 @@ import coordinator_core.ops.session.resolve_chain_terminal_disposition as rctd
 # _make_repo spawns real git per test (init/config/add/commit); declared to
 # the spawn ratchet rather than grandfathered in its frozen baseline --
 # see coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _make_repo(tmp_path):

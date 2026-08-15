@@ -67,6 +67,13 @@ from coordinator_core.frontmatter.schema_validate import (  # noqa: E402
 )
 from coordinator_core.win_portability import no_console_creationflags
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Test infrastructure (mirrors test_cross_repo_memo.py conventions)
 # ---------------------------------------------------------------------------
@@ -110,15 +117,50 @@ def _python() -> str:
 
 # Standalone-script helpers mirror test_cross_repo_memo.py by design (no shared import); keep in sync if either changes.
 # Review: code-reviewer F8 — deliberate duplication noted; these helpers are not accidentally repeated.
-def _run_dispatcher(args: list[str], env: dict, stdin_text: str = "") -> subprocess.CompletedProcess:
-    """Invoke cross-repo-memo CLI via subprocess (Windows-compatible)."""
+def _run_dispatcher(args: list[str], env: dict, stdin_text: str = "", cwd: str | None = None) -> subprocess.CompletedProcess:
+    """Invoke cross-repo-memo CLI via subprocess (Windows-compatible).
+
+    cwd MUST be an isolated fixture repo, never left to inherit the pytest
+    process's cwd — cross-repo-memo.py's send path resolves the SENDER repo
+    via `_current_repo_root()` (git root of cwd), and memo.send unconditionally
+    appends a row to <sender>/state/memo-outbox/sent-ledger.jsonl and commits
+    it. An uncontrolled cwd (real claude-klabauter checkout) makes this test
+    write real rows and real commits into real substrate — see
+    docs/wiki test-isolation leak note, kind-contract round-trip (C6a).
+    """
     return subprocess.run(
         [_python(), _script_path()] + args,
         env={**os.environ, **env},
         capture_output=True,
         text=True,
         input=stdin_text,
+        cwd=cwd,
     )
+
+
+def _make_sender_repo(parent_dir: str, name: str = "sender_repo") -> str:
+    """Create a minimal isolated git repo to serve as the SENDER worktree.
+
+    Mirrors test_cross_repo_memo_draft.py's `_make_git_repo` helper (same
+    shape, same rationale): cross-repo-memo.py's send path resolves the
+    sender repo via `_current_repo_root()` (git root of the CLI subprocess's
+    cwd) — memo.send is common_dir-scoped and derives repo_root from THAT
+    cwd, never from CLAUDE_KLABAUTER_ROOT (CLAUDE_KLABAUTER_ROOT only resolves where the engine
+    package lives for cc_invoke's own subprocess spawn/import, and is safe to
+    point at the real repo checkout for that purpose alone).
+    """
+    repo_dir = os.path.join(parent_dir, name)
+    os.makedirs(repo_dir)
+    subprocess.run(["git", "init", repo_dir], capture_output=True, check=False)
+    subprocess.run(
+        ["git", "-C", repo_dir, "config", "user.email", "test@test.com"],
+        capture_output=True, check=False,
+    )
+    subprocess.run(
+        ["git", "-C", repo_dir, "config", "user.name", "Test"],
+        capture_output=True, check=False,
+    )
+    return repo_dir
 
 
 def _make_mock_machine_local(tmpdir: str, return_value: str) -> str:  # mirrors test_cross_repo_memo.py by design
@@ -317,8 +359,10 @@ def test_c6a_kind_roundtrip_schema_and_band(
 
     with tempfile.TemporaryDirectory() as receiver_tmpdir, \
          tempfile.TemporaryDirectory() as claude_home_tmpdir, \
-         tempfile.TemporaryDirectory() as stub_tmpdir:
+         tempfile.TemporaryDirectory() as stub_tmpdir, \
+         tempfile.TemporaryDirectory() as sender_tmpdir:
 
+        sender_repo = _make_sender_repo(sender_tmpdir)
         mock_impl = _make_mock_machine_local(stub_tmpdir, receiver_tmpdir)
         # A8 strangler cutover: the flag-only send path now dispatches through
         # cc_invoke.route_mutation onto the real memo.send op, which reads
@@ -356,7 +400,7 @@ def test_c6a_kind_roundtrip_schema_and_band(
                 "--scoped-to-seam", "cross-field-validation",
             ])
 
-        result = _run_dispatcher(cli_args, env=env, stdin_text="This is the memo body.\n")
+        result = _run_dispatcher(cli_args, env=env, stdin_text="This is the memo body.\n", cwd=sender_repo)
 
         # AC8 (2026-08-04): the receiver_tmpdir here is a plain (non-git)
         # directory, so delivery lands but the commit leg degrades — exit 2

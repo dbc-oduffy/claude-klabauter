@@ -818,6 +818,284 @@ class TestSuffixSlugFallback:
         assert "suffix" in error.lower()
 
 
+class TestRevisionShaFallback:
+    """2026-08-14 tier — `/coordinator:pickup` invoked with a git commit/
+    revision SHA (peer EMs habitually cite a memo's delivery-commit SHA,
+    never its filepath) must resolve to the artifact that revision
+    delivered, via the SAME basename search the other tiers use rather
+    than trusting the commit-time path."""
+
+    def test_single_artifact_delivery_commit_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "2026-08-14-sender-single-artifact-delivery.md")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "memo"
+        assert result.decision_object["artifact"]["path"] == (
+            "cross-repo/inbox/2026-08-14-sender-single-artifact-delivery.md"
+        )
+        assert "resolved via its delivery commit" in result.decision_object["narration"]
+
+    def test_commit_time_path_since_moved_to_archive_still_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        live = _seed_handoff(repo, "2026-08-14-moved-after-delivery.md")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        archived = _archive_handoff(repo, live)
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "archived"
+        assert result.decision_object["artifact"]["path"] == archived.relative_to(repo).as_posix()
+
+    def test_multi_artifact_commit_is_ambiguous_not_guessed(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        first = repo / "cross-repo" / "inbox" / "2026-08-14-a-multi-artifact-one.md"
+        second = repo / "cross-repo" / "inbox" / "2026-08-14-b-multi-artifact-two.md"
+        for p in (first, second):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(
+                "---\nkind: fyi\nstatus: open\nfrom: sender-session\n"
+                "summary: A test memo.\ncreated: 2026-01-01\n---\n\nBody.\n",
+                encoding="utf-8",
+            )
+        _git(repo, "add", str(first.relative_to(repo)), str(second.relative_to(repo)))
+        _git(repo, "commit", "-m", "add two memos at once")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+        resolution = result.decision_object["artifact"]["resolution"]
+        assert sorted(resolution["live_paths"]) == sorted(
+            [
+                "cross-repo/inbox/2026-08-14-a-multi-artifact-one.md",
+                "cross-repo/inbox/2026-08-14-b-multi-artifact-two.md",
+            ]
+        )
+
+    def test_unresolvable_hex_arg_errors_with_tier_named(self, tmp_path):
+        """A full 40-hex value is now existence-checked by
+        `_resolve_revision_raw` (via `_read_object`) before being trusted,
+        symmetric with the abbreviated-sha path's `_find_object_by_prefix`
+        check just below it — so a 40-hex value naming no object in the
+        store genuinely reaches the "unresolvable" arm and gets the "does
+        not resolve as a commit" message, not the "resolved but delivered
+        no artifact" message a stale literal-hex fast path used to produce
+        for it. See `test_abbreviated_sha_not_in_clone_names_the_clone_not_the_filename`
+        for the abbreviated-sha sibling repro (the memo's `5bb1e3a8` shape:
+        7-39 hex chars, no matching object)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        error = result.decision_object["error"]
+        assert "does not resolve as a commit" in error
+        assert str(repo) in error
+        assert f"revision {sha!r}" in error
+        assert "delivered no artifact" not in error
+
+    def test_abbreviated_sha_not_in_clone_names_the_clone_not_the_filename(self, tmp_path):
+        """`cross-repo/inbox/2026-08-15-example-retrieval-repo-em-pickup-cannot-resolve-a-memo-by-its-delivery-sha.md`:
+        a SHA-shaped argument that `_resolve_revision` cannot find as a
+        commit in THIS clone (a sender-side commit copied into a
+        receiver-side pickup, or a genuine typo) must not fall through to
+        the generic filename-miss message — that misdiagnoses the failure
+        as a filename search that never had a chance of succeeding."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        sha = "5bb1e3a8"
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        error = result.decision_object["error"]
+        assert "does not resolve as a commit" in error
+        assert str(repo) in error
+        assert f"revision {sha!r}" in error
+        assert "not found at the passed path" not in error
+
+    def test_revision_resolves_but_delivers_no_artifact_names_it_distinctly(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()  # the "init" commit — README.md only
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        error = result.decision_object["error"]
+        assert "resolved as revision" in error
+        assert "delivered no artifact" in error
+
+    def test_non_hex_arg_is_unaffected_by_revision_tier(self, tmp_path):
+        """Regression guard on the existing ladder: a plain (non-hex-shaped)
+        slug must keep resolving exactly as before — the revision tier is
+        skipped entirely, never even attempted."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "2026-07-28-sender-not-a-git-sha-at-all-slug.md")
+
+        result = pa.brief("not-a-git-sha-at-all-slug", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "memo"
+        assert "revision" not in result.decision_object["narration"].lower()
+
+    def test_real_full_sha_still_resolves_and_delivers_artifact(self, tmp_path):
+        """Non-regression on the existence check added to the 40-hex fast
+        path: a full 40-hex sha that genuinely names a commit in the clone
+        must keep resolving and keep returning that commit's delivered
+        artifact — the fix only tightens the no-such-object case, it must
+        not cost the real-object case anything."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "2026-08-14-real-full-sha-still-resolves.md")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        assert len(sha) == 40
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "memo"
+        assert result.decision_object["artifact"]["path"] == (
+            "cross-repo/inbox/2026-08-14-real-full-sha-still-resolves.md"
+        )
+
+    def test_real_abbreviated_sha_still_resolves(self, tmp_path):
+        """Non-regression on the abbreviated-sha path, which is untouched
+        by this fix but sits right beside the edited 40-hex fast path —
+        confirms the fall-through ordering after the new existence check
+        still reaches `_find_object_by_prefix` correctly for a real
+        object."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "2026-08-14-real-abbreviated-sha-still-resolves.md")
+        full_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        short_sha = full_sha[:8]
+
+        result = pa.brief(short_sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "memo"
+        assert result.decision_object["artifact"]["path"] == (
+            "cross-repo/inbox/2026-08-14-real-abbreviated-sha-still-resolves.md"
+        )
+
+    def test_deletion_commit_with_no_surviving_copy_errors_distinctly(self, tmp_path):
+        """Citing a commit that deleted a `.md` artifact — and nothing by
+        that basename survives anywhere (not moved, not re-added) — must
+        name the artifact as gone, distinct from both "delivered no
+        artifact" (never touched anything) and a plain lookup miss (never
+        resolved a revision at all)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        memo = _seed_memo(repo, "2026-08-14-sender-deleted-outright.md")
+        _git(repo, "rm", "-q", str(memo.relative_to(repo)))
+        _git(repo, "commit", "-m", "remove memo outright, no replacement")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        error = result.decision_object["error"]
+        assert "resolved as revision" in error
+        assert "no longer exist" in error
+
+    def test_deletion_commit_still_resolves_when_moved_elsewhere(self, tmp_path):
+        """A deletion the revision-tier walk now surfaces (P2) must still
+        prefer the basename re-feed over the new "gone" error when the
+        deleted path in fact moved (e.g. an inbox->archive move in the
+        same commit) — an archival move is a delete+add pair, and citing
+        either half must resolve it."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        live = _seed_handoff(repo, "2026-08-14-deleted-half-of-a-move.md")
+        archived = _archive_handoff(repo, live)
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()  # the archive commit itself
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "archived"
+        assert result.decision_object["artifact"]["path"] == archived.relative_to(repo).as_posix()
+
+    def test_root_commit_with_no_parent_resolves_its_own_artifact(self, tmp_path):
+        """A root commit (no parents) must count its own present paths as
+        changed, per `_commit_touches_path`'s root-commit handling — built
+        here as a repo whose very FIRST commit delivers the artifact
+        directly, so there is no init commit ahead of it to parent it."""
+        repo = tmp_path / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _git(repo, "init", "-b", "work/test/2026-01-01")
+        _git(repo, "config", "commit.gpgsign", "false")
+        _git(repo, "config", "user.email", "test@example.com")
+        _git(repo, "config", "user.name", "Test")
+        memo = repo / "cross-repo" / "inbox" / "2026-08-14-sender-root-commit-delivery.md"
+        memo.parent.mkdir(parents=True, exist_ok=True)
+        memo.write_text(
+            "---\nkind: fyi\nstatus: open\nfrom: sender-session\n"
+            "summary: A test memo.\ncreated: 2026-01-01\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+        _git(repo, "add", str(memo.relative_to(repo)))
+        _git(repo, "commit", "-m", "root commit delivers the memo directly")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        assert _git(repo, "rev-list", "--parents", "-n", "1", sha).stdout.strip() == sha  # no parents
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "memo"
+        assert result.decision_object["artifact"]["path"] == (
+            "cross-repo/inbox/2026-08-14-sender-root-commit-delivery.md"
+        )
+
+    def test_merge_commit_surfaces_paths_novel_to_either_parent(self, tmp_path):
+        """A merge commit combining two branches, each introducing a
+        distinct `.md` artifact the other lacks: verified against the
+        module's own "any parent differs" heuristic (module docstring,
+        `_changed_md_paths_for_revision`) rather than asserting full `git
+        log` merge-simplification semantics the module explicitly does not
+        implement (negative-spec). Both artifacts are novel relative to at
+        least one parent, so both surface — an ambiguous multi-hit, not a
+        single resolved artifact."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        base_branch = "work/test/2026-01-01"
+        _git(repo, "checkout", "-b", "feature")
+        _seed_memo(repo, "2026-08-14-a-merge-feature-side.md")
+        feature_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        _git(repo, "checkout", base_branch)
+        _seed_memo(repo, "2026-08-14-b-merge-base-side.md")
+        merge_result = _git(repo, "merge", "--no-ff", "feature", "-m", "merge feature into base")
+        assert merge_result.returncode == 0, merge_result.stderr
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", sha).stdout.split()
+        assert len(parents) == 3  # merge sha + 2 parents
+
+        result = pa.brief(sha, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+        resolution = result.decision_object["artifact"]["resolution"]
+        assert sorted(resolution["live_paths"]) == sorted(
+            [
+                "cross-repo/inbox/2026-08-14-a-merge-feature-side.md",
+                "cross-repo/inbox/2026-08-14-b-merge-base-side.md",
+            ]
+        )
+
+
 class TestAmbiguousBranch:
     def test_missing_frontmatter_is_ambiguous_business_failure(self, tmp_path):
         repo = tmp_path / "repo"
@@ -1379,6 +1657,108 @@ class TestComputeDeliverableEvidence:
 
         assert evidence[0]["signal"] == "not-shipped"
         assert evidence[0]["exists"] is False
+
+    def test_absent_but_deleted_by_commit_in_range_is_deleted_shipped(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "gone.sh").write_text("echo hi\n", encoding="utf-8")
+        _git(repo, "add", "gone.sh")
+        _git(repo, "commit", "-m", "add gone.sh")
+        _git(repo, "rm", "gone.sh")
+        _git(repo, "commit", "-m", "remove gone.sh")
+
+        evidence = pa.compute_deliverable_evidence(repo, ["gone.sh"], "2020-01-01")
+
+        assert evidence[0]["signal"] == "deleted-shipped"
+        assert evidence[0]["exists"] is False
+        assert evidence[0]["commits"]
+
+    def test_absent_with_only_modifying_commits_stays_not_shipped(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "modified.py").write_text("x = 1\n", encoding="utf-8")
+        _git(repo, "add", "modified.py")
+        _git(repo, "commit", "-m", "add modified.py")
+        (repo / "modified.py").write_text("x = 2\n", encoding="utf-8")
+        _git(repo, "add", "modified.py")
+        _git(repo, "commit", "-m", "modify modified.py")
+        (repo / "modified.py").unlink()
+
+        evidence = pa.compute_deliverable_evidence(repo, ["modified.py"], "2020-01-01")
+
+        assert evidence[0]["signal"] == "not-shipped"
+        assert evidence[0]["exists"] is False
+
+    def test_absent_with_no_commits_stays_not_shipped(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        evidence = pa.compute_deliverable_evidence(repo, ["never-existed.py"], "2020-01-01")
+
+        assert evidence[0]["signal"] == "not-shipped"
+        assert evidence[0]["exists"] is False
+        assert evidence[0]["commits"] == []
+
+    def test_initial_commit_cannot_delete_a_path(self, tmp_path):
+        """Trivial companion to the merge case below: `_commit_deletes_path`
+        short-circuits `False` for a no-parent (initial) commit — there is
+        no prior tree to have carried the path, so "deleted" cannot apply.
+        Was implicit-only before this test (code-reviewer finding, close-out
+        of ced5c1e8)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        common_dir = pa._discover_git_dirs(repo)[1].common_dir
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        commit = pa._commit_meta(common_dir, sha)
+        assert commit["parents"] == []
+
+        assert pa._commit_deletes_path(common_dir, sha, commit, "README.md") is False
+
+    def test_merge_commit_credits_itself_for_a_deletion_on_one_parent_line(self, tmp_path):
+        """Pins `_commit_deletes_path`'s merge-commit behavior (code-reviewer
+        finding, close-out of ced5c1e8): a merge commit where the path was
+        already deleted on ONE parent's line (`feature`), the OTHER parent
+        (`base`) still carries it, and the merge result omits it — the merge
+        commit itself is credited with the deletion, `True`, even though the
+        actual `git rm` happened earlier, on the feature line.
+
+        This is the defensible reading, not an accident: `_commit_deletes_path`
+        is walked bottom-up per-commit (module docstring) to answer "did
+        history walking THIS commit find path X gone that a parent still
+        had" — and for the merge commit specifically, that question is true
+        regardless of which parent line first removed it. The merge is where
+        the path's absence entered the mainline being walked; crediting the
+        earlier feature-line commit *instead of* the merge would require
+        picking a "first" parent, which is exactly the git-log merge-
+        simplification semantics this module's docstring says it does not
+        implement (negative-spec). Do not "fix" this to only credit the
+        feature-line commit — that changes a deliberate choice, not a bug.
+        """
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        base_branch = "work/test/2026-01-01"
+        (repo / "gone.sh").write_text("echo hi\n", encoding="utf-8")
+        _git(repo, "add", "gone.sh")
+        _git(repo, "commit", "-m", "add gone.sh")
+        _git(repo, "checkout", "-b", "feature")
+        _git(repo, "rm", "gone.sh")
+        _git(repo, "commit", "-m", "delete gone.sh on feature")
+        _git(repo, "checkout", base_branch)
+        merge_result = _git(repo, "merge", "--no-ff", "feature", "-m", "merge feature into base")
+        assert merge_result.returncode == 0, merge_result.stderr
+        merge_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        common_dir = pa._discover_git_dirs(repo)[1].common_dir
+        merge_commit = pa._commit_meta(common_dir, merge_sha)
+        assert len(merge_commit["parents"]) == 2, "fixture invalid: expected a two-parent merge"
+
+        assert pa._commit_deletes_path(common_dir, merge_sha, merge_commit, "gone.sh") is True
+
+        evidence = pa.compute_deliverable_evidence(repo, ["gone.sh"], "2020-01-01")
+
+        assert evidence[0]["signal"] == "deleted-shipped"
+        assert evidence[0]["exists"] is False
+        assert any(c["sha"] == merge_sha for c in evidence[0]["commits"])
 
 
 # ---------------------------------------------------------------------------
@@ -3157,11 +3537,28 @@ class TestBriefAwaitingGateCheck:
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
         assert obj["gates"]["gate_check"]["gate_dependency"] == "peer campaign must settle first"
-        consume = next(d for d in obj["directives"] if d["cli"] == "archive-stamp-cli")
-        assert consume["depends_on"] == "jgate"
+        consume = next(
+            d for d in obj["directives"] if d["cli"] == "archive-stamp-cli" and d["args"][0] == "claim-handoff"
+        )
+        # Piece A — `d-gate-recheck` rides in `d2`'s depends_on alongside
+        # `jgate` unconditionally, so the recording directive always
+        # sequences before the claim (cross-repo/inbox/2026-08-04-market-
+        # intelligence-em-pickup-jgate-cleared-strands-gate-fields.md).
+        assert consume["depends_on"] == ["jgate", "d-gate-recheck"]
+        gate_recheck = next(
+            d for d in obj["directives"] if d["cli"] == "archive-stamp-cli" and d["args"][0] == "gate-recheck"
+        )
+        assert gate_recheck["id"] == "d-gate-recheck"
+        assert gate_recheck["depends_on"] == "jgate"
         gate_jp = next(jp for jp in obj["judgment_points"] if jp["id"] == "jgate")
         values = {d["value"] for d in gate_jp["dispositions"]}
         assert values == {"cleared", "not-cleared"}
+        cleared = next(d for d in gate_jp["dispositions"] if d["value"] == "cleared")
+        assert set(cleared["resolves"]) == {"d2", "d-gate-recheck"}
+        assert cleared.get("guidance")
+        not_cleared = next(d for d in gate_jp["dispositions"] if d["value"] == "not-cleared")
+        assert not_cleared["resolves"] == []
+        assert not_cleared.get("guidance")
 
 
 class TestBriefAwaitingGateAndLivenessCombinedDependsOn:
@@ -3200,14 +3597,21 @@ class TestBriefAwaitingGateAndLivenessCombinedDependsOn:
         obj = result.decision_object
         jp_ids = {jp["id"] for jp in obj["judgment_points"]}
         assert {"jgate", "j1"} <= jp_ids
-        consume = next(d for d in obj["directives"] if d["cli"] == "archive-stamp-cli")
-        assert consume["depends_on"] == ["jgate", "j1"]
+        consume = next(
+            d for d in obj["directives"] if d["cli"] == "archive-stamp-cli" and d["args"][0] == "claim-handoff"
+        )
+        assert consume["depends_on"] == ["jgate", "d-gate-recheck", "j1"]
 
-    def test_only_gate_fires_depends_on_stays_scalar_string(self, tmp_path):
+    def test_only_gate_fires_depends_on_carries_recheck_id_too(self, tmp_path):
         # No claimed_by/consumed_by/picked_up_by and no cited plan -> the
-        # liveness signal legitimately does not fire; the single-gate case
-        # must keep the plain string form (contract: "do not gratuitously
-        # wrap single gates in one-element lists").
+        # liveness signal legitimately does not fire. Piece A means the
+        # single-judgment-point `awaiting_gate` case no longer keeps the
+        # plain-string form the contract otherwise still enforces for a
+        # true single blocker (`test_no_gate_or_liveness_yields_
+        # unconditional_none` and similar single-jp cases elsewhere are
+        # unaffected) — `d-gate-recheck`'s directive-id always rides
+        # alongside `jgate` (ordering-only, see `build_gate_recheck_
+        # directive`'s docstring), so this is the two-id list form.
         repo = tmp_path / "repo"
         _init_repo(repo)
         path = repo / "state" / "handoffs" / "h1.md"
@@ -3228,8 +3632,10 @@ class TestBriefAwaitingGateAndLivenessCombinedDependsOn:
         result = pa.brief("state/handoffs/h1.md", repo_root=repo)
 
         obj = result.decision_object
-        consume = next(d for d in obj["directives"] if d["cli"] == "archive-stamp-cli")
-        assert consume["depends_on"] == "jgate"
+        consume = next(
+            d for d in obj["directives"] if d["cli"] == "archive-stamp-cli" and d["args"][0] == "claim-handoff"
+        )
+        assert consume["depends_on"] == ["jgate", "d-gate-recheck"]
 
 
 class TestBriefShippedStateSurfacesJudgmentPoint:
@@ -3538,8 +3944,10 @@ class TestBriefSuccessorHandoffSurfacesJudgmentPoint:
         obj = result.decision_object
         jp_ids = {jp["id"] for jp in obj["judgment_points"]}
         assert {"jgate", "jsucc"} <= jp_ids
-        consume = next(d for d in obj["directives"] if d["cli"] == "archive-stamp-cli")
-        assert consume["depends_on"] == ["jgate", "jsucc"]
+        consume = next(
+            d for d in obj["directives"] if d["cli"] == "archive-stamp-cli" and d["args"][0] == "claim-handoff"
+        )
+        assert consume["depends_on"] == ["jgate", "d-gate-recheck", "jsucc"]
 
     def test_compute_coast_remedy_non_empty_when_jsucc_fires(self, tmp_path):
         """AC8's self-sufficiency contract — `compute_coast`'s `remedy`

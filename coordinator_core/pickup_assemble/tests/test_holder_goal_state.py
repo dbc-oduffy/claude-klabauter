@@ -23,7 +23,10 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.pickup_assemble.holder_evidence import holder_evidence
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _isolated_git_env(anchor: Path) -> dict[str, str]:

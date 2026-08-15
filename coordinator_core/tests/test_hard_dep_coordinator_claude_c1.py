@@ -112,7 +112,7 @@ def _ladder_manifest(tmp_path: Path) -> tuple[Path, Path]:
         "upstream_url": "https://github.com/dbc-oduffy/coordinator-claude",
         "functional_probe": {
             "kind": "file_exists_any",
-            "paths": [".claude-plugin/plugin.json", "coordinator/CLAUDE.md"],
+            "paths": [".claude-plugin/plugin.json", "coordinator/.claude-plugin/plugin.json"],
         },
     }
     manifest = {
@@ -199,8 +199,8 @@ def test_walker_consent_gate_ladder_flag_override_no_sibling_passes(tmp_path, mo
     """Case 3, flag form: --coordinator-root, no sibling clone present."""
     repo_root, manifest_path = _ladder_manifest(tmp_path)
     override_root = tmp_path / "elsewhere-coord-flag"
-    (override_root / "coordinator").mkdir(parents=True)
-    (override_root / "coordinator" / "CLAUDE.md").write_text("# doc")
+    (override_root / "coordinator" / ".claude-plugin").mkdir(parents=True)
+    (override_root / "coordinator" / ".claude-plugin" / "plugin.json").write_text("{}")
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     monkeypatch.setattr(sys, "argv", ["prog", "--coordinator-root", str(override_root)])
     assert not (repo_root.parent / "coordinator-claude").is_dir()

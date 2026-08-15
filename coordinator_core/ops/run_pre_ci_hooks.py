@@ -62,6 +62,22 @@ _registry_map.py) lands in the separate EM-serial registration pass (CC-3).
 Spec backlink: pln-wave-3-design-settlements-15-d-76fdbd § B3
 Port source: DoE-claude coordinator/skills/percolate/SKILL.md § Step 5a (bash fence)
 
+Caller status (reconciled 2026-08-14, wave-3 baton close): NO CALLER, and the
+planned cutover will not happen as B3 framed it. B3's follow-through was "cut
+percolate over to this op when wave 3 ships." Wave 3 shipped (``36a2dea1``),
+but percolate's pre-CI step was retired by a different route in the interim:
+it went fully declarative. ``percolate-store.yaml`` is now the authoritative
+behavioral spec, ``publish.py``'s ``dispatch_percolate_pre_ci`` calls
+``percolate.run`` phase ``pre_ci`` -> ``percolate.engine.run_pre_ci``, which
+runs declarative guard check-specs, and DoE's § Step 5a — this module's port
+source — no longer exists in that skill at all. The
+``setup/percolate-hooks/<target>/pre-ci/`` dirs it discovers are vestigial
+``.gitkeep``-only scaffolding in DoE (see that tree's README: "nothing reads
+this tree for executable content"). So there is no hook-script discovery seam
+left to repoint. This op survives as an available capability for any target
+that DOES grow ``.py`` pre-ci hooks; it is not the live pre-CI path, and a
+reader should not wire it in believing it is one.
+
 Negative-spec (hard-won):
   - Does NOT execute ``.sh`` hooks via bash, sh, or any shell — there is no
     Windows-portable way to run arbitrary shell hooks, and the PM ruling is

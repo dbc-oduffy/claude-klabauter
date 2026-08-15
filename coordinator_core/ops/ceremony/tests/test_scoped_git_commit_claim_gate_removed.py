@@ -37,7 +37,10 @@ from coordinator_core.win_portability import no_console_creationflags
 # Declared, not excused -- this file spawns a real `git` process because the
 # property under test is porcelain's own behaviour (mirrors the identical
 # note in the now-deleted `test_scoped_git_commit_dirty_gate.py`).
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _git(args, cwd) -> None:

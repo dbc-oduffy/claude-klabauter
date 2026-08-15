@@ -431,3 +431,37 @@ body = "bin/claude-klabauter-doctor-probe.py:_run_probe_orphaned_execnet_gateway
 required = false
 severity_if_fail = "degraded"
 remediation = "Confirm the named pid(s) are not your own in-flight pytest -n run, then terminate them directly. A gateway under a live controller is never flagged (AC4) — only a gateway whose controller has died is reported."
+
+# claude-klabauter.launch.shim_chain -- "will bare `claude` load the coordinator plugin in a
+# NEW shell?". That question had no automated answer, and its failure mode is silent
+# by construction: coordinator's own SessionStart hooks cannot report that coordinator
+# failed to load, because they do not run when it does not load. The check has to live
+# in a surface that runs WITHOUT a session, which is this one.
+#
+# Two silent shapes, both observed live on 2026-08-14 (see
+# docs/reference/interactive-launch-chain.md): a DISABLED profile block (wired source
+# line commented out, so claude() is never defined), and a WRONG-DIALECT shim (bash
+# bytes in claude-doe-shim.ps1, whose profile block is present and correct -- every
+# other check calls that install healthy).
+#
+# Shape-conditioned: SKIPs when no DoE clone resolves, i.e. the marketplace population
+# that never has this chain. `required` is set PER RESULT in the body, not by the
+# `required` key below -- the SKIP path returns required=False (a skipped REQUIRED probe
+# reduces to DEGRADED, which would punish every marketplace install for lacking a chain
+# it should not have), while the real-failure paths return required=True and exit 1 from
+# --step-zero. On a box that HAS this chain, a shim that cannot define claude() means
+# every session runs without coordinator; an install that then calls itself healthy is
+# the failure this probe exists to end. weight = "cheap": two file reads, no subprocess
+# -- so triage = true is permissible under the stated invariant.
+[[probe]]
+id = "claude-klabauter.launch.shim_chain"
+cluster = "install"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (re-render the shim with gen-claude-doe-shim.py, passing the template that matches --shell)"
+symptom_keywords = ["vanilla claude session", "no coordinator skills", "plugin not loading", "shim disabled", "commented out shim", "claude-doe-shim.ps1 bash", "wrong shell dialect", "claude() not defined", "--plugin-dir missing"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_launch_chain"
+required = false
+severity_if_fail = "degraded"
+remediation = "Re-render the shim: python3 <engine-clone>/coordinator/bin/gen-claude-doe-shim.py --shell powershell --template <doe-root>/coordinator/templates/shell/claude-doe-shim.ps1.tmpl (use --shell bash and the .sh.tmpl on POSIX). Then open a NEW shell -- an already-open one holds the old profile."

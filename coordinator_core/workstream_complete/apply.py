@@ -239,6 +239,7 @@ import io
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
@@ -717,6 +718,34 @@ def render_blocked_remedy_lines(blocked_remedy: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _emit_progress(message: str) -> None:
+    """Directive-granularity liveness signal on apply's own stderr.
+
+    Purpose: `_dispatch_directive` captures each CLI's stdout AND stderr
+    for the duration of the call and re-emits them only AFTER it returns,
+    so a long directive is indistinguishable from a hang from outside the
+    process — an operator watching a zero-byte stream for ten minutes has
+    every incentive to kill a ceremony that is merely slow. Cross-repo
+    memo, example-retrieval-repo-em, 2026-08-15 ("why EMs don't cap the wsc
+    ceremony", Finding 3).
+
+    Written to `sys.stderr` (never stdout — the report JSON owns stdout)
+    and flushed per line, since a buffered progress line is not a progress
+    line. Register per docs/wiki/guard-messaging.md: one fact, no prose.
+
+    Negative-spec:
+    - Do NOT thread this through `_dispatch_directive`'s redirect
+      context — these writes must land OUTSIDE `contextlib.redirect_
+      stderr`, or they are captured into the very buffer they exist to
+      pre-empt.
+    - Do NOT state a predicted duration for a directive: no threshold
+      data is computed anywhere in this module, and an invented ETA is
+      worse than none.
+    """
+    sys.stderr.write(f"wsc-apply: {message}\n")
+    sys.stderr.flush()
+
+
 def _execute_directives(
     directives: list[dict[str, Any]],
     judgment_points: list[dict[str, Any]],
@@ -873,6 +902,8 @@ def _execute_directives(
             blocked_remedy[directive["id"]] = _build_blocked_remedy_entry(directive, jp_by_id, decisions)
             continue
 
+        _emit_progress(f"{directive['id']} ({directive['cli']})")
+
         resolved_args, token_error = _resolve_arg_tokens(directive.get("args", []), stdout_by_id)
         if token_error is not None:
             failed.append(
@@ -883,15 +914,21 @@ def _execute_directives(
             )
             continue
 
+        started = time.monotonic()
         try:
             result = _dispatch_directive(directive, args=resolved_args)
         except Exception as exc:  # noqa: BLE001 - closed-table dispatch failure
+            _emit_progress(f"{directive['id']} raised after {time.monotonic() - started:.1f}s")
             entry = {"id": directive["id"], "error": str(exc)}
             if directive.get("best_effort"):
                 degraded.append(entry)
             else:
                 failed.append(entry)
             continue
+        _emit_progress(
+            f"{directive['id']} exited {result.get('exit_code', 0)} "
+            f"in {time.monotonic() - started:.1f}s"
+        )
         if result.get("exit_code", 0) != 0:
             error = f"{directive['cli']} exited {result['exit_code']} (args={result.get('args', [])})"
             captured_stderr = (result.get("stderr") or "").strip()

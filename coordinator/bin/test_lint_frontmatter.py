@@ -19,6 +19,13 @@ import pytest
 
 from coordinator_core.frontmatter.schema_validate import main
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 _VALID_HANDOFF = """---
 title: Test handoff
@@ -389,6 +396,42 @@ Body text.
     assert payload["ok"] is True
     assert payload["violations"] == []
     assert payload["refWarnings"] == []
+
+
+def test_file_mode_predecessor_id_disagreement_is_always_error_even_non_strict(tmp_path, capsys):
+    """--file mode mirror of test_predecessor_id_disagreement_is_always_error_
+    even_non_strict: --file mode calls _check_handoff_refs with strict=False
+    unconditionally, but the never-silently-disagree invariant is asserted to
+    be independent of strict-ness (Review: code-reviewer R1 P3 — this path was
+    previously asserted only in a comment, not pinned by a test)."""
+    repo = _make_repo(tmp_path)
+    (repo / "state" / "handoffs" / "target.md").write_text(_TARGET_WITH_HANDOFF_ID, encoding="utf-8")
+    (repo / "state" / "handoffs" / "different-target.md").write_text(
+        _DIFFERENT_TARGET_WITH_HANDOFF_ID, encoding="utf-8"
+    )
+    disagreeing = """---
+title: Disagreeing predecessor/predecessor_id
+created: 2026-01-01
+branch: work/test/2026-01-01
+status: open
+predecessor: state/handoffs/different-target.md
+predecessor_id: "hnd-target-abc123"
+---
+Body text.
+"""
+    target = repo / "state" / "handoffs" / "disagreeing.md"
+    target.write_text(disagreeing, encoding="utf-8")
+
+    rc = main(["--root", str(repo), "--file", str(target), "--json"])
+
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    violation = payload["violations"][0]
+    fields = {e["field"] for e in violation["errors"]}
+    assert "predecessor_id" in fields
+    error_text = " ".join(e["error"] for e in violation["errors"])
+    assert "never-silently-disagree" in error_text
 
 
 def test_archived_handoff_id_indexed_at_logical_path(tmp_path, capsys):

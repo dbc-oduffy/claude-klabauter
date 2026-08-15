@@ -133,11 +133,24 @@ WRITE-SINK CLASSIFICATION -- the enumerated set (AC20) is owned by
 `_write_bump_sink_shapes.WRITE_SINK_BINARIES` / `extract_write_sink_
 targets_for_segment`, imported here BY REFERENCE, never restated: output
 redirection (`>`, `>>`), `tee`, `cp`, `mv`, `mkdir -p`, `install`, `sed -i`,
-heredocs (`cat > ... <<EOF`), `rsync`, `tar -x -C`. Deliberately NOT covered,
-same reason C4 states: any shape requiring adversarial-style interpreter
-indirection beyond the single inline `-c` case above -- out of scope per §
-Design posture's "do not enumerate evasions" rule, not an oversight. This
-module does NOT handle `git -C <dir> <write>` / `cd <dir> && git <write>`
+heredocs (`cat > ... <<EOF`), `rsync`, `tar -x -C`.
+
+PM-RATIFIED REVERSAL, 2026-08-14 (`docs/plans/2026-08-14-interpreter-body-
+write-sinks.md`) -- record this, do not re-derive the old rule. This
+docstring previously stated that interpreter indirection beyond the single
+inline `-c` case was out of scope BY DESIGN, citing § Design posture's "do
+not enumerate evasions". That exclusion was written against *adversarial*
+evasion; it did not anticipate the dominant *accidental* shape underneath
+it -- a write target that exists solely inside a heredoc body or a
+`python`/`python3 -c` payload string (two independent EMs hit this while
+holding the scratchpad rule in context, not while routing around this
+guard). `_iter_write_sink_candidates` below now ALSO consumes
+`_write_bump_sink_shapes.extract_interpreter_payload_write_sink_targets`, a
+NEW, separately-named, C5-only extractor -- C4 (`bump_foreign_repo_write.py`)
+does not call it and its own shared shape table is untouched. Every other
+clause of "do not enumerate evasions" still stands: no base64/`exec`/
+assembled-path detection, no second interpreter (`node`/`ruby`/`perl`), no
+adversarial-obfuscation handling. This module does NOT handle `git -C <dir> <write>` / `cd <dir> && git <write>`
 shapes at all (contrast C4, which does) -- AC3 names "a plain-bash write
 resolving to no git repo" specifically, and a `git <write-subcommand>`
 invoked against a location with no git repo at all is not a write a real
@@ -267,6 +280,7 @@ from coordinator_core.bash_guards._write_bump_message import (
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     PS_SET_LOCATION_ALIASES,
     _host_is_windows,
+    extract_interpreter_payload_write_sink_targets,
     extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
@@ -432,13 +446,27 @@ def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[s
 # ---------------------------------------------------------------------------
 
 
-def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[str, str, str]]:
+def _iter_write_sink_candidates(
+    cmd: str, cwd: Optional[str], preserve_windows_backslashes: Optional[bool] = None
+) -> Iterator[Tuple[str, str, str]]:
     """Yield `(target_dir, label, raw_target)` for every write-sink candidate
     this command carries -- every depth of `resolve_command_positions`'s own
     result (so `bash`/`sh`/`zsh -c` payloads, already unwrapped by that
     shared tokenizer, are covered for free), PLUS a manual unwrap of any
     depth-0 `python`/`python3 -c` payload (the one leg the shared tokenizer
     does not auto-recurse -- see module docstring).
+
+    `preserve_windows_backslashes` defaults to `None`, which resolves to
+    `_host_is_windows()` -- every caller before this parameter existed gets
+    byte-identical behavior. An explicit `True`/`False` lets a caller force
+    the OTHER resolution for the SAME `cmd`/`cwd` -- `_no_git_repo_target_
+    label` below is the one caller that does, running this generator a
+    second time with the flag forced OFF to see what THIS SAME quote-aware
+    extraction path resolves an unquoted-backslash token to once bash's own
+    escape rule (not this guard's opt-in preservation) applies -- see that
+    function's own docstring for why a second run through this real
+    extraction path is correct where a naive re-lex of an already-dequoted
+    token is not.
 
     `raw_target` (R1, docs/plans/2026-08-08-the-bump-message-never-showed-
     the-operat.md) is the literal token this segment carried BEFORE
@@ -457,6 +485,18 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
     `target_dir` is NOT YET resolved to a git root -- callers do that via
     `resolve_gitdir`/`nearest_existing_ancestor`.
 
+    ALSO yields, once, every candidate `_write_bump_sink_shapes.extract_
+    interpreter_payload_write_sink_targets` finds inside `cmd`'s own heredoc
+    bodies and `python`/`python3 -c` payloads (2026-08-14 PM-ratified
+    reversal -- see module docstring, "WRITE-SINK CLASSIFICATION"). These
+    are resolved against the ORIGINAL `effective_cwd` (before this
+    function's own `cd`-tracking loop below runs), not the possibly-mutated
+    one a later segment sees -- an interpreter payload's own filesystem
+    context is not reliably correlated with a shell `cd` elsewhere in the
+    same multi-line command, and resolving against the untracked starting
+    cwd is the conservative choice for a speed bump that must never invent
+    a wrong-but-plausible base.
+
     `resolve_command_positions` (both here and the nested `-c`-payload
     re-entry below) is called with `preserve_windows_backslashes=
     _host_is_windows()` -- see `bump_foreign_repo_write._iter_write_sink_
@@ -464,17 +504,34 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
     and-close-the-backslash-bypass.md, AC5-AC6) for the mangled-token defect
     this closes; both write-bump guards share this ONE opt-in flag on the
     shared tokenizer rather than each re-deriving their own normalization.
+
+    Negative-spec: this flag makes the guard rule on the TYPED path, not the
+    EXECUTED one -- deliberate. Modelling execution instead would mean
+    ALLOWING an unquoted-backslash write and leaving the operator a silent
+    junk file (Git Bash consumes an unquoted backslash exactly as `shlex`
+    does, per state/audits/2026-08-07-bash-guard-tokenizer-eats-windows-
+    path-separators.md's measured probes -- `echo probe > sub\\dir\\out.txt`
+    lands as `subdirout.txt` in cwd, never at the typed path). The
+    Bash-leg tokenizer mangling this flag reverses is NOT otherwise a
+    defect for THIS tool's executor, for the identical reason: Git Bash
+    mangles the same unquoted backslashes the same way, so a target this
+    flag resolves from an unquoted backslash token never lands where it
+    was typed either -- see `_no_git_repo_target_label` below,
+    which names that real landing name in the denial rather than only the
+    typed one.
     """
     if not cmd or not cmd.strip():
         return
+    preserve = _host_is_windows() if preserve_windows_backslashes is None else preserve_windows_backslashes
     try:
         resolved_segments = resolve_command_positions(
-            cmd, preserve_windows_backslashes=_host_is_windows()
+            cmd, preserve_windows_backslashes=preserve
         )
     except Exception:  # noqa: BLE001 -- fail open, never let a parse crash reach the dispatcher
         return
 
     effective_cwd = cwd or os.getcwd()
+    payload_base_cwd = effective_cwd
     for rc in resolved_segments:
         if rc.confidence == ResolutionConfidence.UNRESOLVED or not rc.tokens:
             continue
@@ -504,7 +561,7 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
                 continue
             try:
                 nested_segments = resolve_command_positions(
-                    inline_payload, preserve_windows_backslashes=_host_is_windows()
+                    inline_payload, preserve_windows_backslashes=preserve
                 )
             except Exception:  # noqa: BLE001 -- fail open
                 continue
@@ -517,6 +574,110 @@ def _iter_write_sink_candidates(cmd: str, cwd: Optional[str]) -> Iterator[Tuple[
                     if resolved_target is None:
                         continue
                     yield (resolved_target, nested_head, raw_target)
+
+    for raw_target in extract_interpreter_payload_write_sink_targets(cmd):
+        resolved_target = _resolve_relative(payload_base_cwd, raw_target)
+        if resolved_target is None:
+            continue
+        yield (resolved_target, "interpreter-payload", raw_target)
+
+
+def _no_git_repo_target_label(
+    cmd: str, cwd: Optional[str], candidate_index: int, target_dir: str, raw_target: str
+) -> str:
+    """Build the `target_repo` display label for an outside-any-repo
+    candidate -- `no git repo (<target_dir>)`, or, on a Windows-backslash
+    token that a re-run of the SAME extraction path resolves DIFFERENTLY
+    with `preserve_windows_backslashes=False`, one merged parenthetical
+    naming the typed path and the EFFECT in the SAME parens, never a second
+    stacked one: `no git repo (<target_dir>; unquoted backslashes, so bash
+    writes into cwd instead)`. Two nested `(...) (...)` groups read as two
+    asides, not one sentence -- see docs/wiki/guard-messaging.md § Register.
+
+    The clause states the effect, NOT a derived landing filename. Three
+    derivations of that filename were tried and each was wrong somewhere:
+    re-lexing the token broke on quoted paths, the flag-off resolved path
+    repeated the directory and mixed separators, and its basename dropped
+    the `C:` prefix that bash keeps in the name it creates. What the
+    operator needs is that the write will not go where they typed and the
+    remedy is to quote it or use forward slashes; the exact mangled name is
+    not load-bearing and every attempt to assert it added a way to be
+    confidently wrong in a denial the reader cannot check.
+
+    FIXED (staff-eng review, live-reproduced defect): a prior version of
+    this helper re-tokenized `raw_target` alone via `tokenize_full_command`,
+    treating its own already-dequoted, already-extracted content as FRESH
+    shell syntax. Two bugs followed from that one mistake: (1) `raw_target`
+    is POST-lexing text -- a `raw_target` of `C:\\My Docs\\out.txt` (the  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    dequoted content of a QUOTED command-line argument) re-lexed as bare
+    unquoted syntax splits on the space, silently yielding `C:My` as the
+    "landing name" -- not even a prefix of the real one; (2) more
+    fundamentally, a post-lexing token carries NO record of whether its
+    backslashes were quoted or unquoted in the ORIGINAL command, which is
+    the entire discriminator for whether this clause should fire at all --
+    a quoted backslash is preserved by real bash exactly like the flag-on
+    resolution already assumes, so the clause is a FALSE effect claim
+    whenever the original token was quoted, not just an imprecise one.
+
+    THE FIX -- reuse the extraction, don't re-lex. `_iter_write_sink_
+    candidates` already resolves this exact command through REAL
+    quote-aware tokenization (`resolve_command_positions`); this helper
+    calls it a SECOND time over the identical `cmd`/`cwd`, forcing
+    `preserve_windows_backslashes=False`, and reads off the candidate at
+    the SAME `candidate_index` the caller is already iterating at (its
+    `for idx, (target_dir, _label, raw_target) in enumerate(...)`, over the
+    flag-on run). Comparing the two RESOLVED targets is correct by
+    construction: if a token was quoted, bash's own escape rule never
+    touches it, so the flag-off pass resolves to the IDENTICAL target as
+    the flag-on pass -- no clause, correctly. If a token was unquoted, the
+    flag-off pass reproduces exactly what real Git Bash would resolve it
+    to (the guard's own defining case for engaging
+    `preserve_windows_backslashes` in the first place) -- that resolved
+    path IS the landing name, read off the same normalization pipeline
+    (`_resolve_relative`/`translate_msys_path`) that produced the flag-on
+    target, never re-derived. No second escape model exists anywhere in
+    this helper.
+
+    Runs the extra pass ONLY on this denial-composition call site -- the
+    allow path never pays for it (module docstring's FAIL OPEN posture is
+    about the VERDICT, not this message-only decoration, but the same
+    "never let a message-only computation cost the common allow path"
+    discipline applies).
+
+    Positional-index matching between the two runs assumes the flag only
+    changes how ONE candidate's own token lexes, never how many candidates
+    a command yields -- true for the shapes this guard classifies (backslash
+    masking only ever affects backslash content INSIDE what is already a
+    single write-sink argument token, never segment/argument boundaries
+    elsewhere in the command). Any mismatch (index out of range, a parse
+    exception) fails closed to the undecorated label, per this guard
+    family's own posture.
+
+    Applies only when `raw_target` carries a literal `\\` on a Windows host
+    (see `_iter_write_sink_candidates`'s docstring negative-spec) -- a
+    forward-slash target returns the undecorated label unchanged without
+    running the extra pass at all, since there is nothing for it to find.
+    Bash-leg only: never called from the PowerShell leg, which does not
+    treat `\\` as an escape character."""
+    label = "no git repo (%s)" % target_dir
+    if not _host_is_windows() or not raw_target or "\\" not in raw_target:
+        return label
+    try:
+        flag_off_candidates = list(
+            _iter_write_sink_candidates(cmd, cwd, preserve_windows_backslashes=False)
+        )
+    except Exception:  # noqa: BLE001 -- fail closed on the decoration only
+        return label
+    if candidate_index >= len(flag_off_candidates):
+        return label
+    flag_off_target = flag_off_candidates[candidate_index][0]
+    if flag_off_target == target_dir:
+        # Quoted (or no backslash survived either way) -- bash preserves
+        # it, intent and effect already agree, nothing to add.
+        return label
+    return "no git repo (%s; unquoted backslashes, so bash writes into cwd instead)" % (
+        target_dir,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -592,7 +753,9 @@ def check_bump_outside_repo_write(
     anchor_git_root_str = str(anchor_gitdir.parent) if anchor_gitdir.name == ".git" else str(anchor_gitdir)
     effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
 
-    for target_dir, _label, raw_target in _iter_write_sink_candidates(cmd, cwd):
+    for candidate_index, (target_dir, _label, raw_target) in enumerate(
+        _iter_write_sink_candidates(cmd, cwd)
+    ):
         probe_dir = _nearest_existing_ancestor(target_dir)
         if probe_dir is None:
             # No existing ancestor at all -- cannot resolve a git root
@@ -646,7 +809,7 @@ def check_bump_outside_repo_write(
 
         message = render_bump_message(
             agent_class=agent_class,
-            target_repo="no git repo (%s)" % target_dir,
+            target_repo=_no_git_repo_target_label(cmd, cwd, candidate_index, target_dir, raw_target),
             session_repo=anchor_git_root_str,
             gitdir=anchor_gitdir,
             session_id=effective_sid,

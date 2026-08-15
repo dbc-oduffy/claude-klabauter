@@ -39,7 +39,10 @@ import pytest
 # Declared, not excused: this file spawns real processes because the behaviour under
 # test IS the spawn. _BASELINE is shrink-only pre-existing residue and is explicitly
 # not the route for a new file -- test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
@@ -144,12 +147,20 @@ def _stranded_prior_dir(dest_dir: Path) -> Path:
 # arm a (AC2) — PermissionError on the staging->dest rename (site 2).
 # ---------------------------------------------------------------------------
 def test_arm_a_staging_to_dest_rename_failure_preserves_git(tmp_path, monkeypatch):
-    dest_dir = tmp_path / "dest"
-    original_head = _init_git_repo(dest_dir)
+    # dest_dir must NOT hold its own `.git` here: this arm pins the
+    # WHOLE-TREE path (`_swap_publish_staging_into_dest`'s non-root branch),
+    # which is only reachable when `(dest_dir / ".git")` is absent (§ that
+    # function's root-dest detection docstring) — a `dest_dir` with its own
+    # `.git` now takes the root branch instead, an entirely different code
+    # path with no `os.rename(staging_dir, dest_dir)` call site to trap.
+    repo_root = tmp_path / "repo"
+    _init_git_repo(repo_root)
+    dest_dir = repo_root / "mirror" / "subdir"
+    dest_dir.mkdir(parents=True)
     (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
-    _git(["add", "."], dest_dir)
-    _git(["commit", "-q", "-m", "payload"], dest_dir)
-    original_head = publish._git_head(dest_dir)
+    _git(["add", "."], repo_root)
+    _git(["commit", "-q", "-m", "payload"], repo_root)
+    original_head = publish._git_head(repo_root)
 
     staging_dir = publish._create_publish_staging_dir(dest_dir)
     (staging_dir / "payload.txt").write_text("new content\n", encoding="utf-8")
@@ -162,8 +173,8 @@ def test_arm_a_staging_to_dest_rename_failure_preserves_git(tmp_path, monkeypatc
     with pytest.raises(PermissionError):
         publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
 
-    assert (dest_dir / ".git").exists()
-    assert publish._git_head(dest_dir) == original_head
+    assert (repo_root / ".git").exists()
+    assert publish._git_head(repo_root) == original_head
     assert (dest_dir / "payload.txt").read_text(encoding="utf-8") == "original\n"
 
 
@@ -171,12 +182,17 @@ def test_arm_a_staging_to_dest_rename_failure_preserves_git(tmp_path, monkeypatc
 # arm b (AC2) — raise on the dest->prior_backup rename (site 1).
 # ---------------------------------------------------------------------------
 def test_arm_b_dest_to_prior_backup_rename_failure_preserves_git(tmp_path, monkeypatch):
-    dest_dir = tmp_path / "dest"
-    _init_git_repo(dest_dir)
+    # dest_dir must NOT hold its own `.git` here — see arm a's comment on
+    # why (this pins the whole-tree path, only reachable for a `dest_dir`
+    # with no `.git` of its own).
+    repo_root = tmp_path / "repo"
+    _init_git_repo(repo_root)
+    dest_dir = repo_root / "mirror" / "subdir"
+    dest_dir.mkdir(parents=True)
     (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
-    _git(["add", "."], dest_dir)
-    _git(["commit", "-q", "-m", "payload"], dest_dir)
-    original_head = publish._git_head(dest_dir)
+    _git(["add", "."], repo_root)
+    _git(["commit", "-q", "-m", "payload"], repo_root)
+    original_head = publish._git_head(repo_root)
 
     staging_dir = publish._create_publish_staging_dir(dest_dir)
     prior_backup = staging_dir.with_name(staging_dir.name + ".prior")
@@ -189,8 +205,8 @@ def test_arm_b_dest_to_prior_backup_rename_failure_preserves_git(tmp_path, monke
     with pytest.raises(PermissionError):
         publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
 
-    assert (dest_dir / ".git").exists()
-    assert publish._git_head(dest_dir) == original_head
+    assert (repo_root / ".git").exists()
+    assert publish._git_head(repo_root) == original_head
     assert (dest_dir / "payload.txt").read_text(encoding="utf-8") == "original\n"
     # site 1 never completed — nothing was ever renamed aside.
     assert not prior_backup.exists()
@@ -200,12 +216,19 @@ def test_arm_b_dest_to_prior_backup_rename_failure_preserves_git(tmp_path, monke
 # arm c (AC2) — recovery rename (site 2's own restore) also fails.
 # ---------------------------------------------------------------------------
 def test_arm_c_recovery_rename_also_fails_git_still_recoverable(tmp_path, monkeypatch):
-    dest_dir = tmp_path / "dest"
-    _init_git_repo(dest_dir)
+    # dest_dir must NOT hold its own `.git` here — see arm a's comment.
+    # `prior_backup` therefore never carries a `.git` for THIS row shape
+    # either (that only happens for a root-dest row, § arm f) — this arm's
+    # remaining value is "original content is still fully recoverable from
+    # `prior_backup` when both renames fail", which holds independent of
+    # `.git`.
+    repo_root = tmp_path / "repo"
+    _init_git_repo(repo_root)
+    dest_dir = repo_root / "mirror" / "subdir"
+    dest_dir.mkdir(parents=True)
     (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
-    _git(["add", "."], dest_dir)
-    _git(["commit", "-q", "-m", "payload"], dest_dir)
-    original_head = publish._git_head(dest_dir)
+    _git(["add", "."], repo_root)
+    _git(["commit", "-q", "-m", "payload"], repo_root)
 
     staging_dir = publish._create_publish_staging_dir(dest_dir)
     (staging_dir / "payload.txt").write_text("new content\n", encoding="utf-8")
@@ -226,11 +249,8 @@ def test_arm_c_recovery_rename_also_fails_git_still_recoverable(tmp_path, monkey
 
     # The error names prior_backup — an operator reading it can find the data.
     assert str(prior_backup) in str(excinfo.value)
-    # `.git` (and the rest of the original content) is recoverable: both
-    # renames failed, so nothing actually moved — prior_backup still holds
-    # the complete original repo under its aside-name.
-    assert (prior_backup / ".git").exists()
-    assert publish._git_head(prior_backup) == original_head
+    # The original content is recoverable: both renames failed, so nothing
+    # actually moved — prior_backup still holds it under its aside-name.
     assert (prior_backup / "payload.txt").read_text(encoding="utf-8") == "original\n"
 
 
@@ -334,6 +354,16 @@ def test_arm_e_happy_path_preserves_git_and_updates_content(tmp_path):
 # assertion (iv) is about the ROW'S REPORT (`process_target`'s recording
 # behaviour on `PublishSwapPartial`), not the swap function in isolation.
 # ---------------------------------------------------------------------------
+# arm f is now a root-dest UNREACHABILITY pin, not a rehome-failure pin: a
+# `dest_dir` holding its own `.git` (this arm's exact shape) is precisely
+# the "root-dest" case `_swap_publish_staging_into_dest`'s new detection
+# routes to `_swap_publish_staging_into_dest_root`, which never touches
+# `.git` at all (§ that function's docstring). The `os.rename(..., dest_dir
+# / ".git")` site 3 this arm used to trap can therefore never fire for this
+# shape anymore, and `PublishSwapPartial`'s `.git`-rehome raise is
+# unreachable for it — this arm now proves that directly (trap installed,
+# asserted never triggered) instead of asserting the failure it induces.
+# ---------------------------------------------------------------------------
 def test_arm_f_git_rehome_failure_reports_content_change_honestly(tmp_path, monkeypatch):
     src_dir = tmp_path / "source"
     src_dir.mkdir()
@@ -378,11 +408,19 @@ def test_arm_f_git_rehome_failure_reports_content_change_honestly(tmp_path, monk
     monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
     monkeypatch.setattr(publish, "write_lastsync_marker", lambda *a, **k: None)
 
-    # Only the trailing .git rehome (site 3) fails — sites 1 and 2 run for
-    # real, so the content swap genuinely lands before this injected failure.
+    # Would have trapped the trailing .git rehome (old site 3) — kept to
+    # prove it is never called for this shape anymore, not to induce a
+    # failure.
+    rehome_attempts: list = []
+
+    def message_for(s: Path, d: Path) -> str:
+        rehome_attempts.append((s, d))
+        return f"should be unreachable: {s} -> {d}"
+
     _install_rename_trap(
         monkeypatch,
         fail_when=lambda s, d: d == dest_dir / ".git",
+        message_for=message_for,
     )
 
     totals = publish.RunTotals()
@@ -391,40 +429,31 @@ def test_arm_f_git_rehome_failure_reports_content_change_honestly(tmp_path, monk
     visited_files_sink: set = set()
     published_dest_dirs_sink: set = set()
 
-    with pytest.raises(publish.PublishSwapPartial) as excinfo:
-        publish.process_target(
-            target,
-            tmp_path,
-            totals,
-            identity_file_exists=True,
-            identity=None,
-            dry_run=False,
-            engine_ctx=engine_ctx,
-            percolate_store_path=tmp_path / "store.yaml",
-            visited_files_sink=visited_files_sink,
-            published_dest_dirs_sink=published_dest_dirs_sink,
-            out=out,
-        )
+    publish.process_target(
+        target,
+        tmp_path,
+        totals,
+        identity_file_exists=True,
+        identity=None,
+        dry_run=False,
+        engine_ctx=engine_ctx,
+        percolate_store_path=tmp_path / "store.yaml",
+        visited_files_sink=visited_files_sink,
+        published_dest_dirs_sink=published_dest_dirs_sink,
+        out=out,
+    )
 
-    exc = excinfo.value
-    prior_backup = exc.prior_backup
-    assert exc.content_swapped is True
+    # The old .git-rehome rename site was never reached: the root branch
+    # never renames anything onto `dest_dir / ".git"`.
+    assert rehome_attempts == []
 
-    # (i) .git still resolves HEAD to the pre-swap SHA, from inside prior_backup.
-    assert (prior_backup / ".git").exists()
-    assert publish._git_head(prior_backup) == original_head
+    # `.git` was never even renamed aside — it is untouched throughout, and
+    # HEAD still resolves to the pre-swap SHA (there is nothing new to
+    # commit; this row's own swap never touches `.git`).
+    assert (dest_dir / ".git").exists()
+    assert publish._git_head(dest_dir) == original_head
 
-    # (ii) the raised error names prior_backup's concrete path.
-    assert str(prior_backup) in str(exc)
-
-    # (iii) prior_backup was not rmtree'd.
-    assert prior_backup.is_dir()
-
-    # (iv) the row's report discloses the content change (AC5b): content DID
-    # land at dest_dir even though .git is stranded — dest_dir/.git is
-    # therefore absent (the rehome that would have put it there is exactly
-    # what failed).
-    assert not (dest_dir / ".git").exists()
+    # Content still lands correctly.
     assert payload_path.read_bytes() == fixed_bytes
     assert totals.synced == 1
     report = out.getvalue()
@@ -466,14 +495,19 @@ def test_arm_g_dest_subdir_without_own_git_step3_is_noop(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# arm h (AC5c) — the stranded-.prior refuse check.
+# arm h (AC5c) — the stranded-.prior refuse check. dest_dir must NOT hold
+# its own `.git` (root-dest shape skips this guard entirely — it never
+# reaches the check, § `_swap_publish_staging_into_dest`'s docstring); a
+# `dest_subdir` shape is the only one that still exercises it.
 # ---------------------------------------------------------------------------
 def test_arm_h_stranded_prior_refuses_before_any_rename(tmp_path):
-    dest_dir = tmp_path / "dest"
-    _init_git_repo(dest_dir)
+    repo_root = tmp_path / "repo"
+    _init_git_repo(repo_root)
+    dest_dir = repo_root / "mirror" / "subdir"
+    dest_dir.mkdir(parents=True)
     (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
-    _git(["add", "."], dest_dir)
-    _git(["commit", "-q", "-m", "payload"], dest_dir)
+    _git(["add", "."], repo_root)
+    _git(["commit", "-q", "-m", "payload"], repo_root)
     original_head = publish._git_head(dest_dir)
 
     stranded_prior = _stranded_prior_dir(dest_dir)
@@ -796,11 +830,15 @@ def test_arm_j_non_matching_directory_is_untouched(tmp_path):
 # stranded-`.prior` guard (the second interpolation site, § dispatch brief).
 # ---------------------------------------------------------------------------
 def test_arm_h_stranded_prior_glob_metachar_dest_name_still_matched(tmp_path):
-    dest_dir = tmp_path / "app[1]"
-    _init_git_repo(dest_dir)
+    # dest_dir must NOT hold its own `.git` — see the plain arm h above for
+    # why (root-dest skips this guard entirely).
+    repo_root = tmp_path / "repo"
+    _init_git_repo(repo_root)
+    dest_dir = repo_root / "app[1]"
+    dest_dir.mkdir(parents=True)
     (dest_dir / "payload.txt").write_text("original\n", encoding="utf-8")
-    _git(["add", "."], dest_dir)
-    _git(["commit", "-q", "-m", "payload"], dest_dir)
+    _git(["add", "."], repo_root)
+    _git(["commit", "-q", "-m", "payload"], repo_root)
     original_head = publish._git_head(dest_dir)
 
     # This dest's own stranded `.prior`, minted with the literal bracketed
@@ -873,3 +911,100 @@ def test_arm_h_ensure_dest_ready_absent_no_git_ancestor_refuses(tmp_path):
 
     assert publish._ensure_dest_ready(target, totals, out=out) is False
     assert not dest_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# arm k (root-dest branch) — `_swap_publish_staging_into_dest_root` coverage.
+# `dest_dir` IS the repo root (`.git` directly inside it): files + a
+# directory swap correctly, `dest_dir` itself is never renamed, `.git` and
+# an unrelated sibling directory survive untouched, and a stale top-level
+# file absent from staging is removed the same as the whole-tree path would
+# have discarded it.
+# ---------------------------------------------------------------------------
+def test_arm_k_root_dest_swaps_files_and_dirs_never_renames_dest_dir(tmp_path):
+    dest_dir = tmp_path / "repo"
+    _init_git_repo(dest_dir)
+    (dest_dir / "CHANGELOG.md").write_text("old\n", encoding="utf-8")
+    managed_dir = dest_dir / "managed"
+    managed_dir.mkdir()
+    (managed_dir / "a.txt").write_text("old-a\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "seed"], dest_dir)
+    dest_dir_inode_marker = dest_dir  # identity check below is path-based
+
+    staging_dir = publish._create_publish_staging_dir(dest_dir)
+    (staging_dir / "CHANGELOG.md").write_text("new\n", encoding="utf-8")
+    (staging_dir / "managed" / "a.txt").write_text("new-a\n", encoding="utf-8")
+
+    publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
+
+    assert dest_dir == dest_dir_inode_marker and dest_dir.is_dir()
+    assert (dest_dir / "CHANGELOG.md").read_text(encoding="utf-8") == "new\n"
+    assert (dest_dir / "managed" / "a.txt").read_text(encoding="utf-8") == "new-a\n"
+    assert not staging_dir.exists()
+
+
+def test_arm_k_root_dest_preserves_git_and_unrelated_sibling(tmp_path):
+    dest_dir = tmp_path / "repo"
+    _init_git_repo(dest_dir)
+    sibling_dir = dest_dir / "coordinator_core"
+    sibling_dir.mkdir()
+    (sibling_dir / "keep.py").write_text("unrelated\n", encoding="utf-8")
+    (dest_dir / "CHANGELOG.md").write_text("old\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "seed"], dest_dir)
+    original_head = publish._git_head(dest_dir)
+
+    staging_dir = publish._create_publish_staging_dir(dest_dir)
+    (staging_dir / "CHANGELOG.md").write_text("new\n", encoding="utf-8")
+
+    publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
+
+    assert (dest_dir / ".git").exists()
+    assert publish._git_head(dest_dir) == original_head
+    # The unrelated sibling directory (another row's own output) is
+    # byte-identical in staging (an untouched copy, § _dir_trees_equal) and
+    # is therefore left alone, not renamed-aside.
+    assert (sibling_dir / "keep.py").read_text(encoding="utf-8") == "unrelated\n"
+    assert (dest_dir / "CHANGELOG.md").read_text(encoding="utf-8") == "new\n"
+
+
+def test_arm_k_root_dest_removes_stale_top_level_file_absent_from_staging(tmp_path):
+    dest_dir = tmp_path / "repo"
+    _init_git_repo(dest_dir)
+    (dest_dir / "AGENTS.md").write_text("stale\n", encoding="utf-8")
+    (dest_dir / "CHANGELOG.md").write_text("kept\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "seed"], dest_dir)
+
+    staging_dir = publish._create_publish_staging_dir(dest_dir)
+    # Simulates sync_flat_mirror's own "not in source" deletion phase, which
+    # already ran directly against this staging copy before the swap.
+    (staging_dir / "AGENTS.md").unlink()
+
+    publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
+
+    assert not (dest_dir / "AGENTS.md").exists()
+    assert (dest_dir / "CHANGELOG.md").read_text(encoding="utf-8") == "kept\n"
+    assert (dest_dir / ".git").exists()
+
+
+def test_arm_k_root_dest_changed_directory_is_swapped(tmp_path):
+    dest_dir = tmp_path / "repo"
+    _init_git_repo(dest_dir)
+    managed_dir = dest_dir / "managed"
+    managed_dir.mkdir()
+    (managed_dir / "a.txt").write_text("old-a\n", encoding="utf-8")
+    _git(["add", "."], dest_dir)
+    _git(["commit", "-q", "-m", "seed"], dest_dir)
+
+    staging_dir = publish._create_publish_staging_dir(dest_dir)
+    # A fresh copy is byte-identical to its source (copy2 preserves mtime).
+    assert publish._dir_trees_equal(staging_dir / "managed", managed_dir)
+    (staging_dir / "managed" / "a.txt").write_text("new-a\n", encoding="utf-8")
+    assert not publish._dir_trees_equal(staging_dir / "managed", managed_dir)
+
+    publish._swap_publish_staging_into_dest(dest_dir, staging_dir)
+
+    assert (managed_dir / "a.txt").read_text(encoding="utf-8") == "new-a\n"
+    assert (dest_dir / ".git").exists()

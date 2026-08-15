@@ -25,6 +25,15 @@ from coordinator_core.ops.handoff_gate_aging import (
     scan_triage,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _TODAY = date(2026, 7, 16)
 
 #: claude-klabauter repo root, resolved without a subprocess call:

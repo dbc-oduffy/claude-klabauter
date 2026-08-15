@@ -131,6 +131,13 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(_TESTS_DIR))

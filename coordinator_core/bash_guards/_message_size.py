@@ -132,7 +132,7 @@ from coordinator_core.bash_guards._alternative_liveness import (
     _LABELED_INDENT_BLOCK_RE,
 )
 from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
-from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL, operator_override_note
 from coordinator_core.bash_guards.dispatch import GuardBand
 
 #: The cap on a guard's OWN prose, measured with the mandatory
@@ -267,7 +267,10 @@ def _merge_spans(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
 #: `_alternative_liveness.py`), extended with `"Detected:"` for the same
 #: reason the reviewer named: `check_test_suite_invocation.py`'s
 #: `Detected: %s` lines describe the triggering input, not an alternative.
-_DIAGNOSTIC_LINE_PREFIXES: Tuple[str, ...] = ("Subagent:", "Command:", "Denied:", "Reason:", "Detected:")
+#: The `Command:` entry is built from the shared `_helpers.COMMAND_LINE_LABEL`
+#: constant rather than a hand-typed literal -- see that constant's own
+#: docstring for why it is shared across three sites.
+_DIAGNOSTIC_LINE_PREFIXES: Tuple[str, ...] = ("Subagent:", COMMAND_LINE_LABEL, "Denied:", "Reason:", "Detected:")
 
 
 def _is_diagnostic_echo(candidate: str) -> bool:

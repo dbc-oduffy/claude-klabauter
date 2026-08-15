@@ -34,6 +34,15 @@ from coordinator_core.workstream_complete.directives_commit_tail import (
     build_emit_cadence_directive,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _find(directives: list[dict[str, Any]], directive_id: str) -> dict[str, Any]:
     for entry in directives:

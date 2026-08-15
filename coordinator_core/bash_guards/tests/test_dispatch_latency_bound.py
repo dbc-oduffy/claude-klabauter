@@ -106,6 +106,13 @@ from coordinator_core.bash_guards import _command_tokenizer as _ct
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 assert (_REPO_ROOT / ".git").exists(), (
     "%r is not a real git repo root -- the subprocess-count leg below "

@@ -246,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     explicit_repo_root = positional[0] if len(positional) >= 1 and positional[0] else None
     state_common_dir = positional[1] if len(positional) >= 2 and positional[1] else None
 
+    from coordinator_core.install.forwarder_self_heal import self_heal_forwarders
+
+    self_heal_forwarders()
+
     repo_root = _resolve_repo_root(explicit_repo_root)
     if not repo_root:
         print("sweep-boot.py: cannot resolve git repo root", file=sys.stderr)

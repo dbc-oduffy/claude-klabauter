@@ -72,6 +72,13 @@ from typing import NamedTuple
 
 import pytest
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # extension -> the eol attribute every tracked file of that class must resolve.

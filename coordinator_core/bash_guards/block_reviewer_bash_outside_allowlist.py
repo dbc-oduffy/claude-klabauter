@@ -765,6 +765,62 @@ over both legs, computed in `check()`) is untouched by this divergence --
 only WHICH already-confined identity's ruleset applies can change, never
 whether confinement fires at all.
 
+Divergence 18 (2026-08-14, close the named-dispatch confinement-
+manufacturing residual): confirmed live -- a NAMED (Agent-teams teammate)
+dispatch whose back-pointer-resolved `subagent_type` is a type the policy
+does NOT confine (e.g. `coordinator:git-commit-agent`) was denied a command
+(`scoped-git-commit ...`) it is entitled to run, because `check()`'s
+`is_confined` computation was an unconditional
+`_is_confined_type(agent_type, policy) or _is_confined_type(subagent_type,
+policy)`. For a named dispatch, `agent_type` is the caller-chosen teammate
+NAME, never a real `coordinator:*` type (Design section, above); an unknown
+name is confined by leg 3 of `_is_confined_type`
+(`is_confined_by_roster_absence`), so the OR made EVERY named dispatch
+confined regardless of its real type. `_resolve_effective_type`
+(Divergence 16/17) then had no known identity to prefer over the
+confining-via-leg-3 `agent_type`, so `effective_type` became the garbage
+name and `_resolve_ruleset` fell through to `_default_ruleset()` -- the
+narrow findings-agent allowlist -- for a dispatch that should not have been
+confined at all. The same type dispatched UNNAMED was never confined
+(`agent_type` then carries the real type, `subagent_type` empty), so
+confinement depended on whether the EM typed a `name:` -- the actual bug;
+Divergence 16/17 only ever fixed WHICH ruleset a confined identity gets,
+never WHETHER confinement fires.
+
+Fix: `check()` now prefers a KNOWN back-pointer-derived `subagent_type` for
+the confinement verdict, but not unconditionally -- a KNOWN `subagent_type`
+confines when it is itself confined, OR when `agent_type` is ALSO known and
+confined (`_is_confined_type(subagent_type, policy) or
+(_is_confined_type(agent_type, policy) and _is_type_known(agent_type,
+policy))`). The original OR is consulted only when `subagent_type` is not
+known (an unnamed dispatch, where it is empty; or a named dispatch whose
+back-pointer chain itself failed to resolve) -- fail-closed leg-3
+confinement for a type unknown on both legs is UNCHANGED.
+
+**Staff-eng review (2026-08-14, finding 0/major) corrected the first cut of
+this fix**, which let a KNOWN, non-confined `subagent_type` (e.g. a stale or
+attacker-written `dispatched-agents.txt` row resolving to
+`coordinator:enricher`) CLEAR confinement a KNOWN, genuinely-confined
+`agent_type` (`coordinator:code-reviewer`) would otherwise impose -- a new
+de-confinement primitive, not merely a parity fix. The corrected rule: a
+caller-chosen NAME (an unknown `agent_type`) can neither manufacture
+confinement for a real, non-confined type, nor -- the corrected direction --
+can a KNOWN, non-confined `subagent_type` launder a KNOWN, genuinely-confined
+`agent_type` into freedom. Both directions are pinned by the added test
+suite. See `check()`'s own Divergence 18 comment for the exact code, and
+`_resolve_effective_type`'s docstring for the scoping note this divergence
+adds there (its own "never whether confinement fires" claim describes only
+that function, not `check()`).
+
+REFUTED prior hypothesis (recorded so it is not re-investigated): the
+`dispatched-agents.txt` back-pointer row write is NOT broken. A live named
+dispatch this session (`bp-probe@session-0b5c80ee`) produced a correct row
+(`bp-probe@session-0b5c80ee<TAB>sonnet<TAB>coordinator:executor`) plus a
+correct `em-session-id.txt`, at spawn time. The 187 `.agents/` directories
+with no matching row are archived-session survivorship (session directories
+are removed at SessionEnd, `.agents/` directories persist) -- not a write
+failure.
+
 Test surface: `coordinator_core/bash_guards/tests/test_block_reviewer_bash_outside_allowlist.py`
 -- the eight probe commands from the verdict record
 (`docs/research/spike-verdicts/2026-08-07-powershell-guard-detection-and-
@@ -1615,10 +1671,21 @@ def _resolve_effective_type(agent_type: str, subagent_type: str, policy: Any) ->
     Negative spec: this does not, and must not, let a known-but-NOT-confined
     type (e.g. a real ``coordinator:enricher`` on either leg) smuggle a wider
     surface into an actually-confined dispatch -- ``is_confined`` (computed by
-    the caller via the unmodified OR of ``_is_confined_type`` over both legs)
-    still governs whether this guard evaluates the command at all; this
-    function only ever changes WHICH already-confined identity's ruleset
-    applies, never whether confinement fires.
+    the caller, see ``check()``) still governs whether this guard evaluates
+    the command at all; this function only ever changes WHICH already-
+    confined identity's ruleset applies, never whether confinement fires.
+
+    (Divergence 18, 2026-08-14) The claim immediately above -- "never
+    whether confinement fires" -- describes THIS function's own contract
+    only, not ``check()``'s. As of Divergence 18, ``check()`` no longer
+    computes ``is_confined`` as an unconditional OR over both legs: a KNOWN
+    ``subagent_type`` now governs the confinement verdict outright, and the
+    OR is consulted only as a fallback when ``subagent_type`` is not known.
+    See ``check()``'s own Divergence 18 comment for the full mechanism and
+    why an unconditional OR there was itself a defect (it MANUFACTURED
+    confinement for a named dispatch of a genuinely non-confined type), not
+    a restatement of the history above -- this note is additive, appended,
+    not a revision of the Divergence 16/17 record.
 
     Divergence 17 (2026-08-11, close the type-smuggling residual accepted
     above): the ordering above was itself incomplete -- it preferred a KNOWN
@@ -2975,7 +3042,18 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     agent_type = payload.get("agent_type") or ""
     subagent_type = ""
     if agent_id and git_root:
-        subagent_type = _read_backpointer_subagent_type(git_root, agent_id)
+        # Review: coordinator:code-reviewer (2026-08-14, Divergence 18
+        # deferred finding) -- the back-pointer chain never checked that the
+        # em_session_id it read from em-session-id.txt matched THIS payload's
+        # own session_id, so a stale/cross-session/fabricated back-pointer
+        # could resolve a caller-chosen agent_type to any real, non-confined
+        # subagent_type and clear confinement via Divergence 18's new formula.
+        # Passing expected_em_session_id here cross-checks the resolved
+        # em_sid against the live calling session and fails the lookup
+        # (returns "") on any mismatch.
+        subagent_type = _read_backpointer_subagent_type(
+            git_root, agent_id, expected_em_session_id=session_id
+        )
 
     # Empty canonical AGENT_ID -> no subagent or unrecognised shape -> allow
     # (fail-open, reference hook line 117).
@@ -2989,11 +3067,58 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     # emptiness to the PRIOR hardcoded enforcement (AC11), never to ALLOW.
     policy = load_policy(policy_path)
 
-    # 6. OR-resolver: effective confined-set membership (reference hook
-    #    163-192), policy-driven with a hardcoded-set fallback (AC10/AC11).
-    is_confined = _is_confined_type(agent_type, policy) or _is_confined_type(
-        subagent_type, policy
-    )
+    # 6. Confined-set membership (reference hook 163-192), policy-driven with
+    #    a hardcoded-set fallback (AC10/AC11).
+    #
+    # Divergence 18 (2026-08-14, close the named-dispatch confinement-
+    # manufacturing residual): a bare OR here made EVERY named (Agent-teams
+    # teammate) dispatch confined, regardless of the dispatched agent's real
+    # type. Root cause: for a NAMED dispatch, `agent_type` is the caller-
+    # chosen teammate NAME, never a real `coordinator:*` type -- an unknown
+    # name is confined by leg 3 of `_is_confined_type`
+    # (`is_confined_by_roster_absence`), so the OR manufactured confinement
+    # for a dispatch whose back-pointer-resolved `subagent_type` is a type
+    # the policy does NOT confine (e.g. `coordinator:git-commit-agent`,
+    # `coordinator:enricher`). `_resolve_effective_type` then had no known
+    # identity to prefer (the confining leg, `agent_type`, is the only KNOWN
+    # one via leg-3's catch-all), so `effective_type` became the garbage
+    # name and `_resolve_ruleset` fell through to `_default_ruleset()` -- the
+    # narrow findings-agent allowlist -- denying commands (e.g.
+    # `scoped-git-commit`) the real, non-confined type is entitled to run.
+    # This is a DIFFERENT question from Divergence 16/17's fix immediately
+    # below: those changed WHICH already-confined identity's ruleset
+    # applies; this changes WHETHER confinement fires at all for a named
+    # dispatch. Fix: a KNOWN back-pointer-derived `subagent_type` governs the
+    # confinement verdict outright -- a caller-chosen name must never
+    # MANUFACTURE confinement for a type the policy does not confine, on the
+    # same "back-pointer identity outranks caller-chosen free text"
+    # principle Divergence 17 already established for ruleset selection.
+    # Only when `subagent_type` is not known (unnamed dispatch: empty; or a
+    # named dispatch whose back-pointer chain itself failed to resolve) does
+    # the original OR apply -- fail-closed leg-3 confinement for a type
+    # unknown on BOTH legs is unchanged.
+    #
+    # Staff-eng review (2026-08-14, finding 0/major): the first cut of this
+    # fix let a KNOWN, non-confined `subagent_type` CLEAR confinement a
+    # KNOWN, genuinely-confined `agent_type` (e.g. `coordinator:code-
+    # reviewer`) would otherwise impose -- a stale or attacker-written
+    # `dispatched-agents.txt` row could no-op this guard entirely for a
+    # findings agent. Corrected: when `subagent_type` is known, it confines
+    # the dispatch on its own leg OR when `agent_type` is ALSO known and
+    # confined -- a known `subagent_type` can free a caller-chosen NAME
+    # (unknown `agent_type`) from manufactured confinement, but it can never
+    # launder a known-and-confined `agent_type` into freedom. A name cannot
+    # manufacture confinement for a type the policy does not confine, and a
+    # back-pointer value cannot clear confinement a known-confined
+    # `agent_type` imposed.
+    if _is_type_known(subagent_type, policy):
+        is_confined = _is_confined_type(subagent_type, policy) or (
+            _is_confined_type(agent_type, policy) and _is_type_known(agent_type, policy)
+        )
+    else:
+        is_confined = _is_confined_type(agent_type, policy) or _is_confined_type(
+            subagent_type, policy
+        )
     if not is_confined:
         return None
 

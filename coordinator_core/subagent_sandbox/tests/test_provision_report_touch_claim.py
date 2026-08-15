@@ -32,6 +32,13 @@ from coordinator_core.session import core as session_core
 from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 REPORT_SIDECAR_TYPE = "coordinator:code-reviewer"
 PLAN_DERIVABLE_TYPE = "coordinator:docs-checker"
 BARE_HEX_AGENT_ID = "abc123def4567890"

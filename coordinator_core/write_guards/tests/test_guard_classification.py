@@ -179,7 +179,6 @@ ADVISORY_NAMES = [
     "block_dev_side_mirror_wiki",
     "block_em_hand_edit_pending_review_integration",
     "block_priority_ledger_edit",
-    "block_tracker_edit",
     "check_claude_md_size",
     "guard_concrete_path_citations",
     "guard_memory_store_cap",

@@ -132,6 +132,69 @@ flagged as a DoE-side follow-up, not authored here.
 Spec backlink: DoE-claude:pln-canonical-resolution-engine-6eea37 § W2-B3, R7 Addendum
 Sibling seam: coordinator_core/subagent_sandbox/provision_report.py (run-report provisioner)
 Schema-of-record: schemas/decision-object.schema.json $defs/subagent_sidecar (DoE clone)
+
+Anonymous-provision_key disambiguation (2026-08-15 break-class fix): a caller
+that omits ``provision_key`` used to get a fully-random nonce-named sidecar
+(``<label>-sidecar-<nonce>.md``) -- fine for uniqueness, useless for
+identity. Three concurrent same-``agent_type`` dispatches in one session
+(the incident this closes) produced three indistinguishable-looking open
+sidecars; a reviewer that found two identically-shaped empty siblings plus
+one already filled by a peer had no principled way to tell which was its
+own and correctly refused to write rather than guess. Two shapes were
+weighed:
+
+  1. Always derive a ``provision_key`` when the caller supplies none --
+     CHOSEN. See ``provision_subagent_sidecar``'s ``elif agent_id:`` branch:
+     the derived key is ``<effective_label>.<agent_id>``, where
+     ``agent_id`` is the SAME already-canonicalized identity
+     ``resolve_effective_types`` produces (unique per spawned agent within a
+     session by construction -- it is the same value Bash-call attribution
+     elsewhere in this tree relies on for uniqueness). Derivation is gated
+     on ``agent_id`` surviving ``_sanitize_segment`` unchanged (the
+     named-teammate form ``a.+-[a-f0-9]{16}`` is not filesystem-safe by
+     construction -- only the bare-hex form is); an ``agent_id`` that does
+     not falls through to the random-nonce path instead of being derived
+     from, so no two accepted (sanitize-stable) ``agent_id``s can ever
+     collapse onto the same key. This makes collision across concurrent
+     same-type dispatches impossible within one session for every
+     ``agent_id`` this branch actually derives from, without inventing a
+     new identity source.
+  2. Detect the ambiguity and fail loud at provisioning time (refuse a
+     second anonymous same-``agent_type`` provision, name ``provision_key``
+     as the fix) -- REJECTED. This only turns a silent hazard into a loud
+     one; it still requires a human/dispatcher to remember to pass
+     ``provision_key`` next time, which is the exact "the operator
+     remembers" failure shape this repo's north star (see CLAUDE.md) rejects
+     as a discharging artifact. It would also newly brick concurrent same-
+     type dispatch outright until someone updates the dispatcher, which is a
+     regression in availability for a purely a cosmetic-naming gap.
+
+Idempotence tradeoff (named per the spec's ask): an explicit caller-supplied
+``provision_key`` keeps its exact existing path and idempotent re-open
+behavior -- this fix does not touch that branch at all. The DERIVED-key
+branch trades idempotence across a genuine re-dispatch of "the same logical
+unit" under a fresh spawn: a brand-new ``Task`` spawn always mints a fresh
+``agent_id``, so a deliberate retry of the same logical unit lands a SECOND
+sidecar rather than reopening the first. This is accepted because nothing on
+this call's inputs distinguishes "retry the same logical unit" from
+"dispatch a new, unrelated unit of the same type" without a caller-supplied
+key -- guessing wrong there would silently collide two UNRELATED agents'
+sidecars, which is the exact hazard this fix exists to close. A caller that
+wants idempotent re-dispatch across spawns already has the tool: pass an
+explicit ``provision_key`` (e.g. a plan/chunk slug), which is unaffected by
+and unrelated to this change.
+
+Brief surface (not built here): the derived/explicit path must still reach
+the DISPATCHED agent's own prompt to close the incident's second half (an
+agent that can't see its own sidecar path is still guessing). This module
+only emits ``{"subagent_sidecar": <path>}`` to stdout at a PreToolUse-Agent
+hook boundary; folding that value into the spawned agent's brief is done by
+whichever dispatching skill/command constructs the ``Task`` prompt --
+coordinator-claude's surface, not claude-klabauter's (see
+``state/handoffs/2026-08-03-sidecar-emitter-contract.md``'s "DoE owns the
+VALUES -- which dispatching skill/command passes ... " precedent for the
+identical mechanism/values split). No half-bridge is built here; STOPPED per
+the dispatch brief's own instruction.
 """
 
 from __future__ import annotations
@@ -344,6 +407,54 @@ def provision_subagent_sidecar(
         sanitized_provision_key = _sanitize_segment(str(provision_key))
         if sanitized_provision_key is None:
             return None
+    elif agent_id:
+        # Concurrent same-agent_type dispatch disambiguation (2026-08-15
+        # incident: three concurrent coordinator:code-reviewer agents got
+        # nonce-named sidecars, so a reviewer that found two identically-
+        # shaped open siblings had no way to identify its OWN file and
+        # correctly refused to write). No caller-supplied provision_key ->
+        # derive one deterministically from `effective_label` + the already-
+        # resolved, already-canonicalized `agent_id` (see
+        # `resolve_effective_types` above -- either a bare-hex id
+        # `[a-f0-9]{12,}` or a named-teammate id `a.+-[a-f0-9]{16}`, where
+        # the named form's `.+` matches ANY character short of newline, so
+        # `agent_id` is NOT guaranteed `_sanitize_segment`-safe on its own --
+        # the `_sanitize_segment(derived_key)` call below is load-bearing,
+        # not redundant, and must not be dropped even though `derived_key`
+        # already looks path-shaped).
+        # `agent_id` is unique PER SPAWNED AGENT within a session by
+        # construction (it is how this same resolver disambiguates Bash-call
+        # attribution elsewhere in this tree), so two concurrent same-type
+        # dispatches with well-formed agent_ids can never derive the same
+        # key. That collision-proof guarantee only holds when `agent_id`
+        # survives `_sanitize_segment` unchanged -- a named-teammate id that
+        # does NOT (e.g. one containing a stripped character) would collapse
+        # onto any other id differing only in the stripped characters, which
+        # is the exact silent-overwrite failure this fix exists to close.
+        # Guard against that: only derive a key when `agent_id` is already
+        # sanitize-stable; otherwise fall through to the random-nonce path
+        # below exactly as if no agent_id had resolved at all -- a malformed
+        # id is precisely the case this derivation cannot safely cover.
+        #
+        # This trades away idempotence across a genuine re-dispatch of "the
+        # same logical unit" under a NEW agent_id (a fresh Task-tool spawn
+        # always gets a fresh id) -- deliberately: nothing on this call's
+        # inputs distinguishes "re-dispatch the same logical unit" from
+        # "dispatch a new, unrelated unit of the same type" without a
+        # caller-supplied key, and guessing wrong there would silently
+        # collide two UNRELATED agents' sidecars, which is the exact failure
+        # this fix closes. A caller that wants idempotent re-dispatch across
+        # spawns keeps passing an explicit `provision_key` (unchanged, this
+        # branch is not reached when one is supplied) -- deriving one here
+        # only replaces today's fully-random nonce with a deterministic,
+        # collision-proof-within-session key sharing the SAME
+        # `<key>.subagent-sidecar.md` naming as an explicit provision_key,
+        # so a second call with the identical agent_id (e.g. a hook retry
+        # for the same spawn attempt) still reopens the same file rather
+        # than minting a second one.
+        if _sanitize_segment(str(agent_id)) == agent_id:
+            derived_key = f"{sanitized_label}.{agent_id}"
+            sanitized_provision_key = _sanitize_segment(derived_key)
 
     session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
     # sanitized_session_id is guaranteed separator-free by _sanitize_segment,

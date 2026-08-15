@@ -331,6 +331,26 @@ def render_subagent_message(
     )
 
 
+#: `write_verb_label` value `_iter_write_sink_candidates` yields for a `git
+#: push` write-sink candidate (`"git %s" % subcommand` with `subcommand ==
+#: "push"`) -- the one shape this module renders DIFFERENT publish-class
+#: copy for (2026-08-14, cross-repo/inbox percolate-push memo): every other
+#: publish-mirror write (a hand-authored commit/edit into the mirror) keeps
+#: the content-authoring doctrine citation below, since THAT write is what
+#: the citation's "Publish-Repo Content Authoring" section is about. A
+#: `push`, by contrast, is never content authoring -- it ships a commit
+#: that (if legitimate) was already made correctly in source and now needs
+#: to reach the mirror, which is exactly `percolate-push`'s job (see
+#: `coordinator/bin/percolate-push.py`'s own module docstring: this guard
+#: denying an unauthorized push into a publish mirror "is the guard working
+#: as designed", unweakened -- percolate-push never transits Bash, so it
+#: never reaches this guard at all). Citing the content-authoring doctrine
+#: page at a push offers the reader an alternative that does not apply to
+#: what they typed; naming `percolate-push <target>` instead offers one
+#: that does.
+_GIT_PUSH_WRITE_VERB_LABEL = "git push"
+
+
 def render_publish_em_message(
     target_repo: str,
     destination_owner: str,
@@ -338,6 +358,7 @@ def render_publish_em_message(
     session_id: str,
     raw_target: str = "",
     surface: str = SURFACE_BASH,
+    write_verb_label: str = "",
 ) -> str:
     """The PUBLISH-class, EM-class deny copy -- drafted around durability,
     not ownership (see module docstring, "DESTINATION_PUBLISH"). Names the
@@ -354,8 +375,18 @@ def render_publish_em_message(
     fallback-if-you-still-mean-to-write-here escape hatch. `gitdir`/
     `session_id`/`surface` are accepted for call-site parity with
     `render_bump_message`'s single dispatch signature and the sibling
-    publish-subagent renderer -- none is rendered here."""
+    publish-subagent renderer -- none is rendered here.
+
+    `write_verb_label` (see `_GIT_PUSH_WRITE_VERB_LABEL`'s own docstring)
+    swaps the content-authoring citation for the `percolate-push <target>`
+    pointer when the denied command was itself a `git push` -- the one
+    write-sink shape that citation's alternative does not answer."""
     del gitdir, session_id, surface
+    if write_verb_label == _GIT_PUSH_WRITE_VERB_LABEL:
+        return (
+            f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
+            f"(`{destination_owner}`) — push a committed round via `percolate-push <target>`."
+        )
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
@@ -371,6 +402,7 @@ def render_publish_subagent_message(
     sandbox_root: str,
     raw_target: str = "",
     surface: str = SURFACE_BASH,
+    write_verb_label: str = "",
 ) -> str:
     """The PUBLISH-class, subagent-class deny copy -- same durability
     framing as `render_publish_em_message`, routed to the dispatching EM
@@ -382,8 +414,18 @@ def render_publish_subagent_message(
     CHANNEL NEVER CARRIES THE UNLOCK"). `gitdir`/`session_id`/`surface` are
     accepted for call-site parity with the EM-class renderer and
     `render_bump_message`'s single dispatch signature -- none of the three
-    is rendered here, because none of the three is the reader's to use."""
+    is rendered here, because none of the three is the reader's to use.
+
+    `write_verb_label` -- same `git push` swap as
+    `render_publish_em_message`, see that function's docstring and
+    `_GIT_PUSH_WRITE_VERB_LABEL`."""
     del sandbox_root, gitdir, session_id, surface
+    if write_verb_label == _GIT_PUSH_WRITE_VERB_LABEL:
+        return (
+            f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
+            f"(`{destination_owner}`) — push a committed round via `percolate-push <target>`. "
+            "Report to your EM."
+        )
     return (
         f"Coordinator guard — instead: {_target_phrase(target_repo, raw_target)} is publish mirror "
         f"(`{destination_owner}`) — durable fix belongs in source; see "
@@ -404,6 +446,7 @@ def render_bump_message(
     destination_owner: str = "",
     raw_target: str = "",
     surface: str = SURFACE_BASH,
+    write_verb_label: str = "",
 ) -> str:
     """Dispatch to the correct one of the four templates by
     `(destination_class, agent_class)`. The single entry point C4/C5/C7
@@ -447,14 +490,27 @@ def render_bump_message(
     into that call site is out of THIS chunk's scope (a sibling owns that
     file); until it is wired, that surface keeps rendering the
     `SURFACE_BASH` phrasing, which understates its marker's real breadth.
+
+    `write_verb_label` defaults to `""` -- same "optional, safe default"
+    contract as every keyword above. Threaded only to the two PUBLISH-class
+    templates (see `_GIT_PUSH_WRITE_VERB_LABEL`); the FOREIGN-class
+    templates never take it, since a hand-authored write into an ordinary
+    foreign repo has no `percolate-push`-shaped alternative to offer.
     """
     if destination_class == DESTINATION_PUBLISH:
         if agent_class == AGENT_CLASS_SUBAGENT:
             return render_publish_subagent_message(
-                target_repo, destination_owner, gitdir, session_id, sandbox_root, raw_target, surface
+                target_repo,
+                destination_owner,
+                gitdir,
+                session_id,
+                sandbox_root,
+                raw_target,
+                surface,
+                write_verb_label,
             )
         return render_publish_em_message(
-            target_repo, destination_owner, gitdir, session_id, raw_target, surface
+            target_repo, destination_owner, gitdir, session_id, raw_target, surface, write_verb_label
         )
     if agent_class == AGENT_CLASS_SUBAGENT:
         return render_subagent_message(

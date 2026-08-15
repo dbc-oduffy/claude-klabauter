@@ -26,6 +26,13 @@ from coordinator_core.ops.detect_staged_rollback import (
     main,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(repo, *args, check=True):
     return subprocess.run(

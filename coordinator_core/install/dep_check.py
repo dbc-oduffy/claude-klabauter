@@ -4,18 +4,18 @@ agent-mode consent prompt, functional dep probing, and the crash-safe
 visited-set cycle-detection state machine consumed by coordinator's
 install-chain setup.sh.
 
-Port source: coordinator/scripts/lib/dep_check.sh [DoE-claude repo]
-(a thin bash veneer replaces the old function bodies with subprocess calls
-into THIS module; see that file's own header comment for the veneer/degrade
-contract. The `.sh` file stays in place — it is a sourced library, not a
-standalone trampoline executable, so there is no polyglot-shebang shape
-here. Reachability note, confirmed 2026-07-17: DoE-claude's own
-coordinator/scripts/setup.sh no longer sources this bash lib — it is itself
-a polyglot trampoline into coordinator_core.ops.setup_chain_walker.main,
-which ports manifest-reading/dep-probing natively. dep_check.sh is
-maintained as the byte-parity template source for the example-game-repo/example-retrieval-repo/
-deep-research sibling-repo setup.sh copies, not as this repo's own live
-install path — see dep_check.sh's own header for the full note.)
+Port source: coordinator/scripts/lib/dep_check.sh [DoE-claude repo] — the
+`.sh` file is RETIRED and no longer exists in DoE-claude (all of
+`coordinator/scripts/lib/` is gone repo-wide). Historical context: it was
+last a thin bash veneer subprocess-calling into this module's function
+bodies, and by 2026-07-17 DoE-claude's own coordinator/scripts/setup.sh no
+longer sourced it at all (it had become a polyglot trampoline into
+coordinator_core.ops.setup_chain_walker.main, which ports
+manifest-reading/dep-probing natively) — it survived only as a byte-parity
+template source for sibling-repo setup.sh copies. That template rationale
+no longer applies now that the file itself is gone: this module is the sole
+implementation for every consumer, in-repo and sibling-repo vendoring
+alike.
 
 Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase-b.md §7 C3
 Spec backlink: coordinator/docs/wiki/agent-install-contract.md §Dual-mode script UX

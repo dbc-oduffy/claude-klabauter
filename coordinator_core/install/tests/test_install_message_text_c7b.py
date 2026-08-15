@@ -46,8 +46,16 @@ def test_probe_git_lfs_remediation_does_not_name_example_retrieval_repo_ue_addon
     assert "example-retrieval-repo-ue-addon" not in line
 
 
-def test_probe_ue_functional_env_key_untouched():
+def test_probe_ue_functional_env_key_untouched(monkeypatch, tmp_path: Path):
     # EXAMPLE_GAME_REPO_UE_ROOT is a functional env-var identifier, not narrative
     # prose naming a repo — it must survive the sweep unchanged.
+    #
+    # Negative spec: do NOT call probe_ue() bare. Its pass branch reports the
+    # engine path and names no env var, so a bare call asserts a string that
+    # only appears on hosts WITHOUT Unreal installed — green on CI, red on
+    # every developer box that has it. Pin the probe to a deterministic
+    # not-found state so the assertion is about the message text, which is
+    # what this module covers, and not about the host's UE install.
+    monkeypatch.setenv("EXAMPLE_GAME_REPO_UE_ROOT", str(tmp_path / "no-such-ue-root"))
     line = prereq_probe.probe_ue()
     assert "EXAMPLE_GAME_REPO_UE_ROOT" in line

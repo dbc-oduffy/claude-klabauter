@@ -18,6 +18,13 @@ import pytest
 
 from coordinator_core.ops.workday_start_cross_repo_memo_outbox_surface import main
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _write_draft(path, to=None, title=None, body="body", extra_frontmatter=""):
     lines = ["---"]

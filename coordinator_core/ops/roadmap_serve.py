@@ -104,7 +104,15 @@ def _handler(
             "roadmap.serve: missing or invalid 'roadmap_id' param — "
             "returning empty payload"
         )
-        return {"nodes": [], "edges": [], "roll_up": {"total": 0, "by_status": {}, "pct_shipped": None}, "critical_path": []}
+        return {
+            "roadmap_id": roadmap_id,
+            "nodes": [],
+            "edges": [],
+            "roll_up": {"total": 0, "by_status": {}, "pct_shipped": None},
+            "critical_path": [],
+            "scan_incomplete": False,
+            "scan_errors": [],
+        }
 
     # Derive the worktree root from the router-supplied common dir.
     if repo_root is not None:
@@ -115,7 +123,15 @@ def _handler(
             "repo_root arg absent; returning empty payload for roadmap_id=%r",
             roadmap_id,
         )
-        return {"nodes": [], "edges": [], "roll_up": {"total": 0, "by_status": {}, "pct_shipped": None}, "critical_path": []}
+        return {
+            "roadmap_id": roadmap_id,
+            "nodes": [],
+            "edges": [],
+            "roll_up": {"total": 0, "by_status": {}, "pct_shipped": None},
+            "critical_path": [],
+            "scan_incomplete": False,
+            "scan_errors": [],
+        }
 
     # assemble_roadmap_dag is a pure derivation helper (no git subprocess, no spawn).
     # It carries shipped_in as-is (bare SHA scalar) without _stamp_shipped_sha (F1).

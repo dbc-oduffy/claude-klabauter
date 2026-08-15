@@ -78,6 +78,15 @@ from ._polyglot_git_scan import (
     tracked_files_under_coordinator,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # Header window (lines) within which the trampoline literal is considered a
 # live header rather than an incidental/documentation mention. Matches the
 # window `check-bin-sh-polyglot.py`'s `_has_trampoline()` uses (see its
@@ -137,6 +146,11 @@ _SH_SHEBANG_EXEMPT = {
     # (commit 28a7b868: "invoking-shell-bash4-probe.sh correctly kept as
     # POSIX sh"). Permanent exemption, not a migration backlog item.
     # (DR-076 governs the de-polyglot migration this exemption departs from.)
+    # NOTE: the file's `#!/bin/sh` shebang line itself was later stripped
+    # (2026-08-14, wfc-S2-launchers) — every call site invokes it with an
+    # explicit `sh`/`bash` interpreter (DoE-claude coordinator/commands/
+    # install.md:66), so the shebang was decorative. This exemption is about
+    # the sh-vs-Python invariant, not the now-absent shebang line.
     "coordinator/scripts/lib/invoking-shell-bash4-probe.sh",
 }
 

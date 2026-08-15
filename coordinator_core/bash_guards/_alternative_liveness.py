@@ -145,6 +145,7 @@ from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
 from coordinator_core.bash_guards import block_subagent_grant_acquisition
+from coordinator_core.bash_guards import block_subagent_guard_grant
 from coordinator_core.bash_guards import check_raw_pid_liveness
 from coordinator_core.bash_guards import guard_powershell_via_bash
 from coordinator_core.bash_guards import guard_branch_set_precedence
@@ -426,6 +427,30 @@ def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
         return _dc.check_destructive_git_revert_advisory("git -C %s stash" % repo, "altlive-probe")
 
 
+def _trigger_check_git_commit_safe_commit_advise_amend() -> Optional[Dict[str, Any]]:
+    """Key-specific trigger for `check_git_commit_safe_commit_advise`'s
+    `COORDINATOR_ALLOW_GIT_COMMIT_AMEND` override key -- see
+    `KEY_SPECIFIC_TRIGGERS`'s own docstring for why this exists as a SEPARATE
+    row rather than widening `LIVE_TRIGGERS["check_git_commit_safe_commit_
+    advise"]` itself.
+
+    A fresh `_scratch_git_repo()` per call (never the real working tree, and
+    never dependent on it) whose one committed HEAD carries no `Session-Id:`
+    trailer at all -- `_bt_head_commit_amend_provenance`'s `owned` can only
+    ever read True from an EXACT trailer match against the probe's own
+    `session_id`, and this repo's HEAD was authored entirely outside this
+    module's session machinery, so `owned=False` is a property of the FIXTURE
+    (a repo this trigger built and controls end to end), never a guess about
+    the real tree's current HEAD -- re-runnable identically regardless of
+    what commit happens to be at HEAD in the box this suite runs on. Reaches
+    the amend gate's deny branch (`--amend`, no `--only`, no explicit
+    pathspec) at baseline, which is the shape `probe_override` needs to prove
+    `COORDINATOR_ALLOW_GIT_COMMIT_AMEND=1` actually changes."""
+    with _scratch_git_repo() as repo:
+        cmd = 'git -C %s commit --amend -m "amend probe"' % repo
+        return _dc.check_git_commit_safe_commit_advise(cmd, "altlive-probe-amend-nonmatching-session")
+
+
 def _trigger_plan_body_bash_write() -> Optional[Dict[str, Any]]:
     with _scratch_git_repo() as repo:
         agent_id = "deadbeef0123"
@@ -478,6 +503,47 @@ def _trigger_guard_longlived_branch_naming() -> Optional[Dict[str, Any]]:
         )
     finally:
         guard_longlived_branch_naming._is_hazard_repo = orig_hazard
+
+
+def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
+    """``check_blanket_git_add`` resolves its hazard-repo git root from
+    ``os.getcwd()`` (or a ``-C <dir>`` embedded in ``cmd`` itself, see
+    ``_bt_blanket_add_dash_c_cwd``'s own docstring) rather than a
+    ``check(payload)``-shaped ``cwd`` field -- it takes a bare ``cmd``
+    string, not a payload -- so this trigger drives that resolution via an
+    explicit ``git -C <dir> add -A`` rather than relying on whatever
+    directory the test runner's own process happens to be in.
+
+    ``_is_hazard_repo`` is swapped on `dispatch_checks`'s own module
+    attribute (``_dc._is_hazard_repo``) for the duration of this one call,
+    same convention as `_trigger_block_noncanonical_branch_creation` /
+    `_trigger_guard_longlived_branch_naming` /
+    `_trigger_guard_branch_set_precedence` above -- a temporary swap on the
+    SHIPPED guard's own module, restored in `finally`, never a persistent
+    patch. Supersedes the prior `UNTRIGGERED` reason ("target-class gate is
+    hardcoded to the operator's real ~/.claude meta-repo"), which stopped
+    being true once `_is_hazard_repo` replaced that hardcoded check.
+
+    ``_ALTLIVE_HAZARD_CWD`` is passed to ``-C`` UNQUOTED -- deliberately,
+    not merely because it happens to contain no spaces. `check_blanket_
+    git_add`'s own per-segment matcher (`seg_cmd = re.sub(r"'[^']*'", " ",
+    seg_cmd)`) strips ANY single-quoted span before re-matching the git-add
+    shape, a rule meant for quoted commit-message-style TEXT arguments, not
+    a quoted `-C` path. Quoting a backslash-bearing Windows path here (e.g.
+    via `shlex.quote`, which quotes on seeing a bare backslash) blanks the
+    `-C` value out from under `_GIT_ADD_GLOBAL_OPT_RE`'s own `-C\\s+\\S+`
+    match, which then greedily consumes the FOLLOWING `add` token as -C's
+    value instead and the whole gate silently stops matching -- confirmed
+    live during this dispatch (quoted form returns None, unquoted fires).
+    """
+    orig_hazard = _dc._is_hazard_repo
+    _dc._is_hazard_repo = lambda git_root: True
+    try:
+        return _dc.check_blanket_git_add(
+            "git -C %s add -A" % _ALTLIVE_HAZARD_CWD, "altlive-probe"
+        )
+    finally:
+        _dc._is_hazard_repo = orig_hazard
 
 
 def _trigger_guard_branch_set_precedence() -> Optional[Dict[str, Any]]:
@@ -585,6 +651,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_multiprobe_banner_rewrite": lambda: _dc.check_multiprobe_banner_rewrite(
         'echo "=== SESSION FACTS ==="; pwd; whoami; git status --short', "altlive-probe"
     ),
+    "check_blanket_git_add": _trigger_check_blanket_git_add,
     "check_head_tail_plumbing_rewrite": lambda: guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(
         "find . -name '*.py' | head -n 5", "altlive-probe"
     ),
@@ -657,6 +724,21 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
             'python3 -m coordinator_core.session.claude_md_grant grant pm "note"'
         )
     ),
+    # `agent_id` present (the default `_payload()` value) is sufficient to
+    # fire this identity-gated hard-deny -- see `block_subagent_guard_grant.
+    # check`'s own "IDENTITY-GATE POSTURE" docstring section: it denies on
+    # the raw presence of `agent_id` alone, never on further resolution.
+    # `-m coordinator_core.session.em_guard_grant grant` mirrors this
+    # guard's sibling row above (`block_subagent_grant_acquisition`, the
+    # near-identical `claude_md_grant` guard this module was ported from),
+    # substituting the gated module path and dropping the `pm` positional
+    # (this guard's `_GATED_SUBCOMMANDS` check reads only the first token
+    # after the module path, not a `granted_by` argument).
+    "block_subagent_guard_grant": lambda: block_subagent_guard_grant.check(
+        _payload(
+            'python3 -m coordinator_core.session.em_guard_grant grant "note"'
+        )
+    ),
     "guard_powershell_via_bash": lambda: guard_powershell_via_bash.check(
         _payload(
             'powershell.exe -NoProfile -Command "$p=Get-Process -Id 1"',
@@ -667,6 +749,55 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_noncanonical_branch_creation": _trigger_block_noncanonical_branch_creation,
     "guard_branch_set_precedence": _trigger_guard_branch_set_precedence,
     "guard_longlived_branch_naming": _trigger_guard_longlived_branch_naming,
+}
+
+
+#: Per-``(guard_name, override_env_var)`` triggers for the rare case where a
+#: guard advertises TWO (or more) independently-gated override keys that are
+#: only REACHABLE via different input shapes -- ``LIVE_TRIGGERS`` holds
+#: exactly one trigger per guard NAME (see that dict's own comment and every
+#: pinned test resting on that shape: ``test_every_module_guard_is_
+#: registered``, the ``EXPECTED_UNTRIGGERED``/``EXPECTED_UNVERIFIABLE_COUNTS``/
+#: ``EXPECTED_LIVE_FLOORS`` pins), so a guard whose second key needs a
+#: differently-shaped command to reach its own gate cannot be proven live by
+#: re-firing the ONE registered trigger with that key's var set -- the
+#: alternate code path is never entered, and the key scores DEAD regardless
+#: of whether it is genuinely reachable.
+#:
+#: Root cause this closes: ``check_git_commit_safe_commit_advise`` gates a
+#: bare non-amend commit behind ``COORDINATOR_ALLOW_GIT_COMMIT_BARE`` and a
+#: ``git commit --amend`` whose HEAD is not provably this session's behind
+#: ``COORDINATOR_ALLOW_GIT_COMMIT_AMEND`` -- disjoint input shapes. The
+#: guard's ``LIVE_TRIGGERS`` entry is bare-shaped (``'git commit -m "fix the
+#: thing"'``); re-firing it with ``COORDINATOR_ALLOW_GIT_COMMIT_AMEND=1`` set
+#: can never change anything (the amend branch is never entered), so
+#: ``probe_override`` scored a genuinely live key DEAD. This registry adds an
+#: amend-shaped trigger for exactly that ``(guard, env_var)`` pair -- see
+#: ``_trigger_check_git_commit_safe_commit_advise_amend``.
+#:
+#: NEGATIVE-SPEC -- this is NOT a widening of ``LIVE_TRIGGERS`` and must
+#: never become one:
+#: - Scoped to keys on DISJOINT INPUT SHAPES only. A guard whose single
+#:   registered trigger already reaches every override key it advertises has
+#:   no business here; adding a row for such a key would only ever turn a
+#:   correct DEAD into a false LIVE by construction (a second, redundant
+#:   trigger cannot disprove liveness, only fail to prove it) -- see
+#:   ``TestMetaGateProvenToFail``'s dedicated meta-test for a trigger that
+#:   does NOT read its own var and must still score DEAD even when
+#:   registered here.
+#: - Never a substitute for fixing a genuinely dead override. A key with no
+#:   reachable code path at all stays DEAD under a correctly-written
+#:   key-specific trigger -- this registry only supplies the INPUT SHAPE a
+#:   key needs to be exercised; it asserts nothing about the OUTCOME.
+#: - `LIVE_TRIGGERS` itself, `fire_guard`, the baseline fire in
+#:   `evaluate_guard`, and every registration/ratchet test enumerated above
+#:   are untouched by this dict's existence -- `probe_override` is the ONLY
+#:   consumer, and only when a `(guard, env_var)` pair has a row here.
+KEY_SPECIFIC_TRIGGERS: Dict[Tuple[str, str], Callable[[], Optional[Dict[str, Any]]]] = {
+    (
+        "check_git_commit_safe_commit_advise",
+        "COORDINATOR_ALLOW_GIT_COMMIT_AMEND",
+    ): _trigger_check_git_commit_safe_commit_advise_amend,
 }
 
 
@@ -682,19 +813,6 @@ UNTRIGGERED: Dict[str, str] = {
         "worktree remove --force) returned None against a real scratch "
         "repo. Needs a read of the function body to pin the exact trigger "
         "shape, not a black-box guess."
-    ),
-    "check_blanket_git_add": (
-        "This guard's target-class gate is hardcoded to the operator's real "
-        "~/.claude meta-repo (git_root == os.path.realpath(~/.claude)), not "
-        "any repo -- see its own source. A hermetic probe cannot construct "
-        "that specific git root inside a tempdir without monkeypatching the "
-        "guard's own path resolution, which this measurement-only module "
-        "does not do (it never patches a SHIPPED guard's behavior -- see "
-        "module negative-spec). Running the real trigger against the "
-        "operator's actual ~/.claude is read-only-safe (the check only runs "
-        "`git rev-parse`) but ties this test's pass/fail to a path that may "
-        "not exist, or may not be a git repo, on every machine this suite "
-        "runs on -- rejected for portability."
     ),
     "check_probe_spray": (
         "Stateful: gates on its own internal is-probe SHAPE classifier "
@@ -1826,12 +1944,66 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
     Re-fired via ``_call_trigger_isolated``, the same isolated-trigger
     helper ``fire_guard`` uses -- this is the SECOND (and only other) place
     in this module that fires a ``LIVE_TRIGGERS`` entry, so it carries the
-    same ``_isolated_session_scope`` guarantee as the baseline fire."""
-    env_var: str = alt.detail
-    trigger = LIVE_TRIGGERS.get(guard)
-    if trigger is None:
-        return Verdict(VerdictStatus.UNVERIFIABLE, "no registered trigger for %r to behaviorally re-fire with %r set" % (guard, env_var))
+    same ``_isolated_session_scope`` guarantee as the baseline fire.
 
+    ``KEY_SPECIFIC_TRIGGERS`` (see that dict's own docstring) is consulted
+    FIRST, keyed on ``(guard, env_var)`` -- for a guard advertising two
+    override keys reachable only via different input shapes, the caller-
+    supplied ``baseline`` (captured from ``LIVE_TRIGGERS[guard]``, a
+    DIFFERENT command shape) is not a meaningful comparison point for THIS
+    key, so a key-specific trigger's own baseline is captured here (env var
+    explicitly unset, same isolation/save-restore discipline as the
+    set-and-refire call below) rather than reusing the caller's. Falls back
+    to ``LIVE_TRIGGERS.get(guard)`` + the caller-supplied ``baseline``
+    unchanged when no key-specific row exists -- the pre-existing behavior
+    for every guard with a single override key."""
+    env_var: str = alt.detail
+    had_prior = env_var in os.environ
+    prior_value = os.environ.get(env_var)
+
+    key_trigger = KEY_SPECIFIC_TRIGGERS.get((guard, env_var))
+    if key_trigger is not None:
+        trigger = key_trigger
+        os.environ.pop(env_var, None)
+        try:
+            own_baseline_envelope = _call_trigger_isolated(trigger)
+        except Exception as exc:  # noqa: BLE001 -- a crash while unset is evidence, not a probe failure
+            if had_prior:
+                os.environ[env_var] = prior_value
+            return Verdict(
+                VerdictStatus.DEAD,
+                "guard crashed capturing its own key-specific baseline (%r unset) "
+                "(%s: %s) -- cannot prove this override's liveness" % (env_var, type(exc).__name__, exc),
+            )
+        finally:
+            if had_prior:
+                os.environ[env_var] = prior_value
+            else:
+                os.environ.pop(env_var, None)
+        baseline_decision = None
+        if own_baseline_envelope:
+            baseline_decision = own_baseline_envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+    else:
+        trigger = LIVE_TRIGGERS.get(guard)
+        if trigger is None:
+            return Verdict(VerdictStatus.UNVERIFIABLE, "no registered trigger for %r to behaviorally re-fire with %r set" % (guard, env_var))
+        baseline_decision = None
+        if baseline.envelope:
+            baseline_decision = baseline.envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+
+    # Review: coordinator:code-reviewer (finding, 2026-08-15) -- deliberately
+    # RE-READ here, not reused from the `had_prior`/`prior_value` captured
+    # near the top of this function. That earlier pair is scoped to the
+    # key-specific branch's own try/finally (it restores state before that
+    # branch returns/falls through) and is out of scope by the time this
+    # line runs; env_var is provably back to the SAME value either branch
+    # left it at (the key-specific branch's own finally guarantees it), so
+    # a fresh read here is what makes the override-and-refire block below
+    # correct on its own terms rather than depending on that guarantee
+    # holding across a branch boundary. Do not delete this re-read to
+    # "de-duplicate" it -- it is the thing that keeps this block safe if
+    # the key-specific branch above it is ever restructured to no longer
+    # restore state before falling through.
     had_prior = env_var in os.environ
     prior_value = os.environ.get(env_var)
     os.environ[env_var] = "1"
@@ -1845,9 +2017,6 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
         else:
             os.environ.pop(env_var, None)
 
-    baseline_decision = None
-    if baseline.envelope:
-        baseline_decision = baseline.envelope.get("hookSpecificOutput", {}).get("permissionDecision")
     patched_decision = None
     if patched_envelope:
         patched_decision = patched_envelope.get("hookSpecificOutput", {}).get("permissionDecision")

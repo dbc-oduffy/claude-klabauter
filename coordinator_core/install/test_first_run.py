@@ -19,6 +19,13 @@ import pytest
 
 from coordinator_core.install import first_run as fr
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # unit1 -- arg parsing (oracle L38-71).

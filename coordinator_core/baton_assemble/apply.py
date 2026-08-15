@@ -456,149 +456,6 @@ def _dispatch_handoff_author_fork(args: list[str], repo_root: Path) -> dict[str,
     }
 
 
-def _dispatch_render_project_tracker(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """kind=handoff's d4: re-renders `docs/project-tracker.md`. Dispatches
-    the standalone `coordinator/bin/render-project-tracker` subprocess CLI
-    -- the SAME shape as `_dispatch_coordinator_doc_new` /
-    `_dispatch_lint_frontmatter` / `_dispatch_session_claim_cli` above --
-    NOT `_invoke_op_in_process`. `render-project-tracker` self-resolves its
-    own `store_root`/`coordinator_root_path` from `cwd` (git rev-parse) and
-    this script's own on-disk git anchor; it takes no argv of its own, so
-    `args` is always `[]` here and passed through only for report-shape
-    parity with the other subprocess dispatchers.
-
-    2026-07-28 break-class fix (bug reproduced live: `baton-assemble apply
-    handoff <slug>` landed d1/d2 then hard-aborted d4 with
-    `{"error": "unrecognized op 'project.render_tracker'"}`): the previous
-    body called `_invoke_op_in_process("project.render_tracker", ...)`, but
-    no module anywhere registers an op by that name -- `render-project-
-    tracker` was never an `ipc` op at all, it is (and always was) a
-    standalone `coordinator/bin/` CLI, reached by subprocess exactly like
-    d1's `coordinator-doc-new` or d2's `lint-frontmatter`. The capability
-    genuinely exists (confirmed: `coordinator/bin/render-project-tracker`
-    is the SOLE writer of `docs/project-tracker.md`, per that script's own
-    module docstring) -- this was a wiring defect (wrong dispatch shape),
-    not a missing capability, so the fix redirects the call rather than
-    inventing a renderer or degrading the directive to a no-op.
-
-    FAIL POSTURE (2026-07-29 break-class fix) -- this handler NEVER raises on
-    a renderer non-zero exit; it DEGRADES. That is the opposite posture from
-    d3's and d6's, and the difference is what the directive writes:
-    `docs/project-tracker.md` is a DERIVED VIEW, rendered 1:1 from
-    `state/workstreams/` and re-renderable at any later moment from the same
-    inputs, and no directive in this envelope depends on d4. The mint is the
-    load-bearing artifact. Raising here reported APPLY_EXIT_PARTIAL_MUTATION,
-    which (a) fired `_D1_COMPENSATORS` and DELETED the freshly-scaffolded
-    successor, and (b) aborted d5/d6 before they ran -- trading the operator's
-    entire save-state for a stale copy of a regenerable view.
-
-    Live repro (claude-klabauter, 2026-07-29): every repo whose tracker is
-    hand-curated and whose `state/workstreams/` is empty -- i.e. every
-    consumer repo that never adopted the workstream queue -- hit the
-    renderer's zero-workstream truncation guard, so `/handoff` could not mint
-    a baton AT ALL there. The guard was right to decline (it exists to stop a
-    157-line curated tracker becoming an 18-line stub); the defect was this
-    seam treating "correctly declined" as a transaction-fatal error, and then
-    leaving the operator to hand-run d2/d5/d6 one directive at a time.
-
-    `EXIT_NOT_APPLICABLE` is read here rather than string-matching stderr, so
-    "not queue-backed" is distinguishable in the report from a genuine
-    renderer fault on the FAULT axis alone. That collapsed a second, distinct
-    DATA axis: a non-zero, non-EXIT_NOT_APPLICABLE exit could mean either "the
-    renderer itself broke" or "the renderer ran fine but the truncation guard
-    fired because the input data collapsed a previously-populated tracker to
-    zero content" -- two different things an operator would chase completely
-    differently. The mapping is therefore three-way, keyed on exit code:
-    `EXIT_NOT_APPLICABLE` -> "tracker-not-queue-backed" (hand-curated repo,
-    nothing to render, benign); `EXIT_RENDER_REGRESSION` -> "tracker-render-
-    regression" (the renderer ran, but its OWN truncation guard caught a
-    collapse-to-zero over a tracker that previously had content -- the
-    SUSPECT is the input data, not this dispatcher); anything else ->
-    "render-failed" (a genuine renderer fault). All three degrade identically
-    in the RETURNED dict -- none of them raise, and `reason` stays populated
-    for every one of the three so a `--json` consumer can always tell "rendered
-    fine" from "not applicable" from "regressed" from "broke" without parsing
-    prose. Do NOT restore the raise for any of these cases: a broken renderer
-    or a regressed render is still not worth destroying a baton over.
-
-    STDERR PRINTING IS NOT THE SAME QUESTION (2026-08-05 fix). Every consumer
-    repo whose tracker is hand-curated by design -- carries no information,
-    never resolves to anything else -- hit `tracker-not-queue-backed` on
-    EVERY SINGLE `/handoff`, so this print fired every single time and taught
-    its reader to stop reading it, including the one below it that shares this
-    stderr stream and genuinely matters (`tracker-render-regression`, the
-    renderer's truncation guard catching a collapse over a previously-
-    populated tracker -- a suspected bug, not a steady state). A warning that
-    always fires is not a warning. `tracker-not-queue-backed` is therefore
-    demoted to a quiet, structured-only outcome: still `degraded` in the
-    returned dict (nothing about the information is dropped, only its
-    permanently-firing stderr shout), never printed. `tracker-render-
-    regression` and `render-failed` are unaffected -- both keep printing
-    exactly as before, because both name something worth an operator's
-    attention on a stream they can otherwise trust.
-    """
-    from coordinator_core.resolution.facade import resolve_operator_config
-    from coordinator_core.ops.render_project_tracker import (
-        EXIT_NOT_APPLICABLE,
-        EXIT_RENDER_REGRESSION,
-    )
-
-    claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
-    cli = str(Path(claude_klabauter_bin) / "render-project-tracker.py")
-    proc = subprocess.run(
-        [sys.executable, cli, *args], cwd=repo_root, capture_output=True, text=True, **_NO_CONSOLE
-    )
-    degraded = None
-    if proc.returncode != 0:
-        if proc.returncode == EXIT_NOT_APPLICABLE:
-            reason = "tracker-not-queue-backed"
-        elif proc.returncode == EXIT_RENDER_REGRESSION:
-            reason = "tracker-render-regression"
-        else:
-            reason = "render-failed"
-        degraded = {
-            "reason": reason,
-            "returncode": proc.returncode,
-            "stderr": proc.stderr.strip(),
-        }
-        if reason == "tracker-not-queue-backed":
-            message = (
-                "this repo's docs/project-tracker.md is hand-curated and its "
-                "state/workstreams/ store is empty, so there is nothing to "
-                "render; the tracker was left untouched"
-                f" (renderer stderr: {proc.stderr.strip()})"
-            )
-        elif reason == "tracker-render-regression":
-            message = (
-                "the render collapsed docs/project-tracker.md to zero content "
-                "over a tracker that previously had content -- the renderer's "
-                "own truncation guard caught this and declined to write; the "
-                f"SUSPECT is the input data, not the renderer (rc={proc.returncode}): "
-                f"{proc.stderr.strip()}"
-            )
-        else:
-            message = f"the renderer failed (rc={proc.returncode}): {proc.stderr.strip()}"
-        if reason != "tracker-not-queue-backed":
-            # `tracker-not-queue-backed` stays silent on stderr -- see this
-            # handler's own docstring, STDERR PRINTING IS NOT THE SAME
-            # QUESTION. It is still fully represented in `degraded` below, so
-            # a `--json` consumer loses nothing; only the permanently-firing
-            # shout is gone.
-            print(
-                "baton-assemble apply: render-project-tracker degraded -- "
-                + message
-                + ". docs/project-tracker.md is a derived view -- the baton mint "
-                "and every other directive in this run proceeded normally.",
-                file=sys.stderr,
-            )
-    return {
-        "cli": "render-project-tracker",
-        "args": args,
-        "stdout": proc.stdout.strip(),
-        "degraded": degraded,
-    }
-
-
 def _ledger_claim_record(predecessor_path: str, repo_root: Path) -> Optional[dict[str, str]]:
     """The durable, PREDECESSOR-SIDE claim record for `predecessor_path`, read
     off the branch-independent claim ledger
@@ -845,7 +702,8 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
 
     THAT GATE DEGRADES; IT DOES NOT RAISE (2026-08-03 break-class fix, live
     repro below). It is a NOT-APPLICABLE, not a failure, and the distinction is
-    the same one `_dispatch_render_project_tracker` above already draws: the op
+    the same "degrade, don't raise, on a genuinely not-applicable case"
+    posture other dispatchers in this module draw: the op
     is never composed, so nothing is half-applied and the predecessor is left
     byte-identical. A predecessor that was never claimed or shipped is, per
     DR-242 itself, not in a succession relationship at all -- there is nothing
@@ -1032,7 +890,6 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "session-claim-cli": _dispatch_session_claim_cli,
     "handoff.stamp_phase": _dispatch_handoff_stamp_phase,
     "handoff.author_fork": _dispatch_handoff_author_fork,
-    "render-project-tracker": _dispatch_render_project_tracker,
     "handoff.supersede_predecessor": _dispatch_handoff_supersede_predecessor,
     "handoff-carry-gate": _dispatch_handoff_carry_gate,
 }
@@ -1258,9 +1115,8 @@ def _is_pristine_generator_scaffold(target: Path, doc_type: str) -> bool:
     cases -- a broken predicate could silently self-disable forever, orphans
     accumulating with nothing in logs pointing at why. That class is now
     printed to stderr (this module's existing stderr-for-non-fatal-advisory
-    convention, see `_dispatch_handoff_author_fork`'s and
-    `_dispatch_render_project_tracker`'s degrade prints) naming the file and
-    the exception, and STILL declines -- the fail-safe direction is unchanged,
+    convention, see `_dispatch_handoff_author_fork`'s degrade prints) naming
+    the file and the exception, and STILL declines -- the fail-safe direction is unchanged,
     only its silence for the unexpected case is removed.
 
     Negative-spec: does NOT read, write, or consult any sidecar, hash file, or
@@ -1580,9 +1436,10 @@ def _collect_degraded(report: dict[str, Any]) -> list[dict[str, Any]]:
     same legibility contract `_collect_directive_commits`/`_collect_replayed_
     directives` serve for commits and replays.
 
-    2026-08-03. Three handlers here degrade rather than raise (d3's
-    `handoff.author_fork` stamp-mode field degrades, d4's
-    `render-project-tracker`, and d6's DR-242 gate as of this same fix), and a
+    2026-08-03. Handlers here degrade rather than raise (d3's
+    `handoff.author_fork` stamp-mode field degrades, and d6's DR-242 gate as
+    of this same fix; d4's now-retired `render-project-tracker` handler also
+    degraded), and a
     degrade correctly leaves `status: "ok"` -- the run applied. The cost was
     that the ONLY machine-readable trace sat at
     `report["results"][i]["detail"]["degraded"]`, two levels down a list a
@@ -1663,7 +1520,7 @@ def _collect_replayed_directives(
 def _report_replay_to_stderr(replayed: list[dict[str, Any]]) -> None:
     """Prints the replay account to stderr, matching this module's existing
     stderr-for-non-fatal-advisory convention (`_usage`, the author_fork degrade
-    print, the render-project-tracker degrade print). stdout stays the machine
+    print). stdout stays the machine
     surface -- `main_apply` prints the JSON report there and nothing else."""
     if not replayed:
         return

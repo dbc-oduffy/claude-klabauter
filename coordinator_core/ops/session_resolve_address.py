@@ -23,11 +23,24 @@ Negative-spec:
     - No `session_id` param aliasing/normalization beyond what
       `reachability._matching_session_ids` already does (exact match
       only) -- this module is a thin JSON-RPC veneer only.
+    - `reason` is passed through from `reachability.ResolveResult`
+      unmodified and is never synthesized here: no default string, no
+      `getattr(result, "reason", ...)` tolerance, no re-derivation from
+      `outcome`. A `reason` missing from the resolver is an AttributeError
+      at this boundary by design -- a fabricated "unknown" would report a
+      cause this module cannot know.
     - An `ambiguous` outcome's `candidates[i]["address"]` is `None` for a
       matching id that itself lacks a usable name/socket, never a raw
       session id -- inherited unchanged from `reachability.Candidate`
       (Review: code-reviewer -- P3, "confidently wrong address" shape the
       spec's Anti-scope forbids).
+    - `caller_messaging_gate` describes the CALLING session and never the
+      resolved target -- it is named for its subject for that reason. It is
+      not merged into `outcome`/`reason`, and `reachability.messaging_
+      available()` is not consulted to build it: the two answer different
+      questions (box-level deliverability vs. this session's own gate
+      request), and folding either into the other is the collapse
+      `coordinator_core.session.messaging_gate` exists to undo.
 """
 
 from __future__ import annotations
@@ -36,7 +49,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.session import reachability
+from coordinator_core.session import messaging_gate, reachability
 
 
 def _candidate_to_dict(candidate: "reachability.Candidate") -> Dict[str, Any]:
@@ -64,8 +77,31 @@ def _session_resolve_address(params: dict, repo_root: Optional[Path] = None) -> 
 
     Returns:
         {"outcome": "own_session"|"reachable"|"not_reachable"|"ambiguous",
-         "session_id": str|None, "address": str|None,
-         "candidates": [{"session_id","name","ref","address"}, ...]}
+         "session_id": str|None, "address": str|None, "reason": str|None,
+         "candidates": [{"session_id","name","ref","address"}, ...],
+         "caller_messaging_gate": {"state","requested","inbox_bound","note"}}
+
+    `caller_messaging_gate` (`coordinator_core.session.messaging_gate`) is
+    emitted on EVERY outcome, and is about the CALLING session, not the
+    resolved target. It exists because a `not_reachable` /
+    `peer-messaging-unavailable` pair reads identically whether nothing ever
+    asked the harness to open its cross-session inbox or whether this session
+    asked and the inbox did not open -- the second is a claude-klabauter defect
+    (`state/bug-backlog/2026-08-15-the-messaging-gate-default-ships-and-no-
+    session-binds.yaml`) and the first is not, and three repos read the
+    collapsed reading as "the remote GrowthBook flag is still off". A reader
+    deciding whether to plan around a human relay branches on
+    `state == "requested-unbound"`; the other three states say the channel was
+    never asked for, was declined, or is open.
+
+    `reason` carries `reachability.ResolveResult.reason` verbatim: one of
+    `NotReachableReason`'s five constants on the "not_reachable" arm,
+    `None` on every other outcome. Always PRESENT in the dict, `None`-
+    valued when unset, exactly like `session_id`/`address` -- a consumer
+    switching on `outcome` alone is unaffected, and one that wants to say
+    WHY a live-but-unaddressable peer differs from a nonexistent session
+    reads it here instead of re-deriving it from a second registry read
+    it does not have.
 
     A missing/empty `session_id` param yields `{"outcome": "not_reachable", ...}`
     rather than raising -- this op sits on advisory read paths (e.g. the
@@ -81,5 +117,7 @@ def _session_resolve_address(params: dict, repo_root: Optional[Path] = None) -> 
         "outcome": result.outcome,
         "session_id": result.session_id,
         "address": result.address,
+        "reason": result.reason,
         "candidates": [_candidate_to_dict(c) for c in result.candidates],
+        "caller_messaging_gate": messaging_gate.to_dict(messaging_gate.classify()),
     }

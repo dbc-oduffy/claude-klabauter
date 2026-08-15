@@ -1989,13 +1989,6 @@ def _wg_subagent_plan_body_write_fire(
     }
 
 
-def _wg_tracker_edit_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
-    return {
-        "tool_name": "Write",
-        "tool_input": {"file_path": "state/handoff-tracker.md", "content": "x"},
-    }
-
-
 def _wg_unauthorized_claude_md_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     return {
         "tool_name": "Write",
@@ -2097,6 +2090,28 @@ def _wg_em_code_dispatch_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
             "old_string": "def f():\n    return 1",
             "new_string": "def f():\n    return compute_something(x, y)",
         },
+    }
+
+
+def _wg_handoff_ac_shape_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    """`kind: spinoff` (not `session-handoff`, which the guard is silent on
+    per its own docstring Fire condition) with a `## Acceptance criteria`
+    heading whose body is prose bullets, not `- [ ]`/`- [x]` checkboxes --
+    `parse_consumed_handoff_acceptance_criteria` returns `total == 0` for
+    this shape, which is exactly the fire condition."""
+    content = (
+        "---\n"
+        "kind: spinoff\n"
+        "---\n"
+        "## Acceptance criteria\n"
+        "\n"
+        "AC1 met, verified by tests.\n"
+        "AC2 met, see the diff.\n"
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "state/handoffs/foo.md", "content": content},
+        "cwd": str(scratch_dir),
     }
 
 
@@ -2331,8 +2346,6 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "block_subagent_plan_body_write", "fire", True, _wg_subagent_plan_body_write_fire
     ),
     WriteGuardRow("block_subagent_plan_body_write", "control", False, _wg_benign),
-    WriteGuardRow("block_tracker_edit", "fire", True, _wg_tracker_edit_fire),
-    WriteGuardRow("block_tracker_edit", "control", False, _wg_benign),
     WriteGuardRow(
         "block_unauthorized_claude_md_write", "fire", True, _wg_unauthorized_claude_md_fire
     ),
@@ -2353,6 +2366,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("nudge_baton_body_bar", "control", False, _wg_benign),
     WriteGuardRow("nudge_em_code_dispatch", "fire", True, _wg_em_code_dispatch_fire),
     WriteGuardRow("nudge_em_code_dispatch", "control", False, _wg_benign),
+    WriteGuardRow("nudge_handoff_ac_shape", "fire", True, _wg_handoff_ac_shape_fire),
+    WriteGuardRow("nudge_handoff_ac_shape", "control", False, _wg_benign),
     WriteGuardRow(
         "nudge_improvement_queue_write", "fire", True, _wg_improvement_queue_write_fire
     ),

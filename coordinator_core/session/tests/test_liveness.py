@@ -75,6 +75,18 @@ from coordinator_core.pickup_assemble import holder_evidence as holder_evidence_
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
+@pytest.fixture(autouse=True)
+def _reset_registry_snapshot_cache():
+    """Review: staff-eng F5 — `session_live`'s per-process registry-snapshot
+    memoization (see `liveness._cached_registry_lookup`) must not leak a
+    dict built against one test's `monkeypatch`-ed `registry_dir()` into the
+    next test sharing this process. Reset before AND after each test so
+    ordering within this file/session never matters."""
+    liveness._registry_snapshot_cache = None
+    yield
+    liveness._registry_snapshot_cache = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -569,6 +581,26 @@ class TestClaimHolderLive:
         cdir.mkdir()
         (cdir / "session_id").write_text("holder-stale")
         assert liveness.claim_holder_live(str(cdir), cwd=str(repo)) is False
+
+    def test_session_id_dir_registry_confirmed_live_with_no_local_session_dir(
+        self, tmp_path, monkeypatch
+    ):
+        """The claim-layer shape of the 2026-08-14 fix: a claim dir names a
+        holder `session_id` for which THIS repo has no session dir at all
+        (never `_write_session`'d) -- previously always `False` (dead-holder
+        takeable) regardless of the holder's real state. A confirmed harness-
+        registry record now rescues it, matching `claim_artifact`'s own
+        takeover gate (`liveness.claim_holder_live(...) and not lease_expired`)."""
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_registry_record(
+            registry_dir, "s.json", "holder-elsewhere", os.getpid(), _self_create_time()
+        )
+        cdir = tmp_path / "claim-elsewhere"
+        cdir.mkdir()
+        (cdir / "session_id").write_text("holder-elsewhere")
+        assert liveness.claim_holder_live(str(cdir), cwd=str(repo)) is True
 
     def test_session_id_empty_content_not_live(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -2044,6 +2076,30 @@ class TestHarnessRegistrySessionLivePrecedence:
         )
         assert liveness.session_live("s-registry-over-dead-stable", cwd=str(repo)) is True
 
+    def test_registry_live_wins_with_no_local_session_dir_at_all(
+        self, tmp_path, monkeypatch
+    ):
+        """2026-08-14 fix (cross-repo/inbox/2026-08-11-example-market-data-repo-
+        em-reclaim-labels-a-live-session-dead-without-checking.md): Source 0
+        used to be gated behind `Path(sdir).is_dir()`, so a confirmed-live
+        holder with NO session dir visible under `cwd`'s repo at all (a
+        foreign-cwd holder, or any resolution mismatch between where the
+        holder wrote its meta.json and the `cwd` a caller like
+        `claim_holder_live` passes) read instantly DEAD without Source 0
+        ever being consulted -- the exact asymmetry `session_verdict`'s own
+        `"harness-registry-elsewhere"` no-verdict arm (C1) already fixed for
+        ITS callers, but `session_live` (and therefore `claim_holder_live`,
+        the claim-takeover primitive) never got the same fix. No
+        `_write_session` call in this test at all -- that absence is the
+        point."""
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_registry_record(
+            registry_dir, "s.json", "s-registry-no-local-dir", os.getpid(), _self_create_time()
+        )
+        assert liveness.session_live("s-registry-no-local-dir", cwd=str(repo)) is True
+
     def test_registry_none_falls_through_to_stable_pid_arm_exact_verdict(
         self, tmp_path, monkeypatch
     ):
@@ -2084,6 +2140,31 @@ class TestHarnessRegistrySessionLivePrecedence:
         )
         assert (
             liveness.session_live("s-recency-stale-no-registry", cwd=str(repo)) is False
+        )
+
+    def test_registry_stale_record_with_no_local_session_dir_still_reads_dead(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: staff-eng F4 — the false-LIVE direction was untested even
+        though the entire safety argument for the 2026-08-14 reorder rests
+        on it: a registry record that FAILS `stable_pid_alive`'s
+        birth-instant compare (here, a `start_epoch` far from the real
+        process's actual create time — the recycled-pid/stale-record shape)
+        must still read DEAD when there is also no local session dir, not
+        fail open just because Source 0 was reached first."""
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_registry_record(
+            registry_dir,
+            "s.json",
+            "s-registry-stale-no-local-dir",
+            os.getpid(),
+            _self_create_time() - 10_000,  # far outside the 2s tolerance
+        )
+        assert (
+            liveness.session_live("s-registry-stale-no-local-dir", cwd=str(repo))
+            is False
         )
 
     def test_registry_none_falls_through_to_metaless_mtime_substitution(

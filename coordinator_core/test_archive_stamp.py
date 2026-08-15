@@ -32,6 +32,13 @@ import coordinator_core.ops.session.record_pickup  # noqa: F401
 
 import coordinator_core.archive_stamp as arstamp
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # Real-git spawn is load-bearing: archive_stamp's SHA resolution, session-id
 # resolution, and ownership gating orchestrate over ACTUAL git-tracked repo
 # state, and TestArchiveStampColdImport spawns a fresh interpreter to prove

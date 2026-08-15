@@ -55,6 +55,13 @@ import pytest
 
 import coordinator_core.workstream_complete as wsc
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # Documented consumes-manifest members that are never a `directives[].cli`
 # value because they are invoked by a DISPATCHED WORKER rather than the
 # assembler itself. Empty today -- no current census row is worker-only
@@ -109,7 +116,7 @@ def _seed_disk_fixtures(tmp_path: Path) -> None:
     several of the ~35 new directives are gated on real ON-DISK state a
     bare `decisions` key can't fake (`resolve_governing_plan` verifies the
     plan file exists before resolving a slug; `completion_archive_
-    predicate` checks for a real `archive/` dir or `project-tracker.md`;
+    predicate` checks for a real `archive/` dir or `state/workstreams/`;
     `compute_run_report_sidecar_gate` globs a real sidecar directory) --
     see this file's own module docstring negative-spec, which named these
     exact members as the expected residual red pre-widening. This helper

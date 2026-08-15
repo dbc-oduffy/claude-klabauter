@@ -119,10 +119,33 @@ def get_response() -> Optional[Dict[str, Any]]:
         loop.close()
 
 
+_USAGE = (
+    "usage: python -m coordinator_core.ops.check_auto_reconcile\n\n"
+    "Standalone CLI entrypoint -- prints the raw JSON-RPC response envelope for\n"
+    "manual debugging by dispatching handoff.reconcile_open in-process. Takes no\n"
+    "arguments; an unrecognized argument prints this usage and exits 2 rather\n"
+    "than silently dispatching the sweep."
+)
+
+
 def main(argv: List[str]) -> int:
     """Standalone CLI entrypoint (`python -m coordinator_core.ops.check_auto_reconcile`)
     -- prints the raw JSON-RPC response envelope for manual debugging. The DoE
-    trampoline does NOT invoke this CLI form; it calls get_response() directly."""
+    trampoline does NOT invoke this CLI form; it calls get_response() directly.
+
+    `-h`/`--help` prints usage and exits 0 WITHOUT calling get_response() --
+    the same defect class the sender's own memo caught in
+    `start_example_retrieval_repo.py --help` (a flag reaching the working path before
+    anything decides what it means). Any other unrecognized argument prints
+    usage and exits 2 -- this CLI takes none, and silently ignoring one would
+    dispatch the full sweep on a typo'd flag."""
+    if argv:
+        if argv[0] in ("-h", "--help"):
+            print(_USAGE)
+            return 0
+        print(_USAGE)
+        return 2
+
     response = get_response()
     if response is None:
         return 1

@@ -22,6 +22,13 @@ from coordinator_core import meta_repo_identity
 from coordinator_core import state_root as state_root_mod
 from coordinator_core.ops import generate_exec_summary as mod
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(repo: str, *args: str) -> None:
     subprocess.run(

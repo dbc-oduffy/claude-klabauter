@@ -18,6 +18,13 @@ import pytest
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops import verify_scout_inventory_completeness as mod
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(repo, *args):
     subprocess.run(

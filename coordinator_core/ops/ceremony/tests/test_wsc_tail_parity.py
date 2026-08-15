@@ -50,10 +50,12 @@ Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C10
   (AC4, AC14, AC17, AC18).
 
 Also covers (2026-07-22 C9 wiring-gap fix -- § C9): `_run_precommit_tail` sequences
-`tail_ops.render_handoff_tracker` + `tail_ops.refresh_roadmap_callout` (STEP_2_75)
-between the archive-tier ops and `coverage.gate`, mirroring the OLD `wsc_commit.py`'s
-Op 4 position (STEP_2_7 stamp+archive -> STEP_2_75 render pair -> STEP_2_9C
-coverage.gate) -- see `test_precommit_tail_*` below.
+`tail_ops.refresh_roadmap_callout` (STEP_2_75; its former `render_handoff_tracker`
+sibling was retired 2026-08-14, see docs/plans/2026-08-14-retire-the-handoff-
+tracker-and-project-tracker-renders.md § C2) between the archive-tier ops and
+`coverage.gate`, mirroring the OLD `wsc_commit.py`'s Op 4 position (STEP_2_7
+stamp+archive -> STEP_2_75 render -> STEP_2_9C coverage.gate) -- see
+`test_precommit_tail_*` below.
 
 Also covers (2026-07-22 origin-stub-close fold -- step 5d, see wsc_tail.py module
 docstring): folding the standalone `handoff.close_origin_stub` op into the
@@ -100,12 +102,26 @@ from coordinator_core.ops.ceremony import commit_pipeline as commit_pipeline_mod
 from coordinator_core.ops.ceremony.commit_gates import deletion_block_gate
 from coordinator_core.ops.ceremony.commit_message import compose_message, format_kept_entry
 from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline
+from coordinator_core.ops.deliverable_equivalence import _reset_equivalence_map_cache
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 from .fixtures.pipeline_result import make_pipeline_result
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _EM_DASH = " — "
+
+
+@pytest.fixture(autouse=True)
+def _reset_equivalence_cache():
+    """`deliverable_equivalence.load_equivalence_map` memoizes per-process,
+    keyed to the FIRST `worktree_root` it is ever called with (see that
+    function's own docstring) -- each test here uses a fresh `tmp_path`
+    repo, so without a reset between tests a later test would silently read
+    an earlier test's memoized map for an unrelated root. Mirrors
+    `test_commit_scoped.py`'s own `_reset_equivalence_cache` fixture."""
+    _reset_equivalence_map_cache()
+    yield
+    _reset_equivalence_map_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -261,11 +277,33 @@ def test_assertions_a_and_b_end_to_end_through_pipeline(tmp_path):
     # appends a per-commit `Commit-Token: <uuid4().hex>` trailer AFTER
     # `compose_message()` runs, so the real HEAD message is the golden
     # fixture plus that trailer, never byte-identical to the fixture alone.
+    #
+    # `--no-divider` fix (git_native.py's `interpret-trailers --in-place`
+    # calls): the golden fixture's own body ends with a literal `--- end
+    # Step 2.67 blocks ---` line, which git's default divider heuristic
+    # (mis)reads as a scissors/patch divider and splices `Session-Id:` in
+    # BEFORE it -- stranding it mid-body, invisible to git's trailer
+    # parser (see this module's R4 regression tests below for the general
+    # case). `--no-divider` disables that heuristic, so `Session-Id:` now
+    # correctly joins the real terminal trailer paragraph, AFTER the
+    # `Commit-Token:` line minted earlier in `commit()` (same paragraph,
+    # git's own append-after-existing-trailers order -- verified live
+    # against this box's git, not assumed).
     head_message = _head_message(repo).rstrip("\n")
     golden_prefix = _GOLDEN_MESSAGE.rstrip("\n")
     assert head_message.startswith(golden_prefix)
     trailer_suffix = head_message[len(golden_prefix):]
-    assert re.fullmatch(r"\n\nCommit-Token: [0-9a-f]{32}", trailer_suffix), trailer_suffix
+    # `Session-Id:` here is resolved by `compute_missing_trailer_args` from
+    # the AMBIENT session (the real coordinator session this test runs
+    # under), never from this call's own `session_id=` kwarg -- so the
+    # value is a live session uuid, not the `test-session-<hex8>` shape
+    # `_unique_session_id()` mints. Assert the general uuid4 shape rather
+    # than the specific value, which is not stable across runs/machines.
+    assert re.fullmatch(
+        r"\n\nCommit-Token: [0-9a-f]{32}\n"
+        r"Session-Id: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        trailer_suffix,
+    ), trailer_suffix
 
     # (b) staged-set == explicit pathspec: exactly COMMIT_PATHS + DELETED_PATHS,
     # nothing more, nothing less.
@@ -340,6 +378,47 @@ def test_ac5_prose_embedded_trailer_survives_step267_blocks_via_git_trailer_pars
     assert footer_idx < deliverable_idx
     tail = message[footer_idx:].split("--- end Step 2.67 blocks ---\n", 1)[1]
     assert tail.strip("\n") == "Deliverable-Id: dlv-repro-r4-9f2c1a\nSession-Id: repro-session-abc123"
+
+
+def test_ac5_all_trailer_prose_with_no_blank_line_survives_step267_blocks(tmp_path):
+    """Review: code-reviewer — Finding (P3), narrower shape of the same R4
+    bug. `prose` here is NOTHING BUT a trailer-shaped line, with no
+    preceding blank line -- `_split_trailer_tail`'s reached-start carve-out
+    (meant to protect a message SUBJECT that happens to look like
+    "Key: value" from being misread as a trailer) used to also swallow this
+    shape, since `prose` alone reaches `text`'s start the same way. That left
+    an all-trailer `prose` stranded ahead of the Deleted block + footer,
+    invisible to `git log --format=%(trailers)`, for the narrower case where
+    `prose` has no leading non-trailer paragraph at all."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    message = compose_message(
+        subject="C4d: retire a dead shim",
+        prose="Deliverable-Id: dlv-repro-r4-all-trailer",
+        deleted_paths=["coordinator/lib/dead-shim.sh"],
+    )
+
+    _seed_file(repo, "coordinator/lib/dead-shim.sh", "dead")
+    _git(["add", "--", "coordinator/lib/dead-shim.sh"], repo)
+    _git(["commit", "-q", "-m", "seed the shim to be deleted"], repo)
+    _git(["rm", "-q", "coordinator/lib/dead-shim.sh"], repo)
+
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text(message, encoding="utf-8")
+    _git(["commit", "-q", "-F", str(msg_file)], repo)
+
+    deliverable_id = _git(
+        ["log", "-1", "--format=%(trailers:key=Deliverable-Id,valueonly)"], repo
+    ).stdout.strip()
+
+    assert deliverable_id == "dlv-repro-r4-all-trailer", (
+        "Deliverable-Id must be git-trailer-parseable even when `prose` is "
+        f"nothing but that trailer line -- got {deliverable_id!r} from full "
+        f"message:\n{message}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +562,8 @@ def test_kpi_spawn_count_git_only_and_collapsed(tmp_path, monkeypatch):
     Measured-vs-plan-estimate note: the plan's AC14 prose estimates a
     "~2-3" post-rebuild spawn band; empirically instrumenting this
     representative single-file-stage/gate/commit pass (no remote configured,
-    the no-op push path) measures 18 `subprocess.run` calls (post C10/C11,
+    the no-op push path) measures 23 `subprocess.run` calls (post C10/C11
+    and the two 2026-08-14 trailer-hook-independence/CAS-refusal fixes,
     see "Bound history" below), every one of them `git` (see the call list
     asserted below). "~2-3" was a pre-implementation approximation in the
     plan's prose; the number that actually matters for AC2/AC14 -- and the
@@ -555,9 +635,56 @@ def test_kpi_spawn_count_git_only_and_collapsed(tmp_path, monkeypatch):
     site above) is untouched by this change -- it was never lock-dependent,
     just deliberately not deduped -- so its "BEFORE the lock is even
     acquired" framing is dropped above as no longer meaningful, not because
-    its own behaviour changed. `< 19` is 18 measured plus the same one-call
-    headroom convention every prior bound move in this history used, not a
-    relaxation of the invariant below.
+    its own behaviour changed. `< 19` was 18 measured plus the same one-call
+    headroom convention every prior bound move in this history used -- true
+    as set on 2026-08-07, but NOT what this test measures today; see the
+    next two entries for what actually moved 18 -> 23 since.
+
+    2026-08-14T14:58:56+01:00 (`4a59754ce52`, "the agree branch stops
+    trusting a hook to prove who made the commit"): the agree branch used to
+    get its `Session-Id:`/`Deliverable-Id:` trailers ENTIRELY from the
+    installed `prepare-commit-msg` git hook firing during the plain `git
+    commit` call already in the 18-call baseline above -- a hook invocation
+    is not a `subprocess.run` call this test's monkeypatch observes, so it
+    was invisible to this KPI. A hook that cannot find its own script (a
+    real, reported failure mode -- doe-claude-em: 2 of 9 commits in one
+    session landed untrailered) warns and exits 0, silently dropping the
+    trailer on the agree branch only, since the private-index branch (which
+    runs no hooks at all, via `commit-tree`) already computed trailers
+    itself. This commit makes the agree branch replay
+    `commit_trailers.compute_missing_trailer_args()` the same explicit way,
+    applied via ONE new `git interpret-trailers --in-place --trailer
+    <missing-trailer>` call -- hook-independent on both branches now. That
+    is +1 subprocess, landing at 19 measured -- the number this plan's own
+    EM reproduction caught at 21:29:35 that same day, already one over the
+    `< 19` bound set for 18. Not redundant: this is the fix for a real,
+    externally-reported silent-trailer-loss defect, so the correct
+    resolution is naming and re-bounding it, not reverting it.
+
+    2026-08-14T22:39:52+01:00 (`bf7bab8ce37c`, "the agree branch checks whether the world
+    moved under its own feet"): `commit_scoped()`'s agree branch now
+    snapshots each committed path's index blob (`git_native._index_blobs`,
+    `git ls-files -s -z`) and HEAD blob (`git_native._head_blobs`, `git
+    ls-tree HEAD -z`) BEFORE staging, then re-observes both via
+    `_agree_branch_cas_refusal` immediately before the `git add` that used
+    to run unconditionally -- refusing (never falling through to `git add`)
+    if the index entry moved or HEAD already carries the staged blob, i.e.
+    a concurrent sibling absorbed or re-committed the same path first. That
+    closes a real TOCTOU window on a tree this repo's own load norm says
+    runs 50-70 concurrent sessions: the agree branch used to trust its own
+    entry-time observation all the way through to `git add`, with no check
+    that the world hadn't moved in between. The two snapshot pairs cost 4
+    more subprocesses every AGREE-branch pass (2 calls each x 2 observations
+    -- entry snapshot, then re-observation) on top of the 19 measured above,
+    landing at 23 measured in this test's own fixture (`_agree_branch_cas_
+    refusal`'s `absorbed_candidates` leg is non-empty here, so both `_head_
+    blobs` calls fire, not just one -- a fixture with no absorbable
+    candidate would measure 22). `< 24` is 23 plus the same one-call
+    headroom convention every prior bound move in this history used. This
+    is a correctness fix, not new redundant waste -- see AC6's own "no
+    guard weakened" posture; the bound moves because the work it does grew
+    (18 -> 19 -> 23, both moves independently named above), not because the
+    pipeline got sloppier.
     """
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "seed")
@@ -597,11 +724,12 @@ def test_kpi_spawn_count_git_only_and_collapsed(tmp_path, monkeypatch):
         assert "coordinator-session.sh" not in joined
         assert not joined.endswith(".sh") or "COMMIT_EDITMSG" in joined
 
-    # Bounded + collapsed: small headroom over the 18 measured post-C10/C11
+    # Bounded + collapsed: small headroom over the 23 measured post-bf7bab8ce
     # (see the docstring's "Bound history" for what the divergence-check,
-    # deletion-detection, and sha-verification residuals buy and why the OLD
-    # `< 11`/`< 15`/`< 16` grew), and every one is `git` (see above).
-    assert 1 <= len(calls) < 19, f"spawn count {len(calls)} out of expected collapsed band: {calls}"
+    # deletion-detection, sha-verification, and CAS-refusal residuals buy and
+    # why the OLD `< 11`/`< 15`/`< 16`/`< 19` grew), and every one is `git`
+    # (see above).
+    assert 1 <= len(calls) < 24, f"spawn count {len(calls)} out of expected collapsed band: {calls}"
 
 
 def test_kpi_wsc_tail_blocking_path_under_2s(wsc_tail_repo, monkeypatch):
@@ -1388,10 +1516,12 @@ def test_ac9_crash_before_receipt_emit_resumes_without_duplicate_commit(
 
 
 def test_precommit_tail_runs_render_pair_before_coverage_gate(tmp_path, monkeypatch):
-    """render_handoff_tracker + refresh_roadmap_callout run, in that order,
-    same as before (mirroring the OLD wsc_commit.py's Op 4 position -- see
-    module docstring addendum). coverage.gate itself (C6, 2026-07-23
-    wsc-tail-slim-down) is now FIRED before either render (an `asyncio.
+    """refresh_roadmap_callout runs before coverage.gate is joined, same as
+    before (mirroring the OLD wsc_commit.py's Op 4 position -- see module
+    docstring addendum). Its former render_handoff_tracker sibling was
+    retired 2026-08-14, see docs/plans/2026-08-14-retire-the-handoff-tracker-
+    and-project-tracker-renders.md § C2. coverage.gate itself (C6, 2026-07-23
+    wsc-tail-slim-down) is now FIRED before the render (an `asyncio.
     create_task` at the top of `_run_precommit_tail`) but only JOINED
     (awaited) after every other pre-commit step, including review_trail --
     so its result lands in `call_order` LAST even though its own git-log +
@@ -1410,10 +1540,6 @@ def test_precommit_tail_runs_render_pair_before_coverage_gate(tmp_path, monkeypa
     async def _fake_empty(*_a: Any, **_kw: Any) -> dict:
         return {"acted": [], "skipped": [], "failed": []}
 
-    def _fake_render(_worktree_root: Path) -> dict:
-        call_order.append("render_handoff_tracker")
-        return {"acted": [wsc_tail_mod.tail_ops.OP_HANDOFF_TRACKER], "skipped": [], "failed": []}
-
     def _fake_roadmap(_worktree_root: Path, paths: list[str]) -> dict:
         call_order.append("refresh_roadmap_callout")
         assert paths == ["state/handoffs/example.md"]
@@ -1430,7 +1556,6 @@ def test_precommit_tail_runs_render_pair_before_coverage_gate(tmp_path, monkeypa
     # C2 (2026-07-23): archive-sweeps fire detached now -- stub spawn_detached so
     # these unrelated precommit-tail tests never actually spawn a subprocess.
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "spawn_detached", lambda *_a, **_kw: True)
-    monkeypatch.setattr(wsc_tail_mod.tail_ops, "render_handoff_tracker", _fake_render)
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "refresh_roadmap_callout", _fake_roadmap)
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "run_coverage_gate", _fake_coverage)
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "write_review_trail", _fake_review)
@@ -1449,71 +1574,10 @@ def test_precommit_tail_runs_render_pair_before_coverage_gate(tmp_path, monkeypa
         )
     )
 
-    # coverage.gate is FIRED first (before either render, top-of-function) but
+    # coverage.gate is FIRED first (before the render, top-of-function) but
     # only JOINED (awaited) after review_trail -- see this test's docstring.
-    assert call_order == [
-        "render_handoff_tracker", "refresh_roadmap_callout", "review_trail", "coverage_gate",
-    ]
-    assert wsc_tail_mod.tail_ops.OP_HANDOFF_TRACKER in results
+    assert call_order == ["refresh_roadmap_callout", "review_trail", "coverage_gate"]
     assert wsc_tail_mod.tail_ops.OP_ROADMAP_CALLOUT in results
-    assert results[wsc_tail_mod.tail_ops.OP_HANDOFF_TRACKER]["acted"] == [
-        wsc_tail_mod.tail_ops.OP_HANDOFF_TRACKER
-    ]
-
-
-def test_precommit_tail_render_failure_degrades_fail_open(tmp_path, monkeypatch):
-    """A render_handoff_tracker failure lands in that step's failed[] but never
-    aborts the rest of the pre-commit tail -- coverage.gate and review_trail
-    still run afterward (best-effort-with-report)."""
-    common_dir = tmp_path / "repo" / ".git"
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir(parents=True)
-    common_dir.mkdir(parents=True)
-
-    call_order: list[str] = []
-
-    async def _fake_empty(*_a: Any, **_kw: Any) -> dict:
-        return {"acted": [], "skipped": [], "failed": []}
-
-    def _failing_render(_worktree_root: Path) -> dict:
-        return {
-            "acted": [], "skipped": [],
-            "failed": [f"{wsc_tail_mod.tail_ops.OP_HANDOFF_TRACKER}: RuntimeError -- boom"],
-        }
-
-    def _fake_roadmap(_worktree_root: Path, _paths: list[str]) -> dict:
-        call_order.append("refresh_roadmap_callout")
-        return {"acted": [], "skipped": [], "failed": []}
-
-    async def _fake_coverage(*_a: Any, **_kw: Any) -> dict:
-        call_order.append("coverage_gate")
-        return {"acted": [], "skipped": [], "failed": []}
-
-    # C2 (2026-07-23): archive-sweeps fire detached now -- stub spawn_detached so
-    # these unrelated precommit-tail tests never actually spawn a subprocess.
-    monkeypatch.setattr(wsc_tail_mod.tail_ops, "spawn_detached", lambda *_a, **_kw: True)
-    monkeypatch.setattr(wsc_tail_mod.tail_ops, "render_handoff_tracker", _failing_render)
-    monkeypatch.setattr(wsc_tail_mod.tail_ops, "refresh_roadmap_callout", _fake_roadmap)
-    monkeypatch.setattr(wsc_tail_mod.tail_ops, "run_coverage_gate", _fake_coverage)
-    monkeypatch.setattr(wsc_tail_mod.tail_ops, "write_review_trail", _fake_empty)
-
-    results, _extra_stage_paths = _run(
-        wsc_tail_mod._run_precommit_tail(
-            common_dir,
-            worktree_root,
-            "sid-render-fail",
-            review_trail=None,
-            b_adjudication_present=False,
-            coverage_range="",
-            coverage_from_handoff="",
-            coverage_scope_paths=None,
-            consumed_handoff_paths=[],
-        )
-    )
-
-    assert call_order == ["refresh_roadmap_callout", "coverage_gate"]
-    assert results[wsc_tail_mod.tail_ops.OP_HANDOFF_TRACKER]["failed"] != []
-    assert results[wsc_tail_mod.tail_ops.OP_HANDOFF_TRACKER]["acted"] == []
 
 
 
@@ -1542,10 +1606,6 @@ def test_precommit_tail_annotates_coverage_gate_when_review_metadata_absent(tmp_
     # C2 (2026-07-23): archive-sweeps fire detached now -- stub spawn_detached so
     # these unrelated precommit-tail tests never actually spawn a subprocess.
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "spawn_detached", lambda *_a, **_kw: True)
-    monkeypatch.setattr(
-        wsc_tail_mod.tail_ops, "render_handoff_tracker",
-        lambda _w: {"acted": [], "skipped": [], "failed": []},
-    )
     monkeypatch.setattr(
         wsc_tail_mod.tail_ops, "refresh_roadmap_callout",
         lambda _w, _p: {"acted": [], "skipped": [], "failed": []},
@@ -1595,15 +1655,14 @@ def test_precommit_tail_annotates_coverage_gate_when_review_metadata_supplied(tm
         return {"acted": [f"{wsc_tail_mod.tail_ops.OP_COVERAGE_GATE}:UNCOVERED"], "skipped": [], "failed": []}
 
     async def _fake_review_written(*_a: Any, **_kw: Any) -> dict:
-        return {"acted": [f"{wsc_tail_mod.tail_ops.OP_REVIEW_TRAIL}:some/path.json"], "skipped": [], "failed": []}
+        return {
+            "acted": [f"{wsc_tail_mod.tail_ops.OP_REVIEW_TRAIL}:some/path.json"], "skipped": [], "failed": [],
+            "metadata_supplied": True,
+        }
 
     # C2 (2026-07-23): archive-sweeps fire detached now -- stub spawn_detached so
     # these unrelated precommit-tail tests never actually spawn a subprocess.
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "spawn_detached", lambda *_a, **_kw: True)
-    monkeypatch.setattr(
-        wsc_tail_mod.tail_ops, "render_handoff_tracker",
-        lambda _w: {"acted": [], "skipped": [], "failed": []},
-    )
     monkeypatch.setattr(
         wsc_tail_mod.tail_ops, "refresh_roadmap_callout",
         lambda _w, _p: {"acted": [], "skipped": [], "failed": []},
@@ -1652,10 +1711,6 @@ def test_precommit_tail_coverage_gate_annotation_is_additive(tmp_path, monkeypat
     # C2 (2026-07-23): archive-sweeps fire detached now -- stub spawn_detached so
     # these unrelated precommit-tail tests never actually spawn a subprocess.
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "spawn_detached", lambda *_a, **_kw: True)
-    monkeypatch.setattr(
-        wsc_tail_mod.tail_ops, "render_handoff_tracker",
-        lambda _w: {"acted": [], "skipped": [], "failed": []},
-    )
     monkeypatch.setattr(
         wsc_tail_mod.tail_ops, "refresh_roadmap_callout",
         lambda _w, _p: {"acted": [], "skipped": [], "failed": []},
@@ -1710,10 +1765,6 @@ def test_precommit_tail_coverage_gate_verdict_survives_the_shed(tmp_path, monkey
         return {"acted": [f"{wsc_tail_mod.tail_ops.OP_COVERAGE_GATE}:COVERED"], "skipped": [], "failed": []}
 
     monkeypatch.setattr(wsc_tail_mod.tail_ops, "spawn_detached", lambda *_a, **_kw: True)
-    monkeypatch.setattr(
-        wsc_tail_mod.tail_ops, "render_handoff_tracker",
-        lambda _w: {"acted": [], "skipped": [], "failed": []},
-    )
     monkeypatch.setattr(
         wsc_tail_mod.tail_ops, "refresh_roadmap_callout",
         lambda _w, _p: {"acted": [], "skipped": [], "failed": []},

@@ -136,6 +136,13 @@ from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as reviewer_guard,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # Shared dispatcher-decision helper -- the ONE path every test below drives

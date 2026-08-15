@@ -140,6 +140,53 @@ logger = logging.getLogger(__name__)
 _LAYER1_DISABLE_ENV = "COORDINATOR_SESSION_LAYER1_DISABLE"
 _LAYER1_DISABLE_TRUTHY = frozenset({"1", "true", "yes"})
 
+#: Review: staff-eng F5 -- ``session_live``'s Source-0 registry consult
+#: (below) now runs on EVERY missing-sdir sid, including inside the reaper's
+#: and memo-sweep's per-claim-dir loops (``harness_registry``'s own module
+#: docstring: "hundreds of parses per invocation on a loaded box"). Rather
+#: than re-scan ``harness_registry.snapshot()`` per call, this memoizes ONE
+#: snapshot for the lifetime of the current process -- safe under the
+#: spawn-per-call model (one process per op invocation; no long-lived daemon
+#: to go stale under), and the registry read here is already advisory
+#: (confirmed via ``core.stable_pid_alive`` before being trusted, so a
+#: microseconds-stale snapshot cannot manufacture a false LIVE any more than
+#: a fresh one could -- both still require the recorded pid+start_epoch to
+#: pass the birth-instant compare). `None` means "not yet fetched this
+#: process"; a fetch that raises or finds an empty registry caches `{}`, not
+#: `None`, so a miss is never re-fetched every call.
+_registry_snapshot_cache: Optional[dict] = None
+
+
+def _cached_registry_lookup(sid: str):
+    """``harness_registry.lookup(sid)`` via a process-memoized ``snapshot()``
+    (see cache docstring above) -- ``session_live`` is the ONLY caller; other
+    module call sites (``_verdict_for_sdir``'s batch scan, ``session_verdict``'s
+    per-sid path) are unrelated to F5's hot loops and are left untouched.
+
+    Cross-test-file staleness window (Review: coordinator:code-reviewer P2):
+    this cache is process-lifetime, not call-lifetime, and only
+    ``coordinator_core/session/tests/test_liveness.py`` resets it (autouse
+    fixture). ``coordinator_core/pickup_assemble/tests/test_brief_claim_lease.py``
+    and ``test_pickup_claim_stage_stamp_evidence.py`` also exercise
+    ``session_live``/``claim_holder_live`` and now carry their own matching
+    autouse reset for the same reason -- a snapshot cached by one test (in
+    any of these files, sharing a pytest worker process) would otherwise
+    silently outlive a later test's ``monkeypatch.setattr(harness_registry,
+    "registry_dir", ...)``. Still production-safe (spawn-per-call, no
+    daemon); this is a test-suite-only staleness window."""
+    global _registry_snapshot_cache
+    if _registry_snapshot_cache is None:
+        try:
+            _registry_snapshot_cache = harness_registry.snapshot()
+        # snapshot()'s own contract never raises (it catches internally and
+        # returns {} on any failure); this guard is retained purely as a
+        # belt-and-braces backstop against that contract changing underfoot,
+        # not because snapshot() is currently believed to raise.
+        except Exception:
+            _registry_snapshot_cache = {}
+    return _registry_snapshot_cache.get(sid)
+
+
 #: Process-local counter for the Layer 1 fail-open ("unknown" basis) arm --
 #: see ``docs/reference/layer1-liveness-activation.md`` § Observability. Never
 #: persisted, never influences a verdict; a later reader can read it directly
@@ -354,21 +401,56 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     """
     if not sid:
         return False
-    sdir = core.session_dir(sid, cwd)
-    if not sdir:
-        return False
-    if not Path(sdir).is_dir():
-        return False
 
-    # Source 0: harness session registry (preferred, never depended on). A
-    # hit routes through the SAME single core.stable_pid_alive seam Layer 1
-    # uses below -- this is not a second call site. A miss (None) or a
-    # birth-instant mismatch falls through to Layer 1 unchanged. Belt-and-
-    # braces over C1's own AC11 contract (harness_registry never raises to
-    # its caller): an unexpected exception here must still fall through
-    # rather than propagate, matching this module's fail-open bias.
+    # Source 0: harness session registry (preferred, never depended on) --
+    # consulted BEFORE the local sdir existence check below (2026-08-14 fix,
+    # cross-repo/inbox/2026-08-11-example-market-data-repo-em-reclaim-labels-a-
+    # live-session-dead-without-checking.md). Source 0 is keyed on sid alone
+    # and is REPO-INDEPENDENT (the harness registry record carries its own
+    # pid/start_epoch, not a path under `cwd`'s `.git`), so it must not be
+    # gated behind "this repo happens to have a session dir for sid" --
+    # doing so silently starved it of the one case it exists to catch: a
+    # session whose OWN coordinator session dir is not visible under THIS
+    # cwd/repo (a foreign-cwd holder, or a dir a caller resolves via a
+    # different `cwd` than the one the holder wrote it under) read
+    # instantly DEAD here without Source 0 ever being asked, even though
+    # `session_verdict`'s own "no-verdict arm" (C1, docs/plans/2026-08-13-
+    # liveness-stops-conflating-dead-with-elsewhere.md) already established
+    # that exact case is not evidence of death and added a matching
+    # registry consult THERE -- this was the one seam of the two that
+    # never got the same fix, so `session_live` (and therefore
+    # `claim_holder_live`, which calls only this function -- reaper,
+    # memo sweep, and claim takeover all route through it, D5) kept the
+    # gap `session_verdict` had already closed for its own callers.
+    #
+    # BEHAVIOUR CHANGE for every caller of session_live/claim_holder_live
+    # (claim takeover, the reaper, the memo sweep -- claim_holder_live's own
+    # docstring): a claim/session whose sid has NO locally-visible session
+    # dir under `cwd`'s repo, but a confirmed (stable_pid_alive-verified)
+    # harness-registry record, now reads LIVE instead of DEAD. This is a
+    # widening of "live", not a narrowing -- it can only turn a false-DEAD
+    # into a true-LIVE (a stale/orphaned registry record still requires a
+    # LIVE process at the recorded pid+start_epoch to pass
+    # `core.stable_pid_alive`'s birth-instant compare, so a genuinely dead
+    # process is unaffected), matching this module's existing fail-open
+    # bias rather than introducing a new one.
+    #
+    # Reaping consequence (Review: staff-eng, undocumented blast radius --
+    # the widening above names WHAT changed but not this downstream effect):
+    # an `apply`-stage claim held by a foreign-cwd sid with a genuinely live
+    # process is now UNREAPABLE by `reap_stale_claims`/the memo sweep for
+    # that process's entire lifetime -- apply-stage claims carry no lease
+    # (unlike `brief`-stage, which `claim_artifact`'s
+    # `claim_holder_live(...) and not lease_expired` still bounds), and the
+    # reaper has none either, so nothing ever ages it out while the holder
+    # stays alive. Pre-fix, such a claim was reaped within a scan (the
+    # local-sdir-missing case read DEAD unconditionally). This is the
+    # correct trade -- a live process's claim should not be stolen out from
+    # under it -- but it is a real change to reaping behaviour, not just to
+    # narration honesty, and is worth knowing before debugging a claim dir
+    # that "should have" been reaped and wasn't.
     try:
-        record = harness_registry.lookup(sid)
+        record = _cached_registry_lookup(sid)
     except Exception:
         record = None
     if record is not None:
@@ -381,6 +463,12 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
                 return True
         except Exception:
             pass
+
+    sdir = core.session_dir(sid, cwd)
+    if not sdir:
+        return False
+    if not Path(sdir).is_dir():
+        return False
 
     # Layer 1: PPID-authoritative process check (when stable_pid captured at init).
     # Rollback lever (docs/reference/layer1-liveness-activation.md): when set,

@@ -167,6 +167,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -174,6 +175,9 @@ from coordinator_core import resolve_coordinator_clone
 from coordinator_core.install import gen_settings_hooks
 from coordinator_core.ops import gen_claude_doe_shim, gen_doe_root_pointer
 from coordinator_core.win_portability import is_executable, no_console_creationflags
+
+#: Named so `_sep_norm` reads without an escape-in-an-escape.
+BACKSLASH = chr(92)
 
 # Generator-provenance declaration (generator_provenance.py). Every write in
 # this module targets an isolated sandbox CLAUDE_HOME created for the test
@@ -258,6 +262,55 @@ def _run(
 
 def _which(name: str) -> Optional[str]:
     return shutil.which(name)
+
+
+def _sep_norm(p: str) -> str:
+    """Forward-slash form of a path, no trailing separator.
+
+    Every path COMPARISON in this module goes through here. The checks build
+    their expectations by f-string concatenation with a literal "/", while the
+    resolvers under test return native paths — on Windows that made
+    `X:{bs}DoE-claude{bs}coordinator` != `X:{bs}DoE-claude/coordinator` and
+    reported a correct resolver as a FAIL. Separator form is not what any of
+    these assertions is about."""
+    p = p.replace(BACKSLASH, "/")
+    while p.endswith("/") and p != "/":
+        p = p[:-1]
+    return p
+
+
+def _paths_equal(a: str, b: str) -> bool:
+    return _sep_norm(a) == _sep_norm(b)
+
+
+def _path_mentioned(needle: str, haystack: str) -> bool:
+    """True if *haystack* text references the *needle* path in either form."""
+    return _sep_norm(needle) in _sep_norm(haystack)
+
+
+def _claude_doe_wrapper_src() -> str:
+    """Absolute path to the `claude-doe` wrapper this validator installs and
+    dry-runs.
+
+    It lives in THIS repo (`<claude-klabauter>/coordinator/bin/claude-doe.py`), not under
+    the `--coordinator-root` DoE tree — `<doe>/coordinator/bin/` has no
+    `claude-doe*` file at all. Probing the DoE tree made the wrapper checks FAIL
+    on a correctly-installed machine and then crashed the whole run: the F5 leg
+    `shutil.copy2`d the same missing path with no existence guard, so an
+    unhandled FileNotFoundError replaced every check result with a transport
+    failure. Self-location is the RIGHT resolver here precisely because the
+    wrapper is this repo's own artifact — the opposite of `templates/`, which
+    is the DoE clone's and must come from `--coordinator-root`.
+    """
+    return str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "claude-doe.py")
+
+
+def _python_launch(script: str, *args: str) -> List[str]:
+    """argv for running a `.py`/extensionless Python entrypoint. Never exec the
+    file directly: the sandbox copies land as extensionless `claude-doe`, which
+    Windows cannot execute (no shebang honoring, no PATHEXT match) — that path
+    reported rc=127 as a wrapper defect on every Windows run."""
+    return [sys.executable, script, *args]
 
 
 def resolve_doe_clone() -> Tuple[str, bool]:
@@ -377,8 +430,9 @@ def _tier1_filesystem_shape(
 
     # 5. wrapper install
     r.section("--- Step 3.5b: wrapper install ---")
-    wrapper_src = os.path.join(coordinator_root, "bin", "claude-doe.py")
-    if not os.path.isfile(wrapper_src):
+    wrapper_src = _claude_doe_wrapper_src()
+    wrapper_src_present = os.path.isfile(wrapper_src)
+    if not wrapper_src_present:
         r.bad(f"claude-doe wrapper not found at: {wrapper_src}")
     else:
         r.ok(f"claude-doe wrapper source present: {wrapper_src}")
@@ -388,8 +442,13 @@ def _tier1_filesystem_shape(
         shutil.copy2(wrapper_src, sandbox_wrapper)
         if os.name != "nt":
             os.chmod(sandbox_wrapper, 0o755)
-        if os.path.isfile(sandbox_wrapper) and is_executable(sandbox_wrapper):
-            r.ok(f"claude-doe wrapper installed and executable (exec-bit set): {sandbox_wrapper}")
+        # On Windows the exec bit does not exist; `is_executable` is a POSIX
+        # mode test, so asserting it there fails a correct install.
+        installed_ok = os.path.isfile(sandbox_wrapper) and (
+            os.name == "nt" or is_executable(sandbox_wrapper)
+        )
+        if installed_ok:
+            r.ok(f"claude-doe wrapper installed: {sandbox_wrapper}")
         else:
             r.bad(f"claude-doe wrapper install failed (missing or exec-bit not set): {sandbox_wrapper}")
 
@@ -416,13 +475,24 @@ def _tier1_filesystem_shape(
             "COORDINATOR_SETTINGS_HOME": os.path.join(sandbox, ".coordinator-claude-settings"),
             "REPO_DOE_CLAUDE": doe_clone,
         }
-        rc, err = _call_gen_settings_hooks(sandbox_settings, env)
+        rc, err, status = _call_gen_settings_hooks(sandbox_settings, env)
         if rc == 0:
-            r.ok("gen_settings_hooks.generate() succeeded against sandbox settings.json")
+            r.ok(f"gen_settings_hooks.generate() succeeded against sandbox settings.json ({status})")
         else:
             err_path = os.path.join(sandbox, "gen-hooks-err.txt")
             Path(err_path).write_text(err or "", encoding="utf-8")
             r.bad(f"gen_settings_hooks.generate() failed (see {err_path})")
+
+        # A `skipped (...)` status is the generator DECLINING to write, by
+        # design: no positive marker on this machine, an operator kill-switch,
+        # or plugin-side hook delivery already live and fully resolvable (in
+        # which case generating on top would double-fire every hook). Asserting
+        # a non-empty hooks array against that outcome made this checker
+        # contradict the generator — two components disagreeing about what
+        # "installed" means, with the generator being the correct one. The
+        # seeded-vs-declined distinction is the generator's to make; this
+        # validator only asserts that whichever it chose, it did coherently.
+        generation_declined = rc == 0 and status.startswith("skipped")
 
         hook_count = 0
         mcp_leak = 0
@@ -439,7 +509,15 @@ def _tier1_filesystem_shape(
                                 mcp_leak += 1
             except (json.JSONDecodeError, OSError):
                 hook_count = 0
-            if hook_count > 0:
+            if generation_declined:
+                if hook_count == 0:
+                    r.skip(f"settings.json hook seed declined by the generator: {status}")
+                else:
+                    r.bad(
+                        f"gen_settings_hooks reported {status!r} but settings.json has "
+                        f"{hook_count} hook bucket(s) — a declined run must write nothing"
+                    )
+            elif hook_count > 0:
                 r.ok(f"settings.json hooks array seeded: {hook_count} event bucket(s)")
             else:
                 r.bad("settings.json hooks array empty after gen-settings-hooks run")
@@ -455,7 +533,7 @@ def _tier1_filesystem_shape(
         sandbox_settings_v2 = os.path.join(sandbox, "settings.v2.json")
         if os.path.isfile(sandbox_settings):
             shutil.copy2(sandbox_settings, sandbox_settings_v2)
-            rc2, err2 = _call_gen_settings_hooks(sandbox_settings, env)
+            rc2, err2, _status2 = _call_gen_settings_hooks(sandbox_settings, env)
             if rc2 == 0:
                 if Path(sandbox_settings_v2).read_bytes() == Path(sandbox_settings).read_bytes():
                     r.ok("gen_settings_hooks.generate() is idempotent (second run = no-op diff)")
@@ -480,7 +558,7 @@ def _tier1_filesystem_shape(
             "CLAUDE_HOME": sandbox,
             "REPO_DOE_CLAUDE": doe_clone,
         }
-        cp = _run([sys.executable, os.path.join(coordinator_root, "bin", "claude-doe.py"), "--dry-run"], env=env)
+        cp = _run(_python_launch(wrapper_src, "--dry-run"), env=env)
         dryrun_err = os.path.join(sandbox, "dryrun-err.txt")
         Path(dryrun_err).write_text(cp.stderr or "", encoding="utf-8")
         if cp.returncode == 0:
@@ -489,7 +567,7 @@ def _tier1_filesystem_shape(
                 r.ok("claude-doe --dry-run emitted exec line with --plugin-dir")
             else:
                 r.bad(f"claude-doe --dry-run output missing 'exec claude --plugin-dir' (got: {dry_out})")
-            if f"{doe_clone}/coordinator" in dry_out:
+            if _path_mentioned(os.path.join(doe_clone, "coordinator"), dry_out):
                 r.ok("claude-doe --dry-run exec line references clone's coordinator dir")
             else:
                 r.bad("claude-doe --dry-run exec line does not reference clone's coordinator dir")
@@ -502,10 +580,9 @@ def _tier1_filesystem_shape(
 
     # 7b. F5 regression: standalone-copy
     r.section("--- F5 regression: claude-doe standalone-copy --dry-run (siblings absent) ---")
-    if doe_clone_resolved and doe_coordinator_present:
+    if doe_clone_resolved and doe_coordinator_present and wrapper_src_present:
         f5_dir = os.path.join(sandbox, "f5-standalone-bin")
         os.makedirs(f5_dir, exist_ok=True)
-        wrapper_src = os.path.join(coordinator_root, "bin", "claude-doe.py")
         f5_wrapper = os.path.join(f5_dir, "claude-doe")
         shutil.copy2(wrapper_src, f5_wrapper)
         if os.name != "nt":
@@ -521,7 +598,7 @@ def _tier1_filesystem_shape(
             r.ok(f"F5 regression setup: standalone dir has claude-doe ALONE (no siblings): {f5_dir}")
             env = {**os.environ, "REPO_DOE_CLAUDE": doe_clone}
             env.pop("CLAUDE_HOME", None)
-            cp = _run([f5_wrapper, "--dry-run"], env=env)
+            cp = _run(_python_launch(f5_wrapper, "--dry-run"), env=env)
             f5_err = os.path.join(sandbox, "f5-dryrun-err.txt")
             Path(f5_err).write_text(cp.stderr or "", encoding="utf-8")
             if cp.returncode == 0:
@@ -530,7 +607,7 @@ def _tier1_filesystem_shape(
                     r.ok("F5: standalone-copy claude-doe --dry-run emitted exec line with --plugin-dir")
                 else:
                     r.bad(f"F5: standalone-copy claude-doe --dry-run output missing 'exec claude --plugin-dir' (got: {dry_out})")
-                if f"{doe_clone}/coordinator" in dry_out:
+                if _path_mentioned(os.path.join(doe_clone, "coordinator"), dry_out):
                     r.ok("F5: standalone-copy claude-doe --dry-run exec line references clone's coordinator dir")
                 else:
                     r.bad("F5: standalone-copy claude-doe --dry-run exec line does not reference clone's coordinator dir")
@@ -538,6 +615,8 @@ def _tier1_filesystem_shape(
                 r.bad(f"F5: standalone-copy claude-doe --dry-run exited non-zero (see {f5_err})")
     elif not doe_clone_resolved:
         r.skip("F5 regression: standalone-copy claude-doe --dry-run (clone path not resolved)")
+    elif not wrapper_src_present:
+        r.skip(f"F5 regression: standalone-copy claude-doe --dry-run (wrapper source absent: {wrapper_src})")
     else:
         r.skip("F5 regression: standalone-copy claude-doe --dry-run (clone's coordinator/ dir absent pre-W4.2 — runs post-cutover)")
 
@@ -566,7 +645,7 @@ def _assert_gen_settings_hooks_interface(r: Reporter) -> None:
         r.bad("gen_settings_hooks.generate() does not accept out_path= (interface contract broken — sandbox isolation will not work)")
 
 
-def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, str]:
+def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, str, str]:
     """In-process call to :func:`gen_settings_hooks.generate`, replacing the
     former ``bash gen-settings-hooks.sh --out <path>`` subprocess spawn
     (measured ~326ms Windows shim tax per invocation, plus a silent
@@ -585,17 +664,24 @@ def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, s
     ``subprocess.CompletedProcess`` shape the call sites already branch on:
     0 success (including kill-switch no-op), 1 generator business error
     (message captured in ``stderr_text``, same as bash's undifferentiated
-    exit-1 contract)."""
+    exit-1 contract).
+
+    Returns ``(rc, stderr_text, status)``. ``status`` is ``generate()``'s own
+    return value — ``"skipped (...)"`` when it deliberately declined to write.
+    Discarding it (as this wrapper did until 2026-08-14) leaves the caller
+    unable to tell "wrote no hooks because it correctly refused" from "wrote no
+    hooks because it broke", and the caller then reported the former as a
+    FAIL."""
     saved_env = dict(os.environ)
     stderr_buf = io.StringIO()
     try:
         os.environ.clear()
         os.environ.update(env)
         with contextlib.redirect_stderr(stderr_buf):
-            gen_settings_hooks.generate(out_path=out_path)
-        return 0, stderr_buf.getvalue()
+            status = gen_settings_hooks.generate(out_path=out_path)
+        return 0, stderr_buf.getvalue(), str(status or "")
     except gen_settings_hooks.GenSettingsHooksError as exc:
-        return 1, str(exc)
+        return 1, str(exc), ""
     finally:
         os.environ.clear()
         os.environ.update(saved_env)
@@ -941,7 +1027,7 @@ def _tier1b_mirror_and_cold_tier(
         env = {**os.environ, "CLAUDE_PLUGIN_ROOT": expected_mirror}
         rc, mirror_out_or_err = _call_resolve_coordinator_clone("content", env)
         mirror_out = mirror_out_or_err if rc == 0 else ""
-        if mirror_out == expected_mirror:
+        if _paths_equal(mirror_out, expected_mirror):
             r.ok(f"AC5: resolve_coordinator_clone.resolve_content_root() (CLAUDE_PLUGIN_ROOT): returned expected {doe_clone}/coordinator")
         elif mirror_out and os.path.isdir(mirror_out):
             r.bad(f"AC5: resolve_coordinator_clone.resolve_content_root(): returned '{mirror_out}', expected '{expected_mirror}'")
@@ -1004,7 +1090,7 @@ def _tier1b_mirror_and_cold_tier(
         rc_content, cold_content_out_or_err = _call_resolve_coordinator_clone("content", cold_env_vars)
         cold_content_out = cold_content_out_or_err if rc_content == 0 else ""
         expected_cold_content = f"{doe_clone}/coordinator"
-        if cold_content_out == expected_cold_content:
+        if _paths_equal(cold_content_out, expected_cold_content):
             r.ok(f"AC6(a): resolve_content_root() cold (pointer-only): returned {doe_clone}/coordinator")
         elif not cold_content_out:
             r.bad(f"AC6(a): resolve_content_root() cold: returned empty (error: {cold_content_out_or_err})")
@@ -1014,11 +1100,11 @@ def _tier1b_mirror_and_cold_tier(
         rc_gitops, cold_gitops_out_or_err = _call_resolve_coordinator_clone("clone", cold_env_vars)
         cold_gitops_out = cold_gitops_out_or_err if rc_gitops == 0 else ""
         expected_cold_gitops = doe_clone
-        if cold_gitops_out == expected_cold_gitops:
+        if _paths_equal(cold_gitops_out, expected_cold_gitops):
             r.ok(f"AC6(b): resolve_clone_root() cold (pointer-only): returned {doe_clone} (.git confirmed present)")
         elif not cold_gitops_out:
             r.bad(f"AC6(b): resolve_clone_root() cold: returned empty (error: {cold_gitops_out_or_err})")
-        elif cold_gitops_out == f"{doe_clone}/coordinator":
+        elif _paths_equal(cold_gitops_out, os.path.join(doe_clone, "coordinator")):
             r.bad("AC6(b): resolve_clone_root() cold: returned coordinator/ subdir — coordinator/.git absent under maximalist; mode-split violated")
         else:
             r.bad(f"AC6(b): resolve_clone_root() cold: got '{cold_gitops_out}', expected '{expected_cold_gitops}'")
@@ -1028,7 +1114,14 @@ def _tier1b_mirror_and_cold_tier(
     # ---- 12. Cold-shell launch ----
     r.section("--- Cold-shell launch: REPO_DOE_CLAUDE from pointer alone (AC2) ---")
     sandbox_shim_path = os.path.join(sandbox, ".claude", "shell", "claude-doe-shim.sh")
-    if shim_section_ran and os.path.isfile(sandbox_shim_path):
+    if os.name == "nt":
+        # The probe sources a POSIX `.sh` shim under a hand-built cold PATH of
+        # /usr/bin:/bin. On Windows that PATH resolves nothing, the `.sh` shim
+        # is not the launch surface (the `.cmd`/`.ps1` twins are), and the
+        # resulting empty REPO_DOE_CLAUDE was reported as an install defect on
+        # every Windows run. Not applicable is not a failure.
+        r.skip("AC2 cold-shell (POSIX login-shell seam; not applicable on Windows)")
+    elif shim_section_ran and os.path.isfile(sandbox_shim_path):
         cold_path = "/usr/bin:/bin"
         for extra in ("/usr/local/bin", "/opt/homebrew/bin", "/usr/local/opt/bash/bin"):
             if os.path.isdir(extra):
@@ -1041,7 +1134,7 @@ def _tier1b_mirror_and_cold_tier(
         )
         cold_launch_out = cp.stdout.strip()
         if cold_launch_out:
-            if cold_launch_out == doe_clone:
+            if _paths_equal(cold_launch_out, doe_clone):
                 r.ok(f"AC2 cold-shell: REPO_DOE_CLAUDE resolved from pointer alone: {doe_clone}")
             else:
                 r.bad(f"AC2 cold-shell: REPO_DOE_CLAUDE='{cold_launch_out}', expected '{doe_clone}'")
@@ -1144,9 +1237,9 @@ def _tier1c_publish_repo_parity(
     pub_settings = os.path.join(pub_home, "settings.json")
     Path(pub_settings).write_text("{}", encoding="utf-8")
     env2 = {**os.environ, "CLAUDE_HOME": pub_home, "REPO_DOE_CLAUDE": pub_clone}
-    rc2, err2 = _call_gen_settings_hooks(pub_settings, env2)
+    rc2, err2, status_pub = _call_gen_settings_hooks(pub_settings, env2)
     if rc2 == 0:
-        r.ok("F8: gen_settings_hooks.generate() succeeded against publish clone")
+        r.ok(f"F8: gen_settings_hooks.generate() succeeded against publish clone ({status_pub})")
         pub_hook_cmds: List[str] = []
         try:
             data = json.loads(Path(pub_settings).read_text(encoding="utf-8"))
@@ -1159,14 +1252,24 @@ def _tier1c_publish_repo_parity(
         except (json.JSONDecodeError, OSError):
             pub_hook_cmds = []
 
-        if not pub_hook_cmds:
+        if status_pub.startswith("skipped"):
+            # Same contract as Step 3.5c: a declined generation writes nothing
+            # by design, so there is no command list to root-check. Reporting
+            # that as a FAIL asserts the opposite of what the generator decided.
+            r.skip(f"F8: hook-command root check — generation declined: {status_pub}")
+            if pub_hook_cmds:
+                r.bad(
+                    f"F8: gen_settings_hooks reported {status_pub!r} but wrote "
+                    f"{len(pub_hook_cmds)} hook command(s) — a declined run must write nothing"
+                )
+        elif not pub_hook_cmds:
             r.bad("F8: settings.json produced no hook commands to inspect against publish clone")
         else:
-            if any(f"{pub_clone}/coordinator/hooks/" in c for c in pub_hook_cmds):
+            if any(_path_mentioned(os.path.join(pub_clone, "coordinator", "hooks") + "/", c) for c in pub_hook_cmds):
                 r.ok("F8: settings.json hook commands rooted at publish clone ($_pub_clone/coordinator/hooks/...)")
             else:
                 r.bad("F8: settings.json hook commands do NOT reference the publish clone's coordinator/hooks/ path")
-            if any(f"{doe_clone}/coordinator/hooks/" in c for c in pub_hook_cmds):
+            if any(_path_mentioned(os.path.join(doe_clone, "coordinator", "hooks") + "/", c) for c in pub_hook_cmds):
                 r.bad("F8: settings.json hook commands leak the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_settings_hooks (ignores REPO_DOE_CLAUDE)")
             else:
                 r.ok("F8: settings.json hook commands do NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
@@ -1180,7 +1283,7 @@ def _tier1c_publish_repo_parity(
     env3 = {**os.environ, "CLAUDE_PLUGIN_ROOT": f"{pub_clone}/coordinator"}
     rc3, pub_mirror_out_or_err = _call_resolve_coordinator_clone("content", env3)
     pub_mirror_out = pub_mirror_out_or_err if rc3 == 0 else ""
-    if pub_mirror_out == f"{pub_clone}/coordinator":
+    if _paths_equal(pub_mirror_out, os.path.join(pub_clone, "coordinator")):
         r.ok(f"F8: resolve_content_root() rooted at publish clone: {pub_clone}/coordinator")
     else:
         r.bad(f"F8: resolve_content_root() did not root at publish clone — got '{pub_mirror_out}', expected '{pub_clone}/coordinator' (error: {pub_mirror_out_or_err})")
@@ -1318,7 +1421,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("  Remediation: verify the temp filesystem is writable and has free space.", file=sys.stderr)
         return 3
     except Exception as exc:  # noqa: BLE001 — harness boundary, convert to dedicated code
+        # A verification gate that crashes is indistinguishable from one that
+        # fails, and worse: every PASS/FAIL it had already established was
+        # discarded with the exception. Surface the traceback so the crash site
+        # is actionable from the run itself, then still exit 3 (checks did not
+        # complete) rather than 1 (checks ran, some failed).
         print(f"install-sandbox-check: TRANSPORT FAILURE: unhandled {type(exc).__name__}: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        print(
+            "  The run aborted mid-checks; results printed above this line are partial.",
+            file=sys.stderr,
+        )
         return 3
 
     return 1 if r.fail_count > 0 else 0

@@ -89,6 +89,13 @@ from typing import Sequence
 
 import pytest
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # See module docstring's "Secondary guard" -- kept at 2 (not 1) purely as cheap

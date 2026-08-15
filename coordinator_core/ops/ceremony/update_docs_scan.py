@@ -400,51 +400,6 @@ def _classify_tasks_cohort(worktree_root: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Tracker `N of M` reconciliation preview (AC7; close_out_and_stamp.py's own
-# C8 backlink)
-# ---------------------------------------------------------------------------
-
-def _phase_tracker_reconcile(worktree_root: Path) -> list[dict[str, Any]]:
-    """Read-only PREVIEW of AC7's tracker `N of M` bounded-edit
-    reconciliation. Reuses `close_out_and_stamp.reconcile_tracker_shipped_
-    counts` verbatim (never a second implementation) in its pure-compute
-    form only -- this scan performs NO write of its own, preserving this
-    module's own "emits a manifest only" contract. The actual write goes
-    through that module's own single apply entrypoint
-    (`apply_tracker_reconciliation`), invoked explicitly by whichever
-    caller (this op's own EM-facing follow-up, or the mise tracker-sync
-    step once it shares this compute path) decides to act on the preview
-    -- never this scan itself.
-
-    Returns `[]` (not an error) when `docs/project-tracker.md` is absent,
-    or the reconciliation pass finds nothing to reconcile.
-
-    Import deliberately deferred to call time, not module load time:
-    `close_out_and_stamp` itself imports `coordinator_core.ops.ceremony.
-    commit_pipeline`, and this package's own `__init__` eager-imports
-    every registered op module (including this one) at start_server()
-    time -- a module-level import here would close a real cycle
-    (`ops/__init__` -> this module -> `close_out_and_stamp` -> `ops.
-    ceremony.commit_pipeline` -> back to `ops/__init__`, still
-    mid-execution), observed live as an `ImportError: cannot import name
-    ... from partially initialized module` on this op's own eager
-    import."""
-    from coordinator_core.execute_plan_assemble.close_out_and_stamp import (
-        reconcile_tracker_shipped_counts,
-    )
-
-    tracker_path = worktree_root / "docs" / "project-tracker.md"
-    if not tracker_path.is_file():
-        return []
-    try:
-        text = tracker_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    _new_text, edits = reconcile_tracker_shipped_counts(text, worktree_root)
-    return edits
-
-
-# ---------------------------------------------------------------------------
 # JSON-RPC handler
 # ---------------------------------------------------------------------------
 
@@ -483,13 +438,11 @@ def _ceremony_update_docs_scan(params: dict, repo_root: Optional[Path] = None) -
     prune_rows.extend(_classify_crossrepo_archive_cohort(worktree_root, now=now))
     prune_rows.extend(_classify_tasks_cohort(worktree_root))
 
-    tracker_reconcile_preview = _phase_tracker_reconcile(worktree_root)
-
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": now.replace(microsecond=0).isoformat(),
         "phase1": phase1,
         "phase8_lineage_backstop": lineage_edges,
         "phase8b_prune": prune_rows,
-        "tracker_reconcile_preview": tracker_reconcile_preview,
+        "tracker_reconcile_preview": [],
     }

@@ -30,6 +30,15 @@ assert "queue.append" in _REGISTRY, (
 
 from coordinator_core.ops.queue_append import append_queue_entry  # noqa: E402
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Fixed test constants (mirrors test_queue_parity.py's fixed-date convention)
 # ---------------------------------------------------------------------------

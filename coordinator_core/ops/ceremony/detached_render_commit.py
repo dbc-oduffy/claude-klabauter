@@ -36,8 +36,10 @@ Negative-spec:
     changes elsewhere in the tree are never touched.
   - Does NOT decide WHETHER a commit is warranted (e.g. the Rule-5 meta-repo vs.
     sibling-repo branch, or "did the render actually run") -- that classification
-    is the CALLER's job (see `render_handoff_tracker.main` /
-    `refresh_roadmap_callout.main`). This module is pure commit-mechanics: given a
+    is the CALLER's job (see `refresh_roadmap_callout.main`; the former sibling
+    `render_handoff_tracker.main` was retired 2026-08-14, see docs/plans/
+    2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md § C2).
+    This module is pure commit-mechanics: given a
     path the caller has already decided is its own artifact, stage-and-commit it
     if (and only if) it is actually dirty.
   - Does NOT retry a non-lock git failure (e.g. a genuine `git commit` config/
@@ -181,7 +183,7 @@ def commit_own_artifact(
             try:
                 release_path = (
                     rel_path if not Path(rel_path).is_absolute()
-                    else str(Path(rel_path).resolve().relative_to(root.resolve()))
+                    else Path(rel_path).resolve().relative_to(root.resolve()).as_posix()
                 )
                 session_scope.release_committed_claims(
                     session_core.resolve_session_id(str(root)),

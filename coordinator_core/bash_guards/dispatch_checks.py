@@ -752,11 +752,105 @@ def _allow_rewrite(new_cmd: str, ctx: Optional[str] = None) -> Dict[str, Any]:
     return out
 
 
+#: Wall-clock a single dispatch may spend inside `_run_git` subprocesses
+#: before further probes are declined unspawned. Derived from the harness's
+#: own PreToolUse hook window (15 000 ms, read off a `hook_cancelled`
+#: attachment in a live transcript -- the harness owns that number, this
+#: repo does not), minus the rest of one invocation: interpreter boot, the
+#: `coordinator_core` import, and every non-probing guard's in-process work.
+#: Measured idle end-to-end for the whole hook, real payload, warm index:
+#: ~0.55 s, of which ~0.95 s of git time is the tail under contention -- so
+#: this budget is not felt on an unloaded box and only binds when the machine
+#: is at its documented 50-70-concurrent-LLM norm (`docs/wiki/machine-load-
+#: norm.md`).
+#:
+#: WHY A CEILING AT ALL. Per-probe `timeout=2.0` bounds ONE spawn; nothing
+#: bounded their SUM. A commit-shaped command spawns six git processes on
+#: this path, so the engine's own worst case (12 s of git, plus boot and
+#: import) sat ABOVE the harness window -- and a hook that overruns its
+#: window is cancelled outright, which loses every guard's verdict, not just
+#: the slow one's. That is the delivery failure recorded in
+#: `state/bug-backlog/2026-08-15-bare-commit-deny-never-reached-the-
+#: operator.yaml`: no deny, no advisory, nothing printed at all.
+_GIT_PROBE_BUDGET_SECONDS = 6.0
+
+#: Deadline (a `time.monotonic()` stamp) for the dispatch currently in
+#: flight, or `None` when no budget is armed. INERT BY DEFAULT and armed at
+#: exactly one seam (`dispatch.evaluate_payload_json`), which is the only
+#: caller running inside the harness's cancellable window: a check invoked
+#: directly -- every test in this package, `_alternative_liveness`'s own
+#: liveness harness -- sees `None` and behaves byte-identically to before
+#: this budget existed. Do not arm it from a check; a check does not know
+#: whether it is one guard in a chain or the whole call.
+_git_probe_deadline: Optional[float] = None
+
+#: Returned instead of spawning once the budget is spent. Deliberately 127
+#: (`_run_git`'s existing unresolvable-`git` code) and NOT -1: -1 is the
+#: timeout sentinel four oracle branches in this file treat as fail-CLOSED
+#: (`check_destructive_git_clean`, and the revert/reset/stash oracles), and
+#: a budget-exhausted probe is a guard-process resource condition, not
+#: evidence the command is unsafe -- denying on it would block real work on
+#: a loaded machine, the same argument `_bt_c7_index_holds_foreign_paths`
+#: already makes for its own fail-open posture. Every `rc != 0` call site in
+#: this file therefore degrades to its own already-specified fail-open
+#: default, which is strictly better than what the overrun produced: a
+#: cancelled hook delivers NO guard's verdict, including the many that need
+#: no probe at all.
+_GIT_PROBE_BUDGET_SPENT_RC = 127
+
+
+def _arm_git_probe_deadline(budget: Optional[float] = None) -> None:
+    """Open a probe budget for one dispatch. Idempotent per dispatch: a
+    second arm replaces the deadline rather than extending it.
+
+    `None` reads `_GIT_PROBE_BUDGET_SECONDS` AT CALL TIME rather than
+    binding it as a default argument at import: a default would freeze the
+    module constant into this signature, making it unreachable to the one
+    thing that needs to vary it -- a test shrinking the budget so it can
+    exercise exhaustion in milliseconds instead of seconds."""
+    global _git_probe_deadline
+    if budget is None:
+        budget = _GIT_PROBE_BUDGET_SECONDS
+    _git_probe_deadline = time.monotonic() + budget
+
+
+def _disarm_git_probe_deadline() -> None:
+    """Close the current dispatch's probe budget, restoring the unbudgeted
+    default. Callers arm/disarm in a `try`/`finally` so an exception on the
+    guard chain cannot leave a stale deadline armed for the next call in a
+    long-lived process (a test run; anything embedding this engine)."""
+    global _git_probe_deadline
+    _git_probe_deadline = None
+
+
+def _git_probe_budget_spent() -> bool:
+    """True iff a budget is armed AND already spent. `None` (unarmed) is
+    never "spent" -- see `_git_probe_deadline`'s inert-by-default note."""
+    return _git_probe_deadline is not None and time.monotonic() >= _git_probe_deadline
+
+
 def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
              extra_env: Optional[Dict[str, str]] = None) -> Tuple[int, str]:
     """Run `git <args>`, optionally `-C <cwd>`-scoped via subprocess `cwd=`.
     Returns (returncode, stdout). rc == -1 signals a timeout (mirrors bash's
-    `rc=124` convention used by the oracle-timeout deny branches)."""
+    `rc=124` convention used by the oracle-timeout deny branches).
+
+    Declines to spawn at all, returning `_GIT_PROBE_BUDGET_SPENT_RC`, once
+    the dispatch's probe budget is spent (see `_git_probe_deadline`). The
+    per-call `timeout` is deliberately NOT clamped to the remaining budget:
+    a clamped timeout would push borderline probes onto the rc == -1 path,
+    which four oracles in this file treat as fail-CLOSED, manufacturing
+    denies out of machine load. Overshoot is therefore bounded by one call's
+    own `timeout`, not by the budget."""
+    if _git_probe_budget_spent():
+        print(
+            "bash_guards.dispatch_checks: git probe budget (%.1fs) spent; "
+            "declining `git %s` unspawned -- this dispatch's remaining "
+            "probes fall back to their own fail-open defaults."
+            % (_GIT_PROBE_BUDGET_SECONDS, " ".join(args[:3])),
+            file=sys.stderr,
+        )
+        return _GIT_PROBE_BUDGET_SPENT_RC, ""
     env = None
     if extra_env:
         env = dict(os.environ)
@@ -3988,7 +4082,8 @@ def check_blanket_git_add(
         "BLOCKED: blanket `git add` sweeps in sibling sessions' edits "
         "(SC-DR-014). Matched: %s\n\n"
         "Use instead:\n"
-        "  git add -- path/to/file"
+        "  git add -- path/to/file\n"
+        "  scoped-git-commit -m <subject> -- path/to/file"
         % (matched_cmd,)
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _deny(reason)
@@ -6404,6 +6499,35 @@ def _bt_commit_has_sweep_all_flag(seg_tokens: List[str]) -> bool:
     return False
 
 
+def _bt_commit_has_amend_flag(seg_tokens: List[str]) -> bool:
+    """True iff a `git commit` segment carries `--amend` (stopping at the
+    segment's own `--` pathspec separator, since a flag can never appear in
+    the pathspec tail -- this also guards against a file literally named
+    `--amend` sitting in the pathspec tail reading as the flag). No
+    bundled short form of `--amend` exists, so a plain token scan bounded
+    by the separator is sufficient.
+
+    `check_git_commit_safe_commit_advise` calls this from TWO sites with
+    different pathspec state, and neither can assume the other's
+    precondition:
+
+    - The amend-ownership gate (example-retrieval-repo-em cross-repo memo, 2026-08-15,
+      Finding 2) calls this BEFORE the explicit-pathspec early return, so a
+      `True` here may still carry `--only` or an explicit `-- <paths>` --
+      pathspec scoping bounds which files change, not whose commit
+      `--amend` is about to overwrite, so the gate must fire on the scoped
+      form too.
+    - The remediation-text selection later in the same function calls this
+      AFTER that early return has already exited on any scoped form, so a
+      `True` there always means the bare-`--amend`-with-index shape."""
+    for tok in seg_tokens:
+        if tok == "--":
+            break
+        if tok == "--amend":
+            return True
+    return False
+
+
 def _bt_commit_own_pathspec(seg_tokens: List[str]) -> Optional[List[str]]:
     """Extract WHICH staged paths a `git commit` segment will actually take,
     for Check 5 (`check_validate_commit`) to INTERSECT against the full
@@ -6674,6 +6798,127 @@ def _bt_c7_index_holds_foreign_paths(
     return bool(full_paths - scoped_paths)
 
 
+#: Matches a `Session-Id: <sid>` trailer line exactly -- the shape
+#: `ceremony.scoped_git_commit` stamps on every commit it authors (see
+#: `85d55a001`'s own commit message for a live example, and
+#: `ops/ceremony/branch_resolution.py`'s `_session_commit_log`/
+#: `_trailer_reliable`, which already treat this trailer as authoritative
+#: commit provenance elsewhere in the engine). Anchored to the whole line
+#: (`^...$` under MULTILINE) so a session id that is a PREFIX of another
+#: commit's trailer value can never read as a match -- unlike the plain
+#: substring `--grep=Session-Id: <sid>` the rest of the engine uses for
+#: RECALL (where a false-positive widen is the safe direction), this
+#: predicate feeds a fail-CLOSED deny, where a false-positive MATCH is the
+#: unsafe direction.
+_SESSION_ID_TRAILER_RE = re.compile(r"(?m)^Session-Id:\s*(\S+)\s*$")
+
+
+def _bt_head_commit_amend_provenance(
+    cwd: Optional[str], session_id: str
+) -> Optional[Tuple[str, str, bool]]:
+    """Probe HEAD's short sha, subject, and whether it carries THIS
+    session's `Session-Id:` trailer -- ONE `_run_git` call (`log -1
+    --format=%h\\x02%s\\x02%B`), so an amend-ownership check spends exactly
+    one slot of this dispatch's probe budget (`_GIT_PROBE_BUDGET_SECONDS`),
+    not a second one layered on top of the sibling index probes this same
+    check function may already have spent.
+
+    Returns `None` when HEAD is not knowable at all: the probe declined
+    unspawned (`_GIT_PROBE_BUDGET_SPENT_RC`), timed out (`rc == -1`), the
+    repo has no commits yet, or the format string failed to split into
+    exactly three fields. The CALLER decides what `None` means for
+    enforcement (see `check_git_commit_safe_commit_advise`'s amend gate) --
+    this predicate only reports what it could observe.
+
+    Returns `(short_sha, subject, owned)` otherwise. `owned` is True iff
+    the full message contains an EXACT `Session-Id: <session_id>` trailer
+    line. An empty `session_id` can never read as owned: `owned` starts
+    `False` and is only set from an equality comparison against
+    `session_id`, so an empty `session_id` would need an empty CAPTURED
+    trailer value to match, and `_SESSION_ID_TRAILER_RE`'s `\\S+` can never
+    capture an empty string -- there is no input that makes an unresolved
+    session id read as "mine"."""
+    rc, out = _run_git(["log", "-1", "--format=%h\x02%s\x02%B"], cwd=cwd)
+    if rc != 0 or not out:
+        return None
+    parts = out.split("\x02", 2)
+    if len(parts) != 3:
+        return None
+    short_sha = parts[0].strip()
+    subject = parts[1].strip()
+    body = parts[2]
+    if not short_sha:
+        return None
+    owned = False
+    if session_id:
+        m = _SESSION_ID_TRAILER_RE.search(body)
+        owned = bool(m and m.group(1) == session_id)
+    return (short_sha, subject, owned)
+
+
+def _bt_solo_bare_commit_index_nonempty(
+    seg_tokens: List[str],
+    segments: List[Tuple[List[str], bool]],
+    seg_index: int,
+) -> bool:
+    """True iff `seg_tokens` is a solo bare `git commit` -- no preceding
+    `git add -- <paths>` anywhere earlier in the same command (the shape
+    `_bt_c7_index_holds_foreign_paths` deliberately declines to probe, see
+    its own docstring) -- AND the index it would commit currently holds
+    ANY staged path.
+
+    Unlike C7's set-difference (which can name "foreign" paths because it
+    has the command's own `add` pathspec to diff against), a solo bare
+    commit supplies NO pathspec at all in this operation -- there is
+    nothing here to subtract, so nothing here can be verified as this
+    command's own staging. On a shared tree the guard cannot tell "I
+    staged this myself in an earlier command" from "a peer staged this
+    concurrently"; the empirical cost of guessing wrong (fourth recorded
+    recurrence, 2026-08-15, `state/lessons/2026-08-03-git-add-mine-then-
+    bare-git-commit-sweeps-70d1438f8f01.yaml`) is silent cross-session
+    mis-attribution with no rewrite remedy under live peers. A non-empty
+    index is therefore treated as unverifiable, not as "probably mine".
+
+    Excludes `-a`/`-am`/`--all` only (worktree-sourced, invisible to an
+    index probe -- same exclusion C7 already applies). `--amend` is NOT
+    excluded: bare `git commit --amend -m "x"` (no `-a`, no pathspec)
+    commits the CURRENT INDEX amended onto HEAD, not HEAD's tree -- only
+    `--amend --only` with an explicit pathspec restricts to HEAD's tree,
+    and that shape already exits earlier via
+    `_bt_commit_has_explicit_pathspec` (`--only` counts as scope). A prior
+    version of this function excluded bare `--amend` on the false premise
+    that amend always reuses HEAD's tree; corrected 2026-08-15 (P1,
+    coordinator:code-reviewer) -- on a shared dirty index, bare `--amend`
+    sweeps a peer's staged work into the amended commit exactly like the
+    bare-commit shape this check exists to deny. Fails OPEN on any probe
+    failure, same posture as C7's own probe.
+    """
+    if _bt_commit_has_sweep_all_flag(seg_tokens):
+        return False
+    for prior_tokens, _pipe in segments[:seg_index]:
+        # ANY preceding `git add` segment -- scoped or not (`-A`/`-u`/
+        # `--pathspec-from-file` included) -- takes this command out of
+        # "solo bare commit" and into the compound bare-commit-half shape
+        # C7's own probe already owns (advisory-only when it cannot
+        # extract a pathspec, per that check's own fail-open posture).
+        # Checking `_bt_git_add_own_pathspec(...)` truthiness alone here
+        # (rather than "is this an `add` segment at all") wrongly treated
+        # `git add -A && git commit` as a solo bare commit -- an unscoped
+        # add still means the caller DID stage something in this
+        # operation, just not precisely enough for C7's set-difference.
+        if _bt_git_resolved_subcommand(prior_tokens) == "add":
+            return False  # compound shape -- C7's own probe handles this
+    cwd = _bt_git_dash_c_value(seg_tokens)
+    extra_env: Optional[Dict[str, str]] = None
+    index_file = _bt_git_index_file_env(seg_tokens)
+    if index_file:
+        extra_env = {"GIT_INDEX_FILE": index_file}
+    rc, out = _run_git(["diff", "--cached", "--name-only"], cwd=cwd, extra_env=extra_env)
+    if rc != 0:
+        return False
+    return bool([ln for ln in out.splitlines() if ln])
+
+
 def check_git_commit_safe_commit_advise(
     cmd: str,
     session_id: str = "",
@@ -6736,12 +6981,22 @@ def check_git_commit_safe_commit_advise(
     real work on a guard-process error), unlike a fail-closed hard-deny
     guard elsewhere in this package where a probe failure denies (a false
     silence there would be the worse outcome for that guard's own class).
+
+    AMEND GATE (example-retrieval-repo-em cross-repo memo, 2026-08-15): a segment
+    carrying `--amend` is checked for HEAD ownership FIRST, ahead of the
+    explicit-pathspec early return above -- a scoped `--amend -- <paths>`
+    bounds which files change but still overwrites whatever commit is at
+    HEAD, message and authorship both, which pathspec scoping says nothing
+    about. This is the ONLY fail-CLOSED reasoning in this function (every
+    other branch above fails open on probe failure); see
+    `_bt_head_commit_amend_provenance`'s own docstring for why an amend's
+    blast radius inverts the posture. Gated by its own override key,
+    `COORDINATOR_ALLOW_GIT_COMMIT_AMEND`, independent of
+    `COORDINATOR_ALLOW_GIT_COMMIT_BARE`.
     """
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
-    if _override("COORDINATOR_ALLOW_GIT_COMMIT_BARE"):
-        return None
     tokens = _bt_tokenize_full_command(cmd)
     if tokens is None:
         return None
@@ -6758,6 +7013,55 @@ def check_git_commit_safe_commit_advise(
             continue
         if _bt_git_resolved_subcommand(seg_tokens) != "commit":
             continue
+        # Amend-ownership gate (example-retrieval-repo-em cross-repo memo, Finding 2):
+        # evaluated BEFORE the explicit-pathspec early return below, so a
+        # SCOPED amend (`--amend --only -- <paths>`) no longer exits this
+        # check silently -- pathspec scoping bounds which FILES change, it
+        # says nothing about whose commit `--amend` is about to overwrite.
+        # Own key (`COORDINATOR_ALLOW_GIT_COMMIT_AMEND`), independent of
+        # `COORDINATOR_ALLOW_GIT_COMMIT_BARE` below -- amend's blast radius
+        # (destroys a peer's message/authorship at HEAD, no rewrite remedy
+        # under live peers) differs from the bare-commit shape that key
+        # governs, so one must not silently unlock the other.
+        if _bt_commit_has_amend_flag(seg_tokens) and not _override(
+            "COORDINATOR_ALLOW_GIT_COMMIT_AMEND"
+        ):
+            provenance = _bt_head_commit_amend_provenance(
+                _bt_git_dash_c_value(seg_tokens), session_id
+            )
+            owned = provenance is not None and provenance[2]
+            if not owned:
+                _amend_note = operator_override_note(
+                    "COORDINATOR_ALLOW_GIT_COMMIT_AMEND", payload=payload, git_root=git_root
+                )
+                if provenance is not None:
+                    head_sha, head_subject, _owned = provenance
+                    head_subject = _truncate_to_budget(head_subject, 40)
+                    return _deny(
+                        (
+                            "Deny: '--amend' rewrites HEAD (%s %s), not "
+                            "provably yours -- replaces its message/"
+                            "authorship; without --only, also commits "
+                            "staged.\n\n"
+                            "Use instead:\n"
+                            '  git notes add -f -m "<correction>" %s'
+                            % (head_sha, head_subject, head_sha)
+                        )
+                        + ("\n\n%s" % _amend_note if _amend_note else "")
+                    )
+                return _deny(
+                    (
+                        "Deny: '--amend' rewrites HEAD, not provably yours "
+                        "(its provenance could not be verified) -- "
+                        "replaces its message/authorship; without --only, "
+                        "also commits staged.\n\n"
+                        "Use instead:\n"
+                        '  git notes add -f -m "<correction>" <sha>'
+                    )
+                    + ("\n\n%s" % _amend_note if _amend_note else "")
+                )
+        if _override("COORDINATOR_ALLOW_GIT_COMMIT_BARE"):
+            return None
         if _bt_commit_has_explicit_pathspec(seg_tokens):
             return None
         subject = None
@@ -6775,6 +7079,16 @@ def check_git_commit_safe_commit_advise(
         # by reference ("same subject") rather than re-printing it, so the
         # subject text itself never appears twice in one advisory.
         subject_operand = shlex.quote(subject) if subject else '"<subject>"'
+        # `--amend` reaching here always carries no `--only` and no explicit
+        # pathspec (both exit earlier via `_bt_commit_has_explicit_pathspec`),
+        # so it is always the risky bare-`--amend`-with-index shape -- the
+        # remediation below must say the amend-specific thing rather than
+        # the scoped-new-commit shape, which does not amend anything (DoE
+        # cross-repo memo, example-retrieval-repo-em, 2026-08-15, "amend has no safe
+        # helper and the scope advisory reads generic", Findings 2-3). This
+        # branches on TEXT ONLY -- the deny/advisory/allow decision above is
+        # unchanged.
+        is_amend = _bt_commit_has_amend_flag(seg_tokens)
         # Escalate to DENY when the compound bare-commit-half's own `git
         # add` pathspec leaves foreign staged paths behind
         # -- see `_bt_c7_index_holds_foreign_paths`'s own docstring for the
@@ -6784,12 +7098,70 @@ def check_git_commit_safe_commit_advise(
         _commit_bare_note = operator_override_note(
             "COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload, git_root=git_root
         )
+        # Amend-specific remediation (see `is_amend` comment above): the
+        # scoped-new-commit shapes below never apply to `--amend`, so an
+        # amending command gets this text instead of any of the three
+        # branches' ordinary body. Severity (deny vs advisory) is decided
+        # by the branch below exactly as before -- only the body text
+        # differs. `git notes add -f -m "<correction>" <sha>` repairs a
+        # commit's record without rewriting it, so it stays safe under a
+        # live peer; there is deliberately no rewrite-HEAD alternative
+        # offered here (none exists yet that verifies HEAD is still this
+        # session's).
+        _amend_body = (
+            "'git commit --amend' rewrites whatever commit is at HEAD — on "
+            "a shared branch that may be a peer's, landed since your last "
+            "commit. It replaces that commit's message and authorship, and "
+            "(without --only) also commits everything currently staged.\n\n"
+            "To fix a message without rewriting:\n"
+            "  git notes add -f -m \"<correction>\" <sha>"
+        )
         if _bt_c7_index_holds_foreign_paths(seg_tokens, segments, seg_index):
             return _deny(
                 (
-                    "Deny: the index holds staged paths OUTSIDE this "
-                    "command's own 'git add' — a peer's staged work would be "
-                    "swept under your subject.\n\n"
+                    "Deny: " + _amend_body
+                    if is_amend
+                    else (
+                        "Deny: the index holds staged paths OUTSIDE this "
+                        "command's own 'git add' — a peer's staged work would be "
+                        "swept under your subject.\n\n"
+                        "Use instead:\n"
+                        "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
+                        "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
+                        "instead:\n"
+                        "  scoped-git-commit -m <same subject> -- <paths>"
+                        % (subject_operand,)
+                    )
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
+        if _bt_solo_bare_commit_index_nonempty(seg_tokens, segments, seg_index):
+            return _deny(
+                (
+                    "Deny: " + _amend_body
+                    if is_amend
+                    else (
+                        "Deny: this 'git commit' names no scope and stages "
+                        "nothing itself — the shared index already holds staged "
+                        "content this command cannot prove is its own, on a "
+                        "shared branch a peer's.\n\n"
+                        "Use instead:\n"
+                        "  git commit -m %s -- <paths>\n\n"
+                        "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
+                        "instead:\n"
+                        "  scoped-git-commit -m <same subject> -- <paths>"
+                        % (subject_operand,)
+                    )
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
+        return _advisory(
+            (
+                "Advisory: " + _amend_body
+                if is_amend
+                else (
+                    "Advisory: this 'git commit' names no scope — commits "
+                    "whatever is staged, including a peer's concurrent work.\n\n"
                     "Use instead:\n"
                     "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
                     "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
@@ -6797,18 +7169,6 @@ def check_git_commit_safe_commit_advise(
                     "  scoped-git-commit -m <same subject> -- <paths>"
                     % (subject_operand,)
                 )
-                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
-            )
-        return _advisory(
-            (
-                "Advisory: this 'git commit' names no scope — commits "
-                "whatever is staged, including a peer's concurrent work.\n\n"
-                "Use instead:\n"
-                "  git add -- <paths> && git commit -m %s -- <paths>\n\n"
-                "For unusual staging (partial-hunk, GIT_INDEX_FILE) use "
-                "instead:\n"
-                "  scoped-git-commit -m <same subject> -- <paths>"
-                % (subject_operand,)
             )
             + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
         )

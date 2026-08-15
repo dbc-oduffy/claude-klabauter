@@ -30,13 +30,24 @@ records).
     dated corpus census reading as a standing fact: annotate it here rather than let the next
     reader repeat it.
 
-    **The shim STAYS, and the exit condition below is NOT met.** Two reasons, both live:
-    example-retrieval-repo's leg has NOT been re-measured since 2026-07-23 and its last known state is
-    100% old vocabulary — one repo migrating discharges one leg of an all-consumers condition,
-    not the condition. And cockpit themselves argued for keeping it: coercion that is a no-op
-    on a corpus today is exactly what stops being a no-op when an old archived record
-    resurfaces or the vocabulary moves again, and they would rather that logic live in this
-    producer than be forked into their ingest.
+    MEASUREMENT SUPERSEDED IN FULL, 2026-08-11 — the rag half above is stale too.
+    example-retrieval-repo-em re-measured their own ``state/handoffs/`` + ``archive/handoffs/`` trees on
+    request: ``claimed`` 245, ``open`` 104, ``superseded`` 16, ``active``/``consumed`` **zero**.
+    Their corpus is uniformly NEW vocabulary; "example-retrieval-repo: 100% old vocabulary" describes
+    2026-07-23 and nothing since. The only divergence this shim would produce against rag today
+    is the 16 ``superseded`` rows folding to ``claimed`` — which is the separate,
+    permanently-grandfathered axis below, not the transitional tolerance.
+
+    **The shim STAYS, and the exit condition below is NOT met** — but on one reason now, not
+    two. Both consumer legs (cockpit 2026-08-11, rag 2026-08-11) are measured migrated, so the
+    un-migrated-corpus reason is discharged. What survives is cockpit's own argument for
+    keeping it: coercion that is a no-op on a corpus today is exactly what stops being a no-op
+    when an old archived record resurfaces or the vocabulary moves again, and they would rather
+    that logic live in this producer than be forked into their ingest. Retiring the shim is
+    therefore a design call about resurfacing records, no longer a corpus-census question.
+    ``status`` is out of rag's transcription set either way — they read ``title``, ``created``,
+    ``scope``, ``additional_predecessors`` and leave the deliverable-spine keys NULL — so no
+    coercion this module performs is load-bearing for rag's ingest at all.
 
 A record still authored in OLD vocabulary (``status: active``/``consumed``,
 ``deployment_state: abandoned``, ``consumed_at``/``consumed_by``) is coerced up to the new

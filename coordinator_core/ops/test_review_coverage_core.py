@@ -177,6 +177,28 @@ def test_reviewed_set_non_diff_scope_kinds_skipped_silently(tmp_path, monkeypatc
     assert "WARN" not in err
 
 
+def test_reviewed_set_unrecognized_scope_kind_empty_sha_range_skipped_silently(
+    tmp_path, monkeypatch, capsys,
+):
+    """An unrecognized scope_kind ("inline-dispatch") with an empty sha_range
+    hits the `if not sha_range:` early return before the unrecognized-kind
+    accumulation branch, same as any other non-diff kind. It must produce no
+    WARN (the empty-sha_range WARN is diff-only) and must not appear in the
+    aggregated unrecognized-kind WARN either, since that branch is never
+    reached. Locks in the breadth of the `scope_kind == "diff" and warn`
+    guard — it is not scoped to recognized kinds like "plan" alone."""
+    repo = _make_fixture(tmp_path)
+    _add_commit(repo, "src/inline.py")
+    trail = _write_trail(repo, "nd.json", {"scope_kind": "inline-dispatch", "artifact": "x"})
+    monkeypatch.chdir(repo)
+    rc = main(["--reviewed-set", str(trail)], cwd=str(repo))
+    out, err = capsys.readouterr()
+    assert rc == 0
+    assert out.strip() == ""
+    assert "WARN" not in err
+    assert "inline-dispatch" not in err
+
+
 @pytest.mark.parametrize(
     "verdict,included",
     [("pending", False), ("ok", True), ("warn", True), ("blocked", True), ("waived", True), (None, True)],
@@ -261,6 +283,40 @@ def test_reviewed_set_unrecognized_scope_kind_degrades_not_fatal(tmp_path, monke
     assert "WARN" in err and "inline-dispatch" in err, (
         "the unrecognized kind must be named in a loud WARN to stderr"
     )
+
+
+def test_reviewed_set_unrecognized_scope_kind_warn_does_not_scale_with_records(
+    tmp_path, monkeypatch, capsys,
+):
+    """AC1: a corpus with >=2 unrecognized-scope_kind records must emit ONE
+    aggregated WARN line, not one per record. Regression guard for the WARN
+    flood that buried example-retrieval-repo-em's real trailing error (2026-08-15
+    memo)."""
+    repo = _make_fixture(tmp_path)
+    trail_paths = []
+    for i in range(5):
+        sha = _add_commit(repo, f"src/inline_{i}.py")
+        trail_paths.append(
+            _write_trail(
+                repo, f"bad{i}.json",
+                {
+                    "scope_kind": "inline-dispatch",
+                    "sha_range": f"{sha}^..{sha}",
+                    "verdict": "ok",
+                    "artifact": f"bad{i}",
+                },
+            )
+        )
+    monkeypatch.chdir(repo)
+    rc = main(["--reviewed-set", *[str(p) for p in trail_paths]], cwd=str(repo))
+    out, err = capsys.readouterr()
+    assert rc == 0
+    warn_lines = [line for line in err.splitlines() if "unrecognized scope_kind" in line]
+    assert len(warn_lines) == 1, (
+        f"expected exactly one aggregated WARN line for 5 unrecognized-kind "
+        f"records, got {len(warn_lines)}: {warn_lines}"
+    )
+    assert "5" in warn_lines[0] and "inline-dispatch" in warn_lines[0]
 
 
 def test_reviewed_set_garbage_file_default_fail(tmp_path, monkeypatch):

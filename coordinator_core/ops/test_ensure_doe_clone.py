@@ -15,6 +15,13 @@ import coordinator_core.ops.ensure_doe_clone as edc
 from coordinator_core.ops.ensure_doe_clone import main
 from coordinator_core.testing.fake_machine_local import write_fake_executable
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _make_fake_bin(tmp_path: Path, *, get_value: str = "", get_rc: int = 0) -> Path:
     """Fake `machine-local` that answers `get repos.doe_claude` and

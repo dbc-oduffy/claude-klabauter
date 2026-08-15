@@ -532,6 +532,43 @@ class TestSplitUnquotedNewlines:
         assert tokens == ["echo", "a\nb"]
 
 
+class TestPreserveWindowsBackslashesLeavesPosixEscapeUntouched:
+    """`preserve_windows_backslashes` (commit `05fb6ef70`) masks unquoted
+    backslashes with a private-use sentinel before `shlex` runs and
+    un-masks them afterward, leaving `shlex.escape` at its POSIX default --
+    chosen over the alternative of setting `lex.escape = ""`, because that
+    alternative would have disturbed POSIX escape handling. The canonical
+    example (`state/audits/2026-08-07-bash-guard-tokenizer-eats-windows-path-separators.md`)
+    is `find . -name "*.log" -exec rm {} \\;`, whose standalone `\\;` must
+    still lex to `;` identically whether the flag is on or off -- a change
+    that breaks this is a regression toward the rejected `lex.escape = ""`
+    shape, not a Windows-path fix. This is the discriminator: no existing
+    test in this file or `test_bump_foreign_repo_write.py` /
+    `test_bump_outside_repo_write.py` pins this find/exec case."""
+
+    def test_find_exec_standalone_semicolon_lexes_identically_with_flag_on_and_off(
+        self,
+    ):
+        cmd = r'find . -name "*.log" -exec rm {} \;'
+        tokens_without_flag = _command_tokenizer.tokenize_full_command(
+            cmd, preserve_windows_backslashes=False
+        )
+        tokens_with_flag = _command_tokenizer.tokenize_full_command(
+            cmd, preserve_windows_backslashes=True
+        )
+        assert tokens_without_flag == tokens_with_flag
+        assert tokens_with_flag == [
+            "find",
+            ".",
+            "-name",
+            "*.log",
+            "-exec",
+            "rm",
+            "{}",
+            ";",
+        ]
+
+
 class TestMultilineBypassClosedEndToEnd:
     """Regression for the bypass itself, through the real guard
     entrypoints -- reproduces exactly the two commands the 2026-07-30 dispatch

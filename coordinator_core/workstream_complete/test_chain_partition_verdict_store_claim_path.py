@@ -32,6 +32,13 @@ from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
 from coordinator_core.workstream_complete import chain_partition_verdict_store as store
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _make_repo(tmp_path: Path) -> Path:
     """Mirrors test_in_process_writer_claim_path._make_repo — check=True on

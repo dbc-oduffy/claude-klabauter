@@ -63,6 +63,13 @@ from coordinator_core.ops.ceremony.commit_pipeline import PUSH_MODE_NONE, PushOu
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
 from .fixtures.real_git import make_diverged_path, real_git_repo
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)

@@ -220,12 +220,23 @@ _REMEDY = (
     "(coordinator/scripts/install-maximalist.py) as the guided superset, to regenerate forwarders"
 )
 
+# Corrected 2026-08-14 (percolate-push memo — 10 real forwarders, including
+# percolate-push, sat undetected because the prior wording ("expected
+# transient state between installs") assumes something re-installs on a
+# cadence; a machine running the engine straight out of claude-klabauter's own live
+# working tree (this fleet's dev-box default — see CLAUDE.md's Load norm)
+# never does, so on THAT machine the same drift is not transient at all, it
+# is permanent until an operator runs the remedy by hand. The severity split
+# itself is unchanged (still WARN/exit-0 for UNCITED, still fail-loud for
+# CITED-but-missing) — only the rationale text, which this line states
+# plainly once rather than asserting a cadence this fleet does not have.
 _ADVISORY_LINE = (
-    f"[info] {_PROG}: UNCITED drift here is advisory-only, exit 0 always — it means an install ran "
-    "BEFORE the current coordinator/bin/ contents (expected transient state between installs, not "
-    "an install defect). CITED-but-missing drift is different: it fails the CLI's exit code (see "
-    f"module docstring's CITED-VS-UNCITED SPLIT). The remedy in both cases: {_REMEDY}, never an "
-    "escalation for the uncited case."
+    f"[info] {_PROG}: UNCITED drift here is advisory-only, exit 0 always. On a machine that "
+    "re-installs periodically this is ordinary transient lag between installs; on one running the "
+    "engine straight out of a live sibling working tree (no periodic install ever closes it) the "
+    "same drift persists until someone runs the remedy by hand — nothing else surfaces it. "
+    "CITED-but-missing drift is different: it fails the CLI's exit code (see module docstring's "
+    f"CITED-VS-UNCITED SPLIT). Remedy in both cases: {_REMEDY}."
 )
 
 # The ~/.claude/bin compat mirror's producer was retired 2026-07-24 (0fc30697,

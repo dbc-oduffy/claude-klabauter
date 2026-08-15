@@ -33,7 +33,10 @@ from coordinator_core.bash_guards._write_bump_session_start import (
 # Declared, not excused: this file spawns real processes because the behaviour under
 # test IS the spawn. _BASELINE is shrink-only pre-existing residue and is explicitly
 # not the route for a new file -- test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 

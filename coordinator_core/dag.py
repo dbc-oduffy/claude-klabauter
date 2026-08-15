@@ -163,9 +163,7 @@ CONTINUATION_EDGE_KINDS: FrozenSet[str] = frozenset(
 # such as `blocked_by` must not be added to EDGE_KIND_META:
 #   1. It is stub-id-valued, where every existing entry in this constant is
 #      path-valued (the frontmatter field names a file, not a stub id).
-#   2. `_HANDOFF_LINEAGE_FIELDS = tuple(EDGE_KIND_META.keys())` in
-#      ops/ceremony/renderers.py would silently absorb it as a lineage field.
-#   3. The JS twin walk-handoff-dag.js (see module docstring) would drift out of
+#   2. The JS twin walk-handoff-dag.js (see module docstring) would drift out of
 #      sync with this dual-homed SSOT.
 # This sits *beside* EDGE_KIND_META as a pure addition, so neither the default
 # sets in handoff_children.py / archival.py nor EDGE_KIND_META's own shape change.

@@ -18,6 +18,13 @@ import pytest
 from coordinator_core.distill.harvest_debt import compute_harvest_debt
 from coordinator_core.ops.check_harvest_debt import main
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _make_fixture(
     root: Path,

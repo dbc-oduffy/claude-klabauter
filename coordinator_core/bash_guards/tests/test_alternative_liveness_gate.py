@@ -75,7 +75,6 @@ def test_untriggered_set_is_documented_not_silently_empty():
 EXPECTED_UNTRIGGERED = frozenset(
     {
         "check_destructive_git_orphan",
-        "check_blanket_git_add",
         "check_probe_spray",
         "check_validate_commit",
         "check_test_suite_invocation",
@@ -97,7 +96,7 @@ def test_untriggered_set_matches_expected_no_silent_growth():
 #: this line touched, unlike the exact-match test above which is stricter
 #: and catches BOTH directions). Lower this pin by hand as entries close;
 #: never raise it to make a new suppression quiet.
-_UNTRIGGERED_PINNED_MAX = 6
+_UNTRIGGERED_PINNED_MAX = 5
 
 
 def test_untriggered_count_never_grows_past_pin():
@@ -322,10 +321,31 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
 EXPECTED_LIVE_FLOORS: Dict[str, int] = {
     "block_illegal_filename": 2,
     "block_subagent_plan_body_bash_write": 1,
+    # UNTRIGGERED -> LIVE (this dispatch, C3): `_is_hazard_repo` replaced the
+    # hardcoded ~/.claude gate the prior UNTRIGGERED reason described, so
+    # this guard's target-class gate is reachable the same way the C2
+    # branch-creation guards' is -- `_ALTLIVE_HAZARD_CWD` +
+    # `_dc._is_hazard_repo` temporary swap (see `_trigger_check_blanket_
+    # git_add`). Only the `COORDINATOR_OVERRIDE_BLANKET_ADD` override
+    # extracts (proven LIVE behaviorally by `probe_override`): the message's
+    # "Use instead: git add -- path/to/file" / "scoped-git-commit ..." lines
+    # are plain indented text, not backtick-quoted, and `extract_
+    # alternatives`'s indented-line fallback only engages when `alts` is
+    # still empty after the OVERRIDE regex match -- it is not, here. Not
+    # this chunk's scope to reshape that message (owned by a parallel
+    # executor, `dispatch_checks.py` is out of C3's write scope).
+    "check_blanket_git_add": 1,
     "check_cat_heredoc_write_advise": 1,
     "check_destructive_git_clean": 1,
     "check_find_exec_rewrite": 2,
-    "check_git_commit_safe_commit_advise": 1,
+    # Re-pinned 1 -> 2, 2026-08-15 (example-retrieval-repo-em cross-repo memo,
+    # `check_git_commit_safe_commit_advise` amend gate): the guard now
+    # advertises TWO independently-gated override keys
+    # (`COORDINATOR_ALLOW_GIT_COMMIT_BARE`, `COORDINATOR_ALLOW_GIT_COMMIT_
+    # AMEND`), reachable only via different input shapes -- see
+    # `_alternative_liveness.KEY_SPECIFIC_TRIGGERS`'s own docstring for the
+    # per-(guard, override-key) trigger this needed. Both now grade LIVE.
+    "check_git_commit_safe_commit_advise": 2,
     "check_grep_via_bash_rewrite": 2,
     "check_head_tail_plumbing_rewrite": 2,
     "check_multiprobe_banner_rewrite": 2,
@@ -474,6 +494,31 @@ class TestMetaGateProvenToFail:
         assert baseline.fired
         verdict = altlive.probe_override(alt, "check_raw_pid_liveness", baseline)
         assert verdict.status is altlive.VerdictStatus.LIVE
+
+    def test_key_specific_trigger_not_reading_its_var_is_still_dead(self, monkeypatch):
+        """KEY_SPECIFIC_TRIGGERS (added to close the disjoint-input-shape
+        gap for check_git_commit_safe_commit_advise's two override keys)
+        must stay a proven-to-fail mechanism, not a suppression one -- a
+        registered key-specific trigger that never actually reads the env
+        var it is supposed to prove must still grade DEAD, exactly like an
+        ordinary LIVE_TRIGGERS-based probe would. Registers a throwaway
+        (guard, env_var) row whose trigger always returns the SAME deny
+        regardless of the env var, and asserts probe_override still reports
+        DEAD -- a registry that can only turn DEAD into LIVE would pass this
+        with a false LIVE."""
+        guard = "check_git_commit_safe_commit_advise"
+        env_var = "COORDINATOR_ALLOW_TOTALLY_MADE_UP_KEY_SPECIFIC"
+
+        def _inert_trigger():
+            return _fake_deny("Deny: fake finding, never reads its own override.\n")
+
+        monkeypatch.setitem(altlive.KEY_SPECIFIC_TRIGGERS, (guard, env_var), _inert_trigger)
+
+        alt = altlive.Alternative(altlive.AlternativeKind.OVERRIDE, env_var, env_var)
+        baseline = altlive.fire_guard(guard)
+        assert baseline.fired
+        verdict = altlive.probe_override(alt, guard, baseline)
+        assert verdict.status is altlive.VerdictStatus.DEAD
 
 
 class TestCapabilityManifestOracle:

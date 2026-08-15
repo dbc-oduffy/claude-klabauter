@@ -441,6 +441,31 @@ def execute_directives(
     which are computed first and are unconditionally present exactly as
     they were before this parameter existed.
 
+    A directive dict carrying a truthy `"advisory"` key follows the same
+    additive-opt-in-byte-identical-when-omitted shape, on the directive
+    itself rather than as a caller-supplied map (its construction site is
+    the natural place to declare "this check never blocks the run", not a
+    second parallel id-keyed parameter here): when its handler raises, the
+    failure is recorded in the report's additive `"advisory_failures"`
+    list (each entry `{"directive_id", "error"}` — AC4, silence is a worse
+    defect than the false alarm being fixed) and the loop CONTINUES to the
+    remaining directives instead of returning `APPLY_EXIT_PARTIAL_MUTATION`.
+    An advisory failure never appends to `results`/`landed` — it did not
+    land — and is carried forward into whichever report this call
+    eventually returns: `APPLY_EXIT_OK`, `APPLY_EXIT_HALTED_AT_JUDGMENT`,
+    or a LATER directive's own `APPLY_EXIT_PARTIAL_MUTATION` (an advisory
+    failure earlier in the run must not be dropped just because a
+    different, non-advisory directive fails afterward — the operator
+    reconciling that partial mutation still needs the full picture).
+    Because an advisory failure itself never reaches the `except` branch's
+    `PARTIAL_MUTATION` return, it never reaches `_run_compensators` either
+    (AC5: compensation is a reaction to a mutation partially landing, and
+    an advisory check never blocked the run to begin with — tearing down
+    already-landed directives over it would be its own new defect). A
+    directive with no `"advisory"` key, or a run where nothing sets one,
+    never populates `"advisory_failures"` at all — the key is omitted, not
+    emitted empty, so every pre-existing report shape is unchanged (AC6).
+
     Otherwise orders execution-ready directives by `depends_on`
     (directive-to-directive ordering — a judgment-point id in
     `depends_on` is not a member of the directive-id set and is
@@ -489,6 +514,7 @@ def execute_directives(
     landed: list[str] = []
     results: list[DirectiveResult] = []
     blocked_jp_ids: set[str] = set()
+    advisory_failures: list[dict[str, Any]] = []
     for directive_id, handler, directive in resolved:
         if directive.get("already_satisfied"):
             results.append(DirectiveResult(directive_id, already_satisfied=True, detail=None))
@@ -503,12 +529,17 @@ def execute_directives(
         try:
             detail = handler(directive.get("args", []), repo_root)
         except Exception as exc:  # noqa: BLE001 - captured for the partial-mutation report
+            if directive.get("advisory"):
+                advisory_failures.append({"directive_id": directive_id, "error": str(exc)})
+                continue
             partial_report: dict[str, Any] = {
                 "error": str(exc),
                 "failed_directive": directive_id,
                 "landed": list(landed),
                 "results": [r.to_report() for r in results],
             }
+            if advisory_failures:
+                partial_report["advisory_failures"] = advisory_failures
             if compensators:
                 partial_report["compensation"] = _run_compensators(
                     compensators, results, directive_lookup, repo_root
@@ -518,13 +549,19 @@ def execute_directives(
         landed.append(directive_id)
 
     if blocked_jp_ids:
-        return APPLY_EXIT_HALTED_AT_JUDGMENT, {
+        halted_report: dict[str, Any] = {
             "unresolved_judgment_points": sorted(blocked_jp_ids),
             "landed": landed,
             "results": [r.to_report() for r in results],
         }
+        if advisory_failures:
+            halted_report["advisory_failures"] = advisory_failures
+        return APPLY_EXIT_HALTED_AT_JUDGMENT, halted_report
 
-    return APPLY_EXIT_OK, {"landed": landed, "results": [r.to_report() for r in results]}
+    ok_report: dict[str, Any] = {"landed": landed, "results": [r.to_report() for r in results]}
+    if advisory_failures:
+        ok_report["advisory_failures"] = advisory_failures
+    return APPLY_EXIT_OK, ok_report
 
 
 # ---------------------------------------------------------------------------

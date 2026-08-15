@@ -147,9 +147,27 @@ Negative-spec:
     reason, but ship_and_archive is never invoked, regardless of `dry_run`.
   - Does NOT hand-stamp deployment_state:shipped — always reuses
     handoff.ship_and_archive for the auto-ship path.
-  - Does NOT hand-mutate blocked_by/gate_cleared_by — always reuses
-    handoff.transition's gate-cascade-clear verb (C8), which independently
-    re-verifies each blocker's live deployment_state at act-time before writing.
+  - Does NOT hand-mutate blocked_by/gate_cleared_by on an `awaiting_gate`
+    handoff — always reuses handoff.transition's gate-cascade-clear verb (C8),
+    which independently re-verifies each blocker's live deployment_state at
+    act-time before writing.
+  - (jgate-clearance-recording-seam) DOES hand-mutate blocked_by/
+    no_longer_blocked_by directly, in-module, for a pickup-claimed
+    (`deployment_state: in_flight`) handoff only — a residue-retirement-only
+    write that never flips deployment_state or touches gate_dependency/
+    gate_evidence prose, reusing (never widening) `_gate_cascade_clear`,
+    which is unreachable there by design (MutateAbort outside awaiting_gate).
+    See `_handle_in_flight_blocked_by_retirement`'s own docstring. Review:
+    staff-eng Finding 3 — this makes handoff_reconcile.py the codebase's
+    SECOND writer of the schema's `blocked_by`/`no_longer_blocked_by` MOVE
+    invariant, and the two writers currently DISAGREE: `_gate_cascade_clear`
+    (handoff_transition.py, untouched by this pass — widening its own write
+    scope is correctly out of THIS pass's write-scope) DROPS a retired id
+    from both arrays instead of moving it, violating handoff.schema.json's
+    declared union-invariant; `_handle_in_flight_blocked_by_retirement` is
+    the correct reference implementation of that invariant. Recorded, not
+    fixed here — see state/bug-backlog/2026-08-14-gate-cascade-clear-drops-
+    blocked-by-entries-instead-of-moving.md.
   - Does NOT auto-transition a PROSE gate_dependency verdict — surfaces only,
     regardless of the C3 verdict value, per DoE alignment reply #3 (EM judgment
     retained for prose gates).
@@ -448,14 +466,22 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, TypeVar
 
+import yaml
+
 from coordinator_core.archival import reverse_membership
 from coordinator_core.coverage import _get_handoff_consumed_by
 from coordinator_core.dag import _read_meta, handoff_edges, resolve_target, walk_forward
-from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+from coordinator_core.frontmatter.primitives import (
+    read_fm_field,
+    read_fm_field_unquoted,
+    rebuild,
+    split_frontmatter,
+)
+from coordinator_core.frontmatter.schema_validate import format_validation_errors
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
-from coordinator_core.locked_write import LockTimeout, locked_rmw
+from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops.fleet._common import (
     main_worktree_root,
     collect_live_handoff_paths,
@@ -464,7 +490,11 @@ from coordinator_core.ops.fleet._common import (
 from coordinator_core.ops.handoff_ship_archive import _handler as _ship_and_archive_handler
 from coordinator_core.ops.handoff_transition import (
     _handler as _handoff_transition_handler,
+    _blocker_clears_gate,
+    _insert_fm_array_field,
     _read_gate_evidence_resolved,
+    _replace_fm_array_field,
+    _validate_fm,
 )
 from coordinator_core.reconcile.commit_reality import (
     evaluate_commit_reality,
@@ -759,9 +789,30 @@ def _build_dry_run_report(
             why = entry.get("message") or "C2 commit_reality verdict=auto-ship"
         elif hid in gate_by_id:
             entry = gate_by_id[hid]
-            action = "gate-cascade-clear"
-            proposed = f"{action} (verdict={entry.get('verdict')})"
-            why = f"C3 gate_eval cleared blocker_ids={entry.get('blocker_ids')}"
+            # Review: staff-eng Finding 1/2 — this bucket now holds TWO
+            # distinct writers: `_handle_gate_cascade`'s C3 gate-cascade-clear
+            # entries (action="gate-cascade-clear", carries a `verdict`) and
+            # `_handle_in_flight_blocked_by_retirement`'s in-flight residue
+            # retirement entries (action="blocked-by-retire-in-flight", never
+            # carries a `verdict` — no C3 gate_eval verdict ever ran for this
+            # path). Hard-coding action="gate-cascade-clear" here rendered an
+            # in-flight retirement as a fabricated `gate-cascade-clear
+            # (verdict=None)` row with a "C3 gate_eval cleared" justification
+            # that never fired, AND inflated `flip_count` (below) with a
+            # non-transition, since that literal is a
+            # `_TRANSITION_PROPOSED_ACTIONS` member. Deriving `action` from
+            # the entry itself fixes both.
+            action = str(entry.get("action") or "gate-cascade-clear")
+            if action == "blocked-by-retire-in-flight":
+                proposed = action
+                why = (
+                    f"in-flight blocked_by residue retirement blocker_ids="
+                    f"{entry.get('blocker_ids')} (deployment_state untouched, "
+                    "not a C3 gate_eval verdict)"
+                )
+            else:
+                proposed = f"{action} (verdict={entry.get('verdict')})"
+                why = f"C3 gate_eval cleared blocker_ids={entry.get('blocker_ids')}"
             # Review: coordinator:code-reviewer — a handoff can land in BOTH
             # gate_by_id and surface_by_id (the narrow+surface composite —
             # also_surface set on an abandoned/dangling-ref remainder, see
@@ -1696,6 +1747,250 @@ async def _handle_gate_cascade(
         })
 
 
+async def _handle_in_flight_blocked_by_retirement(
+    handoff: Dict[str, Any],
+    worktree_root: Path,
+    repo_root: Path,
+    dry_run: bool,
+    gates_cleared: List[Dict[str, Any]],
+    surfaced: List[Dict[str, Any]],
+    clears_cache: Optional[Dict[str, bool]] = None,
+) -> bool:
+    """C-in-flight — retire structured `blocked_by` residue on a pickup-claimed
+    (`deployment_state: in_flight`) handoff that `_AWAITING_GATE_STATE`'s own
+    gate-cascade branch never reaches (docs/research/2026-08-14-jgate-
+    clearance-recording-seam.md: `_is_open` enumerates a claimed+in_flight
+    handoff into `open_handoffs`, but the per-handoff gate-cascade branch is
+    keyed on `deployment_state == awaiting_gate` only).
+
+    Owned here, not by `pickup_assemble` (EM ruling, cross-repo/inbox/
+    2026-08-04-example-market-data-repo-em-pickup-jgate-cleared-strands-gate-
+    fields.md) — pickup must not become a second author of
+    `blocked_by`/`no_longer_blocked_by` state.
+
+    Deliberately separate from `handoff_transition._gate_cascade_clear`, not a
+    widening of it: that verb MUTATE-ABORTs outside `awaiting_gate` by
+    contract, an in_flight retirement must never flip `deployment_state` or
+    touch `gate_dependency`/`gate_evidence` prose, and this pass's write-scope
+    is this file alone. Reuses (never modifies) `handoff_transition.py`'s
+    act-time evidence predicate `_blocker_clears_gate` and the raw-YAML
+    array-field helpers (`_replace_fm_array_field`/`_insert_fm_array_field`,
+    `_validate_fm`).
+
+    Evidence rule (never age/prose/absence-of-evidence): identical to
+    `_gate_cascade_clear`'s own — `_blocker_clears_gate` returns `clears=True`
+    only for a `shipped` blocker, or a `continued` blocker whose
+    `continued_into` chain resolves to `shipped`; `closed`/`abandoned`/
+    unresolvable/ambiguous never clear. An id that doesn't clear is left
+    untouched in `blocked_by` — no partial guessing, no age-based retirement.
+
+    MOVE semantics (handoff.schema.json `no_longer_blocked_by`): a retiring
+    `blocked_by` entry is relocated into `no_longer_blocked_by`, never merely
+    dropped — the union of the two arrays is invariant across a resolution.
+    This is the FIRST writer of `no_longer_blocked_by` anywhere in
+    `coordinator_core`. NOTE: `handoff_transition._gate_cascade_clear` still
+    DROPS a retired id from both arrays on its own awaiting_gate path instead
+    of moving it — a known divergence, not fixed here (out of this pass's
+    write-scope); see state/bug-backlog/2026-08-14-gate-cascade-clear-drops-
+    blocked-by-entries-instead-of-moving.md.
+
+    `blocking_notes` is untouched — advisory prose the resolver never reads.
+
+    gate_evidence surface-only invariant: mirrors the `_AWAITING_GATE_STATE`
+    branch's own guard — "evidence never auto-clears a gate" (module
+    docstring § D5) — a handoff carrying ANY `gate_evidence` block is always
+    forced onto `surfaced[]`, never auto-applied, dry_run or not. Checked by
+    PRESENCE only, before any candidate enumeration: `_read_gate_evidence_
+    resolved` short-circuits to `None` outside `awaiting_gate`, so it cannot
+    be reused here — a lightweight presence check off the already-parsed
+    frontmatter dict is the correct-shaped mirror.
+
+    Claim-lock / act-time re-verification: `mutate` re-resolves each
+    candidate id's LIVE state fresh, under the file lock, immediately before
+    moving any edge — an enumeration-time verdict (optionally cache-backed
+    via `clears_cache`) is never write-authoritative; `mutate` never reads or
+    writes `clears_cache`.
+
+    Returns True iff this handoff was intercepted for REPORTING purposes
+    (something was retired, a retirement attempt was recorded — dry-run
+    preview or a failed write — or the handoff was surfaced under the
+    gate_evidence guard above); False when there was nothing to retire and no
+    evidence to surface. The caller does NOT `continue` on a truthy return —
+    the C9 ledger/mirror desync check below is independent of this branch's
+    own admission logic and must still run every pass.
+    """
+    handoff_id = handoff.get("id")
+
+    gate_evidence = handoff.get("gate_evidence")
+    if isinstance(gate_evidence, dict) and gate_evidence:
+        legs = gate_evidence.get("legs")
+        surfaced.append({
+            "handoff_id": handoff_id,
+            "reason": (
+                "in_flight handoff carries a gate_evidence block — evidence "
+                "never auto-clears a gate (mirrors the awaiting_gate "
+                "surface-only invariant, module docstring § D5); blocked_by "
+                "retirement is NOT attempted while evidence is in play, "
+                "regardless of dry_run"
+            ),
+            "evidence": legs if isinstance(legs, list) else [],
+        })
+        return True
+
+    blocked_by = handoff.get("blocked_by") or []
+    if not isinstance(blocked_by, list) or not blocked_by:
+        return False
+
+    # Enumeration-time candidate set — mirrors _handle_gate_cascade's own use
+    # of a pre-lock snapshot (gate_verdict, itself derived from evaluate_gate's
+    # read of the in-memory `handoff` dict) to decide WHETHER to attempt a
+    # write at all; the write itself re-verifies fresh under lock below.
+    #
+    # Review: staff-eng Finding 7 (perf) — `clears_cache`, when supplied by
+    # the caller, memoises this ENUMERATION-pass call only, keyed on blocker
+    # id, for the lifetime of one `_handler` invocation. The act-time
+    # re-verify inside `mutate` below deliberately never reads or writes this
+    # cache — that call is the write-authoritative re-check and must always
+    # see live state, cache or no cache.
+    candidate_ids: List[str] = []
+    for blocker_id in blocked_by:
+        bid = str(blocker_id)
+        if clears_cache is not None and bid in clears_cache:
+            clears = clears_cache[bid]
+        else:
+            clears, _detail = _blocker_clears_gate(bid, worktree_root)
+            if clears_cache is not None:
+                clears_cache[bid] = clears
+        if clears:
+            candidate_ids.append(bid)
+
+    if not candidate_ids:
+        return False
+
+    rel_path = _rel_path(worktree_root, handoff["_path"])
+    entry: Dict[str, Any] = {
+        "handoff_id": handoff_id,
+        "handoff_path": rel_path,
+        "action": "blocked-by-retire-in-flight",
+        "blocker_ids": candidate_ids,
+        "dry_run": dry_run,
+    }
+
+    if dry_run:
+        entry["applied"] = False
+        gates_cleared.append(entry)
+        return True
+
+    handoff_path = Path(handoff["_path"])
+    _state: Dict[str, Any] = {"applied": False, "message": "", "retired": []}
+
+    def mutate(old_text: str) -> str:
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(
+                "blocked-by-retire-in-flight: no parseable YAML frontmatter in "
+                f"{handoff_path}"
+            )
+
+        fm_dict = yaml.safe_load(split.fm_text) or {}
+        current_blocked_by = fm_dict.get("blocked_by") or []
+        if not isinstance(current_blocked_by, list):
+            raise MutateAbort(
+                f"blocked-by-retire-in-flight: blocked_by is not a list in {handoff_path}"
+            )
+        current_no_longer = fm_dict.get("no_longer_blocked_by") or []
+        if not isinstance(current_no_longer, list):
+            current_no_longer = []
+
+        # Act-time re-verification (mirrors _gate_cascade_clear's own the Staff Engineer
+        # F0 discipline): re-resolve EACH candidate id's LIVE state fresh,
+        # immediately before moving any edge — a caller-supplied enumeration-
+        # time verdict is never write-authoritative.
+        live_retiring = [
+            bid for bid in candidate_ids
+            if bid in current_blocked_by and _blocker_clears_gate(bid, worktree_root)[0]
+        ]
+        if not live_retiring:
+            # Already retired concurrently, or the live re-check no longer
+            # clears — byte-identical no-op (locked_rmw skips the write).
+            # Review: staff-eng Finding 6 — record a distinct message so this
+            # outcome is not indistinguishable, downstream in the report, from
+            # a dry-run preview (the `dry_run` key differs but nothing else
+            # did before this fix); `_state["retired"]` stays `[]`, which the
+            # caller below renders as `blocker_ids: []` rather than echoing
+            # the (now stale) enumeration-time `candidate_ids`.
+            _state["message"] = (
+                f"blocked-by-retire-in-flight {handoff_path} — no-op: every "
+                "enumeration-time candidate was already retired concurrently "
+                "or no longer clears on live re-check"
+            )
+            return old_text
+
+        new_blocked_by = [bid for bid in current_blocked_by if bid not in live_retiring]
+        new_no_longer = list(current_no_longer)
+        for bid in live_retiring:
+            if bid not in new_no_longer:
+                new_no_longer.append(bid)
+
+        fm = split.fm_text
+        fm = _replace_fm_array_field(fm, "blocked_by", new_blocked_by)
+        if read_fm_field(fm, "no_longer_blocked_by") is not None:
+            fm = _replace_fm_array_field(fm, "no_longer_blocked_by", new_no_longer)
+        else:
+            fm = _insert_fm_array_field(fm, "no_longer_blocked_by", new_no_longer, "blocked_by")
+
+        # Post-mutation schema validation gate — raise MutateAbort to skip
+        # the write, same discipline as every other mutating verb in
+        # handoff_transition.py.
+        errors = _validate_fm(fm)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(
+                f"blocked-by-retire-in-flight: handoff frontmatter validation "
+                f"failed: {details}"
+            )
+
+        _state["applied"] = True
+        _state["retired"] = live_retiring
+        _state["message"] = (
+            f"blocked-by-retire-in-flight {handoff_path} — moved {live_retiring} "
+            "blocked_by -> no_longer_blocked_by (deployment_state untouched)"
+        )
+        return rebuild(split, fm)
+
+    try:
+        await asyncio.to_thread(locked_rmw, handoff_path, mutate, repo_root=repo_root)
+    except FileNotFoundError as exc:
+        entry["applied"] = False
+        entry["error"] = f"blocked-by-retire-in-flight: handoff not found: {exc}"
+        gates_cleared.append(entry)
+        return True
+    except LockTimeout as exc:
+        entry["applied"] = False
+        entry["error"] = (
+            f"blocked-by-retire-in-flight: timed out waiting for file lock on "
+            f"{handoff_path}: {exc}"
+        )
+        gates_cleared.append(entry)
+        return True
+    except MutateAbort as exc:
+        entry["applied"] = False
+        entry["error"] = exc.args[0] if exc.args else "blocked-by-retire-in-flight: aborted"
+        gates_cleared.append(entry)
+        return True
+
+    entry["applied"] = _state["applied"]
+    # Review: staff-eng Finding 6 — `_state["retired"]` is now the sole
+    # source: `[]` on the concurrent-no-op path (nothing left to do),
+    # non-empty on a genuine apply. No longer falls back to the stale
+    # enumeration-time `candidate_ids`, which made "nothing left to do" and
+    # "applied" indistinguishable in the report except via the `dry_run` key.
+    entry["blocker_ids"] = _state["retired"]
+    entry["message"] = _state["message"]
+    gates_cleared.append(entry)
+    return True
+
+
 def _read_mirror_desync_fields(handoff_path: Path) -> "Optional[Dict[str, Optional[str]]]":
     """C9 AC16 conjuncts 3+4 — live re-read of the mirror's `claimed_by` /
     `consumed_by` / `status` fields, independent of the (possibly stale)
@@ -2035,6 +2330,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     reconciled: List[Dict[str, Any]] = []
     gates_cleared: List[Dict[str, Any]] = []
     surfaced: List[Dict[str, Any]] = []
+    # Review: staff-eng Finding 7 (perf) — memoises
+    # _handle_in_flight_blocked_by_retirement's ENUMERATION-pass
+    # _blocker_clears_gate calls only, keyed on blocker id, for this single
+    # _handler invocation. See that function's own docstring for why the
+    # act-time re-verify inside its `mutate` closure never touches this cache.
+    _in_flight_clears_cache: Dict[str, bool] = {}
 
     for handoff in open_handoffs:
         handoff_id = handoff.get("id")
@@ -2227,6 +2528,38 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"-- full gate_verdict={gate_verdict!r}"
             )
 
+        in_flight_intercepted = False
+        if deployment_state == _CONSUMED_OPEN_DEPLOYMENT_STATE:
+            # Widened cleanup branch (jgate-clearance-recording-seam) — a
+            # pickup-claimed handoff (_is_open admits status in {claimed,
+            # consumed} AND deployment_state == in_flight) is enumerated into
+            # open_handoffs but, before this branch existed, fell straight
+            # through the loop unhandled: the gate-cascade cleanup above is
+            # keyed on deployment_state == awaiting_gate only. This branch
+            # closes that gap WITHOUT touching the awaiting_gate path above
+            # (additive — see _handle_in_flight_blocked_by_retirement's own
+            # docstring for why it is a separate write path, never a widened
+            # _gate_cascade_clear call, and never a deployment_state flip).
+            #
+            # Review: staff-eng Finding 5 — deliberately does NOT `continue`
+            # straight past the C9 ledger/mirror desync check on a truthy
+            # return here (unlike the ORIGINAL landing, which did). A
+            # retirement (or a gate_evidence surface) is already durably
+            # recorded in gates_cleared/surfaced; skipping C9 for a claimed
+            # in_flight handoff on the exact pass it retires residue would
+            # hide a claim desync for one pass on precisely the handoffs C9
+            # exists to check. C9's admission logic is independent of this
+            # branch's outcome, so it always runs below. `in_flight_intercepted`
+            # is still tracked so that, once C9 itself declines to admit,
+            # this handoff is not ALSO appended to the terminal
+            # commit_reality catch-all surface below — it was already fully
+            # reported by this branch.
+            in_flight_intercepted = await _handle_in_flight_blocked_by_retirement(
+                handoff, worktree_root, repo_root, dry_run, gates_cleared,
+                surfaced, clears_cache=_in_flight_clears_cache,
+            )
+            # Falls through unconditionally to the C9 desync check.
+
         # C9 — before the terminal surface fall-through, check for a ledger-
         # vs-mirror claim desync on a live holder (the branch-switch-revert
         # incident this plan's Problem section documents) and repair it BY
@@ -2250,6 +2583,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 ),
                 "evidence": [],
             })
+            continue
+
+        if in_flight_intercepted:
+            # Already fully reported by _handle_in_flight_blocked_by_retirement
+            # (a retirement entry in gates_cleared, or a gate_evidence surface
+            # entry) and C9 declined to admit above — do not ALSO append the
+            # generic commit_reality catch-all surface for this handoff.
             continue
 
         # Below the C2 auto-ship bar and not awaiting_gate -> surface.

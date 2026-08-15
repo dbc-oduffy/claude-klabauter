@@ -33,6 +33,13 @@ from coordinator_core.test_baton_assemble import (
     _write_artifact,
 )
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):

@@ -37,6 +37,13 @@ from pathlib import Path
 
 import pytest
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _THIS = Path(__file__).resolve()
 _TESTS_DIR = _THIS.parent
 _BIN_DIR = _TESTS_DIR.parent

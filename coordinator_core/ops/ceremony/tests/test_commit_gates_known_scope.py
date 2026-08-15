@@ -24,6 +24,13 @@ from coordinator_core import claim_state
 from coordinator_core.ops.ceremony import commit_gates
 from coordinator_core.ops import dirty_tree_gate as dirty_tree_gate_mod
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(args, cwd) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)

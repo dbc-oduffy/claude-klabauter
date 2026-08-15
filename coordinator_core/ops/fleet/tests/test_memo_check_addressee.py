@@ -33,6 +33,15 @@ from coordinator_core.ops.fleet.memo_check_addressee import (
     _validate_check_addressee_params,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _run(result):
     """Run an async coroutine synchronously, or pass a plain (already

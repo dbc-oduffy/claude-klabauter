@@ -16,6 +16,13 @@ import pytest
 
 from coordinator_core.ops import check_auto_reconcile
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def test_get_response_returns_none_when_repo_root_unresolvable(monkeypatch):
     monkeypatch.setattr(
@@ -72,6 +79,39 @@ def test_main_returns_1_and_prints_nothing_when_response_is_none(monkeypatch, ca
     out = capsys.readouterr().out
     assert rc == 1
     assert out == ""
+
+
+def test_main_help_flag_prints_usage_and_does_not_dispatch(monkeypatch, capsys):
+    def _boom():
+        pytest.fail("get_response() must not be called when --help is passed")
+
+    monkeypatch.setattr(check_auto_reconcile, "get_response", _boom)
+    rc = check_auto_reconcile.main(["--help"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.startswith("usage:")
+
+
+def test_main_short_help_flag_prints_usage_and_does_not_dispatch(monkeypatch, capsys):
+    def _boom():
+        pytest.fail("get_response() must not be called when -h is passed")
+
+    monkeypatch.setattr(check_auto_reconcile, "get_response", _boom)
+    rc = check_auto_reconcile.main(["-h"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.startswith("usage:")
+
+
+def test_main_unrecognized_argument_prints_usage_and_does_not_dispatch(monkeypatch, capsys):
+    def _boom():
+        pytest.fail("get_response() must not be called on an unrecognized argument")
+
+    monkeypatch.setattr(check_auto_reconcile, "get_response", _boom)
+    rc = check_auto_reconcile.main(["--bogus"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert out.startswith("usage:")
 
 
 def test_main_prints_response_json_and_returns_0(monkeypatch, capsys):

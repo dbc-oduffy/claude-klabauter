@@ -15,6 +15,13 @@ import coordinator_core.ops.find_polluter as find_polluter
 from coordinator_core.ops.find_polluter import main
 from coordinator_core.testing.fake_machine_local import write_fake_executable
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _make_fake_npm(tmp_path: Path, pollute_on_substring: str = "bad") -> Path:
     """Write a cross-platform fake `npm` executable: `npm test <file>` creates

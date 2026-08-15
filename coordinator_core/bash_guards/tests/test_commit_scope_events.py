@@ -27,6 +27,15 @@ from pathlib import Path
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import commit_scope_events
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 SID = "sess-instr"
 
 

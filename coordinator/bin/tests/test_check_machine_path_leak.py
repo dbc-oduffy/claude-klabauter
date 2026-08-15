@@ -28,6 +28,15 @@ import tempfile
 
 from coordinator_core.win_portability import no_console_creationflags
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.normpath(os.path.join(_HERE, "..", "check-machine-path-leak.py"))
 

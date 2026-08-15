@@ -18,11 +18,16 @@ AC6g is only to call it once per advanced candidate and fold its result
 into this op's own response and provenance).
 Spec backlink: pln-terminal-state-propagation-giv-c85539 § C6 (R1, R1a)
 
-Join key: `deliverable_id`, exact-string match against each live handoff's own frontmatter
-field — NEVER the `plan:` pointer (1 of 80 live handoffs carries it; C12 retires it). No
-fork-equivalence canonicalization (unlike `deliverable.rollup`) — C6's body does not call for
-it and folding it in here would be undeclared scope creep on a join this plan's own table
-names as the one everybody already carries.
+Join key: `deliverable_id`, matched against each live handoff's own frontmatter field —
+NEVER the `plan:` pointer (1 of 80 live handoffs carries it; C12 retires it). C6b (per
+`pln-a-baton-closes-when-its-plan-s-1c1e9f` § C6b, AC11) routes this join through
+`deliverable_equivalence.canonicalize()`: this is the exact join the Problem section of
+that plan names as the primary mechanism that missed a declared fork ("deliverable_cascade
+._advance_one is kind-agnostic — it joins purely on deliverable_id string-equality"). A
+declared fork pair (`state/deliverable-equivalence.yaml`) now advances a live handoff
+carrying the LOSER id when the caller supplies the WINNER (or vice versa); an undeclared
+fork still canonicalizes to itself, so a caller/candidate pair the map does not know about
+behaves exactly as before.
 
 Second target kind (C2, this chunk): a CLOSED kind-descriptor (`_KindDescriptor`,
 `_KIND_DESCRIPTORS`) parameterises `_collect_live_candidates` over corpus dir,
@@ -498,6 +503,11 @@ def _collect_live_candidates_for_kind(
     except OSError:
         return matches, True, unreadable
 
+    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
+
+    equivalence_map = load_equivalence_map(worktree_root)
+    canonical_query = canonicalize(deliverable_id, equivalence_map)
+
     for path in entries:
         if path.suffix != kind.suffix or not path.is_file():
             continue
@@ -512,7 +522,7 @@ def _collect_live_candidates_for_kind(
                 unreadable.append({"path": str(path), "reason": "empty or unparseable record"})
             continue
         artifact_did = fm.get("deliverable_id")
-        if not isinstance(artifact_did, str) or artifact_did.strip() != deliverable_id:
+        if not isinstance(artifact_did, str) or canonicalize(artifact_did.strip(), equivalence_map) != canonical_query:
             continue
         lifecycle_value = fm.get(kind.lifecycle_field)
         if lifecycle_value in kind.terminal_values:

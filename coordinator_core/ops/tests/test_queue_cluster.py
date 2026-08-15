@@ -36,6 +36,15 @@ from coordinator_core.ops.queue_cluster import (  # noqa: E402
     cluster_records,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # Repo fixture -- a bare tmp_path, no git required (records_query spawns none)

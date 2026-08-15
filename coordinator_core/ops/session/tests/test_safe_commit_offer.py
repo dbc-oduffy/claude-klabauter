@@ -765,6 +765,60 @@ class TestAutoCommitSession:
         )
         assert report["groups"] == []
 
+    def test_all_dropped_group_is_recorded_in_dropped_groups(self, tmp_path):
+        # Handoff item 1 (2026-08-03, touched-path-bookkeeping) -- the
+        # all-excluded group above vanished from `groups`, `failed_groups`,
+        # and `excluded` (`compute_offer`-derived, not group-derived) all at
+        # once, with no trace anywhere in the report. `dropped_groups` is
+        # that trace.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("other", cwd=str(repo))
+        (repo / "peer.py").write_text("p")
+        scope.touch("other", "peer.py", cwd=str(repo))
+
+        report = safe_commit_offer.auto_commit_session(
+            "mine",
+            cwd=str(repo),
+            groups=[{"paths": ["peer.py"], "message": "all-excluded group"}],
+        )
+        assert report["dropped_groups"] == [
+            {"message": "all-excluded group", "named": 1, "matched": 0}
+        ]
+
+    def test_partially_dropped_group_is_also_recorded(self, tmp_path):
+        # A group losing 4 of 5 paths is the same silence in miniature --
+        # must be recorded even though the group itself still commits.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("other", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        (repo / "peer.py").write_text("p")
+        scope.touch("mine", "a.py", cwd=str(repo))
+        scope.touch("other", "peer.py", cwd=str(repo))
+
+        report = safe_commit_offer.auto_commit_session(
+            "mine",
+            cwd=str(repo),
+            groups=[{"paths": ["a.py", "peer.py"], "message": "partial group"}],
+        )
+        assert report["dropped_groups"] == [
+            {"message": "partial group", "named": 2, "matched": 1}
+        ]
+        assert report["groups"][0]["paths"] == ["a.py"]
+
+    def test_default_groups_never_populate_dropped_groups(self, tmp_path):
+        # `groups=None` (the unattended-trigger fallback) is computed FROM
+        # `safe_paths` itself, so it can never lose a path to the filter --
+        # `dropped_groups` must stay empty for that path.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.py").write_text("a")
+        scope.touch("mine", "a.py", cwd=str(repo))
+
+        report = safe_commit_offer.auto_commit_session("mine", cwd=str(repo))
+        assert report["dropped_groups"] == []
+
     def test_message_flag_produces_one_group(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
@@ -1126,6 +1180,107 @@ class TestMain:
         assert "... and 3 more" in contents
         present = [p for p in paths if p in contents]
         assert len(present) == safe_commit_offer._EXCLUDED_LOG_PREVIEW_COUNT
+
+    def test_all_dropped_group_renders_named_matched_and_logs_and_stays_exit_0(
+        self, tmp_path, capsys
+    ):
+        # Handoff item 1 (2026-08-03, touched-path-bookkeeping) -- an
+        # all-dropped caller-supplied group was previously silent: absent
+        # from `groups`, `failed_groups`, AND `excluded` (which is
+        # `compute_offer`-derived, not group-derived) all at once. This is
+        # the regression guard for the fix: the stdout render, the
+        # diagnostics-log sink, and the exit code all reflect it, and it is
+        # never reported as a commit failure.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("other", cwd=str(repo))
+        (repo / "peer.py").write_text("p")
+        scope.touch("other", "peer.py", cwd=str(repo))
+
+        groups_path = tmp_path / "groups.json"
+        groups_path.write_text(
+            json.dumps([{"paths": ["peer.py"], "message": "all-excluded group"}])
+        )
+
+        exit_code = safe_commit_offer.main(
+            [
+                "--session",
+                "mine",
+                "--root",
+                str(repo),
+                "--groups-json",
+                str(groups_path),
+            ]
+        )
+        out = capsys.readouterr().out
+
+        assert exit_code == 0
+        assert "all-excluded group — named 1 paths, 0 matched" in out
+        assert "NOT committed" not in out
+
+        from coordinator_core.lifecycle import git_common_dir
+
+        log_file = (
+            git_common_dir(Path(repo))
+            / "coordinator-sessions"
+            / "logs"
+            / "sessionend-auto-commit-diagnostics.log"
+        )
+        assert log_file.is_file()
+        log_contents = log_file.read_text()
+        assert "1 caller-supplied group(s) partially or fully dropped" in log_contents
+        assert "all-excluded group — named 1 paths, 0 matched" in log_contents
+
+    def test_dropped_groups_render_and_log_are_bounded(self, tmp_path, capsys):
+        # Bounded-output guard: many dropped groups must still render (and
+        # log) a bounded number of lines plus an "and N more group(s)" tail
+        # -- never one line per group unbounded, the same shape the 1938-
+        # entry `excluded` incident this module already retired once for a
+        # different field.
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("other", cwd=str(repo))
+
+        total = safe_commit_offer._DROPPED_GROUPS_PREVIEW_COUNT + 3
+        groups = []
+        for i in range(total):
+            p = "peer_%02d.py" % i
+            (repo / p).write_text(str(i))
+            scope.touch("other", p, cwd=str(repo))
+            groups.append({"paths": [p], "message": "dropped group %02d" % i})
+
+        groups_path = tmp_path / "groups.json"
+        groups_path.write_text(json.dumps(groups))
+
+        exit_code = safe_commit_offer.main(
+            [
+                "--session",
+                "mine",
+                "--root",
+                str(repo),
+                "--groups-json",
+                str(groups_path),
+            ]
+        )
+        out = capsys.readouterr().out
+
+        assert exit_code == 0
+        assert "... and 3 more group(s)" in out
+        shown = [g for g in groups if g["message"] in out]
+        assert len(shown) == safe_commit_offer._DROPPED_GROUPS_PREVIEW_COUNT
+
+        from coordinator_core.lifecycle import git_common_dir
+
+        log_file = (
+            git_common_dir(Path(repo))
+            / "coordinator-sessions"
+            / "logs"
+            / "sessionend-auto-commit-diagnostics.log"
+        )
+        log_contents = log_file.read_text()
+        assert "... and 3 more group(s)" in log_contents
+        logged = [g for g in groups if g["message"] in log_contents]
+        assert len(logged) == safe_commit_offer._DROPPED_GROUPS_PREVIEW_COUNT
 
 
 # ---------------------------------------------------------------------------

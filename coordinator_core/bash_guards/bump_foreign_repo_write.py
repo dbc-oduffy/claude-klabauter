@@ -1300,6 +1300,25 @@ def _iter_write_sink_candidates(
     a `$( )`/backtick substitution or an interpreter `-c` payload (depth>0)
     is skipped, matching this chunk's own scope (`-c`-payload write-sink
     classification is C5's AC4, not C4's).
+
+    Negative-spec: `preserve_windows_backslashes` makes this guard rule on
+    the TYPED path, not the EXECUTED one -- deliberate. Modelling execution
+    instead would mean ALLOWING an unquoted-backslash write and leaving the
+    operator a silent junk file (Git Bash consumes an unquoted backslash
+    exactly as `shlex` does, per state/audits/2026-08-07-bash-guard-
+    tokenizer-eats-windows-path-separators.md's measured probes -- `echo
+    probe > sub\\dir\\out.txt` lands as `subdirout.txt` in cwd, never at the
+    typed path). The Bash-leg tokenizer mangling this flag reverses is NOT
+    otherwise a defect for THIS tool's executor, for the identical reason:
+    Git Bash mangles the same unquoted backslashes the same way. THIS
+    module does not itself render that landing name in its denial text --
+    its `target_repo` display label is the foreign repo's own ROOT
+    (`probe_root or target_dir`), never the typed file path, so naming a
+    file-shaped landing name against a directory-shaped label would assert
+    a false correspondence. `bump_outside_repo_write.py`'s own
+    `_iter_write_sink_candidates` docstring carries the identical rationale
+    at the one call site where `target_repo` IS the typed path, and its
+    `_no_git_repo_target_label` is the renderer.
     """
     if not cmd or not cmd.strip():
         return
@@ -1391,6 +1410,7 @@ def _evaluate_foreign_repo_candidate(
     agent_id: str,
     raw_target: Optional[str] = None,
     anchor_root: Optional[str] = None,
+    write_verb_label: str = "",
 ) -> Optional[Dict[str, Any]]:
     """One candidate write-sink `target_dir`, already resolved to an
     absolute-or-cwd-relative string by the caller's own extraction leg,
@@ -1411,7 +1431,13 @@ def _evaluate_foreign_repo_candidate(
     root (`resolve_git_root(anchor)`), computed ONCE by the caller and
     threaded through -- see "TWO ROOTS, NEVER CONFLATED" below for why this
     must never be `marker_probe_root` (the TARGET's root, computed further
-    down in this function for the marker's own siting)."""
+    down in this function for the marker's own siting).
+
+    `write_verb_label` (2026-08-14, percolate-push memo) is the caller's own
+    `label` from `_iter_write_sink_candidates` -- `"git push"` for a git-push
+    candidate, the executable basename for a plain write-sink one. Threaded
+    straight through to `render_bump_message`, which only acts on it for the
+    PUBLISH destination class (see `_write_bump_message._GIT_PUSH_WRITE_VERB_LABEL`)."""
     probe_dir = _nearest_existing_ancestor(target_dir)
     if probe_dir is None:
         # No existing ancestor at all -- cannot resolve a git root
@@ -1607,6 +1633,7 @@ def _evaluate_foreign_repo_candidate(
         destination_class=destination_class,
         destination_owner=destination_owner,
         raw_target=raw_target if raw_target and raw_target != target_dir else "",
+        write_verb_label=write_verb_label,
     )
     return _deny(message)
 
@@ -1670,7 +1697,7 @@ def check_bump_foreign_repo_write(
 
     agent_id = payload.get("agent_id") or "" if isinstance(payload, dict) else ""
 
-    for target_dir, _label, raw_target in _iter_write_sink_candidates(cmd, cwd):
+    for target_dir, write_verb_label, raw_target in _iter_write_sink_candidates(cmd, cwd):
         # Review: coordinator:code-reviewer -- keyword args at both call
         # sites give this shared eight-parameter predicate a reorder-safe
         # net across the Bash and PowerShell legs.
@@ -1685,6 +1712,7 @@ def check_bump_foreign_repo_write(
             agent_id=agent_id,
             raw_target=raw_target,
             anchor_root=anchor_root,
+            write_verb_label=write_verb_label,
         )
         if result is not None:
             return result

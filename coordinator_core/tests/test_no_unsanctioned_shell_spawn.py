@@ -321,21 +321,17 @@ def _unsanctioned_sites() -> list[str]:
 # regex, so a *different* spawn appearing in the same function does not
 # inherit the exemption.
 #
-# substrate.py `_powershell` fronts eight Windows machine-mutation call
-# sites (user-PATH registry writes via [Environment]::SetEnvironmentVariable,
-# the orphan AppX stub delete, `py -0p` resolution). Converting it means
-# winreg plus a ctypes WM_SETTINGCHANGE broadcast, none of it verifiable off
-# Windows -- materially larger and riskier than the four sites this plan
-# scoped, so it is with the PM as its own sized ask rather than converted
-# blind or waved through with a silent carve-out. Closes when that PM
-# ruling lands and `_powershell` is converted off `powershell.exe`; the
-# companion staleness assertion below fires the day that happens so this
-# entry cannot silently outlive the site it exempts.
-KNOWN_OPEN = frozenset(
-    {
-        ("coordinator_core/install/substrate.py", "_powershell", "powershell.exe", 0),
-    }
-)
+# Empty since the C11 conversion (2026-08-14): its one entry was
+# substrate.py `_powershell`, fronting the Windows machine-mutation call
+# sites, held open because converting it was believed unverifiable off
+# Windows. It was converted to native winreg/ctypes/os/shutil and verified
+# on Windows 11, so the exemption retired on its own terms rather than
+# being deleted to quiet the gate.
+#
+# Left defined and empty on purpose: the staleness assertion below then
+# keeps checking a live name instead of an absent one, and the next entry
+# that genuinely needs holding open has somewhere to land.
+KNOWN_OPEN = frozenset()
 
 
 def _site_identity(site) -> tuple[str, str, str, int]:
@@ -358,10 +354,9 @@ def test_repo_wide_no_unsanctioned_shell_spawn():
     plus vendored/generated trees such as `.venv`, `node_modules`, `dist`,
     `build`).
 
-    The ONE named exception is `KNOWN_OPEN` above (the substrate.py
-    `_powershell` site, with the PM as its own sized ask) -- matched by
-    exact structural identity, not path substring, so a new spawn landing
-    in the same function does not inherit the exemption.
+    The only exceptions are `KNOWN_OPEN` above (empty since C11) --
+    matched by exact structural identity, not path substring, so a new
+    spawn landing in the same function does not inherit an exemption.
     """
     production_shell_shaped, test_tree_count, excluded, shell_unknown_count = _scan_repo()
     entries = load_allowlist()
@@ -393,9 +388,11 @@ def test_repo_wide_no_unsanctioned_shell_spawn():
 def test_known_open_is_not_stale():
     """KNOWN_OPEN entries must still correspond to a real detected site.
 
-    When the PM's ruling lands and `_powershell` is converted off
-    `powershell.exe`, this exemption becomes stale -- this test then fails
-    loudly instead of the exemption silently carrying a dead entry forever.
+    An exemption whose site has been converted, moved, or deleted is stale;
+    this test fails loudly on that day instead of letting the set carry a
+    dead entry forever. It is what retired the substrate.py `_powershell`
+    entry when C11 converted that site, and it vacuously passes over the
+    now-empty set -- the same check, with nothing yet to check.
     """
     production_shell_shaped, _test_tree_count, _excluded, _shell_unknown_count = _scan_repo()
     entries = load_allowlist()

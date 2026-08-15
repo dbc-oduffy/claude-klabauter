@@ -28,7 +28,8 @@ Public API:
         bad envelope / op-error envelope) — except a structural contract-pin failure
         (engine rc=2), which raises the distinct StructuralPinError subclass instead.
         NEVER returns legacy after a native attempt. Uses the non-bare envelope-parse
-        call convention (positional params argv).
+        call convention (params via --params-file, ARG_MAX-immune — see cc_invoke's
+        own docstring's Params transport note; NOT positional argv).
 
     cc_invoke_bare(op, params, repo_root) -> dict
         The shared Python promotion of the retired bash cc_invoke (see module Port of
@@ -89,7 +90,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-GENERATES = []  # writes only a tempfile.mkstemp() params file for subprocess argv-passing; no tracked artifact
+GENERATES = []  # writes only tempfile.mkstemp() params files (cc_invoke + cc_invoke_bare), always unlinked; no tracked artifact
 
 
 class StructuralPinError(RuntimeError):
@@ -1232,6 +1233,25 @@ def cc_invoke(
       (4) Parse the JSON-RPC envelope; require top-level 'result' key;
           return the BARE result dict (strips jsonrpc/id/result wrapper).
 
+    Params transport: ALWAYS ``--params-file`` (a tempfile), never argv — matches
+    cc_invoke_bare()'s own transport unconditionally, not behind a size threshold.
+    Windows `CreateProcess` caps a command line at 32767 characters; a `params`
+    dict carrying a `paths` list (e.g. a percolate round's changed-file set) can
+    hold thousands of entries and measurably exceeds that before 1000 entries,
+    raising `FileNotFoundError: [WinError 206] The filename or extension is too
+    long` before the child ever starts (see the dispatch that fixed this: DoE
+    percolate-round.py/scoped-git-commit's own `--pathspec-from-file` sibling
+    fix, one layer up). A size-threshold branch was considered and rejected: it
+    would leave the large-payload path as the rarely-exercised one, which is
+    exactly how the argv form survived this long. `--params-file` is already
+    unconditional in cc_invoke_bare(); this now matches it rather than
+    special-casing "small" callers onto the narrower, capped transport.
+    The engine-side receiver (`coordinator_core/invoke/__main__.py`) already
+    accepts `--params-file` independently of `--bare` — no positional
+    `params_json` argv is ever passed by this function anymore, so mode
+    selection (file vs. argv) is unambiguous: the child only ever sees
+    `--params-file <path>` for this call convention.
+
     Args:
         _claude_klabauter_root: already-resolved CLAUDE_KLABAUTER_ROOT (forwarded by route() to avoid a
             second resolution on the State-2 path). If None, resolved here via
@@ -1270,29 +1290,45 @@ def cc_invoke(
     stdout_text: str = ""
     stderr_text: str = ""
 
-    argv = [sys.executable, "-m", "coordinator_core.invoke", op, params_json]
-    if _should_pass_repo(op, claude_klabauter_root):
-        argv += ["--repo", repo_root]
-
+    # params ride a temp file (--params-file), NOT argv — ARG_MAX-immune (see the
+    # docstring's Params transport note above). Written, closed, passed by path,
+    # and unlinked in finally so a large payload never overflows argv. Mirrors
+    # cc_invoke_bare()'s identical --params-file handling below.
+    _params_fd, _params_path = tempfile.mkstemp(prefix="cc-invoke-params-")
     try:
-        proc = subprocess.run(
-            # Review: cross-slice (DR-148) — sys.executable ensures the same interpreter that
-            # loaded cc_invoke.py is used; hardcoded "python3" breaks on Windows.
-            argv,  # popup-safe-env-suppressed
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-            env=env,
-            cwd=claude_klabauter_root,
-            **_no_console_kw(claude_klabauter_root),
-        )
-        rc = proc.returncode
-        stdout_text = proc.stdout
-        stderr_text = proc.stderr
-    except subprocess.TimeoutExpired:
-        # (1) Timeout — mirrors the retired bash transport's cs_timeout exit 124 branch.
-        raise RuntimeError(_timeout_exceeded_message(op, timeout))
+        with os.fdopen(_params_fd, "w", encoding="utf-8") as _pf:
+            _pf.write(params_json)
+        argv = [
+            sys.executable, "-m", "coordinator_core.invoke", op,
+            "--params-file", _params_path,
+        ]
+        if _should_pass_repo(op, claude_klabauter_root):
+            argv += ["--repo", repo_root]
+
+        try:
+            proc = subprocess.run(
+                # Review: cross-slice (DR-148) — sys.executable ensures the same interpreter that
+                # loaded cc_invoke.py is used; hardcoded "python3" breaks on Windows.
+                argv,  # popup-safe-env-suppressed
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+                env=env,
+                cwd=claude_klabauter_root,
+                **_no_console_kw(claude_klabauter_root),
+            )
+            rc = proc.returncode
+            stdout_text = proc.stdout
+            stderr_text = proc.stderr
+        except subprocess.TimeoutExpired:
+            # (1) Timeout — mirrors the retired bash transport's cs_timeout exit 124 branch.
+            raise RuntimeError(_timeout_exceeded_message(op, timeout))
+    finally:
+        try:
+            os.unlink(_params_path)
+        except OSError:
+            pass
 
     # (2) Nonzero process exit — distinguish engine-start failure from op-level error.
     # (3) Empty stdout — invoke always produces output on success.

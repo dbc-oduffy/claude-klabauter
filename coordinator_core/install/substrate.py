@@ -81,6 +81,7 @@ from typing import FrozenSet, List, Optional
 from coordinator_core import machine_resolver
 from coordinator_core._settings_home import settings_home
 from coordinator_core.launchable import resolve_launchable
+from coordinator_core.locked_write import held_lock
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install._shared import (
     RequireHomeError,
@@ -169,14 +170,6 @@ def _cygpath_w(posix_path: str) -> str:
     return _quiet_output(["cygpath", "-w", posix_path])
 
 
-def _powershell(command: str, env=None) -> str:
-    out = _quiet_output(
-        ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", command],
-        env=env,
-    )
-    return out.replace("\r", "")
-
-
 _MACHINE_MUTATION_DISABLE_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 
 
@@ -247,6 +240,96 @@ def _refuse_machine_mutation(
             "test sandbox path, not a genuine install location"
         )
     return None
+
+
+def _win_user_path_entries() -> "Optional[tuple[list[str], str, int]]":
+    """Read HKCU\\Environment PATH -> (entries, raw_value, value_type).
+
+    Returns None when the value cannot be read at all -- callers print a
+    "could not read Windows user PATH" warning and skip integration, matching
+    the pre-conversion behaviour on an empty `powershell.exe` result. A missing
+    key and a key that exists with no PATH value both mean the same thing --
+    an empty PATH, legitimate to prepend onto -- not two branches; both hit
+    the same `FileNotFoundError` handling below.
+
+    Reads the RAW registry value: unlike the .NET
+    ``GetEnvironmentVariable('PATH','User')`` this replaces, ``%VAR%``
+    references are NOT expanded, so a value written back by
+    ``_win_user_path_prepend`` preserves them instead of baking in this
+    session's expansions.
+    """
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            raw, value_type = winreg.QueryValueEx(key, "PATH")
+    except FileNotFoundError:
+        return ([], "", winreg.REG_EXPAND_SZ)
+    except OSError:
+        return None
+    return ([e for e in raw.split(";") if e], raw, value_type)
+
+
+def _win_user_path_prepend(entry: str, existing_raw: str, value_type: int) -> bool:
+    """Prepend `entry` to HKCU\\Environment PATH, then broadcast the change.
+
+    Writes back with the value type it was read with -- a REG_EXPAND_SZ PATH
+    rewritten as REG_SZ silently stops expanding every `%VAR%` it contains,
+    which is the classic installer-ate-my-PATH defect.
+
+    The WM_SETTINGCHANGE broadcast is what makes already-running processes
+    that honour it (Explorer, and shells launched from it afterwards) observe
+    the new value. It is best-effort: a failed broadcast does not fail the write.
+    """
+    import ctypes
+    import winreg
+    new_value = f"{entry};{existing_raw}" if existing_raw else entry
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                        winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, "PATH", 0, value_type, new_value)
+    try:
+        result = ctypes.c_ulong()
+        ctypes.windll.user32.SendMessageTimeoutW(
+            0xFFFF, 0x001A, 0, ctypes.c_wchar_p("Environment"), 0x0002, 1000,
+            ctypes.byref(result),
+        )
+    except OSError:
+        pass
+    return True
+
+
+_IO_REPARSE_TAG_APPEXECLINK = 0x8000001B
+
+
+def _orphan_appx_stub(path: str) -> bool:
+    """True when `path` is an app-execution alias whose backing package is gone.
+
+    Shape check first (zero-length APPEXECLINK reparse point), then
+    resolvability: a live alias' `os.stat` follows to the packaged target,
+    an orphan's cannot. Replaces a PowerShell `LinkType -eq 'ReparsePoint'`
+    test that could never fire: measured on Windows 11 / PowerShell 5.1, a
+    live app-execution alias reports `LinkType` empty and `Target` as an empty
+    collection, so the predicate this converts was unreachable for an orphan
+    and everything else alike. Detection therefore widens from "never" to
+    "actually orphaned" -- and deliberately not to live aliases: measured
+    directly against `os.stat` (not PowerShell) on Windows 11, 2026-08-14,
+    across all 55 zero-length APPEXECLINK aliases present in
+    `%LOCALAPPDATA%\\Microsoft\\WindowsApps`, zero were reported as orphans --
+    live aliases resolve through `os.stat` fine, so the resolvability split
+    holds.
+    """
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if st.st_size != 0:
+        return False
+    if getattr(st, "st_reparse_tag", 0) != _IO_REPARSE_TAG_APPEXECLINK:
+        return False
+    try:
+        os.stat(path)
+    except OSError:
+        return True
+    return False
 
 
 _MANIFEST_ATTRS = ("SETUP_TEMPLATE_FILES", "SETUP_TEMPLATE_EXEC_FILES", "SETUP_TEMPLATE_HOOK_FILES")
@@ -877,6 +960,22 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # imported, per this module's own docstring above), with
 # `test_bin_launcher_parity.py::test_raw_cmdline_entrypoints_matches_substrate_targets`
 # as the drift guard. Extend BOTH sets together, or that test goes red.
+#
+# CORRECTED (docs/plans/2026-08-15-the-caret-fix-went-to-the-caller-that-never-broke.md):
+# the capture this set opts a target into is NOT a fix for the caret loss, and the
+# 2026-08-10 fix (docs/plans/2026-08-10-caret-fix-on-the-wrong-launcher.md) plus its guard
+# suite validated only the one caller that was never broken. cmd.exe strips the caret while
+# parsing its OWN `/c` string; whether `%CMDCMDLINE%` still holds the unstripped text
+# depends on how the SPAWNING process quoted that string, and survives only when the entire
+# post-`/c` string is wrapped in one outer quote pair (first and last character both `"`).
+# PowerShell emits that shape; git-bash/MSYS and `subprocess.run([...])` list-form do not,
+# so on those rungs the capture records text the caret is already gone from — it preserves
+# what `%CMDCMDLINE%` still holds, not what the caller originally typed. See
+# `coordinator/bin/lib/raw_cmdline_recovery.py`, whose classifier is the piece responsible
+# for detecting an unsound capture rather than trusting it. Originating incidents:
+# state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml
+# (DoE-claude tree) and docs/decisions/DR-303-windows-spawn-economics-is-a-fix-not-a-desig.md
+# § Residual uncertainty ("Caret recovery ... reasoned from code on macOS").
 _RAW_CMDLINE_TARGETS = frozenset(
     {"coordinator-write-review-trail.py", "scoped-git-commit", "cross-repo-memo.py"}
 )
@@ -896,6 +995,15 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
     2026-08-14 collision fix (this block MUST change together with that
     one; the two sets are kept in sync by convention per this module's
     `_RAW_CMDLINE_TARGETS` docstring above, and so is this block's body).
+
+    CORRECTED: emitting this block does not make the resulting `%CMDCMDLINE%`
+    capture trustworthy. It is caller-conditional per this module's
+    `_RAW_CMDLINE_TARGETS` docstring above -- sound only when the spawning
+    process outer-quoted the entire post-`/c` string (PowerShell); on
+    git-bash/MSYS and `subprocess.run([...])` list-form the capture records
+    text the caret is already gone from. The consumer
+    (`coordinator/bin/lib/raw_cmdline_recovery.py`) is responsible for
+    classifying the spawn shape and refusing rather than trusting it.
 
     `echo %CMDCMDLINE%` redirected to a file, not
     `set "_X=%CMDCMDLINE%"`: cmd.exe's `set` re-strips any literal `^` from
@@ -1307,7 +1415,17 @@ set "_tmpdir=%_cachedir%\python-bin-cache.%RANDOM%%RANDOM%%RANDOM%.tmp"
 if errorlevel 1 goto :run_baked
 :cache_write_got_dir
 set "_tmpfile=%_tmpdir%\python-bin-cache.tmp"
-echo "%_py%">"%_tmpfile%" 2>nul
+REM The cache file holds a BARE path, not a quoted one. `echo "%_py%">file`
+REM wrote the quotes literally, so the file's content was not itself a usable
+REM path -- only this forwarder's own reader could consume it, and only because
+REM the read rung above strips quotes with `%_cached:"=%`. Any other consumer,
+REM including the install-contract test that asserts the cached value points at
+REM an interpreter that exists, saw a path that could never resolve.
+REM Leading redirect (`>"file" echo ...`) rather than trailing: a trailing
+REM redirect after an unquoted value binds the final character of the value to
+REM the redirect operator, and it is also what forces the quoting that caused
+REM this. No trailing space is emitted this way either.
+>"%_tmpfile%" echo %_py%
 move /y "%_tmpfile%" "%_cachefile%" >nul 2>nul
 2>nul rd /s /q "%_tmpdir%"
 goto :run_baked
@@ -1480,6 +1598,29 @@ exit 127
 # as unrelated files inside coordinator/bin/ (e.g. a `claude-home` and a
 # `machine-local` entry both live there) — exclude them unconditionally
 # rather than relying on the directory scan to never collide.
+#
+# ``claude-doe`` joins them on WINDOWS ONLY, and for a different reason: it is
+# the one entry here that launches an INTERACTIVE TUI. On Windows the generic
+# forwarder emitted by this loop reaches ``claude.exe`` three hops deep
+# (cmd.exe -> python.exe -> python.exe -> claude.exe), and that nesting corrupts
+# the console input mode — xterm focus-report sequences (ESC[I / ESC[O, DECSET
+# 1004) stop being consumed and leak into input as literal ``[I``/``[O``,
+# keystrokes misroute, and the host shell's prompt is left corrupted after exit.
+# The interactive process must be a DIRECT child of the invoking shell.
+# DoE-claude's ``gen-claude-doe-launcher.py`` renders a purpose-built
+# ``claude-doe.{cmd,ps1}`` pair into ``~/.local/bin`` that keeps the launch
+# shallow, but settings-home bin is PATH-prepended ahead of ``~/.local/bin``, so
+# the generic forwarder SHADOWED it and won every bare ``claude-doe``
+# invocation. Excluding the name here leaves the purpose-built launcher as the
+# only copy, and the orphan prune below removes the shadow left by earlier runs.
+#
+# The guard is ``os.name`` because that purpose-built launcher is Windows-only —
+# ``gen-claude-doe-launcher.py`` exits 0 without writing on macOS/Linux. On
+# POSIX this forwarder IS the ``claude-doe`` CLI and must keep being installed;
+# excluding it unconditionally would remove the command entirely there. POSIX
+# also has no equivalent defect: its shim reaches the Python wrapper, which
+# ``os.execv``s claude in place — a genuine process replacement, adding no
+# intermediate process at all.
 _AGENT_HELPER_RESERVED_NAMES = frozenset(
     {
         "machine-local",
@@ -1488,6 +1629,7 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
         "coordinator-settings-home",
         "platform-localize",
     }
+    | ({"claude-doe"} if os.name == "nt" else set())
 )
 
 # Non-CLI data/doc file extensions that can appear alongside real CLIs in
@@ -2042,37 +2184,6 @@ def resolve_repo_env_exports(
     return exports, warnings, errors
 
 
-_WINDOWLESS_BASENAMES = ("pythonw.exe", "pyw.exe")
-
-
-def _console_sibling(windowless_path: str) -> str:
-    """Given a resolved windowless interpreter path (``...\\pythonw.exe``), return
-    the console sibling in the same install dir (``...\\python.exe``) if it exists
-    on disk, else ``""``. Pure filesystem lookup, no resolver re-invocation --
-    python.org installs always ship both binaries side by side, so this is cheaper
-    and more direct than re-running the resolver with a different preference."""
-    # `windowless_path` is a WINDOWS-shaped path string (baked/resolved for a
-    # Windows target), parsed here regardless of the host running this code --
-    # `os.path` is bound to the HOST's flavour at interpreter start (`posixpath`
-    # on a POSIX dev box), so it silently mis-splits a backslash path. `ntpath`
-    # is the explicit, host-independent flavour selection, mirroring the
-    # precedent in `coordinator_core.win_portability` (see that module's own
-    # docstring). `os.path.isfile` stays as-is below: that call dereferences the
-    # real filesystem, which only ever happens against a real path on the host
-    # actually running this code (and is mocked outright in the tests exercising
-    # this branch on a non-Windows dev box) -- a host-local check, not a
-    # Windows-path parse, so it correctly keeps host semantics.
-    directory = ntpath.dirname(windowless_path)
-    basename = ntpath.basename(windowless_path).lower()
-    if basename == "pythonw.exe":
-        sibling = ntpath.join(directory, "python.exe")
-    elif basename == "pyw.exe":
-        sibling = ntpath.join(directory, "py.exe")
-    else:
-        return ""
-    return sibling if os.path.isfile(sibling) else ""
-
-
 def _resolve_baked_python_bin() -> str:
     """Resolve the interpreter to bake into ``python3.cmd`` (Step 3a).
 
@@ -2135,7 +2246,11 @@ def _resolve_baked_python_bin() -> str:
     if os.name != "nt":
         return ""
     try:
-        from coordinator_core.pyresolve import resolve_python_bin
+        from coordinator_core.pyresolve import (
+            _WINDOWLESS_BASENAMES,
+            _console_sibling,
+            resolve_python_bin,
+        )
 
         py_bin, py_args = resolve_python_bin(prefer_windowless=False)
         if not py_bin or py_bin in ("py", "pyw") or py_args:
@@ -2175,22 +2290,40 @@ def resolve_hook_python_bin() -> str:
     AC3): the caller emits the bare ``python3`` token in the command string
     and the install proceeds.
 
-    Policy: prefer the venv interpreter, unconditionally, on every platform.
-    ``resolve_python_bin()``'s tier 1/2 is ``COORDINATOR_PYTHON`` / machine-local
-    ``coordinator.python`` -- the pinned coordinator venv interpreter -- and
-    that is the one this resolver wants. Three live hook scripts import
-    ``yaml``, a venv-only package, and DoE's own
-    ``coordinator/hooks/scripts/enforce-agent-dispatch-mode.py`` imports it at
-    MODULE LEVEL, unguarded -- a system interpreter without PyYAML takes that
-    PreToolUse hook down on every fire. ``coordinator_core/hooks/nudge_unrouted_sizing.py``
-    has the same exposure lazily. The third,
-    ``coordinator_core/hooks/scripts/_oss_operative_strings.py``, imports it
-    guarded/fail-open -- unaffected either way, named here so this count is
-    self-verifying against three (review: code-reviewer F3, 2026-08-03). The
-    known counter-cost (DoE friction-log F7:
-    a baked venv path deadlocked a venv rebuild on a live Windows box) is
-    accepted and mitigated downstream by C2's ``[ -x ]`` / ``Test-Path``
-    self-healing fallback, not by pointing away from the venv.
+    Policy (revised 2026-08-14, docs/plans/2026-08-14-the-venv-fallback-stops-
+    being-something.md C2): resolve the MACHINE interpreter -- the OS-detect
+    tier ``resolve_python_bin()`` itself calls tier 3, never its tier 1/2 pin
+    (``COORDINATOR_PYTHON`` env var / machine-local ``coordinator.python``).
+    That pin is purpose (a)/(b) territory (``coordinator_whoami``, the shared
+    fleet venv) and, post-C1, an explicit machine-level-install-failure
+    opt-in -- none of those are "a hook needs yaml", and taking that pin
+    unconditionally meant a hook baked on a box that merely HAS a venv for an
+    unrelated purpose got pointed at it regardless.
+
+    The previous policy ("prefer the venv interpreter, unconditionally, on
+    every platform") rested on ``yaml`` being "a venv-only package". That was
+    false when it landed: ``PyYAML>=6`` became a declared
+    ``[project].dependencies`` entry in ``912c1648b`` (2026-07-27) --
+    installed machine-level by ``scripts/setup.py::provision_deps`` -- a full
+    week before this resolver landed in ``520c175ce`` (2026-08-03). Three
+    live hook scripts import ``yaml`` (DoE's
+    ``coordinator/hooks/scripts/enforce-agent-dispatch-mode.py`` at MODULE
+    level, unguarded; ``coordinator_core/hooks/nudge_unrouted_sizing.py``
+    lazily; ``coordinator_core/hooks/scripts/_oss_operative_strings.py``
+    guarded/fail-open, unaffected either way -- named here so this count of
+    three is self-verifying, review: code-reviewer F3 2026-08-03) but none of
+    that motivates pointing at the venv specifically: the machine interpreter
+    ``provision_deps`` provisions already has ``yaml`` importable from its own
+    site-packages (verified by execution, 2026-08-14).
+
+    DoE friction-log F7 -- a baked venv path deadlocking a venv rebuild on a
+    live Windows box -- was accepted as a counter-cost of pointing at the
+    venv. Under this policy it is no longer a counter-cost to weigh: hook
+    commands resolving to the machine interpreter cannot deadlock a venv
+    rebuild in the first place, because they never named the venv. The
+    incident stays recorded here as evidence FOR this change, not deleted --
+    a future reader must see why the venv-preferring policy was retired, not
+    just that it was.
 
     NO non-Windows gate, unlike ``_resolve_baked_python_bin``: that gate is
     correct there because every artifact it feeds is a ``.cmd``, inert on
@@ -2207,18 +2340,18 @@ def resolve_hook_python_bin() -> str:
     launcher/flag pair, and there is no way to express ``py -3`` as one env
     value.
 
-    A ``resolve_python_bin()`` exception (e.g. ``PythonPinInvalid``) degrades
-    to ``""``, mirroring ``_resolve_baked_python_bin``'s handling exactly:
-    surfaced as a warning on stderr, never aborting.
+    A resolution exception degrades to ``""``, mirroring
+    ``_resolve_baked_python_bin``'s handling exactly: surfaced as a warning on
+    stderr, never aborting.
 
     Negative-spec: the returned path is for the GENERATING machine. Nothing
     here may assume the generating machine is the executing machine -- C2's
     widened ``[ -x ]`` / ``Test-Path`` existence-guard is what makes that safe.
     """
     try:
-        from coordinator_core.pyresolve import resolve_python_bin
+        from coordinator_core.pyresolve import resolve_machine_python_bin
 
-        py_bin, py_args = resolve_python_bin(prefer_windowless=False)
+        py_bin, py_args = resolve_machine_python_bin(prefer_windowless=False)
         if not py_bin or py_args:
             return ""
         return py_bin
@@ -2707,31 +2840,26 @@ def _prune_orphaned_static_bin_names(
 
 
 def _unblock_files(paths: "list[Path]") -> None:
-    """``Unblock-File`` every path in ``paths`` in one ``powershell.exe``
-    invocation (C7b, ruled IN on the parent plan's spine row and relayed to
+    """Delete the ``Zone.Identifier`` alternate data stream on every path in
+    ``paths`` (C7b, ruled IN on the parent plan's spine row and relayed to
     this baton as AC14). Caller is required to have already checked
     ``_refuse_machine_mutation`` -- this function performs no consent gating
     of its own and unconditionally attempts the mutation.
 
-    Best-effort: ``Unblock-File`` on a file that carries no
-    ``Zone.Identifier`` stream (measured true for every ``.ps1`` on this
-    box's ``~/.claude`` sync path -- see the plan's Problem section) is a
-    harmless no-op, not an error, so a non-zero exit here is logged and
-    swallowed rather than escalated into a failed install: the artifact
-    this pass emitted is unaffected either way, and the POST-emission
-    policy-gate verification that follows is what actually decides whether
-    the ``.ps1`` legs survive."""
+    Best-effort: a file that carries no ``Zone.Identifier`` stream (measured
+    true for every ``.ps1`` on this box's ``~/.claude`` sync path -- see the
+    plan's Problem section) has nothing to delete, so a missing stream is a
+    harmless no-op, not an error, swallowed rather than escalated into a
+    failed install: the artifact this pass emitted is unaffected either way,
+    and the POST-emission policy-gate verification that follows is what
+    actually decides whether the ``.ps1`` legs survive."""
     if not paths:
         return
-    literal_paths = ",".join(f"'{p}'" for p in paths)
-    command = f"Unblock-File -LiteralPath @({literal_paths}) -ErrorAction SilentlyContinue"
-    # Reuses `_powershell()` -- the ONE sanctioned powershell.exe spawn site
-    # this module already carries (see its own definition above) -- rather
-    # than opening a second shell-out site for the same executable.
-    # `_quiet_output` underneath already swallows OSError/TimeoutExpired and
-    # a non-zero exit into an empty string, matching this call's
-    # best-effort contract (see this function's docstring).
-    _powershell(command)
+    for p in paths:
+        try:
+            os.remove(f"{p}:Zone.Identifier")
+        except OSError:
+            pass  # no ADS present -- the common case, a no-op, not an error
 
 
 def _emit_and_verify_ps1_forwarders(
@@ -2961,6 +3089,94 @@ def _handle_ps1_gate_verdict(verdict: "PolicyGateVerdict", bin_dst: Path) -> Non
         _report_ps1_policy_gate_skip(verdict, bin_dst)
 
 
+def _write_agent_helper_forwarders(
+    agent_helper_target_map: "dict[str, str]",
+    agent_cmd_dest_map: "dict[str, str]",
+    bin_dst: Path,
+    check_only: bool,
+    *,
+    python3_cmd_resolved_bin: str,
+) -> "list[WriteSurfaceEntry]":
+    """Step 3b's forwarder-write loop proper, extracted out of
+    ``_install_bin_resolvers`` so a second caller (the missing-forwarder
+    self-heal path — ``coordinator_core.install.forwarder_self_heal``) can
+    write the SAME forwarder bodies through the SAME two writers
+    (``_write_agent_forwarder``/``_write_agent_cmd_forwarder``) without a
+    second, drift-prone implementation.
+
+    Pure refactor of ``_install_bin_resolvers``'s Step 3b body — same two
+    maps in, same per-entry writer calls, same ``WriteSurfaceEntry`` list
+    out. Deliberately does NOT call
+    ``resolution_journal.record_resolution`` itself: that call is an
+    install-RUN concept (it journals into a run-scoped path from
+    ``RESOLUTION_JOURNAL_ENV_VAR`` for ``receipt.build_receipt`` to read
+    back), and the self-heal caller is not an install run — it has no
+    receipt to contribute to. ``_install_bin_resolvers`` still performs
+    that journal call itself, at the original call site, using this
+    function's return value; behaviour there is unchanged.
+
+    Also deliberately excludes the ``.ps1`` leg
+    (``_emit_and_verify_ps1_forwarders``/``_handle_ps1_gate_verdict``),
+    ``_sweep_orphaned_agent_helpers``, platform-localize, and the ml/ch
+    families — none of those are forwarder-loop concerns, and the ``.ps1``
+    leg in particular spawns ``powershell.exe`` for its execution-policy
+    gate, which is out of scope for a self-heal path that must never spawn
+    a subprocess. Callers needing those must still go through
+    ``_install_bin_resolvers``/``run()``.
+
+    Concurrency: ``_write_agent_forwarder``/``_write_agent_cmd_forwarder``
+    write via a plain in-place ``Path.write_text`` (see their docstrings),
+    not atomic-temp-and-rename, so two writers racing the SAME destination
+    can interleave and leave a torn file a concurrent reader (a peer
+    session executing that forwarder, or `forwarder_self_heal`'s own
+    writer) can observe mid-write. `forwarder_self_heal.py` already takes
+    `coordinator_core.locked_write.held_lock` on this same `bin_dst`
+    before calling these two writers directly; this, the full-installer
+    caller of the identical writers, previously took no lock at all --
+    a real install run (which a human can trigger by hand at any moment
+    per CLAUDE.md § Load norm, alongside a dozen concurrent sessions'
+    session-boot self-heal) raced the self-heal path and any concurrent
+    installer run on every entry. Mirrors that same lock here, scoped to
+    the write loop only -- `check_only` mode never writes and is left
+    unlocked (pure read/compare, safe to race). A `LockTimeout` here
+    propagates (unlike self-heal's silent best-effort swallow): this is
+    the fail-loud installer path, not a best-effort session-boot heal.
+    """
+    if check_only:
+        agent_helper_resolved: "list[WriteSurfaceEntry]" = []
+        for f, target in sorted(agent_helper_target_map.items()):
+            py_dst = bin_dst / f
+            _write_agent_forwarder(f, py_dst, check_only, target=target)
+            agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
+            cmd_dest = agent_cmd_dest_map.get(f)
+            if cmd_dest is not None:
+                cmd_dst = bin_dst / cmd_dest
+                _write_agent_cmd_forwarder(
+                    f, cmd_dst, check_only,
+                    python3_cmd_resolved_bin=python3_cmd_resolved_bin,
+                    target=target,
+                )
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
+        return agent_helper_resolved
+
+    agent_helper_resolved = []
+    with held_lock(bin_dst, holder_label="install-substrate-forwarders"):
+        for f, target in sorted(agent_helper_target_map.items()):
+            py_dst = bin_dst / f
+            _write_agent_forwarder(f, py_dst, check_only, target=target)
+            agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
+            cmd_dest = agent_cmd_dest_map.get(f)
+            if cmd_dest is not None:
+                cmd_dst = bin_dst / cmd_dest
+                _write_agent_cmd_forwarder(
+                    f, cmd_dst, check_only,
+                    python3_cmd_resolved_bin=python3_cmd_resolved_bin,
+                    target=target,
+                )
+                agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
+    return agent_helper_resolved
+
+
 def _install_bin_resolvers(
     ml_bin: Path, ch_bin: Path, bin_dst: Path,
     check_only: bool,
@@ -3025,20 +3241,10 @@ def _install_bin_resolvers(
     agent_cmd_dest_map = _resolve_agent_cmd_dest_collisions(agent_helper_target_map)
 
     rm_family(bin_dst, "resolve-claude-klabauter")
-    agent_helper_resolved: "list[WriteSurfaceEntry]" = []
-    for f, target in sorted(agent_helper_target_map.items()):
-        py_dst = bin_dst / f
-        _write_agent_forwarder(f, py_dst, check_only, target=target)
-        agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
-        cmd_dest = agent_cmd_dest_map.get(f)
-        if cmd_dest is not None:
-            cmd_dst = bin_dst / cmd_dest
-            _write_agent_cmd_forwarder(
-                f, cmd_dst, check_only,
-                python3_cmd_resolved_bin=python3_cmd_resolved_bin,
-                target=target,
-            )
-            agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(cmd_dst)))
+    agent_helper_resolved = _write_agent_helper_forwarders(
+        agent_helper_target_map, agent_cmd_dest_map, bin_dst, check_only,
+        python3_cmd_resolved_bin=python3_cmd_resolved_bin,
+    )
     if not check_only:
         resolution_journal.record_resolution(
             _WRITER_ID, _CLAUSE_AGENT_HELPER_FORWARDERS, agent_helper_resolved,
@@ -3238,32 +3444,30 @@ def _percolation_and_path_steps(
         if not claude_dir_win:
             print("[setup] WARNING: cygpath unavailable; cannot resolve Windows path for the claude CLI dir; skipping PATH integration", file=sys.stderr)
             return
-        env = dict(os.environ, CLAUDE_DIR_WIN=claude_dir_win)
-        already = _powershell(
-            "$p=[Environment]::GetEnvironmentVariable('PATH','User'); "
-            "$t=$env:CLAUDE_DIR_WIN; "
-            "if ($p -split ';' | Where-Object {$_ -ieq $t}) {'yes'} else {'no'}",
-            env=env,
-        )
-        if not already:
+        win_path = _win_user_path_entries()
+        if win_path is None:
             print("[setup] WARNING: could not read Windows user PATH; skipping claude-CLI PATH integration", file=sys.stderr)
-        elif already != "yes":
-            if check_only:
-                print(f"[install-substrate] would: add {claude_dir_win} (claude CLI) to Windows user PATH")
-            else:
-                blocked = _refuse_machine_mutation(
-                    str(Path(claude_bin).parent),
-                    what="add claude CLI dir to Windows user PATH",
-                )
-                if blocked:
-                    print(f"[setup] REFUSED: {blocked}", file=sys.stderr)
+        else:
+            entries, raw, value_type = win_path
+            target = claude_dir_win.rstrip("\\")
+            already = any(
+                e.rstrip("\\").lower() == target.lower()
+                or os.path.expandvars(e).rstrip("\\").lower() == target.lower()
+                for e in entries
+            )
+            if not already:
+                if check_only:
+                    print(f"[install-substrate] would: add {claude_dir_win} (claude CLI) to Windows user PATH")
                 else:
-                    _powershell(
-                        "$p = [Environment]::GetEnvironmentVariable('PATH','User'); "
-                        "[Environment]::SetEnvironmentVariable('PATH', \"$env:CLAUDE_DIR_WIN;$p\", 'User')",
-                        env=env,
+                    blocked = _refuse_machine_mutation(
+                        str(Path(claude_bin).parent),
+                        what="add claude CLI dir to Windows user PATH",
                     )
-                    print(f"[setup] added {claude_dir_win} (claude CLI) to Windows user PATH — restart shells for it to take effect")
+                    if blocked:
+                        print(f"[setup] REFUSED: {blocked}", file=sys.stderr)
+                    else:
+                        _win_user_path_prepend(claude_dir_win, raw, value_type)
+                        print(f"[setup] added {claude_dir_win} (claude CLI) to Windows user PATH — open a new shell for it to take effect")
         return
 
     # macOS / Linux: idempotent sentinel-guarded PATH block, written to
@@ -3617,6 +3821,61 @@ def _install_seed_wikis(plugin_root: Path, settings_home_path: Path, check_only:
         )
 
 
+def _fnm_curl_leg_declined() -> bool:
+    """True when the `curl https://fnm.vercel.app/install | bash` leg must not
+    run. Prints the reason and the manual alternative; never raises.
+
+    Two independent reasons:
+
+    1. Native Windows. fnm's official shell installer rejects this platform
+       outright (`OS MSYS_NT-10.0-26200 is not supported`), so the leg could
+       only ever fetch a remote script, execute it, and fail. `winget install
+       Schniz.fnm` is the Windows path.
+    2. No consent. This leg downloads a remote script and pipes it into a
+       shell — an external, unpinned code-execution step, for an OPTIONAL
+       dependency (per-repo Node pinning; core substrate is unaffected without
+       it). It is opt-in: set COORDINATOR_INSTALL_FNM=1, or answer the prompt
+       on an interactive terminal. Silence means declined, and declining costs
+       the operator nothing that matters.
+    """
+    fnm_manual = (
+        "install fnm manually if you need per-repo Node pinning: "
+        "https://github.com/Schniz/fnm#installation"
+    )
+    if os.name == "nt":
+        print(
+            "[setup] fnm: skipping the curl installer — not supported on Windows. "
+            "Install with: winget install Schniz.fnm",
+            file=sys.stderr,
+        )
+        return True
+
+    if os.environ.get("COORDINATOR_INSTALL_FNM") == "1":
+        return False
+
+    interactive = sys.stdin.isatty() and os.environ.get("COORDINATOR_NON_INTERACTIVE") != "1"
+    if interactive:
+        print(
+            "[setup] fnm is absent. Installing it runs a remote script "
+            "(https://fnm.vercel.app/install) through bash.",
+        )
+        try:
+            consent = input("[setup] Fetch and run it? [y/N] ")
+        except EOFError:
+            consent = ""
+        if consent[:1] in ("y", "Y"):
+            return False
+        print(f"[setup] fnm: declined — optional, core substrate unaffected; {fnm_manual}")
+        return True
+
+    print(
+        f"[setup] fnm: absent, and its installer is a remote script — not fetched without "
+        f"consent. Set COORDINATOR_INSTALL_FNM=1 to opt in, or {fnm_manual}",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _fnm_step(check_only: bool) -> None:
     if check_only:
         fnm_path = shutil.which("fnm")
@@ -3624,8 +3883,9 @@ def _fnm_step(check_only: bool) -> None:
             print(f"[install-substrate] check: fnm already present at {fnm_path} (no-op)")
         else:
             print(
-                "[install-substrate] check: fnm absent (would install via brew/curl; "
-                "optional, core substrate unaffected)"
+                "[install-substrate] check: fnm absent (would install via brew, or via the "
+                "remote curl installer only with consent / COORDINATOR_INSTALL_FNM=1, and "
+                "never on Windows; optional, core substrate unaffected)"
             )
         return
     fnm_path = shutil.which("fnm")
@@ -3638,14 +3898,22 @@ def _fnm_step(check_only: bool) -> None:
         print(f"[install-substrate] REFUSED: {blocked}", file=sys.stderr)
         return
     if shutil.which("brew"):
-        print("[setup] installing fnm via brew...")
+        print("[setup] installing fnm via brew...", flush=True)
         proc = _run(["brew", "install", "fnm"], timeout=300)
         if proc.returncode == 0:
             print("[setup] fnm installed via brew")
         else:
             print(f"[setup] WARNING: brew install fnm failed — optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
-    elif shutil.which("curl"):
-        print("[setup] installing fnm via official curl installer...")
+    elif not shutil.which("curl"):
+        print(f"[setup] WARNING: cannot install fnm — neither brew nor curl available; optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
+    elif _fnm_curl_leg_declined():
+        # _fnm_curl_leg_declined printed the reason and the manual alternative.
+        pass
+    else:
+        # flush=True: the subprocess writes straight to the console, so an
+        # unflushed "installing..." line landed AFTER the installer's own
+        # failure output — the run read as if the failure preceded the attempt.
+        print("[setup] installing fnm via official curl installer...", flush=True)
         try:
             curl_proc = subprocess.run(["curl", "-fsSL", "https://fnm.vercel.app/install"], capture_output=True, timeout=60, **_NO_CONSOLE)
             if curl_proc.returncode != 0:
@@ -3663,8 +3931,6 @@ def _fnm_step(check_only: bool) -> None:
             print("[setup] fnm installed via curl installer")
         else:
             print(f"[setup] WARNING: curl installer for fnm failed — optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
-    else:
-        print(f"[setup] WARNING: cannot install fnm — neither brew nor curl available; optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
 
 
 def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
@@ -3678,44 +3944,43 @@ def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
             file=sys.stderr,
         )
     else:
-        env = dict(os.environ, BIN_DST_WIN=bin_dst_win)
-        already = _powershell(
-            "$p=[Environment]::GetEnvironmentVariable('PATH','User'); "
-            "$t=$env:BIN_DST_WIN; "
-            "if ($p -split ';' | Where-Object {$_ -ieq $t}) {'yes'} else {'no'}",
-            env=env,
-        )
-        if not already:
+        win_path = _win_user_path_entries()
+        if win_path is None:
             print(
-                "[setup] WARNING: could not read Windows user PATH (powershell.exe unavailable "
-                "or check failed); skipping PATH integration — bare-name CLI invocation will "
-                "fail. Confirm powershell.exe is on PATH and re-run install.",
+                "[setup] WARNING: could not read Windows user PATH from "
+                "HKCU\\Environment; skipping PATH integration — bare-name CLI "
+                f"invocation will fail. Add {bin_dst_win} to your user PATH "
+                "manually, or re-run install.",
                 file=sys.stderr,
             )
-        elif already != "yes":
-            if check_only:
-                print(f"[install-substrate] would: add {bin_dst_win} to Windows user PATH")
-            else:
-                blocked = _refuse_machine_mutation(
-                    str(bin_dst), what="add settings-home bin dir to Windows user PATH",
-                )
-                if blocked:
-                    print(f"[setup] REFUSED: {blocked}", file=sys.stderr)
+        else:
+            entries, raw, value_type = win_path
+            target = bin_dst_win.rstrip("\\")
+            already = any(
+                e.rstrip("\\").lower() == target.lower()
+                or os.path.expandvars(e).rstrip("\\").lower() == target.lower()
+                for e in entries
+            )
+            if not already:
+                if check_only:
+                    print(f"[install-substrate] would: add {bin_dst_win} to Windows user PATH")
                 else:
-                    _powershell(
-                        "$p = [Environment]::GetEnvironmentVariable('PATH','User'); "
-                        "[Environment]::SetEnvironmentVariable('PATH', \"$env:BIN_DST_WIN;$p\", 'User')",
-                        env=env,
+                    blocked = _refuse_machine_mutation(
+                        str(bin_dst), what="add settings-home bin dir to Windows user PATH",
                     )
-                    print(f"[setup] added {bin_dst_win} to Windows user PATH — restart shells/Claude sessions for it to take effect")
+                    if blocked:
+                        print(f"[setup] REFUSED: {blocked}", file=sys.stderr)
+                    else:
+                        _win_user_path_prepend(bin_dst_win, raw, value_type)
+                        print(f"[setup] added {bin_dst_win} to Windows user PATH — open a new shell/Claude session for it to take effect")
 
     # 3c-1: orphan AppX stub detection.
+    local_app_data = os.environ.get("LOCALAPPDATA")
     for stub_name in ("python.exe", "python3.exe"):
-        stub_path = _powershell(
-            f'$p = "$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\{stub_name}"; '
-            "if (Test-Path -LiteralPath $p) { $i = Get-Item -LiteralPath $p -Force; "
-            "if ($i.Length -eq 0 -and $i.LinkType -eq 'ReparsePoint' -and -not $i.Target) { Write-Output $p } }"
-        )
+        if not local_app_data:
+            break
+        candidate = Path(local_app_data) / "Microsoft" / "WindowsApps" / stub_name
+        stub_path = str(candidate) if _orphan_appx_stub(str(candidate)) else ""
         if stub_path:
             print(f"[setup] Detected orphan AppX stub: {stub_path}")
             print("[setup]   Zero-byte reparse-point from an uninstalled Store Python package.")
@@ -3739,28 +4004,24 @@ def _windows_health_steps(bin_dst: Path, check_only: bool) -> None:
                 except EOFError:
                     consent = ""
                 if consent[:1] in ("y", "Y"):
-                    env = dict(os.environ, STUB_PATH=stub_path)
-                    _powershell("Remove-Item -LiteralPath $env:STUB_PATH -Force", env=env)
-                    print("[setup]   Deleted.")
+                    try:
+                        os.remove(stub_path)
+                    except OSError as exc:
+                        print(f"[setup]   Could not delete: {exc}", file=sys.stderr)
+                    else:
+                        print("[setup]   Deleted.")
             else:
                 print("[setup]   (non-interactive context: skipping deletion; re-run in interactive shell to clean up)")
 
     # 3c-2: store-alias-on-PATH warning
-    py_resolved = _powershell(
-        "$c = Get-Command python3 -ErrorAction SilentlyContinue; "
-        "if (-not $c) { $c = Get-Command python -ErrorAction SilentlyContinue }; "
-        "if ($c) { Write-Output $c.Source }"
-    )
+    py_resolved = shutil.which("python3") or shutil.which("python") or ""
     if "WindowsApps" in py_resolved:
         print(f"[setup] WARNING: python/python3 resolves under WindowsApps: {py_resolved}")
         print("[setup]   Install Python from python.org OR disable App Execution Aliases via")
         print("[setup]   Settings → Apps → Advanced app settings → App execution aliases.")
 
     # 3c-3: no-Python-at-all detection
-    have_py = _powershell(
-        "$p = Get-Command py -ErrorAction SilentlyContinue; "
-        "if ($p) { Write-Output 'yes' } else { Write-Output 'no' }"
-    )
+    have_py = "yes" if shutil.which("py") else "no"
     if have_py != "yes" and not py_resolved:
         print("[setup] WARNING: neither py.exe nor python/python3 found.")
         print("[setup]   Install Python 3 from https://www.python.org/downloads/windows/ —")
@@ -4269,8 +4530,12 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                         "installs the third-party `fnm` binary via `brew "
                         "install fnm` if brew is present, else `curl -fsSL "
                         "https://fnm.vercel.app/install | bash -s -- "
-                        "--skip-shell`; gated by _refuse_machine_mutation "
-                        "(commit 1720a985); skipped entirely if fnm is "
+                        "--skip-shell`; that curl leg is opt-in only "
+                        "(interactive consent or COORDINATOR_INSTALL_FNM=1) "
+                        "and never runs on Windows, where the installer "
+                        "rejects the platform outright; gated by "
+                        "_refuse_machine_mutation (commit 1720a985); "
+                        "skipped entirely if fnm is "
                         "already on PATH; failure is a WARNING, not fatal "
                         "(optional, core substrate unaffected); this "
                         "writer cannot enumerate or reverse what either "

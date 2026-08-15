@@ -464,17 +464,41 @@ def test_derive_agent_helper_names_basic_triplet_dedup(tmp_path: Path):
 
 
 def test_derive_agent_helper_names_extensionless_polyglot_kept_verbatim(tmp_path: Path):
-    """Extensionless polyglots (claude-doe, verify-coverage) keep their
-    bareword name — there is no suffix to strip."""
+    """Extensionless polyglots keep their bareword name — there is no suffix
+    to strip."""
     agent_bin = tmp_path / "coordinator" / "bin"
-    _touch(agent_bin / "claude-doe")
     _touch(agent_bin / "verify-coverage")
     _touch(agent_bin / "verify-coverage.cmd", executable=False)
 
     names = _derive_agent_helper_names(agent_bin)
 
-    assert "claude-doe" in names
     assert "verify-coverage" in names
+
+
+def test_derive_agent_helper_names_claude_doe_reserved_on_windows_only(tmp_path: Path):
+    """`claude-doe` is platform-split, and the split is the point (93089e568).
+
+    On Windows it is reserved out of the generic forwarder set: the generic
+    forwarder reaches `claude.exe` three processes deep, which corrupts the
+    console input mode, so DoE's purpose-built shallow launcher must be the
+    only copy. On POSIX no such launcher is rendered and the shim `execv`s in
+    place, so this forwarder IS the claude-doe CLI and must keep being
+    installed.
+
+    Asserted per-platform rather than unconditionally: this test previously
+    asserted presence on both, which made it green on POSIX and red on
+    Windows — the platform this repo treats as first-class and the only one
+    where the reservation exists at all.
+    """
+    agent_bin = tmp_path / "coordinator" / "bin"
+    _touch(agent_bin / "claude-doe")
+
+    names = _derive_agent_helper_names(agent_bin)
+
+    if os.name == "nt":
+        assert "claude-doe" not in names
+    else:
+        assert "claude-doe" in names
 
 
 def test_derive_agent_helper_names_excludes_private_dirs_and_test_files(tmp_path: Path):
@@ -596,13 +620,16 @@ def test_derive_agent_helper_target_map_py_suffixed_cli_targets_real_file(tmp_pa
 
 
 def test_derive_agent_helper_target_map_extensionless_cli_targets_itself(tmp_path: Path):
+    # `claude-doe` is deliberately NOT the fixture here: it is reserved out of
+    # this map on Windows (93089e568), so using it would make this test about
+    # the host platform rather than about extensionless self-targeting.
     agent_bin = tmp_path / "coordinator" / "bin"
-    _touch(agent_bin / "claude-doe")
+    _touch(agent_bin / "verify-coverage")
 
     mapping = _derive_agent_helper_target_map(agent_bin)
 
-    assert mapping["claude-doe"] == "claude-doe"
-    assert (agent_bin / mapping["claude-doe"]).is_file()
+    assert mapping["verify-coverage"] == "verify-coverage"
+    assert (agent_bin / mapping["verify-coverage"]).is_file()
 
 
 def test_derive_agent_helper_target_map_extensionless_and_py_twin_prefers_py(

@@ -43,6 +43,13 @@ from coordinator_core import claim_state as claim_state_module
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_author_fork import _handler, _resolve_origin_handoff
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 assert "handoff.author_fork" in _REGISTRY, (
     "import guard failed: 'handoff.author_fork' not in _REGISTRY — "
     "coordinator_core.ops.handoff_author_fork @register_op did not fire"

@@ -12,7 +12,7 @@ Decision rules (all silent on no-offer path):
     1. Not a git repo               -> silent (nothing to onboard against)
     2. Distribution repo ((b) class) -> silent (session infra doesn't belong there)
     3. Dismissal sentinel present    -> silent (user already saw offer, dismissed it)
-    4. Unonboarded (no docs/project-tracker.md) -> emit OFFER line (unonboarded)
+    4. Unonboarded (no archive/ and no state/workstreams/ dir) -> emit OFFER line (unonboarded)
     5. Stale (probe returns drift/unstamped)    -> emit OFFER line (stale)
     6. Current                       -> silent (healthy)
 
@@ -107,7 +107,18 @@ def _is_distribution_repo(repo_root: str) -> bool:
 
 
 def _is_onboarded(repo_root: str) -> bool:
-    return os.path.isfile(os.path.join(repo_root, "docs", "project-tracker.md"))
+    # Review: coordinator:code-reviewer (P1) -- `state/workstreams/` alone is
+    # empirically unsound: it is created lazily by queue_append.py on first
+    # workstream event and no install/scaffold path provisions it, so 11 of
+    # 12 currently-onboarded sibling repos in the fleet have no
+    # state/workstreams/ dir and would flip to UNONBOARDED. `archive/` is
+    # present on all of them (verified against the fleet) and is already the
+    # pre-existing arm of completion_archive_predicate below, so matching it
+    # here makes the two predicates genuinely identical instead of merely
+    # claimed-equivalent -- also closes the P2 drift gap.
+    return os.path.isdir(os.path.join(repo_root, "archive")) or os.path.isdir(
+        os.path.join(repo_root, "state", "workstreams")
+    )
 
 
 def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
@@ -129,7 +140,7 @@ def detect_onboarding_offer(repo_root: str, plugin_root: str) -> str:
     if not _is_onboarded(repo_root):
         return (
             "[onboarding] This repo is not yet onboarded — run /repo-setup to get "
-            "coordinator scaffolding, currency tracking, and a project tracker. "
+            "coordinator scaffolding and currency tracking. "
             f"(Dismiss: {dismiss_cmd})"
         )
 

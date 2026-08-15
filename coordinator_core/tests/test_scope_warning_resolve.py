@@ -15,6 +15,13 @@ import pytest
 
 from coordinator_core.ops.scope_warning_resolve import VALID_RESOLUTIONS, main, resolve
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _LOG_LINES = [
     "2026-04-27T10:00:00Z | test-session-1 | foreign-staged | plugins/foo.sh | owner:orphan | pending-resolution\n",
     "2026-04-27T10:01:00Z | test-session-1 | foreign-staged | plugins/bar.sh | owner:session abc-456 | pending-resolution\n",

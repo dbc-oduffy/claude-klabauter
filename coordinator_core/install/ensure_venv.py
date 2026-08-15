@@ -63,6 +63,43 @@ Negative-spec:
   - Does NOT poll-with-backoff on lock contention (``_acquire_flock``'s
     shape) — a 30-60s peer build can outlast a short poll window, and
     polling changes the externally-observable latency contract.
+  - Does NOT pip-install an editable ``coordinator_core`` into this venv
+    (deliberate, investigated 2026-08-14). A live venv was observed carrying
+    ``__editable__.coordinator_core-0.1.0.pth`` pointing at this repo's
+    working tree, but no install-chain site (this module, ``scripts/setup.py``,
+    ``maximalist.py``) ever runs that install — it is hand-installed machine
+    state, not a reproducible contract. The hook path already has its own
+    resolution rung for this exact need: ``_engine_root.py``'s
+    ``resolve_claude_klabauter_root()`` + ``sys.path.insert(0, root)``
+    (coordinator-claude repo, ~line 840), which resolves against the LIVE
+    working tree every hook fire rather than a pinned editable install. This
+    repo's engine is meant to execute from that live tree (project CLAUDE.md
+    § "What this repo is"), so an editable ``.pth`` baked into the venv would
+    itself be a latent bug the moment this repo's checkout path moves —
+    pinning it here would trade a working, self-correcting resolution rung
+    for a second, staler one. Left undeclared on purpose; do not add it to
+    ``_install_deps`` without re-litigating this call.
+
+Rebuild-vs-live-reader safety (``_build_dir_for``/``_swap_in_new_venv``/
+``_sweep_orphaned_swap_dirs``): the build-lock above only serialises
+BUILDERS against each other — every other session on the box executes
+Python out of ``<venv_dir>/bin/python`` with no lock at all (cannot be
+asked to take one). A rebuild therefore never mutates ``venv_dir`` in
+place: the replacement is built at a fresh ``.build-<pid>-<hex>`` sibling
+and only ``os.rename``-swapped into position once fully healthy, with the
+vacated old tree moved aside to a ``.stale-<pid>-<hex>`` sibling first, not
+``rmtree``'d in place. Both renames are metadata-only directory-entry
+updates on POSIX AND Windows, so neither requires a concurrent reader's
+open file/handle under the old tree to be closed first — the swap itself
+is safe on both platforms. Reclaiming the vacated old tree's disk
+afterward is the part that differs: POSIX permits deleting a file a reader
+still has open (the reader keeps the unlinked inode until it closes it),
+so the stale sibling is ``rmtree``'d immediately; Windows can raise a
+sharing violation on that same delete while a reader's handle is still
+open, so that failure is caught and the sibling is left for
+``_sweep_orphaned_swap_dirs`` to reclaim on this venv's NEXT rebuild
+(deferred, not leaked). A build FAILURE never even reaches the swap step —
+``venv_dir`` is untouched until the replacement is known-good.
 """
 
 from __future__ import annotations
@@ -72,6 +109,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -167,8 +205,22 @@ _NETWORK_ERROR_RE = re.compile(
 #: oracle doesn't probe for silently passes health and never rebuilds).
 #: ``coordinator_whoami`` is installed separately (editable, from
 #: ``whoami_pkg``) but probed here alongside the pip-installed deps.
-_VENV_PIP_DEPS = ("pydantic>=2", "psutil>=5.9")
-_VENV_IMPORT_PROBES = ("coordinator_whoami", "pydantic", "psutil")
+#:
+#: ``PyYAML`` is declared here EXPLICITLY even though ``coordinator_whoami``'s
+#: own ``pyproject.toml`` already lists ``PyYAML>=6.0`` as a transitive dep
+#: (so ``pip install -e {whoami_pkg}/`` already pulls it in today) — several
+#: coordinator-claude hook scripts (``enforce-agent-dispatch-mode.py``,
+#: ``handoff-segment-inject.py``, ``_oss_operative_strings.py``) ``import
+#: yaml`` at module level and run under this venv's interpreter on every hook
+#: fire (``_hook_venv_inject.py``), so this is a genuine first-class,
+#: hook-path dependency of THIS venv, not an incidental transitive of
+#: whoami's own needs — it must survive independently of whoami's declared
+#: deps ever changing. ``jsonschema``/``rfc3339-validator`` stay UNDECLARED
+#: here on purpose: nothing outside ``coordinator_whoami`` imports them
+#: directly on the hook path (checked: no hook script does), so they remain
+#: genuinely transitive and need no probe of their own.
+_VENV_PIP_DEPS = ("pydantic>=2", "psutil>=5.9", "PyYAML>=6.0")
+_VENV_IMPORT_PROBES = ("coordinator_whoami", "pydantic", "psutil", "yaml")
 
 #: Single source of truth for the machine-local registry key `_set_pin`
 #: writes and `_clear_dangling_pin` deletes -- both read this constant
@@ -613,6 +665,115 @@ def _resolve_base_python() -> Optional[str]:
     return None
 
 
+def _build_dir_for(venv_dir: Path) -> Path:
+    """A fresh sibling path a rebuild populates BEFORE ever touching the
+    live tree — never pre-created (``python -m venv`` creates it itself);
+    the ``.build-<pid>-<hex>`` naming is what ``_sweep_orphaned_swap_dirs``
+    matches on to reclaim an orphan left by a crashed prior attempt."""
+    return venv_dir.parent / f"{venv_dir.name}.build-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
+def _sweep_orphaned_swap_dirs(venv_dir: Path) -> None:
+    """Best-effort reclaim of ``.build-*``/``.stale-*`` siblings abandoned by
+    a prior process that crashed mid-rebuild (before cleanup) or mid-swap
+    (a Windows deferred-reclaim leftover — see ``_swap_in_new_venv``).
+
+    Safe to run unconditionally here: the caller holds the build lock before
+    calling this, so no OTHER process is concurrently populating its own
+    ``.build-*`` sibling of THIS venv right now — anything matching the
+    prefix at this point belongs to a run that has already ended, one way or
+    another. Never raises; a sweep failure must not block the rebuild it is
+    merely tidying up after.
+
+    Crash-window disclosure: a ``.stale-*`` sibling can also be the leftover
+    of a crash in ``_swap_in_new_venv`` between its first rename (old tree
+    moved to ``.stale-*``) and its second (build tree moved into
+    ``venv_dir``), leaving ``venv_dir`` genuinely absent. That ``.stale-*``
+    tree is NOT a discardable husk by accident — it is the tree that had
+    already FAILED ``_venv_healthy`` and triggered the rebuild that was
+    mid-swap when the crash happened (``_swap_in_new_venv`` is only ever
+    reached after the health probe has returned False). So this sweep's
+    unconditional ``rmtree`` of every ``.stale-*`` match is correct, not a
+    tradeoff: there is no "still-good" tree here to lose. The real cost of
+    that crash window is borne by the ``.build-*`` sibling swept alongside
+    it — a verified-healthy replacement discarded before it ever got
+    swapped in — so the next process pays a full rebuild
+    (``_create_venv`` + ``_install_deps``) rather than reusing it, a real
+    cost on a box regularly running 50-70 concurrent LLM sessions. The
+    sweep does not attempt to distinguish that mid-swap ``.build-*`` from
+    an ordinary post-build leftover; both are equally safe to discard since
+    neither has been published to ``venv_dir`` yet.
+    """
+    parent = venv_dir.parent
+    build_prefix = f"{venv_dir.name}.build-"
+    stale_prefix = f"{venv_dir.name}.stale-"
+    try:
+        children = list(parent.iterdir())
+    except OSError:
+        return
+    for child in children:
+        if child.name.startswith(build_prefix) or child.name.startswith(stale_prefix):
+            shutil.rmtree(child, ignore_errors=True)
+
+
+def _swap_in_new_venv(venv_dir: Path, build_dir: Path) -> None:
+    """Publish ``build_dir`` as ``venv_dir`` via a rename-swap — never an
+    in-place ``rmtree`` of the live tree — so a reader mid-execution against
+    the OLD tree keeps a coherent view instead of having its interpreter
+    gutted out from under it (the defect this function exists to close).
+
+    POSIX: ``os.rename`` is an atomic directory-entry update; an already-open
+    file descriptor survives the rename (or even unlink) of the path that
+    named it, so once the swap lands, discarding the vacated old tree via
+    ``shutil.rmtree`` is safe immediately — a reader with files already open
+    under it keeps working off the unlinked inode until it closes them.
+
+    Windows: renaming a directory is ALSO metadata-only (an update to the
+    parent directory's entry) and, unlike deleting a file, does not require
+    every open HANDLE inside the directory to be closed first — so the same
+    two-rename swap works there too. What differs is reclamation: an
+    in-use file's DELETE typically fails with a sharing violation on
+    Windows while a reader still holds it open, so the immediate
+    ``shutil.rmtree`` of the vacated tree can fail there. That failure is
+    caught, not fatal — the stale tree is left on disk for
+    ``_sweep_orphaned_swap_dirs`` to reclaim on this venv's NEXT rebuild
+    (deferred reclamation, not a leak; see module docstring's disk-
+    reclamation note).
+
+    Crash-window disclosure: the two ``os.rename`` calls below are each
+    individually atomic but not atomic *together*. A crash between them
+    leaves ``venv_dir`` genuinely absent, not just briefly invisible — the
+    tree sitting under ``.stale-{pid}-{hex}`` is the one that JUST FAILED
+    ``_venv_healthy`` (checked twice — once before taking the build lock,
+    once again after — to reach this function at all) and triggered this
+    rebuild in the first place. It is not "still-good"; it is the tree this
+    run was already discarding. The next process to touch this venv finds
+    it unhealthy, takes the build lock, and its ``_sweep_orphaned_swap_dirs``
+    call unconditionally ``rmtree``s every ``.stale-*`` sibling — correctly,
+    since none of them were ever known-good. The only genuine cost of a
+    crash in this window is that the *verified-healthy* replacement sitting
+    under ``.build-*`` is swept right alongside it, so the next process pays
+    a full rebuild (``_create_venv`` + ``_install_deps``) rather than reusing
+    the tree that had already passed the probe.
+    """
+    stale_dir: Optional[Path] = None
+    if venv_dir.is_dir():
+        stale_dir = venv_dir.parent / f"{venv_dir.name}.stale-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        os.rename(venv_dir, stale_dir)
+    os.rename(build_dir, venv_dir)
+    if stale_dir is not None:
+        try:
+            shutil.rmtree(stale_dir)
+        except OSError as exc:
+            print(
+                f"[ensure-coordinator-venv] WARNING: could not immediately reclaim the prior "
+                f"venv tree ({type(exc).__name__}: {exc}) — a reader likely still has it open "
+                f"(expected on Windows). Left at {stale_dir} for reclamation on the next "
+                "rebuild.",
+                file=sys.stderr,
+            )
+
+
 def _create_venv(base_py: str, venv_dir: Path) -> None:
     proc = _run([base_py, "-m", "venv", str(venv_dir)], timeout=120)
     if proc.returncode != 0:
@@ -977,12 +1138,15 @@ def _ensure_coordinator_venv_impl(
             )
             return "ready"
 
-        if venv_dir.is_dir():
-            shutil.rmtree(venv_dir)
+        # Never mutate the live tree in place (module docstring: readers with
+        # no lock of their own execute out of it right now). The replacement
+        # is built at a fresh sibling path and only swapped into position
+        # once it is fully healthy — a build failure here leaves whatever
+        # was already at `venv_dir` (healthy or not) completely untouched.
+        _sweep_orphaned_swap_dirs(venv_dir)
+        build_dir = _build_dir_for(venv_dir)
+        build_venv_py = venv_python_path(build_dir)
 
-        # Any failure from here on leaves venv_dir gone (or partial) — clear a
-        # pre-existing pin that pointed at venv_py rather than leave it
-        # dangling (see _clear_dangling_pin docstring).
         try:
             base_py = _resolve_base_python()
             if not base_py:
@@ -990,30 +1154,46 @@ def _ensure_coordinator_venv_impl(
                     "[ensure-coordinator-venv] ERROR: no python3 or python found in PATH.\n"
                     "[ensure-coordinator-venv]   Install Python 3.10+ and ensure it is on PATH."
                 )
-            _create_venv(base_py, venv_dir)
+            _create_venv(base_py, build_dir)
 
             whoami_pkg = _resolve_whoami_pkg(plugin_root, ml_cli)
-            _install_deps(venv_py, whoami_pkg)
+            _install_deps(build_venv_py, whoami_pkg)
+
+            # The swap below is documented as happening "once fully healthy"
+            # -- enforce that claim rather than trusting a zero exit code
+            # from the two subprocesses above, which is strictly weaker than
+            # the acceptance oracle (`_venv_healthy`): a `pip install` can
+            # exit 0 while leaving a probed module unimportable. Routed
+            # through the same `except EnsureVenvError:` cleanup below so a
+            # failed probe gets exactly the same build_dir removal /
+            # dangling-pin accounting as a failed create/install, not a
+            # parallel copy of that logic.
+            if not _venv_healthy(build_venv_py):
+                raise EnsureVenvError(
+                    "[ensure-coordinator-venv] ERROR: freshly-built venv failed the "
+                    "health probe (import check) before swap-in; discarding it."
+                )
         except EnsureVenvError:
-            shutil.rmtree(venv_dir, ignore_errors=True)
-            if clear_pin_on_failure:
+            shutil.rmtree(build_dir, ignore_errors=True)
+            # Only the just-built (never-published) tree was touched above —
+            # `venv_dir` itself, if anything was there before this attempt,
+            # is exactly as it was. A dangling pin is cleared only when
+            # `venv_dir` genuinely resolves to nothing (see
+            # `_clear_dangling_pin`'s docstring: "a rebuild attempt failed
+            # and the (partial) venv was removed" — no longer this run's
+            # invariant when a pre-existing tree survives untouched).
+            if clear_pin_on_failure and not venv_dir.is_dir():
                 _clear_dangling_pin(ml_cli, venv_py)
-            # The rebuild attempt failed and the (partial) tree was just
-            # removed above — the venv tree genuinely resolved to nothing
-            # this run, not "we never got there" (we DID get there, and it
-            # ended in no tree on disk). Review: coordinator:code-reviewer
-            # (2026-08-06, rcpt-R3-writer-wiring) compared this against
-            # `clone_sibling_repo.py`'s opposite choice (unreported on a
-            # failed clone) as two nearest-analogous sites disagreeing — the
-            # difference is principled, not an inconsistency: THIS module
-            # actively confirms empty-tree via the `shutil.rmtree` line
-            # directly above before journaling `()`, where
-            # `clone_sibling_repo.py` never inspects or cleans up whatever a
-            # failed `git clone` may have left behind, so it cannot make the
-            # same "confirmed empty" claim (see that module's matching note).
-            _record_resolution(_VENV_TREE_CLAUSE_INDEX, ())
+            if venv_dir.is_dir():
+                _record_resolution(
+                    _VENV_TREE_CLAUSE_INDEX,
+                    (WriteSurfaceEntry(kind="file-path", path=str(venv_dir)),),
+                )
+            else:
+                _record_resolution(_VENV_TREE_CLAUSE_INDEX, ())
             raise
 
+        _swap_in_new_venv(venv_dir, build_dir)
         _set_pin(ml_cli, venv_py)
         _record_resolution(
             _VENV_TREE_CLAUSE_INDEX, (WriteSurfaceEntry(kind="file-path", path=str(venv_dir)),)

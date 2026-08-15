@@ -52,7 +52,7 @@ def _wire_identity(monkeypatch, subagent_type=""):
     monkeypatch.setattr(
         guard,
         "_read_backpointer_subagent_type",
-        lambda git_root, agent_id: subagent_type,
+        lambda git_root, agent_id, **kw: subagent_type,
     )
 
 

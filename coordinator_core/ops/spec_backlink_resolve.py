@@ -181,11 +181,18 @@ class _BacklinkIndex:
     own "build once per invocation" requirement — not "once per process").
     """
 
-    __slots__ = ("plan_id_to_paths", "deliverable_id_to_paths", "path_to_ids", "basename_to_paths")
+    __slots__ = (
+        "plan_id_to_paths",
+        "deliverable_id_to_paths",
+        "path_to_ids",
+        "basename_to_paths",
+        "_equivalence_map",
+    )
 
-    def __init__(self) -> None:
+    def __init__(self, equivalence_map: Optional[Dict[str, str]] = None) -> None:
         self.plan_id_to_paths: Dict[str, List[str]] = {}
         self.deliverable_id_to_paths: Dict[str, List[str]] = {}
+        self._equivalence_map: Dict[str, str] = equivalence_map or {}
         # Inverse of the two maps above: path -> {"plan_id": ..., "deliverable_id": ...}.
         # Only populated for records carrying at least one real id — this is
         # the seam `rewrite_spec_backlinks.resolve_citation` (C3) needs: given
@@ -216,7 +223,15 @@ class _BacklinkIndex:
             # matching deliverable_id's own collision handling.
             self.plan_id_to_paths.setdefault(plan_id, []).append(path)
         if deliverable_id is not None:
-            self.deliverable_id_to_paths.setdefault(deliverable_id, []).append(path)
+            # Join key canonicalized (C6b/AC11) -- the DICT KEY only. The
+            # inverse `path_to_ids`/`_hit` payload below still carries the
+            # RAW `deliverable_id` (never a stamped/echoed canonical value)
+            # so a caller feeding this back into a citation rewrite sees
+            # exactly what the record's own frontmatter carries.
+            from coordinator_core.ops.deliverable_equivalence import canonicalize
+
+            canonical_deliverable_id = canonicalize(deliverable_id, self._equivalence_map)
+            self.deliverable_id_to_paths.setdefault(canonical_deliverable_id, []).append(path)
         if plan_id is not None or deliverable_id is not None:
             self.path_to_ids[path] = {"plan_id": plan_id, "deliverable_id": deliverable_id}
             basename = os.path.basename(path)
@@ -313,7 +328,9 @@ def build_index(worktree_root: Path) -> _BacklinkIndex:
     Building the index once per invocation — never per citation lookup — is
     the requirement the plan's own anti-scope names explicitly.
     """
-    index = _BacklinkIndex()
+    from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
+
+    index = _BacklinkIndex(equivalence_map=load_equivalence_map(worktree_root))
     sizings_parts, _sizings_kind = SIZINGS_ONLY_ROOT
     sizings_dir = worktree_root.joinpath(*sizings_parts)
     for parts, kind in RESOLVABLE_ARTIFACT_ROOTS:
@@ -370,7 +387,9 @@ def resolve_id(index: _BacklinkIndex, queried_id: str) -> dict:
             return _ambiguity(list(paths), queried_id)
         return _hit(paths[0], queried_id)
     if queried_id.startswith(_DLV_PREFIX):
-        paths = index.deliverable_id_to_paths.get(queried_id)
+        from coordinator_core.ops.deliverable_equivalence import canonicalize
+
+        paths = index.deliverable_id_to_paths.get(canonicalize(queried_id, index._equivalence_map))
         if not paths:
             return _miss(queried_id)
         if len(paths) > 1:

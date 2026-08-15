@@ -46,6 +46,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core._settings_home import claude_config_dir
+
 # Pairs: (live_relative_name, template_relative_name) — relative filenames,
 # both dirs rooted at LIVE_SETUP / TEMPLATES_SETUP respectively.
 PAIRS: List[Tuple[str, str]] = [
@@ -196,9 +198,8 @@ def main(argv: List[str]) -> int:
         print(f"verify-templates-setup-sync: {exc}", file=sys.stderr)
         return 1
 
-    claude_home = Path(os.environ.get("CLAUDE_HOME", str(Path.home()))) / ".claude"
     templates_setup = plugin_root / "templates" / "setup"
-    live_setup = claude_home / "setup"
+    live_setup = claude_config_dir() / "setup"
 
     lines, exit_code = check_pairs(templates_setup, live_setup)
     for line in lines:

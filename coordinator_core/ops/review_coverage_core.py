@@ -90,6 +90,7 @@ from coordinator_core.coverage import (
     _classify_bookkeeping_shas,
     _parse_trail_file,
     _verdict_counts,
+    emit_unrecognized_kind_warning,
 )
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -223,7 +224,11 @@ def _load_records(
 # ---------------------------------------------------------------------------
 
 
-def _classify_shape(rec: dict, warn: bool = True) -> Optional[Tuple[str, str, str]]:
+def _classify_shape(
+    rec: dict,
+    warn: bool = True,
+    unrecognized_sink: Optional[Dict[str, int]] = None,
+) -> Optional[Tuple[str, str, str]]:
     """Return (sha_range, artifact, kind) if the record is a diff- or
     plan-shaped record with a SAFE_RANGE-valid sha_range, else None.
     VERDICT-BLIND by construction — the verdict filter lives in `_classify`,
@@ -248,6 +253,14 @@ def _classify_shape(rec: dict, warn: bool = True) -> Optional[Tuple[str, str, st
     read of the same records (`classify_pending_records`) that must not duplicate
     the crediting path's stderr.
 
+    `unrecognized_sink`, when given, accumulates unrecognized-`scope_kind`
+    counts (keyed by the kind string) instead of printing a WARN per record —
+    the per-record flood buried the real trailing error on a legacy corpus
+    (2026-08-15 example-retrieval-repo-em memo). The caller (`build_reviewed_set`,
+    `build_segments`) owns the dict and emits ONE aggregated WARN after its
+    walk. `None` (the default) preserves the old per-call print, for any
+    direct caller of this function that has no walk to aggregate over.
+
     Spec backlink: pln-open-review-loops-are-a-named--6e8fea § C2
     Spec backlink (kind): pln-planning-artifacts-are-a-third-77111f § C6
     """
@@ -259,7 +272,18 @@ def _classify_shape(rec: dict, warn: bool = True) -> Optional[Tuple[str, str, st
         if scope_kind == "integration":
             return None  # legitimately non-diff; skip silently — not reopened by this chunk
         if not sha_range:
-            if warn:
+            # Only an actual diff-typed record's empty sha_range is a real
+            # signal worth a WARN. The `scope_kind == "diff"` guard means
+            # EVERY other kind skips silently here on empty sha_range — not
+            # just recognized ones like "plan", but unrecognized kinds too
+            # (e.g. "inline-dispatch"): this `return None` precedes the
+            # unrecognized-kind accumulation branch below, so an unrecognized
+            # kind with no sha_range is never counted there either, in
+            # addition to producing no WARN. This mirrors coverage.py's
+            # build_reviewed_set, which `continue`s here with no print
+            # regardless of kind (see its "skip silently" comment on the
+            # identical branch).
+            if scope_kind == "diff" and warn:
                 print(
                     f"WARN: diff-typed trail record has empty sha_range: {artifact}",
                     file=sys.stderr,
@@ -275,11 +299,14 @@ def _classify_shape(rec: dict, warn: bool = True) -> Optional[Tuple[str, str, st
             # `_credit_from_kind_partition` never reads an unrecognized kind's
             # bucket, so it earns zero credit — fail-closed, unchanged safety
             # direction.
-            print(
-                f"WARN: unrecognized scope_kind {scope_kind!r} — record "
-                f"credits nothing: {artifact}",
-                file=sys.stderr,
-            )
+            if unrecognized_sink is not None:
+                unrecognized_sink[scope_kind] = unrecognized_sink.get(scope_kind, 0) + 1
+            else:
+                print(
+                    f"WARN: unrecognized scope_kind {scope_kind!r} — record "
+                    f"credits nothing: {artifact}",
+                    file=sys.stderr,
+                )
         # scope_kind == "diff" credits unconditionally (fall through);
         # scope_kind == "plan" (or future value) is resolved here and filtered
         # to planning-artifact commits downstream in build_reviewed_set.
@@ -307,10 +334,16 @@ def _classify_shape(rec: dict, warn: bool = True) -> Optional[Tuple[str, str, st
     return sha_range, artifact, kind
 
 
-def _classify(rec: dict) -> Optional[Tuple[str, str, str]]:
+def _classify(
+    rec: dict,
+    unrecognized_sink: Optional[Dict[str, int]] = None,
+) -> Optional[Tuple[str, str, str]]:
     """Return (sha_range, artifact, kind) if the record passes all filters,
-    else None (a WARN/INFO has already been emitted to stderr for the skip)."""
-    shaped = _classify_shape(rec, warn=True)
+    else None (a WARN/INFO has already been emitted to stderr for the skip).
+
+    `unrecognized_sink` is forwarded to `_classify_shape` unchanged — see its
+    docstring."""
+    shaped = _classify_shape(rec, warn=True, unrecognized_sink=unrecognized_sink)
     if shaped is None:
         return None
     sha_range, artifact, kind = shaped
@@ -409,10 +442,13 @@ def build_reviewed_set(
     commits before crediting (see `_credit_from_kind_partition`) rather than
     crediting its whole range unconditionally."""
     valid_ranges: List[Tuple[str, str, str]] = []
+    unrecognized_kind_counts: Dict[str, int] = {}
     for _source_path, rec in all_records:
-        classified = _classify(rec)
+        classified = _classify(rec, unrecognized_sink=unrecognized_kind_counts)
         if classified is not None:
             valid_ranges.append(classified)
+
+    emit_unrecognized_kind_warning(unrecognized_kind_counts)
 
     if not valid_ranges:
         return set()
@@ -492,9 +528,10 @@ def build_segments(
     revlist_skip: Set[str] = set()
     namelog_memo: Dict[str, Set[str]] = {}
     namelog_skip: Set[str] = set()
+    unrecognized_kind_counts: Dict[str, int] = {}
 
     for _source_path, rec in all_records:
-        classified = _classify(rec)
+        classified = _classify(rec, unrecognized_sink=unrecognized_kind_counts)
         if classified is None:
             continue
         sha_range, artifact, _kind = classified
@@ -544,6 +581,8 @@ def build_segments(
             namelog_memo[sha_range] = files
 
         segments.append({"sha_range": sha_range, "shas": shas, "files": files})
+
+    emit_unrecognized_kind_warning(unrecognized_kind_counts)
 
     return [
         {

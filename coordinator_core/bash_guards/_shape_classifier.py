@@ -90,6 +90,7 @@ input.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, Tuple
@@ -149,6 +150,24 @@ _GREP_FAMILY_BINARIES: Tuple[str, ...] = ("grep", "egrep", "fgrep", "rg")
 
 #: head/tail plumbing binaries -- see ``_detect_head_tail_plumbing``.
 _HEAD_TAIL_BINARIES: Tuple[str, ...] = ("head", "tail")
+
+#: Session-fact probe binaries this fleet's harness already knows the
+#: answer to -- the family the MULTI_PROBE_BANNER shape's own name and
+#: docstring claim to detect (``echo``/``printf`` carry the banner label
+#: itself and are handled separately in ``_is_probe_segment``; the
+#: remaining harness-known-fact probes are ``git``, ``pwd``, ``whoami``,
+#: ``date``, and ``uname`` -- the same family
+#: ``dispatch_checks._bt_probe_segment_kind`` recognizes as translatable
+#: session-fact probes for the sibling rewrite guard. Not imported from
+#: there: that module imports THIS one, and duplicating a five-name tuple
+#: is cheaper than restructuring the import graph for it.
+_SESSION_FACT_PROBE_BINARIES: Tuple[str, ...] = (
+    "git",
+    "pwd",
+    "whoami",
+    "date",
+    "uname",
+)
 
 #: Minimum total segment count (post ``;``/``&``/``|`` split) for a
 #: banner-marked echo to count as a MULTI-probe banner rather than a
@@ -242,15 +261,100 @@ def _detect_grep_via_bash(
     return None
 
 
+#: Matches a leading `VAR=value` environment-assignment token, the same
+#: shape `env FOO=bar ...` uses for each assignment before its target
+#: binary -- see `_peel_probe_prefix`.
+_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _peel_probe_prefix(tokens: List[str]) -> List[str]:
+    """Peel a leading `sudo` token, or a leading `env` token plus its run of
+    `VAR=value` assignment tokens, off `tokens` before `_is_probe_segment`
+    tests the head binary (Review: coordinator:code-reviewer, Finding 2) --
+    `sudo git status` / `env FOO=bar git status` as a top-level segment is
+    still a genuine session-fact re-derivation, not a different shape,
+    despite the wrapper prefix disqualifying a bare head-binary check.
+
+    Deliberately narrow -- exactly one `sudo` token, or `env` plus ONLY
+    `VAR=value`-shaped tokens, stops at anything else (a flag, a
+    non-assignment operand). This is NOT a general command-prefix parser:
+    it does not peel `command`/`time`/`exec`/`nice`/`nohup` or chain
+    multiple wrappers (`sudo env FOO=bar ...`) -- those are out of scope
+    for this narrowly-named gap.
+    """
+    if not tokens:
+        return tokens
+    head = tokens[0]
+    if token_matches_binary(head, "sudo"):
+        return tokens[1:]
+    if token_matches_binary(head, "env"):
+        rest = tokens[1:]
+        i = 0
+        while i < len(rest) and _ENV_ASSIGNMENT_RE.match(rest[i]):
+            i += 1
+        return rest[i:]
+    return tokens
+
+
+def _is_probe_segment(tokens: List[str]) -> bool:
+    """Whether `tokens` (one already-split segment) invokes a
+    harness-known-fact probe binary -- ``echo``/``printf`` (the banner
+    label itself, or a bare probe echo like ``echo "=== git status ==="``
+    or ``echo hi``) or one of ``_SESSION_FACT_PROBE_BINARIES`` (``git``,
+    ``pwd``, ``whoami``, ``date``, ``uname``), after peeling a leading
+    `sudo`/`env VAR=x ...` prefix (`_peel_probe_prefix`). Used by
+    ``_detect_multi_probe_banner`` to require every OTHER segment in a
+    banner-shaped command to actually be a session-fact re-derivation,
+    not just formatted like one -- see that function's docstring.
+    """
+    if not tokens:
+        return False
+    tokens = _peel_probe_prefix(tokens)
+    if not tokens:
+        return False
+    head = tokens[0]
+    if token_matches_binary(head, "echo") or token_matches_binary(head, "printf"):
+        return True
+    return any(token_matches_binary(head, b) for b in _SESSION_FACT_PROBE_BINARIES)
+
+
 def _detect_multi_probe_banner(
     segments: List[Tuple[List[str], bool]]
 ) -> Optional[ShapeMatch]:
     """Match if the command contains a banner-marked ``echo``/``printf``
-    segment (see ``_has_banner_marker``) AND the command has at least
-    ``_MIN_BANNER_SEGMENTS`` total segments -- a banner label alone
-    (``echo "=== status ==="; git status``, 2 segments) is a single
+    segment (see ``_has_banner_marker``), the command has at least
+    ``_MIN_BANNER_SEGMENTS`` total segments (a banner label alone --
+    ``echo "=== status ==="; git status``, 2 segments -- is a single
     labeled probe, not the N-unrelated-probes-in-one-call shape this
-    detector targets.
+    detector targets), AND every OTHER TOP-LEVEL segment (``pipe_before``
+    is ``False`` -- the head of a ``;``/``&``-separated command, not a
+    pipe continuation of one) is itself a harness-known-fact probe
+    (``_is_probe_segment``: ``echo``/``printf`` or the
+    ``git``/``pwd``/``whoami``/``date``/``uname`` family).
+
+    Pipe-continuation segments (``pipe_before`` True) are deliberately
+    NOT required to be probe-shaped: the plan's own canonical overlap
+    example, ``echo "=== git status ==="; git status | grep -i modified |
+    head``, is a SINGLE probe (``git status``) piped through plumbing --
+    the ``grep``/``head`` segments are shape of that one probe's output,
+    not additional probes, and gating on them here would make this
+    detector silent on its own pinned canonical case
+    (``TestPrecedence.test_canonical_triple_overlap_resolves_grep_first``).
+
+    That third condition is the semantic content this shape's own name
+    claims: "re-derives session facts the harness already knows". Without
+    it, this detector was pure banner-formatting shape (``echo`` + ``===``
+    + 3+ segments) and matched ANY labeled multi-segment command -- e.g.
+    ``echo "=== EM snippets ==="; wc -c a.md b.md; ls x``, a legitimate
+    labeled multi-file measurement that probes nothing the harness
+    already knows. Confirmed false positive,
+    ``state/audits/2026-08-14-boot-payload-baseline.md`` § "The
+    false-positive matcher". A command that mixes a real probe segment
+    with a non-probe segment (``echo "=== x ==="; git status; wc -l a``)
+    does not match either -- it is not PURELY the re-derive-known-facts
+    shape, so this detector stays silent and lets whatever shape (if any)
+    the non-probe segment matches speak for itself, rather than misnaming
+    the mix.
     """
     banner_segment: Optional[List[str]] = None
     for tokens, _pipe_before in segments:
@@ -266,6 +370,15 @@ def _detect_multi_probe_banner(
         return None
     if len(segments) < _MIN_BANNER_SEGMENTS:
         return None
+    for tokens, pipe_before in segments:
+        if tokens is banner_segment:
+            continue
+        if not tokens:
+            continue
+        if pipe_before:
+            continue
+        if not _is_probe_segment(tokens):
+            return None
     return ShapeMatch(Shape.MULTI_PROBE_BANNER, evidence=" ".join(banner_segment))
 
 

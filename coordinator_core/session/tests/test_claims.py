@@ -41,6 +41,7 @@ import pytest
 
 from coordinator_core.session import claims, core, scope, shape
 from coordinator_core.ops.session import safe_commit_offer
+from coordinator_core.win_portability import no_console_creationflags
 
 # Every test in this file builds its repo via `_make_repo(tmp_path)`, spawning
 # real git (init/config/add/commit) because the production code under test --
@@ -235,6 +236,102 @@ class TestAtomicDedupAppend:
             claims.atomic_dedup_append("", "x")
         with pytest.raises(ValueError):
             claims.atomic_dedup_append(str(tmp_path / "t.txt"), "")
+
+
+# ---------------------------------------------------------------------------
+# atomic_dedup_append — the LOCKED branch (C6). Every test above targets a
+# bare `tmp_path`-derived file with no `.git` ancestor, so
+# `_atomic_dedup_append_lock_anchor` returns None for all of them and none
+# of them ever exercise the `with held_lock(...)` branch this class covers.
+# Review: coordinatorcode-reviewer-feb6d8e8 Finding "No test in this diff
+# exercises the new locked path at all."
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicDedupAppendLockedBranch:
+    def _touched_path(self, repo, sid):
+        # The exact shape `_atomic_dedup_append_lock_anchor` requires:
+        # <repo>/.git/coordinator-sessions/<sid>/touched.txt — parents[2]
+        # must be literally named ".git".
+        d = Path(repo) / ".git" / "coordinator-sessions" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "touched.txt"
+
+    def test_anchor_resolves_repo_root_for_realistic_touched_shape(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        touched = self._touched_path(repo, "sid-anchor")
+        anchor = claims._atomic_dedup_append_lock_anchor(str(touched))
+        assert anchor == Path(os.path.abspath(str(repo)))
+
+    def test_locked_branch_is_taken_for_realistic_repo_layout(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        touched = self._touched_path(repo, "sid-locked")
+        touched.write_text("", encoding="utf-8")
+
+        calls = []
+        real_held_lock = claims.held_lock
+
+        def _spy_held_lock(*args, **kwargs):
+            calls.append((args, kwargs))
+            return real_held_lock(*args, **kwargs)
+
+        monkeypatch.setattr(claims, "held_lock", _spy_held_lock)
+
+        assert claims.atomic_dedup_append(str(touched), "a/b.py") is True
+
+        assert calls, (
+            "held_lock was never invoked — the append silently degraded to "
+            "the pre-C6 unlocked fallback for a realistic <repo>/.git/"
+            "coordinator-sessions/<sid>/touched.txt path"
+        )
+        assert calls[0][1]["anchor_root"] == Path(os.path.abspath(str(repo)))
+
+        verb, _ts, path = scope.parse_touch_event(touched.read_text(encoding="utf-8").splitlines()[0])
+        assert (verb, path) == ("T", "a/b.py")
+
+    def test_concurrent_writers_under_real_repo_lose_nothing(self, tmp_path):
+        # Real subprocesses, not threads: threads do not contend for
+        # held_lock's Windows advisory lock (technique per
+        # test_touch_concurrency_and_attribution.py's module docstring —
+        # verified there that a same-process thread pair never observes the
+        # lock as held).
+        repo = _make_repo(tmp_path)
+        touched = self._touched_path(repo, "sid-concurrent")
+        touched.write_text("", encoding="utf-8")
+
+        repo_root = str(Path(__file__).resolve().parents[3])
+        script = tmp_path / "writer.py"
+        script.write_text(
+            "import sys\n"
+            f"sys.path.insert(0, {repo_root!r})\n"
+            "from coordinator_core.session import claims\n"
+            "touched, entry = sys.argv[1:3]\n"
+            "claims.atomic_dedup_append(touched, entry)\n",
+            encoding="utf-8",
+        )
+
+        n = 8
+        env = dict(os.environ)
+        for key in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "COORDINATOR_SESSION_ID"):
+            env.pop(key, None)
+        procs = [
+            subprocess.Popen(
+                [sys.executable, str(script), str(touched), f"path{i}.py"],
+                env=env,
+                **no_console_creationflags(),
+            )
+            for i in range(n)
+        ]
+        for p in procs:
+            assert p.wait(timeout=30) == 0
+
+        lines = touched.read_text(encoding="utf-8").splitlines()
+        paths = {scope.parse_touch_event(line)[2] for line in lines if line.strip()}
+        expected = {f"path{i}.py" for i in range(n)}
+        assert paths == expected, (
+            f"lost entries under concurrent locked writers: missing "
+            f"{expected - paths}"
+        )
 
 
 # ---------------------------------------------------------------------------

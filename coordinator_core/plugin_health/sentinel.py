@@ -1,6 +1,7 @@
 """
-coordinator_core.plugin_health.sentinel — coordinator-doctor probe suite (P-1..P-19,
-minus the pre-existing P-16 manifest/sentinel skew documented below) and the
+coordinator_core.plugin_health.sentinel — coordinator-doctor probe suite (P-1..P-19
+plus P-23, minus the pre-existing P-16/P-20/P-21/P-22 manifest/sentinel skew
+documented below) and the
 --full-mode `doctor-last-run.json` sentinel writer that scan-addon-health.sh
 (coordinator_core.plugin_health.scan) consumes.
 
@@ -61,7 +62,12 @@ as-is, byte-parity target): doctor-probes.toml declares a P-16 probe (cluster
 body (coordinator-doctor-sentinel.sh @ HEAD, 989 lines) has no `is_active "P-16"`
 probe block at all — the manifest is ahead of the sentinel body. This port faithfully
 reproduces that skew (no probe_p16 function exists here either); fixing it would be a
-behavior change outside this port's parity-preserving scope.
+behavior change outside this port's parity-preserving scope. P-20/P-21/P-22 were added
+to the manifest post-port (bash-version gate, durable-root-pointer confirmation,
+publish-targets drift) and carry the same skew — no probe_p20/p21/p22 function exists
+here, so `--full` silently never evaluates them. Observed while adding P-23 (claude-doe
+wrapper drift, wired up below); out of this change's scope to close — flagged here so
+the gap is discoverable rather than re-found from scratch.
 
 Contract to preserve — LOAD-BEARING, cross-plugin (not one of the 8 T0-frozen
 contracts, but equally so): the sentinel JSON schema (ran_at, verdict, red_probes,
@@ -95,6 +101,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from coordinator_core._settings_home import normalize_native_path, settings_home
 from coordinator_core.install import check_install_singularity
+from coordinator_core.install._shared import require_home
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.ops import probe_onboarding_currency, verify_templates_setup_sync, verify_ue_overrides
@@ -220,6 +227,23 @@ def _default_manifest_path(bin_dir_sibling: Optional[Path]) -> Path:
     if bin_dir_sibling is not None and os.environ.get("COORDINATOR_BIN_ROOT"):
         return bin_dir_sibling / "doctor-probes.toml"
     return _claude_klabauter_bin_root() / "doctor-probes.toml"
+
+
+# Manifest ids with no probe body in this module. Until 2026-08-15 these were
+# simply absent from the dispatch list below, so `--full` reported GREEN having
+# never evaluated them -- a fabricated pass, which is the one thing
+# docs/wiki/doctor-probe-design.md § `inconclusive` Is a First-Class Probe Status
+# forbids. They now report `inconclusive` instead, and the honest amber stands
+# until somebody writes the bodies.
+#
+# P-16 is a documented, deliberate byte-parity skew inherited from the bash port.
+# P-20/P-21/P-22 were added to the manifest with no matching wiring here and went
+# unnoticed because nothing compared the two sets.
+#
+# This list is a debt ledger, not an escape hatch: shrink it by wiring a probe,
+# never grow it to silence a new one.
+# Guard: coordinator/tests/test_doctor_manifest_ssot.py
+_UNWIRED_PROBE_IDS = ("P-16", "P-20", "P-21", "P-22")
 
 
 def _is_runnable_file(path: Path) -> bool:
@@ -1373,6 +1397,127 @@ def probe_p19(lib_dir: Optional[Path], coordinator_root: Optional[Path]) -> List
     return []
 
 
+def _resolve_wrapper_home() -> Path:
+    """Resolve the home probe_p23 checks the installed wrapper against,
+    through the SAME ladder `_install_claude_doe_wrapper`
+    (coordinator_core/install/maximalist.py) uses to pick
+    `claude_home_dir` — `require_home()`'s `CLAUDE_HOME -> HOME ->
+    USERPROFILE` order — rather than re-deriving a second copy of that
+    ladder here.
+
+    Review: code-reviewer (P1) — the prior derivation was
+    `Path(os.environ.get("CLAUDE_HOME") or str(Path.home()))`, which falls
+    through to `Path.home()` (stdlib `ntpath.expanduser`, USERPROFILE
+    before HOME on Windows) once CLAUDE_HOME is unset, instead of
+    `require_home`'s HOME-before-USERPROFILE order. Under a git-bash
+    session where HOME and USERPROFILE diverge — routine on this box —
+    the two ladders resolve to different directories, so the probe was
+    checking a path the installer never wrote its wrapper to: a probe
+    reporting GREEN about a file nobody installs. A second private copy
+    of the installer's ladder is exactly what let this drift in the first
+    place, so this reuses `require_home` directly rather than
+    re-encoding the order a second time.
+
+    Raises `RequireHomeError` (via `require_home`) when none of the three
+    vars is set — `_run_probe`'s catch-all already turns any exception
+    raised by a probe body into a red `"<id> probe crashed"` note, which
+    is the correct fail-loud outcome here: an environment where the
+    installer itself could not have resolved a home is not a case this
+    probe can silently degrade past.
+    """
+    return Path(require_home("plugin_health.sentinel.probe_p23"))
+
+
+def probe_p23(claude_klabauter_root: Path, wrapper_home: Path, sh_bin: Path) -> List[ProbeNote]:
+    """Verify the installed claude-doe wrapper (`~/.local/bin/claude-doe`) has
+    not drifted from its repo source, `<claude_klabauter_root>/coordinator/bin/claude-doe.py`.
+
+    Mirrors `_install_claude_doe_wrapper`'s (coordinator_core/install/maximalist.py)
+    own POSIX/Windows split. POSIX installs `wrapper_dst` as a SYMLINK onto
+    `<settings_bin>/claude-doe` — which `_install_bin_resolvers` regenerates
+    from the same `wrapper_src` on every install pass — so staleness there is
+    structurally impossible; a symlink resolving to that well-known target (or
+    straight to `wrapper_src`) is an unconditional PASS, no content read
+    needed. Windows has no equivalent-cost native symlink story, so
+    `_install_claude_doe_wrapper` falls back to a `shutil.copy2` byte-copy
+    that can silently drift from `wrapper_src` on any edit until the next
+    install pass — this probe is that gap's regression net, closed by a
+    direct byte comparison against `wrapper_src` (cheap: two file reads, no
+    subprocess spawn).
+
+    `claude_klabauter_root` is resolved by the caller from this module's own on-disk
+    location (`Path(__file__).resolve().parents[2]`) rather than through the
+    `coordinator_claude_klabauter_root()` machine-local ladder — this probe already
+    runs from inside a live claude-klabauter checkout, so a self-relative resolution is
+    both cheap (no subprocess) and immune to a stale/unset `repos.claude_klabauter`
+    registry entry that would otherwise misreport an unrelated resolver gap as
+    wrapper drift.
+    """
+    wrapper_src = claude_klabauter_root / "coordinator" / "bin" / "claude-doe.py"
+    wrapper_dst = wrapper_home / ".local" / "bin" / "claude-doe"
+    # Review: code-reviewer (P1) — `wrapper_home` MUST reach here via the
+    # installer's own require_home() ladder (see _resolve_wrapper_home
+    # below), never a re-derived Path.home(): the installer's
+    # CLAUDE_HOME -> HOME -> USERPROFILE order can diverge from
+    # Path.home()'s stdlib priority (USERPROFILE before HOME on Windows,
+    # ntpath.expanduser) under a git-bash session where HOME and
+    # USERPROFILE point at different places — this probe would otherwise
+    # check a path the installer never wrote to and report a false GREEN.
+
+    if not wrapper_src.is_file():
+        # Not this probe's business — an absent source is a broken install
+        # elsewhere (_install_claude_doe_wrapper's own FATAL gate covers it).
+        # Degrade gracefully rather than false-flagging the wrapper as drifted.
+        return _inconclusive("P-23", f"wrapper source not found: {wrapper_src}")
+
+    if wrapper_dst.is_symlink():
+        link_target = sh_bin / "claude-doe"
+        try:
+            resolved = Path(os.readlink(wrapper_dst))
+        except OSError as exc:
+            return _inconclusive(
+                "P-23", f"could not read symlink {wrapper_dst} — {_exec_detail(exc)}"
+            )
+        if resolved in (link_target, wrapper_src):
+            return []
+        return [
+            ProbeNote(
+                "P-23",
+                "amber",
+                f"claude-doe wrapper symlink at {wrapper_dst} points to {resolved}, "
+                f"not {link_target} — resolver drift",
+            )
+        ]
+
+    if not wrapper_dst.is_file():
+        return [
+            ProbeNote(
+                "P-23",
+                "amber",
+                f"claude-doe wrapper not installed at {wrapper_dst}",
+            )
+        ]
+
+    try:
+        src_bytes = wrapper_src.read_bytes()
+        dst_bytes = wrapper_dst.read_bytes()
+    except OSError as exc:
+        return _inconclusive("P-23", f"could not read wrapper files — {_exec_detail(exc)}")
+
+    if src_bytes == dst_bytes:
+        return []
+    return [
+        ProbeNote(
+            "P-23",
+            "amber",
+            f"claude-doe wrapper at {wrapper_dst} has drifted from its repo source "
+            f"{wrapper_src} — Windows has no symlink equivalent, so edits to "
+            "claude-doe.py are inert until the wrapper is re-published (Step 3.5b, "
+            "python scripts/setup.py)",
+        )
+    ]
+
+
 def _fetch_machine_json(whoami_ok: bool, py_bin: str, py_args: List[str]) -> dict:
     """Deliberate isolation boundary, not a candidate for an in-process
     import — runs ``coordinator_whoami.machine`` under ``py_bin``, a
@@ -1505,6 +1650,21 @@ def _resolve_claude_home(claude_home_env: Optional[str]) -> Path:
     return Path(claude_home_env or str(Path.home())) / ".claude"
 
 
+def _this_claude_klabauter_root() -> Path:
+    """Self-relative claude-klabauter-root resolution for probe_p23 — this module lives
+    at `<claude_klabauter_root>/coordinator_core/plugin_health/sentinel.py`, so a
+    running instance of this probe suite already IS inside the claude-klabauter
+    checkout whose wrapper source it needs to read. Deliberately NOT
+    `coordinator_core.claude_klabauter_root.coordinator_claude_klabauter_root()`: that ladder's
+    Rung 2 shells out to `machine-local get repos.claude_klabauter` (a
+    subprocess spawn this `weight = "cheap"` probe must not incur) and can
+    fail on a machine where that registry key drifted — a resolver gap
+    unrelated to wrapper drift that this probe has no business surfacing as
+    P-23 amber.
+    """
+    return Path(__file__).resolve().parents[2]
+
+
 def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     """Fire the selected probe(s) and produce (stdout_lines, stderr_lines, exit_code).
 
@@ -1629,6 +1789,24 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     _run_probe("P-14", lambda: probe_p14(ml_cmd, ch_cmd, sh_bin))
     _run_probe("P-18", lambda: probe_p18(original_claude_home))
     _run_probe("P-19", lambda: probe_p19(lib_dir_sibling, coordinator_root))
+    _run_probe(
+        "P-23",
+        lambda: probe_p23(
+            _this_claude_klabauter_root(),
+            _resolve_wrapper_home(),
+            sh_bin,
+        ),
+    )
+
+    for _unwired in _UNWIRED_PROBE_IDS:
+        if _unwired in active:
+            notes.extend(
+                _inconclusive(
+                    _unwired,
+                    "declared in doctor-probes.toml but no probe body is wired here — "
+                    "this check did NOT run",
+                )
+            )
 
     red_probes = [n.id for n in notes if n.severity == "red"]
     amber_probes = [n.id for n in notes if n.severity == "amber"]

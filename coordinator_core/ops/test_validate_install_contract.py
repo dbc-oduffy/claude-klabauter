@@ -9,11 +9,43 @@ Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
+import yaml
 
+from coordinator_core.ops import validate_install_contract as vic
 from coordinator_core.ops.validate_install_contract import main
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
+def _write_record(records_root: Path, platform: str, machine: str, surface: str, **overrides) -> Path:
+    """Write one platform-outcome record conforming to
+    coordinator/schemas/platform-outcome.schema.json's required fields, with
+    per-field overrides for stale/failing variants."""
+    record = {
+        "platform": platform,
+        "surface": surface,
+        "command": "python3 setup.py --check-only",
+        "outcome": "pass",
+        "exit_code": 0,
+        "observed_at": "2026-08-14T00:00:00Z",
+        "machine": machine,
+        "surface_sha": "deadbeef" * 5,
+        "invoking_repo": "claude-klabauter",
+    }
+    record.update(overrides)
+    platform_dir = records_root / platform / machine
+    platform_dir.mkdir(parents=True, exist_ok=True)
+    path = platform_dir / f"{surface}.yaml"
+    path.write_text(yaml.safe_dump(record), encoding="utf-8")
+    return path
 
 
 def _write_manifest(tmp_path: Path, data: object, name: str = "manifest.json") -> Path:
@@ -311,7 +343,164 @@ def test_point4_empty_tested_platforms_is_valid(tmp_path, capsys):
     manifest["tested_platforms"] = []
     path = _write_manifest(tmp_path, manifest)
     rc = main(["--manifest-path", str(path)])
+    err = capsys.readouterr().err
+    assert rc == 0, err
+    assert "point-4" not in err
+
+
+def test_point4_empty_tested_platforms_no_records_consulted(tmp_path, capsys, monkeypatch):
+    """Empty array is trivially satisfied — derive_tested_platforms must not
+    even be invoked (no records dir needed, no I/O)."""
+    def _boom(*a, **k):
+        raise AssertionError("derive_tested_platforms must not be called for []")
+
+    monkeypatch.setattr(vic, "derive_tested_platforms", _boom)
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = []
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
     assert rc == 0, capsys.readouterr().err
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_point4_absent_records_dir_is_not_a_finding(tmp_path, capsys):
+    """Greenfield repo: state/platform-outcomes/ does not exist at all. Must
+    NOT hard-fail — regressing this would undo commit 9a10aba9's unblock.
+
+    Spawns a real external process (current_repo_sha's `git rev-parse`, left
+    un-monkeypatched here). Spawn ratchet:
+    coordinator_core/tests/test_no_new_spawning_tests.py"""
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = ["macos", "windows"]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 0, err
+    assert "point-4" not in err
+
+
+def test_point4_pyyaml_unavailable_is_not_a_finding(tmp_path, capsys, monkeypatch):
+    """PyYAML unavailable => cannot verify != violation; must not fail."""
+    monkeypatch.setattr(vic, "current_repo_sha", lambda root: None)
+
+    def _raise_import_error(*a, **k):
+        raise ModuleNotFoundError("no module named 'yaml'")
+
+    monkeypatch.setattr(vic, "derive_tested_platforms", _raise_import_error)
+    records_root = tmp_path / "state" / "platform-outcomes"
+    _write_record(records_root, "macos", "mac1", "programmatic_entry_point")
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = ["macos"]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+    assert rc == 0, capsys.readouterr().err
+
+
+def test_point4_present_valid_passing_fresh_record_no_finding(tmp_path, capsys, monkeypatch):
+    fixed_sha = "cafebabe" * 5
+    monkeypatch.setattr(vic, "current_repo_sha", lambda root: fixed_sha)
+    records_root = tmp_path / "state" / "platform-outcomes"
+    _write_record(
+        records_root,
+        "macos",
+        "mac1",
+        "programmatic_entry_point",
+        surface_sha=fixed_sha,
+    )
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = ["macos"]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 0, err
+    assert "point-4" not in err
+
+
+def test_point4_stale_surface_sha_mismatch_finding(tmp_path, capsys, monkeypatch):
+    fixed_sha = "cafebabe" * 5
+    monkeypatch.setattr(vic, "current_repo_sha", lambda root: fixed_sha)
+    records_root = tmp_path / "state" / "platform-outcomes"
+    _write_record(
+        records_root,
+        "macos",
+        "mac1",
+        "programmatic_entry_point",
+        surface_sha="stalestale" * 4,
+    )
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = ["macos"]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "tested_platforms declares 'macos', but no passing, fresh platform-outcome record backs it" in err
+
+
+def test_point4_stale_observed_at_finding(tmp_path, capsys, monkeypatch):
+    """SECONDARY staleness: >30-day-old observed_at, even with a matching
+    surface_sha (achieved here via current_sha=None so PRIMARY never fires)."""
+    monkeypatch.setattr(vic, "current_repo_sha", lambda root: None)
+    records_root = tmp_path / "state" / "platform-outcomes"
+    _write_record(
+        records_root,
+        "macos",
+        "mac1",
+        "programmatic_entry_point",
+        observed_at="2020-01-01T00:00:00Z",
+    )
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = ["macos"]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "tested_platforms declares 'macos'" in err
+
+
+def test_point4_failing_record_finding(tmp_path, capsys, monkeypatch):
+    fixed_sha = "cafebabe" * 5
+    monkeypatch.setattr(vic, "current_repo_sha", lambda root: fixed_sha)
+    records_root = tmp_path / "state" / "platform-outcomes"
+    _write_record(
+        records_root,
+        "macos",
+        "mac1",
+        "programmatic_entry_point",
+        surface_sha=fixed_sha,
+        outcome="fail",
+        exit_code=1,
+    )
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = ["macos"]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "tested_platforms declares 'macos'" in err
+
+
+def test_point4_ceremony_surface_is_grandfathered_not_backing_evidence(tmp_path, capsys, monkeypatch):
+    """A record whose `surface` is a ceremony op id (not an entry-point key)
+    is not backing evidence -> platform has ZERO entry-point-surface records
+    -> grandfathered (already-declared claim preserved), no finding."""
+    fixed_sha = "cafebabe" * 5
+    monkeypatch.setattr(vic, "current_repo_sha", lambda root: fixed_sha)
+    records_root = tmp_path / "state" / "platform-outcomes"
+    _write_record(
+        records_root,
+        "macos",
+        "mac1",
+        "some_ceremony_op_id",
+        surface_sha=fixed_sha,
+    )
+    manifest = _compliant_manifest()
+    manifest["tested_platforms"] = ["macos"]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path), "--repo-root", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert rc == 0, err
+    assert "point-4" not in err
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,15 @@ from pathlib import Path
 from coordinator_core.workday_complete import apply as wc_apply
 from coordinator_core.workday_complete import brief as wc_brief
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _EMPTY = {"today": [], "stale": [], "unreadable_error": None}
 
 

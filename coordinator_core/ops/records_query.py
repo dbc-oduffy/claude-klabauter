@@ -272,6 +272,20 @@ _MEMO_TERMINAL_STATUS = frozenset({
 # (no ``---`` fences — see ``_load_record``'s extension branch below); roadmap
 # and completion have a wildcard DIRECTORY component (``*/``) and are collected
 # via ``_walk_glob_segments`` rather than the single-base-dir fast path.
+#
+# ``tracker`` KEPT LIVE despite the tracker-render retirement plan
+# (docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md):
+# ``coordinator_core.ops.emit.sections.trackers._query_tracker_records`` still calls
+# ``query_records("tracker", ...)`` in-process and feeds claude-central-em's frozen
+# ``contract/cockpit_schema/entities/tracker_summary.py`` — explicitly out-of-scope for
+# this plan's C4 (see the plan's Out-of-scope list) until a coordinated cross-repo cut
+# is memo'd (plan § C6) and the underlying ``docs/project-tracker.md``/section porter
+# are removed (plan § AC8). Removing this entry ahead of that cut makes
+# ``query_records`` raise ``SystemExit(1)``, which ``_query_tracker_records``'s
+# fail-open ``except`` silently swallows into a permanently-empty TrackerSummary —
+# ``test_all_wired_types_present``/``test_glob_values_match_oracle`` in
+# ``coordinator_core/ops/tests/test_records_query.py`` already assert this entry's
+# presence and value and would fail loud if it were dropped again.
 _TYPE_TO_GLOB: dict[str, str] = {
     'handoff':          'state/handoffs/*.md',
     'handoff-archived': 'archive/handoffs/**/*.md',
@@ -1315,7 +1329,7 @@ def _collect_files(worktree_root: Path, record_type: str) -> list[Path]:
 
     # Non-recursive: derive base dir from the glob pattern's directory portion,
     # and match the filename portion (which may be a bare literal like
-    # 'project-tracker.md', a suffix pattern like '*-decisions.md', or an
+    # 'OVERVIEW.md', a suffix pattern like '*-decisions.md', or an
     # extension pattern like '*.yaml') via the same segment-regex the wildcard-
     # dir path uses, rather than a hardcoded `.md` endswith check.
     # e.g. 'state/handoffs/*.md' → worktree_root / 'state' / 'handoffs'

@@ -14,6 +14,13 @@ import pytest
 from coordinator_core.ops import fold_execution_record as fer
 from coordinator_core.testing import symlink_capability
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git_init(repo_root) -> None:
     subprocess.run(["git", "init", "-q"], cwd=str(repo_root), check=True)

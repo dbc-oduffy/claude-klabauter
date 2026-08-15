@@ -124,6 +124,15 @@ from coordinator_core.write_guards.tests._casefold_bypass_lint_baseline import (
     KNOWN_BYPASS_BASELINE,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCAN_DIR = "coordinator_core/write_guards"
 

@@ -72,6 +72,13 @@ from coordinator_core.ops.docgen import template_format as tf
 from coordinator_core.ops.docgen import volatility as vol
 from coordinator_core.ops.docgen.render import render_document
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Oracle resolution (module-scoped — repo-root-relative, no cross-repo clone
 # lookup). The oracle CLI lives in THIS repo as of DoE commit b644d5a9; a

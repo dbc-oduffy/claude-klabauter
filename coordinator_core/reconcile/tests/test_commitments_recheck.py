@@ -38,6 +38,13 @@ from coordinator_core import sibling_fact
 from coordinator_core.reconcile import commitments_recheck
 from coordinator_core.reconcile.commitments_recheck import recheck_commitments
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # Sibling git-repo fixture (mirrors coordinator_core/tests/test_sibling_fact.py)

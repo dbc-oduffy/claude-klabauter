@@ -63,6 +63,108 @@ _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 #: the >120s-wedge class this rebuild exists to kill.
 _DEFAULT_TIMEOUT_SECS = 60
 
+#: Character budget for the pathspec batch handed to a single `diverging_
+#: paths()` `git diff` subprocess call from `commit_scoped()`'s own
+#: divergence check, sized well under the Windows `CreateProcess` command-
+#: line cap (32767 UTF-16 code units) with generous headroom for the
+#: `git.exe` path itself, the fixed `diff --cached --name-only --` argv
+#: prefix, per-argument quoting overhead around any path containing a
+#: space, and the second, unfiltered `git diff --name-only --` call
+#: `diverging_paths()` also issues against the same pathspec. Same value
+#: and reasoning as `commit_pipeline._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS`
+#: (a percolate-publish batch, ~2000-2700 paths, blows the raw 32767 cap
+#: outright on one argv -- `rc=127`, "divergence indeterminate") --
+#: promoted here (2026-08-15) as the shared home for `_chunk_paths()`
+#: itself, so `commit_pipeline.py` imports both rather than growing a
+#: second, independently-drifting copy. See `_chunk_paths()`'s own
+#: docstring for why this module, not `commit_pipeline.py`, is the shared
+#: home: `commit_pipeline.py` already imports `git_native` (this module),
+#: so the reverse import direction would be circular.
+_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = 6000
+
+
+def _chunk_paths(
+    paths: Sequence[str], *, budget_chars: int = _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
+) -> List[List[str]]:
+    """Pack `paths` into argv-safe chunks, each bounded by `budget_chars`.
+
+    Promoted here (2026-08-15) from `commit_pipeline.py` (where it was
+    originally extracted from `_diverging_paths_chunked`, that module's
+    first caller of this packing shape) so `commit_scoped()`'s own chunked
+    `diverging_paths()` divergence check (below) can reuse the identical
+    packer and budget instead of forking a second, subtly-different copy.
+    `commit_pipeline.py` cannot host the shared copy itself: it already
+    imports this module (`from coordinator_core.ops.ceremony import
+    git_native`), so a `git_native` -> `commit_pipeline` import back would
+    be circular. Behaviour is unchanged from the original -- this is a
+    promotion, not a rewrite; `commit_pipeline.py` now imports `_chunk_
+    paths`/`_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS` from here instead of
+    defining its own.
+
+    Packing is greedy and order-preserving: a path never crosses a chunk
+    boundary, and no chunk exceeds `budget_chars` (a single path longer
+    than the budget still gets its own one-path chunk rather than being
+    dropped or truncated -- callers must not assume every chunk is
+    non-trivially sized). Returns `[]` for an empty `paths`, never a
+    single empty chunk.
+    """
+    if not paths:
+        return []
+
+    chunks: List[List[str]] = []
+    chunk: List[str] = []
+    chunk_chars = 0
+    for p in paths:
+        added = len(p) + 1
+        if chunk and chunk_chars + added > budget_chars:
+            chunks.append(chunk)
+            chunk = []
+            chunk_chars = 0
+        chunk.append(p)
+        chunk_chars += added
+    if chunk:
+        chunks.append(chunk)
+    return chunks
+
+
+def _diverging_paths_chunked(
+    paths: Sequence[str],
+    cwd: str,
+    *,
+    timeout: float,
+) -> Set[str]:
+    """Chunked `diverging_paths(..., fail_loud=True)` for `commit_scoped()`'s
+    own divergence check -- closes the same Windows argv-length defect
+    `commit_pipeline._diverging_paths_chunked` closes for `explicit_stage()`,
+    one call site over (this function's own docstring there covers the full
+    incident: at percolate-publish scale, ~2000-2700 paths on one `git diff
+    --cached --name-only` argv exceeds the 32767-char Windows command-line
+    cap, `subprocess` reports `rc=127`, and the whole batch reads as
+    indeterminate even though nothing actually diverged). `git diff` cannot
+    take a `--pathspec-from-file` (verified empirically against this
+    machine's git 2.55.0.windows.3 -- usage error), unlike `git add`/`git
+    commit` below, which is why this call is CHUNKED rather than converted
+    to a pathspec file the way the agree-branch `git add` and the final
+    `git commit` are (see `commit_scoped`'s own docstring for that split).
+
+    Each chunk gets its own independent `diverging_paths()` call -- a
+    path's divergence answer comes from exactly the one chunk it was placed
+    in, never a whole-batch verdict ORed/ANDed across chunks, so a peer
+    session's own deliberate partial-hunk staging protection (state/lessons/
+    2026-08-14-partial-stage-protection-did-not-survive-a-moving-head.md)
+    is preserved at scale, not just at the aggregate. A `DivergenceCheckFailed`
+    from ANY chunk (a genuine `git diff` error, not an argv-length artifact
+    -- each chunk is already sized to avoid that) propagates immediately and
+    uncaught, exactly like an unchunked `fail_loud=True` call would --
+    `commit_scoped()`'s own `try`/`except DivergenceCheckFailed` still
+    refuses the whole call rather than guess at paths whose chunk never got
+    an answer.
+    """
+    diverged: Set[str] = set()
+    for chunk in _chunk_paths(list(paths)):
+        diverged.update(diverging_paths(list(chunk), cwd=cwd, timeout=timeout, fail_loud=True))
+    return diverged
+
 
 @dataclass(frozen=True)
 class GitResult:
@@ -671,8 +773,95 @@ def commit_with_message_file(
 
     Never a bare `git commit` / `git commit -m` — a concurrent sibling's staged
     file or deletion outside `paths` is never absorbed (parity assertions d + e).
+
+    Puts the WHOLE `paths` list on argv, so this is unsafe at the
+    percolate-publish scale (~2000+ paths) that blows the Windows
+    `CreateProcess` 32767-char cap -- `commit_scoped()`'s own agree branch
+    uses `commit_with_message_file_pathspec_scoped()` (below) instead, never
+    this wrapper, for exactly that reason. Kept here unchanged for every
+    other, smaller-batch caller.
     """
     return _git(["commit", "-F", str(msg_file), "--", *paths], cwd=cwd)
+
+
+def _write_pathspec_file(root: Union[str, Path], paths: Sequence[str]) -> Path:
+    """Write `paths` to a uniquely-named temp file, one per line, and return
+    its path -- the newline-delimited input `git ... --pathspec-from-file=<f>`
+    expects by default (git also offers `--pathspec-file-nul` for a NUL-
+    delimited feed; this module picks newline-delimited throughout, both
+    here and in every reader of a file this function produces, since no
+    path this module ever commits/stages contains a literal newline byte
+    and the plain-text form is easier to inspect if a call ever needs
+    debugging). Same PID+uuid uniqueness convention `stage_from_patch()`'s
+    own `temp_index` already uses, for the same reason: two concurrent
+    sessions on this shared machine must never collide on the same temp
+    filename. UTF-8, trailing newline after the last path (matches git's
+    own `--pathspec-from-file=-` stdin convention). Caller owns cleanup
+    (`finally: pathspec_file.unlink(missing_ok=True)`), mirroring the
+    `-F <msgfile>` flow's own discipline elsewhere in this module.
+    """
+    pathspec_file = (
+        Path(tempfile.gettempdir())
+        / f"git-pathspec-{os.getpid()}-{uuid.uuid4().hex}.txt"
+    )
+    pathspec_file.write_text("\n".join(paths) + "\n", encoding="utf-8")
+    return pathspec_file
+
+
+def add_paths_pathspec_file(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:
+    """`git add --pathspec-from-file=<f>` — the percolate-publish-scale-safe
+    sibling of `add_paths()` (which puts the whole `paths` list on argv).
+
+    `commit_scoped()`'s own agree branch is the sole caller (2026-08-15,
+    the last of the five argv-length sites this repo's commit path had --
+    siblings `ef84c2ee9`/`fe0f4eb84`/`25268ed33`/`47e8defbb` closed the
+    other four): staging is not chunked here, unlike `_diverging_paths_
+    chunked()` above, because `git add --pathspec-from-file=<f>` is
+    empirically SUPPORTED (verified against this machine's git
+    2.55.0.windows.3, in a scratch repo -- unlike `git diff`, which
+    rejects `--pathspec-from-file` outright) -- one pathspec-file call
+    replaces one argv-list call with no chunking needed, and no atomicity
+    concern either (staging is not the commit itself).
+    """
+    root = Path(cwd)
+    pathspec_file = _write_pathspec_file(root, paths)
+    try:
+        return _git(["add", f"--pathspec-from-file={pathspec_file}"], cwd=root)
+    finally:
+        pathspec_file.unlink(missing_ok=True)
+
+
+def commit_with_message_file_pathspec_scoped(
+    cwd: Union[str, Path], msg_file: Union[str, Path], paths: Sequence[str]
+) -> GitResult:
+    """`git commit -F <msg_file> --pathspec-from-file=<f>` — the
+    percolate-publish-scale-safe sibling of `commit_with_message_file()`
+    (which puts the whole `paths` list on argv, the exact defect this
+    module's own docstring section describes commit_scoped() closing).
+
+    `commit_scoped()`'s own agree branch is the sole caller. Deliberately
+    NEVER chunked, unlike `_diverging_paths_chunked()`/`add_paths_pathspec_
+    file()` above -- `commit_scoped()`'s whole contract is that the named
+    pathspec lands as EXACTLY ONE commit; splitting one commit into several
+    to dodge an argv limit would trade the Windows argv bug for an
+    atomicity bug, which is strictly worse (a half-landed multi-commit
+    batch on a shared branch, versus a single command that fails cleanly).
+    `--pathspec-from-file` sidesteps the argv limit entirely instead:
+    empirically verified SUPPORTED for `git commit` (a commit landed, rc 0,
+    against this machine's git 2.55.0.windows.3, in a scratch repo) --
+    unlike `git diff --cached --name-only --pathspec-from-file=<f>`, which
+    is a usage error (see `_diverging_paths_chunked()`'s own docstring for
+    why THAT call stays chunked instead).
+    """
+    root = Path(cwd)
+    pathspec_file = _write_pathspec_file(root, paths)
+    try:
+        return _git(
+            ["commit", "-F", str(msg_file), f"--pathspec-from-file={pathspec_file}"],
+            cwd=root,
+        )
+    finally:
+        pathspec_file.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +904,144 @@ def _parse_ls_files_cacheinfo(stdout: str) -> List[_CacheInfoEntry]:
     return entries
 
 
+#: Sentinel distinguishing "this path's blob could not be READ" (a `git`
+#: subprocess failure) from `None` ("this path genuinely has no entry" --
+#: untracked, staged-deletion, absent from HEAD). Identity-compared only
+#: (never `==`'d against a real sha string) -- see `_index_blobs`/
+#: `_head_blobs`'s own docstrings for the missed-refusal this closes
+#: (code-reviewer finding, bf7bab8ce37c review, P1 "degraded reads").
+_GIT_READ_FAILED = object()
+
+#: Sentinel distinguishing "git's output could not be tied back to this
+#: caller's own key string" from `None` ("this path genuinely has no
+#: entry"). Primary cause: a case-divergent match on a case-insensitive
+#: filesystem (`core.ignorecase` -- the Windows default) -- git's pathspec
+#: matching finds the tracked entry under its OWN tracked case, which never
+#: equals the caller's differently-cased key even after `_normalize_path_
+#: key`'s deliberately-not-case-folding normalization (see that function's
+#: own docstring for why case-folding there would be wrong). Left at `None`
+#: this reads as "absent" and silently exempts the path from the whole CAS
+#: check (PM follow-up on the P1 path-key-mismatch review finding,
+#: bf7bab8ce37c: "an unreconciled caller key must REFUSE, not pass").
+_GIT_PATH_UNRECONCILED = object()
+
+
+def _normalize_path_key(path: str) -> str:
+    """Canonical lookup key for reconciling a git-PRINTED path back to the
+    CALLER's own key string in `_index_blobs`/`_head_blobs`. Strips a
+    `./`-prefix and folds backslash separators to forward slashes -- the two
+    reconciliation gaps the P1 "path-key mismatch" review finding named
+    alongside C-quoting (which `-z` on the git invocation itself already
+    eliminates -- see `_parse_git_z_cacheinfo`). Deliberately does NOT case-
+    fold: a genuine case divergence (Windows caller case vs. tracked-case)
+    is a real ambiguity this function must not paper over by guessing which
+    case is "right" -- callers reconcile via this normalized key and, on a
+    genuine remaining miss, keep the git-printed path as its own key rather
+    than silently dropping the entry (see `_index_blobs`/`_head_blobs`).
+    """
+    return path.replace("\\", "/").removeprefix("./")
+
+
+def _parse_git_z_cacheinfo(stdout: str) -> List[Tuple[List[str], str]]:
+    """Split NUL-separated `git ls-files -s -z` / `git ls-tree HEAD -z`
+    output into `(meta_fields, path)` pairs -- the shared low-level
+    primitive behind both `_index_blobs` and `_head_blobs`'s parsing.
+
+    Consolidated (code-reviewer finding, bf7bab8ce37c review, P2) so a
+    porcelain-format fix is applied ONCE, not to two independently hand-
+    rolled parsers that can silently drift apart (as `_head_blobs`'s
+    previous parser had from `_parse_ls_files_cacheinfo`). `-z` (never the
+    newline-separated default) is required so a path containing a non-ASCII
+    byte, backslash, quote, or tab is never C-quoted under git's default
+    `core.quotePath=true` -- an unquoted key is a precondition for
+    `_normalize_path_key` reconciliation to ever succeed (code-reviewer
+    finding, bf7bab8ce37c review, P1 "path-key mismatch").
+
+    A malformed/short chunk yields `([], path-or-less)`-shaped tuples where
+    `meta_fields` simply has the wrong length -- callers check
+    `len(meta_fields)` themselves and skip rather than this function
+    guessing at their format's field count.
+    """
+    entries: List[Tuple[List[str], str]] = []
+    for chunk in stdout.split("\0"):
+        if not chunk:
+            continue
+        meta, _, path = chunk.partition("\t")
+        entries.append((meta.split(), path))
+    return entries
+
+
+def _case_insensitive_rescan(
+    root: Path,
+    subcommand_args: Sequence[str],
+    still_null_paths: Sequence[str],
+) -> Optional[List[Tuple[List[str], str]]]:
+    """Re-query `still_null_paths` (paths the PRIMARY, case-sensitive
+    pathspec query found no entry for) using git's explicit `:(icase)`
+    pathspec magic, and return the parsed `(meta_fields, path)` entries --
+    or `None` if the rescan itself failed (git error, not "found nothing").
+
+    Empirically verified (2026-08-14, this repo's own git): a bare literal
+    pathspec (`git ls-files -- file.txt`) is CASE-SENSITIVE regardless of
+    `core.ignorecase` -- a caller-supplied path differing only in case from
+    a tracked `File.txt` matches NOTHING in the primary query, so the path
+    reads as ordinary `None` (untracked), not as an unreconciled printed
+    entry `_mark_unreconciled` can catch. The real hazard lives one layer
+    further down: `git add -- file.txt` DOES silently reuse the existing
+    `File.txt` index entry (git's own case-insensitive-filesystem collision
+    avoidance -- verified empirically, same session) -- so a CAS snapshot
+    that reads `None` for `file.txt` on BOTH sides never trips `moved`, yet
+    the agree branch's own `git add`/`git commit` a few lines later DOES
+    silently touch the tracked `File.txt` entry. This rescan is what makes
+    that case visible to the snapshot: `:(icase)` pathspec magic performs
+    an explicit case-INSENSITIVE match (independent of `core.ignorecase`,
+    verified empirically), so a still-null caller path that in fact
+    resolves to a differently-cased tracked entry is surfaced here and fed
+    to `_mark_unreconciled` exactly like a quoting/`./`-prefix mismatch --
+    PM follow-up on the P1 path-key-mismatch review finding, bf7bab8ce37c.
+    """
+    if not still_null_paths:
+        return []
+    icase_pathspecs = [f":(icase){p}" for p in still_null_paths]
+    result = _git([*subcommand_args, "--", *icase_pathspecs], cwd=root)
+    if not result.ok:
+        return None
+    return _parse_git_z_cacheinfo(result.stdout)
+
+
+def _mark_unreconciled(
+    blobs: Dict[str, object],
+    paths: Sequence[str],
+    matched_normalized: Set[str],
+    unreconciled_entries: Sequence[Tuple[str, str]],
+) -> None:
+    """Force every caller path in `paths` that `git`'s printed output could
+    not be tied back to (via `_normalize_path_key`) from its unmatched
+    `None` default into `_GIT_PATH_UNRECONCILED`, mutating `blobs` in place.
+
+    `unreconciled_entries` is `(git-printed-path, sha)` pairs already parsed
+    but whose normalized form matched no caller key -- the primary cause is
+    a case-divergent match (see `_GIT_PATH_UNRECONCILED`'s own docstring).
+    Case-INSENSITIVE matching is used ONLY here, to attribute a printed
+    entry back to the specific caller path it most likely answers for so
+    the refusal message can name it -- never to key `blobs` itself (that
+    would be the case-folding `_normalize_path_key`'s own docstring already
+    rules out). When no caller path case-insensitively matches a given
+    printed entry, every still-unmatched caller path is marked instead --
+    conservative by construction: refuse rather than guess which one.
+    """
+    unmatched = {
+        _normalize_path_key(p): p for p in paths if _normalize_path_key(p) not in matched_normalized
+    }
+    if not unmatched:
+        return
+    for printed_path, _sha in unreconciled_entries:
+        printed_cf = _normalize_path_key(printed_path).casefold()
+        candidates = [orig for norm, orig in unmatched.items() if norm.casefold() == printed_cf]
+        for target in candidates or list(unmatched.values()):
+            blobs[target] = _GIT_PATH_UNRECONCILED
+
+
 def _trailer_value(msg_text: str, prefix: str) -> Optional[str]:
     """Return the (stripped) value of the first line in `msg_text` starting
     with `prefix` (e.g. `"Deliverable-Id:"`), or `None` if no such line
@@ -731,7 +1058,9 @@ def _trailer_value(msg_text: str, prefix: str) -> Optional[str]:
     return None
 
 
-def _check_deliverable_id_precedence(msg_text: str, deliverable_id: str) -> bool:
+def _check_deliverable_id_precedence(
+    msg_text: str, deliverable_id: str, equivalence_map: Optional[dict] = None
+) -> bool:
     """PM ruling (2), `docs/plans/2026-08-10-a-commit-trailer-that-names-
     the-session.md` chunk C7a: the precedence between an explicit caller-
     supplied `deliverable_id` and a pre-existing `Deliverable-Id:` trailer
@@ -760,7 +1089,11 @@ def _check_deliverable_id_precedence(msg_text: str, deliverable_id: str) -> bool
     existing = _trailer_value(msg_text, "Deliverable-Id:")
     if existing is None:
         return True
-    if existing == deliverable_id:
+
+    from coordinator_core.ops.deliverable_equivalence import canonicalize
+
+    equivalence_map = equivalence_map or {}
+    if canonicalize(existing, equivalence_map) == canonicalize(deliverable_id, equivalence_map):
         return False
 
     from coordinator_core.ops.deliverable_carry import DivergentDeliverableIdError
@@ -859,12 +1192,696 @@ def _validate_explicit_deliverable_id(deliverable_id: str, root: Path) -> Option
     return None
 
 
+def _index_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
+    """Return `{path: index-blob-sha}` for `paths`, via `git ls-files -s -z`.
+    A path with no index entry (untracked, or deleted-from-index) maps to
+    `None`. On a `git` failure, EVERY entry maps to `_GIT_READ_FAILED` --
+    NOT `None` -- so a caller comparing against a prior snapshot can never
+    read a degraded read as "genuinely absent" (code-reviewer finding,
+    bf7bab8ce37c review, P1 "degraded reads": the previous all-`None`
+    degrade was claimed refuse-leaning but was not -- see
+    `_agree_branch_cas_refusal`'s own use of this sentinel for the two
+    directions that claim was false in).
+
+    `-z` (never the newline-separated default) means git prints each path
+    UNQUOTED, and the result is reconciled back to the caller's own key
+    string via `_normalize_path_key` (a `./`-prefix or backslash-separator
+    difference no longer leaves the caller's key permanently unmatched --
+    code-reviewer finding, bf7bab8ce37c review, P1 "path-key mismatch"). A
+    printed path that still cannot be reconciled to any caller key is kept
+    under its own git-printed key AS DIAGNOSTICS (visible, never dropped),
+    and every caller path it could plausibly answer for is forced to
+    `_GIT_PATH_UNRECONCILED` (never left at `None`) -- see
+    `_GIT_PATH_UNRECONCILED`'s own docstring for the case-divergence hazard
+    this closes (PM follow-up, bf7bab8ce37c review P1).
+
+    Chunked (2026-08-15, `_chunk_paths()` -- same packer/budget `_diverging_
+    paths_chunked()` uses, promoted here from `commit_pipeline.py`): this
+    function's own `pre_index_blobs`/`current_index_blobs` snapshot reads,
+    taken by `commit_scoped()`'s Layer-1 CAS (`_agree_branch_cas_refusal`)
+    BEFORE and immediately before the agree branch's own `git add`, put the
+    WHOLE `paths` list on `git ls-files -s -z --` argv -- at percolate-
+    publish scale this blows the same 32767-char Windows `CreateProcess` cap
+    the divergence check does, and a `git` failure here degrades EVERY path
+    to `_GIT_READ_FAILED`, which `_agree_branch_cas_refusal` reads as
+    "moved" -- so an unchunked call here would make the agree branch refuse
+    EVERY commit at this scale, not just fail to detect a real race.
+    Chunking is per-chunk-failure, not whole-batch: a `git` failure in one
+    chunk marks only that chunk's paths `_GIT_READ_FAILED` (mirrors
+    `commit_pipeline._ls_files_deleted_chunked`'s own established per-chunk-
+    failure idiom), so an argv-length artifact in a later chunk no longer
+    taints paths a healthy earlier chunk already answered for. The `:(icase)`
+    rescan (`still_null`, below) is chunked identically, for the same reason.
+    """
+    if not paths:
+        return {}
+    blobs: Dict[str, object] = {p: None for p in paths}
+    key_by_normalized = {_normalize_path_key(p): p for p in paths}
+    matched: Set[str] = set()
+    unreconciled: List[Tuple[str, str]] = []
+    for chunk in _chunk_paths(list(paths)):
+        result = _git(["ls-files", "-s", "-z", "--", *chunk], cwd=root)
+        if not result.ok:
+            for p in chunk:
+                blobs[p] = _GIT_READ_FAILED
+            continue
+        for parts, path in _parse_git_z_cacheinfo(result.stdout):
+            if len(parts) != 3:
+                continue
+            mode, sha, _stage = parts
+            norm = _normalize_path_key(path)
+            key = key_by_normalized.get(norm)
+            if key is not None:
+                blobs[key] = sha
+                matched.add(norm)
+            else:
+                blobs[path] = sha
+                unreconciled.append((path, sha))
+
+    still_null = [p for p in paths if blobs[p] is None]
+    for rescan_chunk in _chunk_paths(still_null):
+        rescanned = _case_insensitive_rescan(root, ["ls-files", "-s", "-z"], rescan_chunk)
+        if rescanned is None:
+            for p in rescan_chunk:
+                blobs[p] = _GIT_READ_FAILED
+        else:
+            for parts, path in rescanned:
+                if len(parts) != 3:
+                    continue
+                unreconciled.append((path, parts[1]))
+
+    if unreconciled:
+        _mark_unreconciled(blobs, paths, matched, unreconciled)
+    return blobs
+
+
+def _head_blobs(root: Path, paths: Sequence[str]) -> Dict[str, object]:
+    """Return `{path: HEAD-blob-sha}` for `paths`, via `git ls-tree HEAD -z`.
+    A path absent from HEAD (new/untracked) maps to `None`. Same
+    `_GIT_READ_FAILED`-on-failure, `-z`+`_normalize_path_key`-reconciliation
+    posture as `_index_blobs` above -- see that function's own docstring;
+    both route through the shared `_parse_git_z_cacheinfo` primitive so a
+    porcelain-format fix never has to be applied to one and re-forgotten on
+    the other (code-reviewer finding, bf7bab8ce37c review, P2).
+
+    One legitimate non-`git`-failure cause of `not result.ok` here: an
+    UNBORN branch (no commit has ever landed on this ref yet -- the very
+    first `commit_scoped()` call in a fresh repo, exercised by this repo's
+    own `test_op_schema_accepts_string_deliverable_id`). Git's stable
+    diagnostic for that case is `"fatal: Not a valid object name HEAD"`
+    (verified empirically against this repo's own git, 2026-08-14) --
+    matched here and treated as the ordinary "every path absent from HEAD"
+    answer (`None`, not `_GIT_READ_FAILED`), since there genuinely is no
+    HEAD tree to have failed to read. Any OTHER non-zero exit (git missing,
+    corrupt repo, timeout, permission error) still maps to
+    `_GIT_READ_FAILED`.
+
+    Deliberately has NO `:(icase)` rescan of its own, unlike `_index_blobs`
+    -- `git ls-tree` REJECTS that pathspec magic outright (`fatal: pathspec
+    magic not supported by this command: 'icase'`, verified empirically,
+    2026-08-14; an earlier version of this fix tried it here and broke
+    every ordinary new-file commit, since the rescan's own git failure was
+    then indistinguishable from a real `_GIT_READ_FAILED`). Not a gap: the
+    case-divergence hazard this exists to catch (`git add` silently reusing
+    an EXISTING INDEX entry under a different case) is entirely an
+    index-side fact -- `_index_blobs`'s own `:(icase)` rescan already forces
+    `_GIT_PATH_UNRECONCILED` into `pre_index_blobs`/`current_index_blobs`
+    for that path, which `_agree_branch_cas_refusal` already refuses on
+    before `_head_blobs`'s answer for that same path is ever consulted.
+
+    Chunked (2026-08-15) for the identical percolate-publish-scale argv-
+    length reason `_index_blobs()`'s own docstring documents -- same
+    `_chunk_paths()` packer, same per-chunk-failure posture (a `git`
+    failure in one chunk marks only that chunk's paths `_GIT_READ_FAILED`,
+    never the whole batch). The unborn-HEAD case (`"not a valid object name
+    head"`) is checked PER CHUNK, not once up front: an unborn branch fails
+    identically on every chunk's own `git ls-tree HEAD` call, so this is
+    behaviour-preserving (every path still resolves to the ordinary
+    "absent from HEAD" `None`, never `_GIT_READ_FAILED`) while staying
+    chunk-local like every other failure branch here.
+    """
+    if not paths:
+        return {}
+    blobs: Dict[str, object] = {p: None for p in paths}
+    key_by_normalized = {_normalize_path_key(p): p for p in paths}
+    matched: Set[str] = set()
+    unreconciled: List[Tuple[str, str]] = []
+    for chunk in _chunk_paths(list(paths)):
+        result = _git(["ls-tree", "HEAD", "-z", "--", *chunk], cwd=root)
+        if not result.ok:
+            if "not a valid object name head" in result.stderr.strip().lower():
+                continue
+            for p in chunk:
+                blobs[p] = _GIT_READ_FAILED
+            continue
+        for parts, path in _parse_git_z_cacheinfo(result.stdout):
+            if len(parts) != 3:
+                continue
+            _mode, _type, sha = parts
+            norm = _normalize_path_key(path)
+            key = key_by_normalized.get(norm)
+            if key is not None:
+                blobs[key] = sha
+                matched.add(norm)
+            else:
+                blobs[path] = sha
+                unreconciled.append((path, sha))
+    if unreconciled:
+        _mark_unreconciled(blobs, paths, matched, unreconciled)
+    return blobs
+
+
+def _agree_branch_cas_refusal(
+    root: Path,
+    path_list: Sequence[str],
+    pre_index_blobs: Dict[str, object],
+    pre_head_blobs: Dict[str, object],
+) -> Optional["GitResult"]:
+    """Intra-invocation compare-and-swap for `commit_scoped()`'s AGREE branch
+    (2026-08-14, `state/audits/2026-08-14-scoped-commit-partial-stage-
+    sweep.md`, "Layer 1"). `commit_scoped()` snapshots each path's index/HEAD
+    blob BEFORE its own `diverging_paths()` call; this function re-observes
+    both right before the agree branch's `git add` and refuses (rather than
+    silently proceeding) if either signal shows the world moved inside THIS
+    call's own check-then-act window:
+
+      - the path's INDEX entry no longer matches the snapshot (some
+        writer -- a peer's `git add`, a peer's own agree-branch stage, a
+        peer's private-index commit that never touches the shared index --
+        touched it), or
+      - HEAD now carries exactly the blob that was staged at snapshot time,
+        while that staged blob differed from HEAD's blob AT snapshot time
+        (the incident's own tell: "my staged content is already in
+        history -- someone else committed it"). Deliberately conditioned on
+        `pre_index != pre_head` at snapshot time -- an ordinary already-
+        staged==HEAD path (nothing pending) must never trip this, or every
+        ordinary no-op commit attempt would refuse.
+
+    Returns `None` when neither signal fires (the overwhelming-majority
+    case -- nothing moved). Returns a failed `GitResult` naming which paths
+    tripped which signal otherwise; `commit_scoped()` returns this directly,
+    never falling through to `git add`.
+
+    Deliberately session-blind, matching every other predicate in this
+    module (PM ruling, `_check_claim_conflicts()` removal, 2026-08-13): this
+    is a blob-identity check, not an ownership/claim gate -- it does not ask
+    WHO moved the world, only THAT it moved.
+
+    Degraded-read posture (code-reviewer finding, bf7bab8ce37c review, P1
+    "degraded reads"): `_index_blobs`/`_head_blobs` map a `git` failure to
+    `_GIT_READ_FAILED`, a sentinel distinct from `None` (genuine absence).
+    Any path whose PRE or CURRENT index read failed is forced into `moved`
+    unconditionally -- a degraded snapshot no longer silently disables the
+    absorbed-check for the rest of the call (it forces immediate refusal
+    instead of leaving `absorbed_candidates` permanently unable to see it),
+    and a degraded-vs-degraded pair no longer reads as `None == None` ->
+    "nothing moved" (identity-compared, `_GIT_READ_FAILED != _GIT_READ_FAILED`
+    is never reached -- the explicit `is` check above it fires first). A
+    degraded CURRENT `_head_blobs` read during the absorbed re-check is
+    treated the same way: unable to confirm the path is safe, so it is
+    added to `absorbed` (refuse) rather than silently excluded.
+
+    Unkeyable-path posture (PM follow-up on the P1 path-key-mismatch
+    finding, bf7bab8ce37c review): `_index_blobs`/`_head_blobs` map a path
+    git's output could not be tied back to the caller's own key string
+    (case divergence, primarily) to `_GIT_PATH_UNRECONCILED`, distinct from
+    both `None` (genuinely absent) and `_GIT_READ_FAILED` (git itself
+    failed). Any path whose PRE or CURRENT index read is unreconciled is
+    refused immediately and reported by name (`unkeyable`, below), never
+    folded into the generic `moved` wording that implies a real content
+    change was observed -- there is no observation here, only an inability
+    to key the path at all.
+    """
+    current_index_blobs = _index_blobs(root, path_list)
+    moved: List[str] = []
+    unkeyable: List[str] = []
+    for p in path_list:
+        cur = current_index_blobs.get(p)
+        pre = pre_index_blobs.get(p)
+        if cur is _GIT_PATH_UNRECONCILED or pre is _GIT_PATH_UNRECONCILED:
+            unkeyable.append(p)
+        elif cur is _GIT_READ_FAILED or pre is _GIT_READ_FAILED or cur != pre:
+            moved.append(p)
+
+    excluded = set(moved) | set(unkeyable)
+    absorbed_candidates = [
+        p
+        for p in path_list
+        if p not in excluded
+        and pre_index_blobs.get(p) is not None
+        and pre_index_blobs.get(p) != pre_head_blobs.get(p)
+    ]
+    absorbed: List[str] = []
+    if absorbed_candidates:
+        current_head_blobs = _head_blobs(root, absorbed_candidates)
+        for p in absorbed_candidates:
+            chb = current_head_blobs.get(p)
+            if chb is _GIT_READ_FAILED or chb is _GIT_PATH_UNRECONCILED or chb == pre_index_blobs.get(p):
+                absorbed.append(p)
+
+    if not moved and not absorbed and not unkeyable:
+        return None
+
+    detail: List[str] = []
+    if moved:
+        detail.append(f"index entry changed since this call's own snapshot: {', '.join(moved)}")
+    if unkeyable:
+        detail.append(
+            "could not be matched to an index/HEAD entry (git's output did not "
+            f"reconcile to this caller-supplied path -- likely a case-divergent "
+            f"match): {', '.join(unkeyable)}"
+        )
+    if absorbed:
+        detail.append(
+            "HEAD now carries this call's own staged blob (a peer committed it "
+            f"first): {', '.join(absorbed)}"
+        )
+    return GitResult(
+        returncode=-1,
+        stdout="",
+        stderr=(
+            "commit_scoped: compare-and-swap refused -- "
+            + "; ".join(detail)
+            + ". Re-run once current state is freshly re-observed; refusing to "
+            "restage from the worktree over content that may already be "
+            "someone else's committed history "
+            "(state/audits/2026-08-14-scoped-commit-partial-stage-sweep.md)."
+        ),
+    )
+
+
+#: The three content sources `_resolve_content_sources` can resolve a path
+#: to. String constants (not an enum) so they compare/format cheaply and
+#: read plainly in a diagnostic -- see that function's own docstring.
+_SOURCE_SUPPLIED = "supplied-blob"
+_SOURCE_STAGED = "staged-blob"
+_SOURCE_WORKTREE = "worktree"
+
+#: Mode recorded for a supplied-blob cacheinfo entry until a real producer
+#: exists. C2 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md)
+#: introduces `stage_from_patch()`, the first caller of `supplied_blobs`;
+#: this chunk only wires the resolution's plumbing through with an empty
+#: default, so no real mode has ever been observed here yet. `100644`
+#: (ordinary non-executable file) matches every path this repo's own
+#: `--stage-patch` use case targets; C2 owns deciding whether a supplied
+#: blob ever needs to preserve an executable bit.
+_SUPPLIED_BLOB_MODE = "100644"
+
+
+@dataclass(frozen=True)
+class StagePatchResult:
+    """Typed result of `stage_from_patch()` -- C2,
+    docs/plans/2026-08-14-the-tool-stages-what-it-commits.md.
+
+    Fields:
+        ok — True iff the patch applied cleanly under the private index and
+            every named path was keyable. False on any refusal (see
+            `reason`); on False, `blobs`/`head_blobs` are both `{}` --
+            never a partial result a caller could mistake for "some paths
+            succeeded" (AC3's atomicity: nothing is committed to
+            `_commit_scoped_private_index` on a False result).
+        blobs — `{path: blob_sha}` for every path in the bounded pathspec
+            the patch actually wrote NEW content for (as read back from the
+            private index post-apply). A path in the pathspec the patch did
+            not touch is simply absent here -- this is the additive-per-path
+            shape AC4 (C3) consumes; `stage_from_patch()` itself makes no
+            claim about what happens to an absent path (that is a
+            downstream, C3, resolution question via `_resolve_content_
+            sources`).
+        head_blobs — `{path: HEAD-blob-sha-or-None}` for every path in the
+            bounded pathspec, taken via `_head_blobs()` BEFORE the private
+            index is touched -- the AC2 base-hole snapshot. A caller
+            committing these `blobs` later MUST re-check this snapshot
+            against HEAD immediately before committing via
+            `stage_from_patch_cas_refusal()` (this module) -- never commit
+            straight off a `StagePatchResult` without re-observing HEAD.
+        stderr — diagnostic text on a `False` result; "" on success.
+        reason — a short machine-readable tag distinguishing refusal causes
+            ("apply-failed", "index-infra-failure", "unkeyable-path",
+            "empty-pathspec", "directory-pathspec"); "" on success. Callers
+            building AC7's distinct exit paths (C3) key off this, not off
+            `stderr` text. "apply-failed" is reserved for a genuine bad-hunk
+            (the patch's own content does not apply, verified not already-
+            applied via the reverse-check below); "index-infra-failure" is
+            the private index's own plumbing breaking (`read-tree HEAD`, the
+            post-apply `ls-files` read) -- a corrupt/unreadable repo state,
+            not a patch/content problem, and worth distinguishing from
+            "apply-failed" for anyone debugging off `reason` alone (review:
+            coordinator:code-reviewer 1ead6ae2, finding 1).
+    """
+
+    ok: bool
+    blobs: Dict[str, str]
+    head_blobs: Dict[str, object]
+    stderr: str = ""
+    reason: str = ""
+
+
+def patch_touched_paths(patch_path: Union[str, Path], cwd: Union[str, Path]) -> Set[str]:
+    """AC4 (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md):
+    the set of paths `patch_path` touches, WITHOUT applying it or mutating
+    anything -- `git apply --numstat` parses the patch text only, spawning
+    no read against the repository's own index/worktree/HEAD. Used by
+    `commit_pipeline.run_commit_pipeline()` to decide, BEFORE staging runs,
+    which of the caller's `stage_paths` a `stage_patch` will cover (and must
+    therefore never see an ordinary `git add`) vs. which fall through to
+    today's staged-or-worktree route unchanged (and DO need an ordinary
+    `git add` so the dirty-tree gate can attribute them).
+
+    Returns an empty set (never raises) on a malformed/unreadable patch --
+    the caller is expected to treat "nothing covered" the same as any other
+    zero-overlap case; `stage_from_patch()` itself is the one authority that
+    FAILS LOUD on a genuinely bad patch, at apply time.
+    """
+    result = _git(["apply", "--numstat", str(patch_path)], cwd=Path(cwd))
+    if not result.ok:
+        return set()
+    touched: Set[str] = set()
+    for line in result.stdout.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3:
+            touched.add(_normalize_path_key(parts[2].strip()))
+    return touched
+
+
+def stage_from_patch(
+    patch_path: Union[str, Path],
+    paths: Sequence[str],
+    cwd: Union[str, Path],
+) -> StagePatchResult:
+    """Apply `patch_path` under a process-private temporary index (`GIT_INDEX_
+    FILE`, seeded from `read-tree HEAD` -- the SAME idiom `_commit_scoped_
+    private_index` already uses, deliberately not reinvented here), bounded
+    to `paths`, and return the blob each named path resolved to.
+
+    NEVER writes to the shared repo index. This is the whole load-bearing
+    property of the plan (Approach, staff-eng review findings 1/1a/1b): a
+    private index is unforgeable by a peer, so a blob this function reports
+    is provenance BY CONSTRUCTION, never by asking who a session is. If a
+    future edit here reaches for the shared index "for convenience", it
+    reintroduces the exact incident this plan exists to close
+    (`state/audits/2026-08-14-scoped-commit-partial-stage-sweep.md`).
+
+    AC2's base hole: `head_blobs` on the returned `StagePatchResult` is each
+    path's HEAD blob taken via `_head_blobs()` BEFORE the private index is
+    touched (git-tree-atomic with the `read-tree HEAD` that seeds the
+    private index a few lines later -- both read the same ref). A caller
+    that later commits `.blobs` MUST re-check `.head_blobs` against a FRESH
+    `_head_blobs()` read immediately before committing
+    (`stage_from_patch_cas_refusal`, below) -- if a peer committed to one of
+    these paths between this call and that later commit, the mirror-image
+    CAS refuses rather than silently reverting the peer's committed hunks.
+    This function itself does not re-check at commit time (staging and
+    committing are two different moments; the caller owns bridging them in
+    one invocation, per the plan's anti-scope: no persisted fingerprint).
+
+    AC3's atomicity: `git apply --cached` against the private temp index is
+    all-or-nothing per invocation. A failed apply (bad patch, hunk that does
+    not apply) returns `ok=False, reason="apply-failed"` with `blobs={}` --
+    the temp index is discarded (`finally: unlink`) and the shared index was
+    never touched, so there is no residue to roll back.
+
+    Reuse, not re-derivation: a path this primitive cannot key back to a
+    caller-supplied string (`_GIT_PATH_UNRECONCILED`) or whose read failed
+    outright (`_GIT_READ_FAILED`) is a REFUSAL of the whole call
+    (`reason="unkeyable-path"`), exactly the posture `_agree_branch_cas_
+    refusal` already takes for the same two sentinels -- never a silent
+    per-path skip that could leave `blobs` looking complete when it is not.
+    """
+    root = Path(cwd)
+    path_list = list(paths)
+
+    if not path_list:
+        return StagePatchResult(
+            ok=False, blobs={}, head_blobs={},
+            stderr="stage_from_patch: empty pathspec refused -- nothing to bound the apply to",
+            reason="empty-pathspec",
+        )
+
+    dir_paths = directory_pathspecs(root, path_list)
+    if dir_paths:
+        return StagePatchResult(
+            ok=False, blobs={}, head_blobs={},
+            stderr=f"stage_from_patch: {directory_pathspec_diagnostic(dir_paths[0])}",
+            reason="directory-pathspec",
+        )
+
+    # AC2 base-hole snapshot -- taken BEFORE the private index exists, off
+    # the SAME HEAD the private index is about to be seeded from a few
+    # lines below. Any degraded/unkeyable read here refuses the WHOLE call
+    # rather than silently staging over a path this primitive cannot later
+    # prove was untouched by a peer commit.
+    head_blobs_at_apply = _head_blobs(root, path_list)
+    if any(
+        v is _GIT_READ_FAILED or v is _GIT_PATH_UNRECONCILED
+        for v in head_blobs_at_apply.values()
+    ):
+        return StagePatchResult(
+            ok=False, blobs={}, head_blobs={},
+            stderr=(
+                "stage_from_patch: refusing -- HEAD blob could not be read/keyed "
+                f"for one or more paths: {path_list}"
+            ),
+            reason="unkeyable-path",
+        )
+
+    temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        private_env: Dict[str, str] = dict(os.environ)
+        private_env["GIT_INDEX_FILE"] = str(temp_index)
+
+        read_tree_result = _git(["read-tree", "HEAD"], cwd=root, env=private_env)
+        if not read_tree_result.ok:
+            # Infra/plumbing failure, not a patch-content problem -- distinct
+            # from the genuine bad-hunk "apply-failed" below (review:
+            # coordinator:code-reviewer 1ead6ae2, finding 1).
+            return StagePatchResult(
+                ok=False, blobs={}, head_blobs={},
+                stderr=f"stage_from_patch: read-tree HEAD failed -- {read_tree_result.stderr}",
+                reason="index-infra-failure",
+            )
+
+        apply_args = [
+            "apply", "--cached",
+            *[f"--include={p}" for p in path_list],
+            str(patch_path),
+        ]
+        apply_result = _git(apply_args, cwd=root, env=private_env)
+        if not apply_result.ok:
+            # AC6 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md,
+            # the audit's S5 timeline): a peer's ordinary commit landed the
+            # SAME content this patch would produce, between this patch's
+            # own computation and this apply -- HEAD (what the private
+            # index above was seeded from) already carries the target
+            # content, so the literal context match fails even though there
+            # is nothing left to change. `git apply --check --reverse`
+            # detects exactly this shape (the patch reverses cleanly, i.e.
+            # its POST-image is already present) without mutating anything.
+            # Only on that confirmation is the forward failure treated as
+            # already-satisfied rather than a genuine apply failure -- an
+            # ordinary bad-hunk failure does not reverse-apply cleanly
+            # either, so this never masks a real `patch-did-not-apply`.
+            reverse_check = _git(
+                ["apply", "--cached", "--check", "--reverse", *apply_args[2:]],
+                cwd=root,
+                env=private_env,
+            )
+            if not reverse_check.ok:
+                return StagePatchResult(
+                    ok=False, blobs={}, head_blobs={},
+                    stderr=f"stage_from_patch: git apply --cached failed -- {apply_result.stderr}",
+                    reason="apply-failed",
+                )
+
+        ls_files_result = _git(
+            ["ls-files", "-s", "-z", "--", *path_list], cwd=root, env=private_env
+        )
+        if not ls_files_result.ok:
+            # Infra/plumbing failure (the apply itself already succeeded
+            # above) -- same "index-infra-failure" tag as the read-tree
+            # failure, distinct from "apply-failed" (review:
+            # coordinator:code-reviewer 1ead6ae2, finding 1).
+            return StagePatchResult(
+                ok=False, blobs={}, head_blobs={},
+                stderr=f"stage_from_patch: post-apply ls-files failed -- {ls_files_result.stderr}",
+                reason="index-infra-failure",
+            )
+
+        blobs: Dict[str, str] = {}
+        key_by_normalized = {_normalize_path_key(p): p for p in path_list}
+        matched: Set[str] = set()
+        unreconciled: List[Tuple[str, str]] = []
+        for parts, printed_path in _parse_git_z_cacheinfo(ls_files_result.stdout):
+            if len(parts) != 3:
+                continue
+            _mode, sha, _stage = parts
+            norm = _normalize_path_key(printed_path)
+            key = key_by_normalized.get(norm)
+            if key is not None:
+                blobs[key] = sha
+                matched.add(norm)
+            else:
+                unreconciled.append((printed_path, sha))
+
+        if unreconciled:
+            placeholder: Dict[str, object] = {p: (blobs.get(p) or None) for p in path_list}
+            _mark_unreconciled(placeholder, path_list, matched, unreconciled)
+            unkeyable = [p for p in path_list if placeholder[p] is _GIT_PATH_UNRECONCILED]
+            if unkeyable:
+                return StagePatchResult(
+                    ok=False, blobs={}, head_blobs={},
+                    stderr=(
+                        "stage_from_patch: refusing -- git's post-apply output could "
+                        f"not be tied back to the caller's own path key: {unkeyable}"
+                    ),
+                    reason="unkeyable-path",
+                )
+
+        # AC4 (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md):
+        # `git ls-files -s` above reads back EVERY entry the private index
+        # holds for `path_list`, not just what THIS apply touched -- a path
+        # in `path_list` the patch never mentions still has a pre-existing
+        # (HEAD-seeded) cache entry, and would otherwise be reported here as
+        # "the patch supplied this blob" when it did not. `patch_touched_
+        # paths()` answers "which paths did this patch's own hunks name",
+        # parsed from the patch text alone -- restricting `blobs` to that
+        # intersection is what makes AC4's additive-per-path split honest:
+        # a path absent from the patch is absent from `blobs`, full stop,
+        # never merely absent from `matched`/`unreconciled`'s keying
+        # bookkeeping above (which is a DIFFERENT question -- whether git
+        # could tie a post-apply entry back to a caller key at all).
+        touched = patch_touched_paths(patch_path, root)
+        blobs = {p: sha for p, sha in blobs.items() if _normalize_path_key(p) in touched}
+
+        return StagePatchResult(
+            ok=True, blobs=blobs, head_blobs=head_blobs_at_apply, stderr="", reason="",
+        )
+    finally:
+        temp_index.unlink(missing_ok=True)
+
+
+def stage_from_patch_cas_refusal(
+    root: Union[str, Path],
+    path_list: Sequence[str],
+    head_blobs_at_apply: Dict[str, object],
+) -> Optional["GitResult"]:
+    """AC2's base-hole CAS -- the mirror image of `_agree_branch_cas_
+    refusal`. A caller about to COMMIT the blobs `stage_from_patch()`
+    produced calls this IMMEDIATELY before that commit (no probe-then-act
+    gap -- plan anti-scope), passing the SAME `head_blobs` that call
+    returned. Re-observes HEAD fresh and refuses (rather than silently
+    reverting a peer's committed hunks) if any named path's HEAD blob has
+    changed since the apply -- i.e. a peer committed to that path between
+    this invocation's `stage_from_patch()` call and the commit this guards.
+
+    Neither the ref-level `update-ref` CAS in `_commit_scoped_private_index`
+    nor `_agree_branch_cas_refusal` observes this on their own: the former
+    only refuses if the WHOLE branch tip moved (a peer's commit to an
+    unrelated path also trips it, and it says nothing about which of ITS
+    OWN supplied paths are stale); the latter only ever runs on the
+    worktree/staged-blob agree branch, never on a caller-supplied blob.
+
+    Returns `None` when every path's HEAD blob is unchanged (the
+    overwhelming-majority case). Returns a failed `GitResult` naming which
+    paths moved/could not be re-keyed otherwise -- callers pass this
+    straight through as the commit's own failure, never falling through to
+    commit anyway.
+    """
+    root = Path(root)
+    current_head_blobs = _head_blobs(root, path_list)
+    moved: List[str] = []
+    unkeyable: List[str] = []
+    for p in path_list:
+        cur = current_head_blobs.get(p)
+        pre = head_blobs_at_apply.get(p)
+        if cur is _GIT_PATH_UNRECONCILED or pre is _GIT_PATH_UNRECONCILED:
+            unkeyable.append(p)
+        elif cur is _GIT_READ_FAILED or pre is _GIT_READ_FAILED or cur != pre:
+            moved.append(p)
+
+    if not moved and not unkeyable:
+        return None
+
+    detail: List[str] = []
+    if moved:
+        detail.append(
+            f"HEAD blob changed since stage_from_patch() recorded it -- a peer "
+            f"committed to this path first: {', '.join(moved)}"
+        )
+    if unkeyable:
+        detail.append(
+            "could not be matched to a HEAD entry (git's output did not "
+            f"reconcile to this caller-supplied path): {', '.join(unkeyable)}"
+        )
+    return GitResult(
+        returncode=-1,
+        stdout="",
+        stderr=(
+            "stage_from_patch_cas_refusal: refused -- "
+            + "; ".join(detail)
+            + ". Re-run stage_from_patch() once current HEAD is freshly re-observed; "
+            "refusing to commit a supplied blob over content that may already be "
+            "someone else's committed history "
+            "(docs/plans/2026-08-14-the-tool-stages-what-it-commits.md)."
+        ),
+    )
+
+
+def _resolve_content_sources(
+    diverged: Sequence[str],
+    non_diverged: Sequence[str],
+    supplied_blobs: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Resolve every path in `_commit_scoped_private_index`'s pathspec to
+    EXACTLY ONE content source -- `_SOURCE_SUPPLIED` | `_SOURCE_STAGED` |
+    `_SOURCE_WORKTREE` -- as a single total function over the union of
+    `diverged`, `non_diverged`, and `supplied_blobs`'s keys, computed once.
+
+    Plan backlink: docs/plans/2026-08-14-the-tool-stages-what-it-commits.md
+    chunk C1. Replaces the prior scheme, where `_commit_scoped_private_index`
+    asked two questions in the right order (is this path in `diverged`? is
+    it in `non_diverged`?) and a caller-supplied blob's precedence over both
+    survived only because `git add -- non_diverged` happened to run BEFORE
+    the cacheinfo loop that would otherwise apply a supplied blob -- nothing
+    stated that ordering as a rule. Here the precedence is the function
+    itself, not a side effect of statement order in the caller.
+
+    Precedence (stated, not incidental): `supplied_blobs` wins first -- ANY
+    path present in `supplied_blobs` resolves to `_SOURCE_SUPPLIED` and can
+    NEVER also resolve to `_SOURCE_STAGED` or `_SOURCE_WORKTREE`, regardless
+    of whether that same path also appears in `diverged`/`non_diverged`.
+    Everything else falls to the existing `diverged`-vs-`non_diverged` split
+    unchanged: a path in `diverged` resolves `_SOURCE_STAGED` (its currently
+    staged blob is committed verbatim, never re-read from the worktree); a
+    path in `non_diverged` resolves `_SOURCE_WORKTREE` (safe to (re-)stage
+    from the worktree).
+
+    `supplied_blobs` has no producer yet -- C2 introduces
+    `stage_from_patch()`, the first real caller. Defaults to `{}`, which
+    makes this function's output IDENTICAL to the prior two-set partition:
+    every path in `diverged` resolves staged-blob, every path in
+    `non_diverged` resolves worktree, nothing ever resolves supplied-blob.
+    Behaviour-preserving by construction, not merely by test coverage.
+    """
+    supplied_blobs = supplied_blobs or {}
+    resolution: Dict[str, str] = {}
+    for p in diverged:
+        resolution[p] = _SOURCE_SUPPLIED if p in supplied_blobs else _SOURCE_STAGED
+    for p in non_diverged:
+        resolution[p] = _SOURCE_SUPPLIED if p in supplied_blobs else _SOURCE_WORKTREE
+    for p in supplied_blobs:
+        resolution.setdefault(p, _SOURCE_SUPPLIED)
+    return resolution
+
+
 def _commit_scoped_private_index(
     diverged: Sequence[str],
     non_diverged: Sequence[str],
     msg_file: Union[str, Path],
     cwd: Union[str, Path],
     deliverable_id: Optional[str] = None,
+    *,
+    supplied_blobs: Optional[Dict[str, str]] = None,
 ) -> GitResult:
     """The PRIVATE-INDEX branch of `commit_scoped()` -- see that function's
     docstring for when this runs and why. Builds a commit tree under a
@@ -879,25 +1896,55 @@ def _commit_scoped_private_index(
     `_check_deliverable_id_precedence`. `commit_scoped` has already run the
     AC19 existence/shape guard on this value before calling here; this
     function trusts it and does not re-validate.
+
+    `supplied_blobs` (C1 plumbing, C2's real producer) -- OPTIONAL
+    `{path: blob_sha}`, defaulting to `{}` (see `_resolve_content_sources`'s
+    own docstring for why an empty map leaves this function's behaviour
+    unchanged). Every path resolves to exactly one content source via
+    `_resolve_content_sources`, computed ONCE, up front -- the committer
+    below consumes that resolution rather than re-deriving the same
+    precedence from `diverged`/`non_diverged` set membership at each site
+    that needs it.
     """
     root = Path(cwd)
+    supplied_blobs = supplied_blobs or {}
+    resolution = _resolve_content_sources(diverged, non_diverged, supplied_blobs)
+    staged_paths = [p for p in diverged if resolution[p] == _SOURCE_STAGED]
+    worktree_paths = [p for p in non_diverged if resolution[p] == _SOURCE_WORKTREE]
+    supplied_paths = [p for p in resolution if resolution[p] == _SOURCE_SUPPLIED]
 
     old_head_result = _git(["rev-parse", "HEAD"], cwd=root)
     if not old_head_result.ok:
         return old_head_result
     old_head = old_head_result.stdout.strip()
 
-    # Capture the CURRENTLY STAGED blob for each diverged path from the REAL
-    # index, before any mutation -- this is the deliberately-staged content
-    # (partial hunk, etc.) that must survive VERBATIM, never re-derived from
-    # the worktree (that would reproduce the exact bug this selector exists
-    # to close).
+    # Capture the CURRENTLY STAGED blob for each staged-blob-source path
+    # (`staged_paths`, resolved above) from the REAL index, before any
+    # mutation -- this is the deliberately-staged content (partial hunk,
+    # etc.) that must survive VERBATIM, never re-derived from the worktree
+    # (that would reproduce the exact bug this selector exists to close).
     cacheinfo_entries: List[_CacheInfoEntry] = []
-    if diverged:
-        ls_files_result = _git(["ls-files", "-s", "--", *diverged], cwd=root)
+    if staged_paths:
+        ls_files_result = _git(["ls-files", "-s", "--", *staged_paths], cwd=root)
         if not ls_files_result.ok:
             return ls_files_result
         cacheinfo_entries = _parse_ls_files_cacheinfo(ls_files_result.stdout)
+
+    # Supplied-blob-source paths (`supplied_paths`, empty until C2's
+    # `stage_from_patch()` populates `supplied_blobs`) never touch `git
+    # ls-files` at all -- the blob was already written by the caller, and
+    # the resolution above guarantees a supplied path can never ALSO be a
+    # `staged_paths`/`worktree_paths` member, so appending here is safe
+    # regardless of statement order (see `_resolve_content_sources`'s own
+    # docstring for why this is now a stated property, not an ordering
+    # accident).
+    for p in supplied_paths:
+        # Negative spec: a non-empty `supplied_paths` with no `supplied_blobs`
+        # is a broken resolution, not a recoverable state -- KeyError here is
+        # the loud failure. Never append a None sha: `update-index
+        # --cacheinfo` would take it as a literal and stage garbage.
+        blob = (supplied_blobs or {})[p]
+        cacheinfo_entries.append((_SUPPLIED_BLOB_MODE, blob, p))
 
     temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
 
@@ -918,22 +1965,22 @@ def _commit_scoped_private_index(
         if not read_tree_result.ok:
             return read_tree_result
 
-        # Non-diverged paths (staged==worktree, or newly-added) are safe to
-        # (re-)stage straight from the worktree. A staged-deletion path is
-        # covered too WITHOUT `-A`: the `reset -q HEAD` above resurrects it
-        # in THIS PRIVATE copy (HEAD still has it), so it exists in the
-        # private index even though the worktree lacks it -- `git add --
-        # path` stages a removal for a path present in the index but
-        # missing from the worktree (verified empirically; `-A` is only
-        # needed when a path is untracked/gone from BOTH, which is not this
-        # shape post-reset).
-        if non_diverged:
-            add_result = _git(["add", "--", *non_diverged], cwd=root, env=private_env)
+        # Worktree-source paths (`worktree_paths` -- staged==worktree, or
+        # newly-added) are safe to (re-)stage straight from the worktree. A
+        # staged-deletion path is covered too WITHOUT `-A`: the `reset -q
+        # HEAD` above resurrects it in THIS PRIVATE copy (HEAD still has
+        # it), so it exists in the private index even though the worktree
+        # lacks it -- `git add -- path` stages a removal for a path present
+        # in the index but missing from the worktree (verified empirically;
+        # `-A` is only needed when a path is untracked/gone from BOTH,
+        # which is not this shape post-reset).
+        if worktree_paths:
+            add_result = _git(["add", "--", *worktree_paths], cwd=root, env=private_env)
             if not add_result.ok:
                 return add_result
 
-        # Diverged paths are restored from the captured staged blob, never
-        # from the worktree.
+        # Staged-blob- and supplied-blob-source paths are restored from
+        # `cacheinfo_entries`, never from the worktree.
         for mode, sha, path in cacheinfo_entries:
             cacheinfo_result = _git(
                 ["update-index", "--add", "--cacheinfo", f"{mode},{sha},{path}"],
@@ -970,13 +2017,17 @@ def _commit_scoped_private_index(
         # `DivergentDeliverableIdError` -- see `_check_deliverable_id_
         # precedence`'s own docstring; deliberately uncaught here.
         if deliverable_id:
+            from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
+
             msg_text_before = Path(msg_file).read_text(encoding="utf-8")
-            if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
+            if _check_deliverable_id_precedence(
+                msg_text_before, deliverable_id, equivalence_map=load_equivalence_map(root)
+            ):
                 trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
                 trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
         if trailer_args:
             interpret_result = _git(
-                ["interpret-trailers", "--in-place", *trailer_args, str(msg_file)],
+                ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
                 cwd=root,
             )
             if not interpret_result.ok:
@@ -1016,17 +2067,21 @@ def _commit_scoped_private_index(
                     f"new HEAD). {update_ref_result.stderr}"
                 ),
             )
-        # `diverged` is exactly the set this branch was called with because
-        # it IS the set that had unstaged working-tree modifications --
-        # `commit_scoped()` only reaches this function when `diverging_paths`
-        # (staged-vs-HEAD differs AND worktree-vs-staged differs, per that
-        # function's own docstring) returned a non-empty answer, and passes
-        # that exact answer through unmodified as `diverged` -- so no
+        # `staged_paths` is exactly the resolved staged-blob subset of
+        # `diverged` -- `diverged` is the set that had unstaged
+        # working-tree modifications (`commit_scoped()` only reaches this
+        # function when `diverging_paths` returned a non-empty answer, and
+        # passes that exact answer through unmodified), and
+        # `_resolve_content_sources` carves out any path ALSO present in
+        # `supplied_blobs` before it ever reaches `staged_paths` -- so no
         # separate worktree-vs-staged recomputation is needed here; reusing
-        # the caller's own answer is that answer (see the P1 bug backlog
-        # entry cited on `GitResult.worktree_excluded` for the incident this
-        # closes: this field was previously not populated at all, so a
-        # caller had no way to learn its worktree edits were excluded).
+        # the resolution's own answer is that answer (see the P1 bug
+        # backlog entry cited on `GitResult.worktree_excluded` for the
+        # incident this closes: this field was previously not populated at
+        # all, so a caller had no way to learn its worktree edits were
+        # excluded). With `supplied_blobs` empty (this chunk's only
+        # exercised shape), `staged_paths == diverged` exactly, so this is
+        # byte-identical to the prior behaviour.
         return GitResult(
             returncode=0,
             stdout=new_sha,
@@ -1034,9 +2089,9 @@ def _commit_scoped_private_index(
                 "commit_scoped: worktree edits to %s were NOT included -- "
                 "the staged (index) version was committed instead (private-"
                 "index branch; see GitResult.worktree_excluded)"
-                % (", ".join(diverged),)
+                % (", ".join(staged_paths),)
             ),
-            worktree_excluded=tuple(diverged),
+            worktree_excluded=tuple(staged_paths),
         )
     finally:
         temp_index.unlink(missing_ok=True)
@@ -1073,6 +2128,7 @@ def commit_scoped(
     known_checked: Optional[Set[str]] = None,
     known_diverged: Optional[Set[str]] = None,
     deliverable_id: Optional[str] = None,
+    supplied_blobs: Optional[Dict[str, str]] = None,
 ) -> GitResult:
     """Commit exactly `paths`, choosing the safe mechanism from OBSERVED
     index/worktree state -- the computed replacement for hand-picking
@@ -1106,10 +2162,19 @@ def commit_scoped(
          MECHANISM from the answer, so an indeterminate result must never be
          silently read as "clean" -- see `DivergenceCheckFailed` in
          `coordinator_core.git.divergence` for the incident this closes.
-         - No divergence -> AGREE branch: `git add -- paths` then
-           `git commit -F msg_file -- paths`. Retains SC-DR-008's race
-           protection across the stage->commit window; this is the
-           overwhelming-majority path and stays this cheap. When
+         - No divergence -> AGREE branch: FIRST re-verified by an
+           intra-invocation compare-and-swap (`_agree_branch_cas_refusal`,
+           Layer 1, state/audits/2026-08-14-scoped-commit-partial-stage-
+           sweep.md) against the index/HEAD blob snapshot taken above
+           BEFORE `diverging_paths()` ran -- refuses loud rather than
+           proceeding if a peer's own commit/stage moved either signal in
+           this call's own check-then-act window (the S5 incident shape:
+           `diverging_paths()` answers "not diverged" correctly, because a
+           peer already absorbed this call's own staged content into HEAD
+           moments earlier). Only once the CAS passes does `git add --
+           paths` then `git commit -F msg_file -- paths` run. Retains
+           SC-DR-008's race protection across the stage->commit window; this
+           is the overwhelming-majority path and stays this cheap. When
            `deliverable_id` is truthy, this branch NOW mutates `msg_file` in
            place before `git add`/`git commit` run (see `deliverable_id`
            below) -- prior to C7a (docs/plans/2026-08-10-a-commit-trailer-
@@ -1143,6 +2208,22 @@ def commit_scoped(
     uncheckable at this seam; this function does not and cannot enforce
     that half, only that the value is well-shaped and resolves to SOME real
     artifact (AC19's enforceable half).
+
+    `supplied_blobs` (C3, docs/plans/2026-08-14-the-tool-stages-what-it-
+    commits.md) -- OPTIONAL `{path: blob_sha}`, defaulting to `{}`/`None`
+    (behaviour-preserving: an empty map reproduces the prior two-branch
+    selection exactly). When non-empty, ANY path present resolves to
+    `_SOURCE_SUPPLIED` (see `_resolve_content_sources`) and this call NEVER
+    takes the agree branch, even when `diverged` is empty -- a supplied
+    path's provenanced blob must never be exposed to the agree branch's own
+    `git add -- path_list`, which reads the SHARED worktree and would
+    silently replace it with whatever a peer's ordinary edit left on disk.
+    Threaded straight through to `_commit_scoped_private_index`, which
+    already resolves `supplied_blobs` ahead of both `diverged`/`non_diverged`
+    membership (C1/C2). `_agree_branch_cas_refusal` (the existing index/HEAD
+    compare-and-swap) still runs on its own conditions for every OTHER call
+    to this function -- a supplied blob answers "whose hunks", not "did the
+    world move", and does not exempt any path from that CAS.
 
     `known_checked`/`known_diverged` -- OPTIONAL dedup seam (docs/plans/
     2026-07-27-computed-commit-mechanism-selection.md § dedup). When both
@@ -1231,6 +2312,21 @@ def commit_scoped(
         if rejection is not None:
             return GitResult(returncode=-1, stdout="", stderr=rejection)
 
+    # Layer-1 CAS snapshot (2026-08-14, state/audits/2026-08-14-scoped-
+    # commit-partial-stage-sweep.md "Recommended fix shape" § Layer 1) --
+    # taken BEFORE `diverging_paths()` runs, so it captures each path's
+    # index/HEAD blob as of THIS call's own entry. `_agree_branch_cas_
+    # refusal()` re-observes both immediately before the agree branch's own
+    # `git add`, below, and refuses rather than silently proceeding if
+    # either moved in the window between here and there -- see that
+    # function's own docstring for the two refusal signals. Intentionally
+    # NOT threaded through the private-index branch: that branch already has
+    # its own CAS (the 4-argument `update-ref` in `_commit_scoped_private_
+    # index`), and never re-reads the worktree the way the agree branch's
+    # `git add` does, so it carries none of this hazard.
+    pre_index_blobs = _index_blobs(root, path_list)
+    pre_head_blobs = _head_blobs(root, path_list)
+
     # `fail_loud=True` -- an indeterminate `diverging_paths()` answer (a
     # `git diff` failure or timeout) must NEVER collapse to "no divergence"
     # here, unlike Check 13's advisory use of the same predicate: this
@@ -1256,17 +2352,33 @@ def commit_scoped(
     try:
         if known_checked is not None and known_diverged is not None:
             gap = [p for p in path_list if p not in known_checked]
+            # Chunked (see `_diverging_paths_chunked()`'s own docstring):
+            # `git diff` cannot take a `--pathspec-from-file`, so this is
+            # the one of `commit_scoped()`'s three git calls that stays on
+            # argv, packed into argv-safe batches instead. `gap` is
+            # ordinarily empty/small (the dedup seam's whole point), but a
+            # swept-rename destination set can still reach percolate-
+            # publish scale.
             gap_diverged = (
-                diverging_paths(
-                    gap, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS, fail_loud=True
-                )
+                _diverging_paths_chunked(gap, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS)
                 if gap
-                else []
+                else set()
             )
-            diverged = sorted((known_diverged & set(path_list)) | set(gap_diverged))
+            diverged = sorted((known_diverged & set(path_list)) | gap_diverged)
         else:
-            diverged = diverging_paths(
-                path_list, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS, fail_loud=True
+            # Chunked for the same argv-length reason as the `gap` branch
+            # above -- this is the common case (`commit_pipeline.commit()`
+            # no longer passes `known_checked`/`known_diverged` at all, per
+            # `docs/plans/2026-08-07-excise-the-ceremony-lock.md` § C10), so
+            # `path_list` here is routinely the full percolate-publish batch
+            # (~2000-2700 paths) that blew the raw 32767-char Windows argv
+            # cap on one unchunked `git diff --cached --name-only` call
+            # (`rc=127`, "divergence indeterminate" -- the live failure this
+            # fix closes).
+            diverged = sorted(
+                _diverging_paths_chunked(
+                    path_list, cwd=str(root), timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS
+                )
             )
     except DivergenceCheckFailed as exc:
         return GitResult(
@@ -1279,7 +2391,32 @@ def commit_scoped(
             ),
         )
 
-    if not diverged:
+    # C3 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md):
+    # `supplied_blobs` never reaches the agree branch, regardless of what
+    # `diverged` says. The agree branch's own `git add -- path_list` reads
+    # the SHARED worktree and would silently overwrite a supplied path's
+    # provenanced blob with whatever a peer's ordinary edit left on disk --
+    # exactly the incident class this plan closes. A supplied path is
+    # therefore always routed to `_commit_scoped_private_index`, which
+    # resolves it to `_SOURCE_SUPPLIED` via `_resolve_content_sources`
+    # (supplied wins over both `diverged`/`non_diverged` membership) and
+    # commits its cacheinfo blob verbatim, never re-reading the worktree.
+    supplied_blobs = supplied_blobs or {}
+    if not diverged and not supplied_blobs:
+        # Layer-1 CAS check (see the snapshot comment above `diverging_
+        # paths()`): re-observe index/HEAD blobs now, right before this
+        # branch's own `git add`/`git commit`, and refuse rather than
+        # silently restaging from the worktree if the world moved since
+        # `pre_index_blobs`/`pre_head_blobs` were captured. FAILS LOUD
+        # (`GitResult.ok is False`), same posture as every other guard in
+        # this function -- never a warning, never a silent fall-through to
+        # the private-index branch (see `_agree_branch_cas_refusal`'s own
+        # docstring for why this stays a blob-identity check, not an
+        # ownership gate).
+        cas_refusal = _agree_branch_cas_refusal(root, path_list, pre_index_blobs, pre_head_blobs)
+        if cas_refusal is not None:
+            return cas_refusal
+
         # `path_list` is the FINAL, caller-vetted commit pathspec, which
         # legitimately includes paths already fully staged-deleted (e.g.
         # this pipeline's `deleted_paths`, pre-`git rm`'d by the caller
@@ -1342,28 +2479,40 @@ def commit_scoped(
         # single `interpret-trailers` call below never sees a trailer name
         # it would need to replace.
         if deliverable_id:
+            from coordinator_core.ops.deliverable_equivalence import load_equivalence_map
+
             msg_text_before = Path(msg_file).read_text(encoding="utf-8")
-            if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
+            if _check_deliverable_id_precedence(
+                msg_text_before, deliverable_id, equivalence_map=load_equivalence_map(root)
+            ):
                 trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
                 trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
         if trailer_args:
             interpret_result = _git(
-                ["interpret-trailers", "--in-place", *trailer_args, str(msg_file)],
+                ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
                 cwd=root,
             )
             if not interpret_result.ok:
                 return interpret_result
 
+        # `add_paths_pathspec_file()`/`commit_with_message_file_pathspec_
+        # scoped()`, NOT `add_paths()`/`commit_with_message_file()` -- this
+        # is the agree branch's own percolate-publish-scale argv-length fix
+        # (see those two wrappers' own docstrings, and `_diverging_paths_
+        # chunked()`'s above for why the divergence CHECK a few lines up
+        # takes the opposite (chunked, not pathspec-file) treatment).
         existing = [p for p in path_list if (root / p).exists()]
         if existing:
-            add_result = add_paths(root, existing)
+            add_result = add_paths_pathspec_file(root, existing)
             if not add_result.ok:
                 return add_result
-        return commit_with_message_file(root, msg_file, path_list)
+        return commit_with_message_file_pathspec_scoped(root, msg_file, path_list)
 
     diverged_set = set(diverged)
     non_diverged = [p for p in path_list if p not in diverged_set]
-    return _commit_scoped_private_index(diverged, non_diverged, msg_file, root, deliverable_id)
+    return _commit_scoped_private_index(
+        diverged, non_diverged, msg_file, root, deliverable_id, supplied_blobs=supplied_blobs
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1686,7 +2835,7 @@ def commit_authored_content(
 
         if trailer_args:
             interpret_result = _git(
-                ["interpret-trailers", "--in-place", *trailer_args, str(msg_file)],
+                ["interpret-trailers", "--no-divider", "--in-place", *trailer_args, str(msg_file)],
                 cwd=root,
             )
             if not interpret_result.ok:

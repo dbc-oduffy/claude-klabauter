@@ -27,7 +27,9 @@ from typing import List
 
 import pytest
 
+import coordinator_core.reconcile.commit_reality as commit_reality
 from coordinator_core.reconcile.commit_reality import (
+    _deliverable_deleted_by_commit,
     _derive_noun_tokens,
     _deliverable_present,
     _discriminating_pathspecs,
@@ -140,7 +142,15 @@ class TestClearShip:
             "print('widget engine')\n",
             "feat: land widget engine core",
         )
-        handoff = _handoff("h-widget", ["widget_engine/core.py"], "Widget Engine")
+        # R2 (state/bug-backlog/2026-08-15-auto-ship-verdict-is-0-for-3-against-
+        # gro-cc4c1c2d7bcb.yaml): auto-ship now requires a corroborating
+        # terminal (status:implemented) linked plan in scope.
+        _write_plan(repo, "docs/plans/widget-engine.md", "implemented")
+        handoff = _handoff(
+            "h-widget",
+            ["widget_engine/core.py", "docs/plans/widget-engine.md"],
+            "Widget Engine",
+        )
 
         result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
 
@@ -653,6 +663,163 @@ class TestExplicitShipClaimProvenanceAttribution:
         )
 
 
+class TestExplicitShipClaimPlanCorroborationGate:
+    """P0 fix (code-review sidecar `coordinatorcode-reviewer-527901aa.md`):
+    `_apply_plan_corroboration_gate` is the single chokepoint the
+    explicit-ship-claim path is routed through, same as the three-signal
+    candidates path -- the R1/R2 rule must not be bypassable via `shipped_in`.
+
+    Ruling pinned here: a VERIFIED `shipped_in` stamp (reachable AND either
+    self-scope-overlapping or session-attributed -- i.e. the checks
+    `_evaluate_explicit_ship_claim` already performs) is accepted as
+    sufficient corroboration in place of a plan pointer (R2 does not apply
+    on this path), because it is a deliberate, human/CLI-authored claim
+    naming a specific SHA. R1 still applies unconditionally: a REFUTING plan
+    pointer (approved/draft/unreadable) demotes even when `shipped_in` is
+    present and verified -- explicit-claim-plus-contradicting-evidence is
+    exactly the misattribution case R1 exists to catch.
+    """
+
+    def test_shipped_in_scope_overlap_with_approved_plan_pointer_demotes(
+        self, repo: Path
+    ) -> None:
+        sha = _commit_file(
+            repo,
+            "gated_ship_module/core_module.py",
+            "print('gated ship module')\n",
+            "memo: seed gated ship module (mechanical)",
+        )
+        _write_plan(repo, "docs/plans/2026-01-01-gated-ship.md", "approved")
+
+        handoff = {
+            "id": "h-gated-ship-scope-overlap",
+            "scope": [
+                "gated_ship_module/core_module.py",
+                "docs/plans/2026-01-01-gated-ship.md",
+            ],
+            "title": "Gated Ship Module",
+            "created": "2020-01-01",
+            "shipped_in": sha,
+            "shipped_in_kind": "ship-commit",
+        }
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "surface"
+        assert result["candidate_sha"] == sha
+        assert any(
+            "docs/plans/2026-01-01-gated-ship.md" in e and "status:approved" in e
+            for e in result["evidence"]
+        )
+
+    def test_shipped_in_session_attribution_with_approved_plan_pointer_demotes(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_SESSION_ID", _OWN_SESSION_ID)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+        (repo / "attributed_gated_scope").mkdir(parents=True, exist_ok=True)
+        (repo / "attributed_gated_scope" / "core_module.py").write_text(
+            "own\n", encoding="utf-8"
+        )
+        _git(repo, "add", "attributed_gated_scope/core_module.py")
+        _git(
+            repo, "commit", "-q", "-m",
+            "memo: seed attributed gated scope (mechanical)",
+        )
+        _write_plan(repo, "docs/plans/2026-01-02-gated-attributed.md", "draft")
+
+        ship_sha = _commit_file(
+            repo,
+            "unrelated_gated_touch/core_module.py",
+            "print('ceremonial close touch')\n",
+            "feat: land an unrelated ceremonial-close commit",
+            session_id=_OWN_SESSION_ID,
+        )
+
+        handoff = {
+            "id": "h-gated-ship-attributed",
+            "scope": [
+                "attributed_gated_scope/core_module.py",
+                "docs/plans/2026-01-02-gated-attributed.md",
+            ],
+            "title": "Attributed Gated Scope",
+            "created": "2020-01-01",
+            "shipped_in": ship_sha,
+            "shipped_in_kind": "ship-commit",
+        }
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "surface"
+        assert result["candidate_sha"] == ship_sha
+        assert any(
+            "docs/plans/2026-01-02-gated-attributed.md" in e and "status:draft" in e
+            for e in result["evidence"]
+        )
+
+    def test_shipped_in_with_implemented_plan_pointer_still_auto_ships(
+        self, repo: Path
+    ) -> None:
+        sha = _commit_file(
+            repo,
+            "corroborated_ship_module/core_module.py",
+            "print('corroborated ship module')\n",
+            "memo: seed corroborated ship module (mechanical)",
+        )
+        _write_plan(repo, "docs/plans/2026-01-03-corroborated-ship.md", "implemented")
+
+        handoff = {
+            "id": "h-corroborated-ship",
+            "scope": [
+                "corroborated_ship_module/core_module.py",
+                "docs/plans/2026-01-03-corroborated-ship.md",
+            ],
+            "title": "Corroborated Ship Module",
+            "created": "2020-01-01",
+            "shipped_in": sha,
+            "shipped_in_kind": "ship-commit",
+        }
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "auto-ship"
+        assert result["candidate_sha"] == sha
+
+    def test_verified_shipped_in_with_no_plan_pointer_still_auto_ships(
+        self, repo: Path
+    ) -> None:
+        """Pinned ruling: a verified explicit `shipped_in` stamp (reachable +
+        self-scope-overlap) is itself sufficient corroboration -- R2's
+        "no plan pointer -> demote" rule does NOT apply on the explicit-claim
+        path, unlike the three-signal candidates path
+        (`test_no_plan_pointer_at_all_demotes_r2` above, which pins the
+        opposite outcome for that path)."""
+        sha = _commit_file(
+            repo,
+            "unplanned_ship_module/core_module.py",
+            "print('unplanned ship module')\n",
+            "memo: seed unplanned ship module (mechanical)",
+        )
+        handoff = {
+            "id": "h-unplanned-ship",
+            "scope": ["unplanned_ship_module/core_module.py"],
+            "title": "Unplanned Ship Module",
+            "created": "2020-01-01",
+            "shipped_in": sha,
+            "shipped_in_kind": "ship-commit",
+        }
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "auto-ship"
+        assert result["candidate_sha"] == sha
+        assert any(
+            "accepted on a verified explicit shipped_in stamp" in e
+            for e in result["evidence"]
+        )
+
+
 class TestMixedScopeDirectoryEntryGrantsUnearnedHighConfidence:
     """Pins a defect in `_pathspec_overlaps` (:479): it strips a scope entry's
     trailing "/" before prefix-matching, so a DIRECTORY scope entry is
@@ -1117,9 +1284,13 @@ class TestDirectoryScopeOverlapDoesNotCountTowardAttribution:
             "feat: land widget launcher module",
         )
 
+        _write_plan(repo, "docs/plans/widget-launcher.md", "implemented")
         handoff = _handoff(
             "h-widget-launcher",
-            ["coordinator_core/ops/widget_launcher.py"],
+            [
+                "coordinator_core/ops/widget_launcher.py",
+                "docs/plans/widget-launcher.md",
+            ],
             "Widget Launcher Module",
         )
         other = _handoff(
@@ -1130,6 +1301,145 @@ class TestDirectoryScopeOverlapDoesNotCountTowardAttribution:
 
         assert result["verdict"] == "auto-ship"
         assert result["candidate_sha"] == sha
+
+
+class TestAutoShipPlanCorroborationGate:
+    """R1+R2 (state/bug-backlog/2026-08-15-auto-ship-verdict-is-0-for-3-against-
+    gro-cc4c1c2d7bcb.yaml, state/audits/2026-08-15-three-auto-ship-nominations-
+    adjudicated.md): `auto-ship` is the only verdict that triggers an
+    unattended, destructive `ship_and_archive`, so it now additionally requires
+    a corroborating linked plan whose status is terminal (`implemented`).
+
+    Negative-spec:
+      - Demote-only -- never promotes a `no-match`/`surface` verdict, and never
+        touches those paths' own tests (see the pre-existing classes above,
+        left unmodified).
+      - `landed` is deliberately NOT terminal for this gate (module docstring's
+        `plan_landed` note; `lifecycle_constants` negative-spec; DoE ruling
+        `80b0b29fb`) -- do not widen it.
+      - An unreadable/missing-status plan pointer (e.g. a non-plan file
+        matching the `docs/plans/*.md` shape) is ALSO non-terminal --
+        unreadable is not corroboration.
+      - Reads EVERY `docs/plans/*.md` scope pointer (`_find_all_plan_paths_in_scope`),
+        not just the first (D1's first-match-bias regression pin below).
+    """
+
+    def _seeded_commit(self, repo: Path, subject: str = "feat: land arm scoped module core") -> str:
+        return _commit_file(
+            repo,
+            "arm_scoped_module/core.py",
+            "print('arm scoped module')\n",
+            subject,
+        )
+
+    def test_later_non_terminal_plan_pointer_demotes_d1_regression(
+        self, repo: Path
+    ) -> None:
+        """D1 regression pin: this MUST fail against pre-fix code, which reads
+        only the FIRST `docs/plans/*.md` scope entry (`_find_plan_path_in_scope`,
+        singular) and never sees the later `approved` pointer."""
+        sha = self._seeded_commit(repo)
+        _write_plan(repo, "docs/plans/2026-01-01-arm-first.md", "implemented")
+        _write_plan(repo, "docs/plans/2026-01-02-arm-second.md", "approved")
+
+        handoff = _handoff(
+            "h-arm-multi-plan",
+            [
+                "arm_scoped_module/core.py",
+                "docs/plans/2026-01-01-arm-first.md",
+                "docs/plans/2026-01-02-arm-second.md",
+            ],
+            "Arm Scoped Module",
+        )
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "surface"
+        assert result["candidate_sha"] == sha
+        assert any(
+            "docs/plans/2026-01-02-arm-second.md" in e and "status:approved" in e
+            for e in result["evidence"]
+        )
+
+    def test_all_named_plans_implemented_still_auto_ships(self, repo: Path) -> None:
+        sha = self._seeded_commit(repo)
+        _write_plan(repo, "docs/plans/2026-01-01-arm-a.md", "implemented")
+        _write_plan(repo, "docs/plans/2026-01-02-arm-b.md", "implemented")
+
+        handoff = _handoff(
+            "h-arm-all-implemented",
+            [
+                "arm_scoped_module/core.py",
+                "docs/plans/2026-01-01-arm-a.md",
+                "docs/plans/2026-01-02-arm-b.md",
+            ],
+            "Arm Scoped Module",
+        )
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "auto-ship"
+        assert result["candidate_sha"] == sha
+
+    def test_landed_plan_pointer_demotes(self, repo: Path) -> None:
+        """Pins the `landed` != terminal ruling for this gate."""
+        sha = self._seeded_commit(repo)
+        _write_plan(repo, "docs/plans/2026-01-01-arm-landed.md", "landed")
+
+        handoff = _handoff(
+            "h-arm-landed",
+            ["arm_scoped_module/core.py", "docs/plans/2026-01-01-arm-landed.md"],
+            "Arm Scoped Module",
+        )
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "surface"
+        assert result["candidate_sha"] == sha
+        assert any(
+            "docs/plans/2026-01-01-arm-landed.md" in e and "status:landed" in e
+            for e in result["evidence"]
+        )
+
+    def test_unreadable_plan_status_demotes(self, repo: Path) -> None:
+        """A scope entry shaped like `docs/plans/*.md` but with no readable
+        frontmatter `status:` (e.g. a non-plan doc like README.md) is NOT
+        corroboration."""
+        sha = self._seeded_commit(repo)
+        (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+        (repo / "docs" / "plans" / "README.md").write_text(
+            "# Plans index, not a plan\n", encoding="utf-8"
+        )
+
+        handoff = _handoff(
+            "h-arm-unreadable-plan",
+            ["arm_scoped_module/core.py", "docs/plans/README.md"],
+            "Arm Scoped Module",
+        )
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "surface"
+        assert result["candidate_sha"] == sha
+        assert any(
+            "docs/plans/README.md" in e and "unreadable/missing" in e
+            for e in result["evidence"]
+        )
+
+    def test_no_plan_pointer_at_all_demotes_r2(self, repo: Path) -> None:
+        sha = self._seeded_commit(repo)
+
+        handoff = _handoff(
+            "h-arm-no-plan", ["arm_scoped_module/core.py"], "Arm Scoped Module"
+        )
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "surface"
+        assert result["candidate_sha"] == sha
+        assert any(
+            "no linked docs/plans/*.md pointer in scope" in e for e in result["evidence"]
+        )
 
 
 class TestDirectoryScopeContributesNoTokens:
@@ -1196,6 +1506,124 @@ class TestDeliverableRequiresFile:
         assert _deliverable_present(tmp_path, ["some_file.py"]) is True
 
 
+class TestDeletionAwareDeliverableSignal:
+    """cross-repo/inbox/2026-08-14-example-retrieval-repo-em-auto-reconcile-cannot-see-
+    deletion-deliverables.md Finding 2: a scope path absent on disk because a
+    reachable, non-mechanical commit DELETED it is positive signal-(b)
+    evidence, not negative -- `_deliverable_present` alone cannot see this."""
+
+    def test_deletion_deliverable_clears_signal_and_auto_ships(self, repo: Path) -> None:
+        _commit_file(
+            repo,
+            "scripts/legacy_sweep.sh",
+            "echo old\n",
+            "feat: land legacy sweep script",
+        )
+        (repo / "scripts" / "legacy_sweep.sh").unlink()
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "feat: remove legacy sweep script")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        handoff = _handoff("h-legacy", ["scripts/legacy_sweep.sh"], "Legacy Sweep Script")
+
+        # No linked plan yet -- pins that the deletion-aware signal alone
+        # still can't clear the R2 plan-corroboration gate on its own.
+        no_plan_result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+        assert no_plan_result["verdict"] == "surface"
+        assert any(
+            "deletion was the deliverable" in e and sha in e
+            for e in no_plan_result["evidence"]
+        )
+
+        _write_plan(repo, "docs/plans/legacy-sweep.md", "implemented")
+        handoff["scope"].append("docs/plans/legacy-sweep.md")
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert result["verdict"] == "auto-ship"
+        assert result["candidate_sha"] == sha
+
+    def test_never_deleted_absent_path_keeps_byte_identical_evidence_string(
+        self, repo: Path
+    ) -> None:
+        handoff = _handoff("h-phantom2", ["phantom_module2/core.py"], "Phantom Module Two")
+
+        result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
+
+        assert "deliverable absent on disk" in result["evidence"]
+        assert not any("deletion was the deliverable" in e for e in result["evidence"])
+
+    def test_unreachable_deleting_sha_is_not_evidence(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _commit_file(
+            repo, "widget_two/core.py", "print('x')\n", "feat: land widget two core"
+        )
+        (repo / "widget_two" / "core.py").unlink()
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "feat: remove widget two core")
+
+        monkeypatch.setattr(commit_reality, "_sha_on_any_local_branch", lambda *a, **k: False)
+
+        result = _deliverable_deleted_by_commit(
+            repo, ["widget_two/core.py"], None, _DEFAULT_POLICY["mechanical_commit_denylist"]
+        )
+
+        assert result is None
+
+    def test_mechanical_deleting_subject_is_not_evidence(self, repo: Path) -> None:
+        _commit_file(
+            repo, "gadget_two/core.py", "print('x')\n", "feat: land gadget two core"
+        )
+        (repo / "gadget_two" / "core.py").unlink()
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "pickup: remove gadget two core")
+
+        result = _deliverable_deleted_by_commit(
+            repo, ["gadget_two/core.py"], None, _DEFAULT_POLICY["mechanical_commit_denylist"]
+        )
+
+        assert result is None
+
+    def test_directory_shaped_scope_entry_is_not_evidence(self, repo: Path) -> None:
+        _commit_file(
+            repo, "sprockets_two/core.py", "print('x')\n", "feat: land sprockets two core"
+        )
+        (repo / "sprockets_two" / "core.py").unlink()
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "feat: remove sprockets two core")
+
+        result = _deliverable_deleted_by_commit(
+            repo, ["sprockets_two/"], None, _DEFAULT_POLICY["mechanical_commit_denylist"]
+        )
+
+        assert result is None
+
+    def test_glob_scope_entry_matches_via_git_pathspec_wildcards(self, repo: Path) -> None:
+        """Pins observed behavior (P2, code review): a glob-shaped scope entry
+        is passed through as a literal git pathspec, so it is matched by
+        GIT's own wildcard semantics, not Python's `Path.glob()` -- a
+        documented divergence from `_deliverable_present`'s glob handling,
+        not a contract this test invents."""
+        _commit_file(
+            repo, "widgets_glob/core.py", "print('x')\n", "feat: land widgets glob core"
+        )
+        (repo / "widgets_glob" / "core.py").unlink()
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "feat: remove widgets glob core")
+
+        result = _deliverable_deleted_by_commit(
+            repo,
+            ["widgets_glob/*.py"],
+            None,
+            _DEFAULT_POLICY["mechanical_commit_denylist"],
+        )
+
+        assert result is not None
+        sha, path = result
+        assert path == "widgets_glob/core.py"
+
+
 class TestSelfReferentialScopeIsNotADeliverable:
     """2026-07-20 claude-central-em EM follow-up: a handoff whose scope is only
     its OWN handoff doc + the tracker file is not evidence of anything. Prior to
@@ -1254,7 +1682,12 @@ class TestAwaitingGateNeverAutoShips:
             "print('widget engine')\n",
             "feat: land widget engine core",
         )
-        handoff = _handoff("h-widget-gated", ["widget_engine/core.py"], "Widget Engine")
+        _write_plan(repo, "docs/plans/widget-engine-gated.md", "implemented")
+        handoff = _handoff(
+            "h-widget-gated",
+            ["widget_engine/core.py", "docs/plans/widget-engine-gated.md"],
+            "Widget Engine",
+        )
         handoff["deployment_state"] = "awaiting_gate"
 
         result = evaluate_commit_reality(handoff, repo, _DEFAULT_POLICY, [])
@@ -1660,3 +2093,57 @@ class TestScopeSiblingPrefixGrammarStaysInSync:
             "test_pattern_source_strings_and_flags_are_identical also "
             "checks it. If a copy was removed, drop it from that list."
         )
+
+
+class TestEmptyDenylistFallsBackToDefault:
+    """An empty `mechanical_commit_denylist` must not disable mechanical filtering.
+
+    Regression pin for the exposure opened when `policy_loader.load_policy` began
+    merging an overlay over `_conservative_policy()` on an absent floor: that base
+    supplies `[]` for this key, so an `is None` check let it through as a real value
+    and armed the matcher with NO mechanical-commit filter. Measured live at the time:
+    5 denylist entries with the floor resolvable, 0 without it.
+    """
+
+    def test_empty_denylist_still_rejects_a_mechanical_subject(self, tmp_path):
+        from coordinator_core.reconcile.commit_reality import (
+            _is_mechanical_subject,
+            _DEFAULT_MECHANICAL_DENYLIST,
+        )
+        subject = "pickup: claim handoff 2026-01-01"
+        assert _is_mechanical_subject(subject, list(_DEFAULT_MECHANICAL_DENYLIST))
+        assert not _is_mechanical_subject(subject, [])
+
+    def test_evaluate_commit_reality_empty_denylist_policy_still_rejects_mechanical_candidate(
+        self, repo: Path
+    ) -> None:
+        """End-to-end regression pin for the actual line in
+        `evaluate_commit_reality` (P3, code-review sidecar
+        `coordinatorcode-reviewer-527901aa.md`): drives the real function with
+        a policy whose `mechanical_commit_denylist` is `[]`, and asserts the
+        sole matching commit -- a mechanical `pickup:` subject -- is NOT
+        accepted as signal-(a) candidate evidence. Must FAIL against the
+        pre-fix `is None` guard: that version treats the policy's literal `[]`
+        as "no filtering", lets the pickup commit through as a real
+        candidate, and the verdict/evidence differ from the asserted
+        no-match/no-candidate-evidence outcome below.
+        """
+        sha = _commit_file(
+            repo,
+            "empty_denylist_widget/module.py",
+            "print('empty denylist widget')\n",
+            "pickup: land empty denylist widget module",
+        )
+        handoff = _handoff(
+            "h-empty-denylist",
+            ["empty_denylist_widget/module.py"],
+            "Empty Denylist Widget",
+        )
+        policy = dict(_DEFAULT_POLICY)
+        policy["mechanical_commit_denylist"] = []
+
+        result = evaluate_commit_reality(handoff, repo, policy, [])
+
+        assert result["verdict"] == "no-match"
+        assert not any("subject matched" in e for e in result["evidence"])
+        assert sha  # the commit exists; it's simply correctly excluded as evidence

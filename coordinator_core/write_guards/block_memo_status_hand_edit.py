@@ -20,8 +20,8 @@ guard exists to close recur with a warning attached, which is the "asks a
 model to refuse work it is eager to do" shape `CLAUDE.md` names as
 advisory-in-practice. This is CLASS = "hard-deny", the established category
 for exactly this failure shape alongside `block_cutover_phase_hand_edit.py` /
-`block_tracker_edit.py` / `block_subagent_archive_write.py` — not a novel
-escalation.
+the retired `block_tracker_edit.py` / `block_subagent_archive_write.py` — not
+a novel escalation.
 
 Modelled on the sibling `block_consumed_handoff_edit.py` — same package, same
 interface (`write_guards/INTERFACE.md`), same matcher set (Write|Edit|

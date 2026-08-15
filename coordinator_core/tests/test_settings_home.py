@@ -26,6 +26,7 @@ from coordinator_core._settings_home import (
     home_dir,
     legacy_machine_local_dir,
     machine_local_dir,
+    native_path_form,
     normalize_native_path,
     settings_home,
 )
@@ -337,3 +338,46 @@ def test_claude_config_divergence_raises_on_genuine_divergence(tmp_path, monkeyp
 
     with pytest.raises(ClaudeConfigDivergenceError, match="DIVERGENT CLAUDE CONFIG DIRS"):
         check_claude_config_divergence()
+
+
+# ---------------------------------------------------------------------------
+# native_path_form — the string-preserving companion. Its whole reason to exist
+# is that the persisted write seams (repos.doe_claude, the .doe-root pointer)
+# must repair MSYS mount form WITHOUT rewriting separators on paths that were
+# already native, so both halves are asserted here.
+# ---------------------------------------------------------------------------
+
+
+def test_native_path_form_repairs_msys_mount_form(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
+    assert native_path_form("/x/DoE-claude") == "X:/DoE-claude"
+
+
+def test_native_path_form_repairs_cygdrive_mount_form(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
+    assert native_path_form("/cygdrive/x/DoE-claude") == "X:/DoE-claude"
+
+
+def test_native_path_form_preserves_native_backslash_form_byte_identical(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
+    assert native_path_form(r"C:\Users\dev\DoE-claude") == r"C:\Users\dev\DoE-claude"
+
+
+def test_native_path_form_preserves_native_forward_slash_form(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
+    assert native_path_form("X:/DoE-claude") == "X:/DoE-claude"
+
+
+def test_native_path_form_preserves_trailing_separator(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
+    assert native_path_form("X:/DoE-claude/") == "X:/DoE-claude/"
+
+
+def test_native_path_form_is_noop_on_posix(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "posix")
+    assert native_path_form("/x/DoE-claude") == "/x/DoE-claude"
+
+
+def test_native_path_form_leaves_empty_string_empty(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
+    assert native_path_form("") == ""

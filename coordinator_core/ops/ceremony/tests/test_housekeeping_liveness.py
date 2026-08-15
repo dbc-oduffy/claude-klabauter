@@ -56,11 +56,11 @@ def test_stamp_liveness_preserves_other_classes(tmp_path: Path) -> None:
     repo_root = _git_root(tmp_path)
 
     hl.stamp_liveness(repo_root, hl.ARCHIVE_SWEEPS)
-    hl.stamp_liveness(repo_root, hl.TRACKER_REGEN)
+    hl.stamp_liveness(repo_root, hl.ROADMAP_CALLOUT)
 
     data = json.loads(hl.liveness_path(repo_root).read_text(encoding="utf-8"))
     assert hl.ARCHIVE_SWEEPS in data
-    assert hl.TRACKER_REGEN in data
+    assert hl.ROADMAP_CALLOUT in data
 
 
 def test_check_stale_silent_for_never_stamped_class(tmp_path: Path) -> None:
@@ -105,13 +105,13 @@ def test_check_stale_silent_for_fresh_stamp(tmp_path: Path) -> None:
 def test_check_stale_mixed_classes(tmp_path: Path) -> None:
     repo_root = _git_root(tmp_path)
     _write_stamp(repo_root, hl.ARCHIVE_SWEEPS, age_seconds=60)
-    _write_stamp(repo_root, hl.TRACKER_REGEN, age_seconds=30 * 24 * 3600)
-    # ROADMAP_CALLOUT / COMPLETION_SCAFFOLD / COVERAGE_GATE never stamped at all.
+    _write_stamp(repo_root, hl.ROADMAP_CALLOUT, age_seconds=30 * 24 * 3600)
+    # COMPLETION_SCAFFOLD / COVERAGE_GATE never stamped at all.
 
     messages = hl.check_stale(repo_root, stale_threshold_s=7 * 24 * 3600.0)
 
     assert len(messages) == 1
-    assert hl.TRACKER_REGEN in messages[0]
+    assert hl.ROADMAP_CALLOUT in messages[0]
 
 
 def test_check_stale_never_raises_on_corrupt_file(tmp_path: Path) -> None:
@@ -153,7 +153,7 @@ def test_check_stale_detailed_returns_class_key_and_message(tmp_path: Path) -> N
 def test_check_stale_delegates_to_detailed_message_only(tmp_path: Path) -> None:
     repo_root = _git_root(tmp_path)
     _write_stamp(repo_root, hl.ARCHIVE_SWEEPS, age_seconds=30 * 24 * 3600)
-    _write_stamp(repo_root, hl.TRACKER_REGEN, age_seconds=30 * 24 * 3600)
+    _write_stamp(repo_root, hl.ROADMAP_CALLOUT, age_seconds=30 * 24 * 3600)
 
     detailed = hl.check_stale_detailed(repo_root, stale_threshold_s=7 * 24 * 3600.0)
     plain = hl.check_stale(repo_root, stale_threshold_s=7 * 24 * 3600.0)
@@ -175,7 +175,7 @@ def test_remedy_commands_archive_sweeps_names_all_four_sweep_clis() -> None:
 
 
 def test_remedy_commands_classes_with_no_cli_are_empty() -> None:
-    for cls in (hl.COMPLETION_SCAFFOLD, hl.TRACKER_REGEN, hl.ROADMAP_CALLOUT, hl.COVERAGE_GATE):
+    for cls in (hl.COMPLETION_SCAFFOLD, hl.ROADMAP_CALLOUT, hl.COVERAGE_GATE):
         assert hl.REMEDY_COMMANDS[cls] == ()
 
 
@@ -218,14 +218,14 @@ def test_liveness_status_stale_stamp(tmp_path: Path) -> None:
 def test_liveness_status_mixed_classes_distinguishes_all_three_states(tmp_path: Path) -> None:
     repo_root = _git_root(tmp_path)
     _write_stamp(repo_root, hl.ARCHIVE_SWEEPS, age_seconds=60)
-    _write_stamp(repo_root, hl.TRACKER_REGEN, age_seconds=30 * 24 * 3600)
-    # COMPLETION_SCAFFOLD / ROADMAP_CALLOUT / COVERAGE_GATE never stamped at all.
+    _write_stamp(repo_root, hl.ROADMAP_CALLOUT, age_seconds=30 * 24 * 3600)
+    # COMPLETION_SCAFFOLD / COVERAGE_GATE never stamped at all.
 
     statuses = hl.liveness_status(repo_root, stale_threshold_s=7 * 24 * 3600.0)
 
     assert statuses[hl.ARCHIVE_SWEEPS] == hl.STATUS_FRESH
-    assert statuses[hl.TRACKER_REGEN] == hl.STATUS_STALE
-    for cls in (hl.COMPLETION_SCAFFOLD, hl.ROADMAP_CALLOUT, hl.COVERAGE_GATE):
+    assert statuses[hl.ROADMAP_CALLOUT] == hl.STATUS_STALE
+    for cls in (hl.COMPLETION_SCAFFOLD, hl.COVERAGE_GATE):
         assert statuses[cls] == hl.STATUS_NEVER_STAMPED
 
 

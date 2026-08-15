@@ -395,6 +395,7 @@ rationale.
 | `COORDINATOR_ALLOW_SED_RANGE` | `sed-range-read-advise` (`check_sed_range_read_advise`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_CAT_HEREDOC` | `cat-heredoc-write-advise` (`check_cat_heredoc_write_advise`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_GIT_COMMIT_BARE` | `git-commit-safe-commit-advise` (`check_git_commit_safe_commit_advise`) | `bash_guards/dispatch_checks.py` |
+| `COORDINATOR_ALLOW_GIT_COMMIT_AMEND` | `git-commit-safe-commit-advise` amend-ownership gate (`check_git_commit_safe_commit_advise`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_MULTIPROBE_BANNER` | `multiprobe-banner-rewrite` (`check_multiprobe_banner_rewrite`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING` | `head-tail-plumbing-rewrite` (`check_head_tail_plumbing_rewrite`) | `bash_guards/guard_head_tail_rewrite.py` |
 | `COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS` | `offer-invoke-params-stdin` (`check_offer_invoke_params_stdin`) | `bash_guards/guard_offer_invoke_params_stdin.py` |
@@ -414,7 +415,6 @@ rationale.
 | `COORDINATOR_OVERRIDE_PRIORITY_LEDGER_EDIT` | `block-priority-ledger-edit` | `write_guards/block_priority_ledger_edit.py` |
 | `COORDINATOR_OVERRIDE_SUBAGENT_ARCHIVE` | `block-subagent-archive-write` | `write_guards/block_subagent_archive_write.py` |
 | `COORDINATOR_OVERRIDE_SUBAGENT_PLAN_BODY` (Write/Edit leg) | `block-subagent-plan-body-write` | `write_guards/block_subagent_plan_body_write.py` |
-| `COORDINATOR_OVERRIDE_TRACKER_EDIT` | `block-tracker-edit` | `write_guards/block_tracker_edit.py` |
 | `COORDINATOR_OVERRIDE_CLAUDE_MD_WRITE` | `block-unauthorized-claude-md-write` | `write_guards/block_unauthorized_claude_md_write.py` |
 | `COORDINATOR_OVERRIDE_CUTOVER_PHASE_HAND_EDIT` | `block-cutover-phase-hand-edit` | `write_guards/block_cutover_phase_hand_edit.py` |
 | `COORDINATOR_OVERRIDE_OSS_MIRROR_MEMO_GUARD` | `block-oss-mirror-memo-delivery` | `write_guards/block_oss_mirror_memo_delivery.py` |

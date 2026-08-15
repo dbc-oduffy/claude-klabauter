@@ -53,6 +53,13 @@ from coordinator_core.ops.emit.sections.file_attribution import (
     collect,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _make_ctx(repo_root: str, repo_name: str = "test-org/test-repo") -> MagicMock:
     """Minimal EmitContext stub sufficient for section collect() calls under test."""

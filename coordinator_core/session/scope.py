@@ -56,12 +56,14 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import types
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
+from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.session import core, liveness
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 from coordinator_core.win_portability import no_console_creationflags
@@ -1553,7 +1555,25 @@ def _collect_peer_path_mtimes(
     return mtimes
 
 
-def touch(sid: str, path: str, cwd: Optional[str] = None) -> None:
+#: Sub-second, bounded acquire timeout for the ``touched.txt`` append lock
+#: (C2, docs/plans/2026-08-14-cli-authored-writes-get-claimed.md). Deliberately
+#: NOT ``held_lock``'s 10s default: a 10s blocking acquire looped once per
+#: declared path (``ipc._MAX_DECLARED_TOUCH_PATHS`` = 16) would be a ~160s
+#: worst case against the 300ms ``MUTATING`` budget -- the exact latency
+#: class C1 exists to remove. 0.2s is generous against the measured
+#: uncontended acquire cost (sub-millisecond; see the chunk report) while
+#: still bounding the worst case to a small multiple of the per-call budget
+#: even under real contention.
+_TOUCH_LOCK_TIMEOUT_SECS = 0.2
+
+
+def touch(
+    sid: str,
+    path: str,
+    cwd: Optional[str] = None,
+    root: Optional[str] = None,
+    lock: bool = True,
+) -> None:
     """Port of ``cs_touch <session_id> <path>``: append a repo-relative file
     path to this session's ``touched.txt`` as a ``T`` event (last-event
     dedup — a path whose last event is already ``T`` is skipped; a path
@@ -1581,6 +1601,19 @@ def touch(sid: str, path: str, cwd: Optional[str] = None) -> None:
     incoming path may still use ``/var``). ``realpath`` canonicalises the
     existing prefix of a non-existent path, so untracked files are safe.
 
+    ``root``, forwarded verbatim to :func:`normalize_touch_path`, is
+    deliberately a SEPARATE parameter from ``cwd`` rather than an overload of
+    it — ``cwd`` here also anchors ``core.session_dir``/``core.init`` below,
+    neither of which carries ``normalize_touch_path``'s "MUST be the
+    worktree root itself" precondition, so silently repurposing ``cwd`` as
+    ``root`` would smuggle an unverified value into a call site that trusts
+    it (clause 5 of the zero-spawn guard verifies, but only what it is
+    given). Pass ``root`` ONLY when the caller already resolved the
+    worktree root itself (e.g. ``ipc._record_self_reported_touches``, which
+    derives it via ``core.git_root`` before calling here) — never a
+    directory merely believed to be inside it. Omitting ``root`` reproduces
+    prior behavior byte-for-byte, subprocess count included.
+
     Guard: if the path is STILL absolute after the
     normalization attempt (Python relpath failed, path outside repo), SKIP
     it — an absolute path in ``touched.txt`` corrupts the relative-path scope
@@ -1588,6 +1621,24 @@ def touch(sid: str, path: str, cwd: Optional[str] = None) -> None:
 
     Raises ``ValueError`` if ``sid`` or ``path`` is empty (bash
     ``${1:?}``/``${2:?}`` required-arg contract).
+
+    ``lock`` (C2, docs/plans/2026-08-14-cli-authored-writes-get-claimed.md):
+    when ``True`` (default), the dedup-scan-then-append region below is
+    wrapped in :func:`coordinator_core.locked_write.held_lock`, anchored at
+    ``root or cwd`` (realpath'd), so concurrent same-session declarations
+    against the SAME ``touched.txt`` serialize instead of racing the plain
+    ``open(..., "a")`` lseek+write on Windows (measured ~3% loss, see the
+    plan's Problem section). Pass ``lock=False`` ONLY when the caller
+    already holds this same lock across a whole batch of calls (e.g.
+    ``ipc._record_self_reported_touches``, which acquires ONCE for the
+    declared-path batch rather than once per path — a per-path acquire
+    nested inside that outer acquire would be re-entrant on the same target
+    and ``held_lock`` deadlocks for the full timeout on re-entry). Fails
+    open: no anchor available (``root`` and ``cwd`` both falsy),
+    ``LockTimeout``, or ``RuntimeError`` (no lock backend on this platform)
+    all degrade to the unlocked append — this function must never raise for
+    an operational locking failure, matching its pre-existing fail-open
+    contract for every other operational failure.
     """
     if not sid:
         raise ValueError("session_id required")
@@ -1598,7 +1649,7 @@ def touch(sid: str, path: str, cwd: Optional[str] = None) -> None:
     if not sdir:
         return  # not in a git repo — fail-open (bash `|| return 0`)
 
-    normalized = normalize_touch_path(path, cwd)
+    normalized = normalize_touch_path(path, cwd, root)
     if normalized is None:
         # Guard: skip if STILL absolute after normalization (fail-open).
         return
@@ -1623,41 +1674,116 @@ def touch(sid: str, path: str, cwd: Optional[str] = None) -> None:
                 file=sys.stderr,
             )
 
-    # Event-aware dedup (AC8): a path whose LAST event is already T is
-    # skipped (unchanged claim); a path whose last event is R (released) or
-    # with no event at all gets a fresh T — an edit after a release must not
-    # be silently unclaimed. Scan backwards and stop at the first matching
-    # line rather than parsing the whole log (hot path — fires on every
-    # tool-call file write).
-    if os.path.isfile(touched):
-        try:
-            existing = Path(touched).read_text(encoding="utf-8").splitlines()
-        except OSError:
-            existing = []
-        for line in reversed(existing):
-            if not line:
-                continue
-            verb, _ts, line_path = parse_touch_event(line)
-            if line_path == fpath:
-                if verb == "T":
-                    return
-                break
+    def _dedup_scan_and_append() -> bool:
+        """Event-aware dedup (AC8) + append, run either under the lock or
+        unlocked (see ``lock`` param's docstring paragraph above). A path
+        whose LAST event is already T is skipped (unchanged claim); a path
+        whose last event is R (released) or with no event at all gets a
+        fresh T — an edit after a release must not be silently unclaimed.
+        Scan backwards and stop at the first matching line rather than
+        parsing the whole log (hot path — fires on every tool-call file
+        write / declared write).
 
-    try:
-        with open(touched, "a", encoding="utf-8") as fh:
-            fh.write(format_touch_event("T", fpath) + "\n")
-    except OSError as exc:
-        # fail-open — touch() must never block a tool call on a write
-        # failure; surface it for debugging since this is not expected.
+        Returns ``True`` iff a new event was actually written (so
+        ``last_activity`` should be refreshed) — ``False`` on dedup-skip or
+        an append failure (already logged to stderr below).
+
+        Both the read and the append MUST be inside the same lock scope
+        when ``lock`` is honoured — reading last-event state and appending
+        as two unguarded steps races the dedup DECISION even if the append
+        itself were made atomic, per the plan's pre-flight note.
+        """
+        if os.path.isfile(touched):
+            try:
+                existing = Path(touched).read_text(encoding="utf-8").splitlines()
+            except OSError:
+                existing = []
+            for line in reversed(existing):
+                if not line:
+                    continue
+                verb, _ts, line_path = parse_touch_event(line)
+                if line_path == fpath:
+                    if verb == "T":
+                        return False
+                    break
+
+        try:
+            with open(touched, "a", encoding="utf-8") as fh:
+                fh.write(format_touch_event("T", fpath) + "\n")
+        except OSError as exc:
+            # fail-open — touch() must never block a tool call on a write
+            # failure; surface it for debugging since this is not expected.
+            print(
+                f"cs_touch: failed to append {fpath!r} to {touched} "
+                f"(non-fatal): {exc}",
+                file=sys.stderr,
+            )
+            return False
+        return True
+
+    anchor = root or cwd
+    wrote = False
+    locked = False
+    if lock and not anchor:
+        # Silent-degrade parity with the other paths in this function that
+        # already log their fail-open (lazy core.init() failure above,
+        # append-OSError in _dedup_scan_and_append): a caller requesting
+        # `lock=True` with neither `root` nor `cwd` gets an UNLOCKED append
+        # with no diagnostic trace otherwise — indistinguishable from the
+        # locked path having simply succeeded. Review: code-reviewer P3
+        # (2026-08-14).
         print(
-            f"cs_touch: failed to append {fpath!r} to {touched} "
-            f"(non-fatal): {exc}",
+            f"cs_touch: lock requested but no anchor (root/cwd both falsy) "
+            f"for session {sid}, path {fpath!r} — falling back to unlocked "
+            "append (non-fatal)",
             file=sys.stderr,
         )
-        return
+    if lock and anchor:
+        try:
+            with held_lock(
+                Path(os.path.abspath(touched)),
+                anchor_root=Path(os.path.realpath(anchor)),
+                timeout=_TOUCH_LOCK_TIMEOUT_SECS,
+            ):
+                wrote = _dedup_scan_and_append()
+                # Mark the scan+append DONE as soon as the body completes —
+                # not after the `with` statement exits. `held_lock`'s
+                # `finally` (`_plat_unlock`/`os.close`) can raise `OSError`
+                # at RELEASE time, AFTER `_dedup_scan_and_append()` has
+                # already run to completion. Setting `locked = True` here
+                # (inside the `with`, before that release runs) means a
+                # subsequent release-time OSError still propagates and is
+                # caught below, but `locked` is already `True` by then — so
+                # the `if not locked:` fallback correctly does NOT re-run
+                # the scan+append on work that already happened. Setting
+                # this flag only AFTER the `with` block (the pre-existing
+                # shape) would have `locked` still `False` when a
+                # release-time exception is caught, wrongly triggering that
+                # re-run. Review: EM addendum (2026-08-15) to code-reviewer
+                # P1/P2.
+                locked = True
+        except (LockTimeout, RuntimeError, ValueError, OSError):
+            # LockTimeout: contended past the bound — degrade to the
+            # pre-C2 unlocked append rather than blocking the caller.
+            # RuntimeError: no lock backend on this platform.
+            # ValueError: held_lock's own absolute-path precondition —
+            # only reachable if `anchor` was somehow relative after
+            # realpath, which realpath never produces; defensive only.
+            # OSError: held_lock's acquire path (lock_dir.mkdir, os.open
+            # of the sidecar fd) or its release path (_plat_unlock,
+            # os.close in the `finally`) can both raise a plain OSError
+            # (disk full, permission denied, an already-invalidated fd);
+            # neither is a LockTimeout/RuntimeError/ValueError, and
+            # touch() must never raise for an operational lock failure —
+            # see this function's own fail-open contract above.
+            # Review: code-reviewer P1/P2 (2026-08-14).
+            locked = False
+    if not locked:
+        wrote = _dedup_scan_and_append()
 
-    # Update last_activity (best-effort, no failure on error).
-    core.update_meta_field(sdir, "last_activity", core.now_iso())
+    if wrote:
+        # Update last_activity (best-effort, no failure on error).
+        core.update_meta_field(sdir, "last_activity", core.now_iso())
     return
 
 
@@ -4028,6 +4154,157 @@ def compute_scope(
     )
 
 
+#: Recency guard for `_drop_owned_agent_dirs` — an owned agent dir whose
+#: `touched.txt` was written within this window is treated as possibly
+#: still live and left alone. Deliberately NOT the sibling reaper's
+#: `_reap_stale_agents._AGENT_STALE_SECONDS` (24h): at session-end every
+#: dispatched agent's `touched.txt` is fresh by construction, so a 24h
+#: floor here would make this function a permanent no-op and silently
+#: undo the feature it exists to provide. A short window is instead the
+#: cheapest observable proxy for "may still be writing" available at
+#: archive-time — see `_drop_owned_agent_dirs`'s own docstring.
+_AGENT_DROP_RECENCY_SECONDS = 10 * 60  # 10 minutes
+
+
+def _drop_owned_agent_dirs(sid: str, sdir: str, base: str) -> None:
+    """Best-effort: archive every ``.agents/<agent_id>/`` dir this session
+    (``sid``) dispatched, scoped to its own roster only — never a rescan of
+    the whole ``.agents/`` tree.
+
+    Called from :func:`archive`, BEFORE the session dir at ``sdir`` is
+    ``shutil.move``d out from under ``dispatched-agents.txt`` — after the
+    move, the roster is no longer readable at ``sdir``, so this must run
+    first (verified against ``archive``'s own body, not merely asserted).
+    If the LATER ``sdir`` move in ``archive()`` then fails, this function's
+    own moves are not rolled back: ``archive()`` returns ``False`` (a
+    failed session archive) while this session's agent dirs may already be
+    archived under ``.archive/_agents-*``. That is safe to retry — a
+    retried call finds each moved agent dir's back-pointer file already
+    gone (it moved with the dir) and no-ops on it via the roster/back-
+    pointer checks below, so the retry cannot double-move or corrupt state.
+
+    Roster resolution: read ``<sdir>/dispatched-agents.txt`` column 1 (tab-
+    separated, mirrors ``nudge_unrouted_sizing._dispatch_rows`` and
+    ``_alternative_liveness._make_backpointer``'s writer shape) for the
+    agent ids this session dispatched. For each, drop
+    ``<base>/.agents/<agent_id>/`` ONLY if that dir's ``em-session-id.txt``
+    back-pointer names this same ``sid`` — the same back-pointer check
+    ``release_committed_claims`` already uses (see that function's own
+    ``em_sid != sid: continue`` guard above) — so an id present in the
+    roster whose back-pointer names a DIFFERENT session (a stale/reused
+    agent-id row, or a race) is left untouched; it belongs to that other
+    session, not this one. Unlike ``compute_scope``'s Step 3b, this does
+    NOT distinguish whole-dir-unreadable / per-entry-unreadable /
+    resolved-but-unreadable-touched sentinel shapes — every unreadable or
+    ambiguous back-pointer collapses to the same skip-and-leave-alone
+    outcome, deliberately: that is the conservative direction for a
+    best-effort mover, even though it is coarser than the fail-closed
+    distinctions the cited precedent draws for its own (different) purpose.
+
+    Liveness guard: even with a valid same-``sid`` back-pointer, an agent
+    dir whose ``touched.txt`` mtime is within
+    ``_AGENT_DROP_RECENCY_SECONDS`` of "now" is skipped — it may still be
+    live and writing. See ``_AGENT_DROP_RECENCY_SECONDS``'s own docstring
+    for why the sibling reaper's 24h staleness rail is not reused here.
+    Nothing skipped here is lost: the cadence reaper's own staleness sweep
+    (``_reap_stale_agents``) collects it later once it genuinely goes
+    stale.
+
+    Archive shape: matches ``coordinator_core.ops.session.reap.
+    _reap_stale_agents`` exactly — a rename to
+    ``<base>/.archive/_agents-<agent_id>-<YYYYMMDD>/`` (local date), with
+    an ``exists()`` re-check on ``OSError`` to absorb a concurrent race
+    idempotently (the cadence sweep can write the identical destination
+    path shape). Do NOT invent a second archive shape: the 14-day
+    retention prune (``_prune_stale_agent_archive``, same module) already
+    sweeps this exact ``_agents-*`` prefix, so anything written here is
+    garbage-collected by the same mechanism stale-agent reaps already
+    rely on.
+
+    Best-effort, NEVER fatal: every per-entry failure (missing roster file,
+    missing ``.agents`` dir, missing/unreadable back-pointer, a failed move)
+    is swallowed — this runs inside ``archive()``, whose job is archiving
+    the SESSION, and a failure here must never turn a good session archive
+    into a failed one (mirrors ``archive()``'s own posture toward
+    ``delete_settings_home_session_record``, which is fail-open for the
+    identical reason).
+
+    KNOWN LIMITATION — this covers the clean-exit path only. The SessionEnd
+    hook that calls ``archive()`` is fail-open at four points and does not
+    fire on crash or kill, so a crashed/killed session's agent dirs are NOT
+    dropped here. That path belongs to
+    ``coordinator_core.ops.session.reap._reap_stale_agents``'s cadence
+    sub-reap (currently unregistered — see memo
+    ``2026-08-14-claude-klabauter-em-session-reaper-lost-its-caller.md``) and
+    to ``coordinator_core.ops.reap_orphaned_agent_dirs``'s four-rail orphan
+    sweep. Do not read this function's presence as full coverage.
+    """
+    roster_path = os.path.join(sdir, "dispatched-agents.txt")
+    try:
+        with open(roster_path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+
+    agent_ids: List[str] = []
+    for raw_line in lines:
+        line = raw_line.rstrip("\n").rstrip("\r")
+        agent_id = line.split("\t", 1)[0].strip() if line else ""
+        if agent_id:
+            agent_ids.append(agent_id)
+    if not agent_ids:
+        return
+
+    agents_base = os.path.join(base, ".agents")
+    archive_root = os.path.join(base, ".archive")
+
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+    except Exception:
+        today = "unknown"
+
+    for agent_id in agent_ids:
+        try:
+            agent_dir = os.path.join(agents_base, agent_id)
+            backptr = os.path.join(agent_dir, "em-session-id.txt")
+            if not os.path.isfile(backptr):
+                continue
+            with open(backptr, "r", encoding="utf-8", errors="replace") as fh:
+                first_lines = fh.read().splitlines()
+            em_sid = (first_lines[0] if first_lines else "").strip()
+            if em_sid != sid:
+                continue  # not this session's own agent — never touch it
+
+            # Review: code-reviewer P1 — ownership alone is not liveness; a
+            # dispatched agent that outlives its EM session can still be
+            # writing to its dir. Skip anything recently touched — see
+            # `_AGENT_DROP_RECENCY_SECONDS`'s docstring.
+            touched_path = os.path.join(agent_dir, "touched.txt")
+            try:
+                touched_mtime = os.stat(touched_path).st_mtime
+            except OSError:
+                continue  # can't establish recency — fail-closed, leave alone
+            if (time.time() - touched_mtime) <= _AGENT_DROP_RECENCY_SECONDS:
+                continue  # recently touched — may still be live
+
+            archive_dest = os.path.join(archive_root, f"_agents-{agent_id}-{today}")
+            os.makedirs(archive_root, exist_ok=True)
+            # Review: code-reviewer P2 — match `_reap_stale_agents`'s
+            # rename + exists-recheck idiom exactly rather than
+            # `shutil.move`, whose collision semantics differ (it nests
+            # the source inside an existing destination directory instead
+            # of raising) and whose separate pre-check left a TOCTOU
+            # window against the cadence sweep writing the same path shape.
+            try:
+                os.rename(agent_dir, archive_dest)
+            except OSError:
+                if os.path.exists(archive_dest):
+                    continue  # concurrent reap — dest now exists — idempotent
+                raise
+        except OSError:
+            continue  # best-effort — never fatal to the session archive
+
+
 def archive(sid: str, cwd: Optional[str] = None) -> bool:
     """Port of ``cs_archive <session_id>``: move the
     session dir to ``<sessions_dir>/.archive/<sid>-<YYYY-MM-DD>/``.
@@ -4053,6 +4330,14 @@ def archive(sid: str, cwd: Optional[str] = None) -> bool:
     return value: the settings-home cleanup is fail-open by construction (see
     ``delete_settings_home_session_record``'s own docstring), so it can never
     turn a successful in-repo archive into a failure, nor vice versa.
+
+    Also drops (best-effort, archives — never deletes) every
+    ``.agents/<agent_id>/`` dir this session dispatched, scoped to its own
+    roster only — see :func:`_drop_owned_agent_dirs` for the full contract,
+    including the KNOWN LIMITATION that this covers the clean-exit path
+    only: it runs BEFORE the ``sdir`` move below, while
+    ``dispatched-agents.txt`` is still readable at its pre-move path, and it
+    is never fatal to this function's own return value.
     """
     if not sid:
         raise ValueError("session_id required")
@@ -4070,6 +4355,8 @@ def archive(sid: str, cwd: Optional[str] = None) -> bool:
 
     if not os.path.isdir(sdir):
         return True  # already archived or never existed — idempotent
+
+    _drop_owned_agent_dirs(sid, sdir, base)
 
     try:
         today = datetime.now().strftime("%Y-%m-%d")

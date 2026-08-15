@@ -108,6 +108,15 @@ from pathlib import Path, PurePosixPath
 
 from coordinator_core.win_portability import no_console_creationflags
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _TESTS_DIR = Path(__file__).resolve().parent
 # .../coordinator/bin/tests -> .../coordinator/bin -> .../coordinator -> repo root
 _REPO_ROOT = _TESTS_DIR.parents[2]

@@ -80,6 +80,13 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- shared isolation fixture, autouse once imported.
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _MISSING = object()
 
 

@@ -226,20 +226,53 @@ def _coerce_registry_int(value: object) -> Optional[int]:
     return None
 
 
+def _adapter_vram_bytes(adapter_key) -> Optional[int]:
+    """VRAM in bytes for one adapter registry key, or None.
+
+    Prefers the 64-bit `HardwareInformation.qwMemorySize` (present on modern
+    drivers) and falls back to the older 32-bit `HardwareInformation.MemorySize`
+    (which under-reports on adapters with >4GB VRAM — a known limitation of this
+    registry path, not a bug here)."""
+    import winreg
+
+    for value_name in ("HardwareInformation.qwMemorySize", "HardwareInformation.MemorySize"):
+        try:
+            raw, _ = winreg.QueryValueEx(adapter_key, value_name)
+        except FileNotFoundError:
+            continue
+        as_int = _coerce_registry_int(raw) if raw else None
+        if as_int:
+            return as_int
+    return None
+
+
 def _detect_gpu_windows() -> Tuple[Optional[str], Optional[int]]:
     """Windows GPU name + VRAM (GB) via the registry (no shell spawn, no WMI).
 
-    Reads the first numbered adapter subkey under the Display device-setup
-    class (`_DISPLAY_CLASS_GUID`) that carries a `DriverDesc` value, mirroring
-    the CIM query's `Select-Object -First 1` semantics — best-effort, never
-    raises. VRAM prefers the 64-bit `HardwareInformation.qwMemorySize` value
-    (present on modern drivers) and falls back to the older 32-bit
-    `HardwareInformation.MemorySize` (which under-reports on adapters with
-    >4GB VRAM — a known limitation of this registry path, not a bug here)."""
+    Enumerates EVERY numbered adapter subkey under the Display device-setup
+    class (`_DISPLAY_CLASS_GUID`) carrying a `DriverDesc`, and reports the one
+    with the most VRAM. Best-effort, never raises.
+
+    Why largest-VRAM and not first-found: the previous implementation mirrored
+    the retired CIM query's `Select-Object -First 1`, returning whichever
+    adapter the registry happened to enumerate first. On a laptop or a desktop
+    with an iGPU that is the INTEGRATED adapter — on the reference box it
+    reported `Intel(R) Graphics` / 2GB while an `NVIDIA GeForce RTX 5070 Ti`
+    with 16GB sat at the next index. Example-retrieval-repo's embed sidecar sizes itself
+    off `hardware.vram_gb`, so first-found silently provisions the whole fleet
+    against the weakest adapter on the machine. Enumeration order is not a
+    capability ranking; do not restore `-First 1` semantics for oracle parity.
+
+    Adapters reporting no VRAM at all lose to any adapter that reports some.
+    If NO adapter reports VRAM, the first one with a `DriverDesc` is returned
+    with `None` VRAM — the pre-existing degraded shape, unchanged."""
     try:
         import winreg
     except ImportError:  # pragma: no cover - stdlib on Windows only
         return None, None
+
+    best_desc: Optional[str] = None
+    best_bytes: Optional[int] = None
 
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_GUID) as class_key:
@@ -258,28 +291,19 @@ def _detect_gpu_windows() -> Tuple[Optional[str], Optional[int]]:
                             driver_desc, _ = winreg.QueryValueEx(adapter_key, "DriverDesc")
                         except FileNotFoundError:
                             continue
-                        vram_gb: Optional[int] = None
-                        try:
-                            qwmem, _ = winreg.QueryValueEx(adapter_key, "HardwareInformation.qwMemorySize")
-                        except FileNotFoundError:
-                            qwmem = None
-                        qwmem_int = _coerce_registry_int(qwmem) if qwmem else None
-                        if qwmem_int:
-                            vram_gb = (qwmem_int + _ROUND_HALF_GB) // _BYTES_PER_GB
-                        else:
-                            try:
-                                mem, _ = winreg.QueryValueEx(adapter_key, "HardwareInformation.MemorySize")
-                            except FileNotFoundError:
-                                mem = None
-                            mem_int = _coerce_registry_int(mem) if mem else None
-                            if mem_int:
-                                vram_gb = (mem_int + _ROUND_HALF_GB) // _BYTES_PER_GB
-                        return driver_desc, vram_gb
+                        vram_bytes = _adapter_vram_bytes(adapter_key)
+                        if best_desc is None or (vram_bytes or 0) > (best_bytes or 0):
+                            best_desc = driver_desc
+                            best_bytes = vram_bytes
                 except OSError:
                     continue
     except OSError:
         return None, None
-    return None, None
+
+    if best_desc is None:
+        return None, None
+    vram_gb = (best_bytes + _ROUND_HALF_GB) // _BYTES_PER_GB if best_bytes else None
+    return best_desc, vram_gb
 
 
 def _detect_cores(platform: str) -> Optional[int]:

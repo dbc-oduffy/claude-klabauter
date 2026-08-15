@@ -28,6 +28,15 @@ import coordinator_core.ops.review_brightline_gate as rbg
 from coordinator_core import claim_state
 from coordinator_core.ops.review_brightline_gate import _resolve_closing_session_id
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(

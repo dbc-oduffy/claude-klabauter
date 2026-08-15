@@ -23,6 +23,13 @@ import pytest
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ops.cascade_baton_rows import resolve_baton_rows
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _GIT_ENV = {
     **os.environ,
     "GIT_AUTHOR_NAME": "test",

@@ -27,6 +27,13 @@ import pytest
 
 from coordinator_core.testing import suite_mutex
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 @pytest.fixture(autouse=True)
 def sandboxed_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:

@@ -32,7 +32,10 @@ import pytest
 # `_init_git_repo` shells out to real `git` subprocesses (init/config/add/
 # commit) to build a fixture repo for `held_lock`'s `git_common_dir()`
 # resolution — real process spawn at function scope, not a mock.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

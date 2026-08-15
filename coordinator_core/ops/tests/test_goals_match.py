@@ -50,6 +50,13 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.goals_match import _handler
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Registry completeness assertion (universal positive floor)
 #

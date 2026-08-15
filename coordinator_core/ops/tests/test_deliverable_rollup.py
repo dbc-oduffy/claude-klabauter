@@ -46,6 +46,13 @@ import coordinator_core.ops.deliverable_equivalence as _equivalence_mod
 import coordinator_core.ops.deliverable_rollup as _rollup_mod
 from coordinator_core.ops.deliverable_rollup import _handler, _scan_artifacts_by_deliverable_id
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # RollupRepo — lightweight fixture class (no git ops needed by the handler,

@@ -32,6 +32,13 @@ import pytest
 
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 @pytest.fixture(autouse=True)
 def _isolated_settings_home(tmp_path, monkeypatch):

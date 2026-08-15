@@ -41,6 +41,13 @@ from coordinator_core.ops.emit.context import EmitContext, META_REPO_NAME_FALLBA
 from coordinator_core.ops.emit.envelope import emit
 from coordinator_core.ops.fleet._common import main_worktree_root
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # S4-F3 fix: _run_git mock target for EmitContext.resolve() code-behavior tests
 _RUN_GIT_PATH = "coordinator_core.ops.emit.context._run_git"
 

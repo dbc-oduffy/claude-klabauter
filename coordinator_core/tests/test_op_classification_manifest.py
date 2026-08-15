@@ -218,3 +218,60 @@ def test_manifest_op_keys_are_unique():
     assert len(set(op_keys)) == len(op_keys), (
         "op-key column is not unique across all manifest rows"
     )
+
+
+def _manifest_scope_verdict(cell: str) -> str:
+    """The scope-verdict column is `<verdict> — <justification>`; the verdict is the
+    leading token."""
+    return cell.split(" ")[0].strip()
+
+
+def test_manifest_op_keys_resolve_in_the_scope_table():
+    """A manifest op-key that no longer names a registered op ships a dead dotted key to
+    claude-central-em's relink map — the fence resolves to nothing and
+    `coordinator_core.invoke <key>` fails at the call site, in their repo, after the
+    contract was declared frozen. AC13's set-equality is over the audit's kebab op-*names*
+    and structurally cannot see this: the key column can drift to a name that was never
+    minted (`branch.list_unmerged_work` for the shipped `git_branch.list_unmerged_work`)
+    while every op-name still matches the oracle.
+
+    Spec backlink: pln-coordinator-ops-buildout-from--903224 § AC5, § AC13
+    """
+    from coordinator_core.op_scopes import _OP_KEY_SCOPE
+
+    unresolved = [
+        (row["op-name"], row["op-key"])
+        for row in _load_manifest_rows()
+        if row["op-key"].strip() not in _OP_KEY_SCOPE
+    ]
+    assert not unresolved, (
+        "manifest op-key(s) absent from _OP_KEY_SCOPE (dead cross-repo contract):\n"
+        + "\n".join(f"  {name}: {key}" for name, key in unresolved)
+    )
+
+
+def test_manifest_scope_verdicts_match_the_scope_table():
+    """The manifest's scope-verdict column is the justification of record for AC5's
+    `_OP_KEY_SCOPE` entry. A row justifying `common_dir` against a table entry reading
+    `none` means the op is silently told it needs no worktree — the double fail-open the
+    plan's § Registration is four surfaces, not one names.
+
+    Spec backlink: pln-coordinator-ops-buildout-from--903224 § AC5
+    """
+    from coordinator_core.op_scopes import _OP_KEY_SCOPE
+
+    mismatches = [
+        (row["op-name"], key, declared, _OP_KEY_SCOPE[key])
+        for row in _load_manifest_rows()
+        for key in (row["op-key"].strip(),)
+        if key in _OP_KEY_SCOPE
+        for declared in (_manifest_scope_verdict(row["scope-verdict"]),)
+        if declared != _OP_KEY_SCOPE[key]
+    ]
+    assert not mismatches, (
+        "manifest scope-verdict disagrees with _OP_KEY_SCOPE:\n"
+        + "\n".join(
+            f"  {name} ({key}): manifest={declared!r} table={actual!r}"
+            for name, key, declared, actual in mismatches
+        )
+    )

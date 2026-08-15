@@ -20,6 +20,13 @@ import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_o
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op side effect
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _handler = sweep_mod._handler
 
 _GIT_ENV = {
@@ -202,3 +209,108 @@ class TestDivergenceDetection:
         result = asyncio.run(_handler({}, repo_root=None))
         assert result["exit_code"] == 1
         assert "repo_root" in result["error"]
+
+
+class TestSlugPrefixFamilyDivergence:
+    """AC6/AC7 (C4): the sweep must see a terminal plan whose spine-sharing
+    handoff is non-terminal for a `kind`-ABSENT successor, even though the
+    two ids DIFFER — the exact shape of this plan's own Problem section,
+    reproduced with its own 40/42/45 triple so a drift between this sweep's
+    fixture and `slug_prefix_family`'s own unit-test fixture is one shared
+    test's regression (staff-eng-063f0261 finding 7)."""
+
+    # This plan's § Problem table, verbatim.
+    ID_45 = "dlv-coordinator-ops-buildout-from-fence-inventory-df74c5"
+    ID_42 = "dlv-coordinator-ops-buildout-from-fence-invent-903224"
+    ID_40 = "dlv-coordinator-ops-buildout-from-fence-inve-fc3678"
+
+    def test_a_kind_absent_non_terminal_successor_in_the_plans_slug_family_is_reported(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "p1.md", status="implemented", deliverable_id=self.ID_42)
+        # Plain successor: no `kind` field at all, still open.
+        _seed_handoff(repo, "successor.md", deliverable_id=self.ID_40, deployment_state="ready_to_fire")
+
+        result = _run({}, repo_root=repo / ".git")
+
+        assert result["schema_version"] == 2
+        assert len(result["slug_prefix_family_divergences"]) == 1
+        entry = result["slug_prefix_family_divergences"][0]
+        assert entry["plan_deliverable_id"] == self.ID_42
+        assert "docs/plans/p1.md" in entry["plan_sources"]
+        assert entry["handoff_deliverable_id"] == self.ID_40
+        assert "state/handoffs/successor.md" == entry["handoff_path"]
+        # AC6: report only, never flip.
+        assert result["exit_code"] == 0
+
+    def test_the_full_40_42_45_triple_all_pairwise_report(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "p1.md", status="implemented", deliverable_id=self.ID_45)
+        _seed_handoff(repo, "h42.md", deliverable_id=self.ID_42, deployment_state="ready_to_fire")
+        _seed_handoff(repo, "h40.md", deliverable_id=self.ID_40, deployment_state="awaiting_gate")
+
+        result = _run({}, repo_root=repo / ".git")
+
+        family_handoff_ids = {d["handoff_deliverable_id"] for d in result["slug_prefix_family_divergences"]}
+        assert family_handoff_ids == {self.ID_42, self.ID_40}
+
+    def test_a_kind_bearing_successor_is_not_reported_as_a_slug_family_divergence(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "p1.md", status="implemented", deliverable_id=self.ID_42)
+        _seed_handoff(
+            repo, "stub.md", deliverable_id=self.ID_40, deployment_state="ready_to_fire",
+            extra="kind: roadmap-baton\n",
+        )
+
+        result = _run({}, repo_root=repo / ".git")
+        assert result["slug_prefix_family_divergences"] == []
+
+    def test_a_terminal_kind_absent_successor_is_not_reported_as_a_slug_family_divergence(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "p1.md", status="implemented", deliverable_id=self.ID_42)
+        _seed_handoff(repo, "shipped.md", deliverable_id=self.ID_40, deployment_state="shipped")
+
+        result = _run({}, repo_root=repo / ".git")
+        assert result["slug_prefix_family_divergences"] == []
+
+    def test_an_exact_id_match_is_not_double_reported_as_a_slug_family_divergence(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "p1.md", status="implemented", deliverable_id="dlv-exact-match-000000")
+        _seed_handoff(repo, "h1.md", deliverable_id="dlv-exact-match-000000", deployment_state="ready_to_fire")
+
+        result = _run({}, repo_root=repo / ".git")
+        assert len(result["divergences"]) == 1
+        assert result["slug_prefix_family_divergences"] == []
+
+    def test_never_writes_on_a_slug_family_divergence(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "p1.md", status="implemented", deliverable_id=self.ID_42)
+        handoff = _seed_handoff(repo, "successor.md", deliverable_id=self.ID_40, deployment_state="ready_to_fire")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "seed fixture")
+
+        before_bytes = handoff.read_bytes()
+        _run({}, repo_root=repo / ".git")
+        assert handoff.read_bytes() == before_bytes
+
+        status = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+        assert status.stdout.strip() == ""
+
+    def test_deliverable_id_param_restricts_the_slug_family_scan_to_the_named_plan(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "p1.md", status="implemented", deliverable_id=self.ID_45)
+        _seed_plan(repo, "p2.md", status="implemented", deliverable_id="dlv-unrelated-workstream-000000")
+        _seed_handoff(repo, "h42.md", deliverable_id=self.ID_42, deployment_state="ready_to_fire")
+
+        result = _run({"deliverable_id": "dlv-unrelated-workstream-000000"}, repo_root=repo / ".git")
+        assert result["slug_prefix_family_divergences"] == []

@@ -20,7 +20,8 @@ Migration:    detects the legacy `# --- coordinator maximalist launch ---` block
 Override:     --rc <path> (or the DoE trampoline's COORDINATOR_SHIM_RC env passthrough)
               selects the rc directly (escape hatch when $SHELL detection is wrong).
 
-Shell family: --shell bash|powershell (default: bash, preserving all prior
+Shell family: --shell bash|powershell (default: platform-derived — powershell on
+              native Windows, bash everywhere else including MSYS; preserving all prior
               behaviour byte-for-byte) selects BOTH the wired rc line (bash:
               guarded `source`; powershell: guarded dot-source, see
               EXPECTED_SOURCE_LINE_POWERSHELL) and the rendered shim's
@@ -141,9 +142,12 @@ Options:
                       temp path, discards it, exits 0 on success)
   --template <path>   Override template source path (default: auto-resolved
                       relative to the DoE trampoline; useful for tests)
-  --shell <family>    Target shell family: "bash" (default, covers bash/zsh)
-                      or "powershell" (selects the .ps1 shim path and a
-                      dot-source wired line instead of a bash source line)
+  --shell <family>    Target shell family: "bash" (covers bash/zsh) or
+                      "powershell" (selects the .ps1 shim path, the pwsh
+                      profile as the rc target, and a dot-source wired line
+                      instead of a bash source line).
+                      Default: "powershell" on Windows outside MSYS,
+                      "bash" everywhere else.
   -h, --help          Show this help and exit
 
 Environment:
@@ -185,6 +189,92 @@ def _extract_sentinel_body(text: str, begin: str, end: str) -> str:
     return "\n".join(lines)
 
 
+def _template_family_mismatch(tmpl_path: str, shell_family: str) -> Optional[str]:
+    """Diagnostic when `tmpl_path` is unmistakably the OTHER shell family's
+    template, else None.
+
+    This generator copies template bytes VERBATIM but names the destination
+    from `shell_family` (`_shim_filename`). Those two inputs come from
+    different places — `--template` from the caller, `shell_family` from
+    `--shell` or `_default_shell_family()` — and nothing reconciled them. A
+    caller that hardcodes the `.sh` template and omits `--shell` therefore
+    writes bash bytes into `claude-doe-shim.ps1` on native Windows, where the
+    default family is `powershell`. The profile then dot-sources a file of
+    bash, and `claude()` is never defined: the operator gets a plugin-less
+    session with the sentinel block present and correct, so every downstream
+    check says the install is healthy.
+
+    Detection is deliberately narrow — only an explicit opposite-family
+    extension counts. Neutral or arbitrary template names (test fixtures pass
+    them) are not second-guessed.
+    """
+    base = os.path.basename(tmpl_path).lower()
+    wrong = {
+        "powershell": (".sh.tmpl", "bash"),
+        "bash": (".ps1.tmpl", "powershell"),
+    }.get(shell_family)
+    if not wrong:
+        return None
+    suffix, other = wrong
+    if not base.endswith(suffix):
+        return None
+    return (
+        f"--template is the {other} template ({base}) but the resolved shell family is "
+        f"{shell_family}, which writes {_shim_filename(shell_family)}. "
+        f"Template bytes are copied verbatim, so this would install {other} into a "
+        f"{shell_family} shim. Pass the matching template, or --shell {other}."
+    )
+
+
+def _commented_out_source_lines(rc_text: str, expected_source_line: str) -> List[str]:
+    """Lines in `rc_text` that are this generator's OWN wired source line,
+    commented out — i.e. a deliberately DISABLED shim block.
+
+    A disabled block and a never-installed rc are indistinguishable to the
+    sentinel check: neither carries an exact `SENTINEL_BEGIN` line, so both
+    report "sentinel absent" and both are silently repaired. They mean very
+    different things to an operator. Disabling this block switches off EVERY
+    coordinator surface for every session on the box, and nothing else detects
+    it — coordinator's own SessionStart hooks cannot warn that coordinator
+    failed to load, because they do not run when it does not load. The
+    detector has to live out here, in the installer.
+
+    Detection is exact, not heuristic: a line qualifies only when stripping its
+    leading comment markers yields one of `expected_source_line`'s own
+    non-blank lines verbatim. Prose that merely mentions the shim (a hand-
+    written note in the operator's profile, including the remediation notes
+    this generator's own diagnostics suggest) never matches.
+
+    Spec backlink: docs/reference/interactive-launch-chain.md § 4.
+    """
+    wanted = {line.strip() for line in expected_source_line.split("\n") if line.strip()}
+    found: List[str] = []
+    for raw in rc_text.split("\n"):
+        stripped = raw.strip()
+        if not stripped.startswith("#"):
+            continue
+        if stripped.lstrip("#").strip() in wanted:
+            found.append(raw.rstrip())
+    return found
+
+
+def _disabled_block_report(target_rc: str, evidence: List[str]) -> List[str]:
+    """Operator-facing lines for a detected disabled block.
+
+    Remediation is a runnable command, never a slash command: this fires while
+    the operator has no coordinator session, so naming an agentic remedy names
+    one that cannot run.
+    """
+    lines = [
+        f"WARNING: {target_rc} contains a DISABLED coordinator shim block "
+        f"({len(evidence)} commented source line(s)).",
+        "  While disabled, every session on this box runs without the coordinator plugin.",
+    ]
+    lines.extend(f"    {line}" for line in evidence)
+    lines.append(f"  Delete those commented lines from {target_rc}; a live block is written below.")
+    return lines
+
+
 def _resolve_home() -> str:
     return (
         os.environ.get("HOME")
@@ -195,6 +285,41 @@ def _resolve_home() -> str:
 
 def _resolve_claude_home_base() -> str:
     return os.environ.get("CLAUDE_HOME") or _resolve_home()
+
+
+def _default_shell_family() -> str:
+    """The shell family to target when --shell is not given.
+
+    Windows defaults to ``powershell``; everything else (including Git Bash /
+    MSYS, which sets MSYSTEM) keeps ``bash``. Without this, a Windows operator
+    with no ``$SHELL`` fell through the POSIX ladder to "defaulting to
+    ~/.zshrc", and the generator then wrote a POSIX ``.sh`` shim and edited a
+    ``~/.zshrc`` that no shell on the box reads — a silently inert install whose
+    own success message told the operator to run `source`, which is not a
+    PowerShell command. An explicit ``--shell`` still wins.
+    """
+    if os.name == "nt" and not os.environ.get("MSYSTEM"):
+        return "powershell"
+    return "bash"
+
+
+def _powershell_profile_path() -> str:
+    """The pwsh 7+ per-user profile, matching the `.ps1` shim leg.
+
+    Documents/PowerShell/Microsoft.PowerShell_profile.ps1 is pwsh 7's location;
+    Windows PowerShell 5.1 uses Documents/WindowsPowerShell/. pwsh is the
+    coordinator's Windows shell of record, so 7 is what gets wired.
+    """
+    home = _resolve_home()
+    return os.path.join(home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
+
+
+def _reload_hint(shell_family: str, target_rc: str) -> str:
+    """The 'pick this up now' invocation for the wired rc file. PowerShell
+    dot-sources with `. <path>`; `source` is a POSIX builtin and printing it to
+    a PowerShell operator is a command that does not exist."""
+    verb = "." if shell_family == "powershell" else "source"
+    return f"{verb} {target_rc}"
 
 
 def main(argv: List[str]) -> int:
@@ -224,7 +349,7 @@ def main(argv: List[str]) -> int:
     check_only = False
     template_override: Optional[str] = None
     graceful_skip_unresolved = False
-    shell_family = "bash"
+    shell_family = _default_shell_family()
 
     i = 0
     while i < len(argv):
@@ -307,6 +432,11 @@ def main(argv: List[str]) -> int:
         return 1
 
     tmpl_path = os.path.realpath(template_override)
+    mismatch = _template_family_mismatch(tmpl_path, shell_family)
+    if mismatch:
+        print(f"{_PROG}: {mismatch}", file=sys.stderr)
+        print("claude_shim: failed (template/--shell mismatch)")
+        return 1
     if not os.path.isfile(tmpl_path):
         print(f"{_PROG}: Template not found: {tmpl_path}", file=sys.stderr)
         print("claude_shim: failed (see stderr for gen-claude-doe-shim.py output)")
@@ -352,7 +482,9 @@ def main(argv: List[str]) -> int:
         target_rc = os.environ["COORDINATOR_SHIM_RC"]
     else:
         home = _resolve_home()
-        if os.environ.get("MSYSTEM"):
+        if shell_family == "powershell":
+            target_rc = _powershell_profile_path()
+        elif os.environ.get("MSYSTEM"):
             target_rc = os.path.join(home, ".bashrc")
         else:
             shell_env = os.environ.get("SHELL", "")
@@ -424,6 +556,17 @@ def main(argv: List[str]) -> int:
                     print("claude_shim: failed in check-only validation (see stderr)")
                     return 1
             else:
+                disabled = _commented_out_source_lines(rc_text, expected_source_line)
+                if disabled:
+                    # A DISABLED block is a live misconfiguration, not a
+                    # pending install: this box is running every session
+                    # without coordinator right now. check-only exists to
+                    # report exactly that, so it fails rather than reporting
+                    # the same "would add source block" as a clean machine.
+                    for line in _disabled_block_report(target_rc, disabled):
+                        print(f"[check-only] {line}", file=sys.stderr)
+                    print("claude_shim: check failed: shim block is disabled (see stderr)")
+                    return 1
                 print(
                     f"[check-only] rc {target_rc}: sentinel absent — would add source block",
                     file=sys.stderr,
@@ -466,6 +609,15 @@ def main(argv: List[str]) -> int:
     # ---- wire source line into rc (sentinel-guarded, detect-then-fail-loud on hand-mod) ----
     if not os.path.isfile(target_rc):
         try:
+            # The rc file's PARENT may not exist: a POSIX rc sits directly in
+            # $HOME, but the pwsh profile lives at
+            # Documents/PowerShell/Microsoft.PowerShell_profile.ps1 and pwsh does
+            # not create that directory until a profile is first saved. Without
+            # this the Windows leg failed with "Cannot create rc file" on any box
+            # where the operator had never written a profile.
+            parent = os.path.dirname(target_rc)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             open(target_rc, "a", encoding="utf-8").close()
         except OSError as exc:
             print(f"{_PROG}: ERROR: Cannot create rc file: {target_rc}: {exc}", file=sys.stderr)
@@ -496,6 +648,15 @@ def main(argv: List[str]) -> int:
             print("claude_shim: failed (see stderr for gen-claude-doe-shim.py output)")
             return 1
     else:
+        # Repair path. A disabled block is repaired the same way as a missing
+        # one (the live block below re-enables coordinator), but it is reported
+        # first: the operator needs to know the box HAS been running without
+        # coordinator, and the commented lines are theirs to delete — this
+        # generator never edits an operator's own text.
+        disabled = _commented_out_source_lines(rc_text, expected_source_line)
+        if disabled:
+            for line in _disabled_block_report(target_rc, disabled):
+                print(line, file=sys.stderr)
         tmp_rc = f"{target_rc}.tmp.{os.getpid()}"
         try:
             new_block = f"\n{SENTINEL_BEGIN}\n{expected_source_line}\n{SENTINEL_END}\n"
@@ -517,7 +678,8 @@ def main(argv: List[str]) -> int:
         print(f"rc {target_rc}: source block added", file=sys.stderr)
 
     print(
-        f"Done. Open a new terminal (or run: source {target_rc}) for claude() to take effect.",
+        f"Done. Open a new terminal (or run: {_reload_hint(shell_family, target_rc)}) "
+        "for claude() to take effect.",
         file=sys.stderr,
     )
     print(f"claude_shim: {'ready (no-op)' if rc_block_was_noop else f'installed ({shim_dest})'}")

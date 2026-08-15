@@ -43,6 +43,13 @@ from coordinator_core.bash_guards._write_bump_marker import (
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import WRITE_SINK_BINARIES
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 #: Same bridge-to-C8 gate as `test_command_tokenizer_length_ceiling.py`'s own
 #: `requires_powershell_grammar` -- the cmdlet-detection cases below need
 #: `tree-sitter-pwsh` actually importable; C8 (not this dispatch) is what
@@ -264,6 +271,167 @@ def test_ac3_output_redirection_to_outside_repo_bumps(env, monkeypatch):
     result = guard.check_bump_outside_repo_write(cmd, "sess-2", str(env["anchor"]), {})
 
     assert result is not None
+
+
+def test_backslash_spelled_outside_target_message_names_bash_landing_effect(env, monkeypatch):
+    """The message-only follow-up to C2's AC5/AC6 (docs/plans/2026-08-10-
+    carve-claude-out-and-close-the-backslash-bypass.md): the deny stays
+    exactly as it is (the target really is outside any repo), but the
+    denial text now ALSO names what Git Bash actually does with an
+    UNQUOTED `\\`-spelled token -- strips every separator and lands the
+    write in cwd under the mangled name (state/audits/2026-08-07-bash-
+    guard-tokenizer-eats-windows-path-separators.md's measured probes),
+    not at the path as typed. Host-gated like C2's own AC5 test: on a
+    POSIX host `preserve_windows_backslashes` is never engaged, so there
+    is no unquoted-backslash shape to assert on.
+
+    The expected landing name is computed via the SAME extraction path the
+    guard itself now uses (`_iter_write_sink_candidates(...,
+    preserve_windows_backslashes=False)`), per the staff-eng fix -- never a
+    hand-rolled re-lex or string strip, which is exactly the defect this
+    fix replaced (see `_no_git_repo_target_label`'s own docstring)."""
+    if not guard._host_is_windows():
+        pytest.skip("Windows-only: backslash-spelled absolute paths are not this platform's shape")
+
+    _set_anchor(monkeypatch, env, "sess-bs-outside")
+    dest = env["outside"] / "probe.txt"
+    backslash_target = str(dest)
+    cmd = f"echo probe > {backslash_target}"
+    anchor_str = str(env["anchor"])
+    flag_off = list(
+        guard._iter_write_sink_candidates(cmd, anchor_str, preserve_windows_backslashes=False)
+    )
+    assert flag_off, "fixture must yield a flag-off candidate to compare against"
+    landing = flag_off[0][0]
+    assert landing != backslash_target, "fixture must actually exercise the mangling divergence"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-bs-outside", anchor_str, {})
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    # ONE merged parenthetical, never a second stacked one (docs/wiki/
+    # guard-messaging.md § Register) -- pins the exact shape, not just the
+    # substrings. States the EFFECT, never a derived landing filename (the
+    # staff-eng fix this test now pins) -- `landing` above is retained only
+    # to prove the fixture still exercises a genuine flag-on/flag-off
+    # divergence, not asserted into the message itself.
+    assert (
+        f"no git repo ({backslash_target}; unquoted backslashes, so bash "
+        "writes into cwd instead)" in reason
+    )
+
+
+def test_doubled_backslash_outside_target_clause_tracks_quoting_not_the_backslash_shape(
+    env, monkeypatch
+):
+    """REPURPOSED (staff-eng fix removed the derived-filename clause this
+    test used to pin -- there is no longer a "canonical landing name" to
+    compare against a naive strip). What still matters about a doubled
+    `\\\\` token is the DISCRIMINATOR `_no_git_repo_target_label` actually
+    uses: not the backslash shape itself, but whether the ORIGINAL command
+    quoted it. Same doubled-backslash target, exercised both unquoted
+    (bash treats it as fresh escape syntax -- effect clause fires) and
+    quoted (bash preserves it verbatim -- no clause), proving the
+    quoted-vs-unquoted property survives this specific edge shape and not
+    just the simple single-backslash case covered above."""
+    if not guard._host_is_windows():
+        pytest.skip("Windows-only: backslash-spelled absolute paths are not this platform's shape")
+
+    dest = env["outside"] / "probe.txt"
+    # A literal doubled backslash inserted into the drive-absolute form --
+    # bash/shlex collapses `\\\\` to one literal `\`, a naive
+    # `.replace("\\\\", "")` collapses it to nothing. Both models agree on
+    # every OTHER separator in this path, so the divergence is isolated to
+    # the doubled span.
+    backslash_target = str(dest).replace("probe.txt", "sub\\\\probe.txt")
+    anchor_str = str(env["anchor"])
+
+    _set_anchor(monkeypatch, env, "sess-bs-doubled-unquoted")
+    unquoted_cmd = f"echo probe > {backslash_target}"
+    unquoted_result = guard.check_bump_outside_repo_write(
+        unquoted_cmd, "sess-bs-doubled-unquoted", anchor_str, {}
+    )
+    assert unquoted_result is not None
+    unquoted_reason = unquoted_result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "unquoted backslashes, so bash writes into cwd instead" in unquoted_reason
+
+    _set_anchor(monkeypatch, env, "sess-bs-doubled-quoted")
+    quoted_cmd = f'echo probe > "{backslash_target}"'
+    quoted_result = guard.check_bump_outside_repo_write(
+        quoted_cmd, "sess-bs-doubled-quoted", anchor_str, {}
+    )
+    assert quoted_result is not None
+    quoted_reason = quoted_result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "unquoted backslashes, so bash writes into cwd instead" not in quoted_reason
+
+
+def test_quoted_backslash_outside_target_with_space_has_no_backslash_effect_clause(env, monkeypatch):
+    """Live-reproduced defect this fix closes: a QUOTED Windows path
+    containing a space. Real bash preserves a backslash inside a
+    double-quoted span -- intent and effect agree, so no clause should
+    render at all. The PRE-fix helper re-lexed the already-dequoted
+    `raw_target` as fresh unquoted syntax, splitting on the space and
+    yielding a truncated, wrong "landing name" (`C:My` from
+    `C:\\My Docs\\out.txt`) even though the write really does land exactly
+    where typed. This is the exact case the coordinator reproduced live."""
+    if not guard._host_is_windows():
+        pytest.skip("Windows-only: backslash-spelled absolute paths are not this platform's shape")
+
+    _set_anchor(monkeypatch, env, "sess-bs-quoted-space")
+    dest = env["outside"] / "My Docs" / "out.txt"
+    quoted_target = str(dest)
+    cmd = f'echo probe > "{quoted_target}"'
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-bs-quoted-space", str(env["anchor"]), {})
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert quoted_target in reason
+    assert "unquoted backslashes, so bash writes into cwd instead" not in reason
+
+
+def test_quoted_backslash_outside_target_with_semicolon_has_no_backslash_effect_clause(
+    env, monkeypatch
+):
+    """Same defect class as the space case above, with a `;` instead of a
+    space -- a shell metacharacter that would (if the pre-fix helper's
+    re-lex were still in place) be read as a fresh command separator
+    inside the "landing name" it computed, rather than as ordinary quoted
+    path content."""
+    if not guard._host_is_windows():
+        pytest.skip("Windows-only: backslash-spelled absolute paths are not this platform's shape")
+
+    _set_anchor(monkeypatch, env, "sess-bs-quoted-semicolon")
+    dest = env["outside"] / "a;b" / "out.txt"
+    quoted_target = str(dest)
+    cmd = f'echo probe > "{quoted_target}"'
+
+    result = guard.check_bump_outside_repo_write(
+        cmd, "sess-bs-quoted-semicolon", str(env["anchor"]), {}
+    )
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert quoted_target in reason
+    assert "unquoted backslashes, so bash writes into cwd instead" not in reason
+
+
+def test_forward_slash_spelled_outside_target_message_has_no_backslash_effect_clause(env, monkeypatch):
+    """Control for the test above -- a forward-slash-spelled target's
+    intent and effect already agree, so the denial text must NOT carry the
+    extra "unquoted backslashes, so bash writes into cwd instead" clause
+    (repetition of a fact the reader can already see, per this repo's
+    register contract, docs/wiki/guard-messaging.md § Register)."""
+    _set_anchor(monkeypatch, env, "sess-fs-outside")
+    dest = env["outside"] / "probe.txt"
+    cmd = f"echo probe > {_posix(dest)}"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-fs-outside", str(env["anchor"]), {})
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "unquoted backslashes, so bash writes into cwd instead" not in reason
+    assert "in cwd)" not in reason
 
 
 # ---------------------------------------------------------------------------
@@ -1422,4 +1590,284 @@ def test_set_location_unresolvable_target_yields_silent_not_deny(env, monkeypatc
     assert any(
         s.guard_name == "bump-outside-repo-write" and "Set-Location" in s.reason
         for s in silences
-    ), "the unresolvable Set-Location must be recorded SILENT, not merely swallowed"
+    )
+
+
+# ---------------------------------------------------------------------------
+# docs/plans/2026-08-14-interpreter-body-write-sinks.md (C1) -- the bump
+# never looked INSIDE an interpreter payload (a heredoc body, a
+# `python3 -c` string) for its write-sink candidates. AC1-AC8 below.
+# ---------------------------------------------------------------------------
+
+
+def test_c1_ac1_heredoc_python_write_text_target_bumps(env, monkeypatch):
+    """`python3 - <<'EOF'` piping a `pathlib.Path(...).write_text(...)`
+    payload whose target resolves under no git root at all -- the shape
+    this plan's own § Problem cites as the observed incident (four writes
+    to the install parent, every one through a heredoc)."""
+    _set_anchor(monkeypatch, env, "sess-c1-ac1")
+    cmd = (
+        "python3 - <<'EOF'\n"
+        "import pathlib\n"
+        "pathlib.Path('../mine.patch').write_text('x')\n"
+        "EOF\n"
+    )
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac1", str(env["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_c1_ac2_inline_dash_c_open_write_mode_target_bumps(env, monkeypatch):
+    """`python3 -c "open('../mine2.patch','w').write('x')"` -- the second
+    cause the plan's § Problem names: the shared shell-token classifier
+    never looks inside a `-c` payload's own Python source."""
+    _set_anchor(monkeypatch, env, "sess-c1-ac2")
+    cmd = "python3 -c \"open('../mine2.patch','w').write('x')\""
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac2", str(env["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_c1_ac3_same_payload_with_in_repo_target_does_not_bump(env, monkeypatch):
+    """The AC1/AC2 payload shapes with an IN-REPO target must never false
+    deny -- the caller's own no-git-root predicate still applies to a
+    candidate this new extractor yields, exactly as it does for every
+    shell-token candidate."""
+    _set_anchor(monkeypatch, env, "sess-c1-ac3-heredoc")
+    heredoc_cmd = (
+        "python3 - <<'EOF'\n"
+        "import pathlib\n"
+        "pathlib.Path('sub/mine.patch').write_text('x')\n"
+        "EOF\n"
+    )
+    result = guard.check_bump_outside_repo_write(
+        heredoc_cmd, "sess-c1-ac3-heredoc", str(env["anchor"]), {}
+    )
+    assert result is None
+
+    _set_anchor(monkeypatch, env, "sess-c1-ac3-dashc")
+    dash_c_cmd = "python3 -c \"open('sub/mine.patch','w').write('x')\""
+    result = guard.check_bump_outside_repo_write(
+        dash_c_cmd, "sess-c1-ac3-dashc", str(env["anchor"]), {}
+    )
+    assert result is None
+
+
+def test_c1_ac4_foreign_repo_guard_corpus_undrifted_by_the_interpreter_extractor(
+    tmp_path, monkeypatch
+):
+    """C4 (`bump_foreign_repo_write.py`) shares `_write_bump_sink_shapes.py`
+    with this guard but does NOT opt into the new interpreter-payload
+    extractor -- `extract_write_sink_targets_for_segment` (C4's own table)
+    is untouched by this plan. A fixed corpus of C4 shapes, run through
+    `check_bump_foreign_repo_write`, must verdict exactly as C4's own test
+    suite (`test_bump_foreign_repo_write.py`) already documents: bump on a
+    plain-bash write-sink or a `git -C`/`cd&&git` write targeting the
+    foreign repo, never bump on a read or a same-repo write -- including a
+    heredoc/`-c` Python payload shape this plan newly classifies for C5,
+    which must NOT newly bump here (the shared-table no-drift proof)."""
+    from coordinator_core.bash_guards import bump_foreign_repo_write as foreign_guard
+    from coordinator_core.bash_guards import _write_bump_session_start as foreign_session_start
+
+    anchor = _init_repo(tmp_path, "c1-ac4-anchor")
+    foreign = _init_repo(tmp_path, "c1-ac4-foreign")
+    home = tmp_path / "c1-ac4-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    foreign_session_start.write_session_start_record("sess-c1-ac4", launch_cwd=str(anchor))
+
+    src = anchor / "src.txt"
+    src.write_text("x\n", encoding="utf-8")
+
+    corpus = [
+        (f"git -C {_posix(foreign)} commit --allow-empty -m x", True),
+        (f"cp {_posix(src)} {_posix(foreign / 'dest.txt')}", True),
+        (f"git -C {_posix(foreign)} status", False),
+        (f"cp {_posix(src)} {_posix(anchor / 'dest.txt')}", False),
+        # The new C5-only Python-payload shape -- C4 has no opinion on it at
+        # all (it never calls `extract_interpreter_payload_write_sink_
+        # targets`), so this must verdict identically to before this plan:
+        # no bump, since C4's own candidate extraction finds nothing here.
+        (
+            "python3 -c \"open('%s','w').write('x')\"" % _posix(foreign / "inline.patch"),
+            False,
+        ),
+    ]
+
+    for cmd, expect_bump in corpus:
+        result = foreign_guard.check_bump_foreign_repo_write(
+            cmd, "sess-c1-ac4", str(anchor), {}
+        )
+        if expect_bump:
+            assert result is not None, f"expected a bump for: {cmd!r}"
+        else:
+            assert result is None, f"expected no bump for: {cmd!r}"
+
+
+def test_c1_ac5_unparseable_or_unterminated_payload_shapes_never_raise(env, monkeypatch):
+    """An unterminated heredoc, and an unterminated quote inside a `-c`
+    payload, must both decline (return `None`) rather than raise -- the
+    module's own FAIL OPEN posture, never a parser."""
+    _set_anchor(monkeypatch, env, "sess-c1-ac5-heredoc")
+    unterminated_heredoc = "python3 - <<'EOF'\nimport pathlib\npathlib.Path('../x.patch')\n"
+    result = guard.check_bump_outside_repo_write(
+        unterminated_heredoc, "sess-c1-ac5-heredoc", str(env["anchor"]), {}
+    )
+    assert result is None
+
+    _set_anchor(monkeypatch, env, "sess-c1-ac5-dashc")
+    unterminated_quote = "python3 -c \"open('../x.patch', 'w').write('x"
+    result = guard.check_bump_outside_repo_write(
+        unterminated_quote, "sess-c1-ac5-dashc", str(env["anchor"]), {}
+    )
+    assert result is None
+
+
+def test_c1_ac6_deny_message_names_the_session_scratchpad_for_a_subagent(env, monkeypatch):
+    """The AC1 heredoc deny, under a subagent-class session, names the
+    sandbox route (`state/subagent-share/<session_id>/`) -- the session's
+    own scratchpad -- exactly as the existing plain-bash bump already does
+    (`test_subagent_class_message_names_the_sandbox_route`)."""
+    _set_anchor(monkeypatch, env, "sess-c1-ac6")
+    cmd = (
+        "python3 - <<'EOF'\n"
+        "import pathlib\n"
+        "pathlib.Path('../mine.patch').write_text('x')\n"
+        "EOF\n"
+    )
+    # `_canonical_agent_id` only recognizes a bare-hex unnamed-agent id or a
+    # named teammate id -- see `test_subagent_class_message_names_the_
+    # sandbox_route`'s own comment for why this exact shape is required.
+    payload = {"agent_id": "af307f34d8afa24eb"}
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac6", str(env["anchor"]), payload)
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "state" in reason and "subagent-share" in reason
+
+
+def test_c1_ac7_dollar_var_target_class_stays_out_of_scope_and_unchanged(env, monkeypatch):
+    """`echo hi > $D` -- the `$D`-style empty/unexpanded-variable class this
+    plan's own Out of scope names explicitly -- must stay `None`,
+    unaffected by this chunk's addition."""
+    _set_anchor(monkeypatch, env, "sess-c1-ac7")
+    cmd = "echo hi > $D"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac7", str(env["anchor"]), {})
+
+    assert result is None
+
+
+def test_c1_ac8_both_target_module_docstrings_record_the_pm_ratified_reversal():
+    """Both `_write_bump_sink_shapes.py` and `bump_outside_repo_write.py`
+    must state, in their own module docstrings, that the interpreter-body
+    exclusion reversal is PM-ratified and why -- so the next reader does not
+    restore the old "do not enumerate evasions" exclusion this plan
+    narrowly reversed."""
+    from coordinator_core.bash_guards import _write_bump_sink_shapes as shapes
+
+    for doc in (shapes.__doc__, guard.__doc__):
+        assert "PM-RATIFIED REVERSAL" in doc
+        assert "2026-08-14" in doc
+        assert "accidental" in doc.lower()
+
+
+def test_c1_ac9_docstring_or_comment_mentioning_a_write_shape_does_not_bump(env, monkeypatch):
+    """A heredoc body whose ONLY mention of an outside-repo write shape is
+    inside a triple-quoted docstring or a `#` comment -- never executed --
+    must not yield a candidate at all, i.e. no false deny. Reviewer-flagged
+    P2 (code-reviewer sidecar, finding 1), folded per EM override: a false
+    deny is the serious defect class for this module and mitigating it does
+    not require building a parser (comment/docstring text stripping only)."""
+    _set_anchor(monkeypatch, env, "sess-c1-ac9-docstring")
+    docstring_cmd = (
+        "python3 - <<'EOF'\n"
+        '"""Writes results to open(\'../shared/out.csv\', \'w\') for reference"""\n'
+        "print('no real write here')\n"
+        "EOF\n"
+    )
+    result = guard.check_bump_outside_repo_write(
+        docstring_cmd, "sess-c1-ac9-docstring", str(env["anchor"]), {}
+    )
+    assert result is None
+
+    _set_anchor(monkeypatch, env, "sess-c1-ac9-comment")
+    comment_cmd = (
+        "python3 - <<'EOF'\n"
+        "# example: open('../shared/out.csv', 'w')\n"
+        "print('no real write here')\n"
+        "EOF\n"
+    )
+    result = guard.check_bump_outside_repo_write(
+        comment_cmd, "sess-c1-ac9-comment", str(env["anchor"]), {}
+    )
+    assert result is None
+
+
+def test_c1_ac9_stray_triple_quote_inside_comment_does_not_eat_a_real_write(env, monkeypatch):
+    """Reviewer-flagged P1 (code-reviewer sidecar `ffbcb84d`, finding 1): a
+    `#` comment containing a stray triple-quote token followed, later in
+    the same payload, by a genuine triple-quoted docstring must NOT cause
+    the real write call sitting between the two to be silently erased.
+    Before the single-pass alternation fix, the old two-pass strip paired
+    the comment's stray triple-quote with the docstring's OPENING
+    triple-quote, erasing every line in between -- including the write
+    call -- and the write silently evaded the guard."""
+    _set_anchor(monkeypatch, env, "sess-c1-p1-comment-quote")
+    cmd = (
+        "python3 - <<'EOF'\n"
+        "# see docstring \"\"\" below for details\n"
+        "open('../shared/out.csv', 'w')\n"
+        '"""\n'
+        "real docstring text\n"
+        '"""\n'
+        "EOF\n"
+    )
+    result = guard.check_bump_outside_repo_write(
+        cmd, "sess-c1-p1-comment-quote", str(env["anchor"]), {}
+    )
+    assert result is not None
+
+
+def test_c1_ac9_unterminated_triple_quote_does_not_false_deny(env, monkeypatch):
+    """Reviewer-flagged P2 (code-reviewer sidecar `ffbcb84d`, finding 2): an
+    unterminated triple-quote leaves the remaining text lexically inside a
+    string literal -- a write-shape MENTION inside it must not bump. Before
+    the fix, the old paired-only triple-quote regex never matched an
+    unterminated opener, so the dangling text passed through unstripped and
+    a mere mention produced a false deny, the serious defect class for this
+    module."""
+    _set_anchor(monkeypatch, env, "sess-c1-p2-unterminated")
+    cmd = (
+        "python3 - <<'EOF'\n"
+        "\"\"\"unterminated docstring mentioning open('../shared/out.csv', 'w')\n"
+        "print('hi')\n"
+        "EOF\n"
+    )
+    result = guard.check_bump_outside_repo_write(
+        cmd, "sess-c1-p2-unterminated", str(env["anchor"]), {}
+    )
+    assert result is None
+
+
+def test_c1_ac9_plain_comment_then_real_write_still_bumps(env, monkeypatch):
+    """A plain `#` comment (no stray triple-quote) followed by a genuine
+    write call must still bump -- the positive/"don't eat real code"
+    direction the commit message claimed was probed but which no prior test
+    pinned (code-reviewer sidecar `ffbcb84d`, finding 3)."""
+    _set_anchor(monkeypatch, env, "sess-c1-plain-comment-write")
+    cmd = (
+        "python3 - <<'EOF'\n"
+        "# just a comment\n"
+        "open('../shared/out.csv', 'w').write('x')\n"
+        "EOF\n"
+    )
+    result = guard.check_bump_outside_repo_write(
+        cmd, "sess-c1-plain-comment-write", str(env["anchor"]), {}
+    )
+    assert result is not None

@@ -36,6 +36,13 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Path setup — locate CLI relative to this test file
 # test file: coordinator/bin/tests/test_coordinator_lesson_add_meta_routing.py

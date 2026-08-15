@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops import gen_claude_doe_shim as gcds
 from coordinator_core.ops.gen_claude_doe_shim import (
     EXPECTED_SOURCE_LINE,
     EXPECTED_SOURCE_LINE_POWERSHELL,
@@ -19,7 +20,15 @@ from coordinator_core.ops.gen_claude_doe_shim import (
 
 
 def _make_template(tmp_path: Path, lines: int = 3) -> Path:
-    tmpl = tmp_path / "claude-doe-shim.sh.tmpl"
+    # Family-NEUTRAL name. The body is placeholder comment lines, not bash, so
+    # naming this `claude-doe-shim.sh.tmpl` claimed a shell family the fixture
+    # never had — and these cases pass no `--shell`, so the resolved family is
+    # the platform default (powershell on native Windows). That pairing is
+    # exactly what `_template_family_mismatch` now rejects, because in
+    # production it renders bash into a `.ps1` shim. The cases below assert
+    # status rows and rc wiring, not template dialect, so a neutral name keeps
+    # them platform-agnostic instead of accidentally encoding the defect.
+    tmpl = tmp_path / "shim-template.tmpl"
     tmpl.write_text("\n".join(f"# template line {i}" for i in range(lines)) + "\n")
     return tmpl
 
@@ -96,7 +105,7 @@ def test_template_not_found_exits_one(tmp_path, capsys):
 def test_fresh_render_writes_shim_and_wires_rc(tmp_path, monkeypatch, capsys):
     home = Path(os.environ["HOME"])
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     shim_dest = home / ".claude" / "shell" / "claude-doe-shim.sh"
     assert shim_dest.read_text() == tmpl.read_text()
@@ -115,19 +124,19 @@ def test_fresh_render_writes_shim_and_wires_rc(tmp_path, monkeypatch, capsys):
 def test_rerun_is_idempotent_noop(tmp_path):
     home = Path(os.environ["HOME"])
     tmpl = _make_template(tmp_path)
-    assert main(["--template", str(tmpl)]) == 0
+    assert main(["--template", str(tmpl), "--shell", "bash"]) == 0
     rc_file = home / ".zshrc"
     before = rc_file.read_text()
-    assert main(["--template", str(tmpl)]) == 0
+    assert main(["--template", str(tmpl), "--shell", "bash"]) == 0
     after = rc_file.read_text()
     assert before == after
 
 
 def test_rerun_reports_noop_message(tmp_path, capsys):
     tmpl = _make_template(tmp_path)
-    assert main(["--template", str(tmpl)]) == 0
+    assert main(["--template", str(tmpl), "--shell", "bash"]) == 0
     capsys.readouterr()
-    assert main(["--template", str(tmpl)]) == 0
+    assert main(["--template", str(tmpl), "--shell", "bash"]) == 0
     assert "sentinel block unchanged (no-op)" in capsys.readouterr().err
 
 
@@ -139,7 +148,7 @@ def test_hand_modified_sentinel_body_fails_loud(tmp_path, monkeypatch, capsys):
         f'echo "hand modified"\n{SENTINEL_END}\n'
     )
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "hand-modified" in err
@@ -169,7 +178,7 @@ def test_coordinator_shim_rc_env_used_when_no_flag(tmp_path, monkeypatch):
     env_rc = tmp_path / "env_rc"
     monkeypatch.setenv("COORDINATOR_SHIM_RC", str(env_rc))
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     assert env_rc.exists()
 
@@ -189,7 +198,7 @@ def test_bash_shell_detection_targets_bashrc(tmp_path, monkeypatch):
     home = Path(os.environ["HOME"])
     monkeypatch.setenv("SHELL", "/bin/bash")
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     assert (home / ".bashrc").exists()
     assert not (home / ".zshrc").exists()
@@ -200,7 +209,7 @@ def test_msystem_env_targets_bashrc_regardless_of_shell(tmp_path, monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/zsh")
     monkeypatch.setenv("MSYSTEM", "MINGW64")
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     assert (home / ".bashrc").exists()
     assert not (home / ".zshrc").exists()
@@ -210,7 +219,7 @@ def test_unrecognised_shell_warns_and_defaults_to_zshrc(tmp_path, monkeypatch, c
     home = Path(os.environ["HOME"])
     monkeypatch.setenv("SHELL", "/usr/bin/fish")
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     assert (home / ".zshrc").exists()
     assert "not recognised; defaulting to ~/.zshrc" in capsys.readouterr().err
@@ -227,7 +236,7 @@ def test_legacy_stopgap_detected_in_home_bashrc(tmp_path, monkeypatch, capsys):
         "# --- coordinator maximalist launch ---\nold stuff\n# end\n"
     )
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     err = capsys.readouterr().err
     assert "NOTE (migration): legacy coordinator maximalist launch" in err
@@ -245,7 +254,7 @@ def test_legacy_stopgap_detected_with_padded_line_form(tmp_path, capsys):
         "----------------\nold stuff\n# end\n"
     )
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     err = capsys.readouterr().err
     assert "NOTE (migration): legacy coordinator maximalist launch" in err
@@ -253,7 +262,7 @@ def test_legacy_stopgap_detected_with_padded_line_form(tmp_path, capsys):
 
 def test_legacy_stopgap_absent_no_note(tmp_path, capsys):
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     err = capsys.readouterr().err
     assert "NOTE (migration)" not in err
@@ -267,7 +276,7 @@ def test_legacy_stopgap_absent_no_note(tmp_path, capsys):
 def test_check_only_does_not_write_live_files(tmp_path, capsys):
     home = Path(os.environ["HOME"])
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl), "--check-only"])
+    rc = main(["--template", str(tmpl), "--shell", "bash", "--check-only"])
     # shim_dest is absent -- a real run would write it, so --check-only now
     # fails loud rather than reporting an always-green 0.
     assert rc == 1
@@ -280,9 +289,9 @@ def test_check_only_does_not_write_live_files(tmp_path, capsys):
 
 def test_check_only_reports_noop_after_real_render(tmp_path, capsys):
     tmpl = _make_template(tmp_path)
-    assert main(["--template", str(tmpl)]) == 0
+    assert main(["--template", str(tmpl), "--shell", "bash"]) == 0
     capsys.readouterr()
-    rc = main(["--template", str(tmpl), "--check-only"])
+    rc = main(["--template", str(tmpl), "--shell", "bash", "--check-only"])
     assert rc == 0
     err = capsys.readouterr().err
     assert "sentinel block present and unmodified (would be no-op)" in err
@@ -293,7 +302,7 @@ def test_check_only_reports_hand_modified_fail_loud(tmp_path, capsys):
     rc_file = home / ".zshrc"
     rc_file.write_text(f"{SENTINEL_BEGIN}\nsomething else\n{SENTINEL_END}\n")
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl), "--check-only"])
+    rc = main(["--template", str(tmpl), "--shell", "bash", "--check-only"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "HAND-MODIFIED" in err
@@ -310,7 +319,7 @@ def test_check_only_survives_missing_tmpdir(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("TEMP", raising=False)
     monkeypatch.delenv("TMP", raising=False)
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl), "--check-only"])
+    rc = main(["--template", str(tmpl), "--shell", "bash", "--check-only"])
     assert rc == 1
     assert "would write" in capsys.readouterr().err
 
@@ -333,7 +342,7 @@ def test_claude_home_override_used_for_shim_dest_not_legacy_detector(
         "# --- coordinator maximalist launch ---\nold\n# end\n"
     )
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     # Shim lands under CLAUDE_HOME.
     assert (claude_home / ".claude" / "shell" / "claude-doe-shim.sh").exists()
@@ -401,18 +410,48 @@ def test_check_only_ready_noop_row_after_real_render(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_default_no_flag_still_produces_bash_line_and_path(tmp_path):
-    """Regression that matters most: omitting --shell entirely must be
-    byte-identical to today's behaviour (bash source line, .sh shim path)."""
+def test_explicit_shell_bash_produces_bash_line_and_path(tmp_path):
+    """The bash leg, pinned: POSIX source line, .sh shim path."""
     home = Path(os.environ["HOME"])
     tmpl = _make_template(tmp_path)
-    rc = main(["--template", str(tmpl)])
+    rc = main(["--template", str(tmpl), "--shell", "bash"])
     assert rc == 0
     shim_dest = home / ".claude" / "shell" / "claude-doe-shim.sh"
     assert shim_dest.exists()
     rc_text = (home / ".zshrc").read_text()
     assert EXPECTED_SOURCE_LINE in rc_text
     assert "Test-Path" not in rc_text
+
+
+def test_default_no_flag_follows_platform_not_a_hardcoded_bash_literal(tmp_path):
+    """Omitting --shell picks the family from the PLATFORM.
+
+    It used to be a hardcoded "bash". On Windows that wrote a POSIX .sh shim and
+    wired it into a ~/.zshrc no shell on the box reads — a silently inert
+    install. The trampoline's own template default reads the SAME resolver, so
+    the two can never disagree about which family is in play."""
+    home = Path(os.environ["HOME"])
+    tmpl = _make_template(tmp_path)
+    rc = main(["--template", str(tmpl)])
+    assert rc == 0
+
+    expected_family = gcds._default_shell_family()
+    assert expected_family == ("powershell" if os.name == "nt" and not os.environ.get("MSYSTEM") else "bash")
+
+    if expected_family == "powershell":
+        assert (home / ".claude" / "shell" / "claude-doe-shim.ps1").exists()
+        assert not (home / ".claude" / "shell" / "claude-doe-shim.sh").exists()
+        assert Path(gcds._powershell_profile_path()).read_text().count("Test-Path") >= 1
+    else:
+        assert (home / ".claude" / "shell" / "claude-doe-shim.sh").exists()
+        assert EXPECTED_SOURCE_LINE in (home / ".zshrc").read_text()
+
+
+def test_reload_hint_matches_the_shell_family():
+    """`source` is a POSIX builtin — printing it to a PowerShell operator names
+    a command that does not exist."""
+    assert gcds._reload_hint("bash", "/home/me/.zshrc") == "source /home/me/.zshrc"
+    assert gcds._reload_hint("powershell", "C:/p/profile.ps1") == ". C:/p/profile.ps1"
 
 
 def test_shell_powershell_writes_dot_source_line_and_ps1_shim(tmp_path):

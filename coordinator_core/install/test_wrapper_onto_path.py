@@ -21,6 +21,13 @@ from coordinator_core.install.wrapper_onto_path import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

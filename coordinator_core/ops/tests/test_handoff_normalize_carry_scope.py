@@ -33,7 +33,10 @@ from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.ops.handoff_normalize import _handler
 from coordinator_core.session import core as session_core
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _GIT_ENV = {"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
             "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"}

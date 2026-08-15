@@ -30,6 +30,13 @@ from coordinator_core.dispatch.provision import (
     main as provision_main,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 SIDECAR_ELIGIBLE_TYPE = "coordinator:executor"
 INELIGIBLE_TYPE = "coordinator:some-other-agent"
 
@@ -127,10 +134,16 @@ def test_eligible_agent_type_creates_sidecar_and_emits_json(
     lines = out.splitlines()
     assert len(lines) == 1
     envelope = json.loads(lines[0])
-    match = _EMIT_RE.match(envelope["subagent_sidecar"])
-    assert match is not None
-    assert match.group("session") == session_id
-    assert match.group("label") == _sanitize_expected(SIDECAR_ELIGIBLE_TYPE)
+    # agent_id is present on this payload, so the anonymous-derivation
+    # branch (2026-08-15 fix) yields a deterministic <label>.<agent_id>
+    # path, not the random-nonce shape _EMIT_RE matches -- see
+    # test_no_provision_key_derives_deterministic_key_from_agent_id for the
+    # dedicated coverage of this shape.
+    expected = (
+        f"state/subagent-share/{session_id}/"
+        f"{_sanitize_expected(SIDECAR_ELIGIBLE_TYPE)}.{BARE_HEX_AGENT_ID}.subagent-sidecar.md"
+    )
+    assert envelope == {"subagent_sidecar": expected}
 
     doc_path = git_repo / envelope["subagent_sidecar"]
     assert doc_path.is_file()
@@ -319,6 +332,130 @@ def test_provision_key_traversal_sanitized_confined_single_segment(
     assert doc_path.is_file()
     share_root = git_repo / "state" / "subagent-share"
     assert doc_path.resolve().is_relative_to(share_root.resolve())
+
+
+# ---------------------------------------------------------------------------
+# Anonymous-provision_key disambiguation (2026-08-15 incident): no caller-
+# supplied provision_key still yields a deterministic, agent_id-derived path
+# rather than a random nonce, so two concurrent same-agent_type dispatches in
+# one session are unambiguously identifiable.
+# ---------------------------------------------------------------------------
+
+def test_no_provision_key_derives_deterministic_key_from_agent_id(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    session_id = "sess-anon-derive-1"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=SIDECAR_ELIGIBLE_TYPE, session_id=session_id
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    expected = (
+        f"state/subagent-share/{session_id}/"
+        f"{_sanitize_expected(SIDECAR_ELIGIBLE_TYPE)}.{BARE_HEX_AGENT_ID}.subagent-sidecar.md"
+    )
+    assert envelope == {"subagent_sidecar": expected}
+    assert (git_repo / envelope["subagent_sidecar"]).is_file()
+
+
+def test_two_concurrent_anonymous_same_type_dispatches_yield_distinct_identifiable_paths(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The exact shape that failed live: two `coordinator:code-reviewer`-
+    class agents dispatched concurrently in the SAME session, neither
+    passing provision_key. Each must land at a path derivable from its own
+    (distinct) agent_id, never a shared/ambiguous nonce."""
+    session_id = "sess-anon-concurrent"
+    agent_id_1 = "1111aaaa2222bbbb"
+    agent_id_2 = "3333cccc4444dddd"
+
+    payload_1 = _payload(agent_id=agent_id_1, agent_type=SIDECAR_ELIGIBLE_TYPE, session_id=session_id)
+    payload_2 = _payload(agent_id=agent_id_2, agent_type=SIDECAR_ELIGIBLE_TYPE, session_id=session_id)
+
+    exit_code_1, out_1 = _run(payload_1, policy_path, git_repo, monkeypatch, capsys)
+    exit_code_2, out_2 = _run(payload_2, policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code_1 == 0 and exit_code_2 == 0
+    path_1 = json.loads(out_1.splitlines()[0])["subagent_sidecar"]
+    path_2 = json.loads(out_2.splitlines()[0])["subagent_sidecar"]
+
+    assert path_1 != path_2
+    assert agent_id_1 in path_1
+    assert agent_id_2 in path_2
+    assert (git_repo / path_1).is_file()
+    assert (git_repo / path_2).is_file()
+
+
+def test_no_provision_key_no_agent_id_falls_back_to_nonce(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """No provision_key AND no resolvable agent_id: nothing to derive a
+    stable key from, so this preserves today's random-nonce fallback rather
+    than fabricating a fake identity."""
+    session_id = "sess-anon-no-agent-id"
+    payload = _payload(agent_type=SIDECAR_ELIGIBLE_TYPE, session_id=session_id)
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    match = _EMIT_RE.match(envelope["subagent_sidecar"])
+    assert match is not None
+    assert (git_repo / envelope["subagent_sidecar"]).is_file()
+
+
+def test_malformed_named_teammate_agent_id_falls_back_to_nonce_not_collision(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A named-teammate-shaped agent_id (`^a.+-[a-f0-9]{16}$`) containing a
+    character `_sanitize_segment` strips must NOT be derived from -- two
+    distinct such ids differing only in the stripped character would
+    otherwise collapse onto the identical derived key (the exact silent-
+    overwrite failure this module exists to close). This proves the
+    module's collision-proof claim by falling back to the random-nonce
+    path instead, rather than by producing a matching path directly --
+    would fail against a version of the code that unconditionally derives
+    from any truthy agent_id."""
+    session_id = "sess-named-teammate-malformed"
+    malformed_agent_id = "a!teammate-1111aaaa2222bbbb"
+    payload = _payload(
+        agent_id=malformed_agent_id, agent_type=SIDECAR_ELIGIBLE_TYPE, session_id=session_id
+    )
+    exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+
+    assert exit_code == 0
+    envelope = json.loads(out.splitlines()[0])
+    match = _EMIT_RE.match(envelope["subagent_sidecar"])
+    assert match is not None
+    assert malformed_agent_id not in envelope["subagent_sidecar"]
+    assert (git_repo / envelope["subagent_sidecar"]).is_file()
+
+
+def test_explicit_provision_key_path_and_idempotence_unaffected(
+    git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Regression guard: an explicit provision_key still resolves through
+    the pre-existing branch untouched by the anonymous-derivation fix --
+    same path shape, same idempotent re-open on a second call."""
+    session_id = "sess-explicit-unaffected"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type=SIDECAR_ELIGIBLE_TYPE,
+        session_id=session_id,
+        provision_key="explicit.key",
+    )
+    exit_code_1, out_1 = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code_1 == 0
+    envelope_1 = json.loads(out_1.splitlines()[0])
+    assert envelope_1 == {
+        "subagent_sidecar": f"state/subagent-share/{session_id}/explicit.key.subagent-sidecar.md"
+    }
+
+    exit_code_2, out_2 = _run(payload, policy_path, git_repo, monkeypatch, capsys)
+    assert exit_code_2 == 0
+    envelope_2 = json.loads(out_2.splitlines()[0])
+    assert envelope_2 == envelope_1
 
 
 def test_direct_call_no_argparse_path_still_provisions(

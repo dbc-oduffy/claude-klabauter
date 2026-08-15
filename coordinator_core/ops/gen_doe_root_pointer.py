@@ -63,7 +63,7 @@ import sys
 import tempfile
 from typing import List, Optional
 
-from coordinator_core._settings_home import machine_local_dir
+from coordinator_core._settings_home import machine_local_dir, native_path_form
 from coordinator_core.session.declared_writes import declare_write
 
 GENERATES = []  # writes only <settings-home>/machine-local/.doe-root, outside any git tree
@@ -84,9 +84,15 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     resolution (env override, then machine-local registry).
     """
     # Tier 1: explicit env override (install sandbox tests / operator pin).
+    # Normalized like tier 2: an override exported by a Git-Bash caller carries
+    # the MSYS mount form (`/x/DoE-claude`), and the pointer this writes is read
+    # almost exclusively by native-Windows node / py.exe processes, which resolve
+    # a leading `/x/` as drive-relative `X:\x\...`. Tier 2 is normalized upstream
+    # by `machine-local get`'s own repos.* branch; without this the two tiers
+    # would disagree on path form for the same clone. No-op off Windows.
     env_override = os.environ.get("REPO_DOE_CLAUDE", "")
     if env_override:
-        return env_override, 0
+        return native_path_form(env_override), 0
 
     # Tier 2: machine-local registry.
     ml_bin = _resolve_machine_local()
@@ -123,7 +129,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
         )
         return None, 1
 
-    resolved = result.stdout.strip()
+    resolved = native_path_form(result.stdout.strip())
     if not resolved:
         print(
             f"{_PROG}: repos.doe_claude is unset in the registry",

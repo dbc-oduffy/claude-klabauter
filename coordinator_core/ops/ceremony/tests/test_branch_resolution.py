@@ -2243,8 +2243,13 @@ def test_applicable_node_ids_omits_chain_terminal_steps_single_session(repo):
 
 
 def test_applicable_node_ids_includes_chain_terminal_steps_chain_terminal(repo):
-    """Chain-terminal disposition includes all three chain-terminal-only D-nodes
-    in applicable_node_ids, matching the full node ledger 1:1.
+    """Chain-terminal disposition includes both remaining chain-terminal-only
+    D-nodes in applicable_node_ids, matching the full node ledger 1:1.
+
+    STEP_2_75 (the render-handoff-tracker D-node) was removed 2026-08-14 --
+    see docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-
+    renders.md § C2 -- so it is no longer part of the node ledger at all and
+    is not asserted on here.
     """
     sid = "sess-applic-chain-001"
     repo.seed_handoff("consumed-applic.md", consumed_by=sid)
@@ -2259,7 +2264,6 @@ def test_applicable_node_ids_includes_chain_terminal_steps_chain_terminal(repo):
 
     applicable = result["applicable_node_ids"]
     assert STEP_2_7 in applicable
-    assert STEP_2_75 in applicable
     assert STEP_2_9C in applicable
 
     all_node_ids = [n["id"] for n in result["resolved_state"]["nodes"]]

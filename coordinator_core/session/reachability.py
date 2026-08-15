@@ -37,7 +37,7 @@ refusal text hands back the correct ref-qualified form for a retry. This
 module does not read, parse, or retry on that text -- it is an affordance
 for the calling consumer, not a contract to pattern-match.
 
-Three outcomes, distinguishable by the caller as structured data — collapsing
+Four outcomes, distinguishable by the caller as structured data — collapsing
 them is the defect this module exists to close:
 
     "own_session"   — the input resolves to the CALLING session's own record,
@@ -52,7 +52,11 @@ them is the defect this module exists to close:
                        mislabelled `not_reachable`; a session cannot
                        `SendMessage` itself via this address form regardless.
     "reachable"      — exactly one live record matches; `address` is set.
-    "not_reachable"  — no live record matches. NEVER a fallback guess.
+    "not_reachable"  — no ADDRESS can be built for the input. NEVER a
+                       fallback guess. `reason` names which of the five
+                       distinct facts produced it (see `NotReachableReason`
+                       below); collapsing them reports "no such session"
+                       for a session that is demonstrably live and busy.
     "ambiguous"      — the input's own `sessionId` maps to more than one
                        registry record; `candidates` lists every match's own
                        resolved address, and the caller must not pick. Kept
@@ -60,7 +64,67 @@ them is the defect this module exists to close:
                        reaching this function today can produce it -- see
                        `resolve_address`'s own docstring for why.
 
+The harness's messaging inbox is a RUNTIME capability, not a given
+(measured live 2026-08-14, Claude Code 2.1.232, Windows, 44/44
+`<claude-config>/sessions/*.json` records). `messagingSocketPath` is
+written into a session record from `CLAUDE_CODE_MESSAGING_SOCKET`, and
+that env var is set at exactly one place in the harness: a SUCCESSFUL
+`startCrossSessionInbox()` bind, which the harness itself skips when its
+cross-session-messaging gate is off (`"[uds-messaging] Skipped:
+cross-session messaging gate off"`). With the gate off, no record on the
+box carries the field at all. That is not a renamed key and not a drifted
+parser -- the harness's OWN peer enumeration filters its session records
+on the same field (`.filter(r => r.sock && r.sock !== self)`), so when it
+is absent everywhere the harness lists ZERO local peers and refuses every
+`SendMessage` to one, whatever address a caller supplies. There is
+therefore no address to compute, and no key to correct: the field's
+absence IS the capability's absence, and this module reports that rather
+than manufacturing an address string the harness would reject.
+
+The gate's DEFAULT is a remote GrowthBook flag (telemetry name
+`agents_cross_session_inbox`) -- re-verified 2026-08-15 against Claude
+Code 2.1.233 (`~/.local/share/claude/versions/2.1.233`; see
+`coordinator_core.session.harness_registry`'s module docstring for the
+full measurement, including a LATE-BIND path where a mid-session
+GrowthBook refresh can turn messaging ON for an already-running session).
+
+It is NOT remote-only, and an earlier revision of this docstring was
+wrong to say there is no local workaround: from bundle 2.1.232 the gate
+predicate short-circuits `true` on the `CLAUDE_CODE_HARBOR_KITE`
+environment variable ahead of both the platform check and the GrowthBook
+read, and `coordinator/bin/claude-doe.py` sets it for every session it
+launches. Nothing in THIS module can pin or force the gate -- that is a
+launch-time concern, not a resolver concern -- but a caller reading a
+`not_reachable` from here must not conclude the switch is out of the
+fleet's hands. Ownership detail lives in `harness_registry`'s module
+docstring; why that launcher default reached no interactive session on
+Windows is answered in
+`state/audits/2026-08-15-why-the-harbor-kite-default-binds-nothing.md`.
+
+2.1.233 also stamps every record with `peerProtocol: <int>` (measured
+2026-08-15: 42/42 records, all `peerProtocol: 1`, 0/42 carrying
+`messaging_socket_path` -- same gate-off signature as 2026-08-14's
+44/44). This module does NOT read `peerProtocol` and `messaging_
+available()` below MUST NOT be changed to key on it: the harness's own
+FleetView peer listing uses `peerProtocol` (plus liveness, plus a 24h
+recency window) to decide peer VISIBILITY, a materially looser question
+than the DELIVERABILITY question this module answers -- a peer can be
+`peerProtocol >= 1` and listed while still having no `messaging_socket_
+path` and thus no address `SendMessage` could actually reach (that is
+precisely today's box-wide state). `messaging_available()` stays scoped
+to `messaging_socket_path` on purpose.
+
+    → `messaging_available()`, and the `NotReachableReason` vocabulary.
+
 Negative-spec:
+    - `messaging_socket_path` is never SUBSTITUTED when absent. No
+      `sessionId`, `pid`, `cwd`, or record-file path is hashed in its
+      place to produce a stand-in `ref`: the harness hashes its own live
+      socket path and nothing else, so any substitute yields a
+      confidently-wrong address -- the exact shape the spec's Anti-scope
+      forbids ("a confident wrong address is worse than no address: it
+      injects into an unrelated session's context and the intended
+      recipient never learns anything was sent").
     - No cross-call snapshot, cache, or file is written. `harness_registry.
       snapshot()` performs its own single fresh directory scan per call
       (see that module) — this module reads it exactly once per
@@ -102,6 +166,53 @@ _REF_MIN_LEN = 6
 _REF_MAX_LEN = 12
 
 
+class NotReachableReason:
+    """The `not_reachable` arm's five distinct causes, named.
+
+    A caller that prints "not reachable" without one of these tells a
+    reader "there is no such session" for a session that may be live,
+    busy, and simply unaddressable because the harness's messaging inbox
+    is not bound. Each constant states a different fact about a different
+    subject, and no two are interchangeable:
+
+        NO_OWNER_ID          — the caller passed an empty/falsy id. Says
+                               nothing about the registry, which is not
+                               read on that path.
+        NO_LIVE_RECORD       — the id has no live registry record. The
+                               original, exact meaning of "not reachable".
+        MESSAGING_UNAVAILABLE— the id HAS a live record, and NO record in
+                               the whole registry carries a messaging
+                               socket: the harness's cross-session inbox
+                               is unbound box-wide, so no peer has an
+                               address, this one included. A property of
+                               the HARNESS, not of the target session.
+        PEER_INBOX_ABSENT    — the id has a live record with no messaging
+                               socket while other records have one: peer
+                               messaging works here, but this session
+                               never registered an inbox. A property of
+                               the TARGET, not of the harness.
+        NO_PEER_NAME         — the id has a live record WITH a messaging
+                               socket but no harness-rendered `name`, so
+                               the `f"{name} [{ref}]"` form has no name
+                               half to build from. The pre-existing
+                               missing-`name` degrade (module docstring's
+                               "never falls back to the refuted
+                               first-two-hex-digits heuristic"), now
+                               named instead of silent.
+
+    Split rather than merged because the remedies differ and a caller
+    surfacing the wrong one sends its reader somewhere useless: the
+    harness-wide arm is not fixed by picking a different peer, and the
+    per-peer arm is not fixed by anything about the harness.
+    """
+
+    NO_OWNER_ID = "no-owner-id"
+    NO_LIVE_RECORD = "no-live-record"
+    MESSAGING_UNAVAILABLE = "peer-messaging-unavailable"
+    PEER_INBOX_ABSENT = "peer-inbox-absent"
+    NO_PEER_NAME = "no-peer-name"
+
+
 @dataclass(frozen=True)
 class Candidate:
     """One live registry record resolved to its `SendMessage` address.
@@ -138,12 +249,83 @@ class ResolveResult:
     `Candidate.address` slot is `None` for that entry, never the raw
     session id, so a caller printing `.address` unconditionally never
     prints a bare UUID as though it were a real `SendMessage` address).
+
+    `reason` is populated ONLY on the "not_reachable" arm, always, with
+    one of `NotReachableReason`'s five constants -- it is `None` on every
+    other outcome, where the outcome itself is the whole answer. Additive
+    with a `None` default: an existing caller switching on `outcome`
+    alone is unaffected, and one that wants to say WHY reads this instead
+    of re-deriving it from a second registry read it does not have.
     """
 
     outcome: str
     session_id: str | None = None
     address: str | None = None
     candidates: list[Candidate] = field(default_factory=list)
+    reason: str | None = None
+
+
+def messaging_available(snapshot: dict) -> bool:
+    """True if ANY live record carries a `messaging_socket_path` -- i.e.
+    the harness's cross-session messaging inbox is bound somewhere on this
+    box and peer addresses can exist at all.
+
+    Mirrors the harness's own local-peer enumeration, which filters its
+    session records on exactly this field (`r.sock && r.sock !== self`)
+    before probing each socket: a registry in which no record carries one
+    yields an EMPTY peer list from the harness itself, so every address
+    this module could compute would be refused. False is therefore a fact
+    about the harness's capability, not about any session's liveness --
+    every record in the snapshot may be a live, busy process.
+
+    Takes the snapshot as an argument rather than reading one: `resolve_
+    address` already holds the single fresh scan its own contract pins
+    (one `harness_registry.snapshot()` per call), and a second scan here
+    would both break that count and give a torn view across the two
+    reads.
+
+    Negative-spec: this is NOT a liveness signal and NOT a per-peer
+    reachability test. A `True` return says only that an address form
+    exists to be computed; the harness still probes the socket and lazily
+    unlinks unreachable records, so a resolved address remains a
+    candidate, never a delivery guarantee (spec § 3, "Record presence is
+    not reachability").
+
+    Negative-spec, 2.1.233: do NOT key this on `peerProtocol` (the field
+    the harness's own FleetView listing filters on for peer VISIBILITY).
+    Visibility and DELIVERABILITY are different predicates on this harness
+    version -- measured 2026-08-15, every record on this box carried
+    `peerProtocol: 1` while 0/42 carried `messaging_socket_path` -- so a
+    peer can be listed and still be unaddressable. This function answers
+    the deliverability question and must keep answering it with `messaging_
+    socket_path` alone; see the module docstring for the full measurement.
+
+    A `False` return does NOT say whether anything asked the harness to open
+    the gate. That question is `coordinator_core.session.messaging_gate.
+    classify()`, a separate self-scoped read of the calling session's own
+    environment -- kept out of this predicate deliberately: box-level
+    deliverability and this session's own request are different facts, and
+    folding either into the other is the collapse that module exists to undo.
+    """
+    return any(record.messaging_socket_path for record in snapshot.values())
+
+
+def _not_reachable_reason(sid: str, snapshot: dict) -> str:
+    """Classify WHY `sid` has no address, into one of
+    `NotReachableReason`'s registry-derived four.
+
+    Never called for a falsy owner id -- that path returns
+    `NO_OWNER_ID` without reading a snapshot at all, since a caller's own
+    empty input is not evidence about the registry.
+    """
+    record = snapshot.get(sid)
+    if record is None:
+        return NotReachableReason.NO_LIVE_RECORD
+    if not record.messaging_socket_path:
+        if not messaging_available(snapshot):
+            return NotReachableReason.MESSAGING_UNAVAILABLE
+        return NotReachableReason.PEER_INBOX_ABSENT
+    return NotReachableReason.NO_PEER_NAME
 
 
 def _full_hash12(messaging_socket_path: str) -> str:
@@ -350,6 +532,17 @@ def resolve_addresses_bulk(session_ids: list[str]) -> dict[str, str]:
     P3, docstring/loop mismatch).
     """
     snapshot = harness_registry.snapshot()
+    return _resolve_addresses_bulk_from_snapshot(session_ids, snapshot)
+
+
+def _resolve_addresses_bulk_from_snapshot(session_ids: list[str], snapshot: dict) -> dict[str, str]:
+    """The snapshot-scoped core of `resolve_addresses_bulk`, factored out so
+    `resolve_addresses_bulk_with_availability` can pair it with one
+    `messaging_available(snapshot)` read off the SAME snapshot -- two
+    separate `harness_registry.snapshot()` calls one after another risk a
+    torn view (the registry is a live directory scan, not a stable
+    read), which would let a caller's address dict and its "is messaging
+    on at all" verdict disagree about the instant they describe."""
     self_info = harness_registry.self_record()
     self_sid = self_info[0] if self_info is not None else None
     live_candidates = {c.session_id: c for c in resolve_candidates(snapshot)}
@@ -364,6 +557,35 @@ def resolve_addresses_bulk(session_ids: list[str]) -> dict[str, str]:
         candidate = live_candidates.get(sid)
         result[sid] = candidate.address if candidate is not None and candidate.address else ""
     return result
+
+
+def resolve_addresses_bulk_with_availability(session_ids: list[str]) -> tuple[dict[str, str], bool]:
+    """`resolve_addresses_bulk`'s address dict, paired with `messaging_
+    available(snapshot)` off the SAME snapshot read -- one scan answers both
+    "what is each id's address" and "is there any address to be had at all".
+
+    Built for a caller that renders `""` (this specific peer has no
+    address) and box-wide messaging-unavailable (no peer on this box can
+    have one) as two DIFFERENT facts -- `resolve_addresses_bulk` alone
+    collapses both into `""`, which is exactly the defect named in
+    `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-messaging-gate-off-vs-
+    proven-round-trip.md` § "Smaller, concrete: the empty-string rendering":
+    an empty `send_message_address` reads as "resolved to nothing" when the
+    true fact is "the harness's cross-session inbox is unbound box-wide,
+    same as `messaging_available()` already reports on the peer-roster
+    surface".
+
+    Negative-spec: a `False` availability flag does NOT mean every entry in
+    the returned dict is `""` -- a `"<this session>"` self-match is
+    unaffected by box-wide availability (a session always resolves itself).
+    It DOES mean every OTHER falsy entry is falsy for the box-wide reason,
+    not a per-peer one, which is exactly the distinction the caller needs to
+    render `send_message_address` as `None` + a named reason instead of the
+    ambiguous `""`.
+    """
+    snapshot = harness_registry.snapshot()
+    addresses = _resolve_addresses_bulk_from_snapshot(session_ids, snapshot)
+    return addresses, messaging_available(snapshot)
 
 
 def resolve_address(owner_id: str) -> ResolveResult:
@@ -383,6 +605,15 @@ def resolve_address(owner_id: str) -> ResolveResult:
          signal because signal 1 can decline for a correct pid (measured
          live: `_resolve_claude_pid_from_env()` -> `env-miss:name-mismatch`
          with `CLAUDE_PID` correctly set). See `_socket_env_self_match`.
+
+    Every "not_reachable" return carries a `reason` from
+    `NotReachableReason` -- there is no unexplained arm. The one this
+    fleet hits today is `MESSAGING_UNAVAILABLE`: the harness's
+    cross-session inbox gate is off, so no record carries a
+    `messaging_socket_path`, no peer has an address, and the harness's own
+    peer list is empty (module docstring, § runtime capability). A caller
+    must not read that as "no such session" -- the target may be live and
+    busy; nothing on this box can address it.
 
     Negative-spec: an absent/empty env var, or a record with
     `messaging_socket_path is None`, never contributes a match on signal 2
@@ -407,7 +638,9 @@ def resolve_address(owner_id: str) -> ResolveResult:
     string outright.
     """
     if not owner_id:
-        return ResolveResult(outcome="not_reachable")
+        return ResolveResult(
+            outcome="not_reachable", reason=NotReachableReason.NO_OWNER_ID
+        )
 
     snapshot = harness_registry.snapshot()
 
@@ -417,7 +650,10 @@ def resolve_address(owner_id: str) -> ResolveResult:
     matches = _matching_session_ids(owner_id, snapshot)
 
     if not matches:
-        return ResolveResult(outcome="not_reachable")
+        return ResolveResult(
+            outcome="not_reachable",
+            reason=_not_reachable_reason(owner_id, snapshot),
+        )
 
     if len(matches) == 1 and (
         matches[0] == self_sid or _socket_env_self_match(matches[0], snapshot)
@@ -434,6 +670,9 @@ def resolve_address(owner_id: str) -> ResolveResult:
     sid = matches[0]
     candidate = _resolve_one(sid, snapshot)
     if candidate is None:
-        return ResolveResult(outcome="not_reachable")
+        return ResolveResult(
+            outcome="not_reachable",
+            reason=_not_reachable_reason(sid, snapshot),
+        )
 
     return ResolveResult(outcome="reachable", session_id=sid, address=candidate.address)

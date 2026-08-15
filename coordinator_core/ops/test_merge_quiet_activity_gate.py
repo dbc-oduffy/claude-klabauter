@@ -21,6 +21,13 @@ from coordinator_core.ops.merge_quiet_activity_gate import (
     evaluate,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(*args: str, cwd: Path, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(

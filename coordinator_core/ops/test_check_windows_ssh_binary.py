@@ -24,6 +24,13 @@ from coordinator_core.ops.check_windows_ssh_binary import (
     main,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _fake_run_git(mapping):
     """Build a _run_git stand-in keyed on the args tuple."""

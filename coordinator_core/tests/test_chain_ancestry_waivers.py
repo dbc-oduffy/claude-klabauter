@@ -38,7 +38,10 @@ from coordinator_core.chain_ancestry_waivers import chain_reached_terminal_close
 # _make_repo spawns real git per test (init/config/add/commit) — declared to
 # the spawn ratchet rather than grandfathered in its frozen baseline. See
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _make_repo(tmp_path):

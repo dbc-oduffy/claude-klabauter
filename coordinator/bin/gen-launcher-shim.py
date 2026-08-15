@@ -198,17 +198,33 @@ SPEC_BACKLINK_REGISTRY = Path(__file__).resolve().parent / "launcher-spec-backli
 # silently strips any literal `^` from each argument BEFORE the launcher
 # body ever runs — this happens during cmd.exe's OWN command-line parse,
 # ahead of anything the generated launcher body could do about it (measured:
-# even a bare `echo %*` batch file loses the caret, and it is lost whether
-# the caller is PowerShell, python subprocess list-form, or cmd.exe itself —
-# not a caller-side quoting bug). `%CMDCMDLINE%`, by contrast, still carries
-# the ORIGINAL, unmangled invocation text (measured) — a launcher whose
-# entrypoint is named here gets ONE extra line exporting that raw text into
-# `_LAUNCHER_RAW_CMDLINE` before invoking Python, and the entrypoint itself
-# (not this generator) is responsible for re-deriving un-mangled argv from
-# it. This is a SECOND named, narrow, opt-in exception in the same spirit as
-# the WHOAMI-BOOTSTRAP EXCEPTION above — do NOT generalize it to every
-# launcher; every entrypoint not named here renders byte-identical to before
-# this mechanism existed (see `_cmd_raw_cmdline_block`).
+# even a bare `echo %*` batch file loses the caret).
+#
+# CORRECTED (docs/plans/2026-08-15-the-caret-fix-went-to-the-caller-that-never-broke.md):
+# the capture below is NOT a fix for this loss — it is caller-conditional, and the
+# 2026-08-10 fix and its guard suite validated only the one caller that was never broken.
+# cmd.exe strips the caret while parsing its OWN `/c` string, and whether `%CMDCMDLINE%`
+# still holds the unstripped text depends on how the SPAWNING process quoted that string:
+# it survives iff the entire post-`/c` string is wrapped in one outer quote pair (first and
+# last character both `"`). PowerShell emits that shape, so the caret survives into
+# `%CMDCMDLINE%` there; git-bash/MSYS and `subprocess.run([...])` list-form do not emit it,
+# so the capture on those rungs records text the caret is *already gone from* — the capture
+# preserves what `%CMDCMDLINE%` still holds, not what the caller originally typed. A
+# launcher whose entrypoint is named here gets ONE extra line exporting that (possibly
+# already-mangled) raw text into `_LAUNCHER_RAW_CMDLINE` before invoking Python; the
+# entrypoint itself (not this generator) is responsible for classifying the spawn shape and
+# refusing rather than trusting an unsound capture (`coordinator/bin/lib/raw_cmdline_recovery.py`).
+# This is a SECOND named, narrow, opt-in exception in the same spirit as the WHOAMI-BOOTSTRAP
+# EXCEPTION above — do NOT generalize it to every launcher; every entrypoint not named here
+# renders byte-identical to before this mechanism existed (see `_cmd_raw_cmdline_block`).
+#
+# Originating incidents: docs/plans/2026-08-10-caret-fix-on-the-wrong-launcher.md (the fix
+# that validated only the PowerShell rung) and
+# state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-6679bf76eb8a.yaml
+# (DoE-claude tree). docs/decisions/DR-303-windows-spawn-economics-is-a-fix-not-a-desig.md
+# § Residual uncertainty: "Caret recovery ... reasoned from code on macOS" — DR-303 treated
+# this as break-class, not as a deferred defect. (Review: coordinator:code-reviewer —
+# original phrasing double-"as"; fixed for clarity, meaning unchanged.)
 #
 # MIRRORED, NOT IMPORTED, against `coordinator_core/install/substrate.py`'s
 # `_RAW_CMDLINE_TARGETS` — same caret-eating defect, same keying convention

@@ -25,6 +25,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.ops import migrate_branch_canonical_case as mbcc  # noqa: E402
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

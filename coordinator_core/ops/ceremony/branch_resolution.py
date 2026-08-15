@@ -102,7 +102,6 @@ from coordinator_core.ops.ceremony.node_handlers import (
     STEP_2_67A,
     STEP_2_67B,
     STEP_2_7,
-    STEP_2_75,
     STEP_2_8A,
     STEP_2_8B,
     STEP_2_8C,
@@ -166,7 +165,7 @@ log = logging.getLogger(__name__)
 # Step IDs applicable ONLY when disposition == "chain-terminal" — used to compute
 # the declared applicable_node_ids membership list (op-spec §3, Option B).  Two
 # distinct reasons land a step here:
-#   - STEP_2_7 / STEP_2_75 / STEP_2_9C: their resolving_op is skipped outright in
+#   - STEP_2_7 / STEP_2_9C: their resolving_op is skipped outright in
 #     single-session (each carries evidence.chain_terminal below, in _resolve_branches).
 #   - STEP_2_96: reads state/tasks/<sid>/completeness-checklist.yaml, a mirror that
 #     only exists post-pickup (written by /pickup Step 5.5) — structurally absent
@@ -174,8 +173,11 @@ log = logging.getLogger(__name__)
 #     comment: "normal single-session case, the mirror is absent").  STEP_2_96 does
 #     NOT carry an evidence.chain_terminal flag of its own; membership here is a
 #     declared semantic exclusion, not a scavenged evidence read.
+# Review: code-reviewer (690dd6f9) -- STEP_2_75 dropped: its only ctx.add_node
+# call site was removed by the handoff-tracker retirement diff, so the id can
+# never appear in the ledger and the prior membership was stale.
 _CHAIN_TERMINAL_ONLY_STEPS: frozenset[str] = frozenset(
-    {STEP_2_7, STEP_2_75, STEP_2_9C, STEP_2_96}
+    {STEP_2_7, STEP_2_9C, STEP_2_96}
 )
 
 # ---------------------------------------------------------------------------
@@ -2790,11 +2792,6 @@ def _resolve_branches(  # noqa: C901  (complex but linear — each branch is 1 s
                               "consumed_handoffs_paths": (
                                   consumed_handoff_paths_all if canonicalize(disposition) == PREDECESSOR_CONSUMED else []
                               ),
-                          }))
-    ctx.add_node(handle_d(STEP_2_75, resolving_op="node:render-handoff-tracker.js",
-                          evidence={
-                              "note": "regenerate handoff-tracker.md — chain-terminal only",
-                              "chain_terminal": canonicalize(disposition) == PREDECESSOR_CONSUMED,
                           }))
     ctx.add_node(handle_d(STEP_2_8B, resolving_op="regenerate-orientation-cache.sh",
                           evidence={"note": "append pinboard entry if J-step answered yes"}))

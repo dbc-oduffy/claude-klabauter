@@ -40,8 +40,12 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import re
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from coordinator_core.ops import handoff_transition as _handoff_transition
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
@@ -172,3 +176,141 @@ class ReaperSkipBranchesNeverPassReapedFromTest(unittest.TestCase):
             f"found {len(with_reaped_from)}: {with_reaped_from}",
         )
         self.assertIn("unconsume-handoff", with_reaped_from[0])
+
+
+class UnclaimSessionLedgerAdvisoryTest(unittest.TestCase):
+    """Direct-call coverage for `_unclaim`'s Session Ledger discharge-evidence
+    advisory (docs/plans/2026-08-14-discharge-evidence-at-the-unclaim-seam.md,
+    C1). Unlike the argv-parsing suite above, this calls
+    `coordinator_core.ops.handoff_transition._unclaim` directly against a real
+    on-disk handoff fixture — the behaviour under test (frontmatter mutation +
+    body parsing) lives below the CLI/op-handler seam those tests cover.
+
+    `locked_rmw` is monkeypatched to a minimal in-process read/mutate/write —
+    this is a unit test of `_unclaim`'s `mutate()` logic, not an integration
+    test of the cross-process flock (which needs a real git common dir this
+    suite has no reason to stand up).
+
+    Both sid abbreviation directions are exercised (AC2): the corpus and the
+    canonical writer (`format_oneline_row`) disagree on which end of the full
+    session id a ledger row's 6-char column abbreviates — see
+    `_unclaim_session_ledger_notice`'s docstring."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.worktree = Path(self._tmpdir.name)
+        self.repo_root = self.worktree  # never dereferenced by the fake below
+
+        def _fake_locked_rmw(target, mutate, *, repo_root, timeout=None, missing_ok=False):
+            old_text = target.read_text(encoding="utf-8")
+            new_text = mutate(old_text)
+            if new_text != old_text:
+                target.write_text(new_text, encoding="utf-8")
+            return new_text
+
+        patcher = mock.patch.object(_handoff_transition, "locked_rmw", _fake_locked_rmw)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write_handoff(self, *, claimed_by: str, ledger_lines=None) -> Path:
+        handoffs_dir = self.worktree / "state" / "handoffs"
+        handoffs_dir.mkdir(parents=True, exist_ok=True)
+        body_lines = ["", "## What this covers", "", "Test fixture body.", ""]
+        if ledger_lines is not None:
+            body_lines += ["## Session Ledger", "", *ledger_lines, ""]
+        content = (
+            "---\n"
+            'title: "Test handoff for unclaim ledger advisory"\n'
+            "created: 2026-08-14\n"
+            'branch: "work/test/branch"\n'
+            "status: claimed\n"
+            "predecessor: none\n"
+            "deployment_state: in_flight\n"
+            "claimed_at: '2026-08-14T00:00:00Z'\n"
+            f"claimed_by: {claimed_by}\n"
+            "category: infra\n"
+            "summary: 'Test fixture for the unclaim ledger advisory suite'\n"
+            "---\n" + "\n".join(body_lines)
+        )
+        path = handoffs_dir / "test-handoff.md"
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    # Real corpus example (state/handoffs/2026-08-14-retire-coordinator-venv.md):
+    # ledger row "c973de" against full id c973dea9-...-b5538c7cb3b6 — a LEADING-6
+    # match, the convention the live corpus actually uses.
+    _FULL_SID = "c973dea9-fab3-462d-8c3b-b5538c7cb3b6"
+    _OTHER_CLAIMER = "931ad709-a702-4279-98b6-0b47ec3af140"
+    _EXPECTED_NOTICE = (
+        "ledger row for this session present — unclaimed anyway; "
+        "ship-handoff marks it finished instead"
+    )
+
+    def test_leading_six_hit_warns_and_still_applies(self):
+        path = self._write_handoff(
+            claimed_by=self._OTHER_CLAIMER,
+            ledger_lines=["2026-08-13 | c973de | S | 3d / 1o | did some work"],
+        )
+        result = _handoff_transition._unclaim(
+            str(path), "", self.worktree, self.repo_root, session_id=self._FULL_SID
+        )
+        self.assertEqual(result["exit_code"], 0)
+        self.assertTrue(result["applied"])
+        self.assertIn(self._EXPECTED_NOTICE, result["message"])
+        new_text = path.read_text(encoding="utf-8")
+        self.assertIn("status: open", new_text)
+        self.assertIn("deployment_state: ready_to_fire", new_text)
+
+    def test_trailing_six_hit_also_warns(self):
+        path = self._write_handoff(
+            claimed_by=self._OTHER_CLAIMER,
+            ledger_lines=["2026-08-13 | 7cb3b6 | S | 3d / 1o | did some work"],
+        )
+        result = _handoff_transition._unclaim(
+            str(path), "", self.worktree, self.repo_root, session_id=self._FULL_SID
+        )
+        self.assertTrue(result["applied"])
+        self.assertIn(self._EXPECTED_NOTICE, result["message"])
+
+    def test_different_session_row_does_not_warn(self):
+        path = self._write_handoff(
+            claimed_by=self._OTHER_CLAIMER,
+            ledger_lines=["2026-08-13 | ffffff | S | 3d / 1o | someone else's work"],
+        )
+        result = _handoff_transition._unclaim(
+            str(path), "", self.worktree, self.repo_root, session_id=self._FULL_SID
+        )
+        self.assertTrue(result["applied"])
+        self.assertEqual(
+            result["message"],
+            f"unclaimed {str(path)} (status: open, deployment_state: ready_to_fire)",
+        )
+
+    def test_no_ledger_block_behaves_as_today(self):
+        path = self._write_handoff(claimed_by=self._OTHER_CLAIMER, ledger_lines=None)
+        result = _handoff_transition._unclaim(
+            str(path), "", self.worktree, self.repo_root, session_id=self._FULL_SID
+        )
+        self.assertTrue(result["applied"])
+        self.assertEqual(
+            result["message"],
+            f"unclaimed {str(path)} (status: open, deployment_state: ready_to_fire)",
+        )
+
+    def test_no_session_id_never_blocks_unclaim(self):
+        """AC2c: an unresolvable/absent session_id is silently no-warn — the
+        advisory must never fail loud onto the release path it rides on
+        (unlike _claim's fail-loud empty-session_id gate)."""
+        path = self._write_handoff(
+            claimed_by=self._OTHER_CLAIMER,
+            ledger_lines=["2026-08-13 | c973de | S | 3d / 1o | did some work"],
+        )
+        result = _handoff_transition._unclaim(
+            str(path), "", self.worktree, self.repo_root, session_id=None
+        )
+        self.assertTrue(result["applied"])
+        self.assertEqual(
+            result["message"],
+            f"unclaimed {str(path)} (status: open, deployment_state: ready_to_fire)",
+        )

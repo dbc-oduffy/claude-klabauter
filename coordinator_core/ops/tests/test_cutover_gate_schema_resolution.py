@@ -37,6 +37,13 @@ from coordinator_core.ops.cutover_gate import (
     resolve_cutover_schema,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _SCHEMA_BODY = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "x-schema-name": "cutover",

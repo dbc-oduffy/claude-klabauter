@@ -45,7 +45,11 @@ import pytest
 # Whole-module opt-out: every test here compares emitted output against the
 # LIVE coordinator tree, resolved via the machine-local registry. conftest.py's
 # home quarantine turns that into 'coordinator root not found'.
-pytestmark = pytest.mark.real_home
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+    pytest.mark.real_home,
+]
 
 # --------------------------------------------------------------------------- paths
 _TESTS_DIR = Path(__file__).resolve().parent

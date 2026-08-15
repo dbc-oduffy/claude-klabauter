@@ -19,6 +19,13 @@ from coordinator_core.install.clone_sibling_repo import (
     clone_idempotent,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _GIT_TIMEOUT = 30
 
 

@@ -23,6 +23,13 @@ import pytest
 
 from coordinator_core.benchmarks.harness import _collect_samples, _percentile, run
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def test_percentile_empty_list_raises():
     with pytest.raises(ValueError):

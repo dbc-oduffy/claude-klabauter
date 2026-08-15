@@ -37,6 +37,13 @@ sys.path.insert(0, str(REPO_ROOT))
 from coordinator_core import pickup_assemble as pa  # noqa: E402
 from coordinator_core.pickup_assemble import apply as pa_apply  # noqa: E402
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(args, cwd):
     return subprocess.run(

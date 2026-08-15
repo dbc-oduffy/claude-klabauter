@@ -28,6 +28,13 @@ from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import core as session_core
 from coordinator_core.session import grant as grant_module
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _AGENT_ID = "a0123456789abcdef"
 _GRANT_SID = "s-grant-leg-test"
 

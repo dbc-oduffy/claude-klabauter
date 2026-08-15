@@ -44,6 +44,13 @@ from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 CEILING = _command_tokenizer._MAX_TOKENIZABLE_COMMAND_CHARS
 
 

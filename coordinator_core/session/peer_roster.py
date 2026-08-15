@@ -61,6 +61,26 @@ class PeerRow:
     are not in this list because your session is outside this repo" apart
     from "we could not work out which row is you" without a second call --
     see `build_roster`'s docstring.
+
+    `messaging_available` is `reachability.messaging_available()` read off
+    the SAME snapshot this roster was built from: `False` means no record
+    on the box carries a messaging socket, so the harness's cross-session
+    inbox is unbound box-wide and EVERY row's `address` is `None` for that
+    one harness-wide reason -- not because these particular peers are
+    gone, and not because their records drifted. It is a fact about the
+    harness, never about the row it rides on, and it is carried per row
+    for the same reason `self_determination` is: `build_roster` returns a
+    plain `List[PeerRow]`, so a consumer holding only the rows has no
+    side-channel to read it from, and a roster-level slot would need a
+    second call or a changed return type for every existing caller.
+
+    Negative-spec: a `True` value is NOT a per-row reachability claim. A
+    row can still carry `address=None` while `messaging_available` is
+    `True` -- that is the per-peer case (`NotReachableReason.
+    PEER_INBOX_ABSENT`/`NO_PEER_NAME`), and the two must not be read as
+    the same fact. This field does not re-derive `reachability.
+    _not_reachable_reason`'s per-id classification; it reports only the
+    harness-wide predicate that classification's first branch consults.
     """
 
     session_id: str
@@ -72,6 +92,7 @@ class PeerRow:
     running_seconds: float
     is_self: bool
     self_determination: str
+    messaging_available: bool
 
 
 def _normalize_path(path: str) -> str:
@@ -166,6 +187,17 @@ def build_roster(
     that case (`"resolved"` otherwise), so a consumer can always tell the
     two apart. See `PeerRow.self_determination`'s own docstring.
 
+    Every row also carries `messaging_available`, read once from
+    `reachability.messaging_available(snapshot)` off the snapshot already
+    taken above -- no second `harness_registry.snapshot()` scan (that
+    module's one-fresh-scan-per-call contract stays literally true, and a
+    second read would give a torn view), and no local re-derivation of the
+    predicate. It answers the question a roster of `address: null` rows
+    otherwise leaves open: `False` means the harness's cross-session inbox
+    is unbound box-wide, so no peer has an address at all -- the rows are
+    live sessions nobody on this box can message, not stale or missing
+    records. See `PeerRow.messaging_available`.
+
     Degrades to an empty list on any internal failure -- an
     absent/unreadable registry, a `self_record()` failure -- rather than
     raising; same advisory-read discipline as `reachability.resolve_address`.
@@ -224,6 +256,7 @@ def build_roster(
                 break
 
     self_determination = "resolved" if self_sid is not None else "unresolved"
+    harness_messaging_available = reachability.messaging_available(snapshot)
 
     candidates_by_sid = {
         candidate.session_id: candidate
@@ -258,6 +291,7 @@ def build_roster(
                 running_seconds=running_seconds,
                 is_self=(sid == self_sid),
                 self_determination=self_determination,
+                messaging_available=harness_messaging_available,
             )
         )
     return rows

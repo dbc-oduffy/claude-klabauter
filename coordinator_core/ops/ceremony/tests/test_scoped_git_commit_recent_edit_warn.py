@@ -28,7 +28,10 @@ from coordinator_core.win_portability import no_console_creationflags
 # `claim_index.lookup(cwd=...)` -> `core.sessions_dir()`, which spawns a real
 # `git rev-parse --git-common-dir` (mirrors the identical note in this
 # directory's sibling `test_scoped_git_commit_claim_gate_removed.py`).
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _git(args, cwd) -> None:

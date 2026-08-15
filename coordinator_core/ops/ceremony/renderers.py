@@ -12,21 +12,7 @@ is defined here as the single canonical copy — it was ported from the OLD
 imports it from this module rather than carrying its own compiled copy, so the
 two guards can never silently drift apart.
 
-C8b (this module too): ``render_repo_section`` / ``build_workstream_index`` /
-``workstream_seq`` / ``is_active``, the port of ``render-handoff-tracker.js``
-(Handoffs / Execution Handoffs / Spinoffs / Cross-Repo-Memos tracker section).
-Shares this module surface with C8c; both land independently, each
-contributing a disjoint set of top-level functions.
-
-C9-parity (this module, follow-up): ``## Execution Handoffs`` — the JS
-original partitions every active handoff into EXACTLY ONE of
-``## Handoffs`` / ``## Execution Handoffs`` on ``frontmatter.handoff_phase
-== "execution"`` (render-handoff-tracker.js:495-511), then further splits
-the execution set into Fireable / Gated / Other sub-tables on
-``deployment_state`` (render-handoff-tracker.js:519-538). The initial C8b
-port omitted this section entirely; this closes that gap.
-
-Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b, § C8c
+Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8c
 
 Negative-spec (C8c, refresh_roadmap_callout):
   - Does NOT implement the full ``refresh-queries.js`` CLI surface (``--check``,
@@ -47,35 +33,24 @@ Negative-spec (C8c, refresh_roadmap_callout):
     carrying its own compiled copy, so the two guards can never silently drift
     apart.
 
-Negative-spec (C8b, render_repo_section):
-  - Does NOT implement the node CLI's ``--all-repos`` DoE-aggregation mode,
-    machine-local repo enumeration, or output-path resolution
-    (``resolvePerRepoStateRoot`` / ``resolveCentralStateRoot``) — those are
-    CLI/dispatch concerns for whichever tail op wires this renderer to disk
-    (C9), not part of the renderer port itself. ``render_repo_section``
-    returns a markdown string; it never writes a file.
-  - Does NOT call C8a's ``query_records`` for the parse-error-surfacing "all
-    handoffs" scan — that helper silently skips unparseable files by design
-    (its own negative-spec defers fail-loud surfacing to this caller). This
-    module does its own frontmatter-optional scan
-    (``_collect_handoffs_with_parse_errors``) so parse-error handoffs are
-    surfaced as fail-loud rows (mirrors ``query-records.js``'s
-    ``includeUnparseable`` opt-in used by ``render-handoff-tracker.js``).
-  - Standalone (no-workstream) handoff rows are emitted in scan order, NOT
-    sorted by ``created`` — this transliterates a real quirk in the node
-    source (``render-handoff-tracker.js:411-414`` comment claims "sorted by
-    created desc" but the code never calls ``.sort()`` on ``standalones``).
-    Full-fidelity port means matching behavior, not the stale comment.
+``_collect_handoffs_with_parse_errors`` (general-purpose helper, retained):
+does NOT call C8a's ``query_records`` for its scan — that helper silently
+skips unparseable files by design (its own negative-spec defers fail-loud
+surfacing to this caller). This function does its own frontmatter-optional
+scan so parse-error handoffs are surfaced (``frontmatter: None`` stub rows),
+never dropped. See ``test_renderers_unreadable_handoff.py`` for the
+unreadable-file contract this promise covers.
 """
 
 from __future__ import annotations
 import sys
 
 # Generator-provenance declaration: every render function in this module is
-# pure and returns a markdown string with no disk I/O of its own (see
-# render_repo_section's own negative-spec above: "never writes a file"). The
-# only file writes attributed to this rendering population live in the C9
-# disk seam, coordinator_core.ops.ceremony.render_handoff_tracker.
+# pure and returns a markdown string with no disk I/O of its own. The former
+# C9 disk seam, coordinator_core.ops.ceremony.render_handoff_tracker (this
+# module's only in-tree writer), was retired 2026-08-14 along with the
+# handoff-tracker render path -- see docs/plans/2026-08-14-retire-the-
+# handoff-tracker-and-project-tracker-renders.md § C2.
 GENERATES = []
 
 import os
@@ -84,16 +59,13 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Set
 
 from coordinator_core.dag import (
-    EDGE_KIND_META,
     _read_meta,
     as_history_membership_set,
     build_git_history_cache,
     resolve_target,
 )
-from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops.ceremony.records_query import _collect_files, query_records
-from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT, HANDOFF_TERMINAL_STATUS
 from coordinator_core.ops.fleet._common import rel_id
 from coordinator_core.ops.records_query import _apply_consumed_marker
 from coordinator_core.ops._relative_link import relative_markdown_target
@@ -104,33 +76,6 @@ from coordinator_core.ops._relative_link import relative_markdown_target
 # from the OLD wsc_commit.py, which no longer exists; ``tail_ops.py`` imports this
 # name rather than compiling its own copy.
 _ROADMAP_ID_ALLOWLIST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-#: Kinds the handoff-tracker renderer sorts into the spinoff-or-roadmap bucket
-#: rather than the plain-handoff one (mirrors the former inline
-#: ``kind in ("spinoff", "spinoff-roadmap")`` tuple).
-#:
-#: Membership is EXPLICIT rather than derived from ``baton_class()``, and that
-#: is a finding rather than a shortcut. These members do not share one
-#: ``baton_class``: ``spinoff`` derives ``deflection`` while ``spinoff-roadmap``
-#: and ``roadmap-baton`` derive ``intention``. A ``baton_class()``-based
-#: predicate here would simultaneously WIDEN the bucket (pulling in every other
-#: ``deflection`` kind, e.g. ``goal-seed``) and NARROW it (dropping
-#: ``roadmap-baton``, which is exactly what the migrated live records carry) --
-#: changing behaviour in two directions at once. Preserving the membership beats
-#: deriving it.
-#:
-#: Legacy values are retained PERMANENTLY, not time-boxed: sibling repos still
-#: carry pre-rename values on disk after this repo's own records have migrated,
-#: and a half-migrated fleet is the normal state of a fleet vocabulary change.
-#:
-#: The retired/successor pair is sourced from the canonical
-#: ``_PRE_RENAME_ALIASES`` table via ``kind_values_for_canonical()`` instead of
-#: being spelled as a literal collection here (AC4 -- see
-#: ``test_baton_class_is_the_only_membership_set.py``).
-_SPINOFF_OR_ROADMAP_KINDS = frozenset(
-    {"spinoff"} | set(kind_values_for_canonical("roadmap-baton"))
-)
-
 
 class _GitHistoryCacheProvider:
     """Lazily builds ``dag.build_git_history_cache(repo_root)`` on the FIRST
@@ -577,105 +522,6 @@ def refresh_roadmap_callout(worktree_root: Path, roadmap_id: str) -> dict[str, A
 
 
 # =============================================================================
-# C8b — render_repo_section: port of render-handoff-tracker.js
-# =============================================================================
-
-# ---------------------------------------------------------------------------
-# Active-state filter (mirrors render-handoff-tracker.js TERMINAL_DEPLOYMENT /
-# TERMINAL_STATUS). Values now SSOT in lifecycle_constants, still mirroring
-# DoE lib/consumed-marker.js.
-# ---------------------------------------------------------------------------
-_TERMINAL_DEPLOYMENT = HANDOFF_TERMINAL_DEPLOYMENT
-_TERMINAL_STATUS = HANDOFF_TERMINAL_STATUS
-
-
-def is_active(fm: Optional[dict]) -> bool:
-    """Return whether a handoff/spinoff record is active (not terminal).
-
-    Mirrors ``isActive`` (render-handoff-tracker.js:191-198). Parse-error
-    records (``fm is None``) are never active — the caller routes them to
-    the fail-loud parse-error rows instead.
-    """
-    if not fm:
-        return False
-    deployment_state = str(fm.get("deployment_state") or "")
-    status = str(fm.get("status") or "")
-    if deployment_state in _TERMINAL_DEPLOYMENT:
-        return False
-    if status in _TERMINAL_STATUS:
-        return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Date normalisation
-# ---------------------------------------------------------------------------
-
-
-def _to_iso_date(val) -> str:
-    """Bare ``YYYY-MM-DD`` or full ISO-8601 -> first 10 chars. Mirrors ``toIsoDate``."""
-    if not val:
-        return ""
-    return str(val)[:10]
-
-
-# ---------------------------------------------------------------------------
-# Workstream-seq denominator
-# ---------------------------------------------------------------------------
-
-
-def build_workstream_index(root: Path) -> dict[str, list[str]]:
-    """Build workstream slug -> sorted (ascending) ``created`` dates.
-
-    Denominator spans BOTH active (``handoff``) and archived
-    (``handoff-archived``) records sharing the same workstream slug — archive
-    read is count-only. Mirrors ``buildWorkstreamIndex``
-    (render-handoff-tracker.js:219-246).
-    """
-    live_records = query_records("handoff", root)
-    archived_records = query_records("handoff-archived", root)
-
-    ws_map: dict[str, list[str]] = {}
-    for record in (*live_records, *archived_records):
-        fm = record["frontmatter"]
-        if not fm:
-            continue
-        workstream = fm.get("workstream")
-        if not workstream:
-            continue
-        ws_map.setdefault(workstream, []).append(_to_iso_date(fm.get("created")))
-
-    for dates in ws_map.values():
-        dates.sort()
-
-    return ws_map
-
-
-def workstream_seq(
-    ws_map: dict[str, list[str]], workstream: Optional[str], created
-) -> Optional[str]:
-    """Return "N of M" for a record's workstream rank, or ``None`` if absent.
-
-    Mirrors ``workstreamSeq`` (render-handoff-tracker.js:253-263). Rank is
-    1-based, found via first-matching-index over the ascending-sorted dates
-    (ties resolve to the first matching slot, same as ``Array.indexOf``).
-    """
-    if not workstream:
-        return None
-    dates = ws_map.get(workstream)
-    if not dates:
-        return None
-    total = len(dates)
-    iso_created = _to_iso_date(created)
-    try:
-        rank = dates.index(iso_created) + 1
-    except ValueError:
-        rank = 0
-    if rank == 0:
-        return f"? of {total}"
-    return f"{rank} of {total}"
-
-
 # ---------------------------------------------------------------------------
 # Markdown table helpers
 # ---------------------------------------------------------------------------
@@ -709,150 +555,6 @@ def _render_table(headers: list[str], rows: list[list]) -> str:
         *("| " + " | ".join(_cell(v) for v in row) + " |" for row in rows),
     ]
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Per-record row builders
-# ---------------------------------------------------------------------------
-
-
-def _plan_annotation(record: dict, plan_by_handoff: Optional[dict[str, tuple[str, str]]]) -> str:
-    """Bracketed plan-slug/status suffix for a handoff/spinoff row's Summary
-    cell, or ``""`` when no plan's ``predecessor_handoff:`` resolves to this
-    row. Deliberately a distinct-looking ``[plan: ... status: ...]`` tag —
-    never bare text — so a plan ``status:`` is never mistaken for the
-    handoff's own ``deployment_state``/``status`` in the same row."""
-    if not plan_by_handoff:
-        return ""
-    hit = plan_by_handoff.get(record["path"])
-    if not hit:
-        return ""
-    slug, status = hit
-    return f" [plan: {slug} status: {status}]"
-
-
-def _handoff_row(
-    record: dict,
-    ws_map: dict[str, list[str]],
-    plan_by_handoff: Optional[dict[str, tuple[str, str]]] = None,
-) -> list:
-    """Build a Handoffs-table row. Mirrors ``handoffRow`` (render-handoff-tracker.js:301-320)."""
-    fm = record["frontmatter"]
-    if not fm:
-        # Parse-error row — fail-loud, never dropped (AC8).
-        return [f"⚠ PARSE-ERROR | {record['path']}", "", "", "", "", ""]
-    filename = os.path.basename(record["path"])
-    file_link = _md_link(filename, record["path"])
-    created = _to_iso_date(fm.get("created"))
-    deployment_state = _cell(fm.get("deployment_state"))
-    category = str(fm["category"]) if fm.get("category") else "—"
-    summary = _cell(fm.get("summary") or fm.get("title")) + _plan_annotation(record, plan_by_handoff)
-    workstream = str(fm["workstream"]) if fm.get("workstream") else None
-    seq = workstream_seq(ws_map, workstream, fm.get("created")) if workstream else None
-    seq_display = seq or (workstream if workstream else "standalone")
-    return [file_link, created, deployment_state, category, summary, seq_display]
-
-
-def _spinoff_row(
-    record: dict,
-    ws_map: dict[str, list[str]],
-    is_roadmap: bool,
-    plan_by_handoff: Optional[dict[str, tuple[str, str]]] = None,
-) -> list:
-    """Build a Spinoffs-table row. Mirrors ``spinoffRow`` (render-handoff-tracker.js:327-349)."""
-    fm = record["frontmatter"]
-    filename = os.path.basename(record["path"])
-    file_link = _md_link(filename, record["path"])
-    created = _to_iso_date(fm.get("created"))
-    deployment_state = _cell(fm.get("deployment_state"))
-    category = str(fm["category"]) if fm.get("category") else "—"
-    summary = _cell(fm.get("summary") or fm.get("title")) + _plan_annotation(record, plan_by_handoff)
-    workstream = str(fm["workstream"]) if fm.get("workstream") else None
-    seq = workstream_seq(ws_map, workstream, fm.get("created")) if workstream else None
-    seq_display = seq or (workstream if workstream else "standalone")
-    base = [file_link, created, deployment_state, category, summary, seq_display]
-    if is_roadmap:
-        base.append(_cell(fm.get("stub_id")))
-        blocked_by = fm.get("blocked_by")
-        if isinstance(blocked_by, list):
-            bb_display = ", ".join(str(b) for b in blocked_by)
-        elif blocked_by:
-            bb_display = str(blocked_by)
-        else:
-            bb_display = ""
-        base.append(bb_display)
-    return base
-
-
-def _memo_row(record: dict) -> list:
-    """Build a Cross-Repo-Memos-table row. Mirrors ``memoRow`` (render-handoff-tracker.js:355-368)."""
-    fm = record["frontmatter"]
-    filename = os.path.basename(record["path"])
-    file_link = _md_link(filename, record["path"])
-    created = _to_iso_date(fm.get("created"))
-    return [
-        file_link,
-        created,
-        _cell(fm.get("from")),
-        _cell(fm.get("to")),
-        _cell(fm.get("status")),
-        _cell(fm.get("title")),
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Group records by workstream, sort workstreams alphabetically, rows by
-# created desc. Standalone (no-workstream) records are NOT re-sorted — see
-# module negative-spec.
-# ---------------------------------------------------------------------------
-
-
-def _grouped_handoff_rows(
-    records: list[dict],
-    ws_map: dict[str, list[str]],
-    plan_by_handoff: Optional[dict[str, tuple[str, str]]] = None,
-) -> list[list]:
-    """Group ``records`` by workstream, then flatten to rendered Handoffs-table
-    rows. Composes ``_group_by_workstream`` + ``_handoff_row`` — the
-    "group, then flatten" pattern shared by every Handoffs-shaped table in
-    ``render_repo_section``. Mirrors ``groupedHandoffRows``
-    (render-handoff-tracker.js:425-431).
-    """
-    return [
-        _handoff_row(r, ws_map, plan_by_handoff)
-        for group in _group_by_workstream(records)
-        for r in group["rows"]
-    ]
-
-
-def _group_by_workstream(records: list[dict]) -> list[dict]:
-    """Mirrors ``groupByWorkstream`` (render-handoff-tracker.js:379-417)."""
-    grouped: dict[str, list[dict]] = {}
-    standalones: list[dict] = []
-
-    for record in records:
-        fm = record["frontmatter"]
-        workstream = str(fm["workstream"]) if fm and fm.get("workstream") else None
-        if not workstream:
-            standalones.append(record)
-        else:
-            grouped.setdefault(workstream, []).append(record)
-
-    result = []
-    for workstream in sorted(grouped.keys()):
-        recs = grouped[workstream]
-        recs.sort(
-            key=lambda r: _to_iso_date(r["frontmatter"].get("created") if r["frontmatter"] else None),
-            reverse=True,
-        )
-        result.append({"workstream": workstream, "rows": recs})
-
-    # Standalone records: scan order, NOT sorted (transliterated quirk — see
-    # module negative-spec).
-    for record in standalones:
-        result.append({"workstream": None, "rows": [record]})
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -902,11 +604,13 @@ def _collect_handoffs_with_parse_errors(root: Path) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # Plans join — ``docs/plans/*.md`` frontmatter joined onto
-# ``predecessor_handoff:`` against the tracker's own ``state/handoffs/`` rows.
-# Single collection helper feeds BOTH ``render_repo_section`` (the compact
-# per-handoff annotation + remainder pointer) and ``render_plans_index_markdown``
-# (the full plans index) — see module negative-spec for why a second parser
-# is out of scope.
+# ``predecessor_handoff:`` against ``state/handoffs/`` rows. Single collection
+# helper feeds ``render_plans_index_markdown`` (the full plans index) — its
+# former co-consumer, ``render_repo_section`` (the tracker's compact
+# per-handoff annotation + remainder pointer), was retired 2026-08-14 (see
+# docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-
+# renders.md § C2) — see module negative-spec for why a second parser is out
+# of scope.
 # ---------------------------------------------------------------------------
 
 #: Review-sidecar filename suffixes excluded from the plans glob (grep
@@ -1043,48 +747,6 @@ def _normalize_path(value: str) -> str:
     return value.replace("\\", "/")
 
 
-#: Case-insensitive sentinel tokens meaning "not declared" for a handoff
-#: lineage field, once a trailing YAML comment (if any survived parsing) is
-#: stripped. ``null``/``~``/empty already resolve to Python ``None`` via
-#: normal YAML parsing of an UNQUOTED scalar — but ``none`` is not a
-#: recognized YAML 1.1 null keyword, so it survives as the literal string
-#: ``"none"``, and it is the dominant sentinel on live disk
-#: (``predecessor: none`` on ~50 of 60 handoffs).
-_LINEAGE_NULL_SENTINELS = frozenset({"none", "null", "~"})
-
-
-def _normalize_lineage_value(raw: Any) -> Optional[str]:
-    """Normalize one declared handoff-lineage field value (``predecessor``,
-    ``origin_handoff``, ``forked_from``, ``additional_predecessors`` entry)
-    to either a candidate path string or ``None`` ("not declared").
-
-    One hygiene issue lives on disk that a bare ``if value:`` truthiness
-    check gets wrong: ``none`` (lowercase word, not YAML's ``null``/``~``/
-    empty) is NOT a recognized YAML null keyword and parses as the literal
-    string ``"none"`` — treating it as a declared candidate would manufacture
-    a dangling-link false positive for the majority of handoffs on disk.
-
-    No inline-comment stripping happens here (and none is needed): every
-    value this function receives has already been parsed through
-    ``coordinator_core.dag._parse_scalar``, which strips a trailing YAML
-    comment via the quote-aware ``_strip_inline_comment`` before this
-    function ever sees the value — a real ``  # comment`` cannot survive to
-    reach here. A naive, non-quote-aware ``" #"`` strip at this layer used to
-    exist for defense-in-depth, but it was a bug, not a backstop: it would
-    truncate a legitimate already-parsed value that happens to contain the
-    literal substring ``" #"`` (e.g. a quoted path with a hash in it),
-    silently corrupting data the upstream parser had already handled
-    correctly. Removed 2026-07-25 — see the lineage-visibility round-2 code
-    review.
-    """
-    if raw is None:
-        return None
-    text = str(raw).strip()
-    if not text or text.lower() in _LINEAGE_NULL_SENTINELS:
-        return None
-    return text
-
-
 def _index_handoffs_by_basename(dir_path: Path, root: Path) -> dict[str, str]:
     """Map ``basename -> repo-relative path`` for every ``.md`` file under
     ``dir_path``, searched recursively (covers both the flat
@@ -1115,8 +777,7 @@ def _classify_handoff_location(path: Path, root: Path) -> str:
 
     ``_join_plans_to_handoffs`` maps ``"invalid-target"`` back onto its own
     ``"gone"`` state explicitly (plans rendering has no fourth state and
-    must stay byte-identical); ``_join_handoff_lineage`` renders it as its
-    own distinct state.
+    must stay byte-identical).
     """
     for state_name, base in (
         ("live", root / "state" / "handoffs"),
@@ -1141,10 +802,8 @@ def _resolve_candidate_path(
 ) -> tuple[str, Optional[str], Optional[str]]:
     """Resolve one already-normalized candidate path against both handoff
     trees, falling through to a git-history tier-3 check when neither tree
-    resolves it. THE shared resolution algorithm — both
-    ``_join_plans_to_handoffs`` and ``_resolve_lineage_field`` call this
-    rather than each carrying their own copy of it (the anti-scope line both
-    are held to: reuse, not a second parallel resolver).
+    resolves it. Used by ``_join_plans_to_handoffs`` — the shared resolution
+    algorithm this join is held to (reuse, not a second parallel resolver).
 
     Tries, in order: (1) the candidate as a literal repo-relative path
     (handles a value already pointing into ``archive/handoffs/...``, or a
@@ -1380,15 +1039,12 @@ def _join_plans_to_handoffs(
         since flattening all of them to "no predecessor" loses the
         actionable ones.
 
-    D5 — pruned/recoverable collapses to "gone" here, unlike the lineage
-    join: the plans join answers "is this plan's predecessor handoff still
-    reachable" (a plan with a git-recoverable-but-pruned predecessor has no
-    live tracker row either way — recoverability doesn't change the render
-    action), whereas the lineage join (``_join_handoff_lineage``) answers
-    "is this pointer evidence of a normal lifecycle event or a defect" —
-    where the distinction is the entire point. Same explicit-branch
-    treatment as the existing ``invalid-target`` collapse below, not a
-    silent fallthrough.
+    D5 — pruned/recoverable collapses to "gone" here: the plans join
+    answers "is this plan's predecessor handoff still reachable" (a plan
+    with a git-recoverable-but-pruned predecessor has no live tracker row
+    either way — recoverability doesn't change the render action). Same
+    explicit-branch treatment as the existing ``invalid-target`` collapse
+    below, not a silent fallthrough.
 
     ``predecessor_handoff`` resolution tries, in order: (1) the declared
     value as a literal repo-relative path (handles a value that already
@@ -1406,6 +1062,18 @@ def _join_plans_to_handoffs(
     archive_index = _index_handoffs_by_basename(root / "archive" / "handoffs", root)
     handoff_dir = root / "state" / "handoffs"
     deliverable_index = _index_handoffs_by_field(root, "deliverable_id")
+    # Join key canonicalized (C6b/AC11) -- a declared fork pair's raw ids
+    # are re-keyed onto the same canonical winner so a plan carrying one
+    # leg still joins a handoff declaring the other.
+    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
+
+    _renderers_equivalence_map = load_equivalence_map(root)
+    _canonical_deliverable_index: dict[str, list[tuple[str, str]]] = {}
+    for _raw_did, _entries in deliverable_index.items():
+        _canonical_deliverable_index.setdefault(
+            canonicalize(_raw_did, _renderers_equivalence_map), []
+        ).extend(_entries)
+    deliverable_index = _canonical_deliverable_index
 
     joined: list[dict] = []
     for record in plan_records:
@@ -1441,17 +1109,17 @@ def _join_plans_to_handoffs(
                 # "permanently gone" and "pruned but git-recoverable" — a
                 # plan with either kind of dangling predecessor gets no live
                 # tracker row regardless, so recoverability isn't actionable
-                # here the way it is for the lineage join. Explicit branch,
-                # not silent fallthrough — see this function's docstring
-                # (D5) for the full rationale and its contrast with
-                # ``_join_handoff_lineage``, which keeps "pruned" distinct.
+                # here. Explicit branch, not silent fallthrough — see this
+                # function's docstring (D5) for the full rationale.
                 resolution_state, resolved, archived = "gone", None, None
             if resolution_state in ("live", "archived"):
                 resolution_method = "predecessor_handoff"
 
         if resolution_state not in ("live", "archived") and deliverable_id:
             match, ambiguous_count = _resolve_deliverable_match(
-                deliverable_index.get(deliverable_id, [])
+                deliverable_index.get(
+                    canonicalize(deliverable_id, _renderers_equivalence_map), []
+                )
             )
             if match:
                 match_path, match_state = match
@@ -1477,525 +1145,6 @@ def _join_plans_to_handoffs(
             }
         )
     return joined
-
-
-# ---------------------------------------------------------------------------
-# Handoff -> handoff lineage join — every frontmatter field
-# ``coordinator_core.dag.EDGE_KIND_META`` names as a lineage edge kind
-# (``predecessor``, ``additional_predecessors``, ``forked_from``,
-# ``origin_handoff`` as of this writing) on EVERY ``state/handoffs/*.md``
-# file, each resolved against both handoff trees with the same four-state
-# classification ``_classify_handoff_location`` now returns (live / archived
-# / gone / invalid-target).
-#
-# ``gate_dependency`` is DELIBERATELY EXCLUDED (design decision D1, stated
-# again in the commit message): it is free text, not a path, by schema
-# (``type: string``, no pattern) AND by live DoE doctrine, which forbids
-# file-pathed values outright — ``DoE-claude coordinator/skills/
-# roadmap-planning/SKILL.md:590`` requires ``gate_dependency:`` be
-# subsystem-named ("consumer_runner retry telemetry policy"), never
-# file-pathed, precisely because a file-pathed value goes stale on
-# archive-to-``archive/handoffs/`` and breaks the audit prompt with a
-# dangling reference — the exact rot class this lineage renderer exists to
-# surface. 14 of 15 live values on disk are prose English ("PM revisits the
-# enforcement-mechanism choice — deferred to July 2026"); the 15th points at
-# a PLAN (docs/plans/...), a doctrine violation to surface, not a link to
-# resolve. Path-shaped guidance survives only in the stale OSS publish
-# mirror ``coordinator-claude/skills/spinoff/SKILL.md:114`` — DoE's own
-# tree has no such line. Resolving it here would report 14-15 fabricated
-# broken links against a field that is free text de jure and in practice.
-# It stays excluded for free: ``gate_dependency`` is not a member of
-# ``EDGE_KIND_META`` (the SSOT this module now derives its field set from),
-# which is itself further confirmation D1 was right — the edge-kind SSOT and
-# this design call agree independently.
-# ---------------------------------------------------------------------------
-
-#: The handoff-lineage frontmatter fields this join resolves — derived from
-#: ``coordinator_core.dag.EDGE_KIND_META`` (the SSOT for which frontmatter
-#: fields are lineage edges) rather than hand-restated here, so a future
-#: edge-kind addition to ``EDGE_KIND_META`` propagates into this render
-#: automatically instead of silently being skipped by a second, out-of-sync
-#: field list. ``gate_dependency`` is excluded — see the module comment
-#: above.
-_HANDOFF_LINEAGE_FIELDS = tuple(EDGE_KIND_META.keys())
-
-
-def _resolve_lineage_field(
-    declared_raw: Any,
-    root: Path,
-    live_index: dict[str, str],
-    archive_index: dict[str, str],
-    *,
-    handoff_dir: Optional[Path] = None,
-    git_history_cache: Optional[_GitHistoryCacheProvider] = None,
-) -> dict:
-    """Resolve one declared handoff-lineage field value against both handoff
-    trees, via the same shared resolution algorithm ``_join_plans_to_handoffs``
-    uses (``_resolve_candidate_path`` — literal repo-relative path first,
-    then a basename-only fallback against both trees, then a git-history
-    tier-3 fall-through for the bare-basename convention ``predecessor:``
-    commonly uses).
-
-    Returns ``{"declared", "resolution_state", "resolved_path",
-    "archived_path"}`` — ``resolution_state`` in ``"live"`` / ``"archived"``
-    / ``"pruned"`` / ``"gone"`` / ``"invalid-target"`` / ``None``. ``declared``
-    is ``None`` when the raw value normalizes to "not declared"
-    (``_normalize_lineage_value`` — absent, YAML null, or the
-    ``none``/``null``/``~`` sentinel family); in that case
-    ``resolution_state`` is also ``None`` — a distinct sentinel from
-    ``"gone"`` (field declared but unresolvable in all three tiers), so a
-    future caller reading ``resolution_state`` without first checking
-    ``declared`` can't silently misreport an undeclared field as "target
-    gone." Every current caller (``_handoff_lineage_state_counts``,
-    ``render_handoff_lineage_markdown``) already guards on ``declared is not
-    None`` before consuming ``resolution_state``, so this is additive, not a
-    behavior change for either.
-
-    Negative-spec: ``"invalid-target"`` detection is best-effort, literal-path
-    declarations only — a declared bare basename that resolves via the
-    basename-fallback branch never reaches ``_classify_handoff_location``, so
-    a bare basename naming a real but non-handoff file elsewhere in the tree
-    (e.g. ``predecessor: foo.md`` where the only ``foo.md`` on disk is
-    ``docs/problems/foo.md``) reports ``"gone"``, not ``"invalid-target"``.
-    Closing that gap would require an unbounded tree-wide basename search
-    with fuzzy semantics — not implemented, by design.
-    """
-    declared = _normalize_lineage_value(declared_raw)
-    result: dict = {
-        "declared": declared,
-        "resolution_state": None,
-        "resolved_path": None,
-        "archived_path": None,
-    }
-    if declared is None:
-        return result
-
-    candidate = _normalize_path(declared)
-    resolution_state, resolved_path, archived_path = _resolve_candidate_path(
-        candidate,
-        root,
-        live_index,
-        archive_index,
-        handoff_dir=handoff_dir,
-        git_history_cache=git_history_cache,
-    )
-    result["resolution_state"] = resolution_state
-    result["resolved_path"] = resolved_path
-    result["archived_path"] = archived_path
-    return result
-
-
-def _resolve_lineage_field_multi(
-    raw: Any,
-    root: Path,
-    live_index: dict[str, str],
-    archive_index: dict[str, str],
-    *,
-    handoff_dir: Optional[Path] = None,
-    git_history_cache: Optional[_GitHistoryCacheProvider] = None,
-) -> list[dict]:
-    """Resolve a multi-valued (array) handoff-lineage field —
-    ``additional_predecessors`` is the only ``EDGE_KIND_META`` member with
-    ``multi: True`` as of this writing — against both handoff trees, one
-    resolved dict per DECLARED array entry.
-
-    Mirrors ``_resolve_lineage_field``'s per-value normalize -> resolve
-    pipeline (``_normalize_lineage_value`` then ``_resolve_candidate_path``),
-    applied independently to each list element, rather than restating that
-    logic — same anti-scope line the rest of this join is held to. Element
-    order is preserved (list order in, list order out) so a caller rendering
-    "one row per entry" gets a stable, reproducible row sequence.
-
-    Returns a LIST, not a single dict — unlike a scalar field, an array
-    field has no single not-declared state to represent: it has zero or
-    more declared entries. A sentinel/undeclared entry (``none``/``null``/
-    ``~``/empty — see ``_normalize_lineage_value``) is dropped from the list
-    entirely rather than represented as a dict with ``declared=None``, so
-    every dict this returns has a non-None ``declared``. ``raw`` that isn't
-    a list (field absent, or a malformed scalar where an array was
-    expected) resolves to an empty list — the "nothing to report" case a
-    scalar field represents via ``declared=None`` instead.
-
-    Returns: list of ``{"declared", "resolution_state", "resolved_path",
-    "archived_path"}`` dicts, each shaped exactly like one non-empty
-    ``_resolve_lineage_field`` return.
-    """
-    if not isinstance(raw, list):
-        return []
-    results: list[dict] = []
-    for item in raw:
-        declared = _normalize_lineage_value(item)
-        if declared is None:
-            continue
-        candidate = _normalize_path(declared)
-        resolution_state, resolved_path, archived_path = _resolve_candidate_path(
-            candidate,
-            root,
-            live_index,
-            archive_index,
-            handoff_dir=handoff_dir,
-            git_history_cache=git_history_cache,
-        )
-        results.append(
-            {
-                "declared": declared,
-                "resolution_state": resolution_state,
-                "resolved_path": resolved_path,
-                "archived_path": archived_path,
-            }
-        )
-    return results
-
-
-def _join_handoff_lineage(
-    root: Path, *, git_history_cache: Optional[_GitHistoryCacheProvider] = None
-) -> list[dict]:
-    """Resolve every ``EDGE_KIND_META``-named lineage field (``predecessor``,
-    ``additional_predecessors``, ``forked_from``, ``origin_handoff``) for
-    every ``state/handoffs/*.md`` file against both handoff trees, then a
-    git-history tier-3 check for anything neither tree resolves.
-
-    Reuses ``_index_handoffs_by_basename``, ``_classify_handoff_location``,
-    and ``_resolve_candidate_path`` verbatim (one collection helper, one
-    classifier, one resolution algorithm — same anti-scope line the plans
-    join is held to; see ``_resolve_candidate_path``'s docstring). A handoff
-    whose OWN frontmatter failed to
-    parse contributes nothing (no fields to resolve) and is silently
-    excluded — distinct from ``_collect_handoffs_with_parse_errors``'
-    fail-loud stub-surfacing contract, which is about THAT file's own
-    presence in the tracker, not about it as a lineage-link source.
-
-    ``git_history_cache`` (optional): a ``_GitHistoryCacheProvider`` instance,
-    threaded down to every ``_resolve_candidate_path`` call this join makes.
-    Constructing the provider does zero I/O; its ``.get()`` call lazily builds
-    ``dag.build_git_history_cache`` on the FIRST tier-3 need and memoizes the
-    result (including a ``None`` result from a git failure) for the rest of
-    this join, avoiding a per-ref ``git log --all`` subprocess spawn — see the
-    module-level cost note in ``dag.py`` (1053 spawns / ~14.6s on the corpus
-    that motivated the cache) and ``_GitHistoryCacheProvider``'s own docstring
-    for the lazy-build mechanics. A caller that omits it still gets correct
-    (just slower, one-subprocess-per-unresolved-ref) tier-3 resolution — this
-    parameter is a performance thread, not a correctness gate.
-
-    Returns one entry per parseable handoff:
-        {"path", "fields": {"predecessor": {...}, "additional_predecessors":
-         [...], "origin_handoff": {...}, "forked_from": {...}}}
-    — a SCALAR field (``EDGE_KIND_META[field]['multi']`` False) resolves to
-    a single dict shaped per ``_resolve_lineage_field``; a MULTI field
-    (``multi`` True) resolves to a list shaped per
-    ``_resolve_lineage_field_multi``. Callers must branch on
-    ``EDGE_KIND_META[field]['multi']`` to know which shape to expect — the
-    shapes are deliberately NOT unified into "always a list" so the existing
-    scalar-field call sites (and their tests) that expect a dict keep
-    working unchanged.
-    """
-    live_index = _index_handoffs_by_basename(root / "state" / "handoffs", root)
-    archive_index = _index_handoffs_by_basename(root / "archive" / "handoffs", root)
-    handoff_dir = root / "state" / "handoffs"
-
-    joined: list[dict] = []
-    for record in _collect_handoffs_with_parse_errors(root):
-        fm = record["frontmatter"]
-        if fm is None:
-            continue
-        fields: dict[str, Any] = {}
-        for field in _HANDOFF_LINEAGE_FIELDS:
-            frontmatter_key = EDGE_KIND_META[field]["field"]
-            raw = fm.get(frontmatter_key)
-            if EDGE_KIND_META[field]["multi"]:
-                fields[field] = _resolve_lineage_field_multi(
-                    raw,
-                    root,
-                    live_index,
-                    archive_index,
-                    handoff_dir=handoff_dir,
-                    git_history_cache=git_history_cache,
-                )
-            else:
-                fields[field] = _resolve_lineage_field(
-                    raw,
-                    root,
-                    live_index,
-                    archive_index,
-                    handoff_dir=handoff_dir,
-                    git_history_cache=git_history_cache,
-                )
-        joined.append({"path": record["path"], "fields": fields})
-    return joined
-
-
-def _handoff_lineage_state_counts(joined: list[dict]) -> dict[str, int]:
-    """Aggregate resolution-state counts across all lineage fields and all
-    handoffs, counting only DECLARED values — a scalar field's ``declared``
-    is not ``None``; a multi field contributes one count per entry in its
-    resolved list (every entry there is already declared by construction —
-    see ``_resolve_lineage_field_multi``). Shared by the tracker's
-    remainder-pointer line and ``render_handoff_lineage_markdown`` so the
-    two numbers can never drift apart — both are derived from this single
-    pass over the same join.
-    """
-    counts = {"live": 0, "archived": 0, "pruned": 0, "gone": 0, "invalid-target": 0}
-    for record in joined:
-        for field, field_result in record["fields"].items():
-            if EDGE_KIND_META[field]["multi"]:
-                for item in field_result:
-                    counts[item["resolution_state"]] += 1
-            else:
-                if field_result["declared"] is None:
-                    continue
-                counts[field_result["resolution_state"]] += 1
-    return counts
-
-
-# ---------------------------------------------------------------------------
-# Per-repo section renderer
-# ---------------------------------------------------------------------------
-
-
-def render_repo_section(
-    root: Path,
-    *,
-    joined_lineage: Optional[list[dict]] = None,
-    git_history_cache: Optional[_GitHistoryCacheProvider] = None,
-) -> str:
-    """Render the full Handoffs / Execution Handoffs / Spinoffs / Cross-Repo-Memos
-    tracker section for one repo root.
-
-    ``joined_lineage`` (optional): a pre-computed ``_join_handoff_lineage(root)``
-    result. Pass this when a caller also renders ``state/handoff-lineage.md``
-    in the same invocation, so both draw counts from ONE join over ONE disk
-    snapshot rather than each independently re-walking ``state/handoffs/``
-    (see ``_handoff_lineage_state_counts``'s docstring — this is what makes
-    its "can never drift apart" claim literally true). Defaults to ``None``,
-    which computes its own join — this parameter is additive, not mandatory,
-    so a standalone caller (e.g. a test) keeps working unchanged.
-
-    ``git_history_cache`` (optional): forwarded to this function's OWN
-    ``_join_plans_to_handoffs`` call (the plans join is not covered by
-    ``joined_lineage`` — that param only threads the handoff-lineage join).
-    See ``_join_handoff_lineage``'s matching parameter docstring for what it
-    buys and why omitting it is still correct, just slower.
-
-    Returns a markdown string (no trailing newline) — mirrors
-    ``renderRepoSection`` (render-handoff-tracker.js:427-529). Does not write
-    to disk; does not resolve an output path — see module negative-spec.
-    """
-    ws_map = build_workstream_index(root)
-
-    all_handoffs = _collect_handoffs_with_parse_errors(root)
-
-    plan_joins = _join_plans_to_handoffs(
-        _collect_plans_with_parse_errors(root), root, git_history_cache=git_history_cache
-    )
-    plan_by_handoff: dict[str, tuple[str, str]] = {
-        j["resolved_handoff_path"]: (j["slug"], j["status"])
-        for j in plan_joins
-        if j["resolved_handoff_path"]
-    }
-    gone_plan_count = sum(1 for j in plan_joins if j["resolution_state"] == "gone")
-    archived_plan_count = sum(1 for j in plan_joins if j["resolution_state"] == "archived")
-
-    active_handoffs: list[dict] = []
-    active_spinoffs: list[dict] = []
-    parse_errors: list[dict] = []
-
-    for record in all_handoffs:
-        fm = record["frontmatter"]
-        if fm is None:
-            parse_errors.append(record)
-            continue
-        if not is_active(fm):
-            continue
-        kind = str(fm["kind"]) if fm.get("kind") else ""
-        if kind in _SPINOFF_OR_ROADMAP_KINDS:
-            active_spinoffs.append(record)
-        else:
-            active_handoffs.append(record)
-
-    all_memos = query_records("cross-repo-memo", root)
-    open_memos = [
-        r
-        for r in all_memos
-        if r["frontmatter"] and r["frontmatter"].get("status") in ("open", "in_progress")
-    ]
-
-    # --- Partition active_handoffs into execution vs non-execution ---
-    # Every active handoff renders in EXACTLY ONE of `## Handoffs` /
-    # `## Execution Handoffs`, never both and never neither. `## Handoffs`'s
-    # selection predicate is narrowed to EXCLUDE handoff_phase: execution;
-    # `## Execution Handoffs` is the sole home for the excluded set,
-    # partitioned into Fireable / Gated / Other so a deployment_state outside
-    # the named two (e.g. in_flight, or absent) still renders exactly once.
-    # Mirrors render-handoff-tracker.js:495-511.
-    non_execution_handoffs: list[dict] = []
-    execution_handoffs: list[dict] = []
-    for record in active_handoffs:
-        fm = record["frontmatter"]
-        phase = fm.get("handoff_phase") if fm else None
-        if phase == "execution":
-            execution_handoffs.append(record)
-        else:
-            non_execution_handoffs.append(record)
-
-    # --- Handoffs table (continuation handoffs; execution-phase excluded) ---
-    handoff_headers = ["File", "Created", "State", "Category", "Summary", "Workstream-Seq"]
-    handoff_error_rows = [_handoff_row(r, ws_map, plan_by_handoff) for r in parse_errors]
-    handoff_body_rows = _grouped_handoff_rows(non_execution_handoffs, ws_map, plan_by_handoff)
-    all_handoff_rows = [*handoff_error_rows, *handoff_body_rows]
-
-    # --- Execution Handoffs table (Fireable / Gated / Other sub-tables) ---
-    # Column set is shared with the Handoffs table (single source of truth).
-    execution_headers = handoff_headers
-    fireable_execution_handoffs = [
-        r for r in execution_handoffs if r["frontmatter"].get("deployment_state") == "ready_to_fire"
-    ]
-    gated_execution_handoffs = [
-        r for r in execution_handoffs if r["frontmatter"].get("deployment_state") == "awaiting_gate"
-    ]
-    # An active execution handoff whose deployment_state is neither
-    # ready_to_fire nor awaiting_gate (e.g. in_flight, or absent) matches
-    # neither of the above buckets — this fallback is the explicit third
-    # bucket so every active execution handoff renders exactly once.
-    other_execution_handoffs = [
-        r
-        for r in execution_handoffs
-        if r["frontmatter"].get("deployment_state") not in ("ready_to_fire", "awaiting_gate")
-    ]
-    fireable_rows = _grouped_handoff_rows(fireable_execution_handoffs, ws_map, plan_by_handoff)
-    gated_rows = _grouped_handoff_rows(gated_execution_handoffs, ws_map, plan_by_handoff)
-    other_rows = _grouped_handoff_rows(other_execution_handoffs, ws_map, plan_by_handoff)
-
-    # --- Spinoffs table ---
-    has_roadmap = any(
-        r["frontmatter"] and r["frontmatter"].get("kind") == "spinoff-roadmap"
-        for r in active_spinoffs
-    )
-    spinoff_headers = ["File", "Created", "State", "Category", "Summary", "Workstream-Seq"]
-    if has_roadmap:
-        spinoff_headers.extend(["stub_id", "blocked_by"])
-
-    spinoff_groups = _group_by_workstream(active_spinoffs)
-    spinoff_body_rows = [
-        _spinoff_row(r, ws_map, has_roadmap, plan_by_handoff)
-        for group in spinoff_groups
-        for r in group["rows"]
-    ]
-
-    # --- Memos table ---
-    memo_headers = ["File", "Created", "From", "To", "Status", "Summary"]
-    memo_body_rows = [_memo_row(r) for r in open_memos]
-
-    lines = [
-        "## Handoffs",
-        "",
-        _render_table(handoff_headers, all_handoff_rows),
-        "",
-        "## Execution Handoffs",
-        "",
-        "### Fireable",
-        "",
-        _render_table(execution_headers, fireable_rows),
-        "",
-        "### Gated",
-        "",
-        _render_table(execution_headers, gated_rows),
-        "",
-        "### Other",
-        "",
-        _render_table(execution_headers, other_rows),
-        "",
-        "## Spinoffs",
-        "",
-        _render_table(spinoff_headers, spinoff_body_rows),
-        "",
-        "## Cross-Repo Memos",
-        "",
-        _render_table(memo_headers, memo_body_rows),
-    ]
-
-    # --- Plans (remainder pointer) ---
-    # Live-linked plans are already annotated inline on their handoff/spinoff
-    # row above; dumping every remaining plan here too would drown the
-    # tracker (design call: state/handoffs/2026-07-25_000921_slate-tracker-and-registry-sync.md).
-    # A single compact pointer to the full index covers the remainder; the
-    # section is omitted entirely when there is nothing to point at (no
-    # docs/plans/ tree, or every plan resolved live).
-    #
-    # An archived-linked plan is NOT dangling — its target is a normal,
-    # resolvable "consumed then archived" lifecycle outcome, not a broken
-    # reference — so it gets its own clause rather than being folded into
-    # the "no live tracker row" count verbatim. Segment counts here must
-    # equal the row counts in docs/plans/INDEX.md's ## Unlinked / ## Archived
-    # sections respectively (reconciliation verified by
-    # test_renderers_plans_join.py).
-    remainder_segments: list[str] = []
-    if gone_plan_count:
-        plural = gone_plan_count != 1
-        noun = "plans" if plural else "plan"
-        verb = "have" if plural else "has"
-        remainder_segments.append(f"{gone_plan_count} {noun} {verb} no live tracker row")
-    if archived_plan_count:
-        plural = archived_plan_count != 1
-        noun = "plans" if plural else "plan"
-        verb = "resolve" if plural else "resolves"
-        remainder_segments.append(f"{archived_plan_count} {noun} {verb} to an archived handoff")
-    if remainder_segments:
-        lines.extend(
-            [
-                "",
-                "## Plans (no live tracker row)",
-                "",
-                f"_{'; '.join(remainder_segments)} — see docs/plans/INDEX.md_",
-            ]
-        )
-
-    # --- Handoff Lineage (remainder pointer) ---
-    # Same compact-pointer shape as the Plans section above, not a second
-    # generator: per-handoff lineage rows belong in state/handoff-lineage.md
-    # (render_handoff_lineage_markdown), not dumped into this tracker. A
-    # live-resolving lineage link is healthy and unremarkable — omitted from
-    # the pointer, same as a live-linked plan is omitted from the Plans
-    # remainder above. Counts are derived from the exact same joined-lineage
-    # list render_handoff_lineage_markdown renders, so the two can never
-    # numerically drift (verified by count-reconciliation tests) — see this
-    # function's ``joined_lineage`` param docstring.
-    if joined_lineage is None:
-        joined_lineage = _join_handoff_lineage(root, git_history_cache=git_history_cache)
-    lineage_counts = _handoff_lineage_state_counts(joined_lineage)
-    lineage_segments: list[str] = []
-    if lineage_counts["archived"]:
-        n = lineage_counts["archived"]
-        noun = "links" if n != 1 else "link"
-        verb = "resolve" if n != 1 else "resolves"
-        lineage_segments.append(f"{n} {noun} {verb} to an archived handoff")
-    if lineage_counts["pruned"]:
-        n = lineage_counts["pruned"]
-        noun = "links" if n != 1 else "link"
-        verb = "point" if n != 1 else "points"
-        lineage_segments.append(
-            f"{n} {noun} {verb} at a target pruned from disk but recoverable from git history"
-        )
-    if lineage_counts["gone"]:
-        n = lineage_counts["gone"]
-        noun = "links" if n != 1 else "link"
-        verb = "point" if n != 1 else "points"
-        lineage_segments.append(f"{n} {noun} {verb} at a target no longer on disk")
-    if lineage_counts["invalid-target"]:
-        n = lineage_counts["invalid-target"]
-        noun = "links" if n != 1 else "link"
-        verb = "point" if n != 1 else "points"
-        lineage_segments.append(f"{n} {noun} {verb} at a file that is not a handoff")
-    if lineage_segments:
-        lines.extend(
-            [
-                "",
-                "## Handoff Lineage (no live tracker row)",
-                "",
-                f"_{'; '.join(lineage_segments)} — see state/handoff-lineage.md_",
-            ]
-        )
-
-    return "\n".join(lines)
 
 
 #: Marker stamped on the generated ``docs/plans/INDEX.md`` — a reader (or a
@@ -2114,11 +1263,12 @@ def render_plans_index_markdown(
     into the README would destroy curated prose.
 
     Reuses the same ``_collect_plans_with_parse_errors`` /
-    ``_join_plans_to_handoffs`` pair ``render_repo_section`` uses for its
-    compact remainder pointer — one plan-collection helper feeding both
-    render targets (Item B design call). Returns a markdown string (no
-    trailing newline); does not write to disk — see
-    ``render_handoff_tracker.py`` for the disk-write seam.
+    ``_join_plans_to_handoffs`` pair the now-retired ``render_repo_section``
+    used for its compact remainder pointer (see docs/plans/2026-08-14-retire-
+    the-handoff-tracker-and-project-tracker-renders.md § C2) — one
+    plan-collection helper, kept for this surviving render target (Item B
+    design call). Returns a markdown string (no trailing newline); does not
+    write to disk.
 
     ``git_history_cache`` (optional): forwarded to ``_join_plans_to_handoffs``
     — see ``_join_handoff_lineage``'s matching parameter docstring. This
@@ -2198,89 +1348,4 @@ def render_plans_index_markdown(
         "",
         _render_table(unlinked_headers, unlinked_rows),
     ]
-    return "\n".join(lines)
-
-
-#: Marker stamped on the generated ``state/handoff-lineage.md`` — mirrors
-#: ``PLANS_INDEX_GENERATED_MARKER``'s shape and purpose.
-HANDOFF_LINEAGE_GENERATED_MARKER = (
-    "<!-- generated by coordinator_core/ops/ceremony/renderers.py::"
-    "render_handoff_lineage_markdown — do not hand-edit -->"
-)
-
-def _lineage_target_cell(field_result: dict) -> str:
-    """Render the Target cell for one resolved lineage field: a markdown
-    link to the resolved path when one exists (live/archived), the raw
-    declared value as plain text otherwise (pruned/gone/invalid-target — no
-    resolvable path to link to; a "pruned" target has no disk path at all,
-    only git history's word it once existed; a "gone" value may not even be
-    a real path, and an "invalid-target" value IS a real file but linking it
-    here would visually suggest it's a valid handoff, which is exactly the
-    defect being surfaced)."""
-    path = field_result["resolved_path"] or field_result["archived_path"]
-    if path:
-        return _md_link(os.path.basename(path), path)
-    return field_result["declared"] or ""
-
-
-def render_handoff_lineage_markdown(
-    root: Path,
-    *,
-    joined_lineage: Optional[list[dict]] = None,
-    git_history_cache: Optional[_GitHistoryCacheProvider] = None,
-) -> str:
-    """Render ``state/handoff-lineage.md`` — every ``state/handoffs/*.md``
-    file's ``EDGE_KIND_META``-named lineage links (``predecessor``,
-    ``additional_predecessors``, ``forked_from``, ``origin_handoff``), one
-    section per field, resolved live / archived / pruned / invalid-target /
-    gone.
-
-    ``gate_dependency`` is deliberately excluded — see the module comment
-    above ``_join_handoff_lineage`` (design decision D1).
-
-    Only handoffs with a DECLARED value for a given field appear in that
-    field's table — a handoff with no ``origin_handoff:`` at all has nothing
-    to report for that field, and rendering it would conflate "not declared"
-    with "declared but broken" (the same distinction ``render_plans_index_
-    markdown``'s Unlinked section draws for plans). A MULTI field
-    (``additional_predecessors``) contributes one row per DECLARED array
-    entry rather than one row per handoff — a handoff with two live
-    ``additional_predecessors`` entries gets two rows, each independently
-    resolved and independently reconciled into the state counts (see
-    ``_handoff_lineage_state_counts``).
-
-    ``joined_lineage`` (optional): a pre-computed ``_join_handoff_lineage(root)``
-    result — see ``render_repo_section``'s matching parameter docstring for
-    why a caller rendering both artifacts in one invocation should pass this.
-    Defaults to ``None``, which computes its own join (in which case
-    ``git_history_cache`` is forwarded to that computed join — see
-    ``_join_handoff_lineage``'s matching parameter docstring).
-
-    Returns a markdown string (no trailing newline); does not write to disk
-    — see ``render_handoff_tracker.py`` for the disk-write seam.
-    """
-    joined = (
-        joined_lineage
-        if joined_lineage is not None
-        else _join_handoff_lineage(root, git_history_cache=git_history_cache)
-    )
-
-    lines = ["# Handoff Lineage", "", HANDOFF_LINEAGE_GENERATED_MARKER]
-
-    for field in _HANDOFF_LINEAGE_FIELDS:
-        headers = ["Handoff", "State", "Target"]
-        multi = EDGE_KIND_META[field]["multi"]
-        rows: list[list[str]] = []
-        for record in joined:
-            handoff_link = _md_link(os.path.basename(record["path"]), record["path"])
-            field_result = record["fields"][field]
-            if multi:
-                for item in field_result:
-                    rows.append([handoff_link, item["resolution_state"], _lineage_target_cell(item)])
-            elif field_result["declared"] is not None:
-                rows.append(
-                    [handoff_link, field_result["resolution_state"], _lineage_target_cell(field_result)]
-                )
-        lines.extend(["", f"## {field}", "", _render_table(headers, rows)])
-
     return "\n".join(lines)

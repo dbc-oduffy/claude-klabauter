@@ -42,6 +42,13 @@ from coordinator_core.ops.strategic.version_highlights import (
 )
 from coordinator_core.testing.doe_root import resolve_doe_root
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _CLAUDE_KLABAUTER_ROOT = _PROJECT_ROOT  # this repo IS the claude-klabauter repo under test
 _FROZEN_SCHEMA_PATH = (

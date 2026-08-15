@@ -65,10 +65,11 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # hold-forever processes via `subprocess.Popen` to exercise held_lock's
 # cross-process contention, kill, and stale-metadata paths for real.
 pytestmark = [
+    pytest.mark.cadence,
     pytest.mark.skipif(
-        not _LOCKING_AVAILABLE,
-        reason="held_lock needs a file-lock backend (fcntl or msvcrt) — neither available",
-    ),
+            not _LOCKING_AVAILABLE,
+            reason="held_lock needs a file-lock backend (fcntl or msvcrt) — neither available",
+        ),
     pytest.mark.spawns_process,
 ]
 

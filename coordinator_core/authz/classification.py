@@ -253,6 +253,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.subagent_zero_tool_use_resolve": OpClass.COMPUTE_ONLY,
     "hooks.subagent_arrival_check": OpClass.COMPUTE_ONLY,
     "hooks.subagent_fabrication_check": OpClass.COMPUTE_ONLY,
+    # hooks.subagent_sidecar_fill_check — MUTATING despite being an advisory op,
+    # same reasoning as hooks.nudge_foreground_agent_dispatch above: it writes
+    # a per-session advisory-dedupe marker under gitdir
+    # (_advisory_dedupe.mark_advised) on every flagged firing, so it is not a
+    # pure read like its sibling COMPUTE_ONLY hooks.subagent_* ops.
+    "hooks.subagent_sidecar_fill_check": OpClass.MUTATING,
     # hooks.context_pressure_precompact — MUTATING, same bookkeeping class as the four
     # above (its write target is tempdir rather than .git/coordinator-sessions/, which
     # changes the location, not the class).
@@ -405,6 +411,55 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #         non-closed status → skipped "drifted-open".
     #   D2-5 (UDS-only): no HTTP route added; negative-spec in prune_bugs.py:34.
     "fleet.prune_closed_bugs": OpClass.MUTATING,
+    # fleet.aggregate_capability_index — MUTATING, same single-derived-feed-file shape
+    # as strategic.emit: it reads every registered sibling's authored capability
+    # manifest and writes ONE aggregated projection into the invoking repo's own tree.
+    #
+    # Affirmation rationale (five-question checklist):
+    #   1. Does it write, delete, or reorder any state file, queue, or git object?  YES.
+    #      Writes state/capabilities/fleet-index.json via atomic_write_bytes.
+    #   2. Does it write into rag's relational store?                                No.
+    #   3. Does it open any file for write (including sentinel creation)?            YES.
+    #      The index file is the op's entire product.
+    #   4. Does it mutate shared mutable state outside its own module?               YES.
+    #      DoE's review pre-flight reads the persisted index through the op seam.
+    #   5. Does it produce side effects observable across process boundaries?        YES.
+    #
+    # Read-only against every OTHER repo it enumerates — the single write lands in the
+    # invoking worktree, never a sibling's (module negative-spec).
+    #
+    # Spec backlink: coordinator_core/ops/fleet/capability_index.py module docstring
+    "fleet.aggregate_capability_index": OpClass.MUTATING,
+    # spec_backlink.resolve / spec_backlink.rewrite — one module registers both
+    # (coordinator_core/ops/spec_backlink_resolve.py) and they classify OPPOSITELY;
+    # do not copy one's affirmation onto the other.
+    #
+    # spec_backlink.resolve — COMPUTE_ONLY, affirmed against the handler per DR-208
+    # § Classification correctness discipline rather than defaulted to MUTATING.
+    # Affirmation rationale (five-question checklist, all "no"):
+    #   1. Does it write, delete, or reorder any state file, queue, or git object?   No.
+    #      Derives a path for a pln-/dlv- id and returns a typed hit/miss/ambiguity.
+    #   2. Does it write into rag's relational store?                                No.
+    #   3. Does it open any file for write (including sentinel creation)?            No.
+    #      The module carries no write primitive at all.
+    #   4. Does it mutate shared mutable state outside its own module?               No.
+    #      The resolve index is rebuilt lazily per invocation, not persisted.
+    #   5. Does it produce side effects observable across process boundaries?        No.
+    "spec_backlink.resolve": OpClass.COMPUTE_ONLY,
+    # spec_backlink.rewrite — MUTATING: delegates to
+    # coordinator_core.ops.rewrite_spec_backlinks, which converts path-form citations
+    # to id-form IN PLACE over a caller-supplied file list.
+    # Affirmation rationale (five-question checklist):
+    #   1. Does it write, delete, or reorder any state file, queue, or git object?  YES.
+    #      Rewrites citation lines in place in every path the caller supplies.
+    #   2. Does it write into rag's relational store?                                No.
+    #   3. Does it open any file for write (including sentinel creation)?            YES.
+    #   4. Does it mutate shared mutable state outside its own module?               YES.
+    #      The rewritten files are tracked source read by every later consumer.
+    #   5. Does it produce side effects observable across process boundaries?        YES.
+    #
+    # Spec backlink: coordinator_core/ops/spec_backlink_resolve.py handler docstrings
+    "spec_backlink.rewrite": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # fleet.* DR-218 review-trail-findings-reap sub-family — two ops, both
     # classified MUTATING (DR-218 D2/D2a delete-specific five-bound affirmed
@@ -1089,6 +1144,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-213-queue-write-substrate-carveout.md § D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "queue.append": OpClass.MUTATING,
+    # peer_notice.send — writes a notice file under state/peer-notices/.
+    "peer_notice.send": OpClass.MUTATING,
+    # peer_notice.check — read-only listing of unread notices addressed to a session.
+    "peer_notice.check": OpClass.COMPUTE_ONLY,
     # queue.close — MUTATING: stamps an improvement-queue entry's terminal status
     # (plus closed_at/closed_by), commits that one path with an explicit pathspec,
     # then delegates archival to fleet.archive_queue_entry — which therefore
@@ -1357,6 +1416,23 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # the commit.anchors read-only git carve-out does NOT apply here and does NOT transfer).
     # Spec: docs/plans/2026-07-06-claude-klabauter-deliverable-spine-factsupply-op.md § C2/C3
     "deliverable.rollup": OpClass.COMPUTE_ONLY,
+    # deliverable.fork_detect — COMPUTE_ONLY. Landed by a sibling session (d94775334,
+    # C7 of the baton-closes-when-its-plan-ships plan) with an _OP_KEY_SCOPE and an
+    # OP_MODULE_MAP entry but no classification, leaving check_registration_quad() red
+    # at HEAD for every session in this tree. Classified here from the op's own
+    # documented negative-spec rather than inferred:
+    #   Q1 file opened for write?   NO  ("never opens state/deliverable-equivalence.yaml
+    #                                    in any write mode, and never imports a writer of it")
+    #   Q2 git write command?       NO.
+    #   Q3 queue/backlog mutation?  NO  (no automatic row write into the equivalence map;
+    #                                    winner selection stays human/manual adjudication).
+    #   Q4 subprocess spawned?      NO.
+    #   Q5 write-vs-read branch?    NO  (single read path: calls seed_deliverable_ledger_rows
+    #                                    for its rows, then clusters them in memory).
+    # Its transitive callee is the SEEDER's read path; if that ever grows a write, this
+    # entry is the thing that must change with it.
+    # Spec: docs/plans (baton-closes-when-its-plan-ships) § C7
+    "deliverable.fork_detect": OpClass.COMPUTE_ONLY,
     # memo.send — MUTATING: writes one schema-valid memo file (non-committing dirty file)
     # into the cross-repo/inbox/ of a registry-enumerated receiver repo. The receiver's
     # session-init sweep archives it. UDS-only, no HTTP surface (Q-c HARD negative-spec).
@@ -1924,22 +2000,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec backlink: docs/plans/2026-07-08-session-specific-instruction-set-emitter.op-spec.md [DEAD-CITATION: plan file never committed to this repo]
     "ceremony.session_instructions": OpClass.COMPUTE_ONLY,
-    # ceremony.render_handoff_tracker — MUTATING: the C9 disk seam for C8b's
-    # render_repo_section. Writes state/handoff-tracker.md (per-repo mode) or
-    # state/doe-handoff-tracker.md (--all-repos mode) to disk. Handler:
-    # ops/ceremony/render_handoff_tracker.py.
-    # DR-208 five-question affirmation (citing ceremony.render_handoff_tracker handler):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  Yes.
-    #      _handler calls render_repo/render_all_repos then _write(...), which opens
-    #      the resolved handoff-tracker.md / doe-handoff-tracker.md path for write.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             Yes — see 1.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?     Yes — the
-    #      written tracker file is read by ceremony consumers and EM sessions.
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b/C9
-    "ceremony.render_handoff_tracker": OpClass.MUTATING,
+    # ceremony.render_handoff_tracker was retired 2026-08-14 along with the
+    # handoff-tracker render path -- see docs/plans/2026-08-14-retire-the-
+    # handoff-tracker-and-project-tracker-renders.md § C2. Its OP_CLASSIFICATION
+    # entry is removed here too (test_no_stale_classification_entries).
     # ---------------------------------------------------------------------------
     # strang-11 B8 new ops — session.boot_sweep, fleet.archive_shipped_handoffs,
     # fleet.archive_actioned_memos, session.reap. All MUTATING.
@@ -3379,6 +3443,283 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   write-ops in this package family use; see op.py module docstring.
     # Spec: docs/plans/2026-08-12-emitter-turns-a-spine-into-one-workflow.md § C5
     "dispatch.emit": OpClass.MUTATING,
+    # gate.validate_invocable — MUTATING: merge-gate DoD checker
+    # (ops/gate_validate_invocable.py). DR-208 five-question affirmation:
+    #   1. Does the handler open any file for write (including append)?          YES.
+    #      Not the handler itself, but the module unconditionally imports
+    #      gate_dimension_types/_docstrings/_review/_latency at its own
+    #      bottom-of-module import block, and gate_dimension_types.py's
+    #      `_run_mypy` spawns `subprocess.run([mypy_path, ...])` with no
+    #      `--cache-dir`/`--no-incremental`; mypy's default incremental mode
+    #      writes a `.mypy_cache/` directory as a side effect of a normal run.
+    #   2. Does the handler call any git write command?                         No.
+    #   3. Does the handler enqueue any state mutation (queue/backlog/etc.)?     No.
+    #   4. Does the handler invoke any subprocess that may do any of the above?  YES.
+    #      gate_dimension_latency.py's own module docstring already says this
+    #      op "shells mypy, ruff, interrogate, a pytest --cov run, and
+    #      diff-cover" — a real subprocess spawn plus a disk cache write.
+    #   5. Is the handler's I/O behavior conditional (reads under some paths,
+    #      writes under others)?                                                YES.
+    #      Whether a given invocation spawns mypy depends on which dimension
+    #      checks run/are registered; the write is not guaranteed on every
+    #      call but is not ruled out either.
+    #   Review: coordinator:code-reviewer (wsc-D-registration) — the C1-era
+    #   affirmation above was written before C2/C3/C5/C7 landed their real
+    #   dimension implementations in this tree; those implementations are
+    #   already unconditionally imported by this module (not deferred), so a
+    #   COMPUTE_ONLY label here is a silently-widened permission. DR-208's
+    #   fail-closed direction is MUTATING when a write cannot be ruled
+    #   out — here it is demonstrated, not merely unruled-out.
+    # Spec: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1
+    "gate.validate_invocable": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # C9 leg (a) registration-quad gap sweep (2026-08-14) — 56 ops discovered by
+    # gen_dod_backlog_fragment.py's build_rows() with classification: null.
+    # Each entry below is a DR-208 five-question affirmation citing the handler
+    # module named in its comment; grouped by shared write/read shape rather
+    # than op-key alphabetical order. 6 further ops (percolate.run_ci_smoke_check
+    # plus 5 already-covered) were left unfixed as genuinely ambiguous — see the
+    # dispatching handoff/session report, not restated here.
+    # ---------------------------------------------------------------------------
+    # COMPUTE_ONLY group — every handler below is a pure read (git query,
+    # in-memory computation, or explicit negative-spec) with no open(...,"w"),
+    # no os.replace/rename/rmdir, no locked_rmw, and no subprocess call that
+    # writes coordinator substrate. Five-question answers are uniformly No/No/
+    # No/No/No for this group; per-op citation of the read-only evidence below.
+    #   baton.resolve_path_and_repo — ops/resolve_baton_path.py: git rev-parse /
+    #     remote-url reads only.
+    #   baton.resolve_swept_in_archive — ops/resolve_swept_baton.py: `git log`
+    #     read via subprocess.run, no write.
+    #   bug_sweep.verify_fix_files_changed — ops/verify_fix_files_changed.py:
+    #     `git diff` file-list read via subprocess.run, no write.
+    #   cartography.count_references — ops/cartography_edges.py: pure in-memory
+    #     reference counting, no I/O primitive at all.
+    #   cartography.stack — ops/cartography_stack.py: pure in-memory stack
+    #     derivation, no I/O primitive at all.
+    #   ceremony.init_anchor_injection_state — ops/init_anchor_injection_state.py:
+    #     module docstring/negative-spec is explicit — "Does NOT write any file
+    #     — this is a pure in-memory resolve/init step."
+    #   cli.parse_date_flags / cli.parse_flag — ops/parse_cli_args.py: pure
+    #     argv/string parsing, no I/O primitive at all.
+    #   dependency.detect_changed_manifests —
+    #     ops/detect_changed_dependency_manifests.py: `git diff` read via
+    #     subprocess.run, no write.
+    #   detect.plugin_layout / detect.primary_languages —
+    #     ops/detect_plugin_layout.py, ops/detect_primary_languages.py: read-only
+    #     directory/file inspection, no I/O primitive that opens for write.
+    #   doctrine.assert_cross_reference_counts —
+    #     ops/assert_doctrine_cross_reference_counts.py: read-only count/assert,
+    #     no I/O primitive that opens for write.
+    #   fanout.poll_scratch_dir — ops/poll_scratch_dir.py: read-only directory
+    #     listing/poll, no write.
+    #   git_branch.compute_descendant_tip / git_branch.detect_unpushed_commits /
+    #   git_branch.list_unmerged_work / git_branch.verify_commit_in_review_window
+    #     — ops/orphan_branch_sweep.py: each registered handler (verified against
+    #     the handler function specifically, not the module's `main()` sweep,
+    #     which does hold branch-delete logic under a different, unregistered
+    #     code path) routes only through `_git`/`_rev_parse`/`_rev_list_count`/
+    #     `_is_ancestor` — read-only git-query helpers; no `git branch -D`,
+    #     `git push`, or any write call reachable from these four handlers.
+    #   install.detect_cmd_autorun_coverage — ops/cmd_autorun_guard.py
+    #     `_detect_handler`: calls only `detect_cmd_autorun_coverage()` (read-only
+    #     probe of HKCU AutoRun); the module's write/strip verbs are separate
+    #     handlers (see MUTATING group below), not reachable from this one.
+    #   install.detect_python3_appx_stub — ops/ensure_python3_exe_shim.py
+    #     `_detect_python3_appx_stub`: calls only `_classify_python3()` (read-only
+    #     PATH/exe inspection); `_install_shim()` is a distinct, unregistered
+    #     function, not reachable from this handler.
+    #   lessons.filter_undated_universal / lessons.reject_orphan_strip_entries —
+    #     ops/lessons_filter.py: read-only filtering over in-memory record lists,
+    #     no I/O primitive that opens for write.
+    #   mcp.resolve_server_cli_path — ops/resolve_mcp_server_cli_path.py:
+    #     read-only path resolution, no write.
+    #   merge.quiet_activity_gate — ops/merge_quiet_activity_gate.py: `git log`
+    #     epoch-seconds read via subprocess.run, no write.
+    #   percolate.check_inverse_drift — ops/percolate_check_inverse_drift.py:
+    #     `git` read-only queries via subprocess.run wrapper, no write.
+    #   percolate.list_files_newer_than_marker —
+    #     ops/list_files_newer_than_marker.py: read-only mtime comparison over a
+    #     directory listing, no write.
+    #   percolate.run_pre_ci_hooks — ops/run_pre_ci_hooks.py: subprocess.run of
+    #     an external hook script for its exit code / output only; no file the
+    #     handler itself opens for write.
+    #   percolate.scan_content_leakage_tiers — ops/scan_content_leakage.py:
+    #     read-only content scan, no write.
+    #   plan.list_stale_executing — ops/draft_plan_aging.py: `git log` recency
+    #     read via subprocess.run to list (not mutate) stale plans, no write.
+    #   repo_setup.validate_target_root — ops/bootstrap_repo.py
+    #     `_validate_target_root_op`: docstring is explicit — "Idempotency (AC7):
+    #     purely read-only (dir-exists + is-a-git-repo check, no writes
+    #     anywhere)"; the module's `main()` onboarding flow (which does commit)
+    #     is a distinct, unregistered code path.
+    #   research.verify_scout_inventory_completeness —
+    #     ops/verify_scout_inventory_completeness.py: read-only inventory
+    #     completeness check, no write.
+    #   review_trail.scan_unresolved_ubt — ops/scan_unresolved_ubt_records.py:
+    #     read-only record scan, no write.
+    #   schema.drift_gate — ops/schema_drift_gate.py: read-only schema-drift
+    #     comparison, no write.
+    #   session.resolve_chain_terminal_disposition —
+    #     ops/session/resolve_chain_terminal_disposition.py: `git` read-only
+    #     query via subprocess.run, no write.
+    #   update_docs.probe_fresh_repo_noop — ops/probe_fresh_repo_noop.py:
+    #     handler name and module purpose are both explicit — a literal no-op
+    #     probe, no write.
+    #   workday.surface_auto_push_failure_stats —
+    #     ops/workday_surface_auto_push_failure_stats.py: read-only stats
+    #     surfacing over existing records, no write.
+    #   ci.run_pip_audit / ci.run_semgrep_scan — ops/run_pip_audit.py,
+    #     ops/run_semgrep_scan.py: subprocess.run of an external audit/scan
+    #     binary against the repo tree for its JSON/text report only; neither
+    #     handler opens a file for write (contrast ci.run_shellcheck_sweep below,
+    #     which does and is classified MUTATING on that basis).
+    "baton.resolve_path_and_repo": OpClass.COMPUTE_ONLY,
+    "baton.resolve_swept_in_archive": OpClass.COMPUTE_ONLY,
+    "bug_sweep.verify_fix_files_changed": OpClass.COMPUTE_ONLY,
+    "cartography.count_references": OpClass.COMPUTE_ONLY,
+    "cartography.stack": OpClass.COMPUTE_ONLY,
+    "ceremony.init_anchor_injection_state": OpClass.COMPUTE_ONLY,
+    "cli.parse_date_flags": OpClass.COMPUTE_ONLY,
+    "cli.parse_flag": OpClass.COMPUTE_ONLY,
+    "dependency.detect_changed_manifests": OpClass.COMPUTE_ONLY,
+    "detect.plugin_layout": OpClass.COMPUTE_ONLY,
+    "detect.primary_languages": OpClass.COMPUTE_ONLY,
+    "doctrine.assert_cross_reference_counts": OpClass.COMPUTE_ONLY,
+    "fanout.poll_scratch_dir": OpClass.COMPUTE_ONLY,
+    "git_branch.compute_descendant_tip": OpClass.COMPUTE_ONLY,
+    "git_branch.detect_unpushed_commits": OpClass.COMPUTE_ONLY,
+    "git_branch.list_unmerged_work": OpClass.COMPUTE_ONLY,
+    "git_branch.verify_commit_in_review_window": OpClass.COMPUTE_ONLY,
+    "install.detect_cmd_autorun_coverage": OpClass.COMPUTE_ONLY,
+    "install.detect_python3_appx_stub": OpClass.COMPUTE_ONLY,
+    "lessons.filter_undated_universal": OpClass.COMPUTE_ONLY,
+    "lessons.reject_orphan_strip_entries": OpClass.COMPUTE_ONLY,
+    "mcp.resolve_server_cli_path": OpClass.COMPUTE_ONLY,
+    "merge.quiet_activity_gate": OpClass.COMPUTE_ONLY,
+    "percolate.check_inverse_drift": OpClass.COMPUTE_ONLY,
+    "percolate.list_files_newer_than_marker": OpClass.COMPUTE_ONLY,
+    "percolate.run_pre_ci_hooks": OpClass.COMPUTE_ONLY,
+    "percolate.scan_content_leakage_tiers": OpClass.COMPUTE_ONLY,
+    "plan.list_stale_executing": OpClass.COMPUTE_ONLY,
+    "repo_setup.validate_target_root": OpClass.COMPUTE_ONLY,
+    "research.verify_scout_inventory_completeness": OpClass.COMPUTE_ONLY,
+    "review_trail.scan_unresolved_ubt": OpClass.COMPUTE_ONLY,
+    "schema.drift_gate": OpClass.COMPUTE_ONLY,
+    "session.resolve_chain_terminal_disposition": OpClass.COMPUTE_ONLY,
+    "update_docs.probe_fresh_repo_noop": OpClass.COMPUTE_ONLY,
+    "workday.surface_auto_push_failure_stats": OpClass.COMPUTE_ONLY,
+    "ci.run_pip_audit": OpClass.COMPUTE_ONLY,
+    "ci.run_semgrep_scan": OpClass.COMPUTE_ONLY,
+    # MUTATING group — each handler below writes, deletes, or reorders disk
+    # state (coordinator substrate, a scratch/target repo tree, or an external
+    # system the operator's own machine hosts); per-op citation follows.
+    #   branch.merge_into_workstream — ops/merge_branch_into_workstream.py:
+    #     `git merge` write via subprocess.run — mutates a branch ref.
+    #   ceremony.scoped_git_commit — ops/ceremony/scoped_git_commit.py: the
+    #     module's entire purpose is a path-scoped `git add && git commit`;
+    #     the file's own docstring is explicit throughout.
+    #   commit.exec_bit_change — ops/ceremony/commit_exec_bit.py: `git commit`
+    #     (unrestricted, per DR-151) writing an exec-bit change.
+    #   coverage.halt_on_uncovered — ops/coverage_gate.py: writes the coverage
+    #     artifact atomically via tempfile + os.replace (line ~426-429).
+    #   findings.self_persist_fallback — ops/self_persist_findings.py: writes
+    #     via `coordinator_core.locked_write.locked_rmw` (mkstemp + os.replace);
+    #     module docstring is explicit this is the native port of a
+    #     Path.write_text-shaped fallback.
+    #   fleet.archive_paper_trail / fleet.archive_queue_entry /
+    #   fleet.archive_release_accumulator — ops/fleet/archive_paper_trail.py,
+    #     ops/fleet/archive_queue_entry.py, ops/fleet/archive_release_accumulator.py:
+    #     all three delegate to `ops/fleet/_common.py::archive_and_commit`
+    #     (git-mv + commit), the same DR-211-affirmed archival-writer primitive
+    #     as fleet.archive_completed_plans / fleet.archive_completed_handoffs /
+    #     fleet.prune_closed_bugs above — same classification for the same
+    #     reason (D2 five-bound not re-affirmed here; the underlying shared
+    #     helper's affirmation is the fleet.archive_completed_plans entry).
+    #   fleet.migrate_handoff_vocabulary — ops/fleet/migrate_handoff_vocabulary.py:
+    #     `open(rec["_abs_path"], "w", ...)` — direct in-place rewrite of
+    #     handoff files.
+    #   install.write_cmd_autorun_guard / install.strip_cmd_autorun_guard —
+    #     ops/cmd_autorun_guard.py `_write_handler`/`_strip_handler`: write or
+    #     delete the operator's own HKCU AutoRun registry value
+    #     (`_write_autorun`/`_delete_autorun`) — not coordinator substrate, but
+    #     an unambiguous disk/registry write, classified MUTATING on that basis.
+    #   install.write_identity_file — ops/write_identity_file.py: writes via
+    #     `locked_write.locked_rmw` (mkstemp + os.replace); module docstring
+    #     confirms the same native Path.write_text-via-locked_rmw shape as
+    #     findings.self_persist_fallback above.
+    #   machine.hibernate — ops/hibernate_machine.py: DEFAULTED to MUTATING.
+    #     The handler touches no coordinator substrate (module's own "Scope:
+    #     none" note), so DR-208's literal substrate criterion reads No/No/No/
+    #     No/No — but the op's entire purpose is an irreversible, machine-wide
+    #     OS power-state action (hibernate/suspend), which is not "safe to
+    #     expose to a read-only token" in the spirit OpClass exists to gate.
+    #     Classified MUTATING as the fail-closed default rather than stretching
+    #     COMPUTE_ONLY to cover a side effect DR-208's substrate wording does
+    #     not contemplate either way — flagged, not silently assumed.
+    #   release.cut_tag / release.cut_tag_and_publish — ops/release_tagging.py:
+    #     `_cut_tag` creates a git tag (write); `_cut_tag_and_publish` additionally
+    #     calls `_publish_release` (`gh release create`), an external write.
+    #   repo.clone_and_register — ops/repo_bootstrap.py
+    #     `clone_and_register_sibling_repo`: clones a repo to disk AND calls
+    #     `_machine_local_set` (writes the machine-local registry) — two
+    #     independent writes.
+    #   repo.create_and_push_remote — ops/create_github_remote.py: creates a
+    #     GitHub remote and pushes to it via subprocess.run — an external,
+    #     irreversible write.
+    #   repo_setup.copy_console_subprocess_tripwire — ops/copy_plugin_template.py:
+    #     `shutil.copy2(template, dest)` — writes a file into the target tree.
+    #   research.archive_workdir — ops/research_archive_workdir.py: EXDEV-safe
+    #     move via `shutil.copytree(src, tmp)` + `shutil.rmtree(src)` — writes
+    #     and deletes.
+    #   review.snapshot_diff_and_head — ops/ceremony/snapshot_diff_and_head.py:
+    #     `diff_path.write_text(...)` and `head_sha_path.write_text(...)` —
+    #     direct writes of two snapshot sidecar files.
+    #   session.rotate_orphan_sweep_log — ops/session/rotate_orphan_sweep_log.py:
+    #     writes via `locked_write.locked_rmw` under a repo-root lock; module
+    #     docstring confirms mkstemp + os.replace atomic swap.
+    #   workday.stitch_sidecar_into_summary —
+    #     ops/workday_stitch_sidecar_summary.py: writes via `locked_write.locked_rmw`
+    #     AND `sidecar_p.unlink()` on success — a write plus a delete.
+    #   ci.run_shellcheck_sweep — ops/run_shellcheck_sweep.py: DEFAULTED to
+    #     MUTATING per this file's own established precedent
+    #     (hooks.postuse_advisory_dispatch entry above) for DR-208 § 2's named
+    #     ambiguous case — "cache writes, lock files, temp files, advisory
+    #     markers" classify MUTATING, fail-closed. The handler opens a
+    #     `tempfile.NamedTemporaryFile(mode="w", ...)` scratch file to feed
+    #     shellcheck, then unlinks it in a `finally`; the write target is
+    #     system tempdir, not coordinator substrate, but question 3 of the
+    #     five-question checklist ("opens any file for write, including
+    #     sentinel creation?") is YES regardless of the target's durability,
+    #     the same reading this file already applied to context_pressure_
+    #     precompact's tempdir sentinel above.
+    "branch.merge_into_workstream": OpClass.MUTATING,
+    "ceremony.scoped_git_commit": OpClass.MUTATING,
+    "commit.exec_bit_change": OpClass.MUTATING,
+    "coverage.halt_on_uncovered": OpClass.MUTATING,
+    "findings.self_persist_fallback": OpClass.MUTATING,
+    "fleet.archive_paper_trail": OpClass.MUTATING,
+    "fleet.archive_queue_entry": OpClass.MUTATING,
+    "fleet.archive_release_accumulator": OpClass.MUTATING,
+    "fleet.migrate_handoff_vocabulary": OpClass.MUTATING,
+    "install.write_cmd_autorun_guard": OpClass.MUTATING,
+    "install.strip_cmd_autorun_guard": OpClass.MUTATING,
+    "install.write_identity_file": OpClass.MUTATING,
+    "machine.hibernate": OpClass.MUTATING,
+    "release.cut_tag": OpClass.MUTATING,
+    "release.cut_tag_and_publish": OpClass.MUTATING,
+    "repo.clone_and_register": OpClass.MUTATING,
+    "repo.create_and_push_remote": OpClass.MUTATING,
+    "repo_setup.copy_console_subprocess_tripwire": OpClass.MUTATING,
+    "research.archive_workdir": OpClass.MUTATING,
+    "review.snapshot_diff_and_head": OpClass.MUTATING,
+    "session.rotate_orphan_sweep_log": OpClass.MUTATING,
+    "workday.stitch_sidecar_into_summary": OpClass.MUTATING,
+    "ci.run_shellcheck_sweep": OpClass.MUTATING,
+    # research.restructure_for_repeat_topic — ops/research_dir_restructure.py:
+    # `os.rename` moves both the dated result markdown and the archived
+    # paper-trail dir; module docstring confirms this is a native replacement
+    # for a shell `mv`-based fence. MUTATING.
+    "research.restructure_for_repeat_topic": OpClass.MUTATING,
 })
 
 

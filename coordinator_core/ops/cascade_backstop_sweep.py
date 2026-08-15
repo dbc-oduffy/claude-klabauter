@@ -53,6 +53,23 @@ REFUSES is not a divergence — refusal is the cascade's own correct, named
 "not safe to advance" outcome (AC6h), identical whether reached by an event or
 this sweep.
 
+SLUG-PREFIX-FAMILY divergence (C4, AC6/AC7): the exact-equality join above is
+blind to the motivating incident in this module's own plan's Problem
+section — one workstream, three `deliverable_id`s that DIFFER because a slug
+got truncated at three different lengths across time. Adding a `kind` filter
+to the same exact-equality join would not see that shape either
+(staff-eng-063f0261 finding 3), so this is a SEPARATE, second check: for
+every terminal plan's `deliverable_id`, scan live (non-archived)
+`state/handoffs/*.md` for a NON-terminal (`deployment_state` not in
+`HANDOFF_TERMINAL_DEPLOYMENT`), `kind`-ABSENT successor whose own
+`deliverable_id` is a `slug_prefix_family.is_slug_prefix_family` match
+against the plan's — the exact shape the two `kind`-gated closers cannot see
+(no `kind` to gate on) and the exact-equality cascade also missed (the ids
+differ). Reported under `slug_prefix_family_divergences`, never merged into
+`divergences` — a slug-prefix-family match is a WEAKER signal than exact
+join-key equality and must not be presented as the same class of finding.
+Report only; see HARD BOUNDARY above — this check inherits it unchanged.
+
 Self-registration: importing this module calls
 register_op("deliverable.cascade_backstop_sweep") as a side-effect. Added to
 coordinator_core/ops/__init__.py's eager-import table so registration fires
@@ -90,10 +107,13 @@ from coordinator_core.ops.deliverable_cascade import (
     _collect_live_candidates,
     _predicate_refusal,
 )
+from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.ops.slug_prefix_family import is_slug_prefix_family
 
-SCHEMA_VERSION = 1
-"""First key of the returned manifest (C9 schema_version convention)."""
+SCHEMA_VERSION = 2
+"""First key of the returned manifest (C9 schema_version convention). Bumped
+1 -> 2 by C4: adds the `slug_prefix_family_divergences` key (AC6/AC7)."""
 
 
 def _read_fm(path: Path) -> dict:
@@ -164,6 +184,43 @@ def _terminal_handoff_deliverable_ids(worktree_root: Path) -> dict[str, list[str
     return out
 
 
+def _live_non_terminal_kind_absent_handoffs(worktree_root: Path) -> list[dict]:
+    """[{"deliverable_id": ..., "path": <relpath>}] for every LIVE
+    `state/handoffs/*.md` (archived handoffs are, by construction, no longer
+    open — this check is about a successor still sitting out there) whose
+    `deployment_state` is NOT a member of `HANDOFF_TERMINAL_DEPLOYMENT` and
+    which carries no `kind` field at all — the plain-successor shape this
+    plan's Problem section reproduces (AC6/AC7): neither
+    `handoff_close_origin_stub` nor `promote_shipped_in_flight_stubs` can see
+    it (both gate on `kind`), and the kind-agnostic cascade also missed it
+    because its join key forked (see module docstring)."""
+    out: list[dict] = []
+    base = worktree_root / "state" / "handoffs"
+    if not base.is_dir():
+        return out
+    for handoff_path in sorted(base.rglob("*.md")):
+        try:
+            fm = _read_meta(str(handoff_path))
+        except Exception:  # noqa: BLE001 — quarantine an unreadable/malformed record
+            continue
+        if not fm:
+            continue
+        if fm.get("deployment_state") in HANDOFF_TERMINAL_DEPLOYMENT:
+            continue
+        if fm.get("kind"):
+            continue
+        did = fm.get("deliverable_id")
+        if not isinstance(did, str) or not did.strip():
+            continue
+        out.append(
+            {
+                "deliverable_id": did.strip(),
+                "path": handoff_path.relative_to(worktree_root).as_posix(),
+            }
+        )
+    return out
+
+
 @register_op("deliverable.cascade_backstop_sweep")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "deliverable.cascade_backstop_sweep" handler — read-only backstop.
@@ -174,7 +231,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns:
         {
-          "schema_version": 1,
+          "schema_version": 2,
           "sources_scanned": {"plans": <int>, "handoffs": <int>},
           "deliverable_ids_checked": <int>,
           "divergences": [
@@ -183,17 +240,28 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
               "terminal_sources": [<relpath>, ...],
             }, ...
           ],
+          "slug_prefix_family_divergences": [
+            {
+              "plan_deliverable_id": ..., "plan_sources": [<relpath>, ...],
+              "handoff_deliverable_id": ..., "handoff_path": ...,
+            }, ...
+          ],
           "scan_incomplete": <bool>,
         }
 
     A `divergences` entry names a LIVE handoff that C6's own predicate would
     clear (i.e. the real cascade would advance it today) for a deliverable_id
-    this sweep already found a terminal source for on disk. Nothing is ever
-    written here — see module NEGATIVE-SPEC. `exit_code` is always 0; this op
-    reports, it does not fail — an empty `divergences` list IS the clean-sweep
-    result, not a degenerate one, so exit_code carries no separate signal
-    (unlike deliverable_cascade's own "advanced empty is failure" contract,
-    which does not apply to a read-only report).
+    this sweep already found a terminal source for on disk. A
+    `slug_prefix_family_divergences` entry (C4, AC6/AC7) names a LIVE,
+    non-terminal, `kind`-absent handoff whose `deliverable_id` is a
+    slug-prefix-family match (not an exact match — that is `divergences`
+    above) against a terminal plan's `deliverable_id` — see module docstring
+    "SLUG-PREFIX-FAMILY divergence". Nothing is ever written here — see
+    module NEGATIVE-SPEC. `exit_code` is always 0; this op reports, it does
+    not fail — an empty `divergences`/`slug_prefix_family_divergences` list
+    IS the clean-sweep result, not a degenerate one, so exit_code carries no
+    separate signal (unlike deliverable_cascade's own "advanced empty is
+    failure" contract, which does not apply to a read-only report).
     """
     if repo_root is None:
         return {
@@ -202,16 +270,24 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
 
     worktree_root = main_worktree_root(repo_root)
-    only_did = (params.get("deliverable_id") or "").strip() or None
+    equivalence_map = load_equivalence_map(worktree_root)
+    only_did = canonicalize((params.get("deliverable_id") or "").strip() or None, equivalence_map)
 
     plan_ids = _terminal_plan_deliverable_ids(worktree_root)
     handoff_ids = _terminal_handoff_deliverable_ids(worktree_root)
 
+    # Exact-equality plan-vs-handoff join, canonicalized (C6b/AC11) -- a declared
+    # fork pair (raw ids differing only because a slug got truncated at two
+    # points, C3b's equivalence-map shape) now merges into one join key here,
+    # closing the gap the plan's Problem section reproduces. The SEPARATE
+    # slug-prefix-family check below stays on raw ids by design -- it exists
+    # precisely to catch a fork the equivalence map does not yet declare, and
+    # canonicalizing it would hide the exact case it is for.
     all_ids: dict[str, list[str]] = {}
     for did, sources in plan_ids.items():
-        all_ids.setdefault(did, []).extend(sources)
+        all_ids.setdefault(canonicalize(did, equivalence_map), []).extend(sources)
     for did, sources in handoff_ids.items():
-        all_ids.setdefault(did, []).extend(sources)
+        all_ids.setdefault(canonicalize(did, equivalence_map), []).extend(sources)
 
     if only_did is not None:
         all_ids = {did: sources for did, sources in all_ids.items() if did == only_did}
@@ -234,11 +310,30 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     }
                 )
 
+    plan_ids_for_family = plan_ids
+    if only_did is not None:
+        plan_ids_for_family = {did: sources for did, sources in plan_ids.items() if did == only_did}
+
+    slug_prefix_family_divergences: list[dict[str, Any]] = []
+    non_terminal = _live_non_terminal_kind_absent_handoffs(worktree_root)
+    for did in sorted(plan_ids_for_family):
+        for handoff in non_terminal:
+            if is_slug_prefix_family(did, handoff["deliverable_id"]):
+                slug_prefix_family_divergences.append(
+                    {
+                        "plan_deliverable_id": did,
+                        "plan_sources": sorted(plan_ids_for_family[did]),
+                        "handoff_deliverable_id": handoff["deliverable_id"],
+                        "handoff_path": handoff["path"],
+                    }
+                )
+
     return {
         "exit_code": 0,
         "schema_version": SCHEMA_VERSION,
         "sources_scanned": {"plans": len(plan_ids), "handoffs": len(handoff_ids)},
         "deliverable_ids_checked": len(all_ids),
         "divergences": divergences,
+        "slug_prefix_family_divergences": slug_prefix_family_divergences,
         "scan_incomplete": scan_incomplete,
     }

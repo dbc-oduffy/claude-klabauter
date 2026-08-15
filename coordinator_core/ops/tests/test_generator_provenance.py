@@ -15,6 +15,15 @@ from pathlib import Path
 from coordinator_core.ops.generator_provenance import _extract_generates, discover_generators
 from coordinator_core.ops.staleness_git import Verdict
 
+import pytest
+
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 # C2 backfill targets -- the five real generator modules
 # docs/plans/2026-08-13-generator-output-staleness-detector.md § Tasks id C2
 # added a `GENERATES` declaration to. Read directly via `ast.parse` +

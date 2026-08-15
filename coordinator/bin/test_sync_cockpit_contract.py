@@ -41,6 +41,15 @@ if _LIB_DIR not in sys.path:
 from coordinator_data_root import data_root  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _resolve_canonical() -> str | None:
     """Resolve the canonical cockpit-contract schema the same way the script

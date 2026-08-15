@@ -18,6 +18,7 @@ Negative-spec:
 """
 
 from __future__ import annotations
+import os
 import sys
 
 import subprocess
@@ -50,3 +51,50 @@ def git_root(cwd: Optional[Path] = None) -> Optional[str]:
     if result.returncode != 0 or not result.stdout.strip():
         return None
     return result.stdout.strip()
+
+
+def git_root_zero_spawn(start: Optional[Path] = None) -> Optional[str]:
+    """Resolve the enclosing git repo's root WITHOUT spawning a subprocess.
+
+    Sibling to `git_root()`, not a replacement — `git_root()` has live
+    callers with their own semantics (see module docstring) and is left
+    untouched. This one exists because `git_root()` shells out to
+    `git rev-parse` per call and spawn cost is a standing P0 on a machine
+    that runs 50-70 concurrent agents; these app-session ops are called
+    repeatedly, so a pure-Python upward walk pays for itself immediately.
+
+    Resolution order:
+      1. `CLAUDE_PROJECT_DIR` env var, if set AND it is a real directory —
+         honoured first, unconditionally, ahead of any walk.
+      2. Otherwise walk upward from `start` (default: cwd) looking for a
+         `.git` entry at each level, stopping at the first hit.
+
+    `.git` is a DIRECTORY in a normal clone but a FILE in a git worktree
+    (it holds a `gitdir: <path>` pointer). A directory-only test silently
+    fails to resolve inside a worktree, which is exactly the class of
+    silent misresolution this whole primitive exists to avoid — so this
+    walk accepts either a file or a directory named `.git`.
+
+    Anchors on `start` (or cwd), the CONSUMING repo — never on `__file__` —
+    per Hard constraint 6: a `__file__`-relative walk misresolves the
+    moment this code ships anywhere but the tree it operates on.
+
+    Returns None (never raises) when no `.git` entry is found before
+    reaching the filesystem root.
+    """
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if project_dir:
+        p = Path(project_dir)
+        if p.is_dir():
+            return str(p)
+
+    current = Path(start) if start is not None else Path.cwd()
+    current = current.resolve()
+    while True:
+        git_entry = current / ".git"
+        if git_entry.is_dir() or git_entry.is_file():
+            return str(current)
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent

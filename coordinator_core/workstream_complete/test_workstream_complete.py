@@ -151,9 +151,12 @@ def test_directives_only_name_known_real_clis_and_never_invoke_them(monkeypatch,
     assert directives, "expected at least one directive on the chain-terminal path"
     for directive in directives:
         # `best_effort` is optional per a40dd5076 (a best-effort directive
-        # cannot fail a ceremony) — the required set is what this guard
+        # cannot fail a ceremony); `advisory` is optional per
+        # docs/plans/2026-08-15-coverage-gate-advisory-failure-and-warn-flood.md
+        # chunk C2 (an advisory directive's failure never takes the run to
+        # APPLY_EXIT_PARTIAL_MUTATION) — the required set is what this guard
         # pins; an optional key landing later must not silently widen it.
-        assert set(directive.keys()) - {"best_effort"} == {
+        assert set(directive.keys()) - {"best_effort", "advisory"} == {
             "id",
             "cli",
             "args",
@@ -300,11 +303,16 @@ def test_single_session_computes_no_coverage_gate_directive(monkeypatch, tmp_pat
 
 
 def test_write_trail_directive_requires_all_five_review_fields(monkeypatch, tmp_path):
+    """staff-eng review 2026-08-14 (F2): a truthy-but-incomplete `review` used
+    to silently drop `d-write-trail` from the directive list while
+    `build_wsc_tail_directive` still composed `--adjudication-present` for
+    the SAME input -- the seam this raise now closes at assemble time,
+    before `directives[]` is even built. See `_raise_on_review_truthy_
+    unqualified`."""
     _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
     partial_decisions = {"review": {"sha_range": "a..b", "reviewer": "someone"}}
-    decision_object = wsc.brief(decisions=partial_decisions, repo_root=tmp_path)
-    ids = {d["id"] for d in decision_object["directives"]}
-    assert "d-write-trail" not in ids
+    with pytest.raises(ValueError, match="qualifies for no"):
+        wsc.brief(decisions=partial_decisions, repo_root=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +615,126 @@ def test_review_scale_judgment_point_does_not_fire_on_a_fully_resolved_row_1_or_
         assert review_scale["row"] == expected_row
         ids = {jp["id"] for jp in decision_object["judgment_points"]}
         assert "jp-review-scale" not in ids
+
+
+# ---------------------------------------------------------------------------
+# `gates.review_scale.commit_slices` / `.uncommitted_code_loc` -- end-to-end
+# through `brief()` (A, docs/plans/2026-08-08-the-engine-asks-for-facts-it-
+# already-holds.md C-followup). Direct producer coverage
+# (`_measure_session_review_scale_inputs`'s `commit_slices_out` side
+# channel, per-commit ordering/shape, the interleaved-foreign-commit case)
+# lives in test_directives_review_scale.py; this section pins only the
+# envelope-emission contract `brief()` itself owns: presence/absence of the
+# key, and `uncommitted_code_loc`'s arithmetic.
+# ---------------------------------------------------------------------------
+
+_SESSION_ID_FOR_SLICES = "testsid123"  # must match `_gate`'s fixed `sid`
+
+_SLICE_TEST_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+def _git_slice(args: list[str], cwd: Path, **kwargs: Any):
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, **_SLICE_TEST_NO_CONSOLE, **kwargs
+    )
+
+
+def _init_repo_with_session_commit(root: Path) -> str:
+    _git_slice(["init", "-q"], root)
+    _git_slice(["config", "user.email", "t@example.com"], root)
+    _git_slice(["config", "user.name", "t"], root)
+    (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git_slice(["add", "a.py"], root)
+    _git_slice(["commit", "-q", "-m", "init"], root)
+
+    (root / "b.py").write_text("y = 1\ny2 = 2\n", encoding="utf-8")
+    _git_slice(["add", "b.py"], root)
+    _git_slice(["commit", "-q", "-m", f"session work\n\nSession-Id: {_SESSION_ID_FOR_SLICES}"], root)
+    out = _git_slice(["rev-parse", "HEAD"], root, text=True)
+    return out.stdout.strip()
+
+
+def test_brief_emits_commit_slices_and_uncommitted_code_loc_for_a_real_commit(monkeypatch, tmp_path):
+    """(4) `uncommitted_code_loc` equals measured `code_loc` minus the summed
+    slice `diff_loc`; a session with exactly one owned commit and no dirty
+    files gets a one-entry slice list and `uncommitted_code_loc == 0`."""
+    sha = _init_repo_with_session_commit(tmp_path)
+    gate = wsc.SessionShapeGate(
+        sid=_SESSION_ID_FOR_SLICES,
+        disposition="single-session",
+        consumed_handoff="",
+        diagnostics=[],
+        consumed_handoff_paths=(),
+        detection={},
+    )
+    _patch_gate(monkeypatch, gate)
+
+    decision_object = wsc.brief(decisions={"stage_paths": []}, repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+
+    assert "commit_slices" in review_scale
+    slices = review_scale["commit_slices"]
+    assert len(slices) == 1
+    assert slices[0]["sha"] == sha
+    assert slices[0]["sha_range"] == f"{sha}^..{sha}"
+    assert slices[0]["diff_loc"] == 2
+    assert slices[0]["scope_kind"] == "diff"
+
+    assert review_scale["uncommitted_code_loc"] == 0
+
+
+def test_brief_emits_uncommitted_code_loc_with_zero_commits_and_dirty_files(monkeypatch, tmp_path):
+    """(4) The `commit_slices == []` / non-zero `uncommitted_code_loc` case:
+    a session with no owned commits and uncommitted work gets an EMPTY (but
+    present) slice list, and `uncommitted_code_loc` equal to the whole
+    measured `code_loc` (nothing sliced off it)."""
+    _git_slice(["init", "-q"], tmp_path)
+    _git_slice(["config", "user.email", "t@example.com"], tmp_path)
+    _git_slice(["config", "user.name", "t"], tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git_slice(["add", "a.py"], tmp_path)
+    _git_slice(["commit", "-q", "-m", "init"], tmp_path)
+
+    (tmp_path / "dirty.py").write_text("z = 1\nz2 = 2\nz3 = 3\n", encoding="utf-8")
+
+    gate = wsc.SessionShapeGate(
+        sid=_SESSION_ID_FOR_SLICES,
+        disposition="single-session",
+        consumed_handoff="",
+        diagnostics=[],
+        consumed_handoff_paths=(),
+        detection={},
+    )
+    _patch_gate(monkeypatch, gate)
+
+    decision_object = wsc.brief(decisions={"stage_paths": ["dirty.py"]}, repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+
+    assert "commit_slices" in review_scale
+    assert review_scale["commit_slices"] == []
+    assert review_scale["uncommitted_code_loc"] == 3
+
+
+def test_brief_omits_commit_slices_key_when_measurement_unresolvable(monkeypatch, tmp_path):
+    """(3) The unresolvable case OMITS the key entirely -- never present-
+    but-empty. `tmp_path` here is deliberately NOT a git repository, so
+    `_session_owned_shas`'s `git log` spawn fails and the whole four-tuple
+    resolves to `None`."""
+    gate = wsc.SessionShapeGate(
+        sid=_SESSION_ID_FOR_SLICES,
+        disposition="single-session",
+        consumed_handoff="",
+        diagnostics=[],
+        consumed_handoff_paths=(),
+        detection={},
+    )
+    _patch_gate(monkeypatch, gate)
+
+    decision_object = wsc.brief(decisions={"stage_paths": []}, repo_root=tmp_path)
+    review_scale = decision_object["gates"]["review_scale"]
+
+    assert "commit_slices" not in review_scale
+    assert "uncommitted_code_loc" not in review_scale
 
 
 def test_review_scale_judgment_point_unresolved_carries_no_recommendation(monkeypatch, tmp_path):
@@ -3948,6 +4076,79 @@ def test_review_flags_reach_the_wsc_tail_argv_token_transport():
 
 
 # ---------------------------------------------------------------------------
+# state/bug-backlog/2026-08-14-no-caller-composes-b-adjudication-present-
+# 9f4c21a0e5d3.yaml -- build_wsc_tail_directive composes --adjudication-
+# present whenever decisions["review"] is non-empty, the PM-ruled predicate
+# that finally gives the b_adjudication_present fail-loud gate (7c19e190ae86)
+# a real producer.
+# ---------------------------------------------------------------------------
+
+
+def test_build_wsc_tail_directive_composes_adjudication_present_for_nonempty_review():
+    decisions = {
+        "review": {
+            "sha_range": "abc123..def456",
+            "reviewer": "staff-eng",
+            "scope": "chain",
+            "verdict": "approved",
+            "diff_loc": 42,
+        },
+    }
+    directive = _dc_tail.build_wsc_tail_directive("abcdef", decisions)
+    assert "--adjudication-present" in directive["args"]
+    assert directive["args"][-1] == "{d-close-tail-args.argv}"
+
+
+def test_build_wsc_tail_directive_composes_adjudication_present_for_list_shaped_review():
+    decisions = {"review": [_REVIEW_SLICE_A, _REVIEW_SLICE_B]}
+    directive = _dc_tail.build_wsc_tail_directive("abcdef", decisions)
+    assert "--adjudication-present" in directive["args"]
+    assert directive["args"][-1] == "{d-close-tail-args.argv}"
+
+
+# ---------------------------------------------------------------------------
+# staff-eng review 2026-08-14 (coordinatorstaff-eng-659e50f5) F1/F2 --
+# a truthy-but-incomplete decisions["review"] used to compose
+# --adjudication-present in build_wsc_tail_directive while
+# build_close_tail_args_directive composed NO --review-*/--review-slice
+# token at all -- the seam surfaced only post-commit, as an exit_code 2 the
+# operator is told not to re-run for. `_review_any_qualifies` now backs
+# BOTH builders' predicate, and a truthy-but-unqualified `review` raises
+# ValueError at assemble time from EITHER builder instead of the pair
+# silently disagreeing.
+# ---------------------------------------------------------------------------
+
+
+def test_truthy_incomplete_dict_review_raises_from_both_builders_instead_of_pairing_mismatch():
+    decisions = {"review": {"sha_range": "abc..def", "reviewer": "staff-eng"}}  # missing 3 fields
+    with pytest.raises(ValueError, match="qualifies for no"):
+        _dc_tail.build_wsc_tail_directive("abcdef", decisions)
+    with pytest.raises(ValueError, match="qualifies for no"):
+        _dc_tail.build_close_tail_args_directive(decisions)
+
+
+def test_truthy_all_entries_incomplete_list_review_raises_from_both_builders():
+    decisions = {"review": [{"sha_range": "a..b"}, {"reviewer": "x"}]}
+    with pytest.raises(ValueError, match="qualifies for no"):
+        _dc_tail.build_wsc_tail_directive("abcdef", decisions)
+    with pytest.raises(ValueError, match="qualifies for no"):
+        _dc_tail.build_close_tail_args_directive(decisions)
+
+
+def test_build_wsc_tail_directive_omits_adjudication_present_for_falsy_or_absent_review():
+    baseline = _dc_tail.build_wsc_tail_directive("abcdef", {"governing_plan_slug": "some-plan"})
+    assert "--adjudication-present" not in baseline["args"]
+    for falsy_review in (None, {}, [], False, ""):
+        directive = _dc_tail.build_wsc_tail_directive(
+            "abcdef", {"governing_plan_slug": "some-plan", "review": falsy_review}
+        )
+        assert directive["args"] == baseline["args"], (
+            "a falsy/absent decisions['review'] must produce argv byte-identical "
+            "to the no-review-key baseline"
+        )
+
+
+# ---------------------------------------------------------------------------
 # List-shaped decisions["review"] reaching the commit-tail path (finishes the
 # partitioned-review fix's second half -- directives_review.py's
 # build_write_trail_directives covered the standalone directive path in
@@ -4065,6 +4266,129 @@ def test_build_close_tail_args_directive_forwards_reviewer_evidence_per_slice():
     ]
     assert payloads[0]["reviewer_evidence"] == "state/subagent-share/sid/a.md"
     assert "reviewer_evidence" not in payloads[1]
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-14 state/bug-backlog/2026-08-14-wsc-apply-accepts-an-unconsumed-
+# decision-debea052f8c5.yaml -- decisions["review"] nested one key deeper
+# than either accepted shape (e.g. {"slices": [...], ...}) passed both
+# reader sites silently and the ceremony still exited 0. The shared
+# `validate_review_shape` now raises loud, from both sites, on the same
+# malformed payload.
+# ---------------------------------------------------------------------------
+
+_UNCONSUMED_REVIEW_PAYLOAD = {
+    "slices": [
+        {
+            "sha_range": "a1..a2",
+            "reviewer": "code-reviewer",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 10,
+        },
+    ],
+    "reviewer": "someone",
+    "scope": "chain",
+    "verdict": "ok",
+    "reviewer_evidence": "state/subagent-share/sid/reviewer.md",
+}
+
+
+def test_build_close_tail_args_directive_raises_on_unconsumed_review_dict_shape():
+    """The exact failing payload from cross-repo/inbox/2026-08-14-project-
+    cockpit-em-review-decisions-dict-drops-silently-and-mints-a-not-reviewed-
+    waiver.md — a 'slices' wrapper key that is not part of either accepted
+    shape must now raise, naming both legal shapes, instead of silently
+    contributing zero --review-* tokens."""
+    decisions = {"review": _UNCONSUMED_REVIEW_PAYLOAD}
+    with pytest.raises(ValueError) as excinfo:
+        _dc_tail.build_close_tail_args_directive(decisions)
+    message = str(excinfo.value)
+    assert "subset of" in message, "must name the dict-of-recognized-keys legal shape"
+    assert "list of such dicts" in message, "must name the list legal shape"
+    assert "'slices'" in message
+
+
+def test_build_write_trail_directives_raises_on_the_same_unconsumed_review_dict_shape():
+    """The second independent dropping site named in the backlog entry —
+    `build_write_trail_directives` must call the SAME validator, so it
+    cannot diverge from `build_close_tail_args_directive`'s verdict on the
+    identical payload."""
+    with pytest.raises(ValueError) as excinfo:
+        wsc.build_write_trail_directives(_UNCONSUMED_REVIEW_PAYLOAD)
+    assert "'slices'" in str(excinfo.value)
+
+
+def test_validate_review_shape_accepts_legal_single_dict_and_still_emits_five_flags():
+    """A legal single dict (byte-identical shape to
+    `test_build_close_tail_args_directive_single_dict_review_byte_identical`)
+    must still pass validation and still emit the exact five scalar
+    `--review-*` flags it does today — the new validator changes what is
+    REJECTED, never what a legal payload produces."""
+    decisions = {
+        "review": {
+            "sha_range": "abc123..def456",
+            "reviewer": "staff-eng",
+            "scope": "chain",
+            "verdict": "approved",
+            "diff_loc": 42,
+        },
+    }
+    directive = _dc_tail.build_close_tail_args_directive(decisions)
+    assert directive["args"] == [
+        "tail-args",
+        "--review-sha-range", "abc123..def456",
+        "--review-reviewer", "staff-eng",
+        "--review-scope", "chain",
+        "--review-verdict", "approved",
+        "--review-diff-loc", "42",
+    ]
+
+
+def test_validate_review_shape_accepts_legal_list_and_still_emits_one_slice_per_entry():
+    """A legal `list[dict]` review must still pass validation and still
+    emit one `--review-slice` token per valid entry (mirrors
+    `test_build_close_tail_args_directive_list_review_emits_one_slice_per_
+    qualifying_entry`, re-asserted post-fix)."""
+    decisions = {
+        "review": [
+            {
+                "sha_range": "a1..a2",
+                "reviewer": "code-reviewer",
+                "scope": "chain",
+                "verdict": "ok",
+                "diff_loc": 10,
+            },
+            {
+                "sha_range": "b1..b2",
+                "reviewer": "staff-eng",
+                "scope": "session",
+                "verdict": "warn",
+                "diff_loc": 20,
+            },
+        ],
+    }
+    directive = _dc_tail.build_close_tail_args_directive(decisions)
+    assert directive["args"].count("--review-slice") == 2
+
+
+@pytest.mark.parametrize("falsy_review", [None, {}, [], "", 0, False])
+def test_validate_review_shape_stays_silent_on_falsy_review(falsy_review, capsys):
+    directive = _dc_tail.build_close_tail_args_directive({"review": falsy_review})
+    assert directive["args"] == ["tail-args"]
+    assert capsys.readouterr().err == ""
+
+    assert wsc.build_write_trail_directives(falsy_review) == []
+
+
+def test_build_write_trail_directives_absent_review_key_stays_silent(monkeypatch, tmp_path):
+    """`decisions["review"]` genuinely absent (not present-but-malformed)
+    must not raise — `brief()`'s own call site passes `decisions.get(
+    "review")`, which is `None` when the key is missing entirely."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    decision_object = wsc.brief(decisions={}, repo_root=tmp_path)
+    ids = {d["id"] for d in decision_object["directives"]}
+    assert "d-write-trail" not in ids
 
 
 # ---------------------------------------------------------------------------

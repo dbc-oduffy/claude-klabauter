@@ -2518,6 +2518,37 @@ def test_build_reviewed_set_unrecognized_scope_kind_degrades_not_fatal(
     )
 
 
+def test_build_reviewed_set_unrecognized_scope_kind_warn_does_not_scale_with_records(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC1: a corpus with several unrecognized-scope_kind records must emit
+    ONE aggregated WARN line, not one per record — the per-record flood
+    buried example-retrieval-repo-em's real trailing error (2026-08-15 memo)."""
+    from coordinator_core.coverage import build_reviewed_set
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    _make_commit(repo, "C0: initial")
+
+    record_paths = []
+    for i in range(4):
+        sha = _make_commit(repo, f"C{i + 1}: would-be chunk review {i}")
+        record_path = tmp_path / f"chunk_record_{i}.json"
+        _write_unrecognized_kind_record(record_path, f"{sha}^..{sha}", "chunk")
+        record_paths.append(str(record_path))
+
+    build_reviewed_set(record_paths, on_record_error="fail", repo_root=str(repo))
+
+    err = capsys.readouterr().err
+    warn_lines = [line for line in err.splitlines() if "unrecognized scope_kind" in line]
+    assert len(warn_lines) == 1, (
+        f"expected exactly one aggregated WARN line for 4 unrecognized-kind "
+        f"records, got {len(warn_lines)}: {warn_lines}"
+    )
+    assert "4" in warn_lines[0] and "chunk" in warn_lines[0]
+
+
 # ---------------------------------------------------------------------------
 # spec-dispatch PLANNING exemption (2026-08-13 dispatch: "spec-dispatch route
 # and the wsc-brightline gate disagree on plan review"). The S lane runs no

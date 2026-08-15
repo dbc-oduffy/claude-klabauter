@@ -44,6 +44,13 @@ from coordinator_core.ops.session.guard_settings_integrity import (
     evaluate_settings_integrity,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 @pytest.fixture(autouse=True)
 def _hook_layer_always_reachable(monkeypatch):

@@ -18,6 +18,15 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+import pytest
+
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 

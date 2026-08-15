@@ -309,6 +309,7 @@ import sys
 
 import asyncio
 import logging
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -330,6 +331,7 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._common import (
     ARCHIVE_ROOT_SUBDIRS,
     Move,
@@ -345,6 +347,13 @@ from coordinator_core.ops.handoff_transition import _ship
 # Aliased: `rel_id` is also a local variable name in _handler below, and an
 # unaliased import would be shadowed by that binding (UnboundLocalError).
 from coordinator_core.wire_paths import rel_id as _wire_rel_id
+# claim_state / liveness are leaves (see claim_state.py's own module
+# docstring § Import discipline) — neither imports anything under
+# coordinator_core.ops.* or coordinator_core.session.*, so importing them at
+# module top level here does not trip the ops/__init__ eager-import cycle
+# that forces archive_stamp's imports (above) to stay function-local.
+from coordinator_core.claim_state import handoff_claim_dir
+from coordinator_core.liveness import cs_claim_holder_live
 
 _LOG = logging.getLogger(__name__)
 
@@ -600,6 +609,35 @@ def _attribute_claim_holder(
     return fm
 
 
+def _handoff_live_holder_session(handoff_abs: Path, common_dir: Path) -> Optional[str]:
+    """Return the session id of `handoff_abs`'s LIVE claim holder, or None.
+
+    None covers both "no claim dir" and "claim dir present but its holder is
+    not live" — both PROCEED (no holder-live retain), never fail-closed. A
+    missing claim dir is the ordinary unclaimed case, not a degraded read
+    (plan AC2: a dead/absent holder must never be retained by this ground —
+    that interlock keeps the orphan-close path open).
+
+    Mechanism: `claim_state.handoff_claim_dir` (claim-dir resolution) +
+    `liveness.cs_claim_holder_live` (the liveness read) — the fleet's only
+    sanctioned liveness read (plan AC4), same basis `pickup_assemble` reports
+    `competing_claim.holder_live` from. No raw pid read; no new primitive.
+
+    The liveness read itself is never caught here — a raise from
+    `cs_claim_holder_live` is a real condition, not something this call
+    degrades into a proceed (plan § Executor hard constraints).
+    """
+    claim_dir = handoff_claim_dir(common_dir, handoff_abs)
+    if not claim_dir.is_dir():
+        return None
+    if not cs_claim_holder_live(str(claim_dir)):
+        return None
+    # cs_claim_holder_live only returns True for a session_id-bearing claim
+    # dir (a legacy pid-only dir is "always dead in-harness" per its own
+    # docstring), so the session_id file is guaranteed present at this point.
+    return (claim_dir / "session_id").read_text(encoding="utf-8").strip()
+
+
 def _supersede_continued(
     handoff_abs: Path, continued_into: str, repo_root: Path
 ) -> dict:
@@ -714,7 +752,7 @@ def _supersede_continued(
         return rebuild(split, fm)
 
     try:
-        locked_rmw(handoff_abs, mutate, repo_root=repo_root)
+        written_text = locked_rmw(handoff_abs, mutate, repo_root=repo_root)
     except FileNotFoundError:
         return {"exit_code": 1, "error": f"supersede: handoff not found: {handoff_abs}"}
     except LockTimeout as exc:
@@ -733,7 +771,98 @@ def _supersede_continued(
         "applied": _state["applied"],
         "message": _state["message"],
         "warnings": _state["warnings"],
+        # The exact bytes `locked_rmw` returned — either this call's own
+        # fresh write, or (on the idempotent no-op branch) the unchanged
+        # on-disk text read under the same lock. C2 (plan
+        # supersede-asks-whether-the-holder-is-alive) commits THESE bytes on
+        # a retain, never a fresh worktree read at commit time — see that
+        # call site's own comment for why.
+        "written_text": written_text,
     }
+
+
+def _commit_retained_supersede_flip(
+    worktree: Path, rel_path: str, written_text: str, warnings: list
+) -> str:
+    """Commit a supersede status flip that just landed on a RETAINED (not
+    archived-this-call) predecessor, so `retained: True` never leaves the
+    predecessor's frontmatter mutation loose in a shared tree (AC5, plan
+    supersede-asks-whether-the-holder-is-alive C2).
+
+    Mechanism choice: `git_native.commit_authored_content`, not
+    `ceremony.scoped_git_commit` and not `commit_scoped`.
+    `ceremony/scoped_git_commit.py` exposes nothing usable as an in-process
+    callable here — every symbol in that module besides its registered op
+    `_handler` is private, and `_handler` is JSON-RPC-op-shaped (a params
+    dict plus the op-registry's own pathspec/message validation ladder), not
+    a library call this op can invoke mid-handler. `commit_scoped` (also
+    `git_native`) was the other candidate, and is wrong for the same reason
+    `plan_status_transition._commit_plan_flip` rejected it: its AGREE branch
+    stages and commits whatever is CURRENTLY on the worktree path, which
+    could silently absorb a foreign edit landing on this exact predecessor
+    between `_supersede_continued`'s lock release and this call.
+    `commit_authored_content` never reads the worktree on `rel_path` — it
+    commits exactly `written_text`, the bytes `_supersede_continued`'s own
+    `locked_rmw` call produced (or, on an idempotent replay, the unchanged,
+    lock-re-validated on-disk text) — the same shape
+    `_commit_plan_flip` uses for its identical lock-then-commit contract.
+
+    Never turns a commit failure into this op's own exit_code:1 — the status
+    flip already landed on disk before this is called; a stranded-but-real
+    mutation outranks a failed commit attempt as the thing this op fails
+    loud about (mirrors `_supersede_continued`'s own "a failed mutation is
+    not swallowed" discipline one layer up, applied here to "a failed commit
+    does not un-happen the mutation"). Appends a warning on any
+    non-committed outcome and returns a short human-readable fragment the
+    caller folds into the retain `message` (AC6) so a caller reading
+    `retained: True` is never left inferring the tree's state.
+
+    Review: code-reviewer (P2, Finding 2) — narrowed from "never raises":
+    `git_native._git` and `commit_authored_content` both return a `GitResult`
+    on every path (true, unguarded), but the `tempfile.NamedTemporaryFile`
+    open above the try/finally is not guarded and can still propagate (e.g.
+    disk full, permissions). That's correct fail-loud behavior, not a bug to
+    swallow — the property actually protected here is narrower: a commit
+    failure never demotes to this op's exit_code:1 and is never silently
+    dropped.
+    """
+    # A predecessor this op has never committed (freshly scaffolded, not yet
+    # tracked in HEAD) is not this op's file to first-commit — mirrors
+    # `plan_status_transition`'s own untracked-in-HEAD guard ahead of
+    # `commit_authored_content`, which requires `path` to exist in HEAD.
+    tracked = git_native._git(["ls-tree", "HEAD", "--", rel_path], cwd=worktree)
+    if not (tracked.ok and tracked.stdout.strip()):
+        warnings.append(
+            f"{rel_path}'s supersede status flip landed on disk but was left "
+            "uncommitted — the predecessor is not yet tracked in HEAD, and "
+            "this op mutates an existing tracked file in place rather than "
+            "first-committing a new one into git"
+        )
+        return "flip landed on disk, left uncommitted (not yet tracked in HEAD)"
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as fh:
+        fh.write(f"handoff-archive-transition: supersede (retained) {rel_path}\n")
+        msg_path = fh.name
+    try:
+        result = git_native.commit_authored_content(
+            rel_path, written_text, msg_path, worktree, deliverable_id=None
+        )
+    finally:
+        try:
+            Path(msg_path).unlink()
+        except OSError:
+            pass
+
+    if not result.ok:
+        warnings.append(
+            f"{rel_path}'s supersede status flip landed on disk but "
+            f"committing it failed: {result.stderr}"
+        )
+        return f"flip landed on disk, commit failed: {result.stderr}"
+
+    return "flip committed"
 
 
 # ---------------------------------------------------------------------------
@@ -1456,6 +1585,73 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
 
     # ------------------------------------------------------------------
+    # Holder-liveness retain ground (2026-08-15, plan
+    # supersede-asks-whether-the-holder-is-alive, C1). Placed AFTER the
+    # supersede status flip above (that flip is unconditional — see §
+    # Status-flip-precedes-guard fix in the module docstring and the PM
+    # ruling it quotes: a live claim holder is IRRELEVANT to whether the
+    # predecessor is superseded) and AHEAD of the live-children guard below,
+    # so a call whose predecessor is actively claimed by a live session
+    # reports THAT specific reason rather than falling through to
+    # "live-parent"/"indeterminate". Scoped to mode="supersede" only: for
+    # chain/stamp_shipped/stamp_only, the session invoking this op is
+    # routinely the very session that still holds the predecessor's claim
+    # (ship-then-archive in one call) — gating those modes on holder
+    # liveness would retain a baton against its own acting session on the
+    # ordinary path, not against a genuine concurrent hazard. The memo's
+    # data-loss hazard (a supersede git-mv racing the live session it just
+    # named a successor for) is supersede-only by construction.
+    # ------------------------------------------------------------------
+    if mode == "supersede":
+        live_holder_session = await asyncio.to_thread(
+            _handoff_live_holder_session, contained, repo_root
+        )
+        if live_holder_session is not None:
+            retain_reason = (
+                f"predecessor retained — claim holder {live_holder_session} "
+                "is live"
+            )
+            _LOG.info("handoff.archive_transition: %s (%s)", retain_reason, rel_id)
+            # `superseded` reflects the status flip applied ABOVE, before this
+            # check ran — same load-bearing separation as the live-children
+            # guard below: retention describes ONLY the archival move. C2:
+            # a retain must never leave that flip's mutation uncommitted in
+            # a shared tree (AC5) — commit it now, scoped to this exact path.
+            flip_status = None
+            if superseded:
+                flip_status = await asyncio.to_thread(
+                    _commit_retained_supersede_flip,
+                    worktree,
+                    rel_id,
+                    # Review: code-reviewer (P3, Finding 1) — plain subscript,
+                    # not `.get()`: every exit_code:0 return of
+                    # `_supersede_continued` (including the idempotent no-op
+                    # branch) always carries `written_text`, populated from a
+                    # `locked_rmw` call typed `-> str`. `.get()` mispresented
+                    # this as Optional; absence here would be a real bug and
+                    # should fail loud, not fall back to a default.
+                    supersede_res["written_text"],
+                    warnings,
+                )
+            return {
+                "exit_code": 0,
+                "mode": mode,
+                "stamped": stamped,
+                "superseded": superseded,
+                "retained": True,
+                "retain_reason": retain_reason,
+                "retain_kind": "live-holder",
+                "moved": False,
+                "warnings": warnings,
+                "error": None,
+                "message": (
+                    f"superseded {rel_id}; {retain_reason} ({flip_status})"
+                    if superseded
+                    else retain_reason
+                ),
+            }
+
+    # ------------------------------------------------------------------
     # Live-children guard — UNCONDITIONAL (all modes, no flag), and governs
     # ONLY the archival move from here on (see the supersede block directly
     # above — the status flip is no longer subject to this guard). Tri-state:
@@ -1489,7 +1685,20 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # ran — a retained (not-yet-archived) supersede call still reports
         # superseded:True when the status flip landed. This is the load-
         # bearing change: retention now describes ONLY the archival move,
-        # never the status flip.
+        # never the status flip. C2: that flip must never be left
+        # uncommitted on a retain (AC5) — commit it now, scoped to this
+        # exact path, same as the holder-live retain ground above.
+        flip_status = None
+        if superseded:
+            flip_status = await asyncio.to_thread(
+                _commit_retained_supersede_flip,
+                worktree,
+                rel_id,
+                # Review: code-reviewer (P3, Finding 1) — plain subscript, see
+                # the identical annotation at the holder-live call site above.
+                supersede_res["written_text"],
+                warnings,
+            )
         return {
             "exit_code": 0,
             "mode": mode,
@@ -1502,7 +1711,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "warnings": warnings,
             "error": None,
             "message": (
-                f"superseded {rel_id}; {retain_reason}"
+                f"superseded {rel_id}; {retain_reason} ({flip_status})"
                 if superseded
                 else retain_reason
             ),

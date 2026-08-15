@@ -3168,8 +3168,20 @@ class TestNoMemoIndex:
         Structurally inspects coordinator_core.ops.fleet.memo_send module globals for any
         mutable collection type that could serve as a fleet-wide memo index or accumulator.
         Permitted module-level names: immutable constants (str, int, re.Pattern), loggers,
-        and imported names (modules, functions, classes). Mutable collections (dict/list/set)
-        are NOT permitted — their presence at module scope would violate Q-d.
+        imported names (modules, functions, classes), and exactly one named exemption —
+        `MUTATES` (see below). All other mutable collections (dict/list/set) are NOT
+        permitted — their presence at module scope would violate Q-d.
+
+        `MUTATES` exemption: commit c240385d0 ("the tail declares itself: every module
+        now says what it writes or rewrites") introduced a repo-wide generator-provenance
+        convention — a module-level `MUTATES` list of the tracked paths a module writes.
+        It is a fixed declaration, not an accumulator: nothing appends to it at runtime,
+        and it names outputs rather than storing memo data. `memo_send.py` and four
+        sibling modules under coordinator_core/ops/fleet/ carry this declaration. The
+        exemption is narrow and shape-checked below — a `MUTATES` that regresses into a
+        dict, a set, or a list of non-strings still fails this test, and the sibling
+        AC8 companion assertion (test_mutates_declaration_present_and_well_formed) fails
+        loudly if the declaration disappears from this module entirely.
 
         This is an architecture-level assertion (AC8): it catches a future violation at
         the point of introduction, before any runtime behaviour test could notice growth.
@@ -3187,11 +3199,13 @@ class TestNoMemoIndex:
         # Mutable collections (dict/list/set) at module scope would constitute a memo
         # index/store and violate the Q-d store-less-ness invariant.
         # Imported modules and callable objects (functions, classes) are not stores.
+        # `MUTATES` is exempted by name below — everything else is held to the ban.
         mutable_collections = {
             name: val
             for name, val in module_globals.items()
             if isinstance(val, (dict, list, set))
             and not isinstance(val, types.ModuleType)
+            and name != "MUTATES"
         }
 
         assert mutable_collections == {}, (
@@ -3199,6 +3213,43 @@ class TestNoMemoIndex:
             f"(dict/list/set) — any such binding would violate the Q-d store-less-ness "
             f"invariant (AC8: no fleet-wide memo index). "
             f"Found violating names: {sorted(mutable_collections.keys())}"
+        )
+
+        # MUTATES itself is exempt from the ban above, but must still look like the
+        # provenance declaration (commit c240385d0) rather than a store that borrowed
+        # the name: a list of str, nothing else.
+        mutates = module_globals.get("MUTATES")
+        assert isinstance(mutates, list), (
+            f"memo_send.MUTATES MUST be a list (provenance declaration, commit "
+            f"c240385d0) — found {type(mutates).__name__}."
+        )
+        assert all(isinstance(entry, str) for entry in mutates), (
+            f"memo_send.MUTATES MUST be a list of str path patterns — found non-str "
+            f"entries: {[entry for entry in mutates if not isinstance(entry, str)]}."
+        )
+
+    def test_mutates_declaration_present_and_well_formed(self):
+        """memo_send.MUTATES is present, non-empty, and a list of str (provenance convention).
+
+        The generator-provenance convention (commit c240385d0) is itself load-bearing:
+        a module's MUTATES declaration silently disappearing should be caught here, not
+        go unnoticed. This complements test_no_memo_index's shape check by additionally
+        requiring presence and non-emptiness.
+        """
+        import coordinator_core.ops.fleet.memo_send as memo_send_mod
+
+        assert hasattr(memo_send_mod, "MUTATES"), (
+            "memo_send module MUST declare MUTATES (generator-provenance convention, "
+            "commit c240385d0) — declaration is missing."
+        )
+        mutates = memo_send_mod.MUTATES
+        assert isinstance(mutates, list) and mutates, (
+            f"memo_send.MUTATES MUST be a non-empty list of str path patterns — "
+            f"found {mutates!r}."
+        )
+        assert all(isinstance(entry, str) for entry in mutates), (
+            f"memo_send.MUTATES MUST be a list of str path patterns — found non-str "
+            f"entries: {[entry for entry in mutates if not isinstance(entry, str)]}."
         )
 
     def test_handler_calls_do_not_mutate_module_state(self, tmp_path, monkeypatch):
@@ -5022,6 +5073,91 @@ class TestSentMemoLedger:
         # New row carries both.
         assert lines[1]["delivery_commit_reason"] == "ok"
         assert lines[1]["retried"] is False
+
+    def test_ledger_line_carries_real_delivery_sha(self, tmp_path, monkeypatch):
+        """example-retrieval-repo-em cross-repo memo, 2026-08-15 ("pickup cannot resolve
+        a memo by its delivery sha"): a successful delivery's ledger row
+        carries `delivery_commit_sha`, and that sha resolves in the RECEIVER
+        repo as the exact commit that added the delivered memo file — not a
+        borrowed or coincidental HEAD."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="sha-ledger-test", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0, result
+        delivery_commit = result["acted"][0]["delivery_commit"]
+        assert delivery_commit["committed"] is True
+        assert delivery_commit["sha"] is not None
+
+        lines = _read_ledger_lines(sender_repo)
+        assert len(lines) == 1
+        assert lines[0]["delivery_commit_sha"] == delivery_commit["sha"]
+
+        memo_path = Path(result["acted"][0]["id"])
+        rel_path = os.path.relpath(memo_path, receiver_repo)
+        added_sha = _git(
+            receiver_repo, "log", "--diff-filter=A", "--format=%H", "--", rel_path,
+        ).stdout.decode().strip()
+        assert lines[0]["delivery_commit_sha"] == added_sha
+
+    def test_ledger_line_sha_null_on_noop_and_commit_failure(
+        self, tmp_path, monkeypatch,
+    ):
+        """The idempotent no-op arm and the commit-failure arm must write
+        `delivery_commit_sha: null` — never a stale sha carried over from a
+        prior call, and never a guessed/borrowed HEAD."""
+        import coordinator_core.ops.fleet.memo_send as memo_send_mod
+
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        async def _fake_commit_noop(*args, **kwargs):
+            return memo_send_mod.CommitOutcome(
+                committed=True, branch="work", reason=None, committed_sha=None,
+            )
+
+        monkeypatch.setattr(memo_send_mod, "_commit_delivered_memo", _fake_commit_noop)
+
+        result = _run(_memo_send(
+            _base_params(dry_run=False, topic="sha-noop-test", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result["exit_code"] == 0
+        delivery_commit = result["acted"][0]["delivery_commit"]
+        assert delivery_commit["committed"] is True
+        assert delivery_commit["sha"] is None
+
+        lines = _read_ledger_lines(sender_repo)
+        assert len(lines) == 1
+        assert lines[0]["delivery_commit_sha"] is None
+
+        async def _fake_commit_failure(*args, **kwargs):
+            return memo_send_mod.CommitOutcome(
+                committed=False, branch=None, reason="fake git failure: simulated",
+                committed_sha=None,
+            )
+
+        monkeypatch.setattr(memo_send_mod, "_commit_delivered_memo", _fake_commit_failure)
+
+        result2 = _run(_memo_send(
+            _base_params(dry_run=False, topic="sha-fail-test", to="example-retrieval-repo-em"),
+            repo_root=str(sender_repo / ".git"),
+        ))
+        assert result2["exit_code"] == 0
+        delivery_commit2 = result2["acted"][0]["delivery_commit"]
+        assert delivery_commit2["committed"] is False
+        assert delivery_commit2["sha"] is None
+
+        lines2 = _read_ledger_lines(sender_repo)
+        assert len(lines2) == 2
+        assert lines2[1]["delivery_commit_sha"] is None
 
 
 # ===========================================================================

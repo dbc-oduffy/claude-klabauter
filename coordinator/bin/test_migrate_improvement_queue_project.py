@@ -41,6 +41,15 @@ _MODULE_PATH = os.path.join(_SCRIPT_DIR, "migrate-improvement-queue-project.py")
 import importlib.util
 from coordinator_core.win_portability import no_console_creationflags
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _spec = importlib.util.spec_from_file_location("migrator", _MODULE_PATH)
 _mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]

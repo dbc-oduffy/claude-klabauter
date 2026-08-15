@@ -31,6 +31,15 @@ import re
 import subprocess
 import sys
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _GUARDS_DIR = pathlib.Path(__file__).resolve().parents[1] / "bash_guards"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 

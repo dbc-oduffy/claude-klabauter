@@ -234,6 +234,79 @@ def test_read_backpointer_subagent_type_missing_chain_empty(git_repo: Path) -> N
     assert resolved == ""
 
 
+# Review: coordinator:code-reviewer (2026-08-14, Divergence 18 deferred
+# finding) -- expected_em_session_id cross-check. The back-pointer chain
+# never verified the em_session_id it read from em-session-id.txt matched
+# the calling payload's own session_id; a stale/cross-session/fabricated
+# back-pointer could resolve an unrelated session's dispatch row.
+
+
+def test_read_backpointer_subagent_type_matching_session_still_resolves(
+    git_repo: Path,
+) -> None:
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    resolved = engine._read_backpointer_subagent_type(
+        str(git_repo), NAMED_AGENT_ID, expected_em_session_id="em-session-1"
+    )
+    assert resolved == CONFINED_TYPE
+
+
+def test_read_backpointer_subagent_type_different_session_fails_lookup(
+    git_repo: Path,
+) -> None:
+    """A back-pointer naming a DIFFERENT session must not resolve a type --
+    the confinement-bypass oracle this parameter exists to close."""
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    resolved = engine._read_backpointer_subagent_type(
+        str(git_repo), NAMED_AGENT_ID, expected_em_session_id="some-other-session"
+    )
+    assert resolved == ""
+
+
+def test_read_backpointer_subagent_type_unset_param_byte_identical_to_before(
+    git_repo: Path,
+) -> None:
+    """Default (unset) expected_em_session_id preserves pre-existing
+    behaviour -- resolve_effective_types and every other caller that passes
+    nothing must see no change."""
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    resolved = engine._read_backpointer_subagent_type(str(git_repo), NAMED_AGENT_ID)
+    assert resolved == CONFINED_TYPE
+
+
+def test_read_backpointer_subagent_type_duplicate_full_rows_returns_empty(
+    git_repo: Path,
+) -> None:
+    """P3, duplicate-row ambiguity: two full (3+-column) rows for the same
+    agent_id must resolve to "" (ambiguous, fail-closed) rather than
+    whichever appears first in file order."""
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
+    _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", REPORT_SIDECAR_TYPE)
+    resolved = engine._read_backpointer_subagent_type(str(git_repo), NAMED_AGENT_ID)
+    assert resolved == ""
+
+
+def test_read_backpointer_subagent_type_legacy_short_row_ignored(
+    git_repo: Path,
+) -> None:
+    """A legacy 2-column row for agent_id must be ignored outright (never
+    matched), so a single co-existing full row still resolves cleanly."""
+    session_dir = git_repo / ".git" / "coordinator-sessions" / "em-session-1"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    dispatch_file = session_dir / "dispatched-agents.txt"
+    dispatch_file.write_text(
+        f"{NAMED_AGENT_ID}\t2026-07-01T00:00:00Z\n"
+        f"{NAMED_AGENT_ID}\t2026-07-12T00:00:00Z\t{CONFINED_TYPE}\n",
+        encoding="utf-8",
+    )
+    agents_dir = git_repo / ".git" / "coordinator-sessions" / ".agents" / NAMED_AGENT_ID
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / "em-session-id.txt").write_text("em-session-1\n", encoding="utf-8")
+
+    resolved = engine._read_backpointer_subagent_type(str(git_repo), NAMED_AGENT_ID)
+    assert resolved == CONFINED_TYPE
+
+
 # ---------------------------------------------------------------------------
 # resolve_effective_types
 # ---------------------------------------------------------------------------

@@ -41,6 +41,13 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # sys.path bootstrap — ensure <settings-home>/bin is importable without
 # installation. Settings-home is resolved by the same two-rung ladder the

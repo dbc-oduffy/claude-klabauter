@@ -29,6 +29,15 @@ from coordinator_core.claude_md_budget import (
     SOFT_LIMIT_BYTES,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(root: str, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)

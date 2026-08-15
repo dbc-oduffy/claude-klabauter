@@ -457,6 +457,49 @@ retries or degrades-to-skip on INTERNAL_ERROR must NOT do the same here. See
 dispatch_message's exception handling below and coordinator_core.invoke.__main__'s
 distinct exit code (2) for this class."""
 
+
+class CallerFacingValidationError(ValueError):
+    """Raised by an op handler for a caller-supplied-PARAMETER validation failure whose
+    message is deliberately written to be read by the caller — e.g. a closed-enum
+    rejection that already names its own legal value set (``review_trail_write._validate``'s
+    ``reviewer``/``scope``/``verdict``/``scope_kind`` checks).
+
+    ``caller_facing_validation = True`` is a duck-type marker consumed by
+    ``_handler_exception_error``, mirroring ``ContractPinError``'s ``structurally_wedged``
+    marker above: an op handler that raises an exception carrying this attribute gets
+    ``INVALID_PARAMS`` (-32602) with the exception's OWN message preserved (length-bounded),
+    instead of the blanket ``INTERNAL_ERROR`` / class-name-only shape every other,
+    unclassified exception still gets. That blanket shape is the RIGHT default for an
+    arbitrary exception (its message is not assumed safe to surface), but it actively
+    defeats a validator that already did the work of naming its own remediation — a caller
+    reduced to ``-32603 Internal error: ValueError`` has to guess the legal enum values one
+    at a time against the allow-list in the module's own source, exactly what happened here:
+    cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-silently.md.
+
+    Subclasses ``ValueError`` (not a bare ``Exception``), so every existing
+    ``pytest.raises(ValueError, ...)`` call site against a function that now raises this
+    stays passing unchanged — this is a narrowing of WHICH ``ValueError`` an op handler
+    raises for validation, never a widening of the exception hierarchy those tests assert
+    against. A caller invoking the underlying Python function directly (not through the IPC
+    boundary) sees no behavior change at all; only ``dispatch_message``'s error-shaping reads
+    this marker.
+
+    Any future op-handler validator that already composes a caller-facing message (names its
+    own legal values, points at a concrete remediation) should raise this same class rather
+    than inventing a parallel signal — mirrors ``ContractPinError``'s own "any future sibling
+    ... should set this same attribute" guidance."""
+
+    caller_facing_validation = True
+
+
+#: Bound on the preserved message length for a `CallerFacingValidationError` — long enough for
+#: every enum-rejection message this module composes today (the longest, an ALL-invalid-enum-
+#: fields aggregate from `review_trail_write._validate`, runs well under 1000 chars), short
+#: enough to cap a pathological caller-constructed message from ballooning the JSON-RPC error
+#: payload. Never applies to the STRUCTURAL_PIN_ERROR branch above, which has its own message
+#: shape and is not subject to this bound.
+_CALLER_FACING_MESSAGE_MAX_LEN = 2000
+
 # ---------------------------------------------------------------------------
 # Per-invocation dispatch timeout (C3 / AC-3 / Gap-1)
 #
@@ -584,8 +627,69 @@ except Exception:
 # and the `OP_TIMEOUT_OVERRIDES` cross-repo parity re-export keep their existing shape —
 # a future op with a genuinely justified widened cap has a table to land in without
 # reintroducing this one's now-retired rationale.
+#
+# coverage.gate (2026-08-15, docs/plans/2026-08-15-the-close-s-three-deferred-defects-becom.md
+# § C1): re-added, NOT a regression of DEC-2's rationale. DEC-2's three retired rows
+# (ceremony.wsc_commit/wsc_resolve/wsc_tail) are FIXED-cost bookkeeping ops with a
+# regression-tested sub-2s target (test_wsc_tail_parity.py) — a widened cap there really
+# was masking a latency property that should instead be measured and enforced. coverage.gate
+# is structurally different: its cost is `_derive_dag_chain_set`'s DAG fixpoint walk, whose
+# wall-clock is O(chain_commits) git-subprocess calls with NO fixed target — a 100-commit
+# shared-branch window is expected to take longer than a 10-commit one BY DESIGN, so no
+# "under Xs" KPI bound is meaningful the way it is for wsc_tail's fixed-shape bookkeeping
+# path. Measured directly (bypassing IPC and the 30s runaway guard entirely, to isolate the
+# walk itself from any dispatch-layer effect) via
+# `coordinator_core.coverage.run_coverage_gate(from_handoff=<the 2026-08-14 chain-terminal
+# handoff that reproduced the timeout>, ...)` on this box on 2026-08-14/15: 162.8s wall-clock
+# for a 148-commit DAG chain (chain_commits=148, covered=65, uncovered=83, VERDICT=WARN — a
+# real, correct verdict, not a partial/aborted result), roughly 1.1s/commit. That is real,
+# monotonically-progressing work completing to a correct answer, not a hang — the 30s global
+# guard was firing on ordinary DAG-mode work at ~5x the size the guard's budget was ever sized
+# against. 600s gives ~3.7x headroom over the measured 162.8s baseline, sized against this
+# repo's own load norm (docs/wiki/machine-load-norm.md: 50-70 concurrent LLM sessions
+# contending for the same CPU/disk this walk's git subprocesses use) rather than the isolated
+# single-session measurement alone. Still bounded, not unlimited — a genuinely hung walk (e.g.
+# a lock wait) still gets cancelled, just at a budget matched to the work instead of one sized
+# for a different op class.
+#
+# ceremony.scoped_git_commit (2026-08-15, live incident: a ~2116-path publish commit
+# reached the engine and died with `op timed out after 30.0s`, dest HEAD unchanged, no
+# commit landed -- a genuine incomplete op, not the "timeout but the work landed" hazard
+# this file's own negative-spec above warns about). Re-added, NOT a regression of DEC-2's
+# rationale, for the same reason coverage.gate isn't one: DEC-2's three retired rows
+# (ceremony.wsc_commit/wsc_resolve/wsc_tail) are FIXED-cost bookkeeping ops with a
+# regression-tested sub-2s target (test_wsc_tail_parity.py) -- a widened cap there really
+# was masking a latency property that should instead be measured and enforced.
+# scoped_git_commit is structurally different: its cost scales with `len(paths)` (each
+# directory-shaped element alone spawns its own `git status` probe --
+# `scoped_git_commit.py::_directory_porcelain_lines` -- and `commit_pipeline`'s staging/
+# commit/push steps chunk large pathspecs into multiple `git` invocations rather than one
+# unbounded call, per the 2026-08-15 argv-length fixes 25268ed33/47e8defbb/96dee6478), so a
+# 2100-path commit is expected to take longer than a 12-path one BY DESIGN -- no "under Xs"
+# KPI bound is meaningful the way it is for wsc_tail's fixed-shape bookkeeping path.
+# Measured directly (bypassing IPC and the 30s runaway guard, calling
+# `scoped_git_commit._handler` in-process against a synthetic throwaway repo, to isolate the
+# op itself from any dispatch-layer effect -- never against this repo or the real publish
+# mirror) on this box on 2026-08-15: 3 trials, a fresh 2100-file synthetic git repo each
+# time, 53 `git` subprocess spawns per trial (stable across trials -- the chunking is
+# pathspec-count-driven, not random). Wall-clock: 25.7s, 36.6s, 40.9s -- two of three
+# samples ALREADY exceed the 30s default on this box's own ordinary contention, which is
+# itself direct evidence this is the same failure mode as the live incident, not a
+# hypothetical. 150.0s gives ~3.7x headroom over the measured 40.9s worst sample (same
+# ratio coverage.gate's precedent above used), sized against this repo's own load norm
+# (docs/wiki/machine-load-norm.md: 50-70 concurrent LLM sessions contending for the same
+# CPU/disk/process-spawn cost these 53 git subprocesses pay) rather than the isolated
+# single-session numbers alone -- the 25.7s-40.9s spread across three back-to-back trials
+# on an otherwise-idle-for-the-op tempdir already shows how much this box's ambient load
+# alone swings a fixed-shape workload; a 2100-path commit competing against the real load
+# norm has more headroom to lose, not less. Still bounded, not unlimited -- a genuinely
+# hung commit (e.g. a lock wait) still gets cancelled, just at a budget matched to a
+# pathspec-scaling op instead of one sized for a fixed-shape bookkeeping op.
 # ---------------------------------------------------------------------------
-_OP_TIMEOUT_OVERRIDES: Dict[str, float] = {}
+_OP_TIMEOUT_OVERRIDES: Dict[str, float] = {
+    "coverage.gate": 600.0,
+    "ceremony.scoped_git_commit": 150.0,
+}
 
 
 def _timeout_for(method: str) -> float:
@@ -824,21 +928,50 @@ _SCOPE_TOUCH_PATHS_KEY = "_scope_touch_paths"
 from coordinator_core.session.declared_writes import (  # noqa: E402
     _ACTIVE as _declared_writes_var,
 )
+from coordinator_core.locked_write import LockTimeout, held_lock  # noqa: E402
 
 # Cap on the number of paths a single declaration may carry (2026-08-04 F4
-# fix). Each declared path costs ~9-10ms warm (24ms cold) on this repo —
-# one `session.scope.touch()` call, itself a `git ls-files --full-name`
-# normalization plus a `touched.txt` append — on the dispatch hot path
-# every op and CLI passes through, budgeted at 300ms for the MUTATING
-# classification (`coordinator_core/benchmarks/budget-manifest.json`,
-# `defaults.MUTATING.target_ms`, itself marked `_provisional`). 16 paths at
-# the measured warm cost is ~160ms — under half the budget, leaving
-# headroom for the handler's own work and the cold-start case. A handler
+# fix). Re-measured 2026-08-14 (C4, docs/plans/2026-08-14-cli-authored-writes-
+# get-claimed.md), AFTER C1 (touch() forwards `root`, engaging
+# normalize_touch_path's zero-spawn arm) and C2 (one held_lock acquire per
+# batch, not per path) landed — both prior figures in this comment's history
+# (a ~9-10ms/24ms warm/cold estimate, and a since-superseded ~402ms/path
+# pre-C1 measurement) were wrong at the time they were written and are
+# superseded by this one; do not average across them.
+#
+# Method: 20 end-to-end trials of `_record_self_reported_touches` (this
+# module's own recorder — includes the one `held_lock` batch acquire, NOT
+# just `normalize_touch_path` in isolation) against 16 real tracked files in
+# this repo. Measured on this machine with ~130-135 concurrent
+# claude.exe/node.exe processes live (`tasklist`-counted immediately before
+# and after the run) — consistent with the documented load norm
+# (docs/wiki/machine-load-norm.md: 50-70 concurrent LLMs average, floor two
+# dozen), not an idle-box number.
+#
+# Result: mean 56.8ms, median 49.9ms, p90 73.2ms, max 148.9ms for the full
+# 16-path batch (per-path mean ~3.6ms). Against the 300ms MUTATING target
+# (`coordinator_core/benchmarks/budget-manifest.json`,
+# `defaults.MUTATING.target_ms` — marked `_provisional`, DR-276: the manifest
+# is not a runtime ceiling, so treat 300ms itself as not yet settled), even
+# the observed max leaves ~150ms of headroom for the handler's own work and
+# a colder start than any of these 20 trials hit. 16 stays: it costs well
+# under half the (provisional) budget at the measured tail, and a handler
 # legitimately writing more than 16 files in one call is off the shape this
 # contract was designed for (a single-write-primitive self-report, per the
 # module contract above) and should be revisited rather than raising the
 # cap. Excess entries are dropped (log-and-truncate), never silently.
 _MAX_DECLARED_TOUCH_PATHS = 16
+
+#: Sub-second, bounded acquire timeout for the ONE `touched.txt` batch lock
+#: `_record_self_reported_touches` takes per dispatch (C2,
+#: docs/plans/2026-08-14-cli-authored-writes-get-claimed.md) — see that
+#: function's own comment for why one acquire covers the whole
+#: `_MAX_DECLARED_TOUCH_PATHS`-bounded batch rather than one per path.
+#: Matches `session.scope._TOUCH_LOCK_TIMEOUT_SECS`'s per-call default; kept
+#: as a separate constant because the two call sites (batch vs. single-path)
+#: are independent tuning knobs even though they share a starting value
+#: today.
+_TOUCH_BATCH_LOCK_TIMEOUT_SECS = 0.2
 
 
 def _resolve_declared_touch_root_and_path(
@@ -872,9 +1005,14 @@ def _resolve_declared_touch_root_and_path(
     claim in a repo the caller has no standing in can steal a live native
     session's own file and corrupt that repo's session-liveness resolution.
     The returned `repo_root` (== `caller_repo_root`) is threaded through to
-    `session.scope.touch()`'s own `cwd` param so the claim lands in the
+    `session.scope.touch()`'s `cwd` param so the claim lands in the
     caller's own `.git/coordinator-sessions/<sid>/touched.txt` — the one a
-    same-repo `scoped_git_commit` call will actually read.
+    same-repo `scoped_git_commit` call will actually read. `_record_self_
+    reported_touches` ALSO forwards it as `touch()`'s `root` param: it was
+    resolved via `core.git_root` and realpath'd above, satisfying
+    `normalize_touch_path`'s "MUST be the worktree root itself"
+    precondition, so this call site can engage the zero-spawn fast arm
+    instead of re-deriving the root itself per declared path.
 
     Only a FILE may be declared, never a directory (F2 fix, 2026-08-04): a
     directory reaches `commit_pipeline.explicit_stage`'s `git add -- <dir>`
@@ -969,6 +1107,10 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
             if root:
                 caller_repo_root = os.path.realpath(root)
 
+        # Resolve every declared path FIRST (unchanged per-path fail-open
+        # try/except), before any locking decision — a resolution failure
+        # for one path must never affect the lock scope covering the rest.
+        resolved_paths = []
         for raw_path in declared:
             try:
                 resolved, skip_reason = _resolve_declared_touch_root_and_path(
@@ -981,13 +1123,100 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                         raw_path, sid, skip_reason,
                     )
                     continue
-                path_repo_root, abs_path = resolved
-                _scope.touch(sid, abs_path, path_repo_root)
+                resolved_paths.append(resolved)
             except Exception as exc:  # fail-open — never let one bad path abort the rest
                 _log().debug(
-                    "coordinator_core.ipc: self-reported touch failed for %r: %s",
+                    "coordinator_core.ipc: self-reported touch failed to "
+                    "resolve %r: %s",
                     raw_path, exc,
                 )
+
+        def _record_touches(use_lock: bool) -> None:
+            for path_repo_root, abs_path in resolved_paths:
+                try:
+                    _scope.touch(
+                        sid, abs_path, path_repo_root, root=path_repo_root,
+                        lock=use_lock,
+                    )
+                except Exception as exc:  # fail-open — one bad path must not abort the rest
+                    _log().debug(
+                        "coordinator_core.ipc: self-reported touch failed for "
+                        "%r: %s",
+                        abs_path, exc,
+                    )
+
+        if not resolved_paths:
+            return result
+
+        # C2 (docs/plans/2026-08-14-cli-authored-writes-get-claimed.md):
+        # acquire the touched.txt append lock ONCE for the whole declared-
+        # path batch, here at the recorder, rather than once per path inside
+        # `session.scope.touch()` — both to bound worst-case latency (one
+        # acquire instead of up to `_MAX_DECLARED_TOUCH_PATHS`) and because a
+        # per-path acquire nested inside this outer acquire would be
+        # re-entrant on the same target (`held_lock` deadlocks for the full
+        # timeout on re-entry; see `locked_write.py`'s negative-spec). Every
+        # resolved path in one call shares the same `caller_repo_root`
+        # (`_resolve_declared_touch_root_and_path` enforces single-repo
+        # containment against the caller's own repo — see its docstring), so
+        # they also share one `touched.txt` target and one lock. `touch()`
+        # is called with `lock=False` inside this scope so it does NOT
+        # attempt its own (re-entrant) acquire.
+        locked = False
+        touched_path: Optional[Path] = None
+        anchor_repo_root = resolved_paths[0][0]
+        try:
+            sdir = _session_core.session_dir(sid, anchor_repo_root)
+            if sdir:
+                touched_path = Path(sdir) / "touched.txt"
+        except Exception as exc:
+            _log().debug(
+                "coordinator_core.ipc: could not resolve session dir for "
+                "batch touch lock: %s", exc,
+            )
+        if touched_path is not None:
+            try:
+                with held_lock(
+                    Path(os.path.abspath(str(touched_path))),
+                    anchor_root=Path(os.path.realpath(anchor_repo_root)),
+                    timeout=_TOUCH_BATCH_LOCK_TIMEOUT_SECS,
+                ):
+                    _record_touches(use_lock=False)
+                    # Mark the batch done as soon as the body completes, not
+                    # after the `with` statement exits — `held_lock`'s
+                    # `finally` (`_plat_unlock`/`os.close`) can raise
+                    # `OSError` at RELEASE time, AFTER `_record_touches`
+                    # already ran the whole batch. Setting `locked = True`
+                    # here (inside the `with`) means a release-time OSError
+                    # is still caught below, but `locked` is already `True`
+                    # by then, so `if not locked:` does NOT re-run
+                    # `_record_touches` — over EVERY resolved path — a
+                    # second time. Mirrors `scope.py::touch()`'s equivalent
+                    # fix. Review: EM addendum (2026-08-15) to code-reviewer
+                    # P1/P2.
+                    locked = True
+            except (LockTimeout, RuntimeError, ValueError, OSError) as exc:
+                # LockTimeout: contended past the bound. RuntimeError: no
+                # lock backend on this platform. ValueError: held_lock's own
+                # absolute-path precondition (defensive; both paths above
+                # are realpath'd/abspath'd). OSError: held_lock's acquire
+                # path (lock_dir.mkdir, os.open of the sidecar fd) or its
+                # release path (_plat_unlock, os.close in the `finally`) can
+                # both raise a plain OSError — this site's own outer
+                # `except Exception` (below) would also catch it, but this
+                # tuple is the one asserting the intended degrade-not-abort
+                # contract explicitly, same as `scope.py::touch()`'s
+                # matching tuple. Review: code-reviewer P1/P2 (2026-08-14).
+                # All four fail open: degrade to
+                # per-path locking (touch()'s own `lock=True` default),
+                # which itself further degrades to an unlocked append on the
+                # same exception classes — never abort the whole batch.
+                _log().debug(
+                    "coordinator_core.ipc: batch touch lock unavailable, "
+                    "degrading to per-path locking: %s", exc,
+                )
+        if not locked:
+            _record_touches(use_lock=True)
     except Exception as exc:  # fail-open — recording must never fail the op
         _log().debug(
             "coordinator_core.ipc: self-reported touch recording failed: %s", exc
@@ -1173,12 +1402,19 @@ def _handler_exception_error(exc: BaseException) -> dict:
 
     Selects STRUCTURAL_PIN_ERROR (preserving the exception's own message, which already
     states the remediation — see ContractPinError) when ``exc`` carries the
-    ``structurally_wedged`` duck-type marker; otherwise falls back to the pre-existing
-    generic INTERNAL_ERROR shape (class-name-only message — the original message text is
-    not assumed safe to surface for an arbitrary, unclassified exception).
+    ``structurally_wedged`` duck-type marker; selects INVALID_PARAMS (preserving the
+    exception's own message, length-bounded — see CallerFacingValidationError) when ``exc``
+    carries the ``caller_facing_validation`` duck-type marker; otherwise falls back to the
+    pre-existing generic INTERNAL_ERROR shape (class-name-only message — the original message
+    text is not assumed safe to surface for an arbitrary, unclassified exception).
     """
     if getattr(exc, "structurally_wedged", False):
         return {"code": STRUCTURAL_PIN_ERROR, "message": f"{type(exc).__name__}: {exc}"}
+    if getattr(exc, "caller_facing_validation", False):
+        message = str(exc)
+        if len(message) > _CALLER_FACING_MESSAGE_MAX_LEN:
+            message = message[:_CALLER_FACING_MESSAGE_MAX_LEN] + "...(truncated)"
+        return {"code": INVALID_PARAMS, "message": message}
     return {"code": INTERNAL_ERROR, "message": f"Internal error: {type(exc).__name__}"}
 
 

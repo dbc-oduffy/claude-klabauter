@@ -123,12 +123,12 @@ import subprocess
 from coordinator_core.win_portability import no_console_creationflags
 import time
 from pathlib import Path
-from typing import FrozenSet, List, Optional
+from typing import Dict, FrozenSet, List, Optional
 
 from coordinator_core import chain_ancestry_waivers, chain_attribution, session_attribution
 from coordinator_core.session_attribution import GitLogFailed
 from coordinator_core.claim_state import resolve_claim_state
-from coordinator_core.ipc import register_op
+from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
@@ -629,8 +629,52 @@ def _verify_reviewer_evidence(
     logger.warning("review_trail.write advisory (would refuse if enforcing): %s", message)
 
 
+def _bare_reviewer_hint(reviewer: str) -> str:
+    """`" — did you mean 'code-reviewer'?"` when *reviewer* is a valid name
+    wearing its agent-id or subagent-type dress (``coordinator:code-reviewer``,
+    ``agent:staff-eng``), else ``""``.
+
+    `_VALID_REVIEWERS` holds BARE names; the value nearest to hand at a
+    ceremony seam is the id the EM just dispatched, which differs from the
+    accepted value only by a namespace prefix. Naming the intended value beats
+    making the caller diff their string against a seven-item allow-list.
+    """
+    _prefix, sep, bare = reviewer.rpartition(":")
+    if sep and bare in _VALID_REVIEWERS:
+        return f" — did you mean {bare!r}?"
+    return ""
+
+
+def _scale_shaped_scope_hint(scope: str) -> str:
+    """`_bare_reviewer_hint`'s sibling for `scope`: `""` unless *scope* is a
+    member of `decide_review_scale`'s `scale` vocabulary (`none` |
+    `code-reviewer` | `partitioned` | `unresolved`), in which case names the
+    axis collision explicitly rather than leaving the caller to notice it
+    unaided from the allowed-set alone. `scope` (this module) is the
+    record's coverage BREADTH; `scale` (`workstream_complete.
+    directives_review.decide_review_scale`) is the review's PARTITION
+    STRATEGY — two different axes that happen to share no legal values
+    except by coincidence of a caller reading the wrong field name off
+    `gates.review_scale`. See cross-repo/inbox/2026-08-15-example-retrieval-repo-em-
+    wsc-review-trail-skips-silently.md."""
+    if scope in _REVIEW_SCALE_VOCABULARY:
+        return (
+            f" (got {scope!r}, which is decide_review_scale's partition-strategy "
+            "vocabulary, not scope's — scope is this record's coverage breadth, a "
+            "different axis)"
+        )
+    return ""
+
+
 _VALID_SCOPES = frozenset({"chain", "session", "workstream-close-auto"})
 _VALID_VERDICTS = frozenset({"ok", "warn", "blocked", "waived", "pending"})
+
+#: `decide_review_scale`'s (`workstream_complete/directives_review.py`) `scale`
+#: vocabulary — a DIFFERENT axis from this module's `scope` (coverage breadth vs.
+#: partition strategy). `partitioned` is the natural wrong guess a caller who just read
+#: `gates.review_scale` makes when asked for `scope`: cross-repo/inbox/2026-08-15-
+#: example-retrieval-repo-em-wsc-review-trail-skips-silently.md. See `_scale_shaped_scope_hint`.
+_REVIEW_SCALE_VOCABULARY = frozenset({"none", "code-reviewer", "partitioned", "unresolved"})
 _VALID_SCOPE_KINDS = frozenset({"diff", "plan", "integration"})
 
 # Only [A-Za-z0-9_-] permitted in workstream slug (reject-to-null otherwise).
@@ -717,7 +761,12 @@ def _resolve_ref_to_sha(token: str, cwd: Path) -> str:
     return out
 
 
-def _reject_empty_sha_range(sha_range: str, caller_worktree: Optional[Path]) -> None:
+def _reject_empty_sha_range(
+    sha_range: str,
+    caller_worktree: Optional[Path],
+    *,
+    batch_context: Optional[dict] = None,
+) -> None:
     """Refuse to write a record whose diff-shaped ``sha_range`` resolves to
     ZERO commits (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-
     in-a-git-rev-6679bf76eb8a.yaml).
@@ -765,6 +814,12 @@ def _reject_empty_sha_range(sha_range: str, caller_worktree: Optional[Path]) -> 
     # exercise write-path logic with synthetic SHAs) has no real commit
     # history to check emptiness against — skip rather than hard-fail on
     # `git rev-list` erroring out against a non-repo.
+    # Security invariant (state/subagent-share/60a896a5-0b53-494d-b77a-
+    # b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1):
+    # `is_work_tree_rc` is deliberately NOT read from `batch_context` here —
+    # same reasoning as `_guard_foreign_session_range`'s identical comment:
+    # this is a BLOCKING disposition, and `build_batch_attribution_context`
+    # never populates this key. Always re-derived, per call.
     is_work_tree_rc, _out, _err = _git_runner(
         ["git", "rev-parse", "--is-inside-work-tree"], str(caller_worktree),
     )
@@ -1043,13 +1098,18 @@ def _deliverable_id_matched_untrailered_shas(
     (this session's own, or a different one) is excluded unconditionally,
     regardless of any Deliverable-Id it also carries.
 
-    Exact string equality only -- no normalization, no case-folding. Returns
-    the empty set on any git failure or when `shas`/`deliverable_id` is
-    empty -- fail-closed, same contract as this module's sibling foreign-sha
-    classifiers.
+    Join key routed through `deliverable_equivalence.canonicalize()` (C6b/
+    AC11) -- was previously exact string equality with no normalization.
+    Returns the empty set on any git failure or when `shas`/`deliverable_id`
+    is empty -- fail-closed, same contract as this module's sibling
+    foreign-sha classifiers, unchanged by this conversion.
     """
     if not shas or not deliverable_id:
         return frozenset()
+    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
+
+    equivalence_map = load_equivalence_map(caller_worktree)
+    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
     rc, out, _err = _git_runner(
         [
             "git", "log", "--no-walk",
@@ -1082,7 +1142,7 @@ def _deliverable_id_matched_untrailered_shas(
         sha, session_trailer, deliverable_trailer = parts
         if session_trailer.strip():
             continue
-        if deliverable_trailer.strip() == deliverable_id:
+        if canonicalize(deliverable_trailer.strip(), equivalence_map) == canonical_deliverable_id:
             matched.add(sha.strip())
     return frozenset(matched)
 
@@ -1091,6 +1151,8 @@ def _guard_foreign_session_range(
     sha_range: str,
     own_session_id: str,
     caller_worktree: Path,
+    *,
+    batch_context: Optional[dict] = None,
 ) -> FrozenSet[str]:
     """Refuse, or force affirmative disambiguation of, a diff-shaped sha_range
     that spans commits not attributable to the writing session.
@@ -1240,6 +1302,13 @@ def _guard_foreign_session_range(
     not a git repo at all" — there is no real commit history here to reason
     about, so the guard is a no-op rather than a hard git-subprocess failure.
     """
+    # Security invariant (state/subagent-share/60a896a5-0b53-494d-b77a-
+    # b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1):
+    # `is_work_tree_rc` is deliberately NOT read from `batch_context` here —
+    # this is a BLOCKING disposition (a forged `0`/`2` value would take the
+    # "confirmed not a git work tree" no-op branch and skip this entire
+    # guard). `build_batch_attribution_context` never populates this key;
+    # this check is always re-derived, per call, from a real git invocation.
     is_work_tree_rc, _out, is_work_tree_err = _git_runner(
         ["git", "rev-parse", "--is-inside-work-tree"], str(caller_worktree),
     )
@@ -1429,6 +1498,14 @@ def _guard_foreign_session_range(
     # names a different session is refused exactly as before, unconditionally,
     # regardless of any Deliverable-Id it also carries.
     if unplaced_or_foreign:
+        # Security invariant (state/subagent-share/60a896a5-0b53-494d-b77a-
+        # b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1):
+        # `deliverable_id` is deliberately NOT read from `batch_context` —
+        # this recovery path PULLS a commit out of `unplaced_or_foreign`
+        # (a BLOCKING-disposition input to case 1/2/3 below), so a forged
+        # value here could recover a genuinely foreign commit as if it were
+        # this session's own. `build_batch_attribution_context` never
+        # populates this key; it is always re-derived, per call.
         own_deliverable_id = _own_deliverable_id_for_recovery(
             own_session_id, caller_worktree,
         )
@@ -1622,8 +1699,290 @@ _ZERO_CREDIT_REASON_FOREIGN_SESSION = "foreign_session_narrowing"
 _ZERO_CREDIT_REASON_NON_CODE_SCOPE_KIND = "non_code_scope_kind"
 
 
+# ---------------------------------------------------------------------------
+# C1 batching -- one union lookup per `write_review_trail_many` batch
+# instead of N per-slice re-derivations
+# (docs/plans/2026-08-15-the-review-trail-write-stops-paying-n-wa.md)
+#
+# `write_review_trail_many` calls `write_review_trail_entry` once per slice,
+# each a one-commit `sha_range` (this module's own problem statement: "a
+# different one-commit range"). Measured classification of the ~7 per-slice
+# git spawns, before changing shape:
+#
+#   (a) IDENTICAL across every slice of one batch, hoistable outright:
+#       - `git rev-parse --is-inside-work-tree` -- same cwd, same answer,
+#         every time. Spawned TWICE per slice today (once in
+#         `_guard_foreign_session_range`, once again in
+#         `_reject_empty_sha_range`), so this alone is 2N spawns collapsing
+#         to 1 for the whole batch.
+#       - `_own_deliverable_id_for_recovery(own_session_id, caller_worktree)`
+#         -- takes no `sha_range` parameter at all; identical for every
+#         slice (only reached on the `unplaced_or_foreign` branch, so not
+#         every slice pays it today, but every slice that does asks the
+#         identical question).
+#   (b) range-scoped, but answerable from ONE walk over the union of the
+#       slice SHAs -- ONLY the write-time zero-chain-terminal-credit
+#       diagnostic's P2 `chain_attribution` walk
+#       (`_walk_range_commit_session_trailers`'s
+#       `bulk_commit_attribution_map` + `bulk_grep_attributed_shas` pair,
+#       2 spawns/slice). Every slice is a single-commit range by
+#       construction, so `git log --no-walk <end1> <end2> ... <endN>` lists
+#       every slice's own single-commit window entry in ONE call, with no
+#       ancestor-graph resolution needed (`--no-walk` never walks parents),
+#       replacing 2N spawns with 2 for the whole batch.
+#   (c) irreducibly per-slice, NOT touched here: everything inside
+#       `_guard_foreign_session_range` whose case-1/2/3 disposition depends
+#       on the SPECIFIC narrow range's own commit set (`trailer_foreign_
+#       shas`, `_own_session_touched_paths_and_untrailered_flag`,
+#       `detect_foreign_commits`, `range_is_contiguous_suffix`, and the
+#       ambiguous-single-commit `git rev-list --count` check) -- ~4-5
+#       spawns/slice remain O(N). The guard's refusal STRENGTH (Anti-scope
+#       constraint 3) depends on evaluating each slice's own range on its
+#       own terms; collapsing those into one shared answer risks exactly
+#       the isolation/strength regression the plan's Anti-scope forbids
+#       ("Do not batch the per-slice op calls into one... Speed must not be
+#       bought with the isolation property"). Left per-slice, and NOT
+#       claimed as O(1)-in-N by this change — see the executor report for
+#       the measured before/after split.
+#
+# (b) is deliberately scoped to the write-time zero-chain-terminal-credit
+# DIAGNOSTIC only -- purely advisory (never raises, never blocks, never
+# changes `verdict`; see that section's own module comment above) -- never
+# the foreign-session guard itself, so Anti-scope constraint 3 (guard
+# refusal strength) is untouched by this section. The fast path below can
+# only ever UNDER-count a range that turns out NOT to be single-commit (it
+# inspects only the range's own endpoint): per this module's own documented
+# risk tolerance ("today's harmless false positive... [never]... a false
+# NEGATIVE" -- `_walk_range_commit_session_trailers`'s pre-existing
+# docstring, echoing the plan's own Anti-scope constraint 1), under-counting
+# can only make this advisory flag fire in the SAME direction already
+# tolerated (an extra, harmless warning on a record that in fact still
+# credits something) -- it can never SILENCE a genuinely zero-credit write
+# the unbatched walk would have caught, because a batched positive requires
+# the endpoint itself to be foreign; a non-single-commit range's OTHER
+# (unexamined) commits could only ADD more-foreign evidence, never subtract
+# from what the endpoint alone already showed. A slice whose endpoint sha is
+# not present in the precomputed window (batch prep skipped a non-hex/
+# unparseable range, or `caller_worktree` was `None`) transparently falls
+# back to the original, unbatched, fully-general per-range walk --
+# correctness for that shape is unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _range_end_sha(sha_range: str) -> Optional[str]:
+    """Extract the right-hand (tip) token of a `<start>[..|...]<end>` range,
+    or `None` if `sha_range` carries no `..`/`...` separator, or the token is
+    not a concrete SHA-shaped hex string. Callers only ever hand this a
+    `sha_range` that has already been through `_resolve_symbolic_range`, so
+    a real symbolic ref (``HEAD``, a branch name) is not expected here — this
+    is a defensive parse, not a resolution step.
+    """
+    sep = "..." if "..." in sha_range else (".." if ".." in sha_range else None)
+    if sep is None:
+        return None
+    _left, _sep, end = sha_range.partition(sep)
+    end = end.strip()
+    if not end or not _HEX_TOKEN_RE.match(end):
+        return None
+    return end
+
+
+def _sha_range_is_single_commit_shaped(sha_range: str, end_sha: str) -> bool:
+    """True iff *sha_range* is genuinely a single-commit range whose sole
+    member is *end_sha* — i.e. shaped ``<end_sha>^..<end_sha>`` (the only
+    form `write_review_trail_many`'s callers construct per-slice; see
+    `workstream_complete.__init__.py` line ~2965 and
+    `directives_review.py`'s own docstring for the two spellings, ``^..`` and
+    the equivalent-but-unused-here bare ``..`` single-parent form).
+
+    P2 fix (Finding 2, state/subagent-share/60a896a5-0b53-494d-b77a-
+    b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md): `_range_end_sha`
+    alone only extracts the right-hand token — it says nothing about whether
+    the LEFT-hand token actually names *end_sha*'s sole parent. A genuine
+    multi-commit range (e.g. ``abc123..def456`` spanning several commits)
+    whose endpoint is foreign but whose earlier commits are the writing
+    session's own would, without this check, take the batched fast path in
+    `_walk_range_commit_session_trailers` and be reported as "every commit
+    is foreign" from the endpoint alone — a false
+    `chain_terminal_zero_credit_warning`. Refusing the fast path for
+    anything but this exact shape routes such a range to the original,
+    fully-general per-slice `chain_attribution.bulk_commit_attribution_map`
+    walk instead, which correctly examines every commit in the range.
+    """
+    left, sep, right = sha_range.partition("^..")
+    if not sep:
+        return False
+    return left == end_sha and right == end_sha
+
+
+def _bulk_commit_attribution_map_no_walk(
+    shas: List[str], cwd: str, run,
+) -> Dict[str, "chain_attribution.CommitAttribution"]:
+    """`--no-walk` sibling of `chain_attribution.bulk_commit_attribution_map`:
+    resolves a bare LIST of concrete commit SHAs in ONE `git log --no-walk`
+    invocation instead of one `git log <range>` walk per SHA. `--no-walk`
+    lists exactly the named commits, with no ancestor-graph resolution, so N
+    single-commit slice endpoints resolve in one call.
+
+    Reuses `chain_attribution`'s own record format/parser (`_LOG_FORMAT` /
+    `_parse_log_records`) so parsing semantics can never diverge from the P2
+    primitive this module is required to use exclusively (module docstring;
+    plan Anti-scope constraint 1). `chain_attribution.py` is outside this
+    chunk's edit scope, so the small per-record `CommitAttribution`
+    construction is duplicated here rather than factored out there — see
+    `chain_attribution.bulk_commit_attribution_map`'s own body for the
+    canonical version this mirrors field-for-field.
+
+    Raises `GitLogFailed` on a non-zero `git log` returncode — same
+    fail-closed contract as the primitive it mirrors.
+
+    A malformed/non-hex token in `shas` simply fails to appear in `git
+    log`'s output (git resolves what it can and is silent about the rest,
+    or the whole call fails per the `GitLogFailed` contract above) — it is
+    never included in the returned map. Absence from the map already means
+    "not in the walked window" to every caller, so no separate signal for a
+    malformed token is needed. In practice this is unreachable here: the
+    sole caller (`build_batch_attribution_context`) pre-filters `shas`
+    through `_HEX_TOKEN_RE` before calling in.
+    """
+    if not shas:
+        return {}
+    rc, out, err = run(
+        ["git", "log", "--no-walk", f"--format={chain_attribution._LOG_FORMAT}", *shas],
+        cwd,
+    )
+    if rc != 0:
+        raise GitLogFailed(
+            "git log --no-walk failed while batch-resolving commit "
+            f"attribution for {len(shas)} sha(s): {err.strip() or 'unknown error'}"
+        )
+    result: Dict[str, "chain_attribution.CommitAttribution"] = {}
+    for sha, parents, trailer in chain_attribution._parse_log_records(out):
+        parent_shas = [p for p in parents.split(" ") if p]
+        is_merge = len(parent_shas) > 1
+        trailer_values = [v for v in trailer.split("\n") if v.strip()]
+        if not trailer_values:
+            trailer_session_id: Optional[str] = None
+            ambiguous = False
+        elif len(trailer_values) == 1:
+            trailer_session_id = trailer_values[0].strip()
+            ambiguous = False
+        else:
+            trailer_session_id = trailer_values[0].strip()
+            ambiguous = True
+        result[sha] = chain_attribution.CommitAttribution(
+            sha=sha, trailer_session_id=trailer_session_id,
+            is_merge=is_merge, trailer_ambiguous=ambiguous,
+        )
+    return result
+
+
+def _bulk_grep_attributed_shas_no_walk(
+    shas: List[str], session_id: Optional[str], cwd: str, run,
+) -> FrozenSet[str]:
+    """`--no-walk` sibling of `chain_attribution.bulk_grep_attributed_shas` --
+    see `_bulk_commit_attribution_map_no_walk`'s docstring for the shape and
+    rationale. Same validation/failure contract as the singular primitive:
+    empty frozenset on a malformed `session_id` or any git failure, never
+    fail-open.
+    """
+    if not shas or not session_id or not chain_attribution._UUID_RE.match(session_id):
+        return frozenset()
+    rc, out, err = run(
+        [
+            "git", "log", "--no-walk", "--no-merges",
+            f"--grep=^Session-Id: {session_id}$",
+            "--format=%H",
+            *shas,
+        ],
+        cwd,
+    )
+    if rc != 0:
+        return frozenset()
+    return frozenset(line.strip() for line in out.splitlines() if line.strip())
+
+
+def build_batch_attribution_context(
+    caller_worktree: Optional[Path],
+    sha_ranges: List[str],
+) -> dict:
+    """Precompute, ONCE for a whole `write_review_trail_many` batch, the
+    batchable ADVISORY-ONLY work this module's write-side guards do not
+    depend on: `own_session_id`, and the P2 attribution window/grep answer
+    for every slice's single-commit endpoint (feeds
+    `_diagnose_zero_chain_terminal_credit` only).
+
+    SECURITY INVARIANT (state/subagent-share/60a896a5-0b53-494d-b77a-
+    b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1): nothing
+    reachable from this context's return value may influence a BLOCKING
+    disposition (`_guard_foreign_session_range`, `_reject_empty_sha_range`)
+    — it may only pre-compute data for the advisory zero-credit diagnostic,
+    which never raises and never blocks a write. This context reaches every
+    JSON-RPC caller unfiltered as `_batch_context` (`ipc.py` does not strip
+    unknown params keys), so any key here that a guard reads to short-
+    circuit a blocking verdict is forgeable over the wire. The
+    `is_work_tree_rc` and `deliverable_id` keys this function formerly
+    populated were removed for exactly that reason — see the two guards'
+    own comments at their (now-always-live) git re-derivation call sites.
+    Do not add a new key here without first checking every consumer treats
+    it as advisory-only.
+
+    Returns `{}` when `caller_worktree` is `None` (the same test-isolation
+    no-op contract every other git-backed check in this module honors) or
+    `sha_ranges` is empty. An empty/partial context is always a safe,
+    correctness-preserving input to every consumer below — each one falls
+    back to its original, fully-general per-slice computation for whatever
+    a partial context does not cover. This function never raises.
+    """
+    if caller_worktree is None or not sha_ranges:
+        return {}
+
+    # Security invariant (state/subagent-share/60a896a5-0b53-494d-b77a-
+    # b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1): nothing
+    # reachable from `_batch_context` may influence a blocking disposition
+    # in `_guard_foreign_session_range` / `_reject_empty_sha_range` — it may
+    # only pre-compute ADVISORY data (the zero-chain-terminal-credit
+    # diagnostic). `is_work_tree_rc` and `deliverable_id` were removed from
+    # this context because both were read by those two guards to short-
+    # circuit a blocking verdict, and `ipc.py` does not strip unknown
+    # top-level params keys — any JSON-RPC caller could forge
+    # `_batch_context` over the wire (`review_trail_write.py`'s own
+    # `_review_trail_write_handler` does `params.get("_batch_context")`
+    # unconditionally) and pick a value for either key that flips a guard's
+    # verdict, since `write_review_trail_many`'s in-process caller and a
+    # wire caller dispatch through the exact same `params` dict. Do NOT
+    # re-add either key to this context, or re-thread either key into a
+    # guard's blocking path, without re-deriving this analysis: only
+    # `own_session_id`, `attribution_window`, and `grep_attributed` are safe
+    # here, because `_diagnose_zero_chain_terminal_credit` (the sole
+    # consumer of the latter two) never raises and never blocks a write —
+    # a forged value there can only make an advisory warning wrong.
+    own_session_id = _resolve_session_id(caller_worktree)
+    context: dict = {}
+    if own_session_id:
+        context["own_session_id"] = own_session_id
+
+    end_shas = sorted({s for s in (_range_end_sha(r) for r in sha_ranges) if s})
+    if not end_shas:
+        return context
+
+    try:
+        context["attribution_window"] = _bulk_commit_attribution_map_no_walk(
+            end_shas, str(caller_worktree), _git_runner,
+        )
+    except GitLogFailed:
+        return context
+
+    if own_session_id:
+        context["grep_attributed"] = _bulk_grep_attributed_shas_no_walk(
+            end_shas, own_session_id, str(caller_worktree), _git_runner,
+        )
+    return context
+
+
 def _walk_range_commit_session_trailers(
     sha_range: str, own_session_id: str, caller_worktree: Path,
+    *, batch_context: Optional[dict] = None,
 ) -> Optional[dict[str, bool]]:
     """Return ``{sha: is_foreign}`` for every commit git resolves in
     ``sha_range``, or ``None`` if the range fails to resolve (unparseable,
@@ -1687,6 +2046,29 @@ def _walk_range_commit_session_trailers(
     and `bulk_grep_attributed_shas` still raise/never-fail-open internally;
     see their own docstrings and § Anti-scope 13 of the governing plan).
     """
+    # C1 fast path: a batch-precomputed window covering this range's own
+    # single-commit endpoint answers this call from memory, ZERO additional
+    # git spawns. See the "C1 batching" module comment above
+    # `build_batch_attribution_context` for the full argument (including why
+    # this can only ever under-count, never over-credit, a non-single-commit
+    # range — the tolerated direction). Any other shape (no batch_context, a
+    # session-id mismatch, or an endpoint the batch prep did not cover) falls
+    # through unchanged to the original per-range walk below.
+    if batch_context and batch_context.get("own_session_id") == own_session_id:
+        window_all = batch_context.get("attribution_window")
+        if window_all is not None:
+            end_sha = _range_end_sha(sha_range)
+            if (
+                end_sha is not None
+                and end_sha in window_all
+                and _sha_range_is_single_commit_shaped(sha_range, end_sha)
+            ):
+                grep_attributed = batch_context.get("grep_attributed") or frozenset()
+                foreign = chain_attribution.foreign_shas_from_window(
+                    [end_sha], own_session_id, window_all, grep_attributed,
+                )
+                return {end_sha: (end_sha in foreign)}
+
     try:
         window = chain_attribution.bulk_commit_attribution_map(
             sha_range, str(caller_worktree), _git_runner,
@@ -1731,6 +2113,8 @@ def _diagnose_zero_chain_terminal_credit(
     scope_kind: str,
     own_session_id: str,
     caller_worktree: Optional[Path],
+    *,
+    batch_context: Optional[dict] = None,
 ) -> Optional[dict]:
     """Predict, from write-time-available information only, whether this
     record is a PROVABLE zero-credit write at the chain-terminal discharge
@@ -1763,7 +2147,9 @@ def _diagnose_zero_chain_terminal_credit(
         return None
     if caller_worktree is None:
         return None
-    foreign_map = _walk_range_commit_session_trailers(sha_range, own_session_id, caller_worktree)
+    foreign_map = _walk_range_commit_session_trailers(
+        sha_range, own_session_id, caller_worktree, batch_context=batch_context,
+    )
     if not foreign_map:
         return None
     foreign = frozenset(sha for sha, is_foreign in foreign_map.items() if is_foreign)
@@ -2270,26 +2656,45 @@ def _validate(
             f"review_trail.write: diff_loc must be a non-negative integer, got {diff_loc}"
         )
 
+    enum_errors: list[str] = []
     if reviewer not in _VALID_REVIEWERS:
-        raise ValueError(
+        enum_errors.append(
             f"review_trail.write: reviewer {reviewer!r} is invalid; "
             f"allowed: {' | '.join(sorted(_VALID_REVIEWERS))}"
+            f"{_bare_reviewer_hint(reviewer)}"
         )
     if scope not in _VALID_SCOPES:
-        raise ValueError(
+        enum_errors.append(
             f"review_trail.write: scope {scope!r} is invalid; "
-            f"allowed: {' | '.join(sorted(_VALID_SCOPES))}"
+            f"allowed: {' | '.join(sorted(_VALID_SCOPES))} "
+            "(scope is the record's coverage breadth, not the review's partition scale)"
+            f"{_scale_shaped_scope_hint(scope)}"
         )
     if verdict not in _VALID_VERDICTS:
-        raise ValueError(
+        enum_errors.append(
             f"review_trail.write: verdict {verdict!r} is invalid; "
             f"allowed: {' | '.join(sorted(_VALID_VERDICTS))}"
         )
     if scope_kind not in _VALID_SCOPE_KINDS:
-        raise ValueError(
+        enum_errors.append(
             f"review_trail.write: scope_kind {scope_kind!r} is invalid; "
             f"allowed: {' | '.join(sorted(_VALID_SCOPE_KINDS))}"
         )
+    # ALL invalid enum fields in one raise, not first-wins: a caller fixing a
+    # closed-vocabulary mistake one field per invocation pays a round trip per
+    # field, and every one of those round trips happens at a ceremony seam.
+    # Each message is byte-identical to its former standalone form, so a
+    # single-invalid-field call reads exactly as before.
+    #
+    # B (cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-
+    # silently.md): `CallerFacingValidationError`, not a bare `ValueError` --
+    # these messages already name their own legal value set, and a direct
+    # (non-IPC) caller sees no change since it still subclasses `ValueError`.
+    # Across the IPC boundary this now reaches the caller as `-32602 <this
+    # message>` instead of the generic `-32603 Internal error: ValueError`
+    # that discarded it before.
+    if enum_errors:
+        raise CallerFacingValidationError(" | ".join(enum_errors))
     # scope_kind=diff requires sha_range to contain ".." (writer/consumer symmetry).
     if scope_kind == "diff" and ".." not in sha_range:
         raise ValueError(
@@ -2318,6 +2723,7 @@ def write_review_trail_entry(
     execution_basis: Optional[str] = None,
     caller_worktree: Optional[Path] = None,
     _timestamp: Optional[str] = None,
+    _batch_context: Optional[dict] = None,
 ) -> dict:
     """Write one JSON entry to state/review-trail/.
 
@@ -2357,6 +2763,23 @@ def write_review_trail_entry(
                       (AC5, docs/plans/2026-08-11-review-trail-carries-execution-basis.md).
         caller_worktree — the caller's repo worktree root (from main_worktree_root(repo_root)).
         _timestamp  — injectable timestamp string for test isolation (bypasses _compute_timestamp).
+        _batch_context — intended for internal in-process passthrough only
+                      (a `build_batch_attribution_context(...)` result
+                      threaded down by `ceremony.tail_ops.
+                      write_review_trail_many`, C1, docs/plans/2026-08-15-
+                      the-review-trail-write-stops-paying-n-wa.md), but
+                      `ipc.py` does NOT strip unknown params keys, so this
+                      key is reachable from any JSON-RPC caller over the
+                      wire — treat it as attacker-controlled, not as proof
+                      of an in-process caller. This is why every consumer
+                      of this dict is restricted to ADVISORY-only data
+                      (`own_session_id` for the zero-chain-terminal-credit
+                      diagnostic's own-session comparison, plus the P2
+                      attribution window/grep answers that diagnostic
+                      alone reads) — see `build_batch_attribution_context`'s
+                      own docstring "SECURITY INVARIANT" paragraph. `None`
+                      (default) preserves every existing call site's
+                      behavior exactly.
 
     Returns:
         {"out_path": str, "sha_range": str, "reviewer": str, "scope": str,
@@ -2521,7 +2944,9 @@ def write_review_trail_entry(
     # caller_worktree is the same test-isolation no-op contract
     # _resolve_symbolic_range documents above.
     if scope_kind in ("diff", "plan") and caller_worktree is not None:
-        _guard_foreign_session_range(sha_range, resolved_session_id, caller_worktree)
+        _guard_foreign_session_range(
+            sha_range, resolved_session_id, caller_worktree, batch_context=_batch_context,
+        )
 
     # Empty-range rejection (state/bug-backlog/2026-08-08-cmd-exe-shim-eats-
     # the-caret-in-a-git-rev-6679bf76eb8a.yaml): a caller-side mangler (the
@@ -2544,7 +2969,7 @@ def write_review_trail_entry(
     # the guard's contract still fires first for a range that fails to
     # resolve; this backstop only fires for a range that resolves and
     # resolves to zero commits.
-    _reject_empty_sha_range(sha_range, caller_worktree)
+    _reject_empty_sha_range(sha_range, caller_worktree, batch_context=_batch_context)
 
     # Resolve workstream.
     resolved_workstream = _resolve_workstream(workstream, caller_worktree, resolved_session_id)
@@ -2601,8 +3026,18 @@ def write_review_trail_entry(
     # (see the "Write-time zero-chain-terminal-credit diagnostic" section
     # above) — present in the result ONLY when a zero-credit shape is
     # provable, so an ordinary write's result/log stays unchanged.
+    #
+    # NEGATIVE SPEC — this diagnostic is the one surface still reachable from
+    # `_batch_context`, whose keys a JSON-RPC caller can forge (`ipc.py`
+    # strips no unknown params). That is safe ONLY because the warning is
+    # non-persisted and non-gating: a forger can fabricate or suppress a log
+    # line, nothing more. Elevating this warning to gate a write, or
+    # persisting it into the record, re-opens the a76c9fa bypass class —
+    # re-derive its inputs the way `_guard_foreign_session_range` does before
+    # giving it any authority.
     zero_credit_diagnostic = _diagnose_zero_chain_terminal_credit(
         sha_range, scope, scope_kind, resolved_session_id, caller_worktree,
+        batch_context=_batch_context,
     )
     if zero_credit_diagnostic is not None:
         logger.warning(
@@ -2702,5 +3137,16 @@ async def _review_trail_write_handler(
         reviewer_evidence=params.get("reviewer_evidence"),
         execution_basis=params.get("execution_basis"),
         caller_worktree=caller_worktree,
+        # C1 (docs/plans/2026-08-15-the-review-trail-write-stops-paying-n-
+        # wa.md): intended as an internal-only in-process passthrough —
+        # never a documented public param (see this function's own
+        # docstring's "Optional params" list, which deliberately omits it).
+        # BUT `ipc.py` does not strip unknown params keys, so a wire caller
+        # can send this key too — treat it as attacker-controlled. Safe
+        # because every consumer of the resulting dict is restricted to
+        # advisory-only data; see `write_review_trail_entry`'s
+        # `_batch_context` docstring and `build_batch_attribution_context`'s
+        # "SECURITY INVARIANT" paragraph.
+        _batch_context=params.get("_batch_context"),
     )
     return result

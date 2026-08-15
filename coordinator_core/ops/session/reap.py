@@ -8,6 +8,9 @@ EVERY invocation (decoupled from the gate — Decision D1 shape (a), PM-ratified
   (i)  Stale sessions (last_activity > 24h inactive) → .archive/<sid>-<YYYY-MM-DD>/
   (ii) Stale agent dirs (touched.txt mtime > 24h) → .archive/_agents-<aid>-<YYYYMMDD>/
   (iii) Orphaned claim dirs (liveness-checked, TOCTOU re-read) → rm -rf
+  (iv) Stale agent-archive prune: .archive/_agents-* entries older than
+       _AGENT_ARCHIVE_RETENTION_SECONDS (14d mtime) → rm -rf. Behind the same
+       12h gate as (i)/(ii); prunes what (ii) archives but never deletes.
 
 Class-B safety contract (NOT DR-211 git-archival — untracked .git/ substrate):
   - Per-record idempotency: if archive dest already exists, skip (no error).
@@ -96,6 +99,7 @@ _LOG = logging.getLogger(__name__)
 _SESSION_STALE_SECONDS: int = 24 * 3600   # 24h inactivity → stale session
 _AGENT_STALE_SECONDS: int = 24 * 3600     # 24h mtime → stale agent dir
 _CADENCE_SECONDS: int = 12 * 3600         # 12h minimum between reap runs
+_AGENT_ARCHIVE_RETENTION_SECONDS: int = 14 * 24 * 3600  # 14d mtime → prune .archive/_agents-*
 
 # _CLAIM_SUBDIRS / _sessions_dir: imported above from ops.fleet._common (single
 # shared source of truth with archive_handoffs.py's Check 4 — code-reviewer F1,
@@ -411,6 +415,68 @@ def _reap_stale_agents(
 
 
 # ---------------------------------------------------------------------------
+# Sub-reaper (iv): stale agent-archive prune
+# ---------------------------------------------------------------------------
+
+def _prune_stale_agent_archive(sessions_dir: Path) -> Tuple[List[str], List[dict]]:
+    """Sync: delete .archive/_agents-* entries older than the retention window.
+
+    Sub-reap (ii) moves stale agent dirs into .archive/_agents-<aid>-<YYYYMMDD>/
+    but never prunes them — this is the retention prune that closes that leak.
+
+    Confined to archive_root's "_agents-*" glob — any other archive entry shape
+    (bare <sid>-<YYYY-MM-DD> session archives, unexpected names) is never
+    touched, matching sub-reap (i)'s separate archive-naming convention.
+    Retention criterion: entry mtime > _AGENT_ARCHIVE_RETENTION_SECONDS (14d).
+    Fail-open per-entry: an OSError (stat or rmtree) is logged and the entry
+    is skipped — mirrors sub-reaps (i)/(ii)'s per-record failed[] handling;
+    never raises into the reap driver.
+
+    Returns (pruned, failed).
+    """
+    pruned: List[str] = []
+    failed: List[dict] = []
+
+    archive_root = sessions_dir / ".archive"
+    if not archive_root.is_dir():
+        return pruned, failed
+
+    now_epoch = _now_utc_epoch()
+
+    for entry in sorted(archive_root.glob("_agents-*")):
+        name = entry.name
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError as exc:
+            _LOG.warning(
+                "session.reap: prune: stat failed for archive entry %s — skip: %s", name, exc
+            )
+            failed.append({"id": name, "reason": f"stat failed: {exc}"})
+            continue
+
+        age = now_epoch - mtime
+        if age < 0:
+            age = 0.0  # clock-skew clamp (mirrors sub-reaps (i)/(ii))
+
+        if age <= _AGENT_ARCHIVE_RETENTION_SECONDS:
+            continue  # within retention window — keep
+
+        try:
+            shutil.rmtree(str(entry))
+            _LOG.info(
+                "session.reap: pruned stale agent-archive entry %s (age=%.0fs)", name, age
+            )
+            pruned.append(name)
+        except OSError as exc:
+            _LOG.warning(
+                "session.reap: prune: rm failed for archive entry %s — skip: %s", name, exc
+            )
+            failed.append({"id": name, "reason": f"rm failed: {exc}"})
+
+    return pruned, failed
+
+
+# ---------------------------------------------------------------------------
 # Sub-reaper (iii): orphaned claim dirs
 # ---------------------------------------------------------------------------
 
@@ -592,6 +658,7 @@ def _build_result(
     reaped_sessions: List[str],
     reaped_agents: List[str],
     reaped_claims: List[str],
+    pruned_agent_archive: List[str],
     deferred: List[dict],
     failed: List[dict],
 ) -> dict:
@@ -608,6 +675,7 @@ def _build_result(
         "reaped_sessions": reaped_sessions,
         "reaped_agents": reaped_agents,
         "reaped_claims": reaped_claims,
+        "pruned_agent_archive": pruned_agent_archive,
         "deferred": deferred,
         "failed": failed,
     }
@@ -622,6 +690,7 @@ def _build_error_result(reason: str) -> dict:
         "reaped_sessions": [],
         "reaped_agents": [],
         "reaped_claims": [],
+        "pruned_agent_archive": [],
         "deferred": [],
         "failed": [],
     }
@@ -635,10 +704,12 @@ def _build_error_result(reason: str) -> dict:
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """session.reap — cadence-gated reaper for .git/coordinator-sessions/ substrate.
 
-    Three sub-reaps run behind a single 12h .last-reap cadence gate:
+    Four sub-reaps run behind a single 12h .last-reap cadence gate (except
+    (iii), decoupled — see Cadence decoupling below):
       (i)  Stale sessions (last_activity > 24h) → .archive/<sid>-YYYY-MM-DD/
       (ii) Stale agent dirs (touched.txt mtime > 24h) → .archive/_agents-<aid>-YYYYMMDD/
       (iii) Orphaned claim dirs (two liveness checks, TOCTOU re-read) → rm -rf
+      (iv) Stale agent-archive prune: .archive/_agents-* older than 14d mtime → rm -rf
 
     Class-B op: no git commit; substrate is untracked .git/coordinator-sessions/.
     Fail-closed-to-keep: any liveness-check error or ambiguity defers the record.
@@ -658,6 +729,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
       reaped_sessions  [str]   session IDs successfully moved to .archive/
       reaped_agents    [str]   agent IDs successfully moved to .archive/
       reaped_claims    [str]   claim paths (subdir/name) successfully rm'd
+      pruned_agent_archive [str]  .archive/_agents-* entry names successfully rm'd
       deferred         [dict]  records kept due to liveness ambiguity / fail-closed
       failed           [dict]  records that could not be moved/rm'd (mv/rm error)
 
@@ -694,6 +766,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             reaped_sessions=[],
             reaped_agents=[],
             reaped_claims=[],
+            pruned_agent_archive=[],
             deferred=[],
             failed=[],
         )
@@ -720,6 +793,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             reaped_sessions=[],
             reaped_agents=[],
             reaped_claims=reaped_claims,
+            pruned_agent_archive=[],
             deferred=deferred_claims,
             failed=failed_claims,
         )
@@ -757,6 +831,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _reap_orphaned_claims, sessions_dir
     )
 
+    # --- Sub-reap (iv): stale agent-archive prune ---
+    # Behind the same 12h cadence gate as (i)/(ii) — it prunes the .archive/
+    # output of sub-reap (ii), so it shares (ii)'s cadence rather than (iii)'s
+    # every-boot decoupling.
+    pruned_agent_archive, failed_prune = await asyncio.to_thread(
+        _prune_stale_agent_archive, sessions_dir
+    )
+
     # Update .last-reap cadence marker to now (regardless of partial failures).
     # Only reached on a full run (force OR cadence-elapsed) — the fast (iii)-only
     # path above returns before this point and never touches the marker.
@@ -767,8 +849,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reaped_sessions=reaped_sessions,
         reaped_agents=reaped_agents,
         reaped_claims=reaped_claims,
+        pruned_agent_archive=pruned_agent_archive,
         deferred=deferred_sessions + deferred_agents + deferred_claims,
-        failed=failed_sessions + failed_agents + failed_claims,
+        failed=failed_sessions + failed_agents + failed_claims + failed_prune,
     )
 
 

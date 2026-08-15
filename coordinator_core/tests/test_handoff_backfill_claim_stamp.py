@@ -45,7 +45,10 @@ _CLI_PATH = (
     Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "handoff-backfill-claim-stamp.py"
 )
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _OP_NAME = "handoff.backfill_claim_stamp"
 assert _OP_NAME in _REGISTRY, (

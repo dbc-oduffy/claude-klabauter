@@ -22,9 +22,15 @@ per-row below via the ``existing_coverage`` field rather than skipped, since
 AC2 asks for a complete table, not a diff against the other file.
 
 Negative-spec: this module does NOT assert on advisory/deny TEXT (that is
-`test_deny_message_accuracy.py`'s job) and does NOT probe the git index (no
-index-based reasoning exists anywhere in this plan's advisory path -- PM
-Ruling 2, C1b deleted). A row's ``fires`` bit is the ONLY thing under test.
+`test_deny_message_accuracy.py`'s job) and does NOT itself probe the git
+index -- `_fires` only asks whether the check returned non-`None`, so it is
+insensitive to C7's own index probe (bare-commit-half escalation) or its
+2026-08-15 solo-bare-commit sibling (both live in `test_git_commit_safe_
+commit_deny_escalation.py`, C7's own module). A row's ``fires`` bit is the
+ONLY thing under test; a row lacking `-C <repo>` runs the ambient probe
+against whatever cwd this test process happens to have, which can only
+flip a `None` firing-shape row's verdict between advisory and deny, never
+between firing and silent.
 """
 
 from __future__ import annotations

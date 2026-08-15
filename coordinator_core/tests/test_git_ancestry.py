@@ -33,6 +33,13 @@ import pytest
 
 from coordinator_core.git_ancestry import is_covered, is_ancestor, _is_ancestor
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # Git repo helper (mirrors test_coverage_reviewed_set.py convention)

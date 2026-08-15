@@ -48,6 +48,13 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     requires_powershell_grammar,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 
 def _posix(p) -> str:
@@ -1488,6 +1495,69 @@ def test_one_command_publish_ac_marker_clears_the_publish_mirror_push_bump(
     )
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-14 percolate-push memo -- the publish-mirror refusal must name the
+# real alternative for a PUSH (`percolate-push <target>`), while a
+# content-authoring write into the same mirror keeps the doctrine citation
+# unchanged (that copy is correct for THAT shape, see
+# `_write_bump_message._GIT_PUSH_WRITE_VERB_LABEL`'s own docstring). Both
+# halves of this split are asserted here so a future edit cannot silently
+# collapse them back onto a single template.
+# ---------------------------------------------------------------------------
+
+
+def test_percolate_push_memo_git_push_into_publish_mirror_names_percolate_push(
+    repos, monkeypatch, tmp_path
+):
+    reg_dir = tmp_path / "registry"
+    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    _set_anchor(
+        monkeypatch,
+        repos,
+        "sess-percolate-push-em",
+        extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)},
+    )
+    cmd = f"git -C {_posix(repos['foreign'])} push origin main"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-percolate-push-em", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "percolate-push <target>" in reason
+    assert "is publish mirror" in reason
+    # The content-authoring doctrine citation is the WRONG alternative for a
+    # push -- it must not appear alongside the real one.
+    assert "Publish-Repo Content Authoring" not in reason
+
+
+def test_percolate_push_memo_content_authoring_write_still_cites_doctrine(
+    repos, monkeypatch, tmp_path
+):
+    """The complementary half -- a hand-authored commit into the mirror
+    (never a `push`) keeps today's doctrine-citation copy untouched; the
+    percolate-push swap is scoped to the `git push` write-sink shape only."""
+    reg_dir = tmp_path / "registry"
+    _write_publish_registry(reg_dir, str(repos["foreign"]), owner="claude-central-em")
+    _set_anchor(
+        monkeypatch,
+        repos,
+        "sess-percolate-push-authoring",
+        extra={"MACHINE_LOCAL_REGISTRY_DIR": str(reg_dir)},
+    )
+    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-percolate-push-authoring", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Publish-Repo Content Authoring" in reason
+    assert "percolate-push" not in reason
 
 
 # ---------------------------------------------------------------------------

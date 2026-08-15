@@ -231,6 +231,7 @@ from coordinator_core.ops.fleet.archive_handoffs import (
     _collect_all_handoff_paths,
     _handle_act_handoffs,
     _handle_preview_handoffs,
+    _HEIR_NOTE_PREFIX,
     _shipped_in_resolvable,
 )
 from coordinator_core.ops.fleet._common import (
@@ -1609,6 +1610,65 @@ async def _sweep_consumed_handoffs(
         if cand.get("heir") is True
     }
 
+    # Heir-retain surfacing (bug-backlog 2026-08-14, "succession heir never
+    # archives — the retain is invisible"): archive_handoffs._is_terminal's
+    # H4 gate (module docstring "Heir branch") RETAINS a heir candidate whose
+    # own shipped_in is absent/unresolvable — but that verdict is a plain
+    # `return False, ...` from _is_terminal, so _handle_preview_handoffs never
+    # appends it to candidates[] at all (module docstring "H3 falsifiability
+    # diagnostic" only covers the H3 promoter-owned shape, not H4). The
+    # sweep-consumed-handoffs.py CLI's own contract promises every skip is
+    # "always surfaced — never silently swallowed"; this re-derives the
+    # H4-retained set (read-only, never re-verified via _is_terminal itself,
+    # which exposes no "retained but why" hook) so it reaches consumed_skipped
+    # like every other retain reason below, instead of vanishing between the
+    # candidates[] and skipped[] buckets.
+    #
+    # Reuses the SAME read-only classification the (f) heir pre-stamp pass
+    # above already ran (_classify_heir_children + _is_promoter_owned_spinoff_
+    # roadmap) — H3-promoter-owned records are excluded here: H3 retains
+    # regardless of H4's outcome and is a distinct disposition already
+    # covered by _is_terminal's own diagnostics wire key, not this skip list.
+    # Fails closed identically to the rest of this sweep on dag_incomplete —
+    # a partial dag_index cannot safely partition heir/fork-only/childless,
+    # so no heir-retain skip is derived from it (mirrors _handle_preview_
+    # handoffs' own dag_incomplete short-circuit immediately above).
+    heir_retained_skipped: List[dict] = []
+    if not dag_incomplete:
+        try:
+            live_paths_for_heir_retain = collect_live_handoff_paths(state_worktree)
+        except OSError as exc:
+            _LOG.warning(
+                "session.boot_sweep: cannot scan live handoffs for heir-retain "
+                "surfacing — %s; skipping this boot (degrade safe)", exc,
+            )
+            live_paths_for_heir_retain = []
+        for handoff_path in live_paths_for_heir_retain:
+            cid = rel_id(handoff_path, state_worktree)
+            if cid in heir_cids:
+                continue
+            meta = _read_meta(str(handoff_path)) or {}
+            if (meta.get("status") or "").strip().lower() not in HANDOFF_TERMINAL_STATUS:
+                continue
+            if _is_promoter_owned_spinoff_roadmap(meta):
+                continue
+            heir_kind, heir_detail = await _classify_heir_children(handoff_path, dag_index)
+            if heir_kind != "heir":
+                continue
+            shipped_in = meta.get("shipped_in")
+            resolvable = bool(shipped_in) and await _shipped_in_resolvable(
+                state_worktree, str(shipped_in)
+            )
+            if resolvable:
+                continue
+            heir_retained_skipped.append({
+                "id": cid,
+                "reason": (
+                    f"{_HEIR_NOTE_PREFIX}{heir_detail} but no resolvable "
+                    "shipped_in — retained for reaper"
+                ),
+            })
+
     filtered_ids: List[str] = []
     recency_skipped: List[dict] = []
 
@@ -1710,7 +1770,8 @@ async def _sweep_consumed_handoffs(
         ]
         return (
             would_archive,
-            recency_skipped + awaiting_adjudication_skipped + dest_conflict_skipped,
+            recency_skipped + awaiting_adjudication_skipped + dest_conflict_skipped
+            + heir_retained_skipped,
             [],
             warnings,
         )
@@ -1740,7 +1801,12 @@ async def _sweep_consumed_handoffs(
                 state_worktree, git_root_worktree, [],
                 extra_state_paths=stranded_extra_paths,
             )
-        return [], recency_skipped + awaiting_adjudication_skipped, [], warnings
+        return (
+            [],
+            recency_skipped + awaiting_adjudication_skipped + heir_retained_skipped,
+            [],
+            warnings,
+        )
 
     # Read claimed_by (old name: consumed_by) SIDs before mutating (needed for
     # WARN marker text).
@@ -1817,6 +1883,7 @@ async def _sweep_consumed_handoffs(
     acted: List[dict] = act_result.get("acted", [])
     skipped: List[dict] = (
         act_result.get("skipped", []) + recency_skipped + awaiting_adjudication_skipped
+        + heir_retained_skipped
     )
     failed: List[dict] = act_result.get("failed", [])
 

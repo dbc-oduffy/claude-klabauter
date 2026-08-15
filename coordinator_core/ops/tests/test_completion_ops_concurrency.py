@@ -53,6 +53,13 @@ from coordinator_core.ops.completion_ops import (
     reconcile_completion_commits,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent.parent)
 

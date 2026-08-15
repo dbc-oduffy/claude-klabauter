@@ -22,6 +22,7 @@ Public surface (pinned contract — do not change without updating consumers):
     def settings_home() -> Path: ...
     def machine_local_dir() -> Path: ...
     def normalize_native_path(raw) -> Path: ...
+    def native_path_form(raw: str) -> str: ...
     def legacy_machine_local_dir() -> Path: ...
     def check_machine_local_divergence() -> None: ...  # raises SettingsHomeDivergenceError
     class SettingsHomeDivergenceError(RuntimeError): ...
@@ -146,13 +147,35 @@ def normalize_native_path(raw):
     drive-relative 'X:\\x\\...' (doubled drive) — the .doe-root / repos.doe_claude
     mis-resolution bug. Mirrors the `cygpath -m` normalization used on the write side.
     """
+    return Path(native_path_form(raw))
+
+
+def native_path_form(raw: str) -> str:
+    r"""`normalize_native_path` for callers that must hand a STRING onward — the
+    mount-form repair when one applies, the caller's own string byte-identical
+    when none does.
+
+    Exists because no spelling built on `normalize_native_path`'s return value is
+    identity-preserving on Windows: `str()` of it renders `X:/a` as `X:\a`, and
+    `.as_posix()` flips every separator on a native `C:\Users\x` that needed no
+    repair at all — and `Path` additionally eats a trailing separator. Write
+    seams that persist this value — the `repos.doe_claude` registry key, the
+    `.doe-root` pointer file — would then churn their stored form for every
+    caller, not just the MSYS ones. So this is the primitive and
+    `normalize_native_path` is the `Path`-returning wrapper over it; the
+    mount-form regex lives here, once.
+
+    Negative-spec: NOT a general path canonicalizer. It resolves nothing,
+    expands nothing, and strips no trailing separator — the sole transform is
+    the MSYS/Cygwin mount-form repair, gated to `os.name == "nt"`.
+    """
     s = str(raw)
     if os.name != "nt":
-        return Path(raw)
+        return s
     m = re.match(r"^/(?:cygdrive/)?([A-Za-z])(/.*)?$", s)
     if m:
-        return Path(m.group(1).upper() + ":" + (m.group(2) or "/"))
-    return Path(raw)
+        return m.group(1).upper() + ":" + (m.group(2) or "/")
+    return s
 
 
 def legacy_machine_local_dir() -> Path:

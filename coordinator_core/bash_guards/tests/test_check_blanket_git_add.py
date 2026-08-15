@@ -57,6 +57,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
+from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
 
 
 def _set_fake_home(monkeypatch, home_path):
@@ -383,6 +384,42 @@ def test_no_git_add_at_all_allows_in_hazard_repo(monkeypatch, tmp_path):
 def test_empty_command_allows(monkeypatch, tmp_path):
     result = _check(monkeypatch, tmp_path, "", hazard=True)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# C2 (plan 2026-08-15-blanket-gits-proffer-the-scoped-commit-helper, AC6/
+# AC7): the deny now offers `scoped-git-commit` as a second alternative
+# alongside the pre-existing `git add -- path/to/file` line, for all three
+# matched shapes -- the agent that typed a blanket add is staging in order
+# to commit, and handing back only the narrower add leaves it to reassemble
+# the commit half itself. Register (AC7) is checked directly on the
+# rendered envelope via `measure_envelope`, not eyeballed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cmd", ["git add -A", "git add .", "git add -u"])
+def test_blanket_add_deny_offers_scoped_git_commit(monkeypatch, tmp_path, cmd):
+    result = _denies(monkeypatch, tmp_path, cmd)
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "git add -- path/to/file" in reason
+    assert "scoped-git-commit" in reason
+
+
+@pytest.mark.parametrize("cmd", ["git add -A", "git add .", "git add -u"])
+def test_blanket_add_deny_stays_within_prose_cap(monkeypatch, tmp_path, cmd):
+    result = _denies(monkeypatch, tmp_path, cmd)
+    measurement = measure_envelope(result)
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES, (
+        result["hookSpecificOutput"]["permissionDecisionReason"],
+        measurement.prose_bytes,
+    )
+
+
+def test_scoped_add_still_allows_after_offer_change(monkeypatch, tmp_path):
+    """Negative spec: the offer-line change touches only the DENY body --
+    a genuinely scoped `git add -- <path>` must stay an ALLOW, same as
+    before this chunk."""
+    _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -- path/to/file")
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,15 @@ from pathlib import Path
 
 from coordinator_core.ops.blocked import main
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _init_git_repo(root: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)

@@ -22,6 +22,13 @@ import pytest
 from coordinator_core.text.normalize_snippet import normalize_snippet
 from coordinator_core.testing.doe_root import resolve_doe_root
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # (a)-(g) — ported verbatim from test-normalize-snippet.sh, with each input/
 # expected value pre-resolved through bash's $(...) trailing-newline-strip

@@ -430,6 +430,117 @@ def cs_read_local_md_key(repo_root: str, key: str) -> str:
     return _strip_wrapping_quotes(val)
 
 
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _parse_indented_mapping(lines: list) -> dict:
+    """Parse a block of already-indented `key: value` / `key:` lines into a
+    nested dict, recursing on children whose indent is deeper than the
+    block's own base indent (the indent of its first non-blank line).
+
+    Leaf values pass through `_strip_wrapping_quotes` (same discipline as
+    `cs_read_local_md_key`). A key with no scalar remainder and no deeper
+    children resolves to `{}`, never None — every branch stays dict-typed
+    for AC1's "never raises, empty mapping on absence" contract.
+    """
+    entries = [
+        (_indent_of(l), l.strip()) for l in lines if l.strip() != ""
+    ]
+    if not entries:
+        return {}
+    base_indent = entries[0][0]
+    result: dict = {}
+    i = 0
+    n = len(entries)
+    while i < n:
+        indent, content = entries[i]
+        if indent != base_indent:
+            # Malformed/misaligned line under this block — skip rather than
+            # raise; this reader never raises (AC1).
+            i += 1
+            continue
+        if ":" not in content:
+            i += 1
+            continue
+        k, _, rest = content.partition(":")
+        k = k.strip()
+        rest = rest.strip()
+        j = i + 1
+        children = []
+        while j < n and entries[j][0] > base_indent:
+            children.append(entries[j])
+            j += 1
+        if children:
+            child_lines = [(" " * ind) + txt for ind, txt in children]
+            result[k] = _parse_indented_mapping(child_lines)
+        elif rest:
+            result[k] = _strip_wrapping_quotes(rest)
+        else:
+            result[k] = {}
+        i = j
+    return result
+
+
+def cs_read_local_md_mapping(repo_root: str, key: str) -> dict:
+    """Extract a NESTED top-level frontmatter mapping from coordinator.local.md.
+
+    Sibling to `cs_read_local_md_key`, which matches a line prefix and
+    returns the remainder of that ONE line — it cannot see an indented
+    nested block or return a mapping. This function is for config shapes
+    like:
+
+        app_session:
+          desktop:
+            runtime: electron
+            command: pnpm dev
+          web:
+            runtime: server
+            port: 5173
+
+    Anchors on `key` at column 0 (an unindented top-level frontmatter key,
+    same anchoring convention `_extract_fast_test_cmd` uses for
+    `fast_test_cmd:`) followed by an indented block; everything at a
+    shallower or equal indent than that block's first line ends the block.
+
+    NEVER raises. An absent file, an absent key, or a key with no indented
+    block underneath all return `{}` — never None, never an exception.
+    Does NOT alter `cs_read_local_md_key`'s behaviour or internals; the two
+    readers are independent (AC1).
+    """
+    try:
+        local_md = Path(repo_root) / "coordinator.local.md"
+        if not local_md.is_file():
+            return {}
+        fm = _extract_frontmatter(local_md)
+        lines = fm.split("\n")
+        needle = f"{key}:"
+        idx = None
+        for i, line in enumerate(lines):
+            if line[:1] in (" ", "\t"):
+                continue  # not top-level
+            if line == needle or (
+                line.startswith(needle) and line[len(needle):].strip() == ""
+            ):
+                idx = i
+                break
+        if idx is None:
+            return {}
+        block_lines = []
+        for line in lines[idx + 1:]:
+            if line.strip() == "":
+                continue
+            if line[:1] in (" ", "\t"):
+                block_lines.append(line)
+            else:
+                break
+        if not block_lines:
+            return {}
+        return _parse_indented_mapping(block_lines)
+    except Exception:
+        return {}
+
+
 def cs_resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolvedCommand:
     """Resolve the FULL test suite command — the heavier tier bug-blitz runs
     to chase every failing test (distinct from the fast-tier gate the

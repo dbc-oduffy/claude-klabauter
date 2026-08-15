@@ -88,7 +88,6 @@ from coordinator_core.write_guards import (
     block_priority_ledger_edit,
     block_subagent_archive_write,
     block_subagent_plan_body_write,
-    block_tracker_edit,
     block_unauthorized_claude_md_write,
     nudge_baton_body_bar,
     nudge_improvement_queue_write,
@@ -110,7 +109,6 @@ def _no_override_env_leaks(monkeypatch):
     for name in (
         block_completion_monolith_write._OVERRIDE_ENV_VAR,
         block_priority_ledger_edit._OVERRIDE_ENV_VAR,
-        block_tracker_edit._OVERRIDE_ENV_VAR,
         block_subagent_archive_write._OVERRIDE_ENV_VAR,
         block_subagent_plan_body_write._OVERRIDE_ENV_VAR,
         block_unauthorized_claude_md_write._OVERRIDE_ENV_VAR,
@@ -201,18 +199,6 @@ def test_block_priority_ledger_edit_check_deny():
     rendered = result["hookSpecificOutput"]["additionalContext"]
     assert_render_carries_reachability_constraint(rendered, context="block_priority_ledger_edit.check")
     assert operator_override_note(block_priority_ledger_edit._OVERRIDE_ENV_VAR, payload=payload) in rendered
-
-
-def test_block_tracker_edit_check_deny():
-    payload = {
-        "tool_name": "Write",
-        "tool_input": {"file_path": "state/handoff-tracker.md"},
-    }
-    result = block_tracker_edit.check(payload)
-    assert result is not None
-    rendered = result["hookSpecificOutput"]["additionalContext"]
-    assert_render_carries_reachability_constraint(rendered, context="block_tracker_edit.check")
-    assert operator_override_note(block_tracker_edit._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
 
 # ---------------------------------------------------------------------------

@@ -74,6 +74,13 @@ from coordinator_core.contract.decision_object.judgment import (
     build_untrusted_gate_judgment_point,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PACKAGE_DIR = _REPO_ROOT / "coordinator_core" / "backlog_grind_assemble"
 

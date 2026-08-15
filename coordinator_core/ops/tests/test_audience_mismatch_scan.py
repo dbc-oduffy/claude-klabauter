@@ -18,6 +18,15 @@ from pathlib import Path
 
 from coordinator_core.ops.audience_mismatch_scan import main
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _NOW = datetime.now(tz=timezone.utc)
 
 

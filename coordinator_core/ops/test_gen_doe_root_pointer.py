@@ -600,3 +600,49 @@ def test_dual_seed_written_row(tmp_path, monkeypatch, capsys, _isolated_env):
     assert rc == 0
     out = capsys.readouterr().out
     assert f"plugin_mirror_source_path: written ({doe_root})" in out
+
+
+# ---------------------------------------------------------------------------
+# MSYS/Cygwin mount-form repair (Windows only)
+#
+# Regression cover for the bug this generator sat in the middle of: a DoE clone
+# root resolved under Git-Bash arrives as `/x/DoE-claude`, and every consumer of
+# the pointer this writes is a native-Windows process, which reads that leading
+# `/x/` as drive-relative `X:\x\DoE-claude` — a path that does not exist. Both
+# resolution tiers are covered because both can carry the mount form: the env
+# override comes straight from a shell, and the registry tier must not assume
+# its upstream normalized for it.
+# ---------------------------------------------------------------------------
+
+
+def _mount_form(path: Path) -> "tuple[str, str]":
+    """Render `path` as its MSYS mount form. Returns (mount_form, native_form)."""
+    native = path.as_posix()  # 'C:/Users/.../doe-clone'
+    drive, rest = native[0], native[2:]
+    return f"/{drive.lower()}{rest}", f"{drive.upper()}:{rest}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="mount-form repair is os.name=='nt'-gated by design")
+def test_env_override_msys_mount_form_is_repaired(tmp_path, monkeypatch, _isolated_env):
+    doe_root = _make_doe_root(tmp_path)
+    mount_form, native_form = _mount_form(doe_root)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", mount_form)
+
+    rc = main([])
+
+    assert rc == 0
+    assert _pointer_path(_isolated_env).read_text() == f"{native_form}\n"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="mount-form repair is os.name=='nt'-gated by design")
+def test_registry_msys_mount_form_is_repaired(tmp_path, monkeypatch, _isolated_env):
+    doe_root = _make_doe_root(tmp_path)
+    mount_form, native_form = _mount_form(doe_root)
+    bin_dir = _make_fake_machine_local(tmp_path, mount_form)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
+
+    rc = main([])
+
+    assert rc == 0
+    assert _pointer_path(_isolated_env).read_text() == f"{native_form}\n"

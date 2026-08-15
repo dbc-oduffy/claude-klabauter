@@ -155,3 +155,62 @@ class TestUnaffectedCommands:
 
     def test_empty_command(self):
         assert _check("") is None
+
+
+class TestSurgicalInsertionDoesNotCorruptUntouchedSegments:
+    """Regression for the live incident: the prior shape re-tokenized and
+    rebuilt EVERY segment via `shlex.quote`-join, which silently destroyed
+    shell metacharacters (redirects, `$`-expansions) in segments the guard
+    never meant to touch at all. The fix must insert the flag surgically and
+    leave every other byte of the original command untouched."""
+
+    def test_live_repro_redirect_and_dollar_expansion_survive(self):
+        cmd = (
+            "git -C /path status --porcelain | sed 's/^...//' "
+            "> /tmp/out.txt; echo \"RC=$?\""
+        )
+        out = _check(cmd)
+        rewritten = _rewritten_command(out)
+        assert rewritten == (
+            "git -C /path --no-optional-locks status --porcelain | "
+            "sed 's/^...//' > /tmp/out.txt; echo \"RC=$?\""
+        )
+        # The two failure modes actually observed live: a redirect operator
+        # quoted into a literal filename argument, and a `$` expansion
+        # single-quoted into inert text.
+        assert "'>'" not in rewritten
+        assert "> /tmp/out.txt" in rewritten
+        assert '"RC=$?"' in rewritten
+
+    def test_redirect_target_untouched_in_rewritten_segment(self):
+        out = _check("git status --porcelain > /tmp/out.txt")
+        rewritten = _rewritten_command(out)
+        assert rewritten == (
+            "git --no-optional-locks status --porcelain > /tmp/out.txt"
+        )
+
+    def test_dollar_expansion_in_trailing_segment_untouched(self):
+        out = _check('git status; echo "$HOME"')
+        rewritten = _rewritten_command(out)
+        assert rewritten == 'git --no-optional-locks status; echo "$HOME"'
+
+    def test_command_substitution_in_trailing_segment_untouched(self):
+        out = _check("git status; echo $(pwd)")
+        rewritten = _rewritten_command(out)
+        assert rewritten == "git --no-optional-locks status; echo $(pwd)"
+
+    def test_fd_dup_redirect_after_rewritten_subcommand_untouched(self):
+        out = _check("git status 2>&1")
+        rewritten = _rewritten_command(out)
+        assert rewritten == "git --no-optional-locks status 2>&1"
+
+
+class TestMultiLineBailsRatherThanMisplace:
+    """`split_unquoted_newlines` rewrites the text the decision tokenizer
+    sees before this guard's own raw-offset scanner ever runs, so a raw
+    offset computed against `cmd` cannot be trusted to line up once a
+    newline is in play. The guard must pass the command through untouched
+    rather than risk an offset landing in the wrong place."""
+
+    def test_multiline_command_not_rewritten(self):
+        assert _check("git status\necho done") is None

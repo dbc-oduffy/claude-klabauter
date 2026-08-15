@@ -632,8 +632,8 @@ def _uncovered_foreign_trailer_shas(
 #: `_handoff_authoring_shas` below; widening this tuple without consulting it
 #: is how 87578a319 turned the gate vacuous. Do not "simplify" by dropping
 #: `state/` from here and enumerating ceremony subpaths instead: that flips
-#: `shipped_in`-stamp, pickup-assemble-claim, and `state/handoff-tracker.md`
-#: commits back to CODE, which is the permanent false-UNCOVERED tail
+#: `shipped_in`-stamp and pickup-assemble-claim commits back to CODE, which
+#: is the permanent false-UNCOVERED tail
 #: 87578a319 existed to remove.
 _BOOKKEEPING_PATH_PREFIXES: Tuple[str, ...] = ("state/", "archive/", "tasks/", "cross-repo/")
 
@@ -2112,6 +2112,27 @@ def _bulk_trailer_lookup(shas: Set[str], cwd: str) -> Optional[Dict[str, str]]:
     return result
 
 
+def emit_unrecognized_kind_warning(unrecognized_kind_counts: Dict[str, int]) -> None:
+    """Emit ONE aggregated stderr WARN for every unrecognized-`scope_kind`
+    record a walk classified, naming the total count and every distinct kind
+    seen. A no-op if the walk saw none. Shared by this module's
+    `build_reviewed_set` and `coordinator_core.ops.review_coverage_core`'s
+    `build_reviewed_set`/`build_segments` so both live copies emit the
+    identical text (the two were independently maintained until a reviewer
+    flagged the drift risk). The shared copy lives HERE because the existing
+    dependency runs review_coverage_core.py -> coverage.py; putting it the
+    other way round would invert that edge and create an import cycle."""
+    if not unrecognized_kind_counts:
+        return
+    total = sum(unrecognized_kind_counts.values())
+    distinct = sorted(unrecognized_kind_counts)
+    print(
+        f"WARN: {total} record(s) with an unrecognized scope_kind — "
+        f"each credits nothing: {', '.join(distinct)}",
+        file=sys.stderr,
+    )
+
+
 def build_reviewed_set(
     trail_paths: List[str],
     on_record_error: str = "skip",
@@ -2199,6 +2220,13 @@ def build_reviewed_set(
     # chunk (see the plan's Anti-scope: only "plan" becomes creditable).
     valid_ranges: List[Tuple[str, str, Optional[str], Optional[str], str]] = []
 
+    # Per-run accumulator for unrecognized scope_kind records (AC1). The
+    # per-record WARN below is replaced by ONE aggregated stderr line emitted
+    # after the walk — see the emission after this loop. Keyed by scope_kind
+    # so the aggregate line can name every distinct kind seen, not just the
+    # first.
+    unrecognized_kind_counts: Dict[str, int] = {}
+
     for path in trail_paths:
         try:
             records = _parse_trail_file(path)
@@ -2234,10 +2262,13 @@ def build_reviewed_set(
                     # resolved like any other, but `_credit_from_kind_partition`
                     # never reads an unrecognized kind's bucket, so it earns
                     # zero credit — fail-closed, unchanged safety direction.
-                    print(
-                        f"WARN: unrecognized scope_kind {scope_kind!r} — record "
-                        f"credits nothing: {artifact} ({path})",
-                        file=sys.stderr,
+                    # The per-record print used to live here; it flooded
+                    # stderr on a legacy corpus and buried the real trailing
+                    # error (2026-08-15 example-retrieval-repo-em memo). Accumulate
+                    # instead — the aggregated WARN is emitted once, after
+                    # the full walk, below.
+                    unrecognized_kind_counts[scope_kind] = (
+                        unrecognized_kind_counts.get(scope_kind, 0) + 1
                     )
                 kind = scope_kind
             else:
@@ -2262,6 +2293,8 @@ def build_reviewed_set(
                 continue
 
             valid_ranges.append((sha_range, artifact, scope, session_id, kind))
+
+    emit_unrecognized_kind_warning(unrecognized_kind_counts)
 
     if not valid_ranges:
         return set()
@@ -3335,11 +3368,19 @@ def _derive_dag_chain_set(
     # existing for/if idiom (no walrus operator appears elsewhere here),
     # rather than the singleton-tuple trick that only existed to avoid a
     # second _parse_handoff_deliverable_id call.
+    # Join key canonicalized (C6b/AC11) -- `walked_deliverable_ids`,
+    # `did_to_shas`, and `sha_to_did` below all key/compare on
+    # `deliverable_id`; a declared fork pair (state/deliverable-equivalence
+    # .yaml) must not silently split one node's segment across two ids.
+    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
+
+    _coverage_equivalence_map = load_equivalence_map(Path(repo_root))
+
     walked_deliverable_ids: Set[str] = set()
     for node_path in closing_set:
         did = _parse_handoff_deliverable_id(node_path)
         if did is not None:
-            walked_deliverable_ids.add(did)
+            walked_deliverable_ids.add(canonicalize(did, _coverage_equivalence_map))
 
     # C6a batching (this chunk): the per-node segment-attribution loop below
     # used to spawn THREE separate git processes per coverable node —
@@ -3425,9 +3466,10 @@ def _derive_dag_chain_set(
                     continue
                 if sid_v:
                     sid_to_shas.setdefault(sid_v, []).append(h)
-                sha_to_did[h] = did_v
-                if did_v:
-                    did_to_shas.setdefault(did_v, []).append(h)
+                did_v_canonical = canonicalize(did_v, _coverage_equivalence_map) if did_v else did_v
+                sha_to_did[h] = did_v_canonical
+                if did_v_canonical:
+                    did_to_shas.setdefault(did_v_canonical, []).append(h)
         # On rc_head != 0, all three dicts stay empty — every per-node lookup
         # below then sees zero matches, exactly the same degraded shape the
         # old per-node `rc3/rc4 != 0 -> []` branches produced, so the existing
@@ -3709,8 +3751,9 @@ def _derive_dag_chain_set(
 
         # Leg (a): commits directly stamped with THIS deliverable_id. Scoped
         # to HEAD + --no-merges for the same reachability/merge-commit
-        # reasons as the Session-Id segment query above.
-        deliv_seg = did_to_shas.get(deliverable_id, [])
+        # reasons as the Session-Id segment query above. Canonicalized
+        # (C6b/AC11) -- `did_to_shas` above is keyed on the canonical id.
+        deliv_seg = did_to_shas.get(canonicalize(deliverable_id, _coverage_equivalence_map), [])
 
         # Leg (b): legacy-history fallback — commits already matched by
         # Session-Id that carry no Deliverable-Id trailer AT ALL, or that

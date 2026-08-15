@@ -637,10 +637,11 @@ def test_mutate_mode_rebuilds_when_unhealthy(tmp_path, monkeypatch):
 
     def fake_healthy(py):
         healthy_calls["n"] += 1
-        # First two calls (fast-path check, post-lock re-check) unhealthy;
-        # the build-then-check path never re-probes health after install
-        # (mirrors bash — pip success is trusted), so both calls return False.
-        return False
+        # False for the live venv_dir (fast-path check, post-lock
+        # re-check); True for the freshly-built `.build-*` tree, satisfying
+        # the pre-swap health probe so this test still exercises the
+        # successful-rebuild leg.
+        return ".build-" in py.parent.parent.name
 
     monkeypatch.setattr(ev, "_venv_healthy", fake_healthy)
     monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
@@ -656,7 +657,14 @@ def test_mutate_mode_rebuilds_when_unhealthy(tmp_path, monkeypatch):
 
     status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
     assert status == "rebuilt"
-    assert created == [venv_dir]
+    # AC: the replacement is built at a fresh sibling, never venv_dir
+    # directly -- the live tree is only ever touched by the atomic swap
+    # (`_swap_in_new_venv`), which lands the finished build AT venv_dir.
+    assert len(created) == 1
+    assert created[0] != venv_dir
+    assert created[0].parent == venv_dir.parent
+    assert created[0].name.startswith(f"{venv_dir.name}.build-")
+    assert venv_dir.is_dir()
     assert installed
     assert pins
 
@@ -726,7 +734,9 @@ def test_mutate_mode_post_rebuild_leg_leaves_healthy_unrelated_pin(tmp_path, mon
     venv_py = ev.venv_python_path(venv_dir)
     ml_cli = tmp_path / "machine-local"
 
-    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(
+        ev, "_venv_healthy", lambda py: ".build-" in py.parent.parent.name
+    )
     monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
     monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
     monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
@@ -1455,7 +1465,9 @@ def test_general_pin_leg_does_not_double_warn_on_rebuilt_run(tmp_path, monkeypat
     general = tmp_path / "other" / "python"
     _make_exe(general)
 
-    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(
+        ev, "_venv_healthy", lambda py: ".build-" in py.parent.parent.name
+    )
     monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
     monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
     monkeypatch.setattr(ev, "_install_deps", lambda py, pkg: None)
@@ -1526,3 +1538,207 @@ def test_resolve_whoami_pkg_can_suppress_the_stale_seam_warning(tmp_path, monkey
     quiet = ev._resolve_whoami_pkg(plugin_root, ["ml"], warn_on_stale_seam=False)
     assert capsys.readouterr().err == ""
     assert loud == quiet == plugin_root / "whoami"
+
+
+# ---------------------------------------------------------------------------
+# Rebuild-vs-live-reader safety: swap-not-rmtree
+# (docs/plans -- shared .coordinator-venv destroyed under live readers)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.pending_fix(
+    reason="WINDOWS PRODUCTION DEFECT, not a test defect: _swap_in_new_venv's "
+    "os.rename(venv_dir, stale_dir) raises WinError 5 when any plain-open file "
+    "handle exists inside the tree. POSIX moves the directory out from under an "
+    "open fd happily; Windows refuses. The assertion is RIGHT and is deliberately "
+    "left intact as the oracle for the fix -- weakening it would convert a real "
+    "platform defect into a green tick. Measured on a real Windows host: a "
+    "RUNNING interpreter inside the tree survives the rename (the loader opens exe "
+    "images with FILE_SHARE_DELETE), so the scenario the swap docstring frames as "
+    "load-bearing already works; what breaks is an ordinary open() -- an import or "
+    "config read landing mid-rebuild. The only mechanism that satisfies this test "
+    "on Windows is making venv_dir a junction/reparse point, which is an "
+    "architecture change: real-directory assumptions (is_dir/rmtree/realpath) recur "
+    "across ensure_venv.py, substrate.py, uninstall_legs.py, maximalist.py and "
+    "first_run.py, none audited for junction transparency, and junction CREATION "
+    "needs ctypes/DeviceIoControl plumbing this repo does not have. Bounded retry "
+    "cannot help: the handle is held for the whole call, so there is nothing "
+    "transient to wait out. Routed to the retire-coordinator-venv workstream, which "
+    "already owns this file's shape. Unmark when venv_dir publication no longer "
+    "renames a tree that may hold open handles."
+)
+def test_swap_in_new_venv_does_not_delete_tree_a_reader_still_has_open(tmp_path):
+    """The core contract: a reader with an already-open file descriptor
+    against the OLD tree keeps working after a rebuild swaps in a new one --
+    the old tree is never `rmtree`'d in place while that fd is live."""
+    venv_dir = tmp_path / ".coordinator-venv"
+    old_marker = venv_dir / "bin" / "python"
+    old_marker.parent.mkdir(parents=True)
+    old_marker.write_text("old-interpreter")
+
+    # A "reader" holds this file open across the swap, exactly as a live
+    # coordinator session would hold its interpreter's underlying file open
+    # for the duration of the process.
+    reader_fd = open(old_marker, "r")
+    try:
+        build_dir = ev._build_dir_for(venv_dir)
+        (build_dir / "bin").mkdir(parents=True)
+        (build_dir / "bin" / "python").write_text("new-interpreter")
+
+        ev._swap_in_new_venv(venv_dir, build_dir)
+
+        # The reader's already-open fd still reads the OLD content -- it was
+        # never truncated or unlinked out from under a live read.
+        reader_fd.seek(0)
+        assert reader_fd.read() == "old-interpreter"
+    finally:
+        reader_fd.close()
+
+    # The live path now resolves to the NEW tree for any fresh open.
+    assert (venv_dir / "bin" / "python").read_text() == "new-interpreter"
+    assert not build_dir.exists()
+
+
+def test_swap_in_new_venv_defers_reclaim_when_old_tree_delete_fails(tmp_path, monkeypatch):
+    """Windows-shaped failure mode: deleting the vacated old tree can raise
+    (sharing violation while a reader still has a handle open). The swap
+    itself must still land -- reclamation is deferred, not fatal."""
+    venv_dir = tmp_path / ".coordinator-venv"
+    (venv_dir / "bin").mkdir(parents=True)
+    (venv_dir / "bin" / "python").write_text("old")
+
+    build_dir = ev._build_dir_for(venv_dir)
+    (build_dir / "bin").mkdir(parents=True)
+    (build_dir / "bin" / "python").write_text("new")
+
+    def fail_rmtree(path, *a, **kw):
+        raise OSError(32, "sharing violation")  # WinError-shaped
+
+    monkeypatch.setattr(ev.shutil, "rmtree", fail_rmtree)
+
+    ev._swap_in_new_venv(venv_dir, build_dir)  # must not raise
+
+    assert (venv_dir / "bin" / "python").read_text() == "new"
+    stale = list(tmp_path.glob(".coordinator-venv.stale-*"))
+    assert len(stale) == 1
+    assert (stale[0] / "bin" / "python").read_text() == "old"
+
+
+def test_sweep_orphaned_swap_dirs_reclaims_leftover_build_and_stale_siblings(tmp_path):
+    venv_dir = tmp_path / ".coordinator-venv"
+    venv_dir.mkdir()
+    leftover_build = tmp_path / ".coordinator-venv.build-1234-deadbeef"
+    leftover_build.mkdir()
+    leftover_stale = tmp_path / ".coordinator-venv.stale-1234-deadbeef"
+    leftover_stale.mkdir()
+    unrelated = tmp_path / ".coordinator-venv-backup"
+    unrelated.mkdir()
+
+    ev._sweep_orphaned_swap_dirs(venv_dir)
+
+    assert not leftover_build.exists()
+    assert not leftover_stale.exists()
+    assert venv_dir.exists()
+    assert unrelated.exists()  # not our prefix -- must survive the sweep
+
+
+@pytest.mark.pending_fix(
+    reason="WINDOWS PRODUCTION DEFECT, not a test defect: _swap_in_new_venv's "
+    "os.rename(venv_dir, stale_dir) raises WinError 5 when any plain-open file "
+    "handle exists inside the tree. POSIX moves the directory out from under an "
+    "open fd happily; Windows refuses. The assertion is RIGHT and is deliberately "
+    "left intact as the oracle for the fix -- weakening it would convert a real "
+    "platform defect into a green tick. Measured on a real Windows host: a "
+    "RUNNING interpreter inside the tree survives the rename (the loader opens exe "
+    "images with FILE_SHARE_DELETE), so the scenario the swap docstring frames as "
+    "load-bearing already works; what breaks is an ordinary open() -- an import or "
+    "config read landing mid-rebuild. The only mechanism that satisfies this test "
+    "on Windows is making venv_dir a junction/reparse point, which is an "
+    "architecture change: real-directory assumptions (is_dir/rmtree/realpath) recur "
+    "across ensure_venv.py, substrate.py, uninstall_legs.py, maximalist.py and "
+    "first_run.py, none audited for junction transparency, and junction CREATION "
+    "needs ctypes/DeviceIoControl plumbing this repo does not have. Bounded retry "
+    "cannot help: the handle is held for the whole call, so there is nothing "
+    "transient to wait out. Routed to the retire-coordinator-venv workstream, which "
+    "already owns this file's shape. Unmark when venv_dir publication no longer "
+    "renames a tree that may hold open handles."
+)
+def test_mutate_mode_rebuild_swap_survives_a_reader_holding_the_old_tree_open(
+    tmp_path, monkeypatch
+):
+    """End-to-end: a full `ensure_coordinator_venv` rebuild, with a reader's
+    fd held open against the pre-existing (unhealthy) venv the whole time,
+    completes successfully and never breaks that reader's already-open fd."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    (venv_dir / "bin").mkdir(parents=True)
+    (venv_dir / "bin" / "python").write_text("stale-marker")
+
+    reader_fd = open(venv_dir / "bin" / "python", "r")
+    try:
+        # False for the live venv_dir; True for the freshly-built `.build-*`
+        # tree, satisfying the pre-swap health probe so the swap is reached.
+        monkeypatch.setattr(
+            ev, "_venv_healthy", lambda py: ".build-" in py.parent.parent.name
+        )
+        monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+
+        def fake_create(base_py, dst):
+            (dst / "bin").mkdir(parents=True)
+            (dst / "bin" / "python").write_text("fresh-marker")
+
+        monkeypatch.setattr(ev, "_create_venv", fake_create)
+        monkeypatch.setattr(ev, "_install_deps", lambda py, pkg: None)
+        monkeypatch.setattr(ev, "_set_pin", lambda cli, py: None)
+
+        status = ev.ensure_coordinator_venv(plugin_root, settings_home_path, check_only=False)
+        assert status == "rebuilt"
+
+        reader_fd.seek(0)
+        assert reader_fd.read() == "stale-marker"  # untouched underneath the reader
+    finally:
+        reader_fd.close()
+
+    assert (venv_dir / "bin" / "python").read_text() == "fresh-marker"
+
+
+def test_mutate_mode_failed_rebuild_leaves_preexisting_tree_untouched_and_pin_unclearable(
+    tmp_path, monkeypatch
+):
+    """A failed rebuild no longer destroys whatever was already at venv_dir
+    (the old rmtree-before-build behavior) -- so a pin naming that
+    still-present path is not "dangling" even with clear_pin_on_failure=True,
+    since venv_dir did not resolve to nothing this run."""
+    plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)
+    settings_home_path = tmp_path / "settings-home"
+    venv_dir = settings_home_path / ".coordinator-venv"
+    venv_py = ev.venv_python_path(venv_dir)
+    (venv_dir / "bin").mkdir(parents=True)
+    (venv_dir / "bin" / "python").write_text("still-here")
+
+    ml_cli = tmp_path / "machine-local"
+    monkeypatch.setattr(ev, "_resolve_ml_cli", lambda root: ml_cli)
+    monkeypatch.setattr(ev, "_venv_healthy", lambda py: False)
+    monkeypatch.setattr(ev, "_resolve_base_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(ev, "_create_venv", lambda base_py, dst: dst.mkdir(parents=True))
+
+    def fail_install(py, pkg):
+        raise ev.EnsureVenvError("boom")
+
+    monkeypatch.setattr(ev, "_install_deps", fail_install)
+
+    registry = {"coordinator.python": str(venv_py)}
+    monkeypatch.setattr(ev, "_ml_get", lambda cli, key: registry.get(key, ""))
+    monkeypatch.setattr(ev, "_ml_set", lambda cli, key, value: registry.__setitem__(key, value))
+
+    with pytest.raises(ev.EnsureVenvError):
+        ev.ensure_coordinator_venv(
+            plugin_root, settings_home_path, check_only=False, clear_pin_on_failure=True,
+        )
+
+    # The pre-existing tree survives byte-identical -- only the never-
+    # published build sibling was cleaned up.
+    assert (venv_dir / "bin" / "python").read_text() == "still-here"
+    assert registry["coordinator.python"] == str(venv_py)  # not cleared -- still resolves
+    assert not list(settings_home_path.glob(".coordinator-venv.build-*"))

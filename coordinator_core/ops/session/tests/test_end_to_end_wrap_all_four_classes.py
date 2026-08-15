@@ -64,6 +64,13 @@ from coordinator_core.session import core
 from coordinator_core.subagent_sandbox.provision_report import main as provision_report_main
 from coordinator_core.workstream_complete import chain_partition_verdict_store as verdict_store
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 C1_ELIGIBLE_TYPE = "coordinator:executor"
 C2_ELIGIBLE_TYPE = "coordinator:code-reviewer"
 

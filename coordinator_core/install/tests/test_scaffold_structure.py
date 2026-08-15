@@ -26,6 +26,13 @@ from coordinator_core.install.scaffold_structure import (
 )
 from coordinator_core.install.write_surface import ShapedClause, validate
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 SIMPLE_MANIFEST = """\
 entries:
   - path: state/lessons/

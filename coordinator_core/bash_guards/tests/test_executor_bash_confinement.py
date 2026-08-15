@@ -139,7 +139,7 @@ def _confine(monkeypatch, subagent_type: str = _CONFINED_TYPE) -> None:
     monkeypatch.setattr(
         guard,
         "_read_backpointer_subagent_type",
-        lambda git_root, agent_id: subagent_type,
+        lambda git_root, agent_id, **kw: subagent_type,
     )
     monkeypatch.setattr(
         guard, "is_confined_by_roster_absence", _fake_is_confined_by_roster_absence
@@ -160,7 +160,7 @@ def _wire_other_guard(monkeypatch, other_guard, subagent_type: str = _CONFINED_T
     monkeypatch.setattr(
         other_guard,
         "_read_backpointer_subagent_type",
-        lambda git_root, agent_id: subagent_type,
+        lambda git_root, agent_id, **kw: subagent_type,
     )
 
 

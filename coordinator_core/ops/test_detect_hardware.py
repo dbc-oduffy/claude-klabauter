@@ -323,6 +323,55 @@ def _install_fake_winreg(monkeypatch, root_node):
     monkeypatch.setitem(sys.modules, "winreg", _FakeWinreg)
 
 
+def test_detect_gpu_windows_picks_discrete_over_integrated(monkeypatch):
+    """Regression net for the first-found-adapter defect: the reference box
+    enumerated `Intel(R) Graphics` (2GB, index 0001) ahead of an
+    `NVIDIA GeForce RTX 5070 Ti` (16GB, index 0002), so `hardware.vram_gb`
+    landed at 2 on a machine with 16 — and example-retrieval-repo's embed sidecar sizes
+    itself off that value. Enumeration order is not a capability ranking."""
+    _install_fake_winreg(
+        monkeypatch,
+        {
+            "subkeys": {
+                # index 0000: a driver entry with no DriverDesc at all
+                "0000": {"values": {}},
+                "0001": {
+                    "values": {
+                        "DriverDesc": "Intel(R) Graphics",
+                        "HardwareInformation.MemorySize": 2147479552,  # ~2 GB
+                    }
+                },
+                "0002": {
+                    "values": {
+                        "DriverDesc": "NVIDIA GeForce RTX 5070 Ti",
+                        "HardwareInformation.qwMemorySize": 17094934528,  # ~16 GB
+                    }
+                },
+            }
+        },
+    )
+    name, vram_gb = dh._detect_gpu_windows()
+    assert name == "NVIDIA GeForce RTX 5070 Ti"
+    assert vram_gb == 16
+
+
+def test_detect_gpu_windows_no_adapter_reports_vram_falls_back_to_first(monkeypatch):
+    """Degraded shape, unchanged: with no VRAM value anywhere, the first
+    adapter carrying a DriverDesc is reported with vram_gb=None."""
+    _install_fake_winreg(
+        monkeypatch,
+        {
+            "subkeys": {
+                "0001": {"values": {"DriverDesc": "Basic Display Adapter"}},
+                "0002": {"values": {"DriverDesc": "Second Adapter"}},
+            }
+        },
+    )
+    name, vram_gb = dh._detect_gpu_windows()
+    assert name == "Basic Display Adapter"
+    assert vram_gb is None
+
+
 def test_detect_gpu_windows_registry_qwmemorysize_preferred(monkeypatch):
     _install_fake_winreg(
         monkeypatch,

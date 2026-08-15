@@ -24,10 +24,14 @@ from coordinator_core.ops.install_publish_repo_precommit_hook import main
 # run — including --collect-only and -k-filtered ones. That is exactly the
 # import-time class test_no_new_spawning_tests.py's Rule 1 bans. shutil.which
 # answers the same question (is git on PATH) without a process.
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None,
-    reason="git not available",
-)
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+    pytest.mark.skipif(
+        shutil.which("git") is None,
+        reason="git not available",
+    ),
+]
 
 
 def _init_repo(path: Path) -> None:

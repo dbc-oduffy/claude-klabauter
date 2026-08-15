@@ -3059,6 +3059,135 @@ class TestArchive:
         # second call: session dir already gone -> idempotent True
         assert scope.archive("twice", cwd=str(repo)) is True
 
+    def _write_roster(self, sdir: Path, rows) -> None:
+        sdir.mkdir(parents=True, exist_ok=True)
+        with open(sdir / "dispatched-agents.txt", "a", encoding="utf-8") as fh:
+            for agent_id in rows:
+                fh.write(f"{agent_id}\tsome-model\tsome-type\n")
+
+    def _write_backptr(self, base: Path, agent_id: str, em_sid: str, stale: bool = True) -> Path:
+        agent_dir = base / ".agents" / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
+        touched = agent_dir / "touched.txt"
+        touched.write_text("T x\n", encoding="utf-8")
+        if stale:
+            # Older than `_AGENT_DROP_RECENCY_SECONDS` so the liveness
+            # guard doesn't mask the ownership-logic these tests exercise.
+            import os as _os
+            import time as _time
+
+            old = _time.time() - scope._AGENT_DROP_RECENCY_SECONDS - 60
+            _os.utime(touched, (old, old))
+        return agent_dir
+
+    def test_drops_owned_agent_dirs_on_clean_archive(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("owner-sid", cwd=str(repo))
+        sdir = _sdir(repo, "owner-sid")
+        base = sdir.parent
+        self._write_roster(sdir, ["agent-1"])
+        agent_dir = self._write_backptr(base, "agent-1", "owner-sid")
+
+        assert scope.archive("owner-sid", cwd=str(repo)) is True
+        assert not agent_dir.exists()
+        archived = list((base / ".archive").glob("_agents-agent-1-*"))
+        assert len(archived) == 1
+
+    def test_agent_owned_by_different_session_is_left_alone(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("owner-sid", cwd=str(repo))
+        sdir = _sdir(repo, "owner-sid")
+        base = sdir.parent
+        self._write_roster(sdir, ["agent-2"])
+        agent_dir = self._write_backptr(base, "agent-2", "some-other-sid")
+
+        assert scope.archive("owner-sid", cwd=str(repo)) is True
+        assert agent_dir.exists()
+        assert not list((base / ".archive").glob("_agents-agent-2-*"))
+
+    def test_missing_roster_file_is_a_noop(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("no-roster-sid", cwd=str(repo))
+        sdir = _sdir(repo, "no-roster-sid")
+        base = sdir.parent
+        # No dispatched-agents.txt written at all.
+        assert scope.archive("no-roster-sid", cwd=str(repo)) is True
+        assert not (base / ".archive" / "no-roster-sid").exists()  # session itself archives fine
+
+    def test_failing_entry_does_not_prevent_session_archive(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        core.init("owner-sid2", cwd=str(repo))
+        sdir = _sdir(repo, "owner-sid2")
+        base = sdir.parent
+        self._write_roster(sdir, ["agent-3"])
+        self._write_backptr(base, "agent-3", "owner-sid2")
+
+        real_rename = scope.os.rename
+
+        def _selective_boom(src, dst, *args, **kwargs):
+            if "agent-3" in str(src):
+                raise OSError("simulated move failure")
+            return real_rename(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(scope.os, "rename", _selective_boom)
+        assert scope.archive("owner-sid2", cwd=str(repo)) is True
+        assert not sdir.exists()
+
+    def test_recently_touched_owned_agent_dir_is_left_alone(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("owner-sid3", cwd=str(repo))
+        sdir = _sdir(repo, "owner-sid3")
+        base = sdir.parent
+        self._write_roster(sdir, ["agent-fresh"])
+        agent_dir = self._write_backptr(base, "agent-fresh", "owner-sid3", stale=False)
+
+        assert scope.archive("owner-sid3", cwd=str(repo)) is True
+        assert agent_dir.exists()
+        assert not list((base / ".archive").glob("_agents-agent-fresh-*"))
+
+    def test_stale_touched_owned_agent_dir_is_moved(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        core.init("owner-sid4", cwd=str(repo))
+        sdir = _sdir(repo, "owner-sid4")
+        base = sdir.parent
+        self._write_roster(sdir, ["agent-stale"])
+        agent_dir = self._write_backptr(base, "agent-stale", "owner-sid4", stale=True)
+
+        assert scope.archive("owner-sid4", cwd=str(repo)) is True
+        assert not agent_dir.exists()
+        archived = list((base / ".archive").glob("_agents-agent-stale-*"))
+        assert len(archived) == 1
+
+    def test_existing_archive_dest_absorbed_idempotently_via_rename_race(self, tmp_path, monkeypatch):
+        # Simulate a concurrent cadence-reaper race: `os.rename` raises
+        # OSError, but the destination already exists by the time we
+        # re-check — the function must absorb this idempotently, not raise.
+        repo = _make_repo(tmp_path)
+        core.init("owner-sid5", cwd=str(repo))
+        sdir = _sdir(repo, "owner-sid5")
+        base = sdir.parent
+        self._write_roster(sdir, ["agent-race"])
+        agent_dir = self._write_backptr(base, "agent-race", "owner-sid5", stale=True)
+
+        archive_root = base / ".archive"
+        archive_root.mkdir(parents=True, exist_ok=True)
+
+        real_rename = scope.os.rename
+
+        def _race_rename(src, dst, *args, **kwargs):
+            if "agent-race" in str(src):
+                Path(dst).mkdir(parents=True, exist_ok=True)
+                raise OSError("simulated concurrent-reap race")
+            return real_rename(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(scope.os, "rename", _race_rename)
+        assert scope.archive("owner-sid5", cwd=str(repo)) is True
+        # The race-created destination stands in for the concurrent
+        # reaper's own move — absorbed idempotently, not raised.
+        archived = list(archive_root.glob("_agents-agent-race-*"))
+        assert len(archived) == 1
+
 
 # ---------------------------------------------------------------------------
 # parse_touch_event() / format_touch_event() — P1, the frozen event-record

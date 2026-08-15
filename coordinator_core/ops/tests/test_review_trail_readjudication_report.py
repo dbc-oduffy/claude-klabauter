@@ -34,6 +34,13 @@ from coordinator_core.ops.review_trail_readjudication_report import (
     compute_readjudication_report,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _OWN_SESSION = "S-owner-0000"
 _FOREIGN_SESSION = "S-foreign-9999"
 

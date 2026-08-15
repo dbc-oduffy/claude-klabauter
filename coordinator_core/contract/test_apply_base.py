@@ -446,6 +446,92 @@ class TestExecuteDirectivesCompensators:
 
 
 # ---------------------------------------------------------------------------
+# (e-3) execute_directives — the per-directive `"advisory"` marker
+# (AC3-AC6, docs/plans/2026-08-15-coverage-gate-advisory-failure-and-
+# warn-flood.md chunk C2). Every test in `TestExecuteDirectives` above
+# already proves the byte-identical-when-omitted claim (none of them set
+# `"advisory"` on any directive). These tests exercise the marker itself.
+# ---------------------------------------------------------------------------
+
+class TestExecuteDirectivesAdvisory:
+    def test_advisory_failure_does_not_take_the_run_to_partial_mutation(self, tmp_path):
+        directives = [{"id": "d1", "cli": "raising-cli", "advisory": True}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert exit_code != apply_base.APPLY_EXIT_PARTIAL_MUTATION
+        assert exit_code == apply_base.APPLY_EXIT_OK
+
+    def test_advisory_failure_does_not_block_remaining_directives(self, tmp_path):
+        directives = [
+            {"id": "d1", "cli": "raising-cli", "advisory": True},
+            {"id": "d2", "cli": "noop-cli"},
+        ]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert exit_code == apply_base.APPLY_EXIT_OK
+        assert report["landed"] == ["d2"]
+
+    def test_advisory_failure_is_named_in_the_report(self, tmp_path):
+        directives = [{"id": "d1", "cli": "raising-cli", "advisory": True}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert report["advisory_failures"] == [
+            {"directive_id": "d1", "error": "synthetic handler failure"}
+        ]
+
+    def test_advisory_failure_does_not_invoke_a_registered_compensator(self, tmp_path):
+        directives = [
+            {"id": "d1", "cli": "noop-cli"},
+            {"id": "d2", "cli": "raising-cli", "advisory": True},
+        ]
+        called: dict[str, int] = {}
+        compensators = {"d1": lambda directive, repo_root, detail: called.__setitem__("count", 1)}
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE, compensators=compensators
+        )
+        assert exit_code == apply_base.APPLY_EXIT_OK
+        assert "count" not in called
+        assert "compensation" not in report
+
+    def test_omitting_the_marker_is_the_pre_existing_partial_mutation_behaviour(self, tmp_path):
+        directives = [{"id": "d1", "cli": "raising-cli"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION
+        assert "advisory_failures" not in report
+
+    def test_a_clean_run_with_no_advisory_directive_omits_the_key_entirely(self, tmp_path):
+        directives = [{"id": "d1", "cli": "noop-cli"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert exit_code == apply_base.APPLY_EXIT_OK
+        assert "advisory_failures" not in report
+
+    def test_earlier_advisory_failure_survives_a_later_partial_mutation(self, tmp_path):
+        # An advisory directive fails first (recorded, run continues), then
+        # a later NON-advisory directive fails (returns PARTIAL_MUTATION).
+        # The earlier advisory failure must still be named in the report —
+        # dropping it here is exactly the silent-swallow AC4 exists to stop.
+        directives = [
+            {"id": "d1", "cli": "raising-cli", "advisory": True},
+            {"id": "d2", "cli": "raising-cli"},
+        ]
+        exit_code, report = apply_base.execute_directives(
+            directives, [], tmp_path, _DISPATCH_TABLE
+        )
+        assert exit_code == apply_base.APPLY_EXIT_PARTIAL_MUTATION
+        assert report["failed_directive"] == "d2"
+        assert report["advisory_failures"] == [
+            {"directive_id": "d1", "error": "synthetic handler failure"}
+        ]
+
+
+# ---------------------------------------------------------------------------
 # (f) assert_in_repo_root / reject_path_traversal / scoped_commit
 # ---------------------------------------------------------------------------
 

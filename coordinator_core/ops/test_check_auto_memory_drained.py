@@ -19,6 +19,13 @@ from coordinator_core.ops.check_auto_memory_drained import (
     main,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _run(*extra_args: str) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()

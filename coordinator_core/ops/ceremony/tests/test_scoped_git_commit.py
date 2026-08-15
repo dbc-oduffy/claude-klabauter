@@ -24,14 +24,16 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from coordinator_core.ops.ceremony import scoped_git_commit
+from coordinator_core.ops.ceremony import git_native, scoped_git_commit
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.ops.session import scope_report
 from coordinator_core.ops.session.scope_report import (
@@ -175,6 +177,232 @@ def test_does_not_absorb_concurrent_sibling_staged_file(tmp_path):
     # Sibling's own staged file remains staged, neither committed nor lost.
     status = _porcelain(repo)
     assert any(line.endswith("tasks/sibling/other.md") for line in status)
+
+
+def test_agree_branch_cas_refuses_when_peer_absorbs_the_stage_mid_call(tmp_path, monkeypatch):
+    """Layer-1 CAS regression (state/audits/2026-08-14-scoped-commit-
+    partial-stage-sweep.md, "S5" -- the live incident this fix closes).
+
+    A peer commits this call's own staged content into HEAD in the window
+    between `commit_scoped()`'s own `diverging_paths()` check (correctly
+    finds "not diverged" -- the peer's commit made it so) and its
+    agree-branch `git add`. Before the fix, that `git add` silently
+    restaged the (now peer-authored-in-history) worktree content and the
+    commit landed anyway, sweeping the race in. After the fix, the CAS
+    snapshot taken before `diverging_paths()` ran no longer matches --
+    the call refuses loud rather than committing over it.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "file.txt", "base\n")
+    _git(["add", "--", "file.txt"], repo)
+    _git(["commit", "-q", "-m", "base"], repo)
+
+    _seed_file(repo, "file.txt", "base\nEM edit\n")
+    _git(["add", "--", "file.txt"], repo)
+
+    real_diverging_paths = git_native.diverging_paths
+    landed = {"done": False}
+
+    def _racing_diverging_paths(paths, **kwargs):
+        result = real_diverging_paths(paths, **kwargs)
+        if not landed["done"]:
+            landed["done"] = True
+            # A real concurrent peer commits EXACTLY this call's own staged/
+            # worktree content (they agree -- not diverged) into HEAD before
+            # this call's own agree branch ever runs `git add`.
+            _git(["commit", "-q", "-m", "peer race commit", "--", "file.txt"], repo)
+            # The peer's OWN further worktree edit, still uncommitted -- the
+            # real incident's shape (86bb14e47 swept 213 lines of the peer's
+            # OWN uncommitted hunks, not just the absorbed content). Without
+            # this, the pipeline's post-refusal rollback would leave the
+            # path byte-identical to the new HEAD, and this call's own
+            # idempotency reclassification (`_classify_uncommitted`) would
+            # read that as a benign already-committed no-op rather than the
+            # genuine refusal this test pins -- see that function's own
+            # docstring for why "nothing left to commit" and "refused" are
+            # otherwise indistinguishable once the absorbed content matches.
+            (repo / "file.txt").write_text(
+                "base\nEM edit\npeer's own further uncommitted edit\n", encoding="utf-8"
+            )
+        return result
+
+    monkeypatch.setattr(git_native, "diverging_paths", _racing_diverging_paths)
+
+    head_before_call = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["file.txt"],
+            "message": "EM's own commit attempt",
+        }
+    )
+
+    assert result["committed"] is False
+    assert result.get("commit_failed") is True
+    assert any("compare-and-swap" in d.lower() for d in result.get("diagnostics", []))
+
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+    # HEAD is the peer's race commit -- never silently re-committed under a
+    # SECOND (EM) commit, and never rewritten/orphaned by this call.
+    assert head_after != head_before_call
+    log = subprocess.run(
+        ["git", "log", "--format=%s", "-n", "3"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout
+    assert log.count("peer race commit") == 1
+    assert "EM's own commit attempt" not in log
+
+
+def test_agree_branch_cas_check_does_not_false_refuse_a_staged_deletion(tmp_path):
+    """Layer-1 CAS gap noted in review (code-reviewer, bf7bab8ce37c review,
+    P3 "test gap"): a STAGED DELETION has no index entry at all --
+    `_index_blobs` maps it to `None` on both the pre-snapshot and the
+    re-observation immediately before `git add`/`git commit`. `None != None`
+    is False, so `moved` must never fire for it, and `pre_index_blobs.get(p)
+    is not None` excludes it from `absorbed_candidates` outright -- the CAS
+    check must be a complete no-op for this path, and the deletion must
+    still land through the ordinary agree branch.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "file.txt", "seed\n")
+    _git(["add", "--", "file.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    _git(["rm", "-q", "--", "file.txt"], repo)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["file.txt"],
+            "message": "commit the staged deletion",
+        }
+    )
+
+    assert result["committed"] is True
+    assert not (repo / "file.txt").exists()
+    ls_tree = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "file.txt" not in ls_tree.splitlines()
+
+
+def test_agree_branch_cas_refuses_case_divergent_caller_path(tmp_path):
+    """PM follow-up on the P1 path-key-mismatch review finding
+    (bf7bab8ce37c): case divergence is the same missed-refusal shape as the
+    C-quoting bug, narrowed -- a caller-supplied path differing only in
+    case from the tracked path must refuse, not silently pass the CAS
+    check as `None == None`.
+
+    Portable ONLY on a case-INSENSITIVE filesystem (Windows/macOS default --
+    this repo's primary box per CLAUDE.md). Empirically verified
+    (2026-08-14, this repo's own git): git's pathspec matching itself is
+    ALWAYS case-sensitive regardless of `core.ignorecase` -- the hazard is
+    not "the primary ls-files/ls-tree query matches under the wrong case",
+    it is that `git add -- file.txt` silently resolves the file THROUGH the
+    case-insensitive FILESYSTEM and reuses the existing `File.txt` index
+    entry (git's own collision-avoidance), while the primary CAS-snapshot
+    query still (correctly, case-sensitively) sees nothing for `file.txt`
+    and would read `None == None` without the `:(icase)` rescan this fix
+    adds. On a case-sensitive filesystem, `file.txt` never resolves to
+    `File.txt` on disk at all -- `git add -- file.txt` fails outright with
+    "pathspec did not match any files", so the hazard cannot arise; skip
+    there rather than false-failing.
+
+    Exercises `git_native.commit_scoped()` DIRECTLY, not through the
+    `scoped-git-commit` op boundary (`_call`, every sibling test's own
+    helper): `scoped_git_commit.py::_classify_uncommitted` /
+    `_commit_paths_are_clean` (commit_pipeline.py, outside this chunk's own
+    file scope) reclassify a refused commit as a benign idempotent no-op by
+    probing `git status --porcelain -- file.txt` -- a probe that is ITSELF
+    case-sensitive and finds nothing dirty (the real dirty entity is
+    `File.txt`, never touched), so it silently swallows this exact refusal
+    at the op layer (verified empirically, 2026-08-14 -- reported upstream
+    as a live escalation, not fixed here: out of this file's own scope).
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "File.txt", "seed\n")
+    _git(["add", "--", "File.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    if not (repo / "file.txt").exists():
+        pytest.skip(
+            "filesystem here is case-sensitive -- 'file.txt' does not "
+            "resolve to the tracked 'File.txt' on disk, so the case-"
+            "divergent add hazard cannot arise"
+        )
+
+    msg_file = repo / "msg.txt"
+    msg_file.write_text("case-divergent commit attempt\n", encoding="utf-8")
+    result = git_native.commit_scoped(["file.txt"], str(msg_file), str(repo))
+
+    assert result.ok is False
+    assert "could not be matched" in result.stderr.lower()
+
+
+def test_op_surfaces_case_divergent_cas_refusal_as_a_failure_not_a_noop(tmp_path):
+    """The escalation this dispatch exists to close (state/subagent-share/
+    ca848831-1b10-4515-8203-5a0bade9ff0d/coordinatorreview-integrator-
+    1993e652.md, "A third, out-of-scope discovery"): `git_native.
+    commit_scoped()`'s CAS refusal for a case-divergent caller path (see the
+    sibling test above, which exercises `commit_scoped()` directly) was
+    being reclassified as a benign already-committed no-op by THIS op's own
+    `_classify_uncommitted()` — its `reclassifiable` check accepted ANY
+    non-zero `commit` exit code, not just git's own `1` ("nothing to
+    commit"), so `commit_scoped()`'s deliberately-distinct `returncode=-1`
+    refusal sentinel was swept into the same reclassification branch and
+    then rubber-stamped "clean" by `_commit_paths_are_clean()`'s own
+    case-sensitive `git status --porcelain -- file.txt` probe (which never
+    sees `File.txt`'s real divergence).
+
+    Portable ONLY on a case-insensitive filesystem — same skip condition as
+    the sibling `git_native`-level test.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "File.txt", "seed\n")
+    _git(["add", "--", "File.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    if not (repo / "file.txt").exists():
+        pytest.skip(
+            "filesystem here is case-sensitive -- 'file.txt' does not "
+            "resolve to the tracked 'File.txt' on disk, so the case-"
+            "divergent add hazard cannot arise"
+        )
+
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["file.txt"],
+            "message": "case-divergent commit attempt",
+        }
+    )
+
+    # Never rendered as the benign no-op shape (`reason ==
+    # "empty-commit-set"`) -- a real, diagnostic-bearing refusal.
+    assert result["committed"] is False
+    assert result.get("reason") != "empty-commit-set"
+    assert result.get("commit_failed") is True
+    assert any(
+        "could not be matched" in str(d).lower() or "compare-and-swap" in str(d).lower()
+        for d in result.get("diagnostics", [])
+    )
+
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert head_after == head_before
 
 
 def test_diverged_path_reports_worktree_excluded_at_the_op_boundary(tmp_path):
@@ -515,9 +743,10 @@ def _load_cli_module():
 
 def test_cli_parses_deliverable_id_flag_into_params_shape():
     cli = _load_cli_module()
-    subject, repo, paths, as_json, include_orphans, deliverable_id, mangled_cr_paths = (
-        cli._parse_args(["-m", "subject", "--deliverable-id", "dlv-abc123", "--", "a.md"])
-    )
+    (
+        subject, repo, paths, as_json, include_orphans, deliverable_id, _stage_patch,
+        mangled_cr_paths,
+    ) = cli._parse_args(["-m", "subject", "--deliverable-id", "dlv-abc123", "--", "a.md"])
     assert deliverable_id == "dlv-abc123"
     assert subject == "subject"
     assert paths == ["a.md"]
@@ -527,7 +756,8 @@ def test_cli_parses_deliverable_id_flag_into_params_shape():
 def test_cli_omits_deliverable_id_when_not_given():
     cli = _load_cli_module()
     (
-        _subject, _repo, _paths, _as_json, _include_orphans, deliverable_id, _mangled_cr_paths,
+        _subject, _repo, _paths, _as_json, _include_orphans, deliverable_id, _stage_patch,
+        _mangled_cr_paths,
     ) = cli._parse_args(["-m", "subject", "--", "a.md"])
     assert deliverable_id is None
 
@@ -1423,3 +1653,654 @@ def test_no_remote_push_status_maps_to_push_state_no_remote(tmp_path):
 
     assert push_state == sgc.PUSH_STATE_NO_REMOTE
     assert pushed is None
+
+
+# ---------------------------------------------------------------------------
+# C0 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md), AC6: the
+# audit's own reproduction (state/audits/2026-08-14-scoped-commit-partial-
+# stage-sweep.md) ported as a regression test, before its scratchpad fixture
+# dies. S1 and S3 are passing negative controls; S5 is the live incident's
+# own timeline -- headline case, still green today, because the hand-staged
+# path's standing limit is exactly what it documents, not a defect this
+# dispatch fixes. The `--stage-patch` half of AC6 (the fix) lives in
+# test_commit_pipeline.py, `designed_red`, since C2/C3 have not landed yet.
+# ---------------------------------------------------------------------------
+
+_AUDIT_BASE = "\n".join(f"line {i}" for i in range(1, 61)) + "\n"
+
+
+def _audit_variant(*, em: bool, peer: bool) -> str:
+    """`substrate.py`'s 60-line body with the EM's line-5 hunk and/or the
+    peer's line-55 hunk applied -- the audit's own fixture shape
+    (`<scratchpad>/repro2.py::variant`), ported verbatim rather than
+    re-derived.
+    """
+    lines = _AUDIT_BASE.splitlines()
+    if em:
+        lines[4] = "line 5 EM_CHANGE"
+    if peer:
+        lines[54] = "line 55 PEER_CHANGE"
+    return "\n".join(lines) + "\n"
+
+
+def _audit_repo(tmp_path: Path) -> Path:
+    """A fresh repo carrying the audit's base commit, with the worktree
+    already holding BOTH the EM's and the peer's uncommitted hunks --
+    `<scratchpad>/repro2.py::mk`, ported verbatim.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "substrate.py", _AUDIT_BASE)
+    _seed_file(repo, "other.py", "other\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "base"], repo)
+    _seed_file(repo, "substrate.py", _audit_variant(em=True, peer=True))
+    return repo
+
+
+def _audit_partial_stage(repo: Path) -> None:
+    """Deliberate partial stage: the index holds the EM hunk ONLY -- the
+    deterministic equivalent of `git apply --cached` on a filtered patch
+    (`<scratchpad>/repro2.py::partial_stage`, ported verbatim).
+    """
+    em_only = _audit_variant(em=True, peer=False)
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=str(repo), input=em_only, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    _git(["update-index", "--cacheinfo", f"100644,{blob},substrate.py"], repo)
+
+
+def test_s1_hand_staged_path_holds_with_no_peer_interference(tmp_path):
+    """Audit S1 (state/audits/2026-08-14-scoped-commit-partial-stage-
+    sweep.md), passing negative control: with no peer activity in the
+    stage->commit window, the private-index branch commits the EM's own
+    partial stage verbatim -- the protection this file's other CAS tests
+    pin working exactly as designed, unrelated to this scenario's own
+    concurrency shape.
+    """
+    repo = _audit_repo(tmp_path)
+    _audit_partial_stage(repo)
+
+    result = _call(
+        {"worktree_root": str(repo), "paths": ["substrate.py"], "message": "s1 EM commit"}
+    )
+
+    assert result["committed"] is True
+    head = subprocess.run(
+        ["git", "show", "HEAD:substrate.py"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert "EM_CHANGE" in head
+    assert "PEER_CHANGE" not in head
+
+
+def test_s3_peer_add_before_invocation_destroys_the_partial_stage_and_sweeps(tmp_path):
+    """Audit S3, passing negative control documenting the OTHER defeat
+    mechanism (the `index != worktree` conjunct, not `index != HEAD`): a
+    peer's plain `git add` on the same path -- no commit -- before this
+    invocation begins makes `index == worktree`, so `diverging_paths()`'s
+    plain-`git diff` leg empties and the partial stage is already gone
+    before any check runs. The commit still lands (nothing refuses this
+    today), and it carries the peer's hunk too -- the audit's own second
+    independent defeat of the divergence predicate.
+    """
+    repo = _audit_repo(tmp_path)
+    _audit_partial_stage(repo)
+
+    _git(["add", "--", "substrate.py"], repo)  # peer's own restage, no commit
+
+    result = _call(
+        {"worktree_root": str(repo), "paths": ["substrate.py"], "message": "s3 EM commit"}
+    )
+
+    assert result["committed"] is True
+    head = subprocess.run(
+        ["git", "show", "HEAD:substrate.py"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert "EM_CHANGE" in head
+    assert "PEER_CHANGE" in head  # swept -- documents the standing limit
+
+
+def test_s5_hand_staged_path_sweeps_peer_hunks_when_peer_absorbs_before_invocation_begins(tmp_path):
+    """Audit S5 -- the live incident's own timeline (state/audits/2026-08-
+    14-scoped-commit-partial-stage-sweep.md), and this plan's Problem
+    statement's own falsifier: a peer commits the EM's hand-staged blob
+    into HEAD via a SEPARATE, already-completed invocation of the real op,
+    entirely BEFORE this call's own process starts. Unlike the
+    `test_agree_branch_cas_refuses_when_peer_absorbs_the_stage_mid_call`
+    sibling test above (which the Layer-1 CAS DOES catch, because that
+    race lands inside the call's own check-then-act window), no in-process
+    CAS can observe an absorption that predates this call's own snapshot:
+    `pre_index_blobs == pre_head_blobs` already at entry, so
+    `_agree_branch_cas_refusal`'s `absorbed_candidates` condition
+    (`pre_index != pre_head` at snapshot time) never fires for this path.
+    The commit still lands, and it sweeps the peer's own further worktree
+    hunk in -- the standing limit this plan's `--stage-patch` primitive
+    (C2/C3) closes; see the `designed_red` sibling in
+    test_commit_pipeline.py for that half.
+    """
+    repo = _audit_repo(tmp_path)
+    _audit_partial_stage(repo)
+
+    peer_msg = repo / "peer_msg.txt"
+    peer_msg.write_text("peer absorbs the EM's hand-staged blob\n", encoding="utf-8")
+    peer_result = git_native.commit_scoped(["substrate.py"], str(peer_msg), str(repo))
+    assert peer_result.ok, peer_result.stderr  # the peer's own invocation lands first, cleanly
+
+    result = _call(
+        {"worktree_root": str(repo), "paths": ["substrate.py"], "message": "s5 EM commit"}
+    )
+
+    assert result["committed"] is True
+    log_subjects = subprocess.run(
+        ["git", "log", "--format=%s"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert "s5 EM commit" in log_subjects
+    head = subprocess.run(
+        ["git", "show", "HEAD:substrate.py"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert "EM_CHANGE" in head
+    assert "PEER_CHANGE" in head  # swept -- the incident, reproduced
+
+
+def test_cli_parses_stage_patch_flag_into_params_shape():
+    """AC1, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md:
+    `--stage-patch <file>` does not exist yet -- `_parse_args` raises
+    `_Usage("unrecognized argument '--stage-patch' ...")` on this token
+    today. `designed_red` until C3 wires the flag through `_parse_args`;
+    asserts the FUTURE parsed shape (a `stage_patch` value threaded
+    alongside the existing return tuple) and lets today's `_Usage` propagate
+    uncaught -- the right-reason failure (the flag/primitive is absent),
+    never an import or fixture bug -- so this flips green exactly when C3
+    lands, never earlier.
+    """
+    cli = _load_cli_module()
+    (
+        subject, repo, paths, as_json, include_orphans, deliverable_id, stage_patch, mangled_cr_paths,
+    ) = cli._parse_args(
+        ["-m", "subject", "--stage-patch", "patch.diff", "--", "substrate.py"]
+    )
+    assert stage_patch == "patch.diff"
+    assert paths == ["substrate.py"]
+
+
+def test_resolve_content_sources_supplied_blob_never_worktree_sourced():
+    """C1, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md: pins
+    the property the plan names -- a path carrying a supplied blob can
+    NEVER appear in the worktree-sourced resolution, regardless of which
+    (if any) of `diverged`/`non_diverged` it also happens to be a member
+    of. Exercised directly against `_resolve_content_sources`, the total
+    per-path resolution function `_commit_scoped_private_index` now
+    consumes -- `--stage-patch` does not exist until C3, so this does not
+    route through the CLI.
+    """
+    resolution = git_native._resolve_content_sources(
+        diverged=["diverged_and_supplied.py", "diverged_only.py"],
+        non_diverged=["non_diverged_and_supplied.py", "non_diverged_only.py"],
+        supplied_blobs={
+            "diverged_and_supplied.py": "a" * 40,
+            "non_diverged_and_supplied.py": "b" * 40,
+        },
+    )
+
+    assert resolution["diverged_and_supplied.py"] == git_native._SOURCE_SUPPLIED
+    assert resolution["non_diverged_and_supplied.py"] == git_native._SOURCE_SUPPLIED
+    assert resolution["diverged_only.py"] == git_native._SOURCE_STAGED
+    assert resolution["non_diverged_only.py"] == git_native._SOURCE_WORKTREE
+
+    worktree_sourced = {p for p, src in resolution.items() if src == git_native._SOURCE_WORKTREE}
+    staged_sourced = {p for p, src in resolution.items() if src == git_native._SOURCE_STAGED}
+    supplied_sourced = {p for p, src in resolution.items() if src == git_native._SOURCE_SUPPLIED}
+    assert supplied_sourced.isdisjoint(worktree_sourced)
+    assert supplied_sourced.isdisjoint(staged_sourced)
+
+
+def test_resolve_content_sources_empty_supplied_blobs_matches_prior_partition():
+    """C1: an empty (or omitted) `supplied_blobs` map reproduces the
+    PRIOR binary `diverged`/`non_diverged` partition exactly -- the
+    behaviour-preservation guarantee this refactor's hard constraint
+    requires.
+    """
+    resolution = git_native._resolve_content_sources(
+        diverged=["staged.py"], non_diverged=["worktree.py"]
+    )
+    assert resolution == {
+        "staged.py": git_native._SOURCE_STAGED,
+        "worktree.py": git_native._SOURCE_WORKTREE,
+    }
+
+
+# ---------------------------------------------------------------------------
+# C2, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md:
+# `stage_from_patch()` / `stage_from_patch_cas_refusal()`.
+# ---------------------------------------------------------------------------
+
+
+def _write_patch(
+    repo: Path, rel_path: str, old_content: str, new_content: str
+) -> Path:
+    """Seed `rel_path` at `old_content` (committed), edit it to
+    `new_content` in the worktree, capture git's OWN unified diff of that
+    edit as a patch file, then revert the worktree back to `old_content` --
+    leaving the repo exactly as it was before this helper ran, with the
+    patch file the only trace. Using a git-authored diff (never a hand-typed
+    one) means the patch's hunk framing/context matches this repo's own
+    `git apply` expectations exactly.
+    """
+    _seed_file(repo, rel_path, old_content)
+    _git(["add", "--", rel_path], repo)
+    _git(["commit", "-q", "-m", f"seed {rel_path}"], repo)
+
+    _seed_file(repo, rel_path, new_content)
+    diff_result = subprocess.run(
+        ["git", "diff", "--", rel_path], cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    patch_path = repo.parent / f"{rel_path.replace('/', '_')}.patch"
+    # `newline=""` is load-bearing on Windows: `git diff`'s captured stdout
+    # is LF-only (matching the LF blob `core.autocrlf=true` stores), and a
+    # default-newline write here would translate every `\n` to `\r\n`,
+    # corrupting the patch against the LF index content `git apply --cached`
+    # matches hunks against -- an artifact of THIS test helper writing the
+    # file, never of `git diff`'s own output.
+    patch_path.write_text(diff_result.stdout, encoding="utf-8", newline="")
+
+    _git(["checkout", "--", rel_path], repo)
+    return patch_path
+
+
+def _two_hunk_content(marker: str) -> str:
+    lines = [f"line{i}" for i in range(1, 31)]
+    lines[1] = f"{marker}-two"
+    lines[27] = f"{marker}-twentyeight"
+    return "\n".join(lines) + "\n"
+
+
+def test_stage_from_patch_writes_only_to_private_index(tmp_path):
+    """AC1: the shared index and worktree are byte-unchanged after
+    `stage_from_patch()` -- the write landed ONLY in the process-private
+    temp index, and the returned blob is the applied content, never a
+    worktree re-read.
+    """
+    repo = _init_repo(tmp_path)
+    old = _two_hunk_content("old")
+    new = _two_hunk_content("new")
+    patch_path = _write_patch(repo, "a.txt", old, new)
+
+    result = git_native.stage_from_patch(patch_path, ["a.txt"], repo)
+
+    assert result.ok, result.stderr
+    assert "a.txt" in result.blobs
+    assert _porcelain(repo) == []  # shared index/worktree: no visible change
+    assert (repo / "a.txt").read_text(encoding="utf-8") == old  # worktree untouched
+
+    blob_text = subprocess.run(
+        ["git", "cat-file", "-p", result.blobs["a.txt"]],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert blob_text == new
+
+
+def test_stage_from_patch_records_head_blob_at_apply_time(tmp_path):
+    """AC2: `head_blobs` on the result is each path's HEAD blob, taken
+    before the private index is touched -- must equal the real HEAD blob
+    for that path at the time of the call.
+    """
+    repo = _init_repo(tmp_path)
+    old = _two_hunk_content("old")
+    new = _two_hunk_content("new")
+    patch_path = _write_patch(repo, "a.txt", old, new)
+
+    real_head_blob = subprocess.run(
+        ["git", "rev-parse", "HEAD:a.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+    result = git_native.stage_from_patch(patch_path, ["a.txt"], repo)
+
+    assert result.ok, result.stderr
+    assert result.head_blobs["a.txt"] == real_head_blob
+
+
+def test_stage_from_patch_bad_second_hunk_refuses_atomically(tmp_path):
+    """AC3: a patch whose SECOND hunk does not apply refuses the WHOLE
+    call -- `git apply --cached` is all-or-nothing per invocation. Blobs is
+    empty (no partial write reported), the shared index/worktree are
+    untouched, and no private temp-index file is left behind.
+    """
+    repo = _init_repo(tmp_path)
+    old = _two_hunk_content("old")
+    new = _two_hunk_content("new")
+    patch_path = _write_patch(repo, "a.txt", old, new)
+
+    patch_text = patch_path.read_text(encoding="utf-8")
+    # Corrupt the second hunk's context so it can never match -- this
+    # repo's own diff always has TWO "@@" hunk headers here (edits at
+    # line 2 and line 28, far enough apart that default 3-line context
+    # keeps them separate hunks).
+    assert patch_text.count("@@ -") == 2, patch_text
+    corrupted = patch_text.replace("line27", "THIS-CONTEXT-LINE-DOES-NOT-EXIST")
+    patch_path.write_text(corrupted, encoding="utf-8", newline="")
+
+    before = list(Path(tempfile.gettempdir()).glob(f"git-index-{os.getpid()}-*"))
+
+    result = git_native.stage_from_patch(patch_path, ["a.txt"], repo)
+
+    assert result.ok is False
+    assert result.reason == "apply-failed"
+    assert result.blobs == {}
+    assert _porcelain(repo) == []
+    assert (repo / "a.txt").read_text(encoding="utf-8") == old
+
+    after = list(Path(tempfile.gettempdir()).glob(f"git-index-{os.getpid()}-*"))
+    assert after == before  # no residue left behind (`finally: unlink`)
+
+
+def test_stage_from_patch_multi_path_mixed_already_applied_and_conflict_fails_closed(tmp_path):
+    """AC6 (review: coordinator:code-reviewer 1ead6ae2, finding 2) -- the
+    reverse-apply-check fallback is a WHOLE-PATCH check (same `--include`
+    filters as the forward apply), so a multi-path patch where ONE file is
+    already-applied (peer landed the identical content) and ANOTHER file
+    genuinely conflicts must still refuse the whole call: the reverse-check
+    only masks a forward failure when the ENTIRE bounded patch reverses
+    cleanly, and a genuine conflict on `c.txt` means it does not. This must
+    fall through to `reason="apply-failed"`, never silently treat the
+    already-applied file as cover for the still-conflicting one.
+    """
+    repo = _init_repo(tmp_path)
+    old_a = _two_hunk_content("old")
+    new_a = _two_hunk_content("new")
+    patch_a = _write_patch(repo, "a.txt", old_a, new_a)
+
+    old_c = _two_hunk_content("oldc")
+    new_c = _two_hunk_content("newc")
+    patch_c = _write_patch(repo, "c.txt", old_c, new_c)
+
+    combined = repo.parent / "combined.patch"
+    combined.write_text(
+        patch_a.read_text(encoding="utf-8") + patch_c.read_text(encoding="utf-8"),
+        encoding="utf-8", newline="",
+    )
+
+    # a.txt: a peer already landed the patch's own target content -- the
+    # forward apply's context match will fail (HEAD already carries new_a),
+    # but the reverse-check for THIS file alone would succeed.
+    _seed_file(repo, "a.txt", new_a)
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "peer already applied a.txt"], repo)
+
+    # c.txt: genuinely diverged -- neither the patch's pre-image nor its
+    # post-image is present, so neither the forward apply nor the reverse
+    # check can succeed for this file.
+    _seed_file(repo, "c.txt", "totally-unrelated-content\n")
+    _git(["add", "--", "c.txt"], repo)
+    _git(["commit", "-q", "-m", "peer diverged c.txt"], repo)
+
+    result = git_native.stage_from_patch(combined, ["a.txt", "c.txt"], repo)
+
+    assert result.ok is False
+    assert result.reason == "apply-failed"
+    assert result.blobs == {}
+    assert _porcelain(repo) == []
+
+
+def test_stage_from_patch_cas_refusal_when_peer_commits_between(tmp_path):
+    """AC2's base hole: a peer commits to the SAME path between
+    `stage_from_patch()` and the caller's own commit step --
+    `stage_from_patch_cas_refusal()` must refuse rather than let the
+    caller silently commit a supplied blob over the peer's now-landed
+    history.
+    """
+    repo = _init_repo(tmp_path)
+    old = _two_hunk_content("old")
+    new = _two_hunk_content("new")
+    patch_path = _write_patch(repo, "a.txt", old, new)
+
+    result = git_native.stage_from_patch(patch_path, ["a.txt"], repo)
+    assert result.ok, result.stderr
+
+    # Peer commits to the SAME path in between.
+    _seed_file(repo, "a.txt", "peer content\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "peer commit"], repo)
+
+    refusal = git_native.stage_from_patch_cas_refusal(repo, ["a.txt"], result.head_blobs)
+
+    assert refusal is not None
+    assert refusal.ok is False
+    assert "a.txt" in refusal.stderr
+
+
+def test_stage_from_patch_cas_refusal_none_when_head_unmoved(tmp_path):
+    """Sanity control: with no intervening peer commit, the CAS re-check
+    passes (returns `None`) -- the overwhelming-majority case.
+    """
+    repo = _init_repo(tmp_path)
+    old = _two_hunk_content("old")
+    new = _two_hunk_content("new")
+    patch_path = _write_patch(repo, "a.txt", old, new)
+
+    result = git_native.stage_from_patch(patch_path, ["a.txt"], repo)
+    assert result.ok, result.stderr
+
+    refusal = git_native.stage_from_patch_cas_refusal(repo, ["a.txt"], result.head_blobs)
+
+    assert refusal is None
+
+
+# ---------------------------------------------------------------------------
+# AC4/C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md: the
+# `--stage-patch` end-to-end op-level shape -- a real `stage_patch` param,
+# through the op boundary, mixed with an unprovenanced path in the same
+# invocation.
+# ---------------------------------------------------------------------------
+
+
+def test_stage_patch_op_commits_patched_and_names_unprovenanced_path(tmp_path):
+    """AC4: a mixed invocation is provenanced for the patched path and
+    worktree-sourced for the other -- and the op response NAMES the
+    unprovenanced subset, never leaving it for the caller to infer from
+    absence (mirrors `worktree_excluded`'s own posture).
+    """
+    repo = _init_repo(tmp_path)
+    old = _two_hunk_content("old")
+    new = _two_hunk_content("new")
+    patch_path = _write_patch(repo, "a.txt", old, new)
+
+    # `b.txt` is untouched by the patch -- an ordinary worktree edit.
+    _seed_file(repo, "b.txt", "b-v1\n")
+    _git(["add", "--", "b.txt"], repo)
+    _git(["commit", "-q", "-m", "seed b.txt"], repo)
+    _seed_file(repo, "b.txt", "b-v2\n")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.txt", "b.txt"],
+            "message": "mixed stage-patch commit",
+            "stage_patch": str(patch_path),
+        }
+    )
+
+    assert result["committed"] is True, result
+    assert result.get("unprovenanced_paths") == ["b.txt"]
+    head_a = subprocess.run(
+        ["git", "show", "HEAD:a.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    head_b = subprocess.run(
+        ["git", "show", "HEAD:b.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert head_a == new
+    assert head_b == "b-v2\n"
+
+
+def test_stage_patch_op_missing_patch_file_refused_before_mutation(tmp_path):
+    """AC1/AC3: a missing `stage_patch` path refuses BEFORE anything
+    mutates -- a validation error, same shape as a missing required param,
+    never a partial commit.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "a.txt", "v2\n")
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.txt"],
+            "message": "should not land",
+            "stage_patch": str(repo.parent / "does-not-exist.patch"),
+        }
+    )
+
+    assert result["committed"] is False
+    assert "error" in result
+    assert _porcelain(repo)  # untouched -- a.txt's worktree edit is still there, unstaged
+
+
+# ---------------------------------------------------------------------------
+# AC7, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md: five
+# distinct machine-readable `reason`s -- `patch-did-not-apply` is exercised
+# end-to-end here (op level); the remaining four are pinned at
+# `commit_pipeline.py`'s own `commit()` boundary in test_commit_pipeline.py,
+# where the CAS/failure shapes are far cheaper to construct deterministically.
+# ---------------------------------------------------------------------------
+
+
+def test_stage_patch_op_reason_patch_did_not_apply(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    bad_patch = repo.parent / "bad.patch"
+    bad_patch.write_text(
+        "--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-this context does not exist\n+nope\n",
+        encoding="utf-8",
+    )
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.txt"],
+            "message": "should refuse",
+            "stage_patch": str(bad_patch),
+        }
+    )
+
+    assert result["committed"] is False
+    assert result.get("reason") == "patch-did-not-apply"
+    assert result["commit_failed"] is True
+
+
+def test_stage_patch_infra_failure_does_not_masquerade_as_a_bad_patch(monkeypatch, tmp_path):
+    """The staging primitive and this layer speak different failure
+    vocabularies (`apply-failed`/`index-infra-failure` vs AC7's
+    `patch-did-not-apply` family). `commit()` translates between them; a
+    pass-through would replace AC7's vocabulary wholesale, and collapsing
+    every failure onto `patch-did-not-apply` would send an operator to debug
+    a patch that was never the fault. Pins the translation in both
+    directions -- the genuine-bad-hunk case is the sibling test above.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    patch_file = repo.parent / "irrelevant.patch"
+    patch_file.write_text("", encoding="utf-8")
+
+    real = git_native.stage_from_patch
+
+    def _infra_failure(*a, **k):
+        outcome = real(*a, **k)
+        return outcome.__class__(
+            ok=False,
+            blobs={},
+            head_blobs={},
+            reason="index-infra-failure",
+            stderr="read-tree HEAD failed",
+        )
+
+    monkeypatch.setattr(git_native, "stage_from_patch", _infra_failure)
+
+    result = _call(
+        {
+            "worktree_root": str(repo),
+            "paths": ["a.txt"],
+            "message": "should refuse distinctly",
+            "stage_patch": str(patch_file),
+        }
+    )
+
+    assert result["committed"] is False
+    assert result.get("reason") == "stage-infra-failure"
+
+
+def test_classify_uncommitted_bare_exit_1_with_clean_tree_reclassifies_as_noop(tmp_path):
+    """Pins the genuine-idempotency shape `_classify_uncommitted` must keep
+    reclassifying: `exit_code == 1` AND a bare `stderr` (no real diagnostic
+    text -- exactly what `commit_pipeline.commit()`'s `not result.ok` branch
+    leaves it in for git's own "nothing to commit" no-op) AND a porcelain-
+    clean tree together are the benign already-committed case.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    commit_outcome = SimpleNamespace(exit_code=1, stderr="exit_code=1")
+    result = SimpleNamespace(
+        commit_failed=True,
+        diagnostics=["exit_code=1"],
+        committed_sha=None,
+        commit=commit_outcome,
+    )
+
+    commit_failed, diagnostics, empty_commit_set = scoped_git_commit._classify_uncommitted(
+        str(repo), ["README.md"], result
+    )
+
+    assert commit_failed is False
+    assert diagnostics == []
+    assert empty_commit_set is True
+
+
+def test_classify_uncommitted_hook_rejection_with_clean_tree_stays_failed(tmp_path):
+    """Review: code-reviewer -- Finding [P3], 2026-08-15 (chain-ancestry
+    slice). The residual gap: `exit_code == 1` alone cannot distinguish
+    git's own "nothing to commit" no-op from a rejecting `pre-commit`/
+    `commit-msg` hook, both of which conventionally exit 1. The ordinary
+    hook-rejection case is caught downstream by `_commit_paths_are_clean()`'s
+    porcelain probe (a rejected hook normally leaves the pathspec still
+    dirty) -- but a hook that reverts its own edits on failure, leaving the
+    tree byte-identical to HEAD, would pass that probe too. This exercises
+    exactly that: a real, clean-relative-to-HEAD tree (so the porcelain probe
+    alone WOULD reclassify), paired with a `CommitOutcome.stderr` carrying
+    real hook-diagnostic text rather than the bare `exit_code=N` shape --
+    the fix's `_BARE_EXIT_CODE_STDERR_RE` gate must keep this `commit_failed`.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    # Tree is byte-identical to HEAD -- nothing dirty under any pathspec,
+    # exactly the shape `_commit_paths_are_clean()` alone cannot distinguish
+    # from a genuine no-op.
+
+    commit_outcome = SimpleNamespace(
+        exit_code=1,
+        stderr="hook 'pre-commit' rejected: lint failure on README.md",
+    )
+    result = SimpleNamespace(
+        commit_failed=True,
+        diagnostics=["hook 'pre-commit' rejected: lint failure on README.md"],
+        committed_sha=None,
+        commit=commit_outcome,
+    )
+
+    commit_failed, diagnostics, empty_commit_set = scoped_git_commit._classify_uncommitted(
+        str(repo), ["README.md"], result
+    )
+
+    assert commit_failed is True
+    assert diagnostics == ["hook 'pre-commit' rejected: lint failure on README.md"]
+    assert empty_commit_set is False

@@ -21,6 +21,13 @@ import pytest
 
 from coordinator_core.ops import workday_surface_stale_stash_entries as mod
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(args, cwd, check=True):
     return subprocess.run(

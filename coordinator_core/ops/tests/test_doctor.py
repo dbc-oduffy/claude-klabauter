@@ -23,6 +23,13 @@ from pathlib import Path
 
 import pytest
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]
 _DOCTOR = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "doctor.py"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

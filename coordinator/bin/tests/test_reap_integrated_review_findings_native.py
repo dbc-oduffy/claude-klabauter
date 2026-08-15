@@ -23,6 +23,13 @@ from typing import Any, Dict
 
 import pytest
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Module import — filename uses hyphens AND a .sh polyglot-trampoline
 # extension, so importlib.util file-path loading is required (mirrors

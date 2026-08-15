@@ -36,6 +36,13 @@ import coordinator_core.ops.completion_ops  # noqa: F401 — fires @register_op
 from coordinator_core import claim_state as _claim_state_module
 from coordinator_core.ops.completion_ops import day_coverage_sweep
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _HOLDER_SESSION = "b1111111-2222-3333-4444-555555555555"
 _ORPHAN_SESSION = "e1111111-2222-3333-4444-555555555555"
 

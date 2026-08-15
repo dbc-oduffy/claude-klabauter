@@ -35,6 +35,13 @@ import coordinator_core.ops.assert_doctrine_cross_reference_counts  # noqa: F401
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.assert_doctrine_cross_reference_counts import _handler
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _init_repo(tmp_path: Path) -> Path:
     """Init a throwaway git repo under tmp_path and return its common dir."""

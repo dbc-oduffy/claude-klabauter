@@ -53,6 +53,13 @@ import pytest
 from coordinator_core.distill._common import parse_distillation_log
 from coordinator_core.distill.log_append import append_row, append_rows, render_row
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # render_row

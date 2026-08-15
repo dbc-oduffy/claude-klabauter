@@ -87,7 +87,10 @@ from coordinator_core.ops.session.boot_sweep import _handler, _handle_act_handof
 # frozen _BASELINE (it reached git through an imported helper, which the AST
 # detector cannot see), so the inlining below makes its real-process spawn
 # visible for the first time. Rule 2 wants that declared explicitly.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 # Inlined 2026-08-07: this previously imported `_git`/`_init_scratch_repo` from

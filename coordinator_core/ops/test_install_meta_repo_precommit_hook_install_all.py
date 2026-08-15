@@ -36,6 +36,13 @@ from coordinator_core.ops.install_meta_repo_precommit_hook import (
 )
 import coordinator_core.ops.install_meta_repo_precommit_hook as _mod
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git_init(path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(path)], check=True)

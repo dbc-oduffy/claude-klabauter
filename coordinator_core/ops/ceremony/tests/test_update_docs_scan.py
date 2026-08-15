@@ -41,6 +41,13 @@ import coordinator_core.ops.ceremony.update_docs_scan as uds  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _OP_NAME = "ceremony.update_docs_scan"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

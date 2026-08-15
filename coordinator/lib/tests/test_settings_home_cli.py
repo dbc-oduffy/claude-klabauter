@@ -29,6 +29,13 @@ from pathlib import Path
 
 import pytest
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent

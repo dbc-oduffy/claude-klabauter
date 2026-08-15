@@ -161,6 +161,27 @@ def _split_trailer_tail(text: str) -> Tuple[str, str]:
     see module docstring). When no detachable tail exists, returns
     `(text, "")` unchanged -- every other `compose_message()` call shape is
     untouched by this function's existence.
+
+    Review: code-reviewer — Finding (P3). When `text` (`prose`) is ENTIRELY
+    trailer-shaped lines with no preceding blank line, the trailing non-
+    blank run "reaches the start" -- the SAME shape `_ends_with_trailer_
+    block`'s reached-start carve-out exists to protect (there, a message's
+    SUBJECT line happening to look like "Key: value" must never be misread
+    as a detachable trailer paragraph, because the subject is always the
+    message's first paragraph, never a trailer one). That carve-out does
+    not apply here: this function only ever sees `prose`, a free-form body
+    paragraph passed separately from `subject` -- there is no subject line
+    in `text` for an all-trailer `prose` to be confused with. Reproducing
+    the reached-start carve-out here instead reproduced the R4 stranding
+    bug for the narrower shape of a `prose` that is nothing BUT trailer
+    lines: `Deliverable-Id: x` alone with `has_blocks=True` used to come
+    back unchanged (`(text, "")`), leaving it stranded ahead of the
+    Deleted/Kept blocks + footer instead of joining the message's terminal
+    trailer paragraph. Trailers are load-bearing here (`Deliverable-Id`,
+    `Session-Id` are parsed by other engine ops), so an all-trailer `prose`
+    is now still detached as `("", text)` -- an empty body, matching
+    `compose_message()`'s own `if prose_body:` guard which already treats a
+    falsy body as "no prose body to render".
     """
     if not text:
         return text, ""
@@ -171,14 +192,10 @@ def _split_trailer_tail(text: str) -> Tuple[str, str]:
     idx = len(lines) - 1
     while idx >= 0 and lines[idx].strip() != "":
         idx -= 1
-    if idx < 0:
-        # No preceding blank line -- the trailing non-blank run reaches the
-        # start of `text`, so it is `text` itself, never a detachable tail.
-        return text, ""
     trailer_lines = lines[idx + 1 :]
     if not trailer_lines or not all(_TRAILER_LINE_RE.match(ln) for ln in trailer_lines):
         return text, ""
-    body = "\n".join(lines[:idx])
+    body = "\n".join(lines[:idx]) if idx >= 0 else ""
     return body, "\n".join(trailer_lines)
 
 

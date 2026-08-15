@@ -19,6 +19,13 @@ from coordinator_core.ops.scan_unresolved_ubt_records import (
     scan_unresolved_ubt_records,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # The subprocess test below spawns a fresh interpreter that imports
 # coordinator_core. That child inherits cwd but NOT pytest's rootdir sys.path
 # insertion, so it can only resolve the package when cwd is (or is under) the

@@ -33,7 +33,10 @@ import pytest
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
 # residue and is explicitly not the route for a new file --
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _CHAIN_ID = "abcdef01-2345-6789-abcd-ef0123456789"
 _FOREIGN_SID = "11111111-1111-1111-1111-111111111111"

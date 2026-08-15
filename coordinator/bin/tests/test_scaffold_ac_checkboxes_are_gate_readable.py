@@ -59,6 +59,13 @@ from coordinator_core.backlog_grind_assemble.readers_blitz import (
     _render_spinoff_handoff_body,
 )
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 
 _HANDOFF_FAMILY_TYPES_WITH_AC = ["spinoff", "roadmap-baton", "goal-seed", "roadmap-seed"]
 

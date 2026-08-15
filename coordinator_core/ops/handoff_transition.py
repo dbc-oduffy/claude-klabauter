@@ -1215,11 +1215,11 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
     drops it — this is the check that catches a cascade that did not fire, not
     the primary fix.
 
-    Join key: `deliverable_id`, exact-string match against each plan's own
-    frontmatter field — mirrors deliverable_cascade.py's own join-key
-    discipline for the same field (no fork-equivalence canonicalization; that
-    join-key transform belongs to deliverable.rollup's broader roll-up surface,
-    not this narrow completeness gate).
+    Join key: `deliverable_id`, routed through `deliverable_equivalence.
+    canonicalize()` (C6b/AC11) — was previously exact-string match mirroring
+    `deliverable_cascade.py`'s own then-uncanonicalized discipline; that
+    module is converted by the same chunk, so this belt-and-braces check
+    stays consistent with the primary mechanism it backstops.
 
     Read-only — never writes, never raises. Returns {"path": <str>, "title":
     <str>} for the first matching implemented plan found, or None when
@@ -1235,6 +1235,10 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
         entries = sorted(plans_dir.iterdir())
     except OSError:
         return None
+    from coordinator_core.ops.deliverable_equivalence import canonicalize, load_equivalence_map
+
+    equivalence_map = load_equivalence_map(worktree)
+    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
     for path in entries:
         if path.suffix != ".md" or not path.is_file():
             continue
@@ -1245,7 +1249,7 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
         if not fm:
             continue
         plan_did = fm.get("deliverable_id")
-        if not isinstance(plan_did, str) or plan_did.strip() != deliverable_id:
+        if not isinstance(plan_did, str) or canonicalize(plan_did.strip(), equivalence_map) != canonical_deliverable_id:
             continue
         if fm.get("status") != "implemented":
             continue
@@ -1257,12 +1261,49 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
     return None
 
 
+def _unclaim_session_ledger_notice(body_text: str, session_id: Optional[str]) -> Optional[str]:
+    """Discharge-evidence advisory for `_unclaim` — see that function's docstring's
+    `session_id` paragraph.
+
+    Returns a one-line notice when `body_text`'s `## Session Ledger` rows carry a
+    row for `session_id`, else None. Reuses
+    `coordinator_core.session_ledger.aggregate_chain_loe.parse_session_ledgers` — no
+    new `## Session Ledger` parsing primitive here (AC1).
+
+    Match direction: the row's `session_id` column is a 6-char abbreviation of a
+    36-char UUID. The canonical writer (`format_oneline_row`) emits the id's
+    TRAILING 6 characters, but a live-corpus measurement found 207 rows abbreviate
+    the LEADING 6 instead (0 trailing) — writer and corpus disagree, so this
+    matches EITHER end rather than picking one (docs/plans/2026-08-14-discharge-
+    evidence-at-the-unclaim-seam.md Anti-scope — reconciling the writer against the
+    corpus is not this function's job). Never equality, never a bare `in` against
+    the whole body.
+    """
+    if not session_id:
+        return None
+    from coordinator_core.session_ledger.aggregate_chain_loe import (  # noqa: PLC0415
+        parse_session_ledgers,
+    )
+
+    for row in parse_session_ledgers(body_text):
+        row_sid = row.get("session_id") or ""
+        if len(row_sid) == 6 and (
+            session_id.startswith(row_sid) or session_id.endswith(row_sid)
+        ):
+            return (
+                "ledger row for this session present — unclaimed anyway; "
+                "ship-handoff marks it finished instead"
+            )
+    return None
+
+
 def _unclaim(
     handoff_path: str,
     note: str,
     worktree: Path,
     repo_root: Path,
     reaped_from: str | None = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """Apply unclaim transition (status: claimed→open, deployment_state→ready_to_fire).
 
@@ -1336,6 +1377,21 @@ def _unclaim(
     the skip branches (stamp-shipped-in, ship-handoff, live-children guard)
     never receive it. `_unclaim` deliberately does not re-check this itself.
     (Review: code-reviewer Finding 2 — caller discipline.)
+
+    Optional `session_id`, when provided, is the id of the session PERFORMING this
+    unclaim (never the id being released — that is the frontmatter's own claimed_by,
+    handled separately above). It is used ONLY for a discharge-evidence advisory: the
+    body's `## Session Ledger` rows are parsed via
+    `coordinator_core.session_ledger.aggregate_chain_loe.parse_session_ledgers` (no new
+    parsing primitive), and if any row's 6-char `session_id` column matches this
+    session's full id at either end (the corpus and the canonical writer disagree on
+    which end abbreviates a full id — see `_unclaim_session_ledger_notice`), the
+    unclaim still APPLIES and a one-line notice is appended to the success `message` —
+    never a raise, never a new envelope key, never a block. No `session_id` (None or
+    unresolvable) or no matching row leaves `message` byte-identical to today's.
+    Unlike `_claim`'s fail-loud empty-session_id gate, an unresolvable `session_id`
+    here is silently a no-warn — this advisory must never block the release path it
+    rides on.
 
     Routes the read-modify-write through locked_rmw for cross-process serialisation.
     Domain-abort paths raise MutateAbort from inside the mutate closure so no write occurs.
@@ -1502,6 +1558,9 @@ def _unclaim(
         _state["message"] = (
             f"unclaimed {handoff_path} (status: open, deployment_state: ready_to_fire)"
         )
+        notice = _unclaim_session_ledger_notice(split.body_with_leading_newline, session_id)
+        if notice:
+            _state["message"] = f"{_state['message']} — {notice}"
         return rebuild(split, fm)
 
     try:
@@ -2987,7 +3046,11 @@ async def _handler(
         unclaim (unconsume): note (str, optional — non-empty stamps park_note:),
                               reaped_from (str, optional — reaper's opt-in
                               provenance signal; see _unclaim docstring for
-                              the reaped_from_session resolution order)
+                              the reaped_from_session resolution order),
+                              session_id (str, optional — the unclaiming
+                              session's own id, used only for the Session
+                              Ledger discharge-evidence advisory; see
+                              _unclaim docstring's session_id paragraph)
         gate-recheck       : at (str, ISO date, required), cleared (bool, optional, default False)
         gate-cascade-clear : blocker_ids (list[str], required, non-empty),
                               blocker_shas (list[str], required, same length as
@@ -3100,10 +3163,16 @@ async def _handler(
         # never fires the reaped_from_session resolution inside _unclaim.
         reaped_from_param = params.get("reaped_from")
         reaped_from = reaped_from_param.strip() if isinstance(reaped_from_param, str) else None
+        # session_id (discharge-evidence advisory, C1): the id of the session
+        # PERFORMING this unclaim, never required — an absent/unresolvable value
+        # simply means no advisory, see _unclaim's own session_id docstring
+        # paragraph for why this never fails loud the way claim's session_id does.
+        session_id_param = params.get("session_id")
+        session_id = session_id_param.strip() if isinstance(session_id_param, str) else None
         # asyncio.to_thread for DR-212 D3 async-loop mandate.
         # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
         return await asyncio.to_thread(
-            _unclaim, handoff_path, note, worktree, repo_root, reaped_from
+            _unclaim, handoff_path, note, worktree, repo_root, reaped_from, session_id
         )
 
     if verb == "gate-recheck":

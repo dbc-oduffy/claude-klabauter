@@ -1,17 +1,15 @@
 """
-coordinator_core.ops.ensure_vscode_readonly — editor-side handoff-tracker read-only guard.
+coordinator_core.ops.ensure_vscode_readonly — editor-side settings.json merge helper.
 
-Purpose: idempotently, additively merges two `files.readonlyInclude` globs into a
-repo's `.vscode/settings.json` so VS Code (and forks honoring the same setting)
-opens the generated handoff tracker renders (`state/handoff-tracker.md`,
-`state/doe-handoff-tracker.md`) read-only and refuses to save over them. This is
-the EDITOR-side guard (layer 1); the AGENT-side complement is the PreToolUse
-`block-tracker-edit` hook (layer 2) — see docs/wiki/coordinator-tripwires.md
-§ BLOCK-TRACKER-EDIT and docs/wiki/handoff-tracker-system.md.
-
-Offer-shaped, not a hard lock: a user can still override per-file via VS Code's
-"Set Active Editor Writeable" command. The next tracker render overwrites any
-hand-edit anyway.
+Retired guard: the two `files.readonlyInclude` globs this module used to merge
+protected the generated handoff-tracker renders (`state/handoff-tracker.md`,
+`state/doe-handoff-tracker.md`), both retired fleet-wide — see
+docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md.
+`GUARD_KEYS` is now empty and `_merge_settings` is a permanent no-op (idempotent
+over the empty set, matching its pre-existing early-return shape) rather than a
+guard over a file that can no longer exist. Retained rather than deleted: the
+`coordinator/bin/ensure-vscode-readonly.py` trampoline still imports this module
+by name and is out of this chunk's scope.
 
 Called from repo-setup (Phase 3f.6) at project onboarding time — NOT a hot path.
 
@@ -66,10 +64,7 @@ _PROG = "ensure-vscode-readonly"
 # not a fixed claude-klabauter path.
 GENERATES = []
 
-GUARD_KEYS = {
-    "**/state/handoff-tracker.md": True,
-    "**/state/doe-handoff-tracker.md": True,
-}
+GUARD_KEYS: dict = {}
 
 
 def _strip_jsonc(text: str) -> str:
@@ -146,9 +141,7 @@ def _merge_settings(settings_path: Path) -> Tuple[int, str]:
             except (json.JSONDecodeError, ValueError):
                 print(
                     f"[coordinator] {_PROG}: {settings_path} could not be parsed even "
-                    "after comment-strip — skipped to avoid clobbering. Add by hand: "
-                    'files.readonlyInclude → "**/state/handoff-tracker.md": true, '
-                    '"**/state/doe-handoff-tracker.md": true',
+                    "after comment-strip — skipped to avoid clobbering.",
                     file=sys.stderr,
                 )
                 return (0, "")
@@ -201,7 +194,7 @@ def _merge_settings(settings_path: Path) -> Tuple[int, str]:
         )
         return (1, "")
 
-    verb = "created " if raw is None else "merged tracker read-only globs into "
+    verb = "created " if raw is None else "merged read-only globs into "
     return (0, f"[coordinator] {_PROG}: {verb}{settings_path}\n")
 
 

@@ -51,6 +51,13 @@ from coordinator_core.dispatch.provision import provision_subagent_sidecar
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 SIDECAR_ELIGIBLE_TYPE = "coordinator:executor"
 
 

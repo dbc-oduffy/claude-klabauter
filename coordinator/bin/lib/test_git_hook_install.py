@@ -170,6 +170,13 @@ def test_append_block_missing_interpreter_and_missing_script_both_warn():
 
 import pytest
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 @pytest.mark.skipif(os.name != "nt", reason="WinError 193 exec defect is Windows-only")
 def test_ml_get_resolves_via_cmd_twin_on_windows(tmp_path):

@@ -6,23 +6,27 @@ chunk C9a). The ledger is central state (`state/ledgers/` per
 `coordinator/docs/wiki/state-placement-law.md:36`), resolved through
 `coordinator-state-root.py --central` — never a literal `state/
 priority-ledger/` string baked into an op. This guard's OWN match, though,
-is deliberately a path-TAIL regex (mirroring `block_tracker_edit.py`'s
-shape exactly), not a resolve-and-compare against
+is deliberately a path-TAIL regex (mirroring the now-retired
+`block_tracker_edit.py`'s shape exactly — deleted under the tracker-render
+retirement plan, `docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-
+tracker-renders.md`; cited here only as design provenance, not a live sibling),
+not a resolve-and-compare against
 `coordinator_core.state_root.coordinator_state_root(central=True)`: a
 tail match survives worktree moves and avoids paying that resolver's
 subprocess-fallback cost on every Write/Edit/MultiEdit/NotebookEdit in the
 fleet, and the varying part of the physical root (the machine-local
 Claude-klabauter-repo prefix) is exactly what a tail match never hardcodes — only the
-constant `state/priority-ledger/` segment is literal, same discipline as
-`block_tracker_edit.py`'s `state/(handoff-tracker|doe-handoff-tracker)\\.md`.
+constant `state/priority-ledger/` segment is literal, same discipline as the
+retired `block_tracker_edit.py`'s `state/(handoff-tracker|doe-handoff-
+tracker)\\.md` (module deleted; cited for design provenance only).
 
 `priority.set` (CLI trampoline `coordinator/bin/priority-set.py`, mirroring
 `set-goal-kr-status.py`'s naming) is the SOLE ledger writer (plan chunk C3):
 it stamps `set_by`/`set_at`/`source` and writes atomically via
 `locked_rmw`, with post-write schema validation gating the write. A
-hand-edit bypasses all three — the exact failure shape
-`block_tracker_edit.py`/`block_memo_status_hand_edit.py` already close for
-their own disk-truth surfaces; this is not a novel escalation.
+hand-edit bypasses all three — the exact failure shape the retired
+`block_tracker_edit.py` and `block_memo_status_hand_edit.py` already close
+for their own disk-truth surfaces; this is not a novel escalation.
 
 Design-as-offers (load-bearing, not stylistic — plan C9a): the denial reason
 LEADS with the op to call instead ("did you mean `priority-set`?"), never a
@@ -92,7 +96,7 @@ def _extract_file_path(tool_name: str, tool_input: Dict[str, Any]) -> str:
 
 def _normalize(file_path: str) -> str:
     """Backslash -> forward slash, then collapse slash runs (parity with
-    `block_tracker_edit.py`'s F5-fixed normalizer)."""
+    the retired `block_tracker_edit.py`'s F5-fixed normalizer)."""
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")

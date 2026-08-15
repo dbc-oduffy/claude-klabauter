@@ -21,6 +21,15 @@ from pathlib import Path
 
 from coordinator_core.ops.verify_orientation_cache_sync import main, verify
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _POSITIVE = """---
 generated_by: update-docs
 generated_at: 2026-07-13T09:41:49Z

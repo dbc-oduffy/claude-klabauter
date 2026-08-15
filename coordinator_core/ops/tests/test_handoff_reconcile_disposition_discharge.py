@@ -60,7 +60,10 @@ from coordinator_core.ops.handoff_reconcile import _handler as _reconcile_handle
 # the only way to exercise the D1 surfaced-history round trip (`locked_rmw`
 # resolves its lock dir via `git rev-parse`) — same rationale as
 # test_handoff_reconcile_close_terminal_defects.py's own pytestmark.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _OP_NAME = "handoff.reconcile_open"
 assert _OP_NAME in _REGISTRY, (

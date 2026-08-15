@@ -1026,6 +1026,131 @@ def test_explicit_stage_indeterminate_divergence_fails_loud_never_readds(tmp_pat
 
 
 # ---------------------------------------------------------------------------
+# explicit_stage -- divergence check chunking (Windows argv-length defect,
+# bug-2026-08-15-windows-argv-cap-blocks-large-publish-divergence-check)
+# ---------------------------------------------------------------------------
+
+
+def test_diverging_paths_chunked_bounds_argv_and_preserves_per_path_answers(monkeypatch):
+    """`_diverging_paths_chunked()` never hands a single `diverging_paths()`
+    call more than `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS` worth of pathspec,
+    and each path's diverged/clean answer is exactly what a fake per-path
+    oracle assigned it -- proving chunk boundaries never blend one path's
+    verdict into a neighbour's."""
+    paths = [f"bulk/file{i:05d}.md" for i in range(5000)]
+    # Every 137th path is "diverged" per this fake oracle -- prime-stepped so
+    # the marked paths land in varied positions across chunk boundaries.
+    diverged_oracle = {p for i, p in enumerate(paths) if i % 137 == 0}
+
+    calls: list[list[str]] = []
+
+    def _fake_diverging_paths(batch, cwd=None, timeout=2.0, fail_loud=False):
+        calls.append(list(batch))
+        return [p for p in batch if p in diverged_oracle]
+
+    monkeypatch.setattr(commit_pipeline_mod, "diverging_paths", _fake_diverging_paths)
+
+    result = commit_pipeline_mod._diverging_paths_chunked(
+        paths, cwd="/fake/cwd", timeout=5.0
+    )
+
+    assert result == diverged_oracle
+    assert len(calls) > 1, "5000 paths must not fit in a single chunk"
+    budget = commit_pipeline_mod._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
+    for batch in calls:
+        assert sum(len(p) + 1 for p in batch) <= budget
+    # Every path appears in exactly one chunk -- no duplication, no gaps.
+    seen = [p for batch in calls for p in batch]
+    assert sorted(seen) == sorted(paths)
+
+
+def test_diverging_paths_chunked_small_batch_single_call(monkeypatch):
+    """Regression pin: a small pathspec (well under the argv budget) makes
+    exactly ONE `diverging_paths()` call, matching pre-fix behaviour byte-
+    for-byte for the common case."""
+    calls: list[list[str]] = []
+    real = commit_pipeline_mod.diverging_paths
+
+    def _spy(batch, cwd=None, timeout=2.0, fail_loud=False):
+        calls.append(list(batch))
+        return real(batch, cwd=cwd, timeout=timeout, fail_loud=fail_loud)
+
+    monkeypatch.setattr(commit_pipeline_mod, "diverging_paths", _spy)
+
+    result = commit_pipeline_mod._diverging_paths_chunked(
+        ["a.md", "b.md", "c.md"], cwd=".", timeout=2.0
+    )
+
+    assert len(calls) == 1
+    assert calls[0] == ["a.md", "b.md", "c.md"]
+    assert result == set()
+
+
+def test_explicit_stage_large_batch_diverged_path_excluded_others_staged(tmp_path, monkeypatch):
+    """The critical protection at scale: a batch of thousands of paths still
+    leaves a genuinely-diverged path OUT of `git add` (its deliberately
+    staged content survives verbatim), while its neighbours in the SAME
+    call are staged normally -- the divergence check chunking never
+    collapses per-path answers into a batch-wide verdict."""
+    repo = _init_repo(tmp_path)
+    bulk_count = 1200
+    bulk_paths = [f"bulk/file{i:05d}.md" for i in range(bulk_count)]
+    for p in bulk_paths:
+        _seed_file(repo, p, "seed\n")
+    _seed_file(repo, "docs/diverged.md", "seed\n")
+    all_paths = bulk_paths + ["docs/diverged.md"]
+    _git(["add", "--"] + all_paths, repo)
+    _git(["commit", "-q", "-m", "seed bulk"], repo)
+
+    _seed_file(repo, "docs/diverged.md", "STAGED HUNK\n")
+    _git(["add", "--", "docs/diverged.md"], repo)
+    _seed_file(repo, "docs/diverged.md", "LATER EDIT\n")  # further worktree edit
+    _seed_file(repo, "bulk/file00042.md", "safe edit\n")  # ordinary, non-diverged change
+
+    calls: list[list[str]] = []
+    real = commit_pipeline_mod.diverging_paths
+
+    def _spy(batch, cwd=None, timeout=2.0, fail_loud=False):
+        calls.append(list(batch))
+        return real(batch, cwd=cwd, timeout=timeout, fail_loud=fail_loud)
+
+    monkeypatch.setattr(commit_pipeline_mod, "diverging_paths", _spy)
+
+    outcome = explicit_stage(
+        repo,
+        all_paths,
+        caller_paths={"docs/diverged.md", "bulk/file00042.md"},
+    )
+
+    assert outcome.exit_code == 0
+    assert len(calls) > 1, "a 1200+ path batch must not fit in a single divergence chunk"
+    assert "docs/diverged.md" not in outcome.acted
+    assert "diverged:docs/diverged.md" in outcome.skipped
+    assert "bulk/file00042.md" in outcome.acted
+    assert _staged_blob(repo, "docs/diverged.md") == "STAGED HUNK\n"
+    assert (repo / "docs/diverged.md").read_text(encoding="utf-8") == "LATER EDIT\n"
+    assert _staged_blob(repo, "bulk/file00042.md") == "safe edit\n"
+
+
+def test_explicit_stage_large_batch_genuine_failure_still_indeterminate(monkeypatch):
+    """A genuine `git diff` failure (never an argv-length artifact -- every
+    chunk is already sized under the cap) still fails the WHOLE call loud,
+    even against a large multi-chunk batch: chunking must not convert a
+    real error into a confident per-chunk answer."""
+    from coordinator_core.git.divergence import DivergenceCheckFailed
+
+    paths = [f"bulk/file{i:05d}.md" for i in range(5000)]
+
+    def _boom(batch, cwd=None, timeout=2.0, fail_loud=False):
+        raise DivergenceCheckFailed("simulated git diff failure")
+
+    monkeypatch.setattr(commit_pipeline_mod, "diverging_paths", _boom)
+
+    with pytest.raises(DivergenceCheckFailed):
+        commit_pipeline_mod._diverging_paths_chunked(paths, cwd=".", timeout=2.0)
+
+
+# ---------------------------------------------------------------------------
 # commit() -- routed through git_native.commit_scoped() (C4)
 # ---------------------------------------------------------------------------
 
@@ -2159,6 +2284,307 @@ def test_stage_add_paths_partial_failure_residue_check_itself_fails_closed(
     assert any(
         line.startswith("A") and line.endswith("normal.md") for line in status_lines
     ), f"finally must not have touched normal.md (empty staged_this_call, no-op): {status_lines}"
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-15 sweep -- systematic argv-length audit closing the two
+# remaining Windows `CreateProcess` cap defects `explicit_stage()`'s own
+# post-failure residue check and rename/deletion classification probes hit
+# after the divergence check's own chunking fix (25268ed33), plus the
+# `add_paths`/`log_grep` sites the audit surfaced beyond the two named.
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_paths_bounds_and_preserves_order_and_membership():
+    """`_chunk_paths()` is the shared packer every batched call site in this
+    module now reuses -- proves it packs greedily under budget, never
+    drops/duplicates a path, and never crosses the budget within one chunk."""
+    paths = [f"bulk/file{i:05d}.md" for i in range(2000)]
+
+    chunks = commit_pipeline_mod._chunk_paths(paths, budget_chars=500)
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert sum(len(p) + 1 for p in chunk) <= 500
+    flattened = [p for chunk in chunks for p in chunk]
+    assert flattened == paths, "chunking must preserve order and never drop/duplicate a path"
+
+
+def test_chunk_paths_empty_input_returns_no_chunks():
+    """Regression pin: an empty pathspec produces zero chunks, never a
+    single empty chunk (every caller's `for chunk in _chunk_paths(...)`
+    loop must simply not iterate, matching the pre-fix `if not paths`
+    early-return shape each call site used to have of its own)."""
+    assert commit_pipeline_mod._chunk_paths([]) == []
+
+
+def test_residue_paths_chunked_bounds_argv_and_preserves_per_path_answers(monkeypatch):
+    """`_residue_paths_chunked()` (the post-`git add`-failure residue check)
+    never hands a single `diff_cached_name_only()` call more than the argv
+    budget's worth of pathspec, and each path's staged/not-staged answer is
+    exactly what a fake per-path oracle assigned it -- proving chunk
+    boundaries never blend one path's residue verdict into a neighbour's."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    paths = [f"bulk/file{i:05d}.md" for i in range(2000)]
+    staged_oracle = {p for i, p in enumerate(paths) if i % 91 == 0}
+
+    calls: list[list[str]] = []
+
+    def _fake_diff_cached_name_only(cwd, paths=None, *, nul_separated=False):
+        batch = list(paths or [])
+        calls.append(batch)
+        matched = [p for p in batch if p in staged_oracle]
+        return GitResult(returncode=0, stdout="\0".join(matched) + ("\0" if matched else ""), stderr="")
+
+    monkeypatch.setattr(git_native, "diff_cached_name_only", _fake_diff_cached_name_only)
+
+    budget = commit_pipeline_mod._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
+    residue, indeterminate, failure = commit_pipeline_mod._residue_paths_chunked(
+        Path("/fake/root"), paths
+    )
+
+    assert not indeterminate
+    assert failure is None
+    assert residue == staged_oracle
+    assert len(calls) > 1, "2000 paths must not fit in a single residue-check chunk"
+    for batch in calls:
+        assert sum(len(p) + 1 for p in batch) <= budget
+    seen = [p for batch in calls for p in batch]
+    assert sorted(seen) == sorted(paths)
+
+
+def test_residue_paths_chunked_partial_chunk_failure_only_taints_that_chunk(monkeypatch):
+    """A genuine `git diff` failure in ONE chunk must degrade only THAT
+    chunk's own paths to unconfirmed -- never the whole batch -- while
+    still surfacing `indeterminate=True` so the caller's diagnostic is not
+    lost. This is a strict improvement over the pre-chunking behaviour
+    (whole-batch indeterminate on any failure), never a relaxation: a
+    failing chunk's paths are still absent from `residue`, exactly as the
+    old whole-batch failure reported for every path."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    paths = [f"bulk/file{i:05d}.md" for i in range(2000)]
+
+    calls: list[list[str]] = []
+
+    def _fake_diff_cached_name_only(cwd, paths=None, *, nul_separated=False):
+        batch = list(paths or [])
+        calls.append(batch)
+        if len(calls) == 2:
+            return GitResult(returncode=1, stdout="", stderr="simulated chunk failure")
+        return GitResult(returncode=0, stdout="\0".join(batch) + "\0", stderr="")
+
+    monkeypatch.setattr(git_native, "diff_cached_name_only", _fake_diff_cached_name_only)
+
+    residue, indeterminate, failure = commit_pipeline_mod._residue_paths_chunked(
+        Path("/fake/root"), paths
+    )
+
+    assert indeterminate is True
+    assert failure is not None and failure.stderr == "simulated chunk failure"
+    assert len(calls) > 2, "must keep answering the remaining chunks after one fails"
+    failed_chunk = set(calls[1])
+    for p in failed_chunk:
+        assert p not in residue, "a failed chunk's own paths must never be reported as residue"
+    other_paths = set(paths) - failed_chunk
+    assert other_paths <= residue, "every OTHER chunk's paths must still answer correctly"
+
+
+def test_ls_files_deleted_chunked_bounds_argv_and_preserves_per_path_answers(monkeypatch):
+    """`_ls_files_deleted_chunked()` (the unstaged-deletion classification
+    probe) never hands a single `ls_files_deleted()` call more than the
+    argv budget's worth of pathspec, and each path's deleted/not-deleted
+    answer matches a fake per-path oracle exactly."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    paths = [f"bulk/file{i:05d}.md" for i in range(2000)]
+    deleted_oracle = {p for i, p in enumerate(paths) if i % 73 == 0}
+
+    calls: list[list[str]] = []
+
+    def _fake_ls_files_deleted(cwd, paths):
+        batch = list(paths)
+        calls.append(batch)
+        matched = [p for p in batch if p in deleted_oracle]
+        return GitResult(returncode=0, stdout="\n".join(matched), stderr="")
+
+    monkeypatch.setattr(git_native, "ls_files_deleted", _fake_ls_files_deleted)
+
+    budget = commit_pipeline_mod._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
+    deleted, probe_ok = commit_pipeline_mod._ls_files_deleted_chunked(Path("/fake/root"), paths)
+
+    assert probe_ok is True
+    assert deleted == deleted_oracle
+    assert len(calls) > 1, "2000 paths must not fit in a single ls-files-deleted chunk"
+    for batch in calls:
+        assert sum(len(p) + 1 for p in batch) <= budget
+    seen = [p for batch in calls for p in batch]
+    assert sorted(seen) == sorted(paths)
+
+
+def test_ls_files_deleted_chunked_partial_chunk_failure_only_taints_that_chunk(monkeypatch):
+    """The rename/deletion classification's fail-safe posture, at scale: a
+    genuine probe failure confined to ONE chunk must decline only that
+    chunk's own paths (via `probe_ok=False` -> `unverifiable_missing_
+    caller_paths`), never silently assume absence for paths a DIFFERENT,
+    successfully-answering chunk already confirmed as deleted -- the
+    'could not be classified... assumed, not confirmed' defect this fix
+    closes, reproduced at multi-chunk scale."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    paths = [f"bulk/file{i:05d}.md" for i in range(2000)]
+
+    calls: list[list[str]] = []
+
+    def _fake_ls_files_deleted(cwd, paths):
+        batch = list(paths)
+        calls.append(batch)
+        if len(calls) == 1:
+            return GitResult(returncode=1, stdout="", stderr="simulated chunk failure")
+        return GitResult(returncode=0, stdout="\n".join(batch), stderr="")
+
+    monkeypatch.setattr(git_native, "ls_files_deleted", _fake_ls_files_deleted)
+
+    deleted, probe_ok = commit_pipeline_mod._ls_files_deleted_chunked(Path("/fake/root"), paths)
+
+    assert probe_ok is False
+    failed_chunk = set(calls[0])
+    for p in failed_chunk:
+        assert p not in deleted
+    other_paths = set(paths) - failed_chunk
+    assert other_paths <= deleted, "successfully-answered chunks must keep their real answer"
+
+
+def test_explicit_stage_large_batch_unstaged_deletion_classified_via_chunked_probe(
+    tmp_path, monkeypatch
+):
+    """Integration proof for site 2 (the 'could not be classified' defect):
+    a caller-named deletion in a batch large enough to span several
+    `ls_files_deleted()` chunks is still correctly staged as a deletion,
+    never declined as 'genuinely absent' merely because the probe's
+    pathspec no longer fits on one argv."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    bulk_count = 1200
+    bulk_paths = [f"bulk/file{i:05d}.md" for i in range(bulk_count)]
+    for p in bulk_paths:
+        _seed_file(repo, p, "seed\n")
+    _seed_file(repo, "docs/to-delete.md", "seed\n")
+    all_paths = bulk_paths + ["docs/to-delete.md"]
+    _git(["add", "--"] + all_paths, repo)
+    _git(["commit", "-q", "-m", "seed bulk"], repo)
+
+    (repo / "docs/to-delete.md").unlink()
+
+    calls: list[list[str]] = []
+    real = git_native.ls_files_deleted
+
+    def _spy(cwd, paths):
+        calls.append(list(paths))
+        return real(cwd, paths)
+
+    monkeypatch.setattr(git_native, "ls_files_deleted", _spy)
+
+    outcome = explicit_stage(repo, all_paths, caller_paths={"docs/to-delete.md"})
+
+    assert len(calls) > 1, "1200+ paths must not fit in a single ls-files-deleted chunk"
+    assert outcome.exit_code == 0
+    assert "docs/to-delete.md" in outcome.deletion_paths
+    assert "docs/to-delete.md" not in outcome.missing_caller_paths
+    assert "docs/to-delete.md" not in outcome.unverifiable_missing_caller_paths
+
+
+def test_explicit_stage_add_paths_chunked_at_scale_still_reconciles_partial_failure(
+    tmp_path, monkeypatch
+):
+    """Integration proof that chunking the `git add` call itself (the
+    audit-discovered third unbounded site) preserves the existing partial-
+    failure residue reconciliation at scale: a batch spanning several
+    `add_paths()` chunks, where a later chunk fails, still reports every
+    genuinely-staged path (from the chunks that succeeded before the
+    failure) in `acted` -- never silently dropped."""
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    bulk_count = 1200
+    bulk_paths = [f"bulk/file{i:05d}.md" for i in range(bulk_count)]
+    for p in bulk_paths:
+        _seed_file(repo, p, "seed\n")
+
+    real_add_paths = git_native.add_paths
+    add_calls: list[list[str]] = []
+
+    def _fake_add_paths(cwd, paths):
+        add_calls.append(list(paths))
+        if len(add_calls) == 3:
+            return GitResult(returncode=1, stdout="", stderr="simulated chunk add failure")
+        return real_add_paths(cwd, paths)
+
+    monkeypatch.setattr(git_native, "add_paths", _fake_add_paths)
+
+    outcome = explicit_stage(repo, bulk_paths, caller_paths=set())
+
+    assert len(add_calls) >= 3, "1200 paths must not fit in a single `git add` chunk"
+    assert outcome.failed
+    assert outcome.acted, "chunks staged before the failing one must be reconciled into acted"
+    staged_this_call = set(outcome.acted)
+    status_lines = _porcelain(repo)
+    for p in staged_this_call:
+        assert any(
+            line.startswith("A") and line.endswith(p.replace("/", "/")) for line in status_lines
+        ), f"{p} reported in acted but not actually staged: {status_lines}"
+
+
+def test_commit_log_grep_bounds_argv_on_large_commit_paths(tmp_path, monkeypatch):
+    """Integration proof for the third audit-discovered unbounded site:
+    `commit()`'s post-commit sha-verification `git log --grep=<token> --
+    -- <commit_paths>` call must not put the whole `commit_paths` batch on
+    argv -- it is bounded to one argv-safe chunk (see `commit()`'s own
+    inline comment for why any non-empty subset of this call's OWN
+    committed paths still uniquely identifies its commit). Proven against a
+    real repo/commit large enough that the unbounded call would have put
+    well over the budget on argv."""
+    from coordinator_core.ops.ceremony import git_native
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "README.md", "seed")
+    _git(["add", "--", "README.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    bulk_count = 1200
+    bulk_paths = [f"bulk/file{i:05d}.md" for i in range(bulk_count)]
+    for p in bulk_paths:
+        _seed_file(repo, p, "seed\n")
+
+    real_log_grep = git_native.log_grep
+    calls: list[list[str]] = []
+
+    def _spy(cwd, grep_pattern, *, extra_args=None):
+        calls.append(list(extra_args or []))
+        return real_log_grep(cwd, grep_pattern, extra_args=extra_args)
+
+    monkeypatch.setattr(git_native, "log_grep", _spy)
+
+    outcome = commit(repo, message="chore: land a huge bulk batch\n", commit_paths=bulk_paths)
+
+    assert outcome.exit_code == 0
+    assert outcome.committed_sha is not None
+    assert len(calls) == 1
+    budget = commit_pipeline_mod._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
+    logged_paths = calls[0][calls[0].index("--") + 1 :]
+    assert sum(len(p) + 1 for p in logged_paths) <= budget
+    assert len(logged_paths) < bulk_count, "must be bounded to a subset, never the full batch"
 
 
 # ---------------------------------------------------------------------------
@@ -4060,4 +4486,297 @@ def test_pipeline_post_push_peer_race_keeps_own_committed_sha(tmp_path, monkeypa
     assert result.push_status == commit_pipeline_mod.PUSH_STATUS_PUSHED
     assert own_sha is not None
     assert own_sha != peer_sha
-    assert result.committed_sha == own_sha
+
+
+# ---------------------------------------------------------------------------
+# C0 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md), AC6: the
+# `--stage-patch` half of the audit's S5 reproduction (state/audits/2026-08-
+# 14-scoped-commit-partial-stage-sweep.md). The GREEN half -- the hand-
+# staged path sweeping the peer's hunks -- lives in
+# test_scoped_git_commit.py::test_s5_hand_staged_path_sweeps_peer_hunks_
+# when_peer_absorbs_before_invocation_begins; this is its `designed_red`
+# sibling, pinned here because `commit()` (this module) is the pipeline seam
+# AC1's `--stage-patch <file>` threads through (C3, not yet landed).
+# ---------------------------------------------------------------------------
+
+_AUDIT_BASE = "\n".join(f"line {i}" for i in range(1, 61)) + "\n"
+
+
+def _audit_variant(*, em: bool, peer: bool) -> str:
+    """Same shape as `test_scoped_git_commit.py::_audit_variant` -- an
+    independent copy, not imported across test modules (this file's own
+    convention, matching e.g. `_seed_deliverable_artifact`'s sibling copy
+    in that file).
+    """
+    lines = _AUDIT_BASE.splitlines()
+    if em:
+        lines[4] = "line 5 EM_CHANGE"
+    if peer:
+        lines[54] = "line 55 PEER_CHANGE"
+    return "\n".join(lines) + "\n"
+
+
+def _audit_repo(tmp_path: Path) -> Path:
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "substrate.py", _AUDIT_BASE)
+    _git(["add", "-A"], repo)
+    _git(["commit", "-q", "-m", "base"], repo)
+    _seed_file(repo, "substrate.py", _audit_variant(em=True, peer=True))
+    return repo
+
+
+def _audit_em_only_patch(repo: Path) -> str:
+    """A real `git diff`-formatted patch for the EM's own hunk alone,
+    computed by writing the EM-only variant over the current (EM+PEER)
+    worktree content and diffing against HEAD -- restored to the EM+PEER
+    worktree state before returning, so building the patch never leaves
+    the fixture in the state under test.
+    """
+    current = (repo / "substrate.py").read_text(encoding="utf-8")
+    (repo / "substrate.py").write_text(_audit_variant(em=True, peer=False), encoding="utf-8")
+    result = subprocess.run(
+        ["git", "diff", "--", "substrate.py"], cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    (repo / "substrate.py").write_text(current, encoding="utf-8")
+    return result.stdout
+
+
+def test_stage_patch_commits_only_intended_hunks_where_hand_staged_path_sweeps(tmp_path):
+    """AC6: the audit's S5 timeline, replayed with the future `--stage-
+    patch` primitive standing in for hand-staging. `commit()` does not
+    accept a `stage_patch` param yet -- this raises `TypeError`
+    ("unexpected keyword argument 'stage_patch'") today, uncaught, which IS
+    the point: C2 (git_native's process-private staging primitive) and C3
+    (this pipeline's own wiring) have not landed. That is this test's
+    worklist, not a live regression. `designed_red` -- deselected from the
+    fast/full tiers (`pyproject.toml`) until C3 lands, at which point this
+    scenario must show `--stage-patch` committing ONLY the EM's own hunk,
+    where the sibling hand-staged test in test_scoped_git_commit.py commits
+    the sweep.
+    """
+    repo = _audit_repo(tmp_path)
+    patch_text = _audit_em_only_patch(repo)
+    patch_file = tmp_path / "em.patch"
+    patch_file.write_text(patch_text, encoding="utf-8")
+
+    # A peer absorbs a hand-staged EM-only blob before this invocation
+    # begins (the S5 setup) -- proving `--stage-patch` never reads a peer's
+    # stage: it applies its OWN patch under a process-private index instead.
+    em_only = _audit_variant(em=True, peer=False)
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=str(repo), input=em_only, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    _git(["update-index", "--cacheinfo", f"100644,{blob},substrate.py"], repo)
+    peer_msg = repo / "peer_msg.txt"
+    peer_msg.write_text("peer absorbs the hand-staged EM blob\n", encoding="utf-8")
+    peer_outcome = commit_pipeline_mod.git_native.commit_scoped(
+        ["substrate.py"], str(peer_msg), str(repo)
+    )
+    assert peer_outcome.ok, peer_outcome.stderr
+    _git(["reset", "-q", "--", "substrate.py"], repo)  # this call's own stage is the patch, not the index
+
+    outcome = commit(
+        repo,
+        message="s5 EM commit via --stage-patch\n",
+        commit_paths=["substrate.py"],
+        stage_patch=str(patch_file),
+    )
+
+    assert outcome.landed
+    head = subprocess.run(
+        ["git", "show", "HEAD:substrate.py"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    assert "EM_CHANGE" in head
+    assert "PEER_CHANGE" not in head
+
+
+# ---------------------------------------------------------------------------
+# Review: coordinator:code-reviewer (88f5accd, finding 4) -- the ~50-line
+# synthetic-`StageOutcome` composition `run_commit_pipeline` builds for the
+# `stage_patch is not None` branch (patch_touched/patch_covered/remainder/
+# remainder_stage) had only outcome-level coverage (via
+# test_scoped_git_commit.py, out of this slice's scope) before this test:
+# nothing pinned the intermediate `StageOutcome` shape this function itself
+# builds -- e.g. that a patch-covered path never goes through `git add`
+# (never lands in `.acted`) while a remainder path does, and that the
+# skipped list carries a `stage-patch-covered:<path>` tag for every
+# patch-covered path.
+# ---------------------------------------------------------------------------
+
+
+def test_run_commit_pipeline_stage_patch_synthetic_stage_outcome_composition(tmp_path):
+    """AC4: `run_commit_pipeline(..., stage_patch=...)` with a mixed
+    pathspec -- one path the patch covers, one it doesn't -- must compose a
+    `StageOutcome` where the patch-covered path is marked staged WITHOUT
+    ever being `git add`'d (never in `.acted`, present only via the
+    `stage-patch-covered:` skip tag), and the remainder path is staged the
+    ordinary way (present in `.acted`, no such tag).
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    # a.txt: worktree-only change the patch will cover -- never staged via
+    # `git add` by this pipeline.
+    _seed_file(repo, "a.txt", "v2\n")
+    patch_text = subprocess.run(
+        ["git", "diff", "--", "a.txt"], cwd=str(repo), capture_output=True, text=True, check=True,
+    ).stdout
+    patch_file = tmp_path / "a.patch"
+    # `write_bytes`, not `write_text` -- `Path.write_text`'s default universal-
+    # newline translation rewrites every `\n` to `os.linesep` on Windows,
+    # corrupting the patch's own `\n`-delimited line syntax (a distinct
+    # concern from the file CONTENT the patch describes) and making `git
+    # apply` refuse it with "patch does not apply".
+    patch_file.write_bytes(patch_text.encode("utf-8"))
+    (repo / "a.txt").write_text("v1\n", encoding="utf-8")  # restore -- commit() re-applies the patch itself
+
+    # b.txt: a new file the patch does not cover -- the ordinary remainder
+    # staging route.
+    _seed_file(repo, "b.txt", "b content\n")
+
+    result = run_commit_pipeline(
+        repo,
+        session_id=_unique_session_id(),
+        subject="workstream-complete: mixed stage-patch composition",
+        stage_paths=["a.txt", "b.txt"],
+        caller_paths={"a.txt", "b.txt"},
+        stage_patch=str(patch_file),
+    )
+
+    assert result.commit_failed is False
+    assert result.committed_sha is not None
+
+    stage = result.stage
+    assert "stage-patch-covered:a.txt" in stage.skipped
+    assert "a.txt" in stage.staged_paths
+    assert "b.txt" in stage.staged_paths
+    assert "a.txt" not in stage.acted
+    assert "b.txt" in stage.acted
+
+
+# ---------------------------------------------------------------------------
+# AC7, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md: the
+# remaining four `CommitOutcome.reason` tags -- `patch-did-not-apply` is
+# pinned end-to-end at the op level (test_scoped_git_commit.py); these four
+# are pinned here, at `commit()`'s own boundary, where the CAS/failure
+# shapes are far cheaper to construct deterministically than a real
+# concurrent-peer race.
+# ---------------------------------------------------------------------------
+
+
+def test_commit_reason_head_blob_cas_refusal(tmp_path, monkeypatch):
+    """AC2's base hole (AC7): `stage_from_patch_cas_refusal` firing maps to
+    `reason == "head-blob-cas-refusal"`, never collapsed into the generic
+    `commit-failure` bucket.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    monkeypatch.setattr(
+        commit_pipeline_mod.git_native,
+        "stage_from_patch",
+        lambda *a, **k: commit_pipeline_mod.git_native.StagePatchResult(
+            ok=True, blobs={"a.txt": "b" * 40}, head_blobs={"a.txt": "a" * 40}, stderr="", reason="",
+        ),
+    )
+    monkeypatch.setattr(
+        commit_pipeline_mod.git_native,
+        "stage_from_patch_cas_refusal",
+        lambda *a, **k: commit_pipeline_mod.git_native.GitResult(
+            returncode=-1, stdout="", stderr="stage_from_patch_cas_refusal: refused -- a.txt moved",
+        ),
+    )
+
+    outcome = commit(
+        repo,
+        message="should refuse\n",
+        commit_paths=["a.txt"],
+        stage_patch="unused.patch",
+    )
+
+    assert not outcome.landed
+    assert outcome.reason == "head-blob-cas-refusal"
+
+
+def test_commit_reason_index_head_cas_refusal(tmp_path, monkeypatch):
+    """AC5/AC7: the EXISTING agree-branch CAS refusal (`_agree_branch_cas_
+    refusal`) still maps to its own distinct reason, `index-head-cas-
+    refusal`, distinguishable from a generic `commit-failure`.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "a.txt", "v2\n")
+    _git(["add", "--", "a.txt"], repo)
+
+    monkeypatch.setattr(
+        commit_pipeline_mod.git_native,
+        "commit_scoped",
+        lambda *a, **k: commit_pipeline_mod.git_native.GitResult(
+            returncode=-1, stdout="",
+            stderr="commit_scoped: compare-and-swap refused -- a.txt moved concurrently",
+        ),
+    )
+
+    outcome = commit(repo, message="should refuse\n", commit_paths=["a.txt"])
+
+    assert not outcome.landed
+    assert outcome.reason == "index-head-cas-refusal"
+
+
+def test_commit_reason_commit_failure_for_every_other_shape(tmp_path, monkeypatch):
+    """AC7: a `commit_scoped()` failure that is neither the AC2 base-hole
+    CAS nor the existing index/HEAD CAS -- e.g. a `pre-commit` hook BLOCK,
+    or the private-index branch's own `update-ref` CAS -- maps to the
+    catch-all `commit-failure` reason, never silently collapsing into one
+    of the two named CAS reasons.
+    """
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _seed_file(repo, "a.txt", "v2\n")
+    _git(["add", "--", "a.txt"], repo)
+
+    monkeypatch.setattr(
+        commit_pipeline_mod.git_native,
+        "commit_scoped",
+        lambda *a, **k: commit_pipeline_mod.git_native.GitResult(
+            returncode=1, stdout="", stderr="pre-commit hook declined",
+        ),
+    )
+
+    outcome = commit(repo, message="should refuse\n", commit_paths=["a.txt"])
+
+    assert not outcome.landed
+    assert outcome.reason == "commit-failure"
+
+
+def test_op_reports_empty_commit_set_reason_unaffected_by_ac7(tmp_path):
+    """AC7's fifth reason, `empty-commit-set`, is decided one layer up
+    (`scoped_git_commit._classify_uncommitted`, which alone has the `git
+    status` probe that distinction needs) -- pinned here at the op boundary
+    to confirm this plan's new `CommitOutcome.reason`/`PipelineResult.reason`
+    plumbing never shadows or overrides it for the pre-existing benign
+    already-committed no-op.
+    """
+    from coordinator_core.ops.ceremony import scoped_git_commit
+
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a.txt", "v1\n")
+    _git(["add", "--", "a.txt"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+
+    result = scoped_git_commit._handler(
+        {"worktree_root": str(repo), "paths": ["a.txt"], "message": "no-op re-commit"},
+        repo_root=None,
+    )
+
+    assert result["committed"] is False
+    assert result.get("reason") == "empty-commit-set"

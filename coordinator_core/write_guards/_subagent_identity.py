@@ -126,12 +126,26 @@ def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
     return ""
 
 
-def _read_backpointer_subagent_type(git_root: str, agent_id: str) -> str:
+def _read_backpointer_subagent_type(
+    git_root: str, agent_id: str, expected_em_session_id: str = ""
+) -> str:
     """Back-pointer chain: agent_id -> em_session_id -> dispatched-agents.txt row
     column 3. Any missing/unreadable/malformed link
     in the chain returns ``""`` (lookup-fail -> caller treats per its own
     fail-open/fail-closed policy — see each guard's own docstring; this
     shared helper does not decide that).
+
+    ``expected_em_session_id`` (OPTIONAL, review finding, 2026-08-14): when
+    supplied (non-empty), the resolved ``em_sid`` must equal it, or the
+    lookup returns ``""`` exactly as any other lookup-fail. Without this,
+    the chain follows whatever ``em-session-id.txt`` names with no check
+    that it names the SESSION MAKING THE CALL — a stale, cross-session, or
+    fabricated back-pointer could resolve an unrelated session's dispatch
+    row for this ``agent_id``. Left unset (``""``, the default), behaviour
+    is byte-identical to before this parameter existed — both other callers
+    (``block_subagent_plan_body_write``, ``block_subagent_archive_write``)
+    pass nothing deliberately; tightening their fail-open/fail-closed
+    posture is a separate decision, not made here.
     """
     backptr = (
         Path(git_root)
@@ -148,6 +162,8 @@ def _read_backpointer_subagent_type(git_root: str, agent_id: str) -> str:
     em_sid = content.splitlines()[0].strip() if content else ""
     if not _SESSION_ID_FORMAT_RE.match(em_sid):
         return ""
+    if expected_em_session_id and em_sid != expected_em_session_id:
+        return ""
 
     dispatch_file = (
         Path(git_root) / ".git" / "coordinator-sessions" / em_sid / "dispatched-agents.txt"
@@ -157,8 +173,19 @@ def _read_backpointer_subagent_type(git_root: str, agent_id: str) -> str:
     except OSError:
         return ""
 
-    for row in rows:
-        fields = row.split("\t")
-        if len(fields) >= 3 and fields[0] == agent_id:
-            return fields[2]
+    # Review: coordinator:code-reviewer (2026-08-14, P3, duplicate-row
+    # ambiguity) -- a bare "return on first match" resolved a duplicate
+    # agent_id (one legacy 2-column row, one full 3+-column row) by file
+    # order rather than by recency. Now: rows with fewer than 3 columns are
+    # ignored outright (never considered a match), and more than one
+    # 3+-column row matching the same agent_id is ambiguous -> fail-closed
+    # ("") rather than picking one by position.
+    matches = [
+        fields[2]
+        for row in rows
+        for fields in (row.split("\t"),)
+        if len(fields) >= 3 and fields[0] == agent_id
+    ]
+    if len(matches) == 1:
+        return matches[0]
     return ""

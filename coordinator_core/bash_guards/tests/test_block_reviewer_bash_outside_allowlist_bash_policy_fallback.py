@@ -58,7 +58,7 @@ def _confine(monkeypatch, subagent_type: str = _CONFINED_TYPE) -> None:
     monkeypatch.setattr(
         guard,
         "_read_backpointer_subagent_type",
-        lambda git_root, agent_id: subagent_type,
+        lambda git_root, agent_id, **kw: subagent_type,
     )
 
 

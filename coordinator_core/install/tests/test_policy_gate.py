@@ -304,6 +304,72 @@ def test_unrecognized_policy_value_resolves_red() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Windows PowerShell 5.1 absent on a non-Windows platform is NOT-APPLICABLE,
+# not RED — it must never by itself sink an otherwise-green pwsh verdict.
+# ---------------------------------------------------------------------------
+
+
+def test_windows_powershell_absent_on_non_windows_is_not_applicable_not_red(monkeypatch) -> None:
+    monkeypatch.setattr("sys.platform", "darwin")
+    probe = _scripted_probe(
+        {
+            "pwsh": _completed(stdout="RemoteSigned\n"),
+            "powershell.exe": FileNotFoundError("no such file"),
+        }
+    )
+
+    verdict = evaluate_policy_gate(probe=probe)
+
+    assert verdict.green is True
+    ps_v = verdict.verdict_for(HOST_WINDOWS_POWERSHELL)
+    assert ps_v.not_applicable is True
+    assert ps_v.green is False
+    assert "not applicable" in ps_v.reason
+    pwsh_v = verdict.verdict_for(HOST_PWSH)
+    assert pwsh_v.not_applicable is False
+    assert pwsh_v.green is True
+
+
+def test_windows_powershell_absent_on_windows_platform_still_resolves_red(monkeypatch) -> None:
+    """The N/A carve-out is platform-gated — on an actual Windows host,
+    `powershell.exe` missing is a genuine, RED-worthy gap (property (c)
+    unchanged there), not a structural non-question."""
+    monkeypatch.setattr("sys.platform", "win32")
+    probe = _scripted_probe(
+        {
+            "pwsh": _completed(stdout="RemoteSigned\n"),
+            "powershell.exe": FileNotFoundError("no such file"),
+        }
+    )
+
+    verdict = evaluate_policy_gate(probe=probe)
+
+    assert verdict.green is False
+    ps_v = verdict.verdict_for(HOST_WINDOWS_POWERSHELL)
+    assert ps_v.not_applicable is False
+    assert ps_v.green is False
+    assert "not found on PATH" in ps_v.reason
+
+
+def test_pwsh_absent_is_still_red_even_when_windows_powershell_not_applicable(monkeypatch) -> None:
+    """N/A on one host never masks a RED on the other — dual-host
+    independence (property (a)) holds across the N/A carve-out too."""
+    monkeypatch.setattr("sys.platform", "darwin")
+    probe = _scripted_probe(
+        {
+            "pwsh": FileNotFoundError("no such file"),
+            "powershell.exe": FileNotFoundError("no such file"),
+        }
+    )
+
+    verdict = evaluate_policy_gate(probe=probe)
+
+    assert verdict.green is False
+    assert "not found on PATH" in verdict.reason
+    assert verdict.verdict_for(HOST_PWSH).not_applicable is False
+
+
 def test_module_calls_get_execution_policy_only_no_mutation_command() -> None:
     """(d) NO REMEDIATION — the probe command itself never mutates policy.
 

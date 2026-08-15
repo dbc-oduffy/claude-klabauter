@@ -825,17 +825,18 @@ class TestMangledCarriageReturnPaths:
 
     def test_parse_args_strips_trailing_cr_and_reports_it(self):
         module = _load_cli_module()
-        subject, repo, paths, as_json, include_orphans, deliverable_id, mangled = (
-            module._parse_args(
-                ["-m", "msg", "--", "a/one.txt\r", "a/two.txt\r", "a/three.txt"]
-            )
+        (
+            subject, repo, paths, as_json, include_orphans, deliverable_id,
+            stage_patch, mangled,
+        ) = module._parse_args(
+            ["-m", "msg", "--", "a/one.txt\r", "a/two.txt\r", "a/three.txt"]
         )
         assert paths == ["a/one.txt", "a/two.txt", "a/three.txt"]
         assert mangled == ["a/one.txt\r", "a/two.txt\r"]
 
     def test_parse_args_reports_no_mangling_on_clean_paths(self):
         module = _load_cli_module()
-        _, _, paths, _, _, _, mangled = module._parse_args(
+        _, _, paths, _, _, _, _, mangled = module._parse_args(
             ["-m", "msg", "--", "a/one.txt", "a/two.txt"]
         )
         assert paths == ["a/one.txt", "a/two.txt"]
@@ -881,3 +882,179 @@ class TestMangledCarriageReturnPaths:
 
         status = _git(scratch_repo, "status", "--porcelain")
         assert status.strip() == ""
+
+
+class TestPathspecFromFile:
+    """`--pathspec-from-file <path>` (WinError 206 fix, percolate-round's
+    ~2000-path full-publish commit): a Windows `CreateProcess` command line
+    caps at 32767 characters, which an argv-composed pathspec of that size
+    exceeds outright and cannot be called at all. This flag reads the
+    pathspec from a file instead, feeding the SAME `paths` list the argv
+    `-- <paths>` form produces into `main()`'s `params["paths"]` -- one
+    pathspec source reaching the op's validation/claim-conflict/provenance
+    machinery, never a bypass of it.
+    """
+
+    def test_commits_exactly_the_listed_paths(self, scratch_repo, tmp_path):
+        (scratch_repo / "mine.txt").write_text("mine changed\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["mine.txt"])
+        pathspec_file = tmp_path / "pathspec.txt"
+        pathspec_file.write_text("mine.txt\n", encoding="utf-8")
+
+        result = _run_cli(
+            scratch_repo, "-m", "scoped: from pathspec file",
+            "--pathspec-from-file", str(pathspec_file),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "committed" in result.stdout
+
+        name_status = _git(scratch_repo, "show", "--name-only", "--format=", "HEAD")
+        assert name_status.strip() == "mine.txt"
+
+    def test_blank_and_comment_lines_are_skipped(self, scratch_repo, tmp_path):
+        (scratch_repo / "mine.txt").write_text("mine changed again\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["mine.txt"])
+        pathspec_file = tmp_path / "pathspec.txt"
+        pathspec_file.write_text(
+            "\n# a comment line\nmine.txt\n\n", encoding="utf-8"
+        )
+
+        result = _run_cli(
+            scratch_repo, "-m", "scoped: comments skipped",
+            "--pathspec-from-file", str(pathspec_file),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        name_status = _git(scratch_repo, "show", "--name-only", "--format=", "HEAD")
+        assert name_status.strip() == "mine.txt"
+
+    def test_argv_form_unchanged_when_pathspec_from_file_absent(self, scratch_repo):
+        """Regression pin: the pre-existing `-- <paths>` argv form behaves
+        identically to before this flag was added."""
+        (scratch_repo / "mine.txt").write_text("mine changed\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, ["mine.txt"])
+
+        result = _run_cli(scratch_repo, "-m", "argv unchanged", "--", "mine.txt")
+        assert result.returncode == 0, result.stdout + result.stderr
+        name_status = _git(scratch_repo, "show", "--name-only", "--format=", "HEAD")
+        assert name_status.strip() == "mine.txt"
+
+    def test_both_argv_and_pathspec_from_file_is_a_usage_error(
+        self, scratch_repo, tmp_path
+    ):
+        pathspec_file = tmp_path / "pathspec.txt"
+        pathspec_file.write_text("mine.txt\n", encoding="utf-8")
+
+        result = _run_cli(
+            scratch_repo, "-m", "subject",
+            "--pathspec-from-file", str(pathspec_file),
+            "--", "mine.txt",
+        )
+        assert result.returncode == 2
+        assert "mutually exclusive" in result.stderr
+        # Nothing staged or committed as a side effect of the rejected call.
+        assert _git(scratch_repo, "status", "--short").strip() == ""
+
+    def test_missing_pathspec_file_fails_loudly_before_staging(
+        self, scratch_repo, tmp_path
+    ):
+        missing = tmp_path / "does-not-exist.txt"
+        result = _run_cli(
+            scratch_repo, "-m", "subject", "--pathspec-from-file", str(missing)
+        )
+        assert result.returncode == 2
+        assert str(missing) in result.stderr
+        assert _git(scratch_repo, "status", "--short").strip() == ""
+
+    def test_empty_pathspec_file_fails_loudly_before_staging(
+        self, scratch_repo, tmp_path
+    ):
+        empty = tmp_path / "empty.txt"
+        empty.write_text("", encoding="utf-8")
+        result = _run_cli(
+            scratch_repo, "-m", "subject", "--pathspec-from-file", str(empty)
+        )
+        assert result.returncode == 2
+        assert "no paths" in result.stderr
+        assert _git(scratch_repo, "status", "--short").strip() == ""
+
+    def test_comment_and_blank_only_pathspec_file_fails_loudly(
+        self, scratch_repo, tmp_path
+    ):
+        comment_only = tmp_path / "comment-only.txt"
+        comment_only.write_text("\n# nothing here\n\n", encoding="utf-8")
+        result = _run_cli(
+            scratch_repo, "-m", "subject", "--pathspec-from-file", str(comment_only)
+        )
+        assert result.returncode == 2
+        assert "no paths" in result.stderr
+        assert _git(scratch_repo, "status", "--short").strip() == ""
+
+    def test_large_pathspec_round_trips_end_to_end(self, scratch_repo, tmp_path):
+        """The actual bug this flag fixes: a several-thousand-path pathspec
+        cannot be portably asserted against the Windows argv limit in this
+        cross-platform suite, but this pins the property that matters here
+        -- a large batch of paths commits successfully via the file, none
+        silently dropped.
+
+        Capped at 300 (not several thousand, matching a full publish round)
+        deliberately: this CLI's own argv is fixed by this change (the
+        pathspec never rides it), but `main()` still hands the full `paths`
+        list to `cc_invoke.route_mutation`, which JSON-serializes `params`
+        (paths included) onto ITS OWN child-process argv
+        (`coordinator/bin/lib/cc_invoke.py::cc_invoke`, `python -m
+        coordinator_core.invoke <op> <params_json>`) -- a sibling instance
+        of the identical WinError-206 defect class, uncovered while sizing
+        this test (measured: a 2500-path params_json is ~123KB, an 800-path
+        one already exceeds Windows's 32767-char total command line budget
+        on its own). Out of THIS dispatch's scope (`cc_invoke.py` is not in
+        the touched-files list, and fixing it changes the shared facade
+        every op goes through, not just this one) -- flagged to the EM
+        rather than silently worked around. 300 stays safely under that
+        second ceiling so this test exercises only the layer this dispatch
+        actually fixed.
+        """
+        names = []
+        for i in range(300):
+            name = "state/sizings/pathspec-scale-fixture-%04d.yaml" % i
+            names.append(name)
+        (scratch_repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+        for name in names:
+            (scratch_repo / name).write_text("content\n", encoding="utf-8")
+        _seed_session_scope(scratch_repo, names)
+
+        pathspec_file = tmp_path / "large-pathspec.txt"
+        pathspec_file.write_text("\n".join(names) + "\n", encoding="utf-8")
+
+        result = _run_cli(
+            scratch_repo, "-m", "scoped: large pathspec round-trip", "--json",
+            "--pathspec-from-file", str(pathspec_file),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        import json
+
+        payload = json.loads(result.stdout)
+        assert payload.get("committed") is True
+        assert not payload.get("declined_paths")
+
+        name_status = _git(scratch_repo, "show", "--name-only", "--format=", "HEAD")
+        committed_names = set(name_status.strip().splitlines())
+        assert committed_names == set(names)
+
+    def test_parse_args_resolves_pathspec_from_file_before_returning(self, tmp_path):
+        """Unit-level pin on the earliest-join-point design: `_parse_args`
+        itself resolves `--pathspec-from-file` into the same `paths` slot
+        the argv form fills, so every downstream consumer sees one path
+        source."""
+        module = _load_cli_module()
+        pathspec_file = tmp_path / "pathspec.txt"
+        pathspec_file.write_text("a/one.txt\nb/two.txt\n", encoding="utf-8")
+
+        (
+            subject, repo, paths, as_json, include_orphans, deliverable_id,
+            stage_patch, mangled,
+        ) = module._parse_args(
+            ["-m", "msg", "--pathspec-from-file", str(pathspec_file)]
+        )
+        assert paths == ["a/one.txt", "b/two.txt"]
+        assert mangled == []

@@ -39,6 +39,13 @@ import coordinator_core.ops.handoff_children  # noqa: F401 — fires @register_o
 import coordinator_core.ops.handoff_transition  # noqa: F401 — fires @register_op side effect
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _handler = cascade_mod._handler
 
 _GIT_ENV = {

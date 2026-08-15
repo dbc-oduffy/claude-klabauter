@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence
 
@@ -116,12 +117,24 @@ _PROBE_COMMAND = "Get-ExecutionPolicy"
 
 @dataclass(frozen=True)
 class HostVerdict:
-    """One host's independent probe result. Never inferred from another host's."""
+    """One host's independent probe result. Never inferred from another host's.
+
+    `not_applicable` is distinct from a RED `green=False`: it marks a host
+    that structurally cannot exist on this platform (Windows PowerShell
+    5.1 on a non-Windows host — see `_probe_host`'s FileNotFoundError
+    branch), not one that was probed and found wanting or absent-when-it-
+    should-be-present. A NOT-APPLICABLE host is excluded from the overall
+    AND in `evaluate_policy_gate` (it is neither evidence for nor against
+    THIS host's own .ps1-execution soundness) but still reported in
+    `host_verdicts` and folded into `reason` so the operator sees which
+    question could not be asked here, not just a bare RED.
+    """
 
     host: str
     green: bool
     effective_policy: Optional[str]
     reason: str
+    not_applicable: bool = False
 
 
 @dataclass(frozen=True)
@@ -170,6 +183,23 @@ def _probe_host(host: str, probe: ProbeFn) -> HostVerdict:
     try:
         proc = probe(executable)
     except FileNotFoundError:
+        if host == HOST_WINDOWS_POWERSHELL and sys.platform != "win32":
+            # Windows PowerShell 5.1 is a Windows-only host by construction
+            # — it will never be on PATH on macOS/Linux, which is a fact
+            # about this platform, not a probe failure. Recording it RED
+            # (property (c)'s ordinary reading) would roll back a `.ps1`
+            # leg that this box's `pwsh` CAN independently verify, purely
+            # because this box cannot also answer a Windows-only question.
+            # See module docstring, "what the gate is FOR": emitting for a
+            # future Windows operator does not require a Windows host here.
+            return HostVerdict(
+                host=host, green=False, effective_policy=None,
+                reason=(
+                    f"{display}: not applicable on this platform "
+                    f"({sys.platform}) — Windows-only host, not probed here"
+                ),
+                not_applicable=True,
+            )
         return HostVerdict(
             host=host, green=False, effective_policy=None,
             reason=f"{display}: host not found on PATH",
@@ -241,13 +271,18 @@ def evaluate_policy_gate(
     the first RED, so the returned `host_verdicts` always covers every
     requested host.
 
-    Overall verdict is green iff EVERY probed host is green. Any single
-    RED host makes the overall verdict RED; the `reason` names which
-    host(s) failed and why, for C4 to render to the operator.
+    Overall verdict is green iff EVERY APPLICABLE probed host is green — a
+    host marked `not_applicable` (Windows PowerShell probed from a non-
+    Windows platform; see `_probe_host`) contributes its reason to
+    `reason` for visibility but is excluded from the AND, so it can never
+    by itself pull an otherwise-green host's `.ps1` verification down to
+    RED. Any single RED *applicable* host still makes the overall verdict
+    RED; the `reason` names which host(s) failed and why, for C4 to render
+    to the operator.
     """
     host_verdicts = [_probe_host(host, probe) for host in hosts]
 
-    red = [hv for hv in host_verdicts if not hv.green]
+    red = [hv for hv in host_verdicts if not hv.green and not hv.not_applicable]
     if red:
         reason = "; ".join(hv.reason for hv in red)
         return PolicyGateVerdict(green=False, host_verdicts=host_verdicts, reason=reason)

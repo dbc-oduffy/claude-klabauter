@@ -390,12 +390,29 @@ def _canonical_agent_id(raw_agent_id: str, session_id: Optional[str]) -> str:
     return ""
 
 
-def _read_backpointer_subagent_type(git_root: str, agent_id: str) -> str:
+def _read_backpointer_subagent_type(
+    git_root: str, agent_id: str, expected_em_session_id: str = ""
+) -> str:
     """Back-pointer chain: agent_id -> em_session_id -> dispatched-agents.txt row.
 
     Ports the reference hook's secondary OR-resolver leg (lines 179-198).
     Any missing/unreadable/malformed link in the chain returns ``""``
     (lookup-fail — the secondary leg is simply absent, primary still applies).
+
+    ``expected_em_session_id`` (OPTIONAL, review finding, 2026-08-14): when
+    supplied (non-empty), the resolved ``em_sid`` must equal it, or the
+    lookup returns ``""`` exactly as any other lookup-fail. Without this,
+    the chain follows whatever ``em-session-id.txt`` names with no check
+    that it names the SESSION MAKING THE CALL — a stale, cross-session, or
+    fabricated back-pointer could resolve an unrelated session's dispatch
+    row for this ``agent_id``, which
+    ``bash_guards.block_reviewer_bash_outside_allowlist``'s Divergence 18
+    confinement formula (2026-08-14) turns into a confinement-bypass
+    oracle: a KNOWN, non-confined resolved ``subagent_type`` clears
+    confinement for any caller-chosen ``agent_type``. Left unset (``""``,
+    the default), behaviour is byte-identical to before this parameter
+    existed — ``resolve_effective_types`` below passes nothing deliberately;
+    tightening its posture is a separate decision, not made here.
     """
     backptr = Path(git_root) / ".git" / "coordinator-sessions" / ".agents" / agent_id / "em-session-id.txt"
     try:
@@ -405,6 +422,8 @@ def _read_backpointer_subagent_type(git_root: str, agent_id: str) -> str:
     em_sid = content.splitlines()[0].strip() if content else ""
     if not _SESSION_ID_FORMAT_RE.match(em_sid):
         return ""
+    if expected_em_session_id and em_sid != expected_em_session_id:
+        return ""
 
     dispatch_file = Path(git_root) / ".git" / "coordinator-sessions" / em_sid / "dispatched-agents.txt"
     try:
@@ -412,10 +431,21 @@ def _read_backpointer_subagent_type(git_root: str, agent_id: str) -> str:
     except OSError:
         return ""
 
-    for row in rows:
-        fields = row.split("\t")
-        if len(fields) >= 3 and fields[0] == agent_id:
-            return fields[2]
+    # Review: coordinator:code-reviewer (2026-08-14, P3, duplicate-row
+    # ambiguity) -- a bare "return on first match" resolved a duplicate
+    # agent_id (one legacy 2-column row, one full 3+-column row) by file
+    # order rather than by recency. Now: rows with fewer than 3 columns are
+    # ignored outright, and more than one 3+-column row matching the same
+    # agent_id is ambiguous -> fail-closed ("") rather than picking one by
+    # position.
+    matches = [
+        fields[2]
+        for row in rows
+        for fields in (row.split("\t"),)
+        if len(fields) >= 3 and fields[0] == agent_id
+    ]
+    if len(matches) == 1:
+        return matches[0]
     return ""
 
 

@@ -15,7 +15,11 @@ import os
 
 import pytest
 
-from coordinator_core.ops.coordinator_setup_state import main
+from coordinator_core.ops.coordinator_setup_state import (
+    _machine_local_dir,
+    _state_file,
+    main,
+)
 
 
 def _env(tmp_path, claude_home_exists=True):
@@ -30,6 +34,37 @@ def _run(monkeypatch, env, *args):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     return main(list(args))
+
+
+def test_paths_absolute_when_home_unset_userprofile_set(tmp_path):
+    """Native Windows sets USERPROFILE and not HOME. Resolving off HOME alone
+    produced a RELATIVE `.claude/...` path, so `record` wrote its receipt into
+    the process CWD — a real file, truthfully reported, in whatever repo the
+    operator was standing in — while `~/.claude`'s receipt stayed stale. Sibling
+    repos gate setup chaining on that file, so the miss was silent."""
+    env = {"USERPROFILE": str(tmp_path)}
+
+    state_file = _state_file(env)
+    ml_dir = _machine_local_dir(env)
+
+    assert os.path.isabs(state_file)
+    assert os.path.isabs(ml_dir)
+    assert state_file == os.path.join(str(tmp_path), ".claude", "coordinator-setup-state.yaml")
+    assert ml_dir == os.path.join(str(tmp_path), ".coordinator-claude-settings", "machine-local")
+
+
+def test_claude_home_still_wins_over_both_home_vars(tmp_path):
+    env = {
+        "CLAUDE_HOME": str(tmp_path / "explicit"),
+        "HOME": str(tmp_path / "posix"),
+        "USERPROFILE": str(tmp_path / "windows"),
+    }
+    assert _state_file(env).startswith(str(tmp_path / "explicit"))
+
+
+def test_home_wins_over_userprofile_when_both_set(tmp_path):
+    env = {"HOME": str(tmp_path / "posix"), "USERPROFILE": str(tmp_path / "windows")}
+    assert _state_file(env).startswith(str(tmp_path / "posix"))
 
 
 def test_check_before_record_fails(tmp_path, monkeypatch, capsys):

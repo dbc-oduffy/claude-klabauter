@@ -295,6 +295,20 @@ def emit_kind_resolution_failure_signal(
 # ---------------------------------------------------------------------------
 
 
+#: The literal label a guard's advisory prose uses to introduce the raw
+#: offending command it is echoing back (e.g. ``"  Command:  %s\n\n"`` in
+#: ``guard_plumbing_and_loops._generic_advisory``). Shared so the label is
+#: triplicated in ONE place rather than three: the builder format strings
+#: (``guard_plumbing_and_loops.py``), ``_advisory_dedupe._COMMAND_LINE_RE``
+#: (strips this labeled line before hashing, so dedupe keys on SHAPE, not
+#: command instance), and ``_message_size._DIAGNOSTIC_LINE_PREFIXES`` (never
+#: treats a line carrying this label as an offered alternative). A relabel
+#: (e.g. to ``"Cmd:"``) that only touches one of those three sites silently
+#: reverts the others' behavior with no import-time signal; importing this
+#: constant everywhere makes a partial rename a one-line diff instead of a
+#: silent three-way drift.
+COMMAND_LINE_LABEL = "Command:"
+
 #: Reference doc carrying the full bypass-options content this function used
 #: to inline on every firing (the two relayable routes, the CONFINEMENT_DENY
 #: caveat, the pre-launch-only env-var constraint, and the generated

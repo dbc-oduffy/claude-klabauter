@@ -72,6 +72,23 @@ def test_prefer_windowless_false_requests_console_probe_order(monkeypatch):
     assert py_bin == r"C:\Program Files\Python313\python.exe"
 
 
+def test_resolve_machine_python_bin_ignores_a_set_pin(monkeypatch):
+    """``resolve_machine_python_bin`` must skip BOTH pin tiers even when a
+    pin is present and would otherwise win under ``resolve_python_bin``'s
+    own precedence -- the entire point of the function (docs/plans/
+    2026-08-14-the-venv-fallback-stops-being-something.md C2)."""
+    monkeypatch.setenv("COORDINATOR_PYTHON", "/pinned/shared/venv/python3")
+    monkeypatch.setattr(pyresolve, "_machine_local_get", lambda key: "/pinned/ml/python3")
+    monkeypatch.setattr(pyresolve, "_validate_interpreter", lambda path: True)
+    monkeypatch.setattr(pyresolve, "_is_windows", lambda: False)
+    monkeypatch.setattr(pyresolve, "_resolve_non_windows", lambda: ("/machine/python3", []))
+
+    py_bin, py_args = pyresolve.resolve_machine_python_bin()
+
+    assert py_bin == "/machine/python3"
+    assert py_args == []
+
+
 def test_prefer_windowless_false_reorders_path_fallback_probe_names(monkeypatch):
     """The PATH-fallback tier (Step 2 of ``_resolve_windows``) previously
     hardcoded ``pythonw`` first regardless of caller intent -- assert the
@@ -273,3 +290,44 @@ def test_cli_mode_resolve_is_a_cold_process_memo_is_a_noop(monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert out.startswith("/usr/bin/python3\t")
+
+
+# ---------------------------------------------------------------------------
+# _console_sibling / _WINDOWLESS_BASENAMES -- shared lift, coverage for both
+# callers' shape (coordinator_core.install.substrate._resolve_baked_python_bin,
+# coordinator_core.ops.ensure_python3_exe_shim._resolve_python_bin).
+# ---------------------------------------------------------------------------
+
+
+def test_windowless_basenames_contains_both_known_forms():
+    assert pyresolve._WINDOWLESS_BASENAMES == ("pythonw.exe", "pyw.exe")
+
+
+def test_console_sibling_pythonw_returns_python_exe_when_present(monkeypatch):
+    windowless = r"C:\Program Files\Python313\pythonw.exe"
+    probed = []
+    monkeypatch.setattr(
+        pyresolve.os.path, "isfile", lambda p: probed.append(p) or True
+    )
+    result = pyresolve._console_sibling(windowless)
+    assert result == r"C:\Program Files\Python313\python.exe"
+    assert result in probed
+
+
+def test_console_sibling_pyw_returns_py_exe_when_present(monkeypatch):
+    windowless = r"C:\Program Files\Python313\pyw.exe"
+    monkeypatch.setattr(pyresolve.os.path, "isfile", lambda p: True)
+    result = pyresolve._console_sibling(windowless)
+    assert result == r"C:\Program Files\Python313\py.exe"
+
+
+def test_console_sibling_returns_empty_when_sibling_missing(monkeypatch):
+    windowless = r"C:\Program Files\Python313\pythonw.exe"
+    monkeypatch.setattr(pyresolve.os.path, "isfile", lambda p: False)
+    assert pyresolve._console_sibling(windowless) == ""
+
+
+def test_console_sibling_returns_empty_for_non_windowless_basename():
+    # Not a windowless basename at all -- no probe should even matter, "" is
+    # returned before any filesystem check.
+    assert pyresolve._console_sibling(r"C:\Program Files\Python313\python.exe") == ""

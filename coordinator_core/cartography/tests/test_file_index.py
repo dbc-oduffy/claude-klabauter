@@ -41,6 +41,13 @@ from coordinator_core.cartography.file_index import (
     system_for_path,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _OP_NAME = "cartography.file_index"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

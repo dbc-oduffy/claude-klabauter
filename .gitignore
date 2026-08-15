@@ -21,6 +21,17 @@ __pycache__/
 # reach a public repo via a blanket `git add`.
 state/
 
+# Same class, two more strays observed 2026-08-15: a session's own `.claude/`
+# scaffolding, and `Saved/ProjectRag/` -- a ~190MB example-retrieval-repo index (graph.db
+# plus structural sqlite and its -shm/-wal siblings) left by someone indexing
+# the mirror. Neither is OSS payload. Untracked-but-unignored is the worst of
+# both here: it never publishes, but it does trip percolate-round's dirty-dest
+# check, whose offered remedy (`--reconcile-dest=discard`) resets the mirror to
+# HEAD and removes residue -- which would delete an expensive index this repo
+# does not own and cannot regenerate.
+.claude/
+Saved/
+
 # --- Editor / OS detritus ---
 *.bak
 *.tmp

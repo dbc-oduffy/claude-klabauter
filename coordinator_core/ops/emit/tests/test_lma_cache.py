@@ -23,6 +23,13 @@ import pytest
 
 from coordinator_core.ops.emit import enrich, lma_cache
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(root: Path, *args: str, env: "dict | None" = None) -> str:
     result = subprocess.run(

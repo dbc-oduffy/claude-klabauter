@@ -31,6 +31,13 @@ import pytest
 
 from coordinator_core import dag
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _init_repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"

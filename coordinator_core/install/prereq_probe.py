@@ -2,18 +2,32 @@
 coordinator/scripts/lib/prereq_probe.sh's SSOT functional-prerequisite probe
 suite for the coordinator install Step Zero gate.
 
-Port source: coordinator/scripts/lib/prereq_probe.sh [DoE-claude repo]
-(bash lib is SOURCED by coordinator/scripts/setup.sh --preflight and
-coordinator/scripts/normalize-env.sh, and is additionally vendored
-BYTE-STABLE by example-retrieval-repo-ue-addon and deep-research together with its
-self-sourced siblings manifest_reader.sh + step_zero_emit.sh — see that
-file's own header. It stays in place; this module is a PARALLEL
-Python-native implementation for Python-side consumers, NOT a trampoline
-over the bash file — same precedent as
+Port source: coordinator/scripts/lib/prereq_probe.sh [DoE-claude repo] — the
+bash oracle, and all of `coordinator/scripts/lib/` alongside it (including
+its self-sourced siblings manifest_reader.sh + step_zero_emit.sh), is RETIRED
+and no longer exists in DoE-claude. This module is now the SSOT
+functional-prerequisite probe suite for every consumer, Python-side callers
+and vendoring siblings alike — not a parallel implementation shadowing a
+still-live bash original. Composes with
 coordinator_core/install/manifest_reader.py and
-coordinator_core/install/step_zero_emit.py, the two sibling ports this
-module composes with (it reuses their already-landed find_python()/
-emit_line() rather than re-deriving either).
+coordinator_core/install/step_zero_emit.py, the two sibling ports it reuses
+already-landed find_python()/emit_line() from rather than re-deriving
+either.
+
+Vendor closure for sibling repos re-vendoring this suite (e.g.
+Example-retrieval-repo-ue-addon): `prereq_probe.py` + `manifest_reader.py` +
+`step_zero_emit.py` + `win_portability.py` (the `no_console_creationflags`
+import below) — all four stdlib-only once `coordinator_core.ipc` is treated
+as optional (see the guarded `register_op` import below). Verified, not
+assumed: `step_zero_emit.py` has no imports beyond stdlib; `manifest_reader.py`
+is stdlib plus `from coordinator_core.win_portability import
+no_console_creationflags` — itself inside this closure, which is why
+`win_portability.py` is required rather than incidental; `win_portability.py`
+itself is stdlib-only (`os`, `stat`, `pathlib`, `typing`). Caveat:
+`probe_all()` reaches `probe_skill_frontmatter_valid`, whose two
+function-local imports (`coordinator_core.ops.coordinator_doe_root`,
+`coordinator_core.frontmatter.schema_validate`) sit outside this closure —
+a vendor calling `probe_all()` wholesale needs those two modules too.
 
 Spec backlink: docs/plans/2026-06-22-coordinator-env-normalization-step-zero.md
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md
@@ -119,8 +133,39 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.install.step_zero_emit import emit_line
-from coordinator_core.ipc import register_op
 from coordinator_core.win_portability import no_console_creationflags
+
+try:
+    from coordinator_core.ipc import register_op
+except ModuleNotFoundError as exc:
+    # Narrowed to "coordinator_core.ipc itself is absent" (the vendor
+    # case), not any ImportError: a broken import *inside* ipc.py's own
+    # chain (e.g. coordinator_core.lifecycle or coordinator_core.op_scopes
+    # failing) must propagate as a real defect, not silently fall through
+    # to the shim below and drop install.probe_skill_frontmatter_valid /
+    # install.probe_windows_terminal_presence from _REGISTRY with no
+    # diagnostic. (review: code-reviewer — Finding P1)
+    if exc.name != "coordinator_core.ipc":
+        raise
+    # coordinator_core.ipc is a ~1700 LOC module that pulls in
+    # coordinator_core.lifecycle and coordinator_core.op_scopes on import —
+    # weight this module has no need of outside the full in-repo engine.
+    # This module is also vendored byte-stable by sibling repos (e.g.
+    # example-retrieval-repo-ue-addon) whose only interest is the probe functions
+    # themselves, never op dispatch; a hard `ipc` import would drag the
+    # whole engine into a vendor tree that has no engine to dispatch into.
+    # The fallback below mirrors the real register_op(name, handler=None)
+    # signature — parametrized-decorator form and direct-call form both
+    # dispatch identically, returning the decorated/passed function
+    # unchanged — a vendored copy routes no ops, so registering nothing is
+    # the correct behaviour, not a degraded one.
+    def register_op(name, handler=None):  # type: ignore[misc]
+        def _decorator(fn):
+            return fn
+
+        if handler is not None:
+            return _decorator(handler)
+        return _decorator
 
 _PROBE_TIMEOUT_SECS = 10.0
 _NETWORK_PROBE_TIMEOUT_SECS = 8.0

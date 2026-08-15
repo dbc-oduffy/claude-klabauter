@@ -15,6 +15,15 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def test_star_import_style_from_import_resolves_all_six_names():
     from coordinator_core import (

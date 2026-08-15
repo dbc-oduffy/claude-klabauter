@@ -101,6 +101,13 @@ from pathlib import Path
 
 import pytest
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Known-bad tracking -- claude-klabauter-owned fixture defects, tracked pending a fixture-side
 # fix (not a DoE-relay any more -- see ownership note below)

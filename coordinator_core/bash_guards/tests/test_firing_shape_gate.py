@@ -37,6 +37,13 @@ from coordinator_core.bash_guards import guard_inprocess_search as _gis
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.hooks import nudge_em_code_dispatch as _nudge
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # AC8 -- item 1: check_multiprobe_banner_rewrite's pre-fix prose-only

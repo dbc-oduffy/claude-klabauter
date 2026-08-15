@@ -429,6 +429,38 @@ class TestValidation:
                 session_id=_TEST_SESSION,
             )
 
+    def test_invalid_scope_hints_at_review_scale_vocabulary_collision(self):
+        """C, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-
+        silently.md: `scope='partitioned'` is the natural wrong guess from a caller
+        who just read `gates.review_scale` (`decide_review_scale`'s `scale`
+        vocabulary), not `scope`'s own coverage-breadth axis. The rejection must
+        name that collision explicitly, mirroring `_bare_reviewer_hint`'s own
+        precedent for the reviewer field."""
+        with pytest.raises(ValueError, match="partition-strategy"):
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="partitioned",
+                verdict="ok",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+            )
+
+    def test_valid_scope_shaped_value_carries_no_hint(self):
+        """An ordinary unrecognized `scope` (not a `decide_review_scale` vocabulary
+        member) gets the plain enum message, no scale-collision hint appended —
+        `_scale_shaped_scope_hint` must not fire on every invalid scope."""
+        with pytest.raises(ValueError) as excinfo:
+            write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="not-a-scope",
+                verdict="ok",
+                diff_loc=0,
+                session_id=_TEST_SESSION,
+            )
+        assert "partition-strategy" not in str(excinfo.value)
+
     def test_invalid_verdict_raises_value_error(self):
         """Unknown verdict enum value → ValueError."""
         with pytest.raises(ValueError, match="verdict"):
@@ -955,13 +987,28 @@ class TestAtomicWrite:
             f"expected all {n} records' diff_loc values present on disk, got {seen_diff_locs!r}"
         )
 
-    def test_different_timestamps_produce_separate_files(self, tmp_path, monkeypatch):
-        """Different timestamps produce separate files (additive-create)."""
+    def _isolate_trail_root(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setenv("REVIEW_TRAIL_OUTPUT_ROOT", str(tmp_path))
         monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
         monkeypatch.delenv("COORDINATOR_REVIEW_WORKSTREAM", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+
+    def test_distinct_records_at_different_timestamps_produce_separate_files(
+        self, tmp_path, monkeypatch
+    ):
+        """Two DISTINCT records at different timestamps land in two files
+        (additive-create).
+
+        `diff_loc` differs deliberately: `reviewed_at` lives only in the
+        filename, never in the record body, so two writes of the same five
+        field values are byte-identical whatever their timestamps and converge
+        by design (`_reserve_unique_trail_path`'s replay convergence, the fix
+        for the `workstream_complete` PARTIAL_MUTATION duplicate-record
+        defect). This test's earlier form varied only `_timestamp` and so
+        asserted against that convergence rather than against clobbering.
+        """
+        self._isolate_trail_root(tmp_path, monkeypatch)
 
         result1 = write_review_trail_entry(
             sha_range=_TEST_SHA_RANGE,
@@ -978,20 +1025,45 @@ class TestAtomicWrite:
             reviewer="code-reviewer",
             scope="chain",
             verdict="ok",
-            diff_loc=10,
+            diff_loc=11,
             session_id=_TEST_SESSION,
             workstream=None,
             _timestamp="2026-01-15-100001",
         )
 
         assert result1["out_path"] != result2["out_path"], (
-            "different timestamps must produce different output paths"
+            "two distinct records must never share an output path"
         )
         trail_dir = tmp_path / "review-trail"
         json_files = list(trail_dir.glob("*.json"))
         assert len(json_files) == 2, (
-            f"expected 2 files for 2 different timestamps, got {len(json_files)}"
+            f"expected 2 files for 2 distinct records, got {len(json_files)}"
         )
+
+    def test_byte_identical_replay_converges_on_one_file(self, tmp_path, monkeypatch):
+        """The other half of the same rule: a re-run of a failed apply pass
+        fires the same trail-write directive again, possibly across a second
+        boundary. Converging on the existing path is what makes that re-run
+        idempotent instead of duplicating the record."""
+        self._isolate_trail_root(tmp_path, monkeypatch)
+
+        def _write(timestamp: str) -> dict:
+            return write_review_trail_entry(
+                sha_range=_TEST_SHA_RANGE,
+                reviewer="code-reviewer",
+                scope="chain",
+                verdict="ok",
+                diff_loc=10,
+                session_id=_TEST_SESSION,
+                workstream=None,
+                _timestamp=timestamp,
+            )
+
+        result1 = _write("2026-01-15-100000")
+        result2 = _write("2026-01-15-100001")
+
+        assert result1["out_path"] == result2["out_path"]
+        assert len(list((tmp_path / "review-trail").glob("*.json"))) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2753,4 +2825,186 @@ class TestDeliverableIdRecoveryFallback:
         # consulted for this to hold — but stub it anyway to keep this test
         # isolated from real session-shape resolution.
         self._guard(repo, f"{base_sha}..HEAD", monkeypatch, resolved_id="")
+
+
+# ---------------------------------------------------------------------------
+# P1 fix regression (state/subagent-share/60a896a5-0b53-494d-b77a-
+# b4ca00e00f8c/coordinatorcode-reviewer-d8cd8353.md Finding 1): a forged
+# `_batch_context` reaching the write path over JSON-RPC (`ipc.py` does not
+# strip unknown params keys) must never be able to flip a BLOCKING guard
+# disposition. These tests would FAIL against pre-fix code, which read
+# `batch_context["is_work_tree_rc"]` in both `_guard_foreign_session_range`
+# and `_reject_empty_sha_range` and treated any value other than 0/2 as
+# "confirmed not a git work tree" — a no-op bypass of the entire guard.
+# ---------------------------------------------------------------------------
+
+
+class TestForgedBatchContextCannotBypassGuards:
+    def test_forged_is_work_tree_rc_cannot_suppress_foreign_session_guard(
+        self, tmp_path,
+    ) -> None:
+        """A forged `batch_context={"is_work_tree_rc": 1}` (neither the real
+        `0` nor the fail-closed `2`) must NOT make `_guard_foreign_session_range`
+        treat a real git repo as "not a work tree" and skip the whole guard.
+        Pre-fix, this raised nothing because `is_work_tree_rc != 0` took the
+        `!= 2` branch and returned `frozenset()` without ever inspecting the
+        range's commits."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+
+        with pytest.raises(ForeignSessionRangeRefused):
+            rtw._guard_foreign_session_range(
+                f"{base_sha}..{foreign_sha}",
+                _GUARD_OWN_SESSION,
+                repo,
+                batch_context={"is_work_tree_rc": 1, "own_session_id": _GUARD_OWN_SESSION},
+            )
+
+    def test_forged_is_work_tree_rc_cannot_suppress_empty_range_rejection(
+        self, tmp_path,
+    ) -> None:
+        """Same forged key, same defect shape, against `_reject_empty_sha_range`:
+        a genuinely zero-commit range (`{sha}..{sha}`) must still be refused
+        even when `batch_context` claims `is_work_tree_rc=1`."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        sha = _make_commit(repo, "only commit")
+
+        with pytest.raises(ValueError, match="ZERO commits"):
+            rtw._reject_empty_sha_range(
+                f"{sha}..{sha}", repo, batch_context={"is_work_tree_rc": 1},
+            )
+
+    def test_forged_deliverable_id_cannot_recover_a_foreign_untrailered_commit(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        """A forged `batch_context["deliverable_id"]` that matches the
+        commit's own `Deliverable-Id` trailer must not be consulted at all —
+        `_own_deliverable_id_for_recovery` is always re-derived (here
+        stubbed to report nothing recoverable, simulating this write's own
+        resolution genuinely failing), and the guard must still see this
+        untrailered commit as genuinely ambiguous (case 3/refused), never
+        silently recovered via a forged context key alone."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_with_trailers(
+            repo, "one.py", "untrailered work",
+            deliverable_id=_RECOVERY_DELIVERABLE_ID,
+        )
+
+        # Ensure the real recovery resolver reports nothing to recover with —
+        # a forged batch_context key must not substitute for it.
+        monkeypatch.setattr(rtw, "_own_deliverable_id_for_recovery", lambda *a, **k: "")
+
+        with pytest.raises(ForeignSessionRangeRefused):
+            rtw._guard_foreign_session_range(
+                f"{base_sha}..HEAD",
+                _GUARD_OWN_SESSION,
+                repo,
+                batch_context={
+                    "is_work_tree_rc": 0,
+                    "own_session_id": _GUARD_OWN_SESSION,
+                    "deliverable_id": _RECOVERY_DELIVERABLE_ID,
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
+# P2 fix regression (Finding 2, same sidecar): `build_batch_attribution_
+# context`'s batched fast path in `_walk_range_commit_session_trailers` must
+# only fire for a GENUINELY single-commit `sha_range` (`<sha>^..<sha>`), not
+# merely because the range's right-hand endpoint parses as hex. A real
+# multi-commit range whose endpoint is foreign but whose earlier commit is
+# this session's own must not be reported as "every commit is foreign".
+# ---------------------------------------------------------------------------
+
+
+class TestMultiCommitRangeRoutesAroundBatchedFastPath:
+    def test_multi_commit_range_with_own_earlier_commit_no_false_zero_credit(
+        self, tmp_path,
+    ) -> None:
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        base_sha = _make_commit(repo, "base")
+        _make_commit_touching(
+            repo, "own.py", "own work", session_id=_GUARD_OWN_SESSION,
+        )
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        sha_range = f"{base_sha}..{foreign_sha}"
+
+        # A batch context whose precomputed window only covers the range's
+        # OWN endpoint (as `build_batch_attribution_context` would derive
+        # for a single-commit sibling slice sharing this batch) and reports
+        # that endpoint as foreign -- if the fast path fired for this
+        # genuinely multi-commit range, it would report every commit as
+        # foreign from the endpoint alone.
+        batch_context = rtw.build_batch_attribution_context(repo, [sha_range])
+        assert "attribution_window" in batch_context
+        assert foreign_sha in batch_context["attribution_window"]
+
+        result = rtw._walk_range_commit_session_trailers(
+            sha_range, _GUARD_OWN_SESSION, repo, batch_context=batch_context,
+        )
+
+        assert result is not None
+        assert len(result) == 2, (
+            "must examine BOTH commits in the range, not just the endpoint "
+            f"the batched fast path would have used alone: {result!r}"
+        )
+        assert result[foreign_sha] is True
+        # The earlier, own-session commit must not be reported foreign.
+        own_shas = [sha for sha in result if sha != foreign_sha]
+        assert len(own_shas) == 1
+        assert result[own_shas[0]] is False
+
+    def test_single_commit_range_still_uses_batched_fast_path(self, tmp_path) -> None:
+        """Sanity check that the P2 narrowing does not also break the
+        legitimate single-commit batching case it must continue to serve."""
+        import coordinator_core.ops.review_trail_write as rtw
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        foreign_sha = _make_commit_touching(
+            repo, "peer.py", "peer work", session_id=_GUARD_FOREIGN_SESSION,
+        )
+        sha_range = f"{foreign_sha}^..{foreign_sha}"
+
+        batch_context = {
+            "own_session_id": _GUARD_OWN_SESSION,
+            "attribution_window": {
+                foreign_sha: rtw.chain_attribution.CommitAttribution(
+                    sha=foreign_sha,
+                    trailer_session_id=_GUARD_FOREIGN_SESSION,
+                    is_merge=False,
+                    trailer_ambiguous=False,
+                ),
+            },
+            "grep_attributed": frozenset(),
+        }
+
+        result = rtw._walk_range_commit_session_trailers(
+            sha_range, _GUARD_OWN_SESSION, repo, batch_context=batch_context,
+        )
+
+        assert result == {foreign_sha: True}
 

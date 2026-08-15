@@ -46,6 +46,13 @@ from coordinator_core.ops.handoff_transition import _handler
 from coordinator_core.frontmatter.primitives import split_frontmatter, read_fm_field
 from coordinator_core.win_portability import no_console_creationflags
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 _NO_CONSOLE = no_console_creationflags()
 
 

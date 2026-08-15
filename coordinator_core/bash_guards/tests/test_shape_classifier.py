@@ -198,6 +198,80 @@ class TestEachShapeInIsolation:
         result = classify_command("git log --oneline | tail -50")
         assert result.matched_shapes == (Shape.HEAD_TAIL_PLUMBING,)
 
+
+class TestMultiProbeBannerIsSemanticNotJustFormatting:
+    """``state/audits/2026-08-14-boot-payload-baseline.md`` § "The
+    false-positive matcher": the pre-fix predicate was pure ``echo`` +
+    ``===`` + 3-segments SHAPE detection, with no check that the other
+    segments actually re-derive a harness-known session fact. These pin
+    the true positive still firing and the audit's confirmed false
+    positive no longer firing.
+    """
+
+    def test_true_positive_labelled_git_reprobe_still_fires(self) -> None:
+        result = classify_command(
+            'echo "=== git status ==="; git status; git log'
+        )
+        assert result.primary is not None
+        assert result.primary.shape is Shape.MULTI_PROBE_BANNER
+
+    def test_confirmed_false_positive_labelled_measurement_does_not_fire(
+        self,
+    ) -> None:
+        # From the baseline audit verbatim: a legitimate labelled
+        # multi-file measurement, not a session-fact re-derivation.
+        result = classify_command(
+            'echo "=== EM snippets ==="; wc -c a.md b.md; ls x'
+        )
+        assert not result.has_shape(Shape.MULTI_PROBE_BANNER)
+
+    def test_mixed_probe_and_non_probe_segments_does_not_fire(self) -> None:
+        # Not PURELY the re-derive-known-facts shape -- stays silent
+        # rather than misnaming a mixed command.
+        result = classify_command('echo "=== x ==="; git status; wc -l a')
+        assert not result.has_shape(Shape.MULTI_PROBE_BANNER)
+
+    def test_canonical_pipeline_probe_with_plumbing_still_fires_as_residue(
+        self,
+    ) -> None:
+        # The plan's own canonical overlap example: a SINGLE probe
+        # (`git status`) piped through grep/head plumbing -- the pipe
+        # continuations must not be treated as additional non-probe
+        # segments that disqualify the banner match.
+        cmd = 'echo "=== git status ==="; git status | grep -i modified | head'
+        result = classify_command(cmd)
+        assert result.has_shape(Shape.MULTI_PROBE_BANNER)
+
+    def test_probe_family_all_five_binaries_fire(self) -> None:
+        result = classify_command(
+            'echo "=== facts ==="; pwd; whoami; date; uname'
+        )
+        assert result.primary is not None
+        assert result.primary.shape is Shape.MULTI_PROBE_BANNER
+
+    def test_sudo_prefixed_probe_still_fires(self) -> None:
+        # Review: coordinator:code-reviewer (Finding 2) -- a `sudo`-wrapped
+        # probe is still a genuine session-fact re-derivation.
+        result = classify_command(
+            'echo "=== facts ==="; sudo git status; pwd; whoami'
+        )
+        assert result.primary is not None
+        assert result.primary.shape is Shape.MULTI_PROBE_BANNER
+
+    def test_env_var_prefixed_probe_still_fires(self) -> None:
+        result = classify_command(
+            'echo "=== facts ==="; env FOO=bar git status; pwd; whoami'
+        )
+        assert result.primary is not None
+        assert result.primary.shape is Shape.MULTI_PROBE_BANNER
+
+    def test_env_multiple_assignments_prefixed_probe_still_fires(self) -> None:
+        result = classify_command(
+            'echo "=== facts ==="; env FOO=bar BAZ=qux git status; pwd; whoami'
+        )
+        assert result.primary is not None
+        assert result.primary.shape is Shape.MULTI_PROBE_BANNER
+
     def test_for_loop_basic(self) -> None:
         result = classify_command('for f in *.py; do wc -l "$f"; done')
         assert result.matched_shapes == (Shape.FOR_LOOP,)

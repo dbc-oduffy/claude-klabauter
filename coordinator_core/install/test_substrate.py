@@ -51,6 +51,7 @@ from coordinator_core.install.substrate import (
     _refuse_machine_mutation,
     _resolve_agent_cmd_dest_collisions,
     _resolve_baked_python_bin,
+    resolve_hook_python_bin,
     _static_bin_family_names,
     _sweep_orphaned_agent_helpers,
     _windows_health_steps,
@@ -763,18 +764,13 @@ def test_refuse_machine_mutation_env_opt_out_blocks_every_path(monkeypatch):
     assert "COORDINATOR_DISABLE_MACHINE_MUTATION" in reason
 
 
-def _fake_powershell_for_windows_health_steps(calls, already_response="no"):
-    def fake(command, env=None):
-        calls.append(command)
-        # The PATH-membership read that gates the mutation attempt -- see
-        # `_windows_health_steps`'s `$t=$env:BIN_DST_WIN` check.
-        if "$t=$env:BIN_DST_WIN" in command:
-            return already_response
-        # Every other call (AppX stub probe, python/py resolution) answers
-        # "nothing found", which only produces harmless advisory prints.
-        return ""
-
-    return fake
+def _fake_win_user_path_entries_for_windows_health_steps(already_present=False):
+    # C11: replaces the old `_powershell` fake -- `_windows_health_steps` now
+    # reads the user PATH via `_win_user_path_entries` instead of spawning
+    # powershell.exe. `already_present` mirrors the old `already_response`
+    # ("yes"/"no") knob.
+    entries = [_FAKE_REAL_INSTALL_PATH] if already_present else []
+    return lambda: (entries, ";".join(entries), 2)
 
 
 def test_windows_health_steps_refuses_temp_rooted_bin_dst(monkeypatch, tmp_path, capsys):
@@ -783,11 +779,14 @@ def test_windows_health_steps_refuses_temp_rooted_bin_dst(monkeypatch, tmp_path,
 
     calls: list = []
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
-    monkeypatch.setattr(substrate, "_powershell", _fake_powershell_for_windows_health_steps(calls))
+    monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps())
+    monkeypatch.setattr(substrate, "_win_user_path_prepend", lambda *a, **k: calls.append("PREPEND") or True)
+    monkeypatch.setattr(substrate, "_orphan_appx_stub", lambda path: False)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
 
     _windows_health_steps(bin_dst, check_only=False)
 
-    assert not any("SetEnvironmentVariable" in c for c in calls), (
+    assert not calls, (
         "a temp-rooted bin_dst must never reach the real PATH-mutation call"
     )
     assert "REFUSED" in capsys.readouterr().err
@@ -799,11 +798,14 @@ def test_windows_health_steps_respects_disable_env_even_for_non_temp_path(monkey
 
     calls: list = []
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
-    monkeypatch.setattr(substrate, "_powershell", _fake_powershell_for_windows_health_steps(calls))
+    monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps())
+    monkeypatch.setattr(substrate, "_win_user_path_prepend", lambda *a, **k: calls.append("PREPEND") or True)
+    monkeypatch.setattr(substrate, "_orphan_appx_stub", lambda path: False)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
 
     _windows_health_steps(bin_dst, check_only=False)
 
-    assert not any("SetEnvironmentVariable" in c for c in calls)
+    assert not calls
     assert "REFUSED" in capsys.readouterr().err
 
 
@@ -816,11 +818,14 @@ def test_windows_health_steps_mutates_for_a_genuine_non_temp_path(monkeypatch, c
 
     calls: list = []
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
-    monkeypatch.setattr(substrate, "_powershell", _fake_powershell_for_windows_health_steps(calls))
+    monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps())
+    monkeypatch.setattr(substrate, "_win_user_path_prepend", lambda *a, **k: calls.append("PREPEND") or True)
+    monkeypatch.setattr(substrate, "_orphan_appx_stub", lambda path: False)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
 
     _windows_health_steps(bin_dst, check_only=False)
 
-    assert any("SetEnvironmentVariable" in c for c in calls)
+    assert "PREPEND" in calls
     assert "REFUSED" not in capsys.readouterr().err
 
 
@@ -840,9 +845,9 @@ def test_windows_health_steps_cygpath_unavailable_states_consequence_and_fix(mon
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: "")
     # The AppX-stub/store-alias legs downstream of the PATH check still run
     # (they don't depend on a resolved Windows path) -- answer "nothing
-    # found" like `_fake_powershell_for_windows_health_steps` does, rather
-    # than asserting this leg is never reached.
-    monkeypatch.setattr(substrate, "_powershell", lambda *a, **k: "")
+    # found", rather than asserting this leg is never reached.
+    monkeypatch.setattr(substrate, "_orphan_appx_stub", lambda path: False)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
 
     _windows_health_steps(bin_dst, check_only=False)
 
@@ -852,12 +857,14 @@ def test_windows_health_steps_cygpath_unavailable_states_consequence_and_fix(mon
     assert "re-run install" in err
 
 
-def test_windows_health_steps_powershell_unavailable_states_consequence_and_fix(monkeypatch, capsys):
+def test_windows_health_steps_unreadable_user_path_states_consequence_and_fix(monkeypatch, capsys):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
 
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
-    monkeypatch.setattr(substrate, "_powershell", lambda *a, **k: "")
+    monkeypatch.setattr(substrate, "_win_user_path_entries", lambda: None)
+    monkeypatch.setattr(substrate, "_orphan_appx_stub", lambda path: False)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
 
     _windows_health_steps(bin_dst, check_only=False)
 
@@ -997,6 +1004,16 @@ def test_run_setup_only_check_only_on_windows_does_not_claim_seeded(monkeypatch,
 # shell() is True` setup-only branch immediately above), not executed here.
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "cannot simulate POSIX on a Windows host: this test monkeypatches "
+        "substrate.os.name to 'posix', and pathlib dispatches Path() on os.name, so "
+        "every subsequent Path(...) inside run() constructs a PosixPath from a "
+        "Windows-shaped tmp_path and raises UnsupportedOperation before reaching "
+        "the assertion. The POSIX chain is covered for real on POSIX CI."
+    ),
+)
 def test_run_full_chain_posix_no_warning(monkeypatch, tmp_path, capsys):
     _stub_run_dependencies(monkeypatch, tmp_path)
     monkeypatch.setattr(substrate, "_is_windows_shell", lambda: False)
@@ -1023,18 +1040,53 @@ _FAKE_APPX_STUB_PATH = (  # abs-path-ok: synthetic fixture string, never touches
 )
 
 
-def _fake_powershell_for_appx_stub(calls, already_response="yes"):
-    def fake(command, env=None):
-        calls.append(command)
-        if "$t=$env:BIN_DST_WIN" in command:
-            return already_response
-        if "WindowsApps\\python3.exe" in command and "ReparsePoint" in command:
-            return _FAKE_APPX_STUB_PATH
-        # python.exe probe (the other stub_name in the loop) and the
-        # store-alias-on-PATH warning that follows -- answer "nothing found".
-        return ""
+def _fake_orphan_appx_stub(calls, orphan_path=_FAKE_APPX_STUB_PATH):
+    # C11: replaces the old `_powershell` fake -- `_windows_health_steps`
+    # now probes each candidate path via `_orphan_appx_stub` instead of a
+    # PowerShell `Get-Item`/`Test-Path` spawn. Only the python3.exe
+    # candidate (matching `orphan_path`) reports an orphan; python.exe (the
+    # other stub_name in the loop) reports none.
+    def fake(path):
+        calls.append(path)
+        return path == orphan_path
 
     return fake
+
+
+# --- _orphan_appx_stub: real body against real live aliases -----------------
+#
+# Review: coordinator:code-reviewer (P1/P2) -- every test above monkeypatches
+# `_orphan_appx_stub` itself, never exercising its real lstat/stat body, so
+# nothing here proved the resolvability split (live vs. orphaned APPEXECLINK)
+# actually holds. Measured directly (Windows 11, 2026-08-14): 55 zero-length
+# APPEXECLINK aliases enumerated under a real WindowsApps directory, zero
+# reported as orphans by the real function. This test locks that in against
+# whatever live aliases the box running it happens to have, and skips cleanly
+# rather than asserting anything when there are none to check.
+@pytest.mark.skipif(sys.platform != "win32", reason="APPEXECLINK aliases are Windows-only")
+def test_orphan_appx_stub_reports_no_false_positives_on_real_live_aliases():
+    windows_apps = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps"
+    if not windows_apps.is_dir():
+        pytest.skip("no WindowsApps directory on this box")
+
+    checked = 0
+    for candidate in windows_apps.iterdir():
+        try:
+            st = os.lstat(candidate)
+        except OSError:
+            continue
+        if st.st_size != 0:
+            continue
+        if getattr(st, "st_reparse_tag", 0) != substrate._IO_REPARSE_TAG_APPEXECLINK:
+            continue
+        checked += 1
+        assert not substrate._orphan_appx_stub(str(candidate)), (
+            f"{candidate} is a live app-execution alias present on disk; "
+            "_orphan_appx_stub must not report it as orphaned"
+        )
+
+    if checked == 0:
+        pytest.skip("no zero-length APPEXECLINK aliases present on this box")
 
 
 def test_windows_health_steps_appx_stub_disabled_never_prompts_or_deletes(monkeypatch, capsys):
@@ -1042,8 +1094,18 @@ def test_windows_health_steps_appx_stub_disabled_never_prompts_or_deletes(monkey
     bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
 
     calls: list = []
+    removed: list = []
+    # Not tmp_path-rooted -- `_refuse_machine_mutation`'s temp-path check
+    # would otherwise mask the assertion this test is actually about (the
+    # DISABLE_ENV guard, not the temp-path one).
+    fake_local_app_data = str(Path(_FAKE_APPX_STUB_PATH).parent.parent.parent)
+    monkeypatch.setenv("LOCALAPPDATA", fake_local_app_data)
+    orphan_path = _FAKE_APPX_STUB_PATH
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
-    monkeypatch.setattr(substrate, "_powershell", _fake_powershell_for_appx_stub(calls))
+    monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps(already_present=True))
+    monkeypatch.setattr(substrate, "_orphan_appx_stub", _fake_orphan_appx_stub(calls, orphan_path))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(os, "remove", lambda p: removed.append(p))
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.delenv("COORDINATOR_NON_INTERACTIVE", raising=False)
 
@@ -1054,7 +1116,7 @@ def test_windows_health_steps_appx_stub_disabled_never_prompts_or_deletes(monkey
 
     _windows_health_steps(bin_dst, check_only=False)
 
-    assert not any("Remove-Item" in c for c in calls), (
+    assert not removed, (
         "disabled mutation must not delete the orphan AppX stub"
     )
     err = capsys.readouterr().err
@@ -1067,15 +1129,22 @@ def test_windows_health_steps_appx_stub_enabled_prompt_still_deletes(monkeypatch
     bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
 
     calls: list = []
+    removed: list = []
+    fake_local_app_data = str(Path(_FAKE_APPX_STUB_PATH).parent.parent.parent)
+    monkeypatch.setenv("LOCALAPPDATA", fake_local_app_data)
+    orphan_path = _FAKE_APPX_STUB_PATH
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
-    monkeypatch.setattr(substrate, "_powershell", _fake_powershell_for_appx_stub(calls))
+    monkeypatch.setattr(substrate, "_win_user_path_entries", _fake_win_user_path_entries_for_windows_health_steps(already_present=True))
+    monkeypatch.setattr(substrate, "_orphan_appx_stub", _fake_orphan_appx_stub(calls, orphan_path))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(os, "remove", lambda p: removed.append(p))
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.delenv("COORDINATOR_NON_INTERACTIVE", raising=False)
     monkeypatch.setattr("builtins.input", lambda prompt="": "y")
 
     _windows_health_steps(bin_dst, check_only=False)
 
-    assert any("Remove-Item" in c for c in calls), (
+    assert removed, (
         "with the guard unset, consenting to the prompt must still delete the stub"
     )
     assert "REFUSED" not in capsys.readouterr().err
@@ -1808,3 +1877,75 @@ def test_fnm_step_enabled_installs_via_brew(monkeypatch):
     assert calls == [["brew", "install", "fnm"]], (
         "with the guard unset the brew install must still run"
     )
+
+
+# --- resolve_hook_python_bin -- machine interpreter, not the venv pin -------
+#
+# Regression coverage for docs/plans/2026-08-14-the-venv-fallback-stops-
+# being-something.md C2: the resolver used to call resolve_python_bin(),
+# whose tier 1/2 is COORDINATOR_PYTHON / machine-local coordinator.python --
+# the venv pin ensure_venv.py writes for purposes (a)/(b), unrelated to
+# hooks. A box that merely HAS that pin set (e.g. for coordinator_whoami)
+# got every hook command pointed at the venv regardless. This resolver must
+# instead resolve the OS-detect (machine) tier directly, ignoring any pin.
+
+
+def test_resolve_hook_python_bin_ignores_the_venv_pin(monkeypatch):
+    import coordinator_core.pyresolve as pyresolve
+
+    # A pin is present (as it would be on a box that ran ensure_venv.py for
+    # purpose (a)/(b)) -- resolve_python_bin() would return this if called.
+    monkeypatch.setenv("COORDINATOR_PYTHON", "/settings-home/.coordinator-venv/bin/python3")
+
+    monkeypatch.setattr(pyresolve, "_is_windows", lambda: False)
+    monkeypatch.setattr(pyresolve, "_resolve_non_windows", lambda: ("/usr/bin/python3", []))
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("resolve_python_bin (pin-aware) must not be called")
+
+    monkeypatch.setattr(pyresolve, "resolve_python_bin", _fail_if_called)
+
+    assert resolve_hook_python_bin() == "/usr/bin/python3"
+
+
+def test_resolve_hook_python_bin_resolves_windows_console_interpreter(monkeypatch):
+    import coordinator_core.pyresolve as pyresolve
+
+    captured = {}
+
+    def _fake_resolve_windows(**kwargs):
+        captured.update(kwargs)
+        return "/machine/python.exe", []
+
+    monkeypatch.setattr(pyresolve, "_is_windows", lambda: True)
+    monkeypatch.setattr(pyresolve, "_resolve_windows", _fake_resolve_windows)
+    monkeypatch.setattr(
+        pyresolve, "_resolve_non_windows",
+        lambda: (_ for _ in ()).throw(AssertionError("non-Windows tier must not run on a Windows host")),
+    )
+
+    assert resolve_hook_python_bin() == "/machine/python.exe"
+    assert captured == {"prefer_windowless": False}
+
+
+def test_resolve_hook_python_bin_empty_for_launcher_args(monkeypatch):
+    import coordinator_core.pyresolve as pyresolve
+
+    monkeypatch.setattr(pyresolve, "_is_windows", lambda: True)
+    monkeypatch.setattr(pyresolve, "_resolve_windows", lambda **_: ("py", ["-3"]))
+    assert resolve_hook_python_bin() == ""
+
+
+def test_resolve_hook_python_bin_surfaces_resolution_error(monkeypatch, capsys):
+    import coordinator_core.pyresolve as pyresolve
+
+    def _raise():
+        raise RuntimeError("no interpreter resolvable")
+
+    monkeypatch.setattr(pyresolve, "_is_windows", _raise)
+
+    result = resolve_hook_python_bin()
+    assert result == ""
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "no interpreter resolvable" in err

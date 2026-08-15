@@ -865,3 +865,156 @@ def test_exit_code_for_response_structural_pin_error_is_two():
         "error": {"code": STRUCTURAL_PIN_ERROR, "message": "ContractPinError: desync"},
     }
     assert _exit_code_for_response(response, STRUCTURAL_PIN_ERROR) == 2
+
+
+# ---------------------------------------------------------------------------
+# Branch 14 -- stdout transport hardening: a handler print() must not corrupt
+# the JSON-RPC envelope on stdout.
+#
+# Live incident this pins: coordinator_core/ops/plan_tasks_mutate.py's
+# _resolve() calls close_out_and_stamp._stamp_plan_landed(...) in-process,
+# which unconditionally print()s a status line. That line landed on the same
+# stdout stream cc_invoke parses as JSON, breaking every
+# coordinator/bin/ CLI built on cc_invoke with "invoke stdout is not valid
+# JSON". main()'s dispatch loop must capture ANY handler-level stdout write
+# and relay it to stderr, never letting it interleave with the envelope.
+#
+# A throwaway op is registered directly in the SAME subprocess that runs
+# main() (via `python -c`, not `python -m coordinator_core.invoke`) — main()
+# calls os._exit so it cannot be exercised in-process from THIS test process,
+# but the registration + main() call can still share one child process.
+# ---------------------------------------------------------------------------
+
+_PRINT_OP_SCRIPT = """
+import sys
+from coordinator_core import ipc
+
+async def _noisy(params, repo_root=None):
+    print("stray diagnostic line from a handler")
+    return {"ok": True}
+
+ipc.register_op("test.stdout_hardening_probe", _noisy)
+
+sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_probe", "{}"]
+from coordinator_core.invoke.__main__ import main
+main()
+"""
+
+_RAISING_OP_SCRIPT = """
+import sys
+from coordinator_core import ipc
+
+async def _boom(params, repo_root=None):
+    print("stray diagnostic line before the raise")
+    raise RuntimeError("deliberate handler failure")
+
+ipc.register_op("test.stdout_hardening_raise_probe", _boom)
+
+sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_raise_probe", "{}"]
+from coordinator_core.invoke.__main__ import main
+main()
+"""
+
+
+def _run_probe_script(script: str) -> subprocess.CompletedProcess:
+    cmd = [sys.executable, "-c", script]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=_PROJECT_ROOT,
+        env=_make_env(),
+        creationflags=_NO_CONSOLE,
+    )
+
+
+def test_handler_stdout_print_relayed_to_stderr_not_corrupting_envelope():
+    """A handler that print()s during dispatch still yields a stdout stream
+    that is exactly one parseable JSON-RPC envelope; the printed line appears
+    on stderr instead of being lost or interleaved onto stdout.
+    """
+    result = _run_probe_script(_PRINT_OP_SCRIPT)
+
+    assert result.returncode == 0, (
+        f"expected exit 0; got {result.returncode}.\n"
+        f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+    )
+
+    parsed = json.loads(result.stdout.strip())
+    assert parsed.get("jsonrpc") == "2.0"
+    assert parsed.get("result", {}).get("ok") is True
+
+    assert "stray diagnostic line from a handler" in result.stderr, (
+        f"handler stdout must be relayed to stderr, not discarded; got "
+        f"stderr={result.stderr!r}"
+    )
+    assert "stray diagnostic line from a handler" not in result.stdout, (
+        f"handler stdout must never reach the real stdout stream; got "
+        f"stdout={result.stdout!r}"
+    )
+
+
+def test_handler_raise_still_yields_error_envelope_on_stdout():
+    """The error-envelope path is unchanged by the stdout-capture hardening:
+    a handler that raises still produces a JSON-RPC error response on
+    stdout, and any stdout it printed before raising is relayed to stderr.
+    """
+    result = _run_probe_script(_RAISING_OP_SCRIPT)
+
+    parsed = json.loads(result.stdout.strip())
+    assert parsed.get("jsonrpc") == "2.0"
+    assert "error" in parsed, f"expected a JSON-RPC error envelope; got {parsed}"
+
+    assert "stray diagnostic line before the raise" in result.stderr
+    assert "stray diagnostic line before the raise" not in result.stdout
+
+
+_PRINT_OP_BROKEN_STDERR_SCRIPT = """
+import sys
+from coordinator_core import ipc
+
+async def _noisy(params, repo_root=None):
+    print("stray diagnostic line from a handler")
+    return {"ok": True}
+
+ipc.register_op("test.stdout_hardening_broken_stderr_probe", _noisy)
+
+class _BrokenStderr:
+    def write(self, s):
+        raise BrokenPipeError("simulated closed stderr")
+    def flush(self):
+        raise BrokenPipeError("simulated closed stderr")
+
+sys.stderr = _BrokenStderr()
+
+sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_broken_stderr_probe", "{}"]
+from coordinator_core.invoke.__main__ import main
+main()
+"""
+
+
+def test_handler_stdout_relay_raising_still_yields_envelope_on_stdout():
+    """A relay write that raises (e.g. BrokenPipeError from a caller that
+    closed stderr early) must not prevent the JSON-RPC envelope from being
+    printed to stdout -- the relay is best-effort, the envelope is not.
+    """
+    cmd = [sys.executable, "-c", _PRINT_OP_BROKEN_STDERR_SCRIPT]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=_PROJECT_ROOT,
+        env=_make_env(),
+        creationflags=_NO_CONSOLE,
+    )
+
+    assert result.returncode == 0, (
+        f"expected exit 0; got {result.returncode}.\n"
+        f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
+    )
+
+    parsed = json.loads(result.stdout.strip())
+    assert parsed.get("jsonrpc") == "2.0"
+    assert parsed.get("result", {}).get("ok") is True

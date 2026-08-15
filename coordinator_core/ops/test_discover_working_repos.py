@@ -18,6 +18,7 @@ import pytest
 from coordinator_core.ops.discover_working_repos import (
     _TIER_A_EXCLUDE_RE,
     _decode_projects_dir_name,
+    _emit_form,
     _fs_probe_path,
     _gate_and_dedup,
     _is_git_root,
@@ -99,27 +100,69 @@ class TestIsGitRoot:
 
 
 class TestGateAndDedup:
+    """`mirror_keys=set()` is passed explicitly throughout: the default None
+    spawns machine-local to enumerate publish.mirrors.*, which these tests
+    neither need nor want to depend on."""
+
     def test_keeps_only_the_repo_root(self, tmp_path: Path):
         repo = tmp_path / "dev" / "realrepo"
         _init_git_repo(repo)
         nonrepo = tmp_path / "dev"
         scratch = repo / "sub"
         scratch.mkdir()
-        out = list(_gate_and_dedup([str(repo), str(nonrepo), str(scratch)]))
-        assert out == [str(repo)]
+        out = list(_gate_and_dedup([str(repo), str(nonrepo), str(scratch)], set()))
+        assert out == [_emit_form(str(repo))]
 
     def test_cross_form_dedup_trailing_slash(self, tmp_path: Path):
         repo = tmp_path / "dev" / "realrepo"
         _init_git_repo(repo)
-        out = list(_gate_and_dedup([str(repo), str(repo) + "/", str(repo)]))
+        out = list(_gate_and_dedup([str(repo), str(repo) + "/", str(repo)], set()))
         assert len(out) == 1
-        assert out[0] == str(repo)
+        assert out[0] == _emit_form(str(repo))
 
     def test_empty_lines_skipped(self, tmp_path: Path):
         repo = tmp_path / "dev" / "realrepo"
         _init_git_repo(repo)
-        out = list(_gate_and_dedup(["", str(repo), ""]))
-        assert out == [str(repo)]
+        out = list(_gate_and_dedup(["", str(repo), ""], set()))
+        assert out == [_emit_form(str(repo))]
+
+    def test_emitted_form_is_forward_slashed_regardless_of_input_form(self, tmp_path: Path):
+        """Regression net: the oracle preserved each repo's first-seen NATIVE
+        form, so one Windows run emitted registry-sourced rows forward-slashed
+        and filesystem-discovered rows backslashed. The consumer double-quotes
+        those into working-repos.yaml, where a backslash-D is an invalid YAML
+        escape — yaml.safe_load then raised ScannerError for every consumer."""
+        repo = tmp_path / "dev" / "realrepo"
+        _init_git_repo(repo)
+        native = str(repo)
+        forward = native.replace(chr(92), "/")
+
+        out = list(_gate_and_dedup([native, forward], set()))
+
+        assert out == [forward]
+        assert chr(92) not in out[0]
+
+    def test_publish_mirror_is_never_emitted(self, tmp_path: Path):
+        """A publish.mirrors.*.path tree is a publish target, not a working
+        tree — doctrine forbids working in one or addressing a memo to one."""
+        repo = tmp_path / "dev" / "realrepo"
+        mirror = tmp_path / "dev" / "oss-mirror"
+        _init_git_repo(repo)
+        _init_git_repo(mirror)
+
+        out = list(_gate_and_dedup([str(repo), str(mirror)], {_to_posix_key(str(mirror))}))
+
+        assert out == [_emit_form(str(repo))]
+
+    def test_mirror_match_is_separator_and_drive_case_insensitive(self, tmp_path: Path):
+        """The mirror set is keyed by `_to_posix_key`, so a registry entry
+        stored as `E:/dev/x` still excludes a discovery hit of `E:\\dev\\x`."""
+        mirror = tmp_path / "dev" / "oss-mirror"
+        _init_git_repo(mirror)
+        native = str(mirror)
+        forward = native.replace(chr(92), "/")
+
+        assert list(_gate_and_dedup([native], {_to_posix_key(forward)})) == []
 
 
 class TestToPosixKey:
@@ -360,7 +403,7 @@ class TestMainNeverBlocks:
         rc = main([])
         assert rc == 0
         out = capsys.readouterr().out.strip().splitlines()
-        assert out == [str(repo)]
+        assert out == [_emit_form(str(repo))]
 
     def test_internal_tier_error_degrades_to_exit_zero(self, tmp_path: Path, monkeypatch, capsys):
         import coordinator_core.ops.discover_working_repos as m

@@ -39,6 +39,13 @@ from coordinator_core.frontmatter.schema_drift_watch import (
     vendored_schema_paths,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _SCHEMA_A = "handoff.schema.json"
 _SCHEMA_B = "improvement-queue.schema.json"
 

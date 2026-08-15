@@ -70,6 +70,13 @@ from coordinator_core.bash_guards.tests.test_cd_prefix_bypass import (
     _wire_subagent_identity,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 #: `_decision`'s three-way return (`"deny"`/`"advisory"`/`"allow"`) is
 #: what this module's own `test_confinement_attack_corpus` asserts against
 #: below (`== "deny"`). A prior, buggier `_decision` collapsed advisory

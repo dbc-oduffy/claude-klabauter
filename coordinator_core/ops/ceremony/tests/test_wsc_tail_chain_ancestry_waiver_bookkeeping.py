@@ -52,6 +52,13 @@ import coordinator_core.ops.ceremony.wsc_tail as wsc_tail_mod
 from coordinator_core import chain_ancestry_waivers
 from coordinator_core.ops.ceremony.git_native import add_paths, commit_scoped
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _SID = "22222222-2222-2222-2222-222222222222"
 
 

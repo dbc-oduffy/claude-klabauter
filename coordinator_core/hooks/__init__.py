@@ -46,7 +46,7 @@ hooks-specific channel nobody would arm:
     anyone to arm.
 
 Default MUST remain eager (neither channel armed): importing this package eagerly
-registers all 16 hooks.* ops exactly as before this chunk, so the op-registry drift
+registers all 17 hooks.* ops exactly as before this chunk, so the op-registry drift
 guards this docstring names above continue to see the FULL registered set at import
 time in every consumer that does not opt into lazy mode — this is the same
 default-preserving guarantee coordinator_core.ops makes for the analogous op-registry
@@ -132,6 +132,16 @@ transport/hook-registration half):
                                        file (.git/coordinator-sessions/<sid>/
                                        receiver-state.json); MUTATING
 
+Sidecar-fill surfacing op (run-report sidecar contract, surfacing half of the
+2026-08-15 break-class gap — detection is
+coordinator_core.subagent_sandbox.detect_unfilled_sidecar):
+    subagent_sidecar_fill_check     — PostToolUse-Agent; re-scans this session's
+                                       own state/subagent-share/<session_id>/ and
+                                       advises (post_advisory, never blocking)
+                                       only when a sidecar is status: open with
+                                       no agent-authored body; compute + advise,
+                                       no durable write of its own
+
 Spec backlinks:
     docs/plans/2026-07-04-pcore-04-advisory-hook-ops-claude-klabauter-engine.md
     docs/plans/2026-07-04-pcore-08-async-bookkeeping-hooks-engine-vs-mcp.md
@@ -173,6 +183,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.subagent_arrival_check",  # registers "hooks.subagent_arrival_check"
     "coordinator_core.hooks.subagent_fabrication_check",  # registers "hooks.subagent_fabrication_check"
     "coordinator_core.hooks.receiver_state_sensor",  # registers "hooks.receiver_state_sensor"
+    "coordinator_core.hooks.subagent_sidecar_fill_check",  # registers "hooks.subagent_sidecar_fill_check"
 ]
 
 
@@ -280,7 +291,7 @@ def _lazy_ops_requested() -> bool:
 
 
 # Default behavior (neither channel armed) — UNCHANGED from before this chunk:
-# importing this package eagerly registers all 16 hooks.* ops, keeping the
+# importing this package eagerly registers all 17 hooks.* ops, keeping the
 # op-registry drift guards (authz OP_CLASSIFICATION coverage, ipc
 # _OP_KEY_SCOPE coverage, OP_MODULE_MAP parity) honest against the full set.
 if not _lazy_ops_requested():

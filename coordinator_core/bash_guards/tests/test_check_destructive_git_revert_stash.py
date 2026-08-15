@@ -50,6 +50,13 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_destructive_git_revert_advisory,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _deny_reason(result) -> str:
     """The deny text out of a PreToolUse hook payload (see `_deny`)."""

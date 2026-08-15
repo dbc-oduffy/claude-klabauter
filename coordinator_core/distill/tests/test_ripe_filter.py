@@ -58,6 +58,13 @@ from coordinator_core.distill.ripe_filter import (
     scan_spec_dir,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI_PATH = _REPO_ROOT / "bin" / "distill-ripe-filter.py"
 

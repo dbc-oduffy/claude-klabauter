@@ -90,6 +90,13 @@ from coordinator_core.ops.distill_stamp_disposal import (
     manifest_path_for_run,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
 

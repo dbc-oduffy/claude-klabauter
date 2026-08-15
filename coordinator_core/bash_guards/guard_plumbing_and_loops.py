@@ -165,7 +165,7 @@ from coordinator_core.bash_guards.guard_head_tail_rewrite import (
     check_head_tail_plumbing_rewrite,
 )
 from coordinator_core._hook_envelope import allow_advisory
-from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL, operator_override_note
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._verdict import record_silent
 
@@ -377,12 +377,13 @@ def _generic_advisory(
     context = (
         "BASH-SPAWN ADVISORY (non-blocking): `%s`-shaped command spawns a "
         "subprocess per iteration/pipe stage.\n\n"
-        "  Command:  %s\n\n"
+        "  %s  %s\n\n"
         "Use instead: %s\n"
         "  Example:  %s\n"
         "  %s\n"
         % (
             shape_label,
+            COMMAND_LINE_LABEL,
             cmd_safe,
             summary,
             example,

@@ -439,6 +439,137 @@ def test_indirection_python_inline_c_destructive_payload_denies():
     assert "python -c" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_python_inline_c_readonly_git_word_probe_allows():
+    # AC5 repro (docs/plans/2026-08-15-the-close-s-three-deferred-defects-
+    # becom.md C3): a review-integrator's read-only probe -- the word "git"
+    # appears only as quoted DATA (a substring count over file content),
+    # no git binary invoked or invocable. Denied before this fix (the
+    # INLINE-INTERPRETER CARVE-OUT routes any `python3 -c '...'` mentioning
+    # "git" to the legacy free-text classifier, whose terminal catchall
+    # denied on bare word presence).
+    payload = _payload(
+        'python3 -c "print(open(\'notes.txt\').read().count(\'git\'))"',
+        agent_type="coordinator:executor",
+    )
+    assert guard.check(payload) is None
+
+
+def test_python_inline_c_readonly_git_word_probe_single_quoted_allows():
+    # Same shape, single-quoted -c payload -- confirms the fix is not
+    # tied to a specific quote style.
+    payload = _payload(
+        "python3 -c 'print(open(\"notes.txt\").read().count(\"git\"))'",
+        agent_type="coordinator:executor",
+    )
+    assert guard.check(payload) is None
+
+
+def test_python_inline_c_git_word_probe_with_grep_style_pattern_allows():
+    # A grep-shaped read of the WORD "git" via re.search, same non-
+    # invocation data-only shape as the reported incident.
+    payload = _payload(
+        'python3 -c "import re; print(bool(re.search(\'git\', open(\'f\').read())))"',
+        agent_type="coordinator:executor",
+    )
+    assert guard.check(payload) is None
+
+
+def test_python_inline_c_destructive_payload_still_denies_after_catchall_fix():
+    # AC6: the specific push --force free-text pattern (not the catchall
+    # this fix narrows) still catches the memo's exact bypass example --
+    # duplicate assertion of test_indirection_python_inline_c_destructive_
+    # payload_denies, pinned again here directly alongside the fix.
+    payload = _payload(
+        "python3 -c 'import subprocess; subprocess.run([\"git\", \"push\", \"--force\"])'",
+        agent_type="coordinator:executor",
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_python_inline_c_rebase_payload_still_denies():
+    # AC6: `git rebase` free-text pattern still fires inside a -c payload.
+    payload = _payload(
+        "python3 -c \"import os; os.system('git rebase -i HEAD~3')\"",
+        agent_type="coordinator:executor",
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_python_inline_c_reset_hard_payload_still_denies():
+    # AC6: `git reset --hard` free-text pattern still fires inside a -c
+    # payload.
+    payload = _payload(
+        "python3 -c \"import os; os.system('git reset --hard HEAD~1')\"",
+        agent_type="coordinator:executor",
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_python_inline_c_stash_pop_payload_still_denies():
+    # AC6: `git stash pop` free-text pattern still fires inside a -c
+    # payload.
+    payload = _payload(
+        "python3 -c \"import os; os.system('git stash pop')\"",
+        agent_type="coordinator:executor",
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_sh_c_unparseable_shell_segment_still_denies_via_catchall():
+    # AC6: a genuinely unparseable REAL shell segment (unbalanced quote)
+    # must keep the unchanged legacy catchall -- `strict=True`,
+    # `subcmd is None` (not the interpreter-carve-out sentinel), so
+    # `default_deny_on_unmatched` stays True. Uses a git-mentioning,
+    # unterminated-quote segment to reach `_evaluate_git_segment_legacy`
+    # via genuine unparseability rather than the -c carve-out.
+    payload = _payload(
+        "git frobnicate 'unterminated",
+        agent_type="coordinator:executor",
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_evaluate_git_segment_legacy_default_deny_on_unmatched_true_denies_directly():
+    # Direct unit coverage: default (True) keeps the terminal catchall.
+    assert (
+        guard._evaluate_git_segment_legacy("some prose mentioning git only")
+        == "unrecognized git verb (default-deny)"
+    )
+
+
+def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_allows_directly():
+    # Direct unit coverage: False suppresses ONLY the terminal catchall.
+    assert (
+        guard._evaluate_git_segment_legacy(
+            "some prose mentioning git only", default_deny_on_unmatched=False
+        )
+        is None
+    )
+
+
+def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_still_denies_push_force():
+    # Direct unit coverage: False does NOT touch the specific push --force
+    # pattern above the catchall.
+    assert (
+        guard._evaluate_git_segment_legacy(
+            "subprocess.run(['git', 'push', '--force'])",
+            default_deny_on_unmatched=False,
+        )
+        == "git push --force"
+    )
+
+
 def test_indirection_windows_bash_exe_backslash_path_inline_c_denies():
     # A2 fix: `C:\Windows\System32\bash.exe -c '<payload>'` -- the
     # memo's own explicit Windows-spelled bypass example. Before the fix,

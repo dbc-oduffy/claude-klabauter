@@ -87,14 +87,12 @@ class InvalidLivenessRoot(ValueError):
 # One key per shed housekeeping class named in the plan's § Substrate table.
 ARCHIVE_SWEEPS = "archive_sweeps"
 COMPLETION_SCAFFOLD = "completion_scaffold"
-TRACKER_REGEN = "tracker_regen"
 ROADMAP_CALLOUT = "roadmap_callout"
 COVERAGE_GATE = "coverage_gate"
 
 KNOWN_CLASSES: tuple = (
     ARCHIVE_SWEEPS,
     COMPLETION_SCAFFOLD,
-    TRACKER_REGEN,
     ROADMAP_CALLOUT,
     COVERAGE_GATE,
 )
@@ -111,7 +109,6 @@ REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
         "python3 coordinator/bin/sweep-actioned-memos.py",
     ),
     COMPLETION_SCAFFOLD: (),
-    TRACKER_REGEN: (),
     ROADMAP_CALLOUT: (),
     COVERAGE_GATE: (),
 }

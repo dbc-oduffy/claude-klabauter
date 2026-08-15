@@ -152,7 +152,9 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -163,6 +165,7 @@ from coordinator_core.archive_stamp import (
     cs_action_memo,
     cs_claim_handoff,
     cs_claim_memo_stamp,
+    cs_gate_recheck_handoff,
     cs_release_memo_revert,
     cs_unclaim_handoff,
 )
@@ -377,6 +380,54 @@ def _dispatch_archive_stamp_cli(args: list[str], repo_root: Path) -> dict[str, A
         if _common_dir is not None:
             mark_claim_stamped(handoff_claim_dir(_common_dir, handoff_path))
         return {"cli": "archive-stamp-cli", "verb": "claim-handoff", "handoff_path": args[1]}
+
+    if verb == "gate-recheck":
+        # Piece A (cross-repo/inbox/2026-08-04-example-market-data-repo-em-
+        # pickup-jgate-cleared-strands-gate-fields.md) — records the
+        # `jgate: cleared` disposition BEFORE `claim-handoff` moves the
+        # handoff past `awaiting_gate`, the one state both gate-repair
+        # verbs (`gate-recheck`, `gate-cascade-clear`) require. Sequenced
+        # strictly before `claim-handoff` via `directives[].depends_on`
+        # (`build_gate_recheck_directive`'s id names both `jgate` and this
+        # directive's own id in d2's depends_on — see that function's
+        # docstring). `_assert_in_repo_root`-bound like `claim-handoff`
+        # above; `cs_gate_recheck_handoff` itself has no `return_result`
+        # kwarg (unlike `cs_claim_handoff`/`cs_claim_memo_stamp`) — it
+        # already prints the real `handoff.transition` error to stderr on
+        # failure, so this handler surfaces a directive-scoped RuntimeError
+        # rather than inventing a second error-detail channel on a
+        # composed primitive this module does not own (archive_stamp.py is
+        # out of scope for this change).
+        if len(args) != 3:
+            raise UnrecognizedDirective(
+                "archive-stamp-cli gate-recheck: expected 2 arguments (<handoff_path> <at>)"
+            )
+        handoff_path = _assert_in_repo_root(Path(args[1]), repo_root)
+        at = args[2]
+        # Review: staff-eng — cs_gate_recheck_handoff's real refusal reason
+        # (handoff.transition's MutateAbort text) only ever reached
+        # sys.stderr; capture it here so it lands in report["error"] instead
+        # of being lost to a JSON-consuming caller. No guessed cause: there
+        # are several possible refusal reasons and naming one is a guess.
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                rc = cs_gate_recheck_handoff(str(handoff_path), at=at, cleared=True)
+        finally:
+            # Review: coordinator:code-reviewer — an unexpected exception from
+            # cs_gate_recheck_handoff (anything the verb handler itself
+            # doesn't catch and convert to an error dict) used to propagate
+            # out of the `with` block before the captured buffer was ever
+            # flushed to real stderr, silently discarding the refusal detail
+            # this handler exists to surface. Flush unconditionally instead.
+            sys.stderr.write(buf.getvalue())
+        ok = _normalize_primitive_result(rc)
+        if not ok:
+            raise RuntimeError(
+                f"archive-stamp-cli gate-recheck {args[1]}: refused — "
+                f"{buf.getvalue().strip() or 'no detail on stderr'}"
+            )
+        return {"cli": "archive-stamp-cli", "verb": "gate-recheck", "handoff_path": args[1]}
 
     if verb == "restamp-execution-sha":
         # AC18 (chunk C9) — re-stamps `execution_authorized_sha` on the ONE

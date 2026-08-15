@@ -34,6 +34,7 @@ scratch/subagent-sandbox/bash-to-python-engine-migration/).
 from __future__ import annotations
 
 import argparse
+import ntpath
 import os
 import subprocess
 import sys
@@ -44,6 +45,46 @@ from coordinator_core.win_portability import is_executable
 
 _WINDOWS_PYORG_VERSIONS = ("313", "312", "311", "310")
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# Windowless (``/SUBSYSTEM:WINDOWS``) interpreter basenames -- a general-purpose
+# shim baked/resolved with one of these gives a child with a live stdin pipe a
+# null/invalid stdin handle. Shared between ``coordinator_core.install.substrate``
+# (``_resolve_baked_python_bin``) and ``coordinator_core.ops.ensure_python3_exe_shim``
+# (``_resolve_python_bin``) -- both bake/shim a general-purpose interpreter and both
+# need the same defense-in-depth rejection; lifted here as the one definition so
+# neither caller carries its own copy. See ``resolve_python_bin()``'s
+# ``prefer_windowless`` docstring for the general windowless-vs-console rationale,
+# and ``coordinator_core.install.substrate._resolve_baked_python_bin``'s docstring
+# for the originating incident.
+_WINDOWLESS_BASENAMES = ("pythonw.exe", "pyw.exe")
+
+
+def _console_sibling(windowless_path: str) -> str:
+    """Given a resolved windowless interpreter path (``...\\pythonw.exe``), return
+    the console sibling in the same install dir (``...\\python.exe``) if it exists
+    on disk, else ``""``. Pure filesystem lookup, no resolver re-invocation --
+    python.org installs always ship both binaries side by side, so this is cheaper
+    and more direct than re-running the resolver with a different preference."""
+    # `windowless_path` is a WINDOWS-shaped path string (baked/resolved for a
+    # Windows target), parsed here regardless of the host running this code --
+    # `os.path` is bound to the HOST's flavour at interpreter start (`posixpath`
+    # on a POSIX dev box), so it silently mis-splits a backslash path. `ntpath`
+    # is the explicit, host-independent flavour selection, mirroring the
+    # precedent in `coordinator_core.win_portability` (see that module's own
+    # docstring). `os.path.isfile` stays as-is below: that call dereferences the
+    # real filesystem, which only ever happens against a real path on the host
+    # actually running this code (and is mocked outright in the tests exercising
+    # this branch on a non-Windows dev box) -- a host-local check, not a
+    # Windows-path parse, so it correctly keeps host semantics.
+    directory = ntpath.dirname(windowless_path)
+    basename = ntpath.basename(windowless_path).lower()
+    if basename == "pythonw.exe":
+        sibling = ntpath.join(directory, "python.exe")
+    elif basename == "pyw.exe":
+        sibling = ntpath.join(directory, "py.exe")
+    else:
+        return ""
+    return sibling if os.path.isfile(sibling) else ""
 
 # ---------------------------------------------------------------------------
 # per-process memoization -- see resolve_python_bin's "highest per-invocation
@@ -324,6 +365,38 @@ def resolve_python_bin(prefer_windowless: bool = True) -> Tuple[str, List[str]]:
 
     if _is_windows():
         return _resolve_windows(prefer_windowless)
+    return _resolve_non_windows()
+
+
+def resolve_machine_python_bin(prefer_windowless: bool = True) -> Tuple[str, List[str]]:
+    """Resolve the OS-detect ("machine") tier ONLY -- deliberately skipping
+    both pin tiers (``COORDINATOR_PYTHON`` env var, ``machine-local get
+    coordinator.python``) that ``resolve_python_bin()`` checks first.
+
+    This exists as PUBLIC API, not as an inlined call to the private
+    ``_resolve_windows``/``_resolve_non_windows`` helpers, because the
+    coordinator venv the pin tiers can resolve to is a SHARED MUTABLE TREE
+    rebuilt under live sessions (50-70 concurrent on this machine) -- a
+    caller resolving a hook command's interpreter must never resolve through
+    that pin, on pain of baking a path that can vanish mid-rebuild out from
+    under it. Do NOT "simplify" this back into a call to
+    ``resolve_python_bin()`` or back into direct private-helper access: both
+    reintroduce the coupling this function exists to remove. See
+    ``docs/plans/2026-08-14-the-venv-fallback-stops-being-something.md`` C2.
+
+    ``prefer_windowless`` -- same parameter, same semantics, as
+    ``resolve_python_bin()``'s (see its docstring); this is the Windows
+    OS-detect probe order knob, meaningless on non-Windows (``_resolve_non_windows``
+    takes no such parameter). On non-Windows the value is silently dropped --
+    deliberate, mirroring ``resolve_python_bin()``'s own contract at this same
+    point, not an oversight.
+
+    Returns ``(python_bin, python_args)``; ``python_bin == ""`` means no
+    interpreter was found. Does NOT mutate ``PATH`` -- same contract as
+    ``resolve_python_bin()``.
+    """
+    if _is_windows():
+        return _resolve_windows(prefer_windowless=prefer_windowless)
     return _resolve_non_windows()
 
 

@@ -27,6 +27,13 @@ import pytest
 from coordinator_core.ops import verify_arch_audit_atlas_refresh as mod
 from coordinator_core.ops.verify_arch_audit_atlas_refresh import main
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # Fixture helpers

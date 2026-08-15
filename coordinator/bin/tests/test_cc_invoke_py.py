@@ -350,12 +350,17 @@ class TestRouteState2Success(unittest.TestCase):
         self.assertEqual(call_args[1], "-m")
         self.assertEqual(call_args[2], "coordinator_core.invoke")
         self.assertEqual(call_args[3], "queue.append")
+        # Params ride --params-file, NOT a positional argv arg — ARG_MAX-immune
+        # (see cc_invoke's own docstring's Params transport note). No positional
+        # params_json ever appears on argv for this call convention.
+        self.assertIn("--params-file", call_args)
+        self.assertNotIn("queue.append", call_args[4:])  # op itself only appears once, at index 3
         self.assertIn("--repo", call_args)
         repo_idx = call_args.index("--repo")
         self.assertEqual(call_args[repo_idx + 1], "/the/repo")
 
     def test_params_serialised_as_json(self) -> None:
-        """State-2: params dict is serialised to compact JSON before spawn."""
+        """State-2: params dict is serialised to compact JSON and written to --params-file."""
         success_envelope = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
         mock_proc = unittest.mock.Mock()
         mock_proc.returncode = 0
@@ -376,9 +381,103 @@ class TestRouteState2Success(unittest.TestCase):
             _mod.cc_invoke("op", {"foo": "bar", "n": 42}, "/repo")
 
         cmd = captured_calls[0][0][0]
-        params_arg = cmd[4]  # index: python3 -m coordinator_core.invoke OP PARAMS ...
-        parsed = json.loads(params_arg)
-        self.assertEqual(parsed, {"foo": "bar", "n": 42})
+        self.assertIn("--params-file", cmd)
+
+    def test_params_file_content_readable_during_spawn(self) -> None:
+        """State-2: --params-file's content is the exact compact-JSON params, readable
+        at the moment subprocess.run is invoked (before cc_invoke's finally unlinks it)."""
+        success_envelope = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+        mock_proc = unittest.mock.Mock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = success_envelope
+        mock_proc.stderr = ""
+
+        captured_params: list[Any] = []
+
+        def _capture(*args: Any, **kwargs: Any) -> Any:
+            cmd = args[0]
+            params_path = cmd[cmd.index("--params-file") + 1]
+            with open(params_path, "r", encoding="utf-8") as f:
+                captured_params.append(json.load(f))
+            return mock_proc
+
+        with (
+            unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
+            unittest.mock.patch.object(_mod, "_seam_present", return_value=True),
+            unittest.mock.patch("subprocess.run", side_effect=_capture),
+        ):
+            _mod.cc_invoke("op", {"foo": "bar", "n": 42}, "/repo")
+
+        self.assertEqual(captured_params, [{"foo": "bar", "n": 42}])
+
+    def test_large_params_argv_stays_bounded_and_roundtrips(self) -> None:
+        """A several-thousand-path params payload never lands on argv (bounded argv
+        length) and round-trips byte-equal via --params-file — the shape this facade
+        exists to guarantee once Windows CreateProcess's 32767-char argv cap is in play."""
+        paths = [f"some/repo/relative/path/file_{i:05d}.py" for i in range(4000)]
+        big_params = {"paths": paths, "op_field": "value"}
+        success_envelope = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+        mock_proc = unittest.mock.Mock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = success_envelope
+        mock_proc.stderr = ""
+
+        captured_calls: list[Any] = []
+        captured_params: list[Any] = []
+
+        def _capture(*args: Any, **kwargs: Any) -> Any:
+            cmd = args[0]
+            captured_calls.append(cmd)
+            params_path = cmd[cmd.index("--params-file") + 1]
+            with open(params_path, "r", encoding="utf-8") as f:
+                captured_params.append(json.load(f))
+            return mock_proc
+
+        with (
+            unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
+            unittest.mock.patch.object(_mod, "_seam_present", return_value=True),
+            unittest.mock.patch("subprocess.run", side_effect=_capture),
+        ):
+            _mod.cc_invoke("fleet.publish", big_params, "/repo")
+
+        cmd = captured_calls[0]
+        argv_total_len = sum(len(str(a)) for a in cmd)
+        # Well under the Windows 32767 CreateProcess cap — the whole point is the
+        # payload (hundreds of KB of paths) never rides argv at all.
+        self.assertLess(argv_total_len, 2000)
+        for arg in cmd:
+            self.assertNotIn("file_00000.py", arg)  # no path fragment ever lands on argv
+        self.assertEqual(captured_params, [big_params])  # byte-equal round-trip via the file
+
+    def test_params_file_cleaned_up(self) -> None:
+        """The --params-file temp file is unlinked after cc_invoke returns (no scratch leak)."""
+        success_envelope = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})
+        mock_proc = unittest.mock.Mock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = success_envelope
+        mock_proc.stderr = ""
+
+        seen_paths: list[str] = []
+
+        def _run(*args: Any, **kwargs: Any) -> Any:
+            cmd = args[0]
+            pf = cmd[cmd.index("--params-file") + 1]
+            seen_paths.append(pf)
+            self.assertTrue(os.path.exists(pf), "params file must exist during the spawn")
+            return mock_proc
+
+        with (
+            unittest.mock.patch.object(_mod, "_resolve_claude_klabauter_root", return_value="/fake/mr"),
+            unittest.mock.patch.object(_mod, "_seam_present", return_value=True),
+            unittest.mock.patch("subprocess.run", side_effect=_run),
+        ):
+            _mod.cc_invoke("op", {"a": 1}, "/repo")
+
+        self.assertEqual(len(seen_paths), 1)
+        self.assertFalse(
+            os.path.exists(seen_paths[0]),
+            "params file must be unlinked after cc_invoke returns",
+        )
 
     def test_claude_klabauter_root_in_subprocess_env(self) -> None:
         """State-2: subprocess env has CLAUDE_KLABAUTER_ROOT set and PYTHONPATH prepended."""

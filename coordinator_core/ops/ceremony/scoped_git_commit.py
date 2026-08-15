@@ -121,6 +121,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import time
 import uuid
@@ -774,6 +775,27 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                          that does not resolve to a real
                                          artifact is rejected downstream, not
                                          here.
+        stage_patch    (str, optional) — C3 (docs/plans/2026-08-14-the-tool-
+                                         stages-what-it-commits.md): a path to
+                                         a patch file. The tool stages what it
+                                         commits -- when given, this path is
+                                         validated (must exist and be
+                                         readable) BEFORE anything mutates,
+                                         then forwarded to `run_commit_
+                                         pipeline()`, which applies it under a
+                                         process-private temporary index
+                                         (never the shared repo index) and
+                                         commits exactly the resulting blobs
+                                         for every named path the patch
+                                         covers -- provenance by construction,
+                                         never by asking who a session is
+                                         (this plan's own anti-scope). A named
+                                         path the patch does NOT cover still
+                                         takes today's ordinary staged-or-
+                                         worktree route (AC4, additive per-
+                                         path) -- see `unprovenanced_paths`
+                                         below for how that mixed shape is
+                                         named on the response.
 
     Returns:
         {
@@ -841,6 +863,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "truncated": bool,      # True iff count exceeds len(paths) above
           }
 
+        Conditionally present (AC4, C3, docs/plans/2026-08-14-the-tool-
+        stages-what-it-commits.md; never a silent drop -- mirrors
+        `worktree_excluded`'s own posture): present whenever `stage_patch`
+        was supplied and at least one named path was NOT covered by the
+        patch -- that subset took today's ordinary staged-or-worktree route
+        instead, unprovenanced:
+          "unprovenanced_paths": [str, ...]
+
     On a validation error (missing/empty required param):
         {"committed": False, "sha": None, "pushed": None, "error": str}
 
@@ -869,6 +899,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     message = params.get("message")
     prose_raw = params.get("prose", "")
     deliverable_id_raw = params.get("deliverable_id")
+    stage_patch_raw = params.get("stage_patch")
 
     # AC3/AC11 (C3): the required-param and `deliverable_id`-shape checks
     # below (through the `not message` check) are malformed-REQUEST
@@ -932,6 +963,48 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "pushed": None,
             "error": "ceremony.scoped_git_commit: rejected -- %s" % (path_shaped,),
         }
+
+    # AC1/AC3 (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md):
+    # `stage_patch`, when given, must be a readable file -- validated BEFORE
+    # anything mutates (before staging or any git call below), same posture
+    # as every other validation guard above. A missing/unreadable patch
+    # refuses loudly and early rather than surfacing only once `commit()`'s
+    # own `git apply --cached` fails deep inside the pipeline.
+    stage_patch: Optional[str] = None
+    if stage_patch_raw is not None:
+        if not isinstance(stage_patch_raw, str) or not stage_patch_raw.strip():
+            return {
+                "committed": False,
+                "sha": None,
+                "pushed": None,
+                "error": (
+                    "ceremony.scoped_git_commit: 'stage_patch' param must be a "
+                    "non-empty string path when given"
+                ),
+            }
+        stage_patch = normalize_native_path(stage_patch_raw)
+        if not Path(stage_patch).is_file():
+            return {
+                "committed": False,
+                "sha": None,
+                "pushed": None,
+                "error": (
+                    "ceremony.scoped_git_commit: 'stage_patch' path does not "
+                    "exist or is not a file: %s" % (stage_patch,)
+                ),
+            }
+        try:
+            Path(stage_patch).open("r", encoding="utf-8").close()
+        except OSError as exc:
+            return {
+                "committed": False,
+                "sha": None,
+                "pushed": None,
+                "error": (
+                    "ceremony.scoped_git_commit: 'stage_patch' path is not "
+                    "readable: %s (%s)" % (stage_patch, exc)
+                ),
+            }
 
     worktree_root = normalize_native_path(worktree_root_raw)
     paths: List[str] = [str(p) for p in paths_raw]
@@ -1018,6 +1091,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         stage_paths=paths,
         caller_paths=set(paths),
         deliverable_id=deliverable_id_raw,
+        stage_patch=stage_patch,
     )
 
     response: Dict[str, Any] = {
@@ -1153,6 +1227,21 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # `commit_paths`, so the op no-ops while leaving the caller's files
             # staged on a shared branch).
             response["reason"] = "empty-commit-set"
+        elif getattr(result, "reason", ""):
+            # AC7 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md,
+            # C3): the pipeline's own machine-readable failure tag --
+            # "patch-did-not-apply", "head-blob-cas-refusal", "index-head-
+            # cas-refusal", or "commit-failure" -- mirrored verbatim so a
+            # caller (the CLI included) can key a distinct exit path off
+            # `reason` rather than parsing `diagnostics` prose. Never set
+            # here for the `empty_commit_set` no-op above -- that reason is
+            # decided one layer up (this function's own `_classify_
+            # uncommitted`), which alone has the `git status` probe that
+            # distinction needs; a stale `CommitOutcome.reason` left over
+            # from a prior gate must never leak through as this call's
+            # reason once `_classify_uncommitted` has already reclassified
+            # it as benign.
+            response["reason"] = result.reason
     # `result.integrity_breach` is derived by the pipeline as "committed locally
     # AND pushed is False", which over-fires wherever something other than this
     # op's own push step does the pushing -- a post-commit auto-push hook wins
@@ -1195,6 +1284,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "worktree edits to %s were NOT included -- the staged (index) "
             "version was committed instead" % (", ".join(worktree_excluded),)
         )
+
+    # AC4 (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md):
+    # never a silent drop, mirroring `worktree_excluded`'s own posture --
+    # surfaced unconditionally on both the committed and uncommitted
+    # branches, omitted entirely when `stage_patch` was never supplied or
+    # every named path was covered by the patch. Named explicitly rather
+    # than left for the caller to infer from absence: a mixed invocation is
+    # provenanced for some paths and worktree-sourced for others in the SAME
+    # commit, and the plan's own headline claim would be false-by-omission
+    # per-invocation without this.
+    unprovenanced_paths = list(getattr(result, "unprovenanced_paths", ()) or ())
+    if unprovenanced_paths:
+        response["unprovenanced_paths"] = unprovenanced_paths
 
     # Never silent (2026-08-12 fix, see `_collect_untracked_omitted`'s own
     # docstring): surfaced unconditionally, on both the committed and
@@ -1277,6 +1379,26 @@ def _declined_paths(result: PipelineResult) -> List[Dict[str, str]]:
     return declined
 
 
+#: Mirrors `coordinator/bin/scoped-git-commit`'s own `_BARE_EXIT_CODE_RE`
+#: (independently defined here, not imported, so this module carries no
+#: coupling to that CLI's actively-changing internals): `commit_pipeline.
+#: commit()`'s `not result.ok` branch (the "nothing to commit" no-op)
+#: deliberately leaves `CommitOutcome.stderr` in EXACTLY this bare
+#: `exit_code=N` shape when git itself printed nothing diagnostic to either
+#: stream (confirmed empirically, see that branch's own comment) -- any
+#: OTHER stderr content on that same `not result.ok` branch is real git/hook
+#: diagnostic text (`condense_git_diagnostic(result.stderr)`), which a
+#: rejecting `pre-commit`/`commit-msg` hook populates. Review: code-reviewer
+#: -- Finding [P3], 2026-08-15 (chain-ancestry slice): `_classify_
+#: uncommitted`'s prior `exit_code == 1`-only reclassifier could not
+#: distinguish a genuine no-op from a hook rejection that happened to leave
+#: the pathspec byte-identical to HEAD (the porcelain probe alone cannot
+#: tell those apart). Gating reclassification on this bare-shape match closes
+#: that residual: a hook that prints ANY rejection text is never laundered
+#: into the benign no-op, whatever the porcelain probe reports.
+_BARE_EXIT_CODE_STDERR_RE = re.compile(r"^exit_code=\d+$")
+
+
 def _classify_uncommitted(
     worktree_root: str,
     paths: List[str],
@@ -1310,7 +1432,41 @@ def _classify_uncommitted(
       - only when the COMMIT STEP itself ran and returned non-zero (a gate or
         staging failure leaves `result.commit` None and is never reclassified);
       - only when nothing landed;
-      - a git that cannot answer stays `commit_failed=True`.
+      - a git that cannot answer stays `commit_failed=True`;
+      - only when the commit step's `exit_code` is the POSITIVE code `git
+        commit` itself returns (1, on its own "nothing to commit" no-op) --
+        never a negative sentinel. `git_native.py` uses `returncode=-1`
+        uniformly for a PYTHON-SIDE refusal that never asked `git commit` to
+        run at all (a compare-and-swap refusal in `_agree_branch_cas_
+        refusal`, a subprocess that never started) -- `commit_scoped()`'s CAS
+        refusal is exactly this shape (2026-08-14,
+        state/audits/2026-08-14-scoped-commit-partial-stage-sweep.md): a
+        loud, diagnostic-bearing refusal that must never be read as "maybe
+        already committed". Reclassifying it here on the strength of
+        `_commit_paths_are_clean()`'s own case-sensitive `git status
+        --porcelain` probe silently swallowed it back into the SAME benign
+        no-op an ordinary idempotent re-commit produces -- the refusal's
+        `stderr` never has a way to reach the caller once that happens.
+        Narrowing `reclassifiable` to `exit_code == 1` leaves the ordinary
+        idempotent-re-commit case (which always surfaces as exit_code 1)
+        classified exactly as before, and leaves every non-1 commit-step
+        failure -- including this CAS refusal, and any other -1 sentinel --
+        `commit_failed=True` all the way out to the CLI, which already
+        renders any non-bare `diagnostics` entry as a REFUSED verdict (see
+        `coordinator/bin/scoped-git-commit`'s `_explanatory_diagnostics`);
+      - only when `result.commit.stderr` is ALSO exactly the bare
+        `exit_code=N` shape (`_BARE_EXIT_CODE_STDERR_RE`) `commit()` leaves
+        it in on the genuine no-op. `exit_code == 1` alone is not sufficient:
+        a rejecting `pre-commit`/`commit-msg` hook also conventionally exits
+        1, and while the ordinary hook-rejection case is caught by the
+        `_commit_paths_are_clean()` porcelain probe below (a rejected hook
+        normally leaves the pathspec still dirty), a hook that reverts its
+        own edits on failure -- leaving the tree byte-identical to HEAD --
+        would pass that probe too. Any real diagnostic text on `stderr`
+        (which a rejecting hook populates) fails this shape check and keeps
+        `commit_failed=True`, whatever the porcelain probe says. See
+        `test_classify_uncommitted_hook_rejection_with_clean_tree_stays_
+        failed` for the pinned case.
 
     Still earns its keep post-W3 (docs/plans/2026-08-08-a-landed-commit-
     reported-as-failed.md): this probe answers a DIFFERENT question than
@@ -1333,11 +1489,27 @@ def _classify_uncommitted(
     commit_failed = result.commit_failed
     diagnostics = list(result.diagnostics)
 
+    # Review: code-reviewer -- Finding [P3], 2026-08-15 (chain-ancestry
+    # slice). `exit_code == 1` alone conflates git's own "nothing to commit"
+    # no-op with a rejecting `pre-commit`/`commit-msg` hook (hooks
+    # conventionally also exit 1) -- the ordinary case is caught by the
+    # `_commit_paths_are_clean()` porcelain probe below (a hook rejection
+    # normally leaves the pathspec still dirty), but a hook that reverts its
+    # own edits on failure, leaving the tree byte-identical to HEAD, would
+    # pass that probe too. `_BARE_EXIT_CODE_STDERR_RE` closes the residual:
+    # `commit()`'s `not result.ok` branch leaves `CommitOutcome.stderr` in
+    # exactly this bare `exit_code=N` shape ONLY when git itself printed
+    # nothing diagnostic to either stream (the genuine no-op) -- any hook
+    # that rejects the commit populates real diagnostic text there instead
+    # (see `_BARE_EXIT_CODE_STDERR_RE`'s own comment), so requiring the bare
+    # shape here means a hook that prints ANY rejection text is never
+    # reclassified, regardless of what the porcelain probe reports.
     reclassifiable = (
         commit_failed
         and result.committed_sha is None
         and result.commit is not None
-        and result.commit.exit_code != 0
+        and result.commit.exit_code == 1
+        and bool(_BARE_EXIT_CODE_STDERR_RE.match((result.commit.stderr or "").strip()))
     )
     if reclassifiable and _commit_paths_are_clean(worktree_root, paths):
         return False, [], True

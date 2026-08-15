@@ -43,12 +43,10 @@ Coverage:
     (q) review_trail_b_adjudication_incomplete_is_critical
     (r) review_trail_complete_metadata_forwards_to_handler
 
-  render_handoff_tracker / refresh_roadmap_callout (STEP_2_75, 2026-07-22 C9
-  wiring-gap fix -- docs/plans/2026-07-16-wsc-pure-python-tail-rebuild.md § C9):
-    (s) render_handoff_tracker_writes_file        -- happy path: section text lands
-                                                      under the resolved state root
-    (t) render_handoff_tracker_failure_is_fail_open -- a renderer/state-root exception
-                                                        degrades to failed[], never raises
+  refresh_roadmap_callout (STEP_2_75, 2026-07-22 C9 wiring-gap fix -- docs/plans/
+  2026-07-16-wsc-pure-python-tail-rebuild.md § C9; its former render_handoff_tracker
+  sibling was retired 2026-08-14, see docs/plans/2026-08-14-retire-the-handoff-
+  tracker-and-project-tracker-renders.md § C2):
     (u) refresh_roadmap_callout_no_consumed_handoffs_is_clean_skip -- [] input -> skip,
                                                                        no subprocess call
     (v) refresh_roadmap_callout_missing_roadmap_id_skips_per_handoff -- a consumed handoff
@@ -58,34 +56,23 @@ Coverage:
     (x) refresh_roadmap_callout_handler_exception_is_failed -- refresh main() raising
                                                                  degrades to failed[]
 
-  render_handoff_tracker concurrency (C5, 2026-07-23 wsc-tail-slim-down, the Staff Engineer
-  finding 5 -- atomic write + single-flight guard):
-    (y) render_handoff_tracker_write_is_atomic_no_temp_file_left -- happy path leaves
-        no stray `.tmp`/`.lock` file behind, only the final `handoff-tracker.md`
-    (z) render_handoff_tracker_concurrent_render_is_clean_skip -- a pre-existing
-        `.lock` file for the same target makes a second render a clean skip[],
-        never a failure, and never touches the (simulated in-flight) target file
-
   fire_tracker_and_roadmap_detached (C5, 2026-07-23 wsc-tail-slim-down -- detached
-  replacement for the BLOCKING render_handoff_tracker/refresh_roadmap_callout calls;
-  mirrors fire_archive_sweeps_detached's C2 shape):
-    (aa) fire_tracker_and_roadmap_detached_spawns_tracker_and_per_roadmap_callout --
-         the tracker CLI fires unconditionally; the roadmap-callout CLI fires once
-         per distinct allowlist-valid roadmap_id found in consumed_handoff_paths
+  replacement for the BLOCKING refresh_roadmap_callout call; mirrors
+  fire_archive_sweeps_detached's C2 shape; its tracker-CLI leg was retired
+  2026-08-14 along with `render-handoff-tracker.py`):
+    (aa) fire_tracker_and_roadmap_detached_spawns_per_roadmap_callout -- the
+         roadmap-callout CLI fires once per distinct allowlist-valid roadmap_id
+         found in consumed_handoff_paths
     (bb) fire_tracker_and_roadmap_detached_no_roadmap_ids_is_clean_skip -- no
          consumed handoff carries a roadmap_id -> skipped[], zero callout spawns
     (cc) fire_tracker_and_roadmap_detached_dedupes_roadmap_ids -- two consumed
          handoffs sharing one roadmap_id fire the callout CLI only once
     (dd) fire_tracker_and_roadmap_detached_records_spawn_failure -- a spawn_detached()
-         False return for either CLI lands in failed[], the other still fires
+         False return for the callout CLI lands in failed[]
 
-  housekeeping-liveness wiring (C17b follow-up -- the four missing `stamp_liveness`
+  housekeeping-liveness wiring (C17b follow-up -- the missing `stamp_liveness`
   call sites; see housekeeping_liveness.py's own module docstring for the
   three-state contract these calls feed):
-    (ee) render_handoff_tracker_success_stamps_tracker_regen -- happy-path write
-         stamps TRACKER_REGEN
-    (ff) render_handoff_tracker_failure_does_not_stamp -- the fail-open exception
-         branch leaves TRACKER_REGEN unstamped
     (gg) refresh_roadmap_callout_success_stamps_roadmap_callout -- at least one
          acted[] entry stamps ROADMAP_CALLOUT
     (hh) refresh_roadmap_callout_all_skipped_does_not_stamp -- an all-skipped pass
@@ -103,6 +90,7 @@ Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C17b (liveness call 
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -475,6 +463,56 @@ def test_review_trail_b_adjudication_incomplete_is_critical(tmp_path):
     assert "b_adjudication present but review_trail missing" in result["failed_critical"][0]
 
 
+def test_review_trail_partition_mandatory_incomplete_is_critical(tmp_path):
+    """D, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-silently.md:
+    `partition_mandatory` is `b_adjudication_present`'s sibling gate — a resolved
+    `decide_review_scale` row 4/6 with no complete review_trail metadata must also be
+    `failed_critical`, not the ordinary `no-review-metadata` skip."""
+    common_dir = _make_common_dir(tmp_path)
+    result = _run(
+        tail_ops.write_review_trail(
+            common_dir,
+            review_trail=None,
+            partition_mandatory=True,
+        )
+    )
+    assert result["acted"] == []
+    assert result["skipped"] == []
+    assert result["failed"] == []
+    assert len(result["failed_critical"]) == 1
+    assert "partition_mandatory resolved but review_trail missing" in result["failed_critical"][0]
+
+
+def test_review_trail_partition_mandatory_false_and_no_adjudication_is_ordinary_skip(tmp_path):
+    """Neither gate set → the pre-existing ordinary no-review-this-session skip,
+    unchanged — D is additive, never a stricter default for the common close."""
+    common_dir = _make_common_dir(tmp_path)
+    result = _run(
+        tail_ops.write_review_trail(common_dir, review_trail=None, partition_mandatory=False)
+    )
+    assert result["failed"] == []
+    assert "failed_critical" not in result
+    assert result["skipped"] == [f"{tail_ops.OP_REVIEW_TRAIL}:no-review-metadata"]
+
+
+def test_review_trail_many_partition_mandatory_no_qualifying_entries_is_critical(tmp_path):
+    """`write_review_trail_many`'s sibling of the single-record test above — an
+    empty/all-incomplete list with `partition_mandatory=True` must also be critical."""
+    common_dir = _make_common_dir(tmp_path)
+    result = _run(
+        tail_ops.write_review_trail_many(
+            common_dir,
+            review_trail_list=[{"sha_range": "abc..def"}],  # missing required fields
+            partition_mandatory=True,
+        )
+    )
+    assert result["acted"] == []
+    assert result["skipped"] == []
+    assert result["failed"] == []
+    assert len(result["failed_critical"]) == 1
+    assert "partition_mandatory resolved but review_trail (list) had no" in result["failed_critical"][0]
+
+
 def test_review_trail_complete_metadata_forwards_to_handler(tmp_path):
     common_dir = _make_common_dir(tmp_path)
     forwarded = {}
@@ -593,81 +631,144 @@ def test_write_review_trail_many_one_refused_slice_does_not_suppress_siblings(tm
     assert "foreign..range" in result["failed_critical"][0] or "refused" in result["failed_critical"][0]
 
 
-# ---------------------------------------------------------------------------
-# render_handoff_tracker / refresh_roadmap_callout (STEP_2_75, C9 wiring-gap fix)
-# ---------------------------------------------------------------------------
+def test_write_review_trail_many_17_slices_run_concurrently_not_n_times_serial(tmp_path):
+    """KPI regression (2026-08-15, docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-
+    budget.md): measured on a real `/workstream-complete` pass, 17
+    `--review-slice` records drove `write_review_trail_many`'s BLOCKING path
+    to >30s (the global dispatch guard tripped twice) -- 17.8s of that was
+    reproduced here in isolation, sequentially, on a tiny synthetic repo
+    with no real contention, confirming the dominant cost was per-slice
+    SUBPROCESS-SPAWN latency (`review_trail_write._guard_foreign_session_
+    range` + `_own_session_touched_paths_and_untrailered_flag`, each
+    genuinely re-derived per slice since every slice names a DIFFERENT
+    sha_range), not git's own walk cost over the tiny fixture data.
 
+    Fix: `write_review_trail_many` now fires all qualifying slices'
+    `write_review_trail` calls CONCURRENTLY (`asyncio.gather`) rather than
+    sequentially -- each slice's own op call never raises (see that
+    function's own docstring), so `asyncio.gather`'s default
+    `return_exceptions=False` cannot let one slice suppress a sibling; the
+    per-slice failure-isolation property `write_review_trail_many`'s own
+    docstring requires is unaffected, only wall clock changes.
 
-def test_render_handoff_tracker_writes_file(tmp_path):
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir()
-    state_root = tmp_path / "repo" / "state"
+    This test pins the CONCURRENCY property STRUCTURALLY, by observing peak
+    in-flight overlap rather than wall clock. An earlier version asserted a
+    timing budget (``elapsed < 5 * _PER_SLICE_DELAY``) and was flaky exactly
+    as predicted: it passed in isolation and failed in the full-file run on
+    this box's stated load norm of 50-70 concurrent LLMs, because a wall-clock
+    bound measures the scheduler as much as the code. A pin that fails under
+    load teaches the next person to re-run until green, which is worse than no
+    pin at all -- so the assertion is now on max concurrent in-flight calls,
+    which is exactly the property under test and is unaffected by how slowly
+    the box happens to be running.
 
-    with (
-        patch(
-            "coordinator_core.ops.ceremony.renderers.render_repo_section",
-            return_value="## Handoffs\n\nno active handoffs.",
-        ),
-        patch(
-            "coordinator_core.state_root.coordinator_state_root",
-            return_value=str(state_root),
-        ),
-    ):
-        result = tail_ops.render_handoff_tracker(worktree_root)
+    Sequential awaiting yields max_in_flight == 1; `asyncio.gather` yields
+    max_in_flight == n_slices. There is no load condition under which those
+    two are confusable.
+    """
+    common_dir = _make_common_dir(tmp_path)
+    _PER_SLICE_DELAY = 0.05
+    n_slices = 17
 
-    assert result == {
-        "acted": [tail_ops.OP_HANDOFF_TRACKER], "skipped": [], "failed": [],
-        "handoff_tracker_path": "state/handoff-tracker.md",
-    }
-    out_path = state_root / "handoff-tracker.md"
-    assert out_path.is_file()
-    content = out_path.read_text(encoding="utf-8")
-    assert "# Handoff Tracker" in content
-    assert "no active handoffs." in content
+    slices = [
+        {
+            "sha_range": f"sha{i}~1..sha{i}",
+            "reviewer": "staff-eng",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 10,
+        }
+        for i in range(n_slices)
+    ]
 
+    in_flight = 0
+    max_in_flight = 0
 
-def test_render_handoff_tracker_outside_worktree_omits_stage_path(tmp_path):
-    """A central (meta-repo) state root outside worktree_root -- e.g. Claude-klabauter's own
-    state tree -- writes successfully but carries NO `handoff_tracker_path`, since
-    the artifact lands in a DIFFERENT git repo and is never dirty in THIS worktree
-    (nothing for the caller to stage)."""
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir()
-    central_state_root = tmp_path / "elsewhere" / "state"
+    async def _handler(params: dict, repo_root=None) -> dict:
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        try:
+            await asyncio.sleep(_PER_SLICE_DELAY)
+        finally:
+            in_flight -= 1
+        return {"out_path": f"state/review-trail/{params['sha_range']}.json"}
 
-    with (
-        patch(
-            "coordinator_core.ops.ceremony.renderers.render_repo_section",
-            return_value="## Handoffs\n\nno active handoffs.",
-        ),
-        patch(
-            "coordinator_core.state_root.coordinator_state_root",
-            return_value=str(central_state_root),
-        ),
-    ):
-        result = tail_ops.render_handoff_tracker(worktree_root)
+    with patch.object(tail_ops, "get_op_handler", return_value=_handler):
+        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
 
-    assert result["acted"] == [tail_ops.OP_HANDOFF_TRACKER]
     assert result["failed"] == []
-    assert "handoff_tracker_path" not in result
-    assert (central_state_root / "handoff-tracker.md").is_file()
+    assert "failed_critical" not in result
+    assert len(result["acted"]) == n_slices
+
+    assert max_in_flight == n_slices, (
+        f"peak in-flight was {max_in_flight}, expected {n_slices} -- "
+        "the slices are not overlapping, which is a regression back to "
+        "sequential per-slice awaiting"
+    )
 
 
-def test_render_handoff_tracker_failure_is_fail_open(tmp_path):
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir()
+def test_write_review_trail_many_batches_attribution_context_once_not_n_times(tmp_path):
+    """C1/C2 pin (docs/plans/2026-08-15-the-review-trail-write-stops-paying-
+    n-wa.md): `write_review_trail_many` must call `review_trail_write.
+    build_batch_attribution_context` exactly ONCE per batch, not once per
+    slice -- the whole point of C1 is that the identical-or-batchable
+    per-slice lookups (is-inside-work-tree, deliverable-id, P2 attribution
+    window/grep) are computed once and reused, not re-derived per slice. A
+    future edit that reintroduces per-slice re-derivation (e.g. moving the
+    call inside the loop/gather) fails THIS test deterministically, rather
+    than only showing up as a slow stopwatch under machine load.
 
-    with patch(
-        "coordinator_core.ops.ceremony.renderers.render_repo_section",
-        side_effect=RuntimeError("boom"),
-    ):
-        result = tail_ops.render_handoff_tracker(worktree_root)
+    Also pins that every slice's own `write_review_trail` call receives the
+    SAME batch_context object -- the whole point is reuse, not a
+    per-slice-fresh-but-still-single-call context.
+    """
+    common_dir = _make_common_dir(tmp_path)
+    n_slices = 17
+    slices = [
+        {
+            "sha_range": f"sha{i}~1..sha{i}",
+            "reviewer": "staff-eng",
+            "scope": "chain",
+            "verdict": "ok",
+            "diff_loc": 10,
+        }
+        for i in range(n_slices)
+    ]
 
-    assert result["acted"] == []
-    assert result["skipped"] == []
-    assert len(result["failed"]) == 1
-    assert tail_ops.OP_HANDOFF_TRACKER in result["failed"][0]
-    assert "RuntimeError" in result["failed"][0]
+    sentinel_context = {"is_work_tree_rc": 0, "marker": "batch-context-sentinel"}
+    build_calls: list = []
+    received_contexts: list = []
+
+    def fake_build(caller_worktree, sha_ranges):
+        build_calls.append((caller_worktree, tuple(sha_ranges)))
+        return sentinel_context
+
+    async def fake_write(common_dir, entry, *, b_adjudication_present=False, _batch_context=None):
+        received_contexts.append(_batch_context)
+        return {"acted": [entry["sha_range"]], "skipped": [], "failed": [], "failed_critical": []}
+
+    with patch.object(
+        tail_ops._review_trail_write_mod, "build_batch_attribution_context", fake_build,
+    ), patch.object(tail_ops, "write_review_trail", fake_write):
+        result = _run(tail_ops.write_review_trail_many(common_dir, slices))
+
+    assert len(build_calls) == 1, (
+        f"build_batch_attribution_context called {len(build_calls)} times for "
+        f"{n_slices} slices -- expected exactly 1 (batched once), not once per slice"
+    )
+    assert build_calls[0][1] == tuple(entry["sha_range"] for entry in slices)
+    assert len(received_contexts) == n_slices
+    assert all(ctx is sentinel_context for ctx in received_contexts)
+    assert result["failed"] == []
+    assert "failed_critical" not in result
+
+
+# ---------------------------------------------------------------------------
+# refresh_roadmap_callout (STEP_2_75, C9 wiring-gap fix; its former
+# render_handoff_tracker sibling was retired 2026-08-14, see
+# docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md C2)
+# ---------------------------------------------------------------------------
 
 
 def test_refresh_roadmap_callout_no_consumed_handoffs_is_clean_skip(tmp_path):
@@ -780,76 +881,6 @@ def test_refresh_roadmap_callout_handler_exception_is_failed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# render_handoff_tracker concurrency -- atomic write + single-flight guard (C5)
-# ---------------------------------------------------------------------------
-
-
-def test_render_handoff_tracker_write_is_atomic_no_temp_file_left(tmp_path):
-    """Happy path: only the final `handoff-tracker.md` (plus the housekeeping-liveness
-    stamp -- C17b follow-up, TRACKER_REGEN's success-path `stamp_liveness` call) lands
-    on disk -- no stray `.tmp` (atomic-rename scratch file) or `.lock` (single-flight
-    guard) file is left behind after a successful render."""
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir()
-    (worktree_root / ".git").mkdir()
-    state_root = tmp_path / "repo" / "state"
-
-    with (
-        patch(
-            "coordinator_core.ops.ceremony.renderers.render_repo_section",
-            return_value="## Handoffs\n\nno active handoffs.",
-        ),
-        patch(
-            "coordinator_core.state_root.coordinator_state_root",
-            return_value=str(state_root),
-        ),
-    ):
-        result = tail_ops.render_handoff_tracker(worktree_root)
-
-    assert result["failed"] == []
-    entries = sorted(p.name for p in state_root.iterdir())
-    assert entries == ["handoff-tracker.md", "housekeeping-liveness.json"]
-
-
-def test_render_handoff_tracker_concurrent_render_is_clean_skip(tmp_path):
-    """A pre-existing `.lock` file for the same target path (simulating a
-    concurrent in-flight render) makes this call a clean single-flight skip --
-    never a failure, and the target file is left untouched (never opened for
-    write, per the O_CREAT|O_EXCL guard firing before the renderer output is
-    computed... rendering itself already happened by then, so this asserts on
-    the WRITE step specifically: the pre-existing target content is preserved)."""
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir()
-    state_root = tmp_path / "repo" / "state"
-    state_root.mkdir(parents=True)
-    out_path = state_root / "handoff-tracker.md"
-    out_path.write_text("PRE-EXISTING CONTENT\n", encoding="utf-8")
-    lock_path = state_root / "handoff-tracker.md.lock"
-    lock_path.write_text("", encoding="utf-8")
-
-    with (
-        patch(
-            "coordinator_core.ops.ceremony.renderers.render_repo_section",
-            return_value="## Handoffs\n\nno active handoffs.",
-        ),
-        patch(
-            "coordinator_core.state_root.coordinator_state_root",
-            return_value=str(state_root),
-        ),
-    ):
-        result = tail_ops.render_handoff_tracker(worktree_root)
-
-    assert result["acted"] == []
-    assert result["failed"] == []
-    assert result["skipped"] == [f"{tail_ops.OP_HANDOFF_TRACKER}:render-in-flight"]
-    # The in-flight lock holder owns the write -- this caller must not have
-    # clobbered the pre-existing target content.
-    assert out_path.read_text(encoding="utf-8") == "PRE-EXISTING CONTENT\n"
-    # This call never created/removed the lock -- it saw it already there.
-    assert lock_path.is_file()
-
-
-# ---------------------------------------------------------------------------
 # fire_tracker_and_roadmap_detached (C5, 2026-07-23 wsc-tail-slim-down)
 # ---------------------------------------------------------------------------
 
@@ -866,7 +897,7 @@ def _write_handoff(worktree_root: Path, name: str, roadmap_id: str | None) -> st
     return f"state/handoffs/{name}"
 
 
-def test_fire_tracker_and_roadmap_detached_spawns_tracker_and_per_roadmap_callout(tmp_path):
+def test_fire_tracker_and_roadmap_detached_spawns_per_roadmap_callout(tmp_path):
     worktree_root = tmp_path
     rel_path = _write_handoff(worktree_root, "2026-07-23-a.md", "goal-example")
 
@@ -879,20 +910,15 @@ def test_fire_tracker_and_roadmap_detached_spawns_tracker_and_per_roadmap_callou
     with patch.object(tail_ops, "spawn_detached", side_effect=_fake_spawn) as mock_spawn:
         result = tail_ops.fire_tracker_and_roadmap_detached(worktree_root, [rel_path])
 
-    assert mock_spawn.call_count == 2
+    assert mock_spawn.call_count == 1
     fired_scripts = [Path(script_path).name for _repo_root, script_path, _args in spawned]
-    assert fired_scripts == ["render-handoff-tracker.py", "refresh-roadmap-callout.py"]
+    assert fired_scripts == ["refresh-roadmap-callout.py"]
 
-    tracker_call = spawned[0]
-    assert tracker_call[0] == str(worktree_root)
-    assert tracker_call[2] == (str(worktree_root),)
-
-    callout_call = spawned[1]
+    callout_call = spawned[0]
     assert callout_call[0] == str(worktree_root)
     assert callout_call[2] == ("--root", str(worktree_root), "goal-example")
 
     assert result["failed"] == []
-    assert f"detached_fire:render-handoff-tracker.py" in result["acted"]
     assert f"detached_fire:refresh-roadmap-callout.py:goal-example" in result["acted"]
 
 
@@ -903,8 +929,8 @@ def test_fire_tracker_and_roadmap_detached_no_roadmap_ids_is_clean_skip(tmp_path
     with patch.object(tail_ops, "spawn_detached", return_value=True) as mock_spawn:
         result = tail_ops.fire_tracker_and_roadmap_detached(worktree_root, [rel_path])
 
-    # Only the tracker CLI fires -- no roadmap-callout spawn.
-    assert mock_spawn.call_count == 1
+    # No roadmap id -- no spawn at all.
+    assert mock_spawn.call_count == 0
     assert result["failed"] == []
     assert "detached_fire:refresh-roadmap-callout.py:no-roadmap-id" in result["skipped"]
 
@@ -917,8 +943,8 @@ def test_fire_tracker_and_roadmap_detached_dedupes_roadmap_ids(tmp_path):
     with patch.object(tail_ops, "spawn_detached", return_value=True) as mock_spawn:
         result = tail_ops.fire_tracker_and_roadmap_detached(worktree_root, [rel_a, rel_b])
 
-    # Tracker (1) + exactly ONE roadmap-callout fire for the shared id (not two).
-    assert mock_spawn.call_count == 2
+    # Exactly ONE roadmap-callout fire for the shared id (not two).
+    assert mock_spawn.call_count == 1
     assert result["acted"].count("detached_fire:refresh-roadmap-callout.py:goal-example") == 1
 
 
@@ -926,58 +952,18 @@ def test_fire_tracker_and_roadmap_detached_records_spawn_failure(tmp_path):
     worktree_root = tmp_path
     rel_path = _write_handoff(worktree_root, "2026-07-23-a.md", "goal-example")
 
-    def _fake_spawn(repo_root, script_path, args):
-        return "render-handoff-tracker.py" not in script_path
-
-    with patch.object(tail_ops, "spawn_detached", side_effect=_fake_spawn) as mock_spawn:
+    with patch.object(tail_ops, "spawn_detached", return_value=False) as mock_spawn:
         result = tail_ops.fire_tracker_and_roadmap_detached(worktree_root, [rel_path])
 
-    assert mock_spawn.call_count == 2
+    assert mock_spawn.call_count == 1
     assert len(result["failed"]) == 1
-    assert "render-handoff-tracker.py" in result["failed"][0]
-    assert "detached_fire:refresh-roadmap-callout.py:goal-example" in result["acted"]
+    assert "refresh-roadmap-callout.py" in result["failed"][0]
+    assert result["acted"] == []
 
 
 # ---------------------------------------------------------------------------
 # housekeeping-liveness wiring (C17b follow-up)
 # ---------------------------------------------------------------------------
-
-
-def test_render_handoff_tracker_success_stamps_tracker_regen(tmp_path):
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir()
-    (worktree_root / ".git").mkdir()
-    state_root = worktree_root / "state"
-
-    with (
-        patch(
-            "coordinator_core.ops.ceremony.renderers.render_repo_section",
-            return_value="## Handoffs\n\nno active handoffs.",
-        ),
-        patch(
-            "coordinator_core.state_root.coordinator_state_root",
-            return_value=str(state_root),
-        ),
-    ):
-        tail_ops.render_handoff_tracker(worktree_root)
-
-    statuses = hl.liveness_status(str(worktree_root))
-    assert statuses[hl.TRACKER_REGEN] == hl.STATUS_FRESH
-
-
-def test_render_handoff_tracker_failure_does_not_stamp(tmp_path):
-    worktree_root = tmp_path / "repo"
-    worktree_root.mkdir()
-    (worktree_root / ".git").mkdir()
-
-    with patch(
-        "coordinator_core.ops.ceremony.renderers.render_repo_section",
-        side_effect=RuntimeError("boom"),
-    ):
-        tail_ops.render_handoff_tracker(worktree_root)
-
-    statuses = hl.liveness_status(str(worktree_root))
-    assert statuses[hl.TRACKER_REGEN] == hl.STATUS_NEVER_STAMPED
 
 
 def test_refresh_roadmap_callout_success_stamps_roadmap_callout(tmp_path):
@@ -1070,3 +1056,103 @@ def test_coverage_gate_indeterminate_does_not_stamp(tmp_path):
 
     statuses = hl.liveness_status(str(main_worktree_root(common_dir)))
     assert statuses[hl.COVERAGE_GATE] == hl.STATUS_NEVER_STAMPED
+
+
+# ---------------------------------------------------------------------------
+# review_trail_metadata_complete -- the supply predicate `ceremony.wsc_tail`
+# uses to decide the `b_adjudication_present` breach BEFORE it commits.
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_complete_dict_all_fields():
+    assert tail_ops.review_trail_metadata_complete(
+        {"sha_range": "a..b", "reviewer": "code-reviewer", "scope": "session",
+         "verdict": "ok", "diff_loc": "3"}
+    ) is True
+
+
+def test_metadata_complete_dict_missing_one_field():
+    assert tail_ops.review_trail_metadata_complete(
+        {"reviewer": "code-reviewer", "scope": "session", "verdict": "ok", "diff_loc": "3"}
+    ) is False
+
+
+def test_metadata_complete_dict_blank_field_counts_as_missing():
+    assert tail_ops.review_trail_metadata_complete(
+        {"sha_range": "", "reviewer": "code-reviewer", "scope": "session",
+         "verdict": "ok", "diff_loc": "3"}
+    ) is False
+
+
+def test_metadata_complete_none_and_empty_shapes():
+    assert tail_ops.review_trail_metadata_complete(None) is False
+    assert tail_ops.review_trail_metadata_complete({}) is False
+    assert tail_ops.review_trail_metadata_complete([]) is False
+
+
+def test_metadata_complete_list_needs_only_one_qualifying_entry():
+    """Mirrors `write_review_trail_many`'s own once-across-the-list gate: a
+    caller supplying at least one complete slice has discharged the
+    adjudication requirement, whatever the other entries look like."""
+    assert tail_ops.review_trail_metadata_complete(
+        [
+            {"reviewer": "code-reviewer"},
+            {"sha_range": "a..b", "reviewer": "code-reviewer", "scope": "session",
+             "verdict": "ok", "diff_loc": "3"},
+        ]
+    ) is True
+
+
+def test_metadata_complete_list_of_incomplete_entries_is_false():
+    assert tail_ops.review_trail_metadata_complete(
+        [{"reviewer": "code-reviewer"}, "not-a-dict", {}]
+    ) is False
+
+
+def test_metadata_complete_agrees_with_write_review_trail_gate(tmp_path):
+    """The predicate and the writer must never disagree on the same input --
+    the whole point of extracting it is that the pre-commit gate and the
+    post-gate write decide identically."""
+    common_dir = _make_common_dir(tmp_path)
+    incomplete = {"reviewer": "code-reviewer", "scope": "session", "verdict": "ok"}
+
+    assert tail_ops.review_trail_metadata_complete(incomplete) is False
+    result = _run(
+        tail_ops.write_review_trail(common_dir, incomplete, b_adjudication_present=True)
+    )
+    assert result["failed_critical"]
+    assert result["metadata_supplied"] is False
+
+
+def test_write_review_trail_many_isolates_a_raising_slice_from_its_siblings():
+    """A slice that RAISES must not suppress its siblings' writes.
+
+    Pins the isolation guarantee structurally rather than by contract. The
+    sequential loop this function replaced was justified in its own docstring
+    by exactly this property; `asyncio.gather`'s default
+    (`return_exceptions=False`) would have propagated the first exception and
+    cancelled the in-flight siblings, silently converting a documented
+    guarantee into a claim that happens to hold only while
+    `write_review_trail` keeps its never-raises contract. This test fails
+    against that default.
+    """
+    calls: list = []
+
+    async def fake_write(common_dir, entry, *, b_adjudication_present=False, _batch_context=None):
+        calls.append(entry["sha_range"])
+        if entry["sha_range"] == "bbb^..bbb":
+            raise RuntimeError("simulated slice failure")
+        return {"acted": [entry["sha_range"]], "skipped": [], "failed": [], "failed_critical": []}
+
+    entries = [
+        {"sha_range": f"{n}^..{n}", "reviewer": "code-reviewer", "scope": "session",
+         "verdict": "ok", "diff_loc": "1"}
+        for n in ("aaa", "bbb", "ccc")
+    ]
+
+    with patch.object(tail_ops, "write_review_trail", fake_write):
+        result = asyncio.run(tail_ops.write_review_trail_many(Path("."), entries))
+
+    assert "aaa^..aaa" in result["acted"], "a sibling before the raising slice lost its write"
+    assert "ccc^..ccc" in result["acted"], "a sibling after the raising slice lost its write"
+    assert any("bbb^..bbb" in m and "RuntimeError" in m for m in result["failed_critical"]),         "the raising slice must surface as failed_critical, not vanish"

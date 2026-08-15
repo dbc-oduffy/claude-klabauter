@@ -47,6 +47,15 @@ if str(_LIB_DIR) not in sys.path:
 
 from cc_invoke import _no_console_kw  # noqa: E402
 
+import pytest
+
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 # Every hand-rolled trampoline fixed by the 2026-08-14 publish-round chunk,
 # relative to coordinator/bin/, invoked as `python3 <file> --help`.
 _SWEPT_HELP_ENTRYPOINTS = (
@@ -276,9 +285,10 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "reconcile-completion-commits.py",
     "refresh-queries.py",
     "refresh-roadmap-callout.py",
-    "render-handoff-tracker.py",
+    # render-handoff-tracker.py: Review: code-reviewer (690dd6f9) -- deleted by
+    # this diff (state/handoff-tracker.md render path retired); dangling sweep
+    # row of the same shape as the earlier wsc_tail.py defect.
     "render-posture-overlay.py",
-    "render-project-tracker.py",
     "render-template-tree.py",
     "render-template.py",
     "resolve-repo-path.py",

@@ -70,10 +70,14 @@ except ImportError:
 
 _LOCKING_AVAILABLE = _FCNTL_AVAILABLE or _MSVCRT_AVAILABLE
 
-pytestmark = pytest.mark.skipif(
-    not _LOCKING_AVAILABLE,
-    reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
-)
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+    pytest.mark.skipif(
+        not _LOCKING_AVAILABLE,
+        reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
+    ),
+]
 
 from coordinator_core.ops import priority_drain, priority_set  # noqa: E402
 from coordinator_core.ops.priority_drain import drain  # noqa: E402

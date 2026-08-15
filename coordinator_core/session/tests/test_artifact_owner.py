@@ -31,6 +31,15 @@ from coordinator_core.session import core
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session import reachability
 
+import pytest
+
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 
 def _record(name, socket):
     return hr.RegistryRecord(

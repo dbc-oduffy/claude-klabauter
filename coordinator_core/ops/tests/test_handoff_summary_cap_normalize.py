@@ -32,6 +32,13 @@ from coordinator_core.ops.tests.test_handoff_author_fork import (
 from coordinator_core.ops.handoff_author_fork import _handler as _fork_handler
 from coordinator_core.ops.handoff_transition import _handler as _transition_handler
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 _FILE_PATH = Path("state/handoffs/x.md")
 
 

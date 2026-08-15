@@ -25,6 +25,13 @@ from pathlib import Path
 
 import pytest
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 SUT = Path(__file__).resolve().parent.parent / "check-install-singularity.py"
 
 

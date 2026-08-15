@@ -59,6 +59,13 @@ _BIN_DIR = os.path.dirname(os.path.dirname(_HERE))  # coordinator/bin/
 _CLI = os.path.join(_BIN_DIR, 'query-file-attribution.py')
 _FIXTURE = os.path.join(_HERE, 'fixtures', 'transcript-golden.jsonl')
 
+# The real repo root this test file lives in — used as --project for tests
+# that exercise the normal (Leg 1 / Leg 2) path, since AC9's fail-loud check
+# requires a real git repo root (an arbitrary placeholder path like
+# '/project' no longer passes Leg 1). --file query args below stay absolute
+# fixture-style paths ('/project/...'), unaffected by this substitution.
+_REPO_ROOT = os.path.dirname(os.path.dirname(_BIN_DIR))
+
 # The session ID that the fixture transcript belongs to (the temp file will be
 # named <SESSION_ID>.jsonl so derive_rows picks it up by stem).
 _SESSION_ID = 'test-session-0001'
@@ -76,12 +83,65 @@ def _make_transcript_dir() -> tempfile.TemporaryDirectory:
     return tmpdir
 
 
-def _run_cli(*extra_args: str, transcript_dir: str) -> subprocess.CompletedProcess:
+def _make_relative_join_fixture(extra_jsonl_lines=()):
+    """Build a temp git repo whose root doubles as the transcript directory,
+    holding a rewritten copy of the golden fixture: every stored
+    ``"file_path":"/project/`` (and ``"path":"/project/``) prefix is
+    replaced with this repo's own root.
+
+    Exists so relative-arg-join tests (AC9's Leg 1 requires --project be a
+    genuine git repo root) keep depending on the CLI's project_root JOIN —
+    not on the literal string '/project' — by making the fixture's records
+    point at a real, freshly created, self-cleaning temp repo instead of
+    requiring a fixed on-disk location. No shared/fixed path, so no
+    skip-on-collision logic is needed: `tempfile.TemporaryDirectory` gives
+    each call its own directory, cleaned up by its own teardown even across
+    the crash/interrupt and concurrent-session cases a fixed drive-root
+    location could not survive.
+
+    Only rewrites the JSON `"file_path":"..."` / `"path":"..."` VALUE prefix
+    (matched by requiring `/project/` to immediately follow the opening
+    quote) — never touches separators, and never touches the unrelated
+    `/project/new/file.txt` substring that appears inside a tool_result's
+    fake-diff CONTENT string (that occurrence is not preceded by a quote,
+    so the anchored replace leaves it alone). The fixture, as authored,
+    never mixes separators inside a single stored file_path value, so a
+    plain prefix substitution preserves its shape exactly; this deliberately
+    does not attempt cross-separator normalisation of any kind.
+
+    Returns (tmpdir, repo_root) — repo_root uses forward slashes throughout.
+    """
+    tmpdir = tempfile.TemporaryDirectory(prefix='fa_query_test_relroot_')
+    subprocess.run(
+        ['git', 'init', '-q'],
+        cwd=tmpdir.name,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **no_console_creationflags(),
+    )
+    repo_root = tmpdir.name.replace('\\', '/')
+    with open(_FIXTURE, 'r', encoding='utf-8') as f:
+        text = f.read()
+    rewritten = (
+        text
+        .replace('"file_path":"/project/', f'"file_path":"{repo_root}/')
+        .replace('"path":"/project/', f'"path":"{repo_root}/')
+    )
+    lines = rewritten.splitlines()
+    lines.extend(extra_jsonl_lines)
+    dest = os.path.join(tmpdir.name, f'{_SESSION_ID}.jsonl')
+    with open(dest, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines) + '\n')
+    return tmpdir, repo_root
+
+
+def _run_cli(*extra_args: str, transcript_dir: str, project: str = _REPO_ROOT) -> subprocess.CompletedProcess:
     """Invoke the CLI via subprocess; returns the CompletedProcess."""
     cmd = [
         sys.executable,
         _CLI,
-        '--project', '/project',          # arbitrary root (not used when transcript-dir given)
+        '--project', project,              # real repo root — required by Leg 1 (AC9)
         '--transcript-dir', transcript_dir,
     ] + list(extra_args)
     return subprocess.run(
@@ -252,20 +312,40 @@ class TestQueryCLIFileModeResolution(unittest.TestCase):
 
     def test_repo_relative_posix_arg_matches_absolute_record(self):
         """The reported defect: a --project-relative arg must resolve, not
-        string-compare, against the absolute stored file_path."""
-        result = self._query('src/main.py')
+        string-compare, against the absolute stored file_path.
+
+        Uses a fixture copy rewritten onto a real temp git repo (AC9's Leg 1
+        requires --project be a genuine repo root) — see
+        _make_relative_join_fixture(). Still depends on the project_root
+        JOIN, not any literal path string.
+        """
+        tmpdir, repo_root = _make_relative_join_fixture()
+        try:
+            result = _run_cli(
+                '--file', 'src/main.py',
+                transcript_dir=tmpdir.name, project=repo_root,
+            )
+        finally:
+            tmpdir.cleanup()
         data = json.loads(result.stdout)
         self.assertEqual(
             len(data), 1,
             msg=f'Expected 1 record for relative arg, got: {data}; stderr={result.stderr}',
         )
-        self.assertEqual(data[0]['file_path'], '/project/src/main.py')
+        self.assertEqual(data[0]['file_path'], f'{repo_root}/src/main.py')
 
     def test_backslash_arg_matches_forward_slash_record(self):
-        result = self._query('src\\main.py')
+        tmpdir, repo_root = _make_relative_join_fixture()
+        try:
+            result = _run_cli(
+                '--file', 'src\\main.py',
+                transcript_dir=tmpdir.name, project=repo_root,
+            )
+        finally:
+            tmpdir.cleanup()
         data = json.loads(result.stdout)
         self.assertEqual(len(data), 1, msg=f'Expected 1 record, got: {data}')
-        self.assertEqual(data[0]['file_path'], '/project/src/main.py')
+        self.assertEqual(data[0]['file_path'], f'{repo_root}/src/main.py')
 
     def test_same_basename_different_directory_does_not_match(self):
         """Anti-suffix guard: no bare endswith match."""
@@ -288,10 +368,6 @@ class TestQueryByFileBashRedirectDirection(unittest.TestCase):
     """
 
     def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory(prefix='fa_query_test_bash_')
-        dest = os.path.join(self._tmpdir.name, f'{_SESSION_ID}.jsonl')
-        with open(_FIXTURE, 'r', encoding='utf-8') as f:
-            lines = f.read().splitlines()
         extra = json.dumps({
             'type': 'assistant',
             'sessionId': _SESSION_ID,
@@ -314,17 +390,19 @@ class TestQueryByFileBashRedirectDirection(unittest.TestCase):
                 'content': [{'type': 'tool_result', 'tool_use_id': 't99', 'content': ''}],
             },
         })
-        lines.append(extra)
-        lines.append(extra_result)
-        with open(dest, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines) + '\n')
+        self._tmpdir, self._repo_root = _make_relative_join_fixture((extra, extra_result))
 
     def tearDown(self):
         self._tmpdir.cleanup()
 
     def test_absolute_arg_matches_relative_record(self):
+        """The relative-record row ('out/build.log', unaffected by the
+        fixture rewrite since it never carried a '/project/' prefix) is
+        joined against --project — which must be a real repo root (AC9's
+        Leg 1) for the query's absolute arg to land on it."""
         result = _run_cli(
-            '--file', '/project/out/build.log', transcript_dir=self._tmpdir.name,
+            '--file', f'{self._repo_root}/out/build.log',
+            transcript_dir=self._tmpdir.name, project=self._repo_root,
         )
         data = json.loads(result.stdout)
         self.assertEqual(
@@ -389,6 +467,101 @@ class TestQueryCLIErrorHandling(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn('not found', result.stderr)
+
+
+class TestQueryCLIRepoSlug(unittest.TestCase):
+    """AC5/AC6/AC9/AC10 — owner-qualified repo slug via canonical producer.
+
+    Spec backlink: pln-three-query-trampolines-and-th-309bf9 § C5
+    """
+
+    def setUp(self):
+        self._tmpdir = _make_transcript_dir()
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def test_repo_matches_canonical_producer(self):
+        """AC5 — equality against resolve_repo_name(repo_root), not a hardcoded
+        owner/repo literal (which would fail on any other clone)."""
+        claude_klabauter_root = _REPO_ROOT
+        if claude_klabauter_root not in sys.path:
+            sys.path.insert(0, claude_klabauter_root)
+        from coordinator_core.ops.emit.context import resolve_repo_name
+
+        expected = resolve_repo_name(_REPO_ROOT)
+        result = _run_cli('--session', _SESSION_ID, transcript_dir=self._tmpdir.name)
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        for r in data:
+            self.assertEqual(r['repo'], expected)
+
+    def test_coordinator_root_path_is_dot(self):
+        """AC6 — coordinator_root_path is left at aggregate()'s own default
+        ('.'), never the absolute --project path."""
+        result = _run_cli('--session', _SESSION_ID, transcript_dir=self._tmpdir.name)
+        data = json.loads(result.stdout)
+        self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+        for r in data:
+            self.assertEqual(r['coordinator_root_path'], '.')
+
+    def test_subdirectory_project_root_fails_loud(self):
+        """AC9 — Leg 1: --project naming a subdirectory of a repo (not the
+        repo root itself) fails loud, naming both project_root and the
+        resolved toplevel, rather than silently stamping the enclosing
+        repo's slug."""
+        subdir = os.path.join(_REPO_ROOT, 'coordinator')
+        self.assertTrue(os.path.isdir(subdir), msg=f'fixture assumption broken: {subdir}')
+        result = subprocess.run(
+            [
+                sys.executable, _CLI,
+                '--session', _SESSION_ID,
+                '--project', subdir,
+                '--transcript-dir', self._tmpdir.name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            **no_console_creationflags(),
+        )
+        self.assertEqual(
+            result.returncode, 1,
+            msg=f'stdout={result.stdout!r} stderr={result.stderr!r}',
+        )
+        self.assertIn(repr(subdir), result.stderr)
+
+    def test_remoteless_repo_stamps_local_basename(self):
+        """AC10 — a valid repo with no parseable origin remote gets the
+        documented local/<basename> fallback, stamped as-is, not rejected."""
+        remoteless = tempfile.mkdtemp(prefix='fa_remoteless_')
+        try:
+            subprocess.run(
+                ['git', 'init', '-q'],
+                cwd=remoteless,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **no_console_creationflags(),
+            )
+            result = subprocess.run(
+                [
+                    sys.executable, _CLI,
+                    '--session', _SESSION_ID,
+                    '--project', remoteless,
+                    '--transcript-dir', self._tmpdir.name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                **no_console_creationflags(),
+            )
+            data = json.loads(result.stdout)
+            self.assertTrue(data, msg=f'no records: stderr={result.stderr}')
+            expected = f'local/{os.path.basename(remoteless)}'
+            for r in data:
+                self.assertEqual(r['repo'], expected)
+        finally:
+            shutil.rmtree(remoteless, ignore_errors=True)
 
 
 if __name__ == '__main__':

@@ -38,8 +38,8 @@ Responsibilities:
      skipped in --register-only mode, and a clean no-op on any checkout that isn't
      claude-klabauter itself (the op's own identity guard).
 
-Spec backlink: docs/plans/2026-07-04-claude-klabauter-install-and-doctor-system.md § C2
-Spec backlink: docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md § C6
+Spec backlink: pln-claude-klabauter-install-doctor-system-f-537d61 § C2
+Spec backlink: pln-claude-klabauter-pure-python-shop-retire-0f8aee § C6
   (this file replaces scripts/setup.sh + scripts/setup.ps1 — one cross-platform
   naked-Python installer instead of a bash/PowerShell twin pair, per the
   project's pure-Python-shop mandate; DR-047/DR-059).
@@ -52,7 +52,7 @@ Resolver reference: this file's own `resolve_claude_klabauter_root` (CLAUDE_KLAB
 Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-root <path>] [--coordinator-root <path>]
-                            [--break-system-packages] [--with-test-deps]
+                            [--break-system-packages] [--allow-venv-fallback] [--with-test-deps]
                             [--register-only] [--check] [--help]
 
 Negative-spec:
@@ -62,9 +62,10 @@ Negative-spec:
   provisioned set cannot drift from the declared set as deps are added/removed.
   It installs them at MACHINE level by default (so any interpreter can invoke
   coordinator_core without resolving a venv); the settings-home coordinator
-  venv (coordinator_core.install.ensure_venv) is a FALLBACK ONLY, used when
-  the machine Python is PEP-668 externally-managed and --break-system-packages
-  was not passed. See § Dependency provisioning below.
+  venv (coordinator_core.install.ensure_venv) is reachable ONLY via the
+  explicit --allow-venv-fallback opt-in, never automatically — a machine-
+  level install failure without that flag exits non-zero naming both real
+  remediations. See § Dependency provisioning below.
   Does NOT install the [project.optional-dependencies].test extra by default —
   the installer's job is the ENGINE, not the dev loop, and pytest plugins
   auto-load into every OTHER repo's pytest run on the same interpreter, so
@@ -166,6 +167,10 @@ Options:
   --coordinator-root <path>          Explicit coordinator-claude root override (default: COORDINATOR_CLAUDE_ROOT env -> sibling-dir)
   --break-system-packages            Explicit opt-in: pass pip --break-system-packages on a PEP-668
                                       externally-managed machine, instead of falling back to a venv
+  --allow-venv-fallback              Explicit opt-in: on ANY machine-level dependency install
+                                      failure, fall back to the settings-home coordinator venv
+                                      instead of exiting non-zero. Without this flag the fallback
+                                      is never reached automatically.
   --with-test-deps                   Also install the declared test extra (pytest + plugins). Off by
                                       default: the installer provisions the engine, not the dev loop
   --register-only                    Skip Step Zero + dep check; run registration + verification only
@@ -241,6 +246,7 @@ class Args:
         self.skip_dep_check = False
         self.accept_risk = False
         self.break_system_packages = False
+        self.allow_venv_fallback = False
         self.with_test_deps = False
         self.register_only = False
         self.check = False
@@ -266,6 +272,8 @@ def parse_args(argv: list[str]) -> Args:
             args.accept_risk = True
         elif tok == "--break-system-packages":
             args.break_system_packages = True
+        elif tok == "--allow-venv-fallback":
+            args.allow_venv_fallback = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
         elif tok == "--register-only":
@@ -359,6 +367,47 @@ def resolve_python() -> str:
     sys.exit(1)
 
 
+def _git_version_tuple(timeout: float = 10.0) -> tuple[int, ...] | None:
+    """Behavior-verify the `git` on PATH and parse its version, or return None
+    on any probe failure. Never raises, never blocks install — this repo's
+    engine has no hard git-version floor, only a soft one (see caller)."""
+    try:
+        proc = subprocess.run(
+            ["git", "--version"], timeout=timeout, capture_output=True, text=True, **_NO_CONSOLE,
+        )
+        if proc.returncode != 0:
+            return None
+        match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", proc.stdout)
+        if not match:
+            return None
+        return tuple(int(g) for g in match.groups() if g is not None)
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        return None
+
+
+def check_git_version() -> None:
+    """WARN-only, non-blocking: coordinator_core's commit ceremony (git_native.py)
+    and the prepare-commit-msg hook both call `git interpret-trailers
+    --no-divider`, which requires git >= 2.28 (2020). Both call sites already
+    fail clean on an unrecognized flag (hook: swallowed by its top-level
+    try/except, message left unmodified; git_native.py: the failure result is
+    returned up the chain, not raised) — so this is advance notice for an
+    operator on an old git, not a gate. Review: code-reviewer 2026-08-15,
+    finding on commit 72c6d188980b (P2, deferred-but-tradeoff-free, folded)."""
+    version = _git_version_tuple()
+    if version is None:
+        print("WARN [soft] git — could not determine version; commit-trailer stamping needs git >= 2.28.")
+        return
+    if version < (2, 28):
+        print(
+            f"WARN [soft] git — {'.'.join(str(v) for v in version)} found, >= 2.28 needed for "
+            "commit-trailer stamping (git interpret-trailers --no-divider). Trailers will "
+            "silently stop being stamped on commits; nothing else breaks."
+        )
+    else:
+        print(f"PASS [soft] git — {'.'.join(str(v) for v in version)}")
+
+
 def derive_deps(pyproject_path: Path, extra: str | None = None) -> tuple[list[str], list[str]]:
     """Read a dependency array from pyproject.toml and return (pip specs,
     import-probe names). PyPI distribution names and import names are not
@@ -450,14 +499,43 @@ def _run_pip(argv: list[str]) -> subprocess.CompletedProcess:
     )
 
 
-def provision_deps(claude_klabauter_root: Path, py: str, break_system_packages: bool) -> tuple[str, list[str]]:
+def provision_deps(
+    claude_klabauter_root: Path, py: str, break_system_packages: bool, allow_venv_fallback: bool
+) -> tuple[str, list[str]]:
     """Derive coordinator_core's declared deps from pyproject.toml and ensure
-    they're importable — machine-level pip install by default, falling back
-    to the settings-home coordinator venv on ANY install failure (PEP-668
-    externally-managed refusal, or any other failure e.g. permission-denied
-    on a locked-down system interpreter), unless --break-system-packages
-    opts into retrying the machine-level install on PEP-668 refusal
-    specifically.
+    they're importable — machine-level pip install by default.
+    `--break-system-packages` opts into retrying the machine-level install on
+    PEP-668 refusal specifically (still machine-level, never the venv).
+    `--allow-venv-fallback` is a SEPARATE, narrower opt-in: on ANY OTHER
+    machine-level install failure (PEP-668 refusal with no
+    --break-system-packages, or any other failure e.g. permission-denied on
+    a locked-down system interpreter), fall back to the settings-home
+    coordinator venv ONLY when this flag was passed. Without it, such a
+    failure exits non-zero naming both real remediations (fix the
+    machine-level install, or re-run with --allow-venv-fallback) — the venv
+    is `ensure_venv.py`'s own tree (`coordinator_whoami` lives there), not a
+    private fallback, so reaching it is an explicit install-time choice, not
+    an automatic degradation (PM ruling 2026-08-14).
+
+    Both flags passed AND the --break-system-packages retry itself fails:
+    the venv fallback is still reached — both flags passed IS an explicit
+    choice of both, not a request for a harder failure mode (PM ruling
+    2026-08-14; Review: code-reviewer 415489f6, the both-flags edge case).
+
+    The two flags stay distinct rather than one flag doing both jobs:
+    --break-system-packages consents to a narrower, still-machine-level
+    retry (defeat PEP-668's refusal, same interpreter, same site-packages);
+    --allow-venv-fallback consents to a materially different thing (hand
+    dependency resolution to a shared mutable venv another purpose already
+    owns). Collapsing them would mean passing --break-system-packages also
+    silently authorizes the venv on a NON-PEP-668 failure it was never asked
+    about.
+
+    An EXISTING, already-importable fallback venv (see the second fast-path
+    below) is treated as prior consent from a previous install and is used
+    unconditionally, flag or no flag — this flag only gates provisioning a
+    NEW use of the fallback, so an operator who already opted in on an
+    earlier run is not broken by this change.
     Returns (engine_python, import_names).
 
     `claude_klabauter_root` is the FLAG -> ENV -> repo-root resolved CLAUDE_KLABAUTER_ROOT (see
@@ -558,48 +636,16 @@ def provision_deps(claude_klabauter_root: Path, py: str, break_system_packages: 
     if pip_proc.returncode == 0:
         print("PASS [deps] machine-level install (pip, HOME-independent) succeeded.")
     else:
-        pip_output = pip_proc.stdout.lower()
-        is_pep668 = "externally-managed-environment" in pip_output
-
-        if is_pep668 and break_system_packages:
-            print()
-            print(f"  pip refused: PEP 668 externally-managed environment ({py}).", file=sys.stderr)
-            print("  --break-system-packages passed — retrying with explicit consent.", file=sys.stderr)
-            try:
-                pip2 = _run_pip([py, "-m", "pip", "install", "--break-system-packages", *dep_specs])
-            except subprocess.TimeoutExpired:
-                print(f"FAIL [deps] pip install --break-system-packages timed out after 600s under {py}.", file=sys.stderr)
-                sys.exit(1)
-            print(pip2.stdout, end="")
-            if pip2.returncode != 0:
-                print("FAIL [deps] pip install --break-system-packages also failed — see output above.", file=sys.stderr)
-                sys.exit(1)
-            print("PASS [deps] machine-level install (--break-system-packages, explicit consent) succeeded.")
-        else:
-            # Fallback to the settings-home coordinator venv, HOME-independent
-            # by construction — not just on PEP 668 refusal, but on ANY
-            # machine-level install failure (e.g. permission-denied on a
-            # locked-down system interpreter that isn't PEP-668-flagged). The
-            # prior version only fell back on a detected PEP-668 string match
-            # and hard-failed on other errors; that left a
-            # install-succeeds-once-with-a-HOME-dependent-`--user`-flag path
-            # as the only recourse on such machines, reintroducing the very
-            # HOME-dependence this fix removes. Falling back here instead
-            # keeps every surviving path HOME-independent.
-            print()
-            if is_pep668:
-                print("  Machine Python is externally-managed (PEP 668) — plain pip install is blocked.")
-            else:
-                print("  Machine-level pip install failed for a reason other than PEP 668 (see output above).")
-            print(f"  Falling back to the settings-home coordinator venv at {venv_dir}. This is a")
-            print("  FALLBACK, not the primary mechanism — no consumer should need to resolve this venv.")
-            print()
-            if is_pep668:
-                print("  To install at machine level instead, on the next run pick ONE of:")
-                print("    - python3 scripts/setup.py --break-system-packages   (explicit opt-in; we will not do this silently)")
-                print("    - pipx (https://pipx.pypa.io) if your interpreter is pipx-managed")
-                print("    - your OS/distro package manager")
-                print()
+        # Review: code-reviewer 415489f6 — the both-flags-passed, retry-still-fails
+        # edge case was a dead end (hard exit, no path to the venv the operator
+        # explicitly consented to via --allow-venv-fallback). Factored out so both
+        # the --break-system-packages retry-failure path and the plain PEP-668/
+        # other-failure path reach the same consented fallback, instead of one
+        # inlined copy that only the latter could reach. Defined here (P3,
+        # code-reviewer ebc1ac14) rather than above the success check, since the
+        # closure only makes sense once failure is known and is never invoked on
+        # the success path.
+        def _fallback_to_venv() -> str:
             try:
                 venv_status = ensure_coordinator_venv(
                     claude_klabauter_root,
@@ -620,8 +666,71 @@ def provision_deps(claude_klabauter_root: Path, py: str, break_system_packages: 
             if venv_pip.returncode != 0:
                 print("FAIL [deps] venv fallback install failed — see output above.", file=sys.stderr)
                 sys.exit(1)
-            engine_py = str(venv_py)
             print(f"PASS [deps] venv fallback install succeeded ({venv_dir}).")
+            return str(venv_py)
+
+        pip_output = pip_proc.stdout.lower()
+        is_pep668 = "externally-managed-environment" in pip_output
+
+        if is_pep668 and break_system_packages:
+            print()
+            print(f"  pip refused: PEP 668 externally-managed environment ({py}).", file=sys.stderr)
+            print("  --break-system-packages passed — retrying with explicit consent.", file=sys.stderr)
+            try:
+                pip2 = _run_pip([py, "-m", "pip", "install", "--break-system-packages", *dep_specs])
+            except subprocess.TimeoutExpired:
+                print(f"FAIL [deps] pip install --break-system-packages timed out after 600s under {py}.", file=sys.stderr)
+                sys.exit(1)
+            print(pip2.stdout, end="")
+            if pip2.returncode == 0:
+                print("PASS [deps] machine-level install (--break-system-packages, explicit consent) succeeded.")
+            elif not allow_venv_fallback:
+                print("FAIL [deps] pip install --break-system-packages also failed — see output above.", file=sys.stderr)
+                sys.exit(1)
+            else:
+                # Both flags passed and the machine-level retry still failed —
+                # both flags passed IS an explicit choice of both (PM ruling
+                # 2026-08-14), so the venv fallback is reached here too, not
+                # only from the plain-PEP-668/other-failure branch below.
+                print()
+                print("FAIL [deps] pip install --break-system-packages also failed — see output above.", file=sys.stderr)
+                print(f"  --allow-venv-fallback passed — falling back to the settings-home coordinator venv at {venv_dir}.", file=sys.stderr)
+                engine_py = _fallback_to_venv()
+        elif not allow_venv_fallback:
+            print()
+            if is_pep668:
+                print("  Machine Python is externally-managed (PEP 668) — plain pip install is blocked.", file=sys.stderr)
+            else:
+                print("  Machine-level pip install failed for a reason other than PEP 668 (see output above).", file=sys.stderr)
+            print("  Remediation — pick ONE:", file=sys.stderr)
+            print("    - fix the machine-level install (see pip output above; --break-system-packages if PEP-668)", file=sys.stderr)
+            print(f"    - re-run with --allow-venv-fallback to use the settings-home coordinator venv at {venv_dir}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            # Fallback to the settings-home coordinator venv, HOME-independent
+            # by construction — not just on PEP 668 refusal, but on ANY
+            # machine-level install failure (e.g. permission-denied on a
+            # locked-down system interpreter that isn't PEP-668-flagged), and
+            # only when --allow-venv-fallback was explicitly passed (PM
+            # ruling 2026-08-14: reaching the venv is an install-time choice,
+            # not an automatic degradation). The prior version fell back
+            # automatically on any failure; that made the venv reachable
+            # with no consent, which is what this gate removes.
+            print()
+            if is_pep668:
+                print("  Machine Python is externally-managed (PEP 668) — plain pip install is blocked.")
+            else:
+                print("  Machine-level pip install failed for a reason other than PEP 668 (see output above).")
+            print(f"  --allow-venv-fallback passed — falling back to the settings-home coordinator venv at {venv_dir}.")
+            print("  This is a FALLBACK, not the primary mechanism — no consumer should need to resolve this venv.")
+            print()
+            if is_pep668:
+                print("  To install at machine level instead, on the next run pick ONE of:")
+                print("    - python3 scripts/setup.py --break-system-packages   (explicit opt-in; we will not do this silently)")
+                print("    - pipx (https://pipx.pypa.io) if your interpreter is pipx-managed")
+                print("    - your OS/distro package manager")
+                print()
+            engine_py = _fallback_to_venv()
 
     # Verify, don't trust — an install that reports exit 0 but leaves a module
     # unimportable (partial install, wrong target interpreter) is exactly the
@@ -1964,6 +2073,142 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
 
 
+#: Dependency-ordered claude-doe launcher chain: (label, CLI relpath under
+#: coordinator/bin/, extra argv). Order matters -- the root pointer must
+#: exist before anything that resolves through it at RUNTIME (the wrapper's
+#: `--print-plugin-dir` reads it, transitively, via the doe-root ladder), and
+#: the wrapper/launcher (the artifacts the shim's rc block invokes BY PATH)
+#: must be installed before the shim (which wires the rc/profile sentinel
+#: that dot-sources/invokes them). See docs/reference/coordinator-plugin-
+#: load-chain.md § 4 for the full artifact -> generator -> source-of-truth
+#: table this constant mirrors.
+_CLAUDE_DOE_CHAIN_STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("doe-root pointer", "gen-doe-root-pointer.py", ("--graceful-skip-unresolved",)),
+    ("claude-doe wrapper", "install-claude-doe-wrapper.py", ()),
+    ("claude-doe launcher", "gen-claude-doe-launcher.py", ()),
+    ("claude-doe shim (rc/profile sentinel)", "gen-claude-doe-shim.py", ()),
+)
+
+
+def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Best-effort install-chain step: runs the four `coordinator/bin/*claude-doe*`
+    generators that render/wire the interactive `claude-doe` launch chain
+    (`.doe-root` pointer -> `claude-doe` wrapper -> `claude-doe.{cmd,ps1}`
+    launcher -> the rc/profile sentinel that dot-sources/invokes them --
+    see docs/reference/coordinator-plugin-load-chain.md § 4).
+
+    Root-cause fix, 2026-08-15 (sizing dlv-claude-doe-launcher-generators-are-
+    absen-bb685e): `scripts/setup.py`/the manifest never called any of these
+    four generators, so a fresh clean install left claude-klabauter installed and
+    coordinator SILENTLY absent from every session -- no doctrine, no hooks,
+    no skills, no error. Mirrors `install_bin_forwarders`/
+    `install_precommit_hook`'s ADVISORY shape: a launcher-chain failure must
+    never abort the rest of setup, but per this fix's own point (the prior
+    failure mode was SILENT), each step's outcome is printed loudly --
+    PASS/ADVISORY, never swallowed -- rather than folded into a single
+    pass/fail line that could hide which of the four steps actually failed.
+
+    Idempotent by construction, not by a call-site guard: all four generators
+    are ALREADY idempotent (sentinel-guarded rc edits, skip-if-current
+    renders, `cp -p`-then-verify installs -- see each op module's own
+    docstring), so a re-run over an already-working install is a clean no-op
+    at each step; this function adds no de-duplication of its own because
+    none is needed (CLAUDE.md: make the call site idempotent only when the
+    generator ISN'T -- these are).
+
+    Each step is run independently (a failure in one does not skip the
+    others) since only the RUNTIME resolution chain is order-dependent, not
+    generation itself -- an operator who fixes just the failing step later
+    does not need to re-run the whole chain.
+
+    Skipped entirely under `--register-only` (no coordinator-claude/plugin-
+    root resolution attempted in that mode, matching the other post-
+    registration steps it sits beside in `main`) -- callers gate that, not
+    this function.
+    """
+    print()
+    print("--- Install: claude-doe launcher chain (coordinator/bin/*claude-doe*) ---")
+
+    env = dict(os.environ)
+    env["CLAUDE_KLABAUTER_ROOT"] = str(claude_klabauter_root_resolved)
+
+    any_failed = False
+    for label, cli_name, extra_argv in _CLAUDE_DOE_CHAIN_STEPS:
+        cli = repo_root / "coordinator" / "bin" / cli_name
+        if not cli.is_file():
+            any_failed = True
+            print(
+                f"[ADVISORY] {cli} not found — skipping {label} install. "
+                "Coordinator will NOT load in any interactive session on this box until this is fixed.",
+                file=sys.stderr,
+            )
+            continue
+
+        argv = [engine_py, str(cli), *extra_argv]
+        try:
+            proc = subprocess.run(
+                argv,
+                cwd=str(claude_klabauter_root_resolved),
+                env=env,
+                capture_output=True, text=True,
+                **_NO_CONSOLE,
+            )
+        except OSError as exc:
+            any_failed = True
+            print(
+                f"[ADVISORY] {label} install could not even be spawned ({exc}) — "
+                "coordinator will NOT load in any interactive session on this box until this is fixed.",
+                file=sys.stderr,
+            )
+            print(f"  Re-run manually: {' '.join(argv)}", file=sys.stderr)
+            continue
+
+        output = (proc.stdout + proc.stderr).strip()
+        # Review: coordinatorcode-reviewer-7ca32c22 — `gen-doe-root-pointer.py
+        # --graceful-skip-unresolved` exits 0 on a genuine skip (repos.doe_claude
+        # not yet resolved), so returncode alone can't distinguish "wrote it"
+        # from "gave up". Detect the `<label>: skipped` contract row and treat
+        # it as its own ADVISORY outcome — never PASS — with the explanation
+        # printed unconditionally (skip lines must survive agent_mode, unlike
+        # the general output-echo above, or a scripted install sees only a
+        # bare ADVISORY line with no reason).
+        skipped = any(
+            line.strip().endswith(": skipped") or ": skipped (" in line
+            for line in output.splitlines()
+            if line.strip().startswith("doe_root_pointer:")
+        )
+        if not args.agent_mode and output and not skipped:
+            print(output)
+        if skipped:
+            print(
+                f"[ADVISORY] {label} install skipped (see reason below) — "
+                "not an error, but coordinator will NOT load in any interactive session "
+                "on this box until this step completes.",
+                file=sys.stderr,
+            )
+            if output:
+                print(output, file=sys.stderr)
+            print(f"  Re-run manually once resolved: {' '.join(argv)}", file=sys.stderr)
+            continue
+        if proc.returncode != 0:
+            any_failed = True
+            print(
+                f"[ADVISORY] {label} install reported a non-zero exit (code {proc.returncode}) — "
+                "coordinator will NOT load in any interactive session on this box until this is fixed.",
+                file=sys.stderr,
+            )
+            print(f"  Re-run manually: {' '.join(argv)}", file=sys.stderr)
+            continue
+        print(f"PASS [claude-doe-chain] {label}")
+
+    if any_failed:
+        print(
+            "[ADVISORY] claude-doe launcher chain incomplete — see the per-step ADVISORY lines above. "
+            "A session started on this box may look like vanilla Claude Code with no error.",
+            file=sys.stderr,
+        )
+
+
 def _derive_identity_hints(repo_root: Path) -> dict[str, str]:
     """Best-effort, non-interactive derivation of hints for the generated
     `.percolate-identity` template: the operator's git `user.name`, the
@@ -2034,7 +2279,7 @@ def _percolate_identity_template(hints: dict[str, str]) -> str:
     depersonalization, so committing a populated copy would publish exactly
     the strings it exists to scrub.
 
-    Spec backlink: docs/plans/2026-07-31-claude-klabauter-oss-release.md § C12
+    Spec backlink: pln-claude-klabauter-oss-release-e-50bd5d § C12
     """
     return (
         "#!/bin/bash\n"
@@ -2225,8 +2470,11 @@ def main(argv: list[str]) -> int:
         )
         py_version = (version_proc.stdout or version_proc.stderr).strip().split()[-1]
         print(f"PASS [hard] python — {py_version} ({py})")
+        check_git_version()
 
-    engine_py, import_names = provision_deps(claude_klabauter_root_resolved, py, args.break_system_packages)
+    engine_py, import_names = provision_deps(
+        claude_klabauter_root_resolved, py, args.break_system_packages, args.allow_venv_fallback
+    )
 
     if not args.register_only:
         handle_test_tooling(claude_klabauter_root_resolved, engine_py, args)
@@ -2244,6 +2492,7 @@ def main(argv: list[str]) -> int:
 
     if not args.register_only:
         install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
+        install_claude_doe_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_precommit_hook(repo_root, engine_py, args.agent_mode)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)

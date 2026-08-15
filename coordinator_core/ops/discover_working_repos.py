@@ -31,6 +31,23 @@ Tier A is effectively Windows-only in practice; Tier A.5 and Tier B are the
 functioning discovery paths on POSIX. Do not silently "fix" this — it is a
 faithful repro of the pre-port oracle's documented gap.
 
+Output contract (two deliberate departures from the oracle, 2026-08-14):
+
+  1. Every emitted path uses forward slashes. The oracle preserved each repo's
+     first-seen native form, so a single Windows run mixed `X:/example-os-repo`
+     (registry-sourced, Tier A.5) with `X:\\DoE-claude` (filesystem-discovered,
+     Tier A) on adjacent lines. The consumer writes those verbatim into
+     double-quoted YAML scalars in `~/.claude/working-repos.yaml`, where
+     `\\D` is an invalid escape — `yaml.safe_load` raised ScannerError and
+     every downstream consumer of that file crashed. Normalizing here fixes it
+     for every consumer at once rather than per-writer. Negative-spec: do NOT
+     restore native-separator emission for oracle parity.
+
+  2. Publish mirrors are never emitted. A mirror registered under the
+     machine-local `publish.mirrors.*.path` namespace is a publish target, not
+     a working tree — doctrine forbids working in one or addressing a memo to
+     one, so enumerating it as a discovered working repo invites both.
+
 """
 
 from __future__ import annotations
@@ -55,6 +72,9 @@ _MACHINE_LOCAL_TIMEOUT_SECS = 10
 
 
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(/.*)?$")
+
+#: Named so `_emit_form` reads without an escape-in-an-escape.
+BACKSLASH = chr(92)
 
 
 def _fs_probe_path(p: str) -> str:
@@ -225,28 +245,103 @@ def _to_posix_key(p: str) -> str:
     return p
 
 
-def _gate_and_dedup(lines: Iterable[str]) -> Iterator[str]:
-    """Filter stdin-equivalent lines to real git roots, deduped by normalized
-    POSIX key, preserving each repo's first-seen ORIGINAL emitted form (Tier
-    A's native-Windows output contract is preserved).
+def _emit_form(p: str) -> str:
+    """The single output form for a discovered repo path: forward slashes, no
+    trailing slash, original drive-letter case. Distinct from `_to_posix_key`,
+    which additionally lowercases the drive and rewrites `X:/a` to `/x/a` — that
+    is the internal dedup/existence-probe identity, not something a consumer
+    should ever see.
+    """
+    p = p.replace(BACKSLASH, "/")
+    while p.endswith("/") and p != "/":
+        p = p[:-1]
+    return p
 
-    Two fixes in one pass (issue #12, ported unchanged):
+
+def _publish_mirror_keys() -> set:
+    """Dedup keys (`_to_posix_key` form) of every path registered under the
+    machine-local `publish.mirrors.*.path` namespace.
+
+    Best-effort, matching this module's never-block contract: an unavailable or
+    slow machine-local yields an empty set (discovery proceeds unfiltered)
+    rather than an error.
+    """
+    ml_bin = _resolve_machine_local()
+    if ml_bin is None:
+        return set()
+    ml_argv = _machine_local_launch_argv(ml_bin)
+    try:
+        proc = subprocess.run(
+            [*ml_argv, "keys"],
+            capture_output=True,
+            text=True,
+            timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            check=False,
+            **_CREATIONFLAGS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        print(f"skip: _publish_mirror_keys: machine-local keys failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return set()
+
+    keys = [
+        line.strip()
+        for line in proc.stdout.splitlines()
+        if line.strip().startswith("publish.mirrors.") and line.strip().endswith(".path")
+    ]
+
+    mirrors: set = set()
+    for key in keys:
+        try:
+            get_proc = subprocess.run(
+                [*ml_argv, "get", key],
+                capture_output=True,
+                text=True,
+                timeout=_MACHINE_LOCAL_TIMEOUT_SECS,
+                stdin=subprocess.DEVNULL,
+                check=False,
+                **_CREATIONFLAGS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            print(f"skip: _publish_mirror_keys: machine-local get {key} failed: {sys.exc_info()[1]}", file=sys.stderr)
+            continue
+        if get_proc.returncode != 0:
+            continue
+        val = get_proc.stdout.strip()
+        if val:
+            mirrors.add(_to_posix_key(val))
+    return mirrors
+
+
+def _gate_and_dedup(lines: Iterable[str], mirror_keys: Optional[set] = None) -> Iterator[str]:
+    """Filter stdin-equivalent lines to real git roots, deduped by normalized
+    POSIX key, emitting each surviving repo in `_emit_form` (forward slashes).
+    The oracle's preserve-first-seen-native-form behavior is deliberately gone
+    — see the module docstring's Output contract § 1.
+
+    Three filters in one pass:
       (1) `.git` gate — drops bare parent dirs / scratch paths that pass a
           plain existence test but are not repos (the Tier-A leak).
       (2) cross-tier form dedup — collapses native vs POSIX duplicates of one
           repo.
+      (3) publish-mirror exclusion — a `publish.mirrors.*.path` tree is a
+          publish target, never a working repo (see module docstring).
     """
+    if mirror_keys is None:
+        mirror_keys = _publish_mirror_keys()
     seen: set = set()
     for line in lines:
         if not line:
             continue
         key = _to_posix_key(line)
+        if key in mirror_keys:
+            continue
         if not _is_git_root(_fs_probe_path(key)):
             continue
         if key in seen:
             continue
         seen.add(key)
-        yield line
+        yield _emit_form(line)
 
 
 # ---------------------------------------------------------------------------
@@ -523,9 +618,11 @@ def main(argv: Sequence[str]) -> int:
     # sibling repo in registry.local.toml but lack an activity record for
     # it, so a strict stop-at-first-non-empty A would mask the registered
     # repo. Merge + dedup.
+    mirror_keys = _publish_mirror_keys()
+
     if a_out:
         combined = list(a_out) + list(a5_out)
-        for line in _sort_unique(_gate_and_dedup(combined)):
+        for line in _sort_unique(_gate_and_dedup(combined, mirror_keys)):
             print(line)
         return 0
 
@@ -537,7 +634,7 @@ def main(argv: Sequence[str]) -> int:
 
     if b_out or a5_out:
         combined = list(b_out) + list(a5_out)
-        for line in _sort_unique(_gate_and_dedup(combined)):
+        for line in _sort_unique(_gate_and_dedup(combined, mirror_keys)):
             print(line)
         return 0
 

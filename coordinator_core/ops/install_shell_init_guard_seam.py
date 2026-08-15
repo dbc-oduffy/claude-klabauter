@@ -34,6 +34,12 @@ Negative-spec:
       the guard's own stdout-emitter logic is claude-klabauter-resident and entirely
       out of scope for this seam (DR-047: claude-klabauter owns the engine, DoE owns
       the rc-eval seam that sources it).
+    - Emits a POSIX-shell block ONLY. There is no PowerShell counterpart, so on
+      a Windows box whose shell of record is pwsh this seam covers Git Bash
+      sessions and nothing else. The status row says so rather than reporting a
+      bare `installed`, which an operator reasonably reads as "my sessions are
+      guarded". Closing the gap needs a `.ps1` emitter contract of its own —
+      that is a plan, not a message fix.
 """
 
 from __future__ import annotations
@@ -143,6 +149,15 @@ def resolve_claude_klabauter_clone() -> str:
     return result.stdout.strip()
 
 
+def _shell_coverage_note() -> str:
+    """Which shells the POSIX block this seam writes actually covers, when that
+    is not all of them. Empty on platforms where the rc file IS the operator's
+    shell init."""
+    if os.name == "nt" and not os.environ.get("MSYSTEM"):
+        return " — POSIX shells only; PowerShell sessions are NOT covered"
+    return ""
+
+
 def _resolve_rc_path(override: Optional[str]) -> str:
     if override:
         return override
@@ -192,7 +207,7 @@ def main(argv: List[str]) -> int:
     rc_path = _resolve_rc_path(rc_override)
 
     if _rc_has_sentinel(rc_path):
-        print(f"shell_init_guard: ready (no-op) ({rc_path})")
+        print(f"shell_init_guard: ready (no-op) ({rc_path}{_shell_coverage_note()})")
         return 0
 
     if check_only:
@@ -221,7 +236,7 @@ def main(argv: List[str]) -> int:
     # written, not of an intended surface.
     declare_write(rc_path)
 
-    print(f"shell_init_guard: installed ({rc_path})")
+    print(f"shell_init_guard: installed ({rc_path}{_shell_coverage_note()})")
     return 0
 
 

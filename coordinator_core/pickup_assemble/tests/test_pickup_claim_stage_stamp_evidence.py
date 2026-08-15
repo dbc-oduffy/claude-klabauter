@@ -43,7 +43,27 @@ from coordinator_core.session import liveness as liveness_mod
 
 # Declared, not excused: this file spawns a real git process, the same
 # convention as test_brief_claim_lease.py in this package.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
+
+@pytest.fixture(autouse=True)
+def _reset_registry_snapshot_cache():
+    # Review: coordinator:code-reviewer P2 — this file exercises
+    # session_live/claim_holder_live, which route through liveness's
+    # per-process registry-snapshot memoization
+    # (liveness_mod._cached_registry_lookup). Only
+    # coordinator_core/session/tests/test_liveness.py reset that cache;
+    # left unreset here, whichever test in a shared pytest worker process
+    # first populates it (including one in a DIFFERENT file) leaks its
+    # snapshot into every later session_live/claim_holder_live call in this
+    # file, silently masking a monkeypatched registry_dir(). Reset before
+    # AND after each test so cross-file ordering never matters.
+    liveness_mod._registry_snapshot_cache = None
+    yield
+    liveness_mod._registry_snapshot_cache = None
 
 
 def _isolated_git_env(anchor: Path) -> dict[str, str]:
@@ -143,6 +163,112 @@ def _d2(result) -> dict:
         if d["id"] == "d2":
             return d
     raise AssertionError("d2 not found in directives")
+
+
+def test_reclaim_basis_downgrades_recency_only_evidence_to_liveness_unknown(
+    tmp_path, as_session, holder_reads_live, monkeypatch
+):
+    """Root-cause regression for cross-repo/inbox/2026-08-11-market-
+    intelligence-em-reclaim-labels-a-live-session-dead-without-checking.md:
+    the takeover fired (claim_holder_live -> False, the same boolean
+    `claim_artifact` itself acts on), but the ONLY liveness evidence behind
+    that False was Layer 2 recency inference (`session_verdict` basis
+    `"recency-window"`), never a confirmed-dead process check. The reclaim
+    record must say `"holder-liveness-unknown"`, not assert `"dead-holder"`
+    on evidence it never had."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(repo, "h1.md", "sid-old", stage="apply")
+    as_session("sid-new")
+    holder_reads_live(False)
+    monkeypatch.setattr(
+        liveness_mod, "session_verdict", lambda *a, **k: (False, "recency-window", 5400)
+    )
+
+    record = pa.acquire_brief_claim(repo, "handoff", "h1.md")
+
+    assert record is not None
+    assert record["holder"] == "sid-old"
+    assert record["basis"] == "holder-liveness-unknown"
+    assert record["liveness_basis"] == "recency-window"
+
+
+def test_reclaim_basis_stays_dead_holder_for_confirmed_dead_process(
+    tmp_path, as_session, holder_reads_live, monkeypatch
+):
+    """The one case `"dead-holder"` is still evidence-backed: `session_verdict`
+    ran the process-identity (Layer 1) check and it confirmed the holder's
+    process gone (`basis == "stable-pid"`, `live is False`)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(repo, "h1.md", "sid-old", stage="apply")
+    as_session("sid-new")
+    holder_reads_live(False)
+    monkeypatch.setattr(
+        liveness_mod, "session_verdict", lambda *a, **k: (False, "stable-pid", None)
+    )
+
+    record = pa.acquire_brief_claim(repo, "handoff", "h1.md")
+
+    assert record is not None
+    assert record["holder"] == "sid-old"
+    assert record["basis"] == "dead-holder"
+    assert record["liveness_basis"] == "stable-pid"
+
+
+def test_reclaim_basis_downgrades_confirmed_live_verdict_to_liveness_unknown(
+    tmp_path, as_session, holder_reads_live, monkeypatch
+):
+    """Review: staff-eng F1 — `basis` used to be derived from
+    `session_verdict`'s basis string alone, discarding the liveness boolean
+    (slot 0). A `(True, "stable-pid", None)` verdict — the process-identity
+    check CONFIRMED the holder alive — must never be labelled `"dead-holder"`
+    just because the takeover itself fired on `claim_holder_live` (a
+    separate, structurally-different computation — reachable via
+    `COORDINATOR_SESSION_LAYER1_DISABLE`, which `session_live` honours and
+    `session_verdict`/`_verdict_for_sdir` deliberately do not)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(repo, "h1.md", "sid-old", stage="apply")
+    as_session("sid-new")
+    holder_reads_live(False)
+    monkeypatch.setattr(
+        liveness_mod, "session_verdict", lambda *a, **k: (True, "stable-pid", None)
+    )
+
+    record = pa.acquire_brief_claim(repo, "handoff", "h1.md")
+
+    assert record is not None
+    assert record["holder"] == "sid-old"
+    assert record["basis"] == "holder-liveness-unknown"
+    assert record["liveness_basis"] == "stable-pid"
+
+
+def test_reclaim_basis_holder_absent_for_no_evidence_at_all(
+    tmp_path, as_session, holder_reads_live
+):
+    """Review: staff-eng F2 — `session_verdict` returning `None` (no local
+    session dir AND no harness-registry record for the holder anywhere) used
+    to map to `"dead-holder"`, asserting a process confirmation that never
+    ran on the dominant takeover path. Real wiring here (no `session_verdict`
+    stub — Review: F3 gap), so the module's real no-local-dir/no-registry
+    arm is what produces the `None` this exercises."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(repo, "h1.md", "sid-gone", stage="apply")
+    as_session("sid-new")
+    holder_reads_live(False)
+
+    record = pa.acquire_brief_claim(repo, "handoff", "h1.md")
+
+    assert record is not None
+    assert record["holder"] == "sid-gone"
+    assert record["basis"] == "holder-absent"
+    assert record["liveness_basis"] is None
 
 
 def test_fresh_pickup_brief_stage_claim_does_not_satisfy_d2(tmp_path, as_session):

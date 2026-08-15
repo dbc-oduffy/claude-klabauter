@@ -325,6 +325,14 @@ _HEX40_RE = re.compile(r"[0-9a-fA-F]{40}")
 _HEX_ABBREV_RE = re.compile(r"[0-9a-fA-F]{4,39}")
 _GITDIR_POINTER_RE = re.compile(r"^gitdir:\s*(.+)$")
 
+#: `resolve_artifact`'s revision tier (2026-08-14) candidate shape — a
+#: caller citing a delivery-commit SHA rather than its artifact path. Full
+#: hex range git itself accepts for an abbreviated sha (7 is git's default
+#: abbrev floor; 40 is a full sha) — never mistaken for a real path/basename
+#: because a `.md` basename can't be pure-hex-and-nothing-else at this
+#: length in this corpus's `<date>-<sender>-<slug>.md` convention.
+_REVISION_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
 
 def _resolve_common_dir(git_dir: Path) -> Path:
     """A linked worktree's private `git_dir` carries a `commondir` file
@@ -920,7 +928,23 @@ def _resolve_revision_raw(dirs: _GitDirs, value: str) -> Optional[str]:
     if value == "HEAD":
         return _read_head_sha(dirs)
     if _HEX40_RE.fullmatch(value):
-        return value.lower()
+        # A full 40-hex string is trusted only after confirming the object
+        # exists — mirroring the abbreviated-sha path just below, which
+        # already returns `None` on no match via `_find_object_by_prefix`.
+        # Without this check, a 40-hex value that names no object in the
+        # store (e.g. a caller-fabricated or copy-pasted-wrong sha) would
+        # short-circuit here and be reported "resolved" by every downstream
+        # consumer, which then fails on the *next* lookup with a misleading
+        # "resolved but delivered no artifact" message instead of the
+        # correct "does not resolve as a commit" diagnosis. One
+        # content-addressed lookup via `_read_object` — the same cost the
+        # abbreviated path already pays for its prefix scan, and free on
+        # repeat within a `brief()` process thanks to `_OBJECT_CACHE`. No
+        # type filter: a full sha naming a tree/blob/tag is still a real
+        # object in the store, so it is trusted here exactly as it always
+        # was — only a sha naming nothing at all now falls through.
+        if _read_object(dirs.common_dir, value.lower()) is not None:
+            return value.lower()
     if _HEX_ABBREV_RE.fullmatch(value):
         found = _find_object_by_prefix(dirs.common_dir, value.lower())
         if found:
@@ -1048,6 +1072,77 @@ def _blob_sha_at_tree_path(common_dir: Path, tree_sha: Optional[str], path: str)
     return None
 
 
+def _walk_tree_md_paths(common_dir: Path, tree_sha: Optional[str], prefix: str, out: dict[str, str]) -> None:
+    """Recursively collects every `.md` blob under `tree_sha` into `out`
+    (repo-relative path -> blob sha), descending subtrees (mode `40000`)
+    the way `_blob_sha_at_tree_path` descends a single named path — this is
+    the whole-subtree counterpart used by `_changed_md_paths_for_revision`,
+    which needs every `.md` path under a `LIVE_DIRS`/`ARCHIVE_DIRS` root
+    rather than one path it already knows the name of."""
+    if not tree_sha:
+        return
+    obj = _read_object(common_dir, tree_sha)
+    if obj is None or obj[0] != "tree":
+        return
+    for mode, name, sha in _parse_tree(obj[1]):
+        rel = f"{prefix}/{name}" if prefix else name
+        if mode == "40000":
+            _walk_tree_md_paths(common_dir, sha, rel, out)
+        elif name.endswith(".md"):
+            out[rel] = sha
+
+
+def _changed_md_paths_for_revision(common_dir: Path, sha: str) -> list[tuple[str, Optional[str]]]:
+    """The `.md` paths `sha` changed under `LIVE_DIRS + ARCHIVE_DIRS`
+    (repo-relative, commit-time paths — the revision tier in
+    `resolve_artifact` re-derives current locations from these basenames
+    rather than trusting them directly, since an actioned memo has since
+    moved), paired with the path's blob sha *in this commit* (`None` when
+    `sha` deleted the path). A path counts as changed if its blob at `sha`
+    (possibly absent) differs from the same path's blob in every parent it
+    has (mirrors `_commit_touches_path`'s per-path semantics, applied across
+    a whole directory subtree instead of one caller-named path); a root
+    commit counts every present path as changed, exactly as
+    `_commit_touches_path` does for a root commit. Unlike a naive walk of
+    just `sha`'s own tree, this also walks each parent's tree so a path
+    present only in a parent (deleted by `sha`) is still enumerated and
+    reported — otherwise a delete-only commit would be invisible here, at
+    odds with `_commit_touches_path`'s presence/absence handling for the
+    single-path case."""
+    commit = _commit_meta(common_dir, sha)
+    if commit is None:
+        return []
+    parents = commit["parents"]
+    parent_commits = [c for c in (_commit_meta(common_dir, p) for p in parents) if c is not None]
+    changed: list[tuple[str, Optional[str]]] = []
+    for rel_dir in LIVE_DIRS + ARCHIVE_DIRS:
+        dir_tree_sha = _blob_sha_at_tree_path(common_dir, commit["tree"], rel_dir)
+        dir_md_paths: dict[str, str] = {}
+        if dir_tree_sha is not None:
+            _walk_tree_md_paths(common_dir, dir_tree_sha, rel_dir, dir_md_paths)
+        parent_dir_paths: list[dict[str, str]] = []
+        for parent_commit in parent_commits:
+            parent_tree_sha = _blob_sha_at_tree_path(common_dir, parent_commit["tree"], rel_dir)
+            parent_md_paths: dict[str, str] = {}
+            if parent_tree_sha is not None:
+                _walk_tree_md_paths(common_dir, parent_tree_sha, rel_dir, parent_md_paths)
+            parent_dir_paths.append(parent_md_paths)
+        if dir_tree_sha is None and not any(parent_dir_paths):
+            continue
+        all_paths = set(dir_md_paths)
+        for parent_md_paths in parent_dir_paths:
+            all_paths.update(parent_md_paths)
+        for path in all_paths:
+            blob_sha = dir_md_paths.get(path)
+            if not parent_commits:
+                if blob_sha is not None:
+                    changed.append((path, blob_sha))
+                continue
+            if any(parent_md_paths.get(path) != blob_sha for parent_md_paths in parent_dir_paths):
+                changed.append((path, blob_sha))
+    return changed
+
+
 def _resolve_path_in_commit(common_dir: Path, commit_sha: str, path: str) -> Optional[tuple[str, bytes]]:
     commit = _commit_meta(common_dir, commit_sha)
     if commit is None:
@@ -1110,6 +1205,31 @@ def _commit_touches_path(common_dir: Path, sha: str, commit: dict[str, Any], pat
             continue  # identical tree as this commit's -> path cannot differ, no descent needed
         parent_blob = _blob_sha_at_tree_path(common_dir, parent_commit["tree"], path)
         if parent_blob != current:
+            return True
+    return False
+
+
+def _commit_deletes_path(common_dir: Path, sha: str, commit: dict[str, Any], path: str) -> bool:
+    """True when `commit` deleted `path` — absent from `commit`'s own tree
+    but present in at least one parent's tree. Call only once
+    `_commit_touches_path` has already confirmed the commit touches `path`
+    (a deletion is a specific case of "touches"), to avoid a redundant tree
+    descent on commits that don't touch the path at all.
+
+    A commit with no parents (initial commit) cannot delete anything — the
+    path was never there to remove."""
+    current = _blob_sha_at_tree_path(common_dir, commit["tree"], path)
+    if current is not None:
+        return False
+    parents = commit["parents"]
+    if not parents:
+        return False
+    for parent_sha in parents:
+        parent_commit = _commit_meta(common_dir, parent_sha)
+        if parent_commit is None:
+            continue
+        parent_blob = _blob_sha_at_tree_path(common_dir, parent_commit["tree"], path)
+        if parent_blob is not None:
             return True
     return False
 
@@ -2187,6 +2307,12 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     multi-hit path as an exact-tier collision — never a silent
     longest-match/newest-date/prefer-live tiebreak.
     """
+    #: Captured before any elision/sanitize transform mutates `artifact_path`
+    #: below — the revision tier (2026-08-14) matches this RAW input against
+    #: a sha shape, never a transformed/sanitized form (a real sha has no
+    #: punctuation to sanitize and is never elided).
+    _original_artifact_path = artifact_path
+
     elision_resolution: Optional[dict[str, str]] = None
     if _is_elided_basename(Path(artifact_path).name):
         candidates = _resolve_elided_artifact(artifact_path, repo_root)
@@ -2219,6 +2345,12 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     #: see the engine guessed and what it landed on, never silently.
     suffix_resolution: Optional[dict[str, str]] = None
 
+    #: Set the moment a git revision SHA is what actually resolved
+    #: (2026-08-14 tier) — narrated the same "passed" -> "resolved" shape as
+    #: the other tiers above, so a caller who cited a delivery-commit SHA
+    #: sees the engine resolved it and what artifact it landed on.
+    revision_resolution: Optional[dict[str, str]] = None
+
     def _tag(result: dict[str, Any]) -> dict[str, Any]:
         if elision_resolution is not None:
             result = {**result, "elision_resolution": elision_resolution}
@@ -2226,6 +2358,8 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
             result = {**result, "sanitize_resolution": sanitize_resolution}
         if suffix_resolution is not None:
             result = {**result, "suffix_resolution": suffix_resolution}
+        if revision_resolution is not None:
+            result = {**result, "revision_resolution": revision_resolution}
         return result
 
     live_path = (repo_root / artifact_path) if not Path(artifact_path).is_absolute() else Path(artifact_path)
@@ -2346,7 +2480,129 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
                     )
                     suffix_resolution = {"passed": artifact_path, "resolved": resolved_display}
 
+    # Revision tier (2026-08-14): a caller citing a git commit/revision SHA
+    # instead of an artifact path — a peer EM habitually cites a memo's
+    # delivery-commit SHA, never its filepath. Only attempted once every
+    # earlier tier above has found nothing, so a real path/basename never
+    # reaches here (non-regressive by construction). Resolve the revision,
+    # take the `.md` paths it changed under `LIVE_DIRS + ARCHIVE_DIRS`, and
+    # feed the resulting BASENAMES back through the same exact-basename
+    # search used above rather than trusting the commit-time path — a memo
+    # delivered to `cross-repo/inbox/` and later actioned has since moved to
+    # `cross-repo/archive/`, so the commit-time path is stale-by-default; if
+    # the basename search finds nothing but the commit-time path still
+    # exists on disk, that literal path is the fallback.
+    _revision_resolved_no_artifact = False
+    _revision_sha_display: Optional[str] = None
+    _revision_deleted_unresolvable: list[str] = []
+    # `_revision_unresolvable` and `_revision_resolved_no_artifact` /
+    # `_revision_deleted_unresolvable` are mutually exclusive by
+    # construction: the former is set only in the `rev_sha is None` branch
+    # below, the latter two only inside `rev_sha is not None`. No ordering
+    # discipline is needed at the raise site to keep a resolved revision
+    # from ever reaching the new arm — it structurally cannot.
+    _revision_unresolvable = False
+    if total_hits == 0 and _REVISION_SHA_RE.fullmatch(_original_artifact_path):
+        # Unconditional the moment the shape matches, mirroring the
+        # sanitize/suffix tiers' discipline above: recorded whether or not
+        # the revision itself resolves, or resolves to any artifact.
+        tried_basenames.append(f"revision {_original_artifact_path!r}")
+        discovered = _discover_git_dirs(repo_root)
+        rev_sha = _resolve_revision(discovered[1], _original_artifact_path) if discovered is not None else None
+        if discovered is not None and rev_sha is not None:
+            _revision_sha_display = rev_sha
+            common_dir = discovered[1].common_dir
+            changed_paths = _changed_md_paths_for_revision(common_dir, rev_sha)
+            revision_live_hits: list[Path] = []
+            revision_archive_hits: list[Path] = []
+            for rel_path, changed_blob_sha in changed_paths:
+                changed_basename = Path(rel_path).name
+                b_live = _live_fallback_search(repo_root, changed_basename)
+                b_archive = _archive_fallback_search(repo_root, changed_basename)
+                if not b_live and not b_archive:
+                    commit_time_path = repo_root / rel_path
+                    if commit_time_path.is_file():
+                        if _is_under_archive_dir(commit_time_path, repo_root):
+                            b_archive = [commit_time_path]
+                        else:
+                            b_live = [commit_time_path]
+                    elif changed_blob_sha is None:
+                        # `sha` deleted `rel_path` and no basename match
+                        # exists anywhere (not moved, not re-added under a
+                        # different name) -- distinct from "delivered no
+                        # artifact" (never touched anything under these
+                        # dirs) and from a plain lookup miss (never resolved
+                        # a revision at all): the revision delivered an
+                        # artifact that no longer exists.
+                        _revision_deleted_unresolvable.append(rel_path)
+                for p in b_live:
+                    if p not in revision_live_hits:
+                        revision_live_hits.append(p)
+                for p in b_archive:
+                    if p not in revision_archive_hits:
+                        revision_archive_hits.append(p)
+            revision_total = len(revision_live_hits) + len(revision_archive_hits)
+            if revision_total > 0:
+                live_hits, archive_hits, total_hits = (
+                    revision_live_hits,
+                    revision_archive_hits,
+                    revision_total,
+                )
+                if revision_total == 1:
+                    only_hit = (revision_live_hits or revision_archive_hits)[0]
+                    resolved_display = (
+                        rel_id(only_hit, repo_root)
+                        if _is_relative(only_hit, repo_root)
+                        else str(only_hit)
+                    )
+                    revision_resolution = {
+                        "passed": _original_artifact_path,
+                        "resolved": resolved_display,
+                    }
+            elif _revision_deleted_unresolvable:
+                # At least one changed path is a deletion this commit made
+                # that never resolved anywhere else (not a move) -- distinct
+                # from both "delivered no artifact" and a plain lookup miss.
+                pass
+            else:
+                # Revision resolved but delivered no artifact under either
+                # dir set — never reported as "not found at the passed
+                # path" (spec item 3): that misdiagnoses a resolved-revision
+                # failure as a plain lookup miss.
+                _revision_resolved_no_artifact = True
+        else:
+            # SHA-shaped argument, but not a commit `_resolve_revision`
+            # can find in this clone — a sender-side SHA copied into a
+            # receiver-side pickup, or simply a typo. Distinct from both
+            # revision arms above (those require `rev_sha is not None`)
+            # and from a plain lookup miss: the generic message below
+            # reports a filename search that never had a chance of
+            # succeeding, which misdiagnoses the actual failure the same
+            # way `_revision_resolved_no_artifact` was misdiagnosed before
+            # spec item 3 fixed it.
+            _revision_unresolvable = True
+
     if total_hits == 0:
+        if _revision_deleted_unresolvable:
+            raise _ArtifactUnreadable(
+                f"{_original_artifact_path}: resolved as revision {_revision_sha_display} "
+                f"but the artifact(s) it delivered no longer exist "
+                f"({', '.join(repr(p) for p in _revision_deleted_unresolvable)}) "
+                f"(basenames tried: {', '.join(repr(b) for b in tried_basenames)})"
+            )
+        if _revision_resolved_no_artifact:
+            raise _ArtifactUnreadable(
+                f"{_original_artifact_path}: resolved as revision {_revision_sha_display} "
+                f"but that revision delivered no artifact under any of "
+                f"{', '.join(LIVE_DIRS + ARCHIVE_DIRS)} "
+                f"(basenames tried: {', '.join(repr(b) for b in tried_basenames)})"
+            )
+        if _revision_unresolvable:
+            raise _ArtifactUnreadable(
+                f"{_original_artifact_path}: looks like a git revision but does not resolve as "
+                f"a commit in {repo_root} — pickup also searched filenames "
+                f"(basenames tried: {', '.join(repr(b) for b in tried_basenames)})"
+            )
         raise _ArtifactUnreadable(
             f"{artifact_path}: not found at the passed path and not in any of "
             f"{', '.join(LIVE_DIRS + ARCHIVE_DIRS)} "
@@ -2823,10 +3079,15 @@ def compute_deliverable_evidence(
     """Function 3 — MECHANICAL deliverable-scope evidence (Step 3.4b(iii)).
 
     present-on-disk AND commit-referenced -> "strong" shipped signal;
-    present-without-commit -> "weak"; absent -> "not-shipped". A signal
-    string, never a shipped/not-shipped verdict — the EM weighs it alongside
-    closure_signals and candidate commits (contract § "Overall keep/drop
-    verdict per pending item").
+    present-without-commit -> "weak"; absent with no deleting commit in
+    range -> "not-shipped"; absent AND a commit in `commits` deleted the
+    path -> "deleted-shipped" (a scope path whose deliverable IS its own
+    removal — a de-bash wave, a port-out, a consolidation — reads its own
+    successful outcome as positive evidence, not as "not-shipped"; kept
+    distinct from "strong" so a consumer can still tell presence-shipped
+    from deletion-shipped). A signal string, never a shipped/not-shipped
+    verdict — the EM weighs it alongside closure_signals and candidate
+    commits (contract § "Overall keep/drop verdict per pending item").
 
     One bounded commit walk resolves HEAD once and tests every scope path
     per popped commit, instead of calling `_git_log_oneline` once per path
@@ -2852,11 +3113,18 @@ def compute_deliverable_evidence(
     diffs on `state/handoffs/`, consistent with this repo having no
     clock-skew edges in its history — not proof none exist elsewhere).
     A future corpus-diff run against a different repo's history that shows
-    a divergence must be attributed to one of these two changes before
+    a divergence must be attributed to one of these three changes before
     being called a pass or a regression — do not assume "unchanged" and
-    revert the SLOP fix on a diff that is actually it working correctly.
+    revert the SLOP fix (or the deletion-awareness fix below) on a diff
+    that is actually one of them working correctly. The third: absent
+    scope paths whose own `commits` list contains a commit that deleted
+    the path now classify as "deleted-shipped" instead of "not-shipped"
+    (see the signal-value docstring above) — a corpus diff against a repo
+    with any deletion-shaped deliverable in its scope lists will show this
+    as an expected divergence, not a regression.
     """
     per_path_commits: dict[str, list[dict[str, Any]]] = {path: [] for path in scope_paths}
+    deleted_paths: set[str] = set()
     try:
         discovered = _discover_git_dirs(repo_root)
         if discovered is not None:
@@ -2869,6 +3137,8 @@ def compute_deliverable_evidence(
                     for path in scope_paths:
                         if _commit_touches_path(common_dir, sha, commit, path):
                             per_path_commits[path].append({"sha": sha, "subject": commit["subject"]})
+                            if _commit_deletes_path(common_dir, sha, commit, path):
+                                deleted_paths.add(path)
     except (
         _GitReadModelError,
         OSError,
@@ -2880,6 +3150,7 @@ def compute_deliverable_evidence(
         RecursionError,
     ):
         per_path_commits = {path: [] for path in scope_paths}
+        deleted_paths = set()
 
     evidence: list[dict[str, Any]] = []
     for path in scope_paths:
@@ -2889,6 +3160,8 @@ def compute_deliverable_evidence(
             signal = "strong"
         elif exists:
             signal = "weak"
+        elif path in deleted_paths:
+            signal = "deleted-shipped"
         else:
             signal = "not-shipped"
         evidence.append({"path": path, "exists": exists, "commits": commits, "signal": signal})
@@ -3653,8 +3926,42 @@ def acquire_brief_claim(
     holds, or a failed acquisition). Shape when non-`None`:
 
         {"holder": <the sid we took it from>,
-         "basis": "expired-brief-lease" | "dead-holder",
-         "claim_age_minutes": <age of the claim we displaced>}
+         "basis": "expired-brief-lease" | "dead-holder" | "holder-absent"
+                  | "holder-liveness-unknown",
+         "claim_age_minutes": <age of the claim we displaced>,
+         "liveness_basis": <the session.liveness basis behind "basis", or None>,
+         "liveness_live": <the session_verdict boolean behind "basis", or None
+                  when no verdict was available (see "holder-absent") --
+                  Review: coordinator:code-reviewer nit. Surfaced alongside
+                  "liveness_basis" so an incident-report reader can tell a
+                  confirmed-dead "stable-pid" record from a "stable-pid"
+                  record that structurally DISAGREED (live=True, folded into
+                  "holder-liveness-unknown" for the label) after the fact --
+                  before this field, both cases discarded the boolean at the
+                  return boundary and were indistinguishable post hoc.>}
+
+    `basis` is `"dead-holder"` ONLY when a process-identity check (Layer 1 /
+    `"stable-pid"`) both ran AND confirmed the prior holder's process gone
+    (`session_verdict`'s liveness boolean reads `False`) — Review: staff-eng
+    F1, a `"stable-pid"` basis with the boolean reading `True` means the
+    check confirmed the holder ALIVE and must not be reported as a
+    confirmed death. `session_verdict` finding no evidence for the holder
+    at all — `None` (no local session dir, no harness-registry record, a
+    charset-rejected sid, or any exception from the call itself) — reports
+    `"holder-absent"` instead (Review: staff-eng F2): none of those arms ran
+    a process check, so labelling that `"dead-holder"` asserts a
+    confirmation that never happened, on the SAME "absence of evidence"
+    shape the `session_live` half of this fix already treats as not proof
+    of death. A takeover that instead rests on Layer 2's recency inference
+    alone (`"recency-window"` / `"recency-window-mtime"` — a holder simply
+    hasn't refreshed `last_activity` inside the 30-minute window, which this
+    module's own `BRIEF_CLAIM_LEASE_MINUTES` docstring documents as a
+    routine occurrence for a session mid-dispatch), the fail-open
+    `"unknown"` arm, or the `"stable-pid"`-but-live-`True` structural
+    disagreement above, reports `"holder-liveness-unknown"` instead — none
+    of those is proof of death (2026-08-11 incident, cross-repo/inbox/
+    2026-08-11-example-market-data-repo-em-reclaim-labels-a-live-session-dead-
+    without-checking.md).
 
     That record exists so a reclaim stays DISTINGUISHABLE from a fresh
     pickup in the emitted brief. Without it the two collapse: the moment this
@@ -3671,6 +3978,25 @@ def acquire_brief_claim(
     and resolves the contention into the existing `denied` / stand-down
     narration, which is the surface the EM already knows how to read.
     Acquiring is an offer to take the lock, never a second gate.
+
+    `basis` derivation truth table (Review: coordinator:code-reviewer nit —
+    the branches below stay terse and cite back here rather than each
+    re-explaining the same reasoning inline):
+
+        prior_lease_expired | liveness_basis      | liveness_live | basis
+        --------------------|----------------------|---------------|------------------------
+        True                | (any)                | (any)         | expired-brief-lease
+        False               | "stable-pid"          | False         | dead-holder
+        False               | None                  | (n/a)         | holder-absent
+        False               | "recency-window(-mtime)" / "unknown" | (any) | holder-liveness-unknown
+        False               | "stable-pid"          | True          | holder-liveness-unknown
+
+    The last row is the structural-disagreement case (F1): `session_verdict`
+    (computed here, label-only) and `session_live` (what the takeover
+    actually acted on) can disagree under
+    `COORDINATOR_SESSION_LAYER1_DISABLE`, so a "stable-pid" basis is proof of
+    death only when its OWN boolean also reads False — never on the basis
+    string alone.
     """
     claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
 
@@ -3679,6 +4005,8 @@ def acquire_brief_claim(
     prior_holder: Optional[str] = None
     prior_age: Optional[int] = None
     prior_lease_expired = False
+    prior_liveness_basis: Optional[str] = None
+    prior_liveness_live: Optional[bool] = None
     if claims_dir.is_dir():
         try:
             prior_holder = (
@@ -3688,6 +4016,45 @@ def acquire_brief_claim(
             prior_holder = None
         prior_age = _claims.claim_age_minutes(claims_dir)
         prior_lease_expired = _claims.brief_lease_expired(claims_dir)
+        if prior_holder:
+            # Snapshotted for the SAME reason prior_holder/prior_age are —
+            # after a successful takeover the dir names us, and the
+            # evidence behind why the takeover was even ALLOWED is gone.
+            # `claim_artifact`'s own takeover decision (session/claims.py)
+            # only ever asks the boolean `liveness.claim_holder_live`,
+            # which throws away exactly the distinction this needs: a
+            # process-identity-confirmed dead holder ("stable-pid" basis,
+            # live=False) vs. a holder merely inferred dead by NOT having
+            # refreshed `last_activity` inside the 30-minute Layer-2 window
+            # ("recency-window"/"recency-window-mtime", live=False) — a
+            # basis this module's own `BRIEF_CLAIM_LEASE_MINUTES` docstring
+            # admits routinely under-covers real work ("measured dispatches
+            # on this surface run past 30 minutes routinely"). Fixes the
+            # 2026-08-11 incident (cross-repo/inbox/2026-08-11-market-
+            # intelligence-em-reclaim-labels-a-live-session-dead-without-
+            # checking.md): a live, heads-down-executing holder was
+            # narrated "that session reads dead" on evidence that was only
+            # ever a stale recency read, never a confirmed-dead process
+            # check.
+            try:
+                verdict = _liveness.session_verdict(prior_holder, cwd=str(repo_root))
+            except Exception:
+                verdict = None
+            if verdict is not None:
+                # Review: staff-eng F1 — the live boolean (slot 0) must be
+                # consulted, not just the basis string (slot 1). `session_live`
+                # (which `claim_artifact`'s takeover actually acted on) and
+                # `session_verdict` (computed here, for the label only) are
+                # NOT the same computation — `session_live` honours the
+                # `COORDINATOR_SESSION_LAYER1_DISABLE` rollback lever,
+                # `_verdict_for_sdir` deliberately does not (its own
+                # docstring) — so a "stable-pid" basis here can still mean
+                # CONFIRMED ALIVE (`verdict[0] is True`) even though the
+                # takeover already happened on a different, disabled-Layer-1
+                # read. Dropping the boolean rendered that structural
+                # disagreement as a confirmed death.
+                prior_liveness_live = verdict[0]
+                prior_liveness_basis = verdict[1]
 
     try:
         # A re-brief of a lock this session already holds refreshes the lease
@@ -3715,10 +4082,31 @@ def acquire_brief_claim(
         now_holder = ""
     if now_holder == prior_holder:
         return None
+    # See the truth table in this function's docstring — branches below cite
+    # back to it rather than re-deriving the reasoning inline.
+    if prior_lease_expired:
+        basis = "expired-brief-lease"
+    elif prior_liveness_basis == "stable-pid" and prior_liveness_live is False:
+        # Row 2 (Review: staff-eng F1) — confirmed dead: Layer 1 ran AND the
+        # boolean itself reads False.
+        basis = "dead-holder"
+    elif prior_liveness_basis is None:
+        # Row 3 (Review: staff-eng F2) — no verdict at all (no local dir, no
+        # registry record, charset-rejected sid, or the call raised): no
+        # process check ran, so this is not "dead-holder".
+        basis = "holder-absent"
+    else:
+        # Rows 4-5 — a verdict WAS available but is not proof of death: a
+        # recency-only inference ("recency-window(-mtime)"), the fail-open
+        # "unknown" arm, or a "stable-pid" basis whose boolean structurally
+        # DISAGREES (live=True — F1, the 2026-08-11 incident shape).
+        basis = "holder-liveness-unknown"
     return {
         "holder": prior_holder,
-        "basis": "expired-brief-lease" if prior_lease_expired else "dead-holder",
+        "basis": basis,
         "claim_age_minutes": prior_age,
+        "liveness_basis": prior_liveness_basis,
+        "liveness_live": prior_liveness_live,
     }
 
 
@@ -4069,29 +4457,218 @@ def _scan_handoff_dir(handoffs_dir: Path) -> list[dict[str, Any]]:
     return scanned
 
 
+def _scan_bounded_archive_handoff_dir(archive_dir: Path) -> list[dict[str, Any]]:
+    """A BOUNDED counterpart to `_scan_handoff_dir`, over `archive/handoffs/`
+    instead of `state/handoffs/`: flat `archive/handoffs/*.md` (pre-month-
+    folder or hand-placed) plus the TWO most-recently-modified `YYYY-MM/`
+    month folders (one level deep each, not recursive) — never the whole
+    archive tree.
+
+    Exists solely so `compute_successor_handoffs` can find a DIRECT
+    `deployment_state: continued` referencer that the DR-084 supersede verb
+    (`archive_stamp.cs_supersede_archive_handoff`) already moved out of
+    `state/handoffs/` before/at the moment it was stamped — the state-only
+    scan `_scan_handoff_dir` performs can never see it (see
+    `_walk_continued_chain`'s docstring). A continuation link is, by
+    construction, freshly written near "now" (the same session that claims
+    a predecessor to hand it onward archives the link in the same breath),
+    so bounding to the two newest month folders trades a vanishingly rare
+    miss (a chain resumed many months after its own last continuation) for
+    keeping this off `brief()`'s full ~370-entry archive corpus on every
+    call — the session-boot hot-path budget this package is held to
+    (see module-level cold-invocation-cost comments elsewhere in this file)
+    does not have headroom for an unconditional full-archive scan, and this
+    function is called on every `state/handoffs` predecessor regardless of
+    whether it turns out to have a successor at all.
+
+    Same per-file skip behavior as `_scan_handoff_dir`: unreadable or
+    unparseable-frontmatter files are silently skipped.
+    """
+    scanned: list[dict[str, Any]] = []
+    candidate_dirs: list[Path] = [archive_dir]
+    month_dirs = [
+        entry for entry in archive_dir.iterdir()
+        if entry.is_dir() and re.match(r"^\d{4}-\d{2}$", entry.name)
+    ] if archive_dir.is_dir() else []
+    month_dirs.sort(key=lambda p: p.name, reverse=True)
+    candidate_dirs.extend(month_dirs[:2])
+
+    for one_dir in candidate_dirs:
+        try:
+            paths = sorted(one_dir.glob("*.md"))
+        except OSError:
+            continue
+        for candidate_path in paths:
+            try:
+                text = candidate_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            split = split_frontmatter(text)
+            if split is None:
+                continue
+            scanned.append(
+                {
+                    "path": candidate_path,
+                    "resolved": candidate_path.resolve(),
+                    "fm": _parse_fm_dict(split.fm_text),
+                }
+            )
+    return scanned
+
+
+def _read_handoff_fm(path: Path) -> Optional[dict[str, Any]]:
+    """Read+parse one handoff's frontmatter off disk, or `None` on any read/
+    parse failure. Factored out of `compute_successor_handoffs`'s pre-
+    existing defensive-fallback block so `_walk_continued_chain` (below) can
+    reuse the identical read path for nodes that are never a member of the
+    caller's pre-parsed `handoff_scan` (a continuation chain routinely walks
+    into `archive/handoffs/`, which that scan never covers)."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+    return _parse_fm_dict(split.fm_text)
+
+
+def _walk_continued_chain(
+    fm: dict[str, Any], handoffs_dir: Path, root: Path
+) -> Optional[tuple[str, dict[str, Any]]]:
+    """Follow a `deployment_state: continued` node's `continued_into` pointer
+    forward — recursively, since the target can itself be `continued` again
+    before landing on a genuinely live tip — to the chain's terminal node.
+
+    Root cause this closes (cross-repo/inbox/2026-08-14-example-retrieval-repo-em-
+    succession-heir-never-archives.md item 3): the DR-084 supersede verb
+    (`archive_stamp.cs_supersede_archive_handoff`) stamps
+    `deployment_state: continued` + `continued_into: <successor>` and moves
+    the stamped node to `archive/handoffs/YYYY-MM/` in the SAME commit. By
+    the time a caller briefs the node's own predecessor,
+    `compute_successor_handoffs`'s single-hop, state-only reverse-membership
+    scan can see that the direct child now reads `continued` (never a live
+    `_SUCCESSOR_LIVE_DEPLOYMENT_STATES` value), but has no way to see PAST
+    it to whichever descendant is actually live — the continuation link
+    itself is no longer even a member of the state-only scan set. This
+    function is the "see past it" step: it resolves `continued_into`
+    (`coordinator_core.dag.resolve_target`'s normal path/basename/archive/
+    git-history tiers, plus a lazily-built handoff_id index for an
+    id-shaped pointer — `continued_into` is documented, per
+    `archive_stamp.py`, as accepting either) and reads the target's
+    frontmatter directly off disk, archived or not.
+
+    Returns `(abs_path, fm)` for the first node reached whose OWN
+    `deployment_state` is not `"continued"` — the caller applies the
+    ORDINARY live-candidacy test (status + deployment_state +, for
+    `in_flight`, holder liveness) to that node exactly as it would any
+    direct referencer. A node reached this way that fails that test (e.g.
+    itself terminal — `shipped`/`abandoned`/`closed`) is correctly not a
+    candidate; only a node independently `ready_to_fire`/live-`in_flight`
+    ever surfaces, so AC8 ("archived and terminal children surface
+    neither") holds for the chain's terminal node exactly as it already did
+    for a direct referencer.
+
+    Returns `None` on an unresolvable pointer, a missing/unparseable
+    target, a depth-cap trip, or a cycle — an indeterminate chain
+    contributes no candidate, it never raises or hangs `brief()`. Read-only
+    throughout.
+    """
+    from coordinator_core.dag import build_handoff_id_index as _dag_build_handoff_id_index
+    from coordinator_core.dag import resolve_target as _dag_resolve_target
+
+    id_index: Optional[dict[str, str]] = None
+    visited: set[str] = set()
+    current_fm = fm
+    for _ in range(_MAX_CONTINUATION_CHAIN_DEPTH):
+        continued_into = current_fm.get("continued_into")
+        if not continued_into:
+            return None
+        ref_str = str(continued_into).strip()
+        if not ref_str:
+            return None
+        if id_index is None and not ref_str.endswith(".md"):
+            # `continued_into` is id-shaped (no other tier can resolve it) —
+            # build the corpus-wide handoff_id index ONCE, lazily, only when
+            # a chain actually needs it (the common path/basename form never
+            # pays this cost).
+            id_paths = [str(p) for p in sorted(handoffs_dir.glob("*.md"))]
+            archive_dir = root / "archive" / "handoffs"
+            if archive_dir.is_dir():
+                id_paths.extend(str(p) for p in sorted(archive_dir.rglob("*.md")))
+            id_index = _dag_build_handoff_id_index(id_paths)
+        resolved = _dag_resolve_target(ref_str, str(handoffs_dir), str(root), id_index=id_index)
+        if not resolved or resolved == "git-history":
+            return None
+        resolved_abs = os.path.abspath(resolved)
+        if resolved_abs in visited:
+            return None  # cycle — corrupt continued_into chain, never legitimate
+        visited.add(resolved_abs)
+        next_fm = _read_handoff_fm(Path(resolved_abs))
+        if next_fm is None:
+            return None
+        next_state = str(next_fm.get("deployment_state") or "").strip().lower()
+        if next_state != "continued":
+            return resolved_abs, next_fm
+        current_fm = next_fm
+    return None
+
+
+#: Mirrors `reachability.NotReachableReason.MESSAGING_UNAVAILABLE` as a
+#: literal, not an import of the class -- this module only ever needs the
+#: one constant, and importing the whole `reachability` module is already
+#: deferred to inside the `try:` below for its own advisory-degrade reason
+#: (see `_resolve_send_message_addresses`'s docstring); pulling in
+#: `NotReachableReason` unconditionally at module scope would defeat that.
+#: Same string, so a consumer cross-referencing this field against the
+#: peer-roster surface's own reason vocabulary sees one spelling, not two.
+_SEND_MESSAGE_ADDRESS_UNAVAILABLE = "peer-messaging-unavailable"
+
+
 def _resolve_send_message_addresses(candidates: list[dict[str, Any]]) -> None:
     """Shared advisory-resolution core for `compute_competing_claim` and
-    `compute_successor_handoffs` -- stamps `send_message_address` and
-    `send_message_address_resolved_at` onto every dict in `candidates` IN
-    PLACE, off ONE `reachability.resolve_addresses_bulk` call for the whole
-    distinct-holder set (state/handoffs/2026-08-13-session-owner-
+    `compute_successor_handoffs` -- stamps `send_message_address`,
+    `send_message_address_unavailable_reason`, and `send_message_address_
+    resolved_at` onto every dict in `candidates` IN PLACE, off ONE
+    `reachability.resolve_addresses_bulk_with_availability` call for the
+    whole distinct-holder set (state/handoffs/2026-08-13-session-owner-
     reachability-registry.md § 3; cross-repo/inbox/2026-08-13-doe-claude-em-
-    peer-roster-doctrine-reply.md § Counter 2). Factored out because
+    peer-roster-doctrine-reply.md § Counter 2; cross-repo/inbox/2026-08-15-
+    example-retrieval-repo-em-peer-messaging-gate-off-vs-proven-round-trip.md §
+    "Smaller, concrete: the empty-string rendering"). Factored out because
     `reachability.resolve_advisory_address`/`resolve_addresses_bulk` were
     extracted specifically to kill this duplication across `baton_assemble`
     and `pickup_assemble` -- leaving it duplicated verbatim between this
     module's own two call sites was inconsistent with that motivation
     (Review: code-reviewer -- P4).
 
+    `send_message_address` is `""` ONLY for "this specific peer resolved to
+    no address while messaging is available box-wide" -- a fact about the
+    PEER. When no peer on the box can have an address at all (the harness's
+    cross-session inbox is unbound, `reachability.messaging_available()` is
+    `False`), the field is `None` instead and `send_message_address_
+    unavailable_reason` carries `"peer-messaging-unavailable"` (the same
+    string the peer-roster surface's `NotReachableReason.
+    MESSAGING_UNAVAILABLE` already uses) -- a fact about the HARNESS. An EM
+    reading `""` unconditionally as "no address" previously could not tell
+    these apart; this pairing is what makes them distinguishable on this
+    surface the way they already are on the roster surface. Every candidate
+    carries `send_message_address_unavailable_reason`, resolved or not --
+    `None` when an address was resolved OR when the peer-specific `""` arm
+    applies, so a consumer can check the reason field unconditionally
+    without a `None`-vs-missing-key branch.
+
     Advisory only: resolved via ONE live-registry snapshot for the whole
     candidate set. Never raises, never blocks the caller's scan, and never
     touches `verdict`/`disposition`/`holder_live`/`kind`/`status`/
     `deployment_state` on any resolution failure -- a bare import error or a
     raising resolver degrades every candidate's `send_message_address` to
-    `""`, the same value an unresolvable holder gets on its own merits. The
-    local `from coordinator_core.session import reachability` import stays
-    INSIDE the `try:` so an import-time failure degrades identically to a
-    runtime one, never taking this module down.
+    `""` with a `None` reason, the SAME degrade `resolve_addresses_bulk`
+    itself had before this field existed: a resolver exception is "we don't
+    know", never "we know it's box-wide unavailable", so it must not be
+    reported as the latter. The local `from coordinator_core.session import
+    reachability` import stays INSIDE the `try:` so an import-time failure
+    degrades identically to a runtime one, never taking this module down.
 
     Negative-spec: `send_message_address` is NOT durable identity and must
     never be persisted and reused past the instant it was computed -- it
@@ -4109,19 +4686,28 @@ def _resolve_send_message_addresses(candidates: list[dict[str, Any]]) -> None:
     trusting it silently. `.get(candidate.get("claimed_by") or "", "")`
     keeps a missing/empty `claimed_by` from raising `KeyError` -- a
     `ready_to_fire` candidate's `claimed_by` is frequently empty by AC7/
-    AC8's own contract, and `resolve_addresses_bulk` treats a falsy id as
-    `""` without a lookup.
+    AC8's own contract, and `resolve_addresses_bulk_with_availability`
+    treats a falsy id as `""` without a lookup.
     """
     holder_sids = sorted({c["claimed_by"] for c in candidates if c.get("claimed_by")})
     resolved_at = datetime.now(timezone.utc).isoformat()
     try:
         from coordinator_core.session import reachability
 
-        address_by_sid = reachability.resolve_addresses_bulk(holder_sids)
+        address_by_sid, messaging_available = reachability.resolve_addresses_bulk_with_availability(
+            holder_sids
+        )
     except Exception:
         address_by_sid = {}
+        messaging_available = True  # unknown on failure -- never claim box-wide unavailability we didn't observe
     for candidate in candidates:
-        candidate["send_message_address"] = address_by_sid.get(candidate.get("claimed_by") or "", "")
+        address = address_by_sid.get(candidate.get("claimed_by") or "", "")
+        if not address and not messaging_available:
+            candidate["send_message_address"] = None
+            candidate["send_message_address_unavailable_reason"] = _SEND_MESSAGE_ADDRESS_UNAVAILABLE
+        else:
+            candidate["send_message_address"] = address
+            candidate["send_message_address_unavailable_reason"] = None
         candidate["send_message_address_resolved_at"] = resolved_at
 
 
@@ -4311,18 +4897,26 @@ def compute_competing_claim(
                          picked_up_by holder at all.
 
     Each candidate also carries `send_message_address`: a best-effort bare
-    `SendMessage` address for `claimed_by` (`""` when unresolvable, or
-    `"<this session>"` for a self-claim), so the EM reading this brief has
-    somewhere to reach the named holder without a separate lookup (`state/
-    handoffs/2026-08-13-session-owner-reachability-registry.md` § 3;
-    `cross-repo/inbox/2026-08-13-doe-claude-em-peer-roster-doctrine-reply.md`
-    § Counter 2). Advisory only: resolved via `reachability.
-    resolve_addresses_bulk` off ONE live-registry snapshot for the whole
-    candidate set, and any resolution failure degrades every candidate's
-    field to `""` without touching `verdict`, `disposition`, or
-    `holder_live` (see the try/except below). A sibling
-    `send_message_address_resolved_at` (UTC ISO-8601) is stamped alongside
-    it on every candidate, resolved or not.
+    `SendMessage` address for `claimed_by` (`""` when THIS PEER is
+    unresolvable while messaging works elsewhere on the box, `None` with
+    `send_message_address_unavailable_reason` set to `"peer-messaging-
+    unavailable"` when NO peer on the box can have one, or `"<this
+    session>"` for a self-claim), so the EM reading this brief has
+    somewhere to reach the named holder without a separate lookup, and can
+    tell "this peer has no address" apart from "no peer can have one right
+    now" the way the peer-roster surface already can (`state/handoffs/
+    2026-08-13-session-owner-reachability-registry.md` § 3; `cross-repo/
+    inbox/2026-08-13-doe-claude-em-peer-roster-doctrine-reply.md` § Counter
+    2; `cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-messaging-gate-off-
+    vs-proven-round-trip.md` § "Smaller, concrete: the empty-string
+    rendering"). Advisory only: resolved via `reachability.
+    resolve_addresses_bulk_with_availability` off ONE live-registry
+    snapshot for the whole candidate set, and any resolution failure
+    degrades every candidate's field to `""` (reason `None`) without
+    touching `verdict`, `disposition`, or `holder_live` (see the try/except
+    below) -- a resolver exception is "we don't know", never "box-wide
+    unavailable". A sibling `send_message_address_resolved_at` (UTC
+    ISO-8601) is stamped alongside it on every candidate, resolved or not.
 
     Negative-spec: `send_message_address` is NOT durable identity and must
     never be persisted and reused past the instant it was computed — it
@@ -4551,6 +5145,14 @@ _SUCCESSOR_LIVE_DEPLOYMENT_STATES = frozenset({"ready_to_fire", "in_flight"})
 #: terminal-set consumers answer.
 _SUCCESSOR_LIVE_STATUSES = frozenset({"open", "active"})
 
+#: Bounded-walk guard for `_walk_continued_chain` — a `continued_into` cycle
+#: (corruption; never a legitimate write) or a pathological chain must
+#: terminate this walk, not hang `brief()`. 12 hops is generous headroom
+#: over any observed continuation chain (the incident this guards against,
+#: cross-repo/inbox/2026-08-14-example-retrieval-repo-em-succession-heir-never-
+#: archives.md item 3, was 2 hops deep).
+_MAX_CONTINUATION_CHAIN_DEPTH = 12
+
 
 #: `compute_commit_reality`'s programming-error class — judged against what
 #: this function's own new logic (not the corpus walk it wraps) can
@@ -4695,12 +5297,21 @@ def compute_successor_handoffs(
     `dag.referenced_by` already understands every one of these; this
     function does not hand-roll edge matching, per Anti-scope).
 
-    Only `state/handoffs/*.md` is scanned (mirrors `compute_competing_claim`'s
-    own live-only scan) — an archived successor is therefore never a member
-    of the scan set at all, which is what keeps an archived/terminal child
-    from ever surfacing here (AC8's "archived and terminal children surface
-    neither gate nor JP"), with no separate archival-status filter needed on
-    top.
+    `state/handoffs/*.md` is the scan set `dag.referenced_by` walks (mirrors
+    `compute_competing_claim`'s own live-only scan) — an ordinary archived
+    successor (shipped/abandoned/closed) is therefore never a member of it,
+    which is what keeps an archived/terminal child from ever surfacing here
+    (AC8's "archived and terminal children surface neither gate nor JP"),
+    with no separate archival-status filter needed on top. ONE exception,
+    handled by `_walk_continued_chain`: a direct referencer stamped
+    `deployment_state: continued` is a DR-084 supersede LINK, not a dead
+    end — its `continued_into` names where the work actually went, and that
+    target (itself possibly `continued` again) is resolved and read
+    directly off disk, archived or not, so a live tip several `continued`
+    hops downstream of `artifact_path` still surfaces. The chain's terminal
+    node must still independently pass the SAME live-candidacy test below;
+    a `continued` node's own status/deployment_state never does, so AC8
+    holds for it exactly as it does for any other archived node.
 
     A scanned candidate becomes a member of `candidates` iff:
       - its `status` is one of `_SUCCESSOR_LIVE_STATUSES` (dual-tolerant
@@ -4752,13 +5363,44 @@ def compute_successor_handoffs(
 
     ref = _dag_referenced_by(self_resolved, live_set, handoff_dir=str(handoffs_dir))
 
+    # A DIRECT `continued` referencer that the archive-and-move supersede
+    # already relocated out of `state/handoffs/` is invisible to the scan
+    # above by construction — it is simply absent from `live_set`. Re-run
+    # `referenced_by` against `live_set` plus a BOUNDED recent-archive scan
+    # (see `_scan_bounded_archive_handoff_dir`) and keep only the NEWLY
+    # found referencers with `deployment_state: continued` — every other
+    # archive-sourced referencer is discarded unlooked-at here, preserving
+    # AC8 ("archived and terminal children surface neither") for the
+    # ordinary case exactly as before; this second pass exists solely to
+    # find continuation LINKS, never to admit an archived node as a
+    # candidate directly.
+    archive_dir = root / "archive" / "handoffs"
+    archive_continued_referencers: list[tuple[str, dict[str, Any]]] = []
+    if archive_dir.is_dir():
+        archive_scan = _scan_bounded_archive_handoff_dir(archive_dir)
+        if archive_scan:
+            archive_fm_by_resolved = {str(entry["resolved"]): entry["fm"] for entry in archive_scan}
+            extended_live_set = live_set + list(archive_fm_by_resolved.keys())
+            archive_ref = _dag_referenced_by(self_resolved, extended_live_set, handoff_dir=str(handoffs_dir))
+            already_found = set(ref["referencedBy"])
+            for candidate_abs in archive_ref["referencedBy"]:
+                if candidate_abs == self_resolved or candidate_abs in already_found:
+                    continue
+                candidate_fm = archive_fm_by_resolved.get(candidate_abs)
+                if candidate_fm is None:
+                    continue
+                if str(candidate_fm.get("deployment_state") or "").strip().lower() == "continued":
+                    archive_continued_referencers.append((candidate_abs, candidate_fm))
+
     liveness_by_sid: dict[str, bool] = liveness_cache if liveness_cache is not None else {}
 
     candidates: list[dict[str, Any]] = []
-    for candidate_abs in ref["referencedBy"]:
-        if candidate_abs == self_resolved:
-            continue
-        candidate_fm = fm_by_resolved.get(candidate_abs)
+    referencer_entries: list[tuple[str, Optional[dict[str, Any]]]] = [
+        (candidate_abs, fm_by_resolved.get(candidate_abs))
+        for candidate_abs in ref["referencedBy"]
+        if candidate_abs != self_resolved
+    ] + archive_continued_referencers
+    for candidate_abs, candidate_fm in referencer_entries:
         candidate_path = Path(candidate_abs)
         if candidate_fm is None:
             # Defensive fallback only — `dag.referenced_by` is documented to
@@ -4766,20 +5408,32 @@ def compute_successor_handoffs(
             # `candidate_abs` should already be a `fm_by_resolved` key. Kept
             # so a resolution mismatch degrades to the pre-consolidation
             # direct-read behavior rather than dropping the candidate.
-            try:
-                text = candidate_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            # Review: coordinatorcode-reviewer-240bf49d — folded onto
+            # `_read_handoff_fm` (same read+split+parse, `None` on any
+            # failure) so this module's third open-coded copy of that
+            # sequence is gone.
+            candidate_fm = _read_handoff_fm(candidate_path)
+            if candidate_fm is None:
                 continue
-            split = split_frontmatter(text)
-            if split is None:
+
+        deployment_state = str(candidate_fm.get("deployment_state") or "").strip().lower()
+        if deployment_state == "continued":
+            # DR-084 supersede link, not a dead end — see this function's
+            # docstring and `_walk_continued_chain`'s own. Substitute the
+            # chain's terminal node (if any) for THIS iteration and re-derive
+            # every field the evaluation below reads from it; an
+            # unresolvable/cyclic/absent chain contributes no candidate.
+            walked = _walk_continued_chain(candidate_fm, handoffs_dir, root)
+            if walked is None:
                 continue
-            candidate_fm = _parse_fm_dict(split.fm_text)
+            candidate_abs, candidate_fm = walked
+            candidate_path = Path(candidate_abs)
+            deployment_state = str(candidate_fm.get("deployment_state") or "").strip().lower()
 
         status = str(candidate_fm.get("status") or "").strip().lower()
         if status not in _SUCCESSOR_LIVE_STATUSES:
             continue
 
-        deployment_state = str(candidate_fm.get("deployment_state") or "").strip().lower()
         if deployment_state not in _SUCCESSOR_LIVE_DEPLOYMENT_STATES:
             continue
 
@@ -5985,6 +6639,26 @@ def compute_gate_shipped_blocker_evidence(
     return None
 
 
+#: Piece B guidance strings for `jgate`'s two dispositions (message
+#: register: one fact, once, plus a terse alternative — no reassurance, no
+#: repetition). `blocked_by`/`blocking_notes` are the two fields a claim
+#: strands unread if answered "cleared" without `gate-recheck` also
+#: recording the clearance (Piece A) — naming them here is what converts
+#: the silent orphaning the memo describes into a visible one.
+# Review: staff-eng — replaced the obsolete/factually-wrong version (it
+# described gate-recheck as needing a manual follow-on pass and as the
+# owner of retiring blocked_by; neither is true post-Piece-A).
+_JGATE_CLEARED_GUIDANCE = (
+    "Answer from gates.gate_check.blocked_by / .blocking_notes / "
+    ".gate_evidence, not gate_dependency prose. blocked_by is retired "
+    "separately by reconcile-open, not by clearing."
+)
+_JGATE_NOT_CLEARED_GUIDANCE = (
+    "Leave deployment_state:awaiting_gate — claim-handoff will not fire. "
+    "Re-run pickup-assemble once the blocker resolves."
+)
+
+
 def build_gate_check_judgment_point(
     evidence_pointer: str, resolves: list[str], recommendation: Optional[dict[str, str]] = None
 ) -> dict[str, Any]:
@@ -6010,15 +6684,30 @@ def build_gate_check_judgment_point(
     unconditionally either way (contract negative spec 1), the
     `dispositions`/`resolves` lists below are unchanged by which branch
     fires, and the EM still resolves it — a recommendation narrows what is
-    read, never what is decided."""
+    read, never what is decided.
+
+    Piece B (cross-repo/inbox/2026-08-04-example-market-data-repo-em-pickup-
+    jgate-cleared-strands-gate-fields.md) — both dispositions carry a
+    `guidance` string, `jshipped`'s in-repo model (`build_shipped_state_
+    judgment_point`, above). The widened `gates.gate_check` bundle this
+    evidence pointer resolves to now also carries `blocked_by`/
+    `blocking_notes`/`gate_evidence` (see the `awaiting_gate` branch in
+    `_brief_for_artifact` that builds it) — `cleared` is answered directly
+    against the same two fields (`blocked_by`, `blocking_notes`) that a
+    claim strands unless `gate-recheck` also runs (Piece A, this same
+    disposition's `resolves` list)."""
     if recommendation is not None:
         return build_judgment_point(
             "jgate",
             "Has this awaiting_gate handoff's gate actually cleared?",
             evidence_pointer,
             [
-                {"value": "cleared", "resolves": resolves},
-                {"value": "not-cleared", "resolves": []},
+                {"value": "cleared", "resolves": resolves, "guidance": _JGATE_CLEARED_GUIDANCE},
+                {
+                    "value": "not-cleared",
+                    "resolves": [],
+                    "guidance": _JGATE_NOT_CLEARED_GUIDANCE,
+                },
             ],
             recommendation,
         )
@@ -6027,8 +6716,8 @@ def build_gate_check_judgment_point(
         "Has this awaiting_gate handoff's gate actually cleared?",
         evidence_pointer,
         [
-            {"value": "cleared", "resolves": resolves},
-            {"value": "not-cleared", "resolves": []},
+            {"value": "cleared", "resolves": resolves, "guidance": _JGATE_CLEARED_GUIDANCE},
+            {"value": "not-cleared", "resolves": [], "guidance": _JGATE_NOT_CLEARED_GUIDANCE},
         ],
         None,
         reason="insufficient-evidence",
@@ -6087,6 +6776,79 @@ def build_shipped_state_judgment_point(evidence_pointer: str, resolves: list[str
         None,
         reason="insufficient-evidence",
     )
+
+
+def build_gate_recheck_directive(artifact_path: str) -> dict[str, Any]:
+    """Piece A (cross-repo/inbox/2026-08-04-example-market-data-repo-em-pickup-
+    jgate-cleared-strands-gate-fields.md) — the `jgate: cleared` recording
+    directive, built ONLY in the `awaiting_gate` branch alongside `d2`
+    (`claim-handoff`). Dispatches `archive-stamp-cli gate-recheck` ->
+    `archive_stamp.cs_gate_recheck_handoff(path, at=..., cleared=True)`
+    (`apply.py::_dispatch_archive_stamp_cli`), which flips
+    `awaiting_gate -> ready_to_fire` and, when a `gate_evidence:` block is
+    present, re-verifies it before honoring the clearance (`MutateAbort`,
+    no write, unless the re-resolution reduces to `"freed"`) — an EM's
+    `jgate: cleared` becomes an assertion the engine re-checks, not one it
+    trusts absolutely. Most `awaiting_gate` records carry only
+    `gate_dependency` prose, no `gate_evidence:` block: for those, this
+    handler flips straight to `ready_to_fire` with `gate_dependency`
+    stripped and zero machine verification — the EM's `cleared` is the
+    sole authority when there is no machine evidence to check it against.
+    (Review: staff-eng — the prior wording read as an unconditional
+    guarantee.)
+
+    The `awaiting_gate -> ready_to_fire -> in_flight` sequence makes
+    `ready_to_fire` briefly observable on disk mid-`apply`, a state no
+    consumer of an `awaiting_gate` record has had to reason about before
+    (`handoff_gate_aging`, `roadmap/audit`, `cockpit_schema.roadmap_summary`
+    and `handoff_children` all key off `deployment_state`). What bounds that
+    window is the claim lock, NOT any assumption about who reads when:
+    `apply` promotes the brief-stage reservation to a durable `apply`-stage
+    claim (`promote_claim_stage`) before the first directive dispatches, so
+    no second pickup can interleave a mutation here. A reader racing the
+    window still sees committed disk state one transition early — bounded,
+    single-process, and self-correcting on the same run. (Review: staff-eng —
+    recorded because the reasoning that reached this conclusion originally
+    rested on consumers not reading concurrently, which is false on a box
+    running dozens of sessions; the lock is the real invariant, and anyone
+    changing the locking needs to see that here.)
+
+    No compensator is registered for this directive: if it lands and `d2`
+    then raises, `apply` returns `APPLY_EXIT_PARTIAL_MUTATION` and commits
+    nothing, leaving the record on disk at `ready_to_fire` with
+    `gate_dependency` stripped, uncommitted. This is recoverable both ways rather than
+    wedged, but by two DIFFERENT mechanisms — do not assume symmetry.
+    `drop` -> `cs_unclaim_handoff` no-ops idempotently on `status: open`
+    + `ready_to_fire`, then commits the dirty path. A re-run of `apply`
+    recovers WITHOUT re-firing this directive at all: `brief()` reads the
+    record's now-`ready_to_fire` `deployment_state`, so it never re-emits
+    `jgate` or `d-gate-recheck`, and `d2` claims directly off
+    `ready_to_fire`. The recheck is not replayed and not idempotently
+    re-applied — it is already done. (Review: staff-eng — recorded because
+    neither recovery path was documented; the earlier claim here, that a
+    re-run replays `_gate_recheck` byte-identically, was false and was
+    corrected after a reviewer's test disproved it.)
+
+    Ordering (load-bearing): this directive's id must appear in `d2`'s
+    `depends_on` list ALONGSIDE `"jgate"` — `order_by_depends_on`
+    (`contract/apply_base.py`) topologically sorts on directive-id
+    dependencies (this id is a real entry in the directives list), so `d2`
+    never dispatches before this one lands; `directive_gate_open` ignores a
+    `depends_on` entry that does not name a live judgment-point id, so
+    this id contributes ordering only, never a second gate on `d2`'s own
+    judgment resolution (`jgate` alone still gates `d2`, unchanged). `at`
+    is stamped as today's date (`date.today().isoformat()`), matching
+    `handoff_gate_aging`'s own `date.today()` use for gate-facing engine
+    timestamps — `cs_gate_recheck_handoff`'s own `at` contract is a bare
+    date string (see `test_archive_stamp.py::test_gate_recheck_cleared`),
+    not a full ISO-8601 timestamp."""
+    return {
+        "id": "d-gate-recheck",
+        "cli": "archive-stamp-cli",
+        "args": ["gate-recheck", artifact_path, date.today().isoformat()],
+        "depends_on": "jgate",
+        "already_satisfied": False,
+    }
 
 
 #: M3 kind-dispatch disposition sets (contract § JUDGMENT checklist rows
@@ -7184,6 +7946,7 @@ def brief(
     elision_resolution = artifact.pop("elision_resolution", None)
     sanitize_resolution = artifact.pop("sanitize_resolution", None)
     suffix_resolution = artifact.pop("suffix_resolution", None)
+    revision_resolution = artifact.pop("revision_resolution", None)
 
     def _emit_elision_aware(decision_object: dict[str, Any], exit_code: int) -> "BriefResult":
         """Wraps `_emit` for every return site below this point — prepends
@@ -7220,13 +7983,41 @@ def brief(
                 f"via unique basename-suffix match -> '{suffix_resolution['resolved']}'. "
             )
             decision_object = {**decision_object, "narration": note + decision_object.get("narration", "")}
+        if revision_resolution:
+            note = (
+                f"Passed revision '{revision_resolution['passed']}' resolved via its "
+                f"delivery commit -> '{revision_resolution['resolved']}'. "
+            )
+            decision_object = {**decision_object, "narration": note + decision_object.get("narration", "")}
         if reclaimed:
             record = reclaimed[0]
-            basis_phrase = (
-                f"its {_claims.BRIEF_CLAIM_LEASE_MINUTES}-minute brief-stage lease elapsed"
-                if record["basis"] == "expired-brief-lease"
-                else "that session reads dead"
-            )
+            if record["basis"] == "expired-brief-lease":
+                basis_phrase = f"its {_claims.BRIEF_CLAIM_LEASE_MINUTES}-minute brief-stage lease elapsed"
+            elif record["basis"] == "dead-holder":
+                basis_phrase = "that session's process was confirmed gone"
+            elif record["basis"] == "holder-absent":
+                # Review: staff-eng F2 — no local session dir AND no
+                # harness-registry record for that session, so no process
+                # check ever ran. Say so plainly rather than either
+                # "confirmed gone" (no confirmation happened) or "inferred
+                # from inactivity" (there was nothing to infer from).
+                basis_phrase = (
+                    "no session directory or harness-registry record could "
+                    "be found for that session — liveness could not be "
+                    "checked at all"
+                )
+            else:
+                # "holder-liveness-unknown": the takeover happened (the lock
+                # was takeable) but the only evidence was Layer 2 recency
+                # inference, a fail-open "unknown" read, or a liveness
+                # computation that disagreed with the one the takeover acted
+                # on (F1) — never a confirmed-dead process. Say so, not
+                # "reads dead" (2026-08-11 incident).
+                basis_phrase = (
+                    "that session had not refreshed its claim inside the "
+                    "liveness window — liveness NOT confirmed dead, only "
+                    "inferred from inactivity"
+                )
             age = record.get("claim_age_minutes")
             age_phrase = f" (claim was {age}m old)" if age is not None else ""
             note = (
@@ -7536,9 +8327,19 @@ def brief(
         # gate-clearance call is a JUDGMENT entry the EM resolves, not an
         # auto-directive.
         if fm.get("deployment_state") == "awaiting_gate":
+            # Piece B — widen the bundle beyond gate_dependency/aging_verdict
+            # so the EM sees the two fields a "cleared" answer strands
+            # unread otherwise (`fm` is already in scope; both reads are
+            # same-scope, no new I/O). `blocking_notes` stays advisory
+            # prose per schema (never resolver-read) — surfaced here only
+            # so the EM sees what its own claim would orphan, same as
+            # `blocked_by`.
             gate_check = {
                 "gate_dependency": fm.get("gate_dependency"),
                 "aging_verdict": aging_verdict,
+                "blocked_by": fm.get("blocked_by"),
+                "blocking_notes": fm.get("blocking_notes"),
+                "gate_evidence": fm.get("gate_evidence"),
             }
             # C7 enrichment — reads ONLY this record's own `gate_evidence`
             # field (no corpus walk); see `compute_gate_shipped_blocker_
@@ -7548,7 +8349,7 @@ def brief(
                 gate_check["shipped_blocker"] = shipped_blocker
                 gate_jp = build_gate_check_judgment_point(
                     "gates.gate_check",
-                    ["d2"],
+                    ["d2", "d-gate-recheck"],
                     recommendation={
                         "disposition": "cleared",
                         "rationale": (
@@ -7559,7 +8360,9 @@ def brief(
                     },
                 )
             else:
-                gate_jp = build_gate_check_judgment_point("gates.gate_check", ["d2"])
+                gate_jp = build_gate_check_judgment_point(
+                    "gates.gate_check", ["d2", "d-gate-recheck"]
+                )
             judgment_points.append(gate_jp)
         elif fm.get("deployment_state") == "shipped":
             # 2026-07-25 defect fix — a shipped handoff previously briefed as
@@ -7606,10 +8409,26 @@ def brief(
         # A single blocker keeps the plain string form (contract: "do not
         # gratuitously wrap single gates in one-element lists"); zero blockers
         # -> unconditional (`None`), matching the pre-existing behavior this
-        # generalizes.
+        # generalizes. Carve-out (Piece A, this same block): when `gate_check`
+        # is set, `d-gate-recheck`'s id always rides alongside `jgate` below,
+        # so the single-judgment-point `awaiting_gate` case is never scalar
+        # post-Piece-A — two ids minimum whenever this branch fires. Review:
+        # coordinator:code-reviewer — the old scalar-pinning test name/contract
+        # text had no pointer to this exception.
         blocking_ids: list[str] = []
         if gate_check is not None:
             blocking_ids.append("jgate")
+            # Piece A ordering — `d-gate-recheck`'s id rides in this same
+            # AND-list purely so `order_by_depends_on` sequences it before
+            # `d2`; `directive_gate_open` skips any `depends_on` entry that
+            # is not a live judgment-point id, so this contributes no
+            # second gate on `d2`'s own resolution (still `jgate` alone).
+            # Review: staff-eng — built here, at the use site, rather than
+            # bound ~70 lines earlier: nothing between the two points read
+            # the intermediate, so the temp was possibly-unbound fragility
+            # with no benefit (Pyright flagged it).
+            directives.append(build_gate_recheck_directive(artifact["path"]))
+            blocking_ids.append("d-gate-recheck")
         if shipped_state is not None:
             blocking_ids.append("jshipped")
         if liveness_jp:

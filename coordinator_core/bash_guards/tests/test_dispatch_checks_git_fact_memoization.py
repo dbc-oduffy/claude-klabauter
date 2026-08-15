@@ -46,6 +46,13 @@ from coordinator_core.bash_guards.dispatch_checks import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _deny_reason(result) -> str:
     return result["hookSpecificOutput"]["permissionDecisionReason"]

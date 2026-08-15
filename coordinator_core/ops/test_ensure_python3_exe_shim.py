@@ -75,21 +75,109 @@ def test_main_reads_check_only_env(monkeypatch, tmp_path, capsys):
 
 
 def test_resolve_python_bin_returns_resolved_value(monkeypatch):
-    monkeypatch.setattr(
-        "coordinator_core.pyresolve.resolve_python_bin",
-        lambda: ("/opt/found/python", []),
-    )
+    captured = {}
+
+    def _fake_resolve(**kwargs):
+        captured.update(kwargs)
+        return "/opt/found/python", []
+
+    monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _fake_resolve)
     assert _resolve_python_bin() == "/opt/found/python"
+    # Review: coordinatorcode-reviewer — pin the kwarg the callsite is handed
+    # so this test can't pass if prefer_windowless is silently dropped.
+    assert captured == {"prefer_windowless": False}
 
 
 def test_resolve_python_bin_falls_back_on_invalid_pin(monkeypatch):
     from coordinator_core.pyresolve import PythonPinInvalid
 
-    def _raise():
+    captured = {}
+
+    def _raise(**kwargs):
+        captured.update(kwargs)
         raise PythonPinInvalid("bad pin")
 
     monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _raise)
     assert _resolve_python_bin() == sys.executable
+    # Review: coordinatorcode-reviewer — pin the kwarg the callsite is handed
+    # so this test can't pass if prefer_windowless is silently dropped.
+    assert captured == {"prefer_windowless": False}
+
+
+# ---------------------------------------------------------------------------
+# _resolve_python_bin -- console-vs-windowless shim safety
+# ---------------------------------------------------------------------------
+#
+# Mirrors coordinator_core.install.test_substrate's
+# "_resolve_baked_python_bin -- console-vs-windowless bake safety" coverage:
+# this shim is, like python3.cmd, a general-purpose interpreter any caller may
+# hand a live stdin pipe, so it must (a) request the console interpreter and
+# (b) reject a windowless result outright as defense-in-depth.
+
+
+def test_resolve_python_bin_requests_console_interpreter(monkeypatch):
+    captured = {}
+
+    def _fake_resolve(**kwargs):
+        captured.update(kwargs)
+        return "/opt/found/python", []
+
+    monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _fake_resolve)
+    assert _resolve_python_bin() == "/opt/found/python"
+    assert captured == {"prefer_windowless": False}
+
+
+def test_resolve_python_bin_never_returns_a_windowless_path(monkeypatch):
+    windowless = r"C:\Program Files\Python313\pythonw.exe"
+    monkeypatch.setattr(
+        "coordinator_core.pyresolve.resolve_python_bin", lambda **_: (windowless, [])
+    )
+    monkeypatch.setattr(os.path, "isfile", lambda p: False)
+    assert _resolve_python_bin() == ""
+
+
+def test_resolve_python_bin_prefers_console_sibling_when_present(monkeypatch):
+    import ntpath
+
+    windowless = r"C:\Program Files\Python313\pythonw.exe"
+    console_sibling = ntpath.join(ntpath.dirname(windowless), "python.exe")
+    monkeypatch.setattr(
+        "coordinator_core.pyresolve.resolve_python_bin", lambda **_: (windowless, [])
+    )
+    monkeypatch.setattr(os.path, "isfile", lambda p: p == console_sibling)
+    assert _resolve_python_bin() == console_sibling
+
+
+def test_resolve_python_bin_windowless_with_no_console_sibling_warns_and_returns_empty(
+    monkeypatch, capsys
+):
+    windowless = r"C:\Program Files\Python313\pythonw.exe"
+    monkeypatch.setattr(
+        "coordinator_core.pyresolve.resolve_python_bin", lambda **_: (windowless, [])
+    )
+    monkeypatch.setattr(os.path, "isfile", lambda p: False)
+    assert _resolve_python_bin() == ""
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "windowless" in err
+
+
+def test_resolve_python_bin_pythonpininvalid_fallback_rejects_windowless_sys_executable(
+    monkeypatch, capsys
+):
+    from coordinator_core.pyresolve import PythonPinInvalid
+
+    def _raise(**_):
+        raise PythonPinInvalid("bad pin")
+
+    windowless_sys_executable = r"C:\Program Files\Python313\pythonw.exe"
+    monkeypatch.setattr("coordinator_core.pyresolve.resolve_python_bin", _raise)
+    monkeypatch.setattr(mod.sys, "executable", windowless_sys_executable)
+    monkeypatch.setattr(os.path, "isfile", lambda p: False)
+    assert _resolve_python_bin() == ""
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "windowless" in err
 
 
 # ---------------------------------------------------------------------------

@@ -150,6 +150,15 @@ from pathlib import Path
 
 from ._polyglot_git_scan import blob_first_line, blob_full_text, tracked_files_under_coordinator
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _PYTHON3_SHEBANG = "#!/usr/bin/env python3"
 
 _TESTS_DIR = Path(__file__).resolve().parent

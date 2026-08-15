@@ -49,6 +49,13 @@ import coordinator_core.ops.distill_curation_status as dcs  # noqa: F401
 
 from coordinator_core.ipc import _REGISTRY
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _OP_NAME = "distill.curation_status"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

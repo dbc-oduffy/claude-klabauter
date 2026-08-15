@@ -18,6 +18,15 @@ from coordinator_core.ops.emit import validate
 from coordinator_core.ops.emit.envelope import emit
 from coordinator_core.ops.emit.context import EmitContext
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # Minimal EmitContext factory

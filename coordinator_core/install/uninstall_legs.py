@@ -1299,9 +1299,21 @@ def uninstall_remove_substrate(
     # ---- #5: whoami + venv (durable, settings-home) ----
     _rmtree_target(Path(sh) / "coordinator-whoami", "coordinator-whoami", errors)
     _rmtree_target(Path(sh) / ".coordinator-venv", ".coordinator-venv", errors)
+    # `.coordinator-venv` rebuilds rename-swap (never rmtree-in-place — see
+    # ensure_venv.py's `_swap_in_new_venv`), so a crashed rebuild or a
+    # Windows deferred-reclaim can leave `.coordinator-venv.build-<pid>-
+    # <hex>`/`.coordinator-venv.stale-<pid>-<hex>` siblings on disk.
+    # `_sweep_orphaned_swap_dirs` only runs on the venv's NEXT rebuild
+    # (ensure_venv.py's own comment) — an uninstall that removes the live
+    # dir and never rebuilds again would otherwise leave those siblings
+    # behind permanently. Reuse the same sweep here rather than
+    # reimplementing the `.build-`/`.stale-` prefix match a second time.
+    from coordinator_core.install.ensure_venv import _sweep_orphaned_swap_dirs
+    _sweep_orphaned_swap_dirs(Path(sh) / ".coordinator-venv")
     whoami_compat = Path(claude_home) / "coordinator-whoami"
     _rm_target(whoami_compat, "compat symlink", errors)
     _rmtree_target(Path(claude_home) / ".coordinator-venv", "legacy .coordinator-venv", errors)
+    _sweep_orphaned_swap_dirs(Path(claude_home) / ".coordinator-venv")
 
     # ---- #6: .doe-root pointer (BOTH modes) ----
     _rm_target(Path(claude_home) / ".doe-root", ".doe-root", errors)

@@ -47,6 +47,13 @@ from coordinator_core.bash_guards import dispatch as bash_dispatch
 from coordinator_core.bash_guards.dispatch import AdvisoryValue, GuardBand
 from coordinator_core.write_guards import engine as write_engine
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _BASELINE = "6277a0550"
 

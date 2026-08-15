@@ -149,9 +149,26 @@ def _is_milestone(value: str) -> bool:
     return value in _MILESTONES
 
 
+def _home_dir(env: Optional[dict] = None) -> str:
+    """The operator's home directory: HOME, then USERPROFILE, then
+    `os.path.expanduser("~")`.
+
+    HOME alone is a POSIX assumption. Native Windows (PowerShell, cmd) sets
+    USERPROFILE and not HOME, so `env.get("HOME", "")` returned "" and every
+    caller below built a RELATIVE path — `.claude/coordinator-setup-state.yaml`
+    resolved against the process CWD. `record` then wrote a real receipt into
+    whatever repo the operator happened to be standing in, reported that path
+    truthfully, and left the actual `~/.claude` receipt untouched. Sibling repos
+    gate their own setup chaining on that file, so the miss is silent and
+    cross-repo. Never reintroduce a bare HOME lookup here.
+    """
+    env = env if env is not None else os.environ
+    return env.get("HOME") or env.get("USERPROFILE") or os.path.expanduser("~")
+
+
 def _claude_home(env: Optional[dict] = None) -> str:
     env = env if env is not None else os.environ
-    return os.path.join(env.get("CLAUDE_HOME", env.get("HOME", "")), ".claude")
+    return os.path.join(env.get("CLAUDE_HOME") or _home_dir(env), ".claude")
 
 
 def _state_file(env: Optional[dict] = None) -> str:
@@ -181,7 +198,7 @@ def _machine_local_dir(env: Optional[dict] = None) -> str:
         settings_home = override
     else:
         settings_home = os.path.join(
-            env.get("CLAUDE_HOME") or env.get("HOME", ""), ".coordinator-claude-settings"
+            env.get("CLAUDE_HOME") or _home_dir(env), ".coordinator-claude-settings"
         )
     return os.path.join(settings_home, "machine-local")
 

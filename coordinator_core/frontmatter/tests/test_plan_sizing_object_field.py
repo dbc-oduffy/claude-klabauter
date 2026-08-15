@@ -31,6 +31,15 @@ from coordinator_core.frontmatter.schema_validate import (
     validate_frontmatter,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _SCHEMAS_DIR = Path(__file__).parent.parent / 'schemas'
 _PLAN_SCHEMA = _SCHEMAS_DIR / 'plan.schema.json'
 

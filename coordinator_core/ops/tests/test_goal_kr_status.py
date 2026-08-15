@@ -50,10 +50,14 @@ except ImportError:
 _LOCKING_AVAILABLE = _FCNTL_AVAILABLE or _MSVCRT_AVAILABLE
 _PROJECT_ROOT = str(Path(__file__).parent.parent.parent.parent.resolve())
 
-pytestmark = pytest.mark.skipif(
-    not _LOCKING_AVAILABLE,
-    reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
-)
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+    pytest.mark.skipif(
+        not _LOCKING_AVAILABLE,
+        reason="locked_rmw needs a file-lock backend (fcntl or msvcrt) — neither available",
+    ),
+]
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

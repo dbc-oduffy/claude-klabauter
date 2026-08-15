@@ -48,7 +48,10 @@ import pytest
 
 # Declared, not excused: this file spawns real processes because the behaviour under
 # test IS the spawn. test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 _BIN_DIR = Path(__file__).resolve().parent.parent

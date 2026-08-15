@@ -37,6 +37,13 @@ import pytest
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.queue_age_ping import AGING_THRESHOLD_DAYS, _handler, age_ping
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 assert "queue.age_ping" in _REGISTRY, (
     "import guard failed: 'queue.age_ping' not in _REGISTRY — "
     "coordinator_core.ops.queue_age_ping @register_op did not fire"

@@ -1475,6 +1475,134 @@ def _run_probe_strategic_draft_staleness(claude_klabauter_root: Path | None) -> 
         )
 
 
+_LAUNCH_CHAIN_PROBE = "claude-klabauter.launch.shim_chain"
+
+
+def _launch_chain_claude_home() -> Path:
+    return Path(
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or str(Path.home())
+    )
+
+
+def _run_probe_launch_chain() -> _ProbeResult:
+    """Probe claude-klabauter.launch.shim_chain — OPTIONAL (required=False); never gating.
+
+    Answers "will bare `claude` load the coordinator plugin in a NEW shell?".
+
+    Exists because that question had no automated answer, and its failure mode is
+    silent by construction. On 2026-08-14 this box ran every session without the
+    coordinator plugin for an extended period: the console-corruption workaround was
+    to comment the shim block out of the operator's PowerShell profile, after which
+    `claude` runs but resolves no plugin. Coordinator's own SessionStart hooks cannot
+    catch that — they do not run when coordinator fails to load — so the check has to
+    live out here, in a surface that runs without a session.
+
+    Two distinct silent shapes are checked, both observed live:
+
+    1. DISABLED profile block — the wired source line present but commented out. The
+       shim is never dot-sourced, so `claude()` is never defined and bare `claude`
+       is plain claude.exe.
+    2. WRONG-DIALECT shim — a `.ps1` shim holding bash bytes. `maximalist` hardcoded
+       the `.sh` template while the destination filename follows the shell family, so
+       a native-Windows install wrote bash into `claude-doe-shim.ps1`. The profile
+       block is present and correct in this shape, which is what makes it nastier
+       than (1): every other check reports a healthy install.
+
+    Shape-conditioned, per this file's own precedent (`_run_probe_vendored_schema_drift`):
+    SKIPs when no DoE clone resolves, i.e. the marketplace population that never has
+    this chain.
+
+    `required` is set PER RESULT, not per probe, which is what lets this gate without
+    punishing anyone else. The SKIP path returns `required=False` — a skipped REQUIRED
+    probe reduces to DEGRADED (`_local_reduce_overall`), so a blanket `required=True`
+    would degrade every marketplace install for lacking a chain it is not supposed to
+    have. The real-failure paths return `required=True` and therefore exit 1 from
+    `--step-zero`: on a box that HAS this chain, a shim that cannot define `claude()`
+    means every session runs without coordinator, and an install that ends by calling
+    itself healthy is the exact failure this probe exists to end.
+
+    Spec backlink: docs/reference/interactive-launch-chain.md.
+    """
+    shell_dir = _launch_chain_claude_home() / ".claude" / "shell"
+    is_windows = os.name == "nt"
+    shim = shell_dir / ("claude-doe-shim.ps1" if is_windows else "claude-doe-shim.sh")
+    data: dict[str, Any] = {"shim_path": str(shim), "platform": os.name}
+
+    try:
+        from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+
+        doe_root = coordinator_doe_root()
+    except Exception:
+        doe_root = None
+    if not doe_root:
+        return _ProbeResult(
+            probe=_LAUNCH_CHAIN_PROBE,
+            status=_INFO,
+            detail="no DoE clone resolves — not the source-clone launch shape",
+            remediation=(
+                "Optional: check out the DoE-claude sibling repo (or set REPO_DOE_CLAUDE) "
+                "to enable the launch-chain watch on this machine."
+            ),
+            required=False,
+            skipped=True,
+            data=data,
+        )
+    data["doe_root"] = str(doe_root)
+
+    fix = (
+        f"python3 <engine-clone>/coordinator/bin/gen-claude-doe-shim.py --shell "
+        f"{'powershell' if is_windows else 'bash'} --template "
+        f"{doe_root}/coordinator/templates/shell/"
+        f"claude-doe-shim.{'ps1' if is_windows else 'sh'}.tmpl"
+    )
+
+    if not shim.is_file():
+        return _ProbeResult(
+            probe=_LAUNCH_CHAIN_PROBE,
+            status=_DEGRADED,
+            detail=f"shim absent: {shim} — bare `claude` loads no coordinator plugin",
+            remediation=fix,
+            required=True,
+            data=data,
+        )
+
+    body = shim.read_text(encoding="utf-8", errors="replace")
+
+    # Dialect: a PowerShell shim defines `function claude`; a bash shim defines
+    # `claude()`. Checking for the DEFINITION (not a shebang) is what catches
+    # verbatim-copied bytes of the other family, which carry no shebang mismatch.
+    if is_windows:
+        dialect_ok = "function claude" in body
+        wrong = "claude()" in body and not dialect_ok
+    else:
+        dialect_ok = "claude()" in body
+        wrong = "function claude" in body and not dialect_ok
+    data["dialect_ok"] = dialect_ok
+    if not dialect_ok:
+        detail = f"{shim.name} defines no claude() — "
+        detail += "it holds the OTHER shell family's bytes" if wrong else "unrecognised content"
+        return _ProbeResult(
+            probe=_LAUNCH_CHAIN_PROBE,
+            status=_BROKEN,
+            detail=detail + "; every session launches without coordinator",
+            remediation=fix,
+            required=True,
+            data=data,
+        )
+
+    return _ProbeResult(
+        probe=_LAUNCH_CHAIN_PROBE,
+        status=_PASS,
+        detail=f"{shim.name} present and defines claude()",
+        remediation="",
+        required=False,
+        data=data,
+    )
+
+
 _VENDOR_DRIFT_PROBE = "claude-klabauter.schema.vendor_drift"
 
 
@@ -2728,6 +2856,7 @@ def run_probes() -> tuple[list[_ProbeResult], Path | None]:
     results.append(_run_probe_root_pointer(claude_klabauter_root))
     results.append(_run_probe_invoke_latency(claude_klabauter_root))
     results.append(_run_probe_orphaned_execnet_gateways())
+    results.append(_run_probe_launch_chain())
 
     return results, claude_klabauter_root
 

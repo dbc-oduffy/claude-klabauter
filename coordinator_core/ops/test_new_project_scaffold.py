@@ -14,6 +14,13 @@ import pytest
 from coordinator_core.ops import new_project_scaffold
 from coordinator_core.ops.new_project_scaffold import main
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # Captured BEFORE the module-scoped _stub_repo_registration autouse fixture
 # (below) ever runs, so the dedicated "Repo self-registration corpus" tests
 # can exercise the REAL _register_repo even though every other test in this

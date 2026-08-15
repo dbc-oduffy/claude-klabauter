@@ -27,6 +27,13 @@ import pytest
 from coordinator_core.ops import workweek_reverse_drift_gate as gate_mod
 from coordinator_core.ops.workweek_reverse_drift_gate import main, run_gate
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _stub_run(stdout_lines: List[str], stderr_lines: List[str], rc: int):
     def _fake(scope_repo: Optional[str]) -> Tuple[List[str], List[str], int]:

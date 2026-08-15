@@ -37,6 +37,13 @@ import pytest
 from coordinator_core.testing.full_runner import main
 from coordinator_core.win_portability import no_console_creationflags
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # _run_cli spawns a real subprocess that imports coordinator_core. That child
 # inherits cwd but NOT pytest's rootdir sys.path insertion, so it can only
 # resolve the package when cwd is (or is under) the repo root -- from any

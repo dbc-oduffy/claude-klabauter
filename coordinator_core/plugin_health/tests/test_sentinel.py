@@ -103,7 +103,18 @@ def test_resolve_cli_prefers_dot_cmd_on_windows(tmp_path, monkeypatch):
 
 
 def test_resolve_cli_ignores_dot_cmd_on_posix(tmp_path, monkeypatch):
+    # `_as_posix` fakes os.name, but a Windows filesystem cannot express the one
+    # thing the POSIX branch then consults: the executable bit. `chmod(0o755)`
+    # there only toggles the read-only attribute, so `is_executable` stays False,
+    # `_resolve_cli` falls past both candidate dirs, and `shutil.which` answers
+    # off the REAL PATH -- on a box with coordinator installed that is a live
+    # `machine-local.CMD`, so the assertion failed with a host path having never
+    # exercised the branch under test. Fake the bit too, and empty PATH so the
+    # `shutil.which` rung cannot reach this machine at all: a regression now
+    # fails as `None`, never as somebody's install.
     _as_posix(monkeypatch)
+    monkeypatch.setattr(S, "is_executable", lambda p: Path(p).is_file())
+    monkeypatch.setenv("PATH", str(tmp_path / "empty_path"))
     sh_bin = tmp_path / "sh_bin"
     sh_bin.mkdir()
     posix_wrapper = sh_bin / "machine-local"

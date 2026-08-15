@@ -52,6 +52,13 @@ from coordinator_core.ops.distill_stamp_disposal import (
     write_stamped_manifest,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # Same convention as coordinator_core/distill/tests/{test_common,test_delete_guard}.py:
 # the real end-to-end dispatch path shells out to ripgrep (`rg`) via
 # active_reference_guard (coordinator_core/distill/_common.py) — an optional

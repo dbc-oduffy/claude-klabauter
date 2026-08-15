@@ -40,6 +40,13 @@ from coordinator_core.test_baton_assemble import (
 )
 import coordinator_core.baton_assemble.apply as ba_apply
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 @pytest.fixture(autouse=True)
 def _stub_operator_config(monkeypatch):

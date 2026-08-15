@@ -131,18 +131,45 @@ class TestFiletimeConversion:
         ticks_float = float(_epoch_to_filetime_ticks(epoch))
         assert hr._proc_start_to_epoch(ticks_float) is None
 
-    def test_numeric_string_procstart_falls_through_to_string_branches(self):
+    def test_numeric_string_tries_ctime_and_iso_before_filetime(self):
         # A numeric-looking string (e.g. "133...") must not be swallowed
-        # into the FILETIME leg via int(raw) either -- it isn't a ctime or
-        # ISO-8601 shape, so it must yield None rather than a coincidence.
+        # into the FILETIME leg via a bare int(raw) ahead of the ctime/
+        # ISO-8601 string branches -- but as of the digits-string FILETIME
+        # leg it IS a legitimate last-resort shape once those two both
+        # fail, matching the 54/54 live Windows records measured
+        # 2026-08-14 (procStart rendered as a digits string, not a bare
+        # int).
+        epoch = time.time() - 60
+        in_band_ticks = _epoch_to_filetime_ticks(epoch)
+        result = hr._proc_start_to_epoch(str(in_band_ticks))
+        assert result == pytest.approx(epoch, abs=1e-3)
+
+    def test_digits_string_out_of_band_rejected(self):
+        out_of_band_ticks = _epoch_to_filetime_ticks(
+            time.time() - hr._SANITY_BAND_PAST_SEC - 3600
+        )
+        assert hr._proc_start_to_epoch(str(out_of_band_ticks)) is None
+
+    def test_signed_digits_string_not_admitted_as_filetime(self):
+        # No sign handling on the digits-string leg -- str.isdigit() rejects
+        # a leading '-', so a negative numeric string must still fall
+        # through to None rather than being admitted as a FILETIME.
         in_band_ticks = _epoch_to_filetime_ticks(time.time() - 60)
-        assert hr._proc_start_to_epoch(str(in_band_ticks)) is None
+        assert hr._proc_start_to_epoch("-" + str(in_band_ticks)) is None
 
     def test_bool_procstart_rejected(self):
         # bool is an int subclass in Python -- must not be admitted to the
         # FILETIME leg (mirrors _parse_one's own pid bool-rejection).
         assert hr._proc_start_to_epoch(True) is None
         assert hr._proc_start_to_epoch(False) is None
+
+    def test_unicode_digit_string_rejected_not_raised(self):
+        # str.isdigit() returns True for non-decimal Unicode digit
+        # characters (category No, e.g. superscript U+00B2) that int()
+        # rejects with ValueError -- the digits-string leg must return
+        # None for this shape rather than letting the ValueError escape,
+        # per the function's own "Raises nothing" contract.
+        assert hr._proc_start_to_epoch("²²²") is None
 
 
 class TestSnapshotAndLookup:
@@ -281,6 +308,24 @@ class TestCtimeShapedRegistry:
         assert result["sess-a"].start_epoch == pytest.approx(epoch_a, abs=1.0)
         assert result["sess-b"].pid == 2
         assert result["sess-b"].start_epoch == pytest.approx(epoch_b, abs=1.0)
+
+    def test_unicode_digit_procstart_skips_record_not_whole_scan(self, tmp_path, monkeypatch):
+        # A single malformed procStart of this shape must not abort
+        # snapshot()'s scan loop and return an empty registry -- that is
+        # the exact zero-parse outage e3d681a65 fixed. It must only skip
+        # the one bad record while a valid sibling record still resolves.
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        good_ticks = _epoch_to_filetime_ticks(time.time() - 60)
+        payload_bad = {"sessionId": "sess-bad", "pid": 1, "procStart": "²²²"}
+        payload_good = {"sessionId": "sess-good", "pid": 2, "procStart": str(good_ticks)}
+        (sessions_dir / "1.json").write_text(json.dumps(payload_bad), encoding="utf-8")
+        (sessions_dir / "2.json").write_text(json.dumps(payload_good), encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+
+        result = hr.snapshot()
+        assert set(result) == {"sess-good"}
+        assert result["sess-good"].pid == 2
 
 
 class TestExceptionBoundary:

@@ -21,7 +21,6 @@ per-domain routing (which directives/judgment-points a `kind` produces) lives he
 
 directives[] name EXISTING atomic CLIs/ops rather than reimplementing them:
     coordinator-doc-new (scaffold), lint-frontmatter.py (frontmatter lint),
-    coordinator_core.ops.render_project_tracker (tracker render),
     coordinator_core.ops.dirty_tree_gate (dirty-tree-gate),
     coordinator_core.ops.extract_scope_paths (+ apply_base.scoped_commit),
     coordinator/bin/session-claim-cli, coordinator_core.ops.handoff_archive_transition.
@@ -100,8 +99,7 @@ successor a prior attempt already recorded on the predecessor, and
 `_build_directives`'s d1 block marks the scaffold satisfied when that path is
 already a file. Everything else in the envelope converges through predicates that
 ALREADY EXIST and stays `already_satisfied: False` on purpose -- d2's lint is
-read-only, d4 re-renders a derived view (and never raises since the 2026-07-29
-degrade fix), d5's `release-artifact` is holder-identity-checked and no-ops to
+read-only, d5's `release-artifact` is holder-identity-checked and no-ops to
 success, and d6's supersede converges through `_supersede_continued`'s OWN
 byte-identical no-op branch. Deriving a second "has this landed?" predicate
 beside any of those is the named anti-pattern here; see each directive's own
@@ -202,7 +200,6 @@ from coordinator_core.ops.mint_deliverable_id import mint as _mint_deliverable_i
 from coordinator_core.ops.read_frontmatter_field import (
     read_frontmatter_field as _read_frontmatter_field,
 )
-from coordinator_core.ops.render_project_tracker import tracker_is_hand_curated
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C3: foreign-repo gate
 from coordinator_core.resolution.facade import resolve_operator_config
 from coordinator_core.resolve_coordinator_clone import (
@@ -1696,12 +1693,15 @@ def _scan_deliverable_collision(
     skipped, not fatal (AC6) -- this scan never raises.
     """
     from coordinator_core.frontmatter.baton_class import canonical_kind
+    from coordinator_core.ops.deliverable_equivalence import canonicalize
 
     if not deliverable_id:
         return None
     handoffs_dir = root / "state" / "handoffs"
     if not handoffs_dir.is_dir():
         return None
+    equivalence_map = load_equivalence_map(root)
+    canonical_deliverable_id = canonicalize(deliverable_id, equivalence_map)
     excluded: set[Path] = set()
     if exclude_path is not None:
         try:
@@ -1721,7 +1721,7 @@ def _scan_deliverable_collision(
             continue
         if not fm:
             continue
-        if _fm_field(fm, "deliverable_id") != deliverable_id:
+        if canonicalize(_fm_field(fm, "deliverable_id"), equivalence_map) != canonical_deliverable_id:
             continue
         deployment_state = _fm_field(fm, "deployment_state")
         if deployment_state in HANDOFF_TERMINAL_DEPLOYMENT:
@@ -2028,9 +2028,14 @@ def resolve_lineage(
         # exists), so the cut proceeds as before.
         _rungs_diverge_on_deliverable_id = True
         if excise_rung in ("plan_file", "predecessor_file") and _plan_file and _predecessor_file:
-            _rungs_diverge_on_deliverable_id = _read_frontmatter_field(
-                _plan_file, "deliverable_id"
-            ) != _read_frontmatter_field(_predecessor_file, "deliverable_id")
+            from coordinator_core.ops.deliverable_equivalence import canonicalize
+
+            _excise_equivalence_map = load_equivalence_map(root)
+            _rungs_diverge_on_deliverable_id = canonicalize(
+                _read_frontmatter_field(_plan_file, "deliverable_id"), _excise_equivalence_map
+            ) != canonicalize(
+                _read_frontmatter_field(_predecessor_file, "deliverable_id"), _excise_equivalence_map
+            )
         if excise_rung == "plan_file" and _rungs_diverge_on_deliverable_id:
             _plan_file = None
         elif excise_rung == "predecessor_file" and _rungs_diverge_on_deliverable_id:
@@ -3164,39 +3169,12 @@ def _build_directives(
         # deliberately does NOT name ... handoff.stamp_phase") -- d1's
         # scaffold already stamps handoff_phase:continuation unconditionally,
         # so a dedicated stamp directive in this brief would always be a
-        # no-op. d4 keeps its historical id (spinoff's own directive set
-        # already skips id "d4" entirely -- non-contiguous ids across kinds
-        # are the established convention here, not a defect) and now depends
-        # directly on d1's scaffold instead of the removed d3.
-        # 2026-08-06 fix: d4 is armed ONLY when this repo's tracker is not
-        # hand-curated (`tracker_is_hand_curated` -- reused, not re-derived,
-        # from `render_project_tracker`'s own main() truncation-guard arm
-        # (a)). Before this fix d4 was appended unconditionally for every
-        # `kind == "handoff"` brief, so a repo like this one --
-        # `docs/project-tracker.md` hand-curated, `state/workstreams/`
-        # empty -- degraded d4 on EVERY SINGLE handoff, permanently. The
-        # renderer's own refusal (`EXIT_NOT_APPLICABLE`,
-        # `tracker-not-queue-backed`) was and remains correct; the defect was
-        # arming a directive that can never succeed on such a repo. See
-        # `j-tracker-hand-curated` below for the judgment point that takes
-        # d4's place there.
-        if not tracker_hand_curated:
-            directives.append(
-                {
-                    "id": "d4",
-                    "cli": "render-project-tracker",
-                    "args": [],
-                    "depends_on": ["d1"],
-                    # Never `already_satisfied`: the tracker is a DERIVED VIEW,
-                    # rendered 1:1 from `state/workstreams/` and idempotent by
-                    # construction, and since the 2026-07-29 degrade fix this
-                    # directive cannot raise at all. Answering "is the rendered
-                    # output already current?" would mean re-deriving the renderer's
-                    # own output here -- a second definition of its logic, for zero
-                    # gain over simply re-rendering.
-                    "already_satisfied": False,
-                }
-            )
+        # no-op.
+        #
+        # d4 (render-project-tracker) was retired 2026-08-14 alongside the
+        # renderer itself -- see `j-tracker-hand-curated` below for the
+        # judgment point that still names the tracker's hand-curated state
+        # (residue of d4's arming decision, kept for now).
         # session-claim-cli is a multi-subcommand CLI (`<subcommand>
         # <args...>`, see coordinator_core.session.claims's
         # `release_artifact` docstring) -- the first arg MUST be the
@@ -3493,15 +3471,41 @@ def _build_directives(
 # verdict here.
 # ---------------------------------------------------------------------------
 
+_TRACKER_GENERATED_MARKER_PREFIX = "**Overall status:** generated from state/workstreams/"
+
+
+def _tracker_is_hand_curated(store_root: str) -> bool:
+    """Predicate answering "is this repo's docs/project-tracker.md a
+    hand-curated file rather than one the (now-retired) render-project-tracker
+    CLI generated?" -- inlined from `render_project_tracker.tracker_is_hand_curated`
+    (2026-08-14, that module deleted alongside d4) so `j-tracker-hand-curated`
+    below, which still reads this signal, keeps working without importing a
+    module that no longer exists.
+
+    Semantics (mirrors the deleted renderer's own `main()`
+    `existing_is_hand_curated` derivation exactly, not a re-design of it):
+      - tracker file ABSENT -> False.
+      - tracker PRESENT and carries the generated-marker prefix -> False.
+      - tracker PRESENT, non-blank, and lacks the marker -> True
+        (hand-curated)."""
+    tracker_path = os.path.join(store_root, "docs", "project-tracker.md")
+    if not os.path.isfile(tracker_path):
+        return False
+    with open(tracker_path, encoding="utf-8") as fh:
+        existing_body = fh.read()
+    if not existing_body.strip():
+        return False
+    return _TRACKER_GENERATED_MARKER_PREFIX not in existing_body
+
 
 def _tracker_hand_curated_evidence(root: Path, kind: str = "handoff") -> str:
     """Evidence string for `j-tracker-hand-curated` -- states plainly that
     the tracker at `docs/project-tracker.md` is hand-curated, names the
     path, and states the obligation the skill previously only carried in
     prose: the EM must update it by hand if this session progressed
-    anything. That is the whole point of surfacing this judgment point in
-    d4's place -- see `_build_directives`'s own comment on why d4 is not
-    armed here.
+    anything. That obligation now stands on its own -- the `render-project-tracker`
+    CLI it once described (id `d4`) was retired 2026-08-14; see
+    `_build_directives`'s own comment on that removal.
 
     2026-08-14 fix: `kind == "spinoff"` carries a DIFFERENT obligation than
     `kind == "handoff"` -- a spinoff's SKILL prose (`/spinoff` step 2) asks
@@ -3520,10 +3524,10 @@ def _tracker_hand_curated_evidence(root: Path, kind: str = "handoff") -> str:
             "skill's own prose obligation (step 2)."
         )
     return (
-        f"{tracker_path} is hand-curated (predates render-project-tracker "
-        "and carries no generated-marker), so d4 (render-project-tracker) "
-        "was not armed for this baton -- the EM must update this tracker "
-        "by hand if this session progressed anything worth recording in it."
+        f"{tracker_path} is hand-curated (predates the retired "
+        "render-project-tracker renderer and carries no generated-marker) "
+        "-- the EM must update this tracker by hand if this session "
+        "progressed anything worth recording in it."
     )
 
 
@@ -3678,13 +3682,13 @@ def _build_judgment_points(
                 reason="Judgment residue -- stays SKILL prose (C4/C5).",
             )
         )
-    # 2026-08-06 fix: d4 (render-project-tracker) is no longer armed when
-    # this repo's tracker is hand-curated (see `_build_directives`'s own
-    # comment) -- that obligation does not vanish, it moves here. The skill
-    # already stated it in prose ("update the hand-curated tracker yourself,
-    # by hand, if this session progressed items worth recording in it"); this
-    # surfaces it as an actual judgment point so it can be discharged rather
-    # than silently dropped.
+    # 2026-08-06 fix (2026-08-14: d4/render-project-tracker itself since
+    # retired, see `_build_directives`'s own comment): the hand-curated-
+    # tracker obligation does not vanish just because no directive renders
+    # it. The skill already stated it in prose ("update the hand-curated
+    # tracker yourself, by hand, if this session progressed items worth
+    # recording in it"); this surfaces it as an actual judgment point so it
+    # can be discharged rather than silently dropped.
     # 2026-08-14 fix: widened from `kind == "handoff"` to also cover
     # `kind == "spinoff"`. The prior gate mirrored d4's own handoff-only
     # scope (d4/render-project-tracker never fires for a spinoff -- see
@@ -3708,9 +3712,9 @@ def _build_judgment_points(
             )
         else:
             question = (
-                "This repo's docs/project-tracker.md is hand-curated (d4 "
-                "was not armed) -- did this session progress anything worth "
-                "recording in it, and if so, has it been updated by hand?"
+                "This repo's docs/project-tracker.md is hand-curated -- did "
+                "this session progress anything worth recording in it, and "
+                "if so, has it been updated by hand?"
             )
         points.append(
             build_untrusted_gate_judgment_point(
@@ -4461,7 +4465,7 @@ def brief(
     # arming gate) -- same shared-computation shape as
     # `_predecessor_canonical_kind` immediately above, not re-derived at
     # either call site.
-    _tracker_hand_curated = bool(root is not None and tracker_is_hand_curated(str(root)))
+    _tracker_hand_curated = bool(root is not None and _tracker_is_hand_curated(str(root)))
     directives = _build_directives(
         kind,
         lineage,

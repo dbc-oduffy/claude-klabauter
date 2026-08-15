@@ -23,7 +23,10 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 # Declared, not excused: this file spawns a real process (git) because the
 # property under test is that binary's own behaviour, which no fixture stands
 # in for. Mirrors test_sizing_decline.py's own identical rationale.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _handler = ship_mod._handler
 

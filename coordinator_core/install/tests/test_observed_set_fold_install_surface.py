@@ -98,7 +98,10 @@ import pytest
 from coordinator_core.tracker_store import EVENTS_SHARD_GLOB
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.cadence
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
 
 # ---------------------------------------------------------------------------
 # Project root — the source of the clone, and (for the belt-and-braces

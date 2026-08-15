@@ -593,6 +593,152 @@ def _banner_unreachable_plugins(keys: list[str], settings_data: dict | None = No
 
 
 # ---------------------------------------------------------------------------
+# Plugin-gating drift detector -- distinct from both lenses above. The
+# clobber lens asks "did enabledPlugins survive intact" and the
+# reconciliation lens asks "is each declared-true key actually reachable";
+# this one asks "does each contract-covered key still hold its
+# declared-correct VALUE" -- the 2026-08-14 incident this closes: four UE
+# plugins drifted from `false` to `true` in a hand-edited, unversioned,
+# cross-machine-synced settings.json and stayed drifted long enough that an
+# entire workstream was launched to investigate the resulting 19,356-byte
+# boot-context symptom before the root cause (the config value itself) was
+# ever named. See state/subagent-share/ed69af78-ccc1-4efc-8b58-4cc93cb3b461/
+# coordinatorstaff-eng-3c57c48d.md, finding "No detector for enabledPlugins
+# drift".
+#
+# Contract seam: `_PLUGIN_GATING_CONTRACT_PATH` is the ONE thing a future
+# repointer needs to touch. It currently names a claude-klabauter-local JSON file
+# (`plugin_gating_contract.json`, this directory) because writing into
+# DoE-claude's tree from here would be a cross-repo write this module must
+# not make. The finding suggests the contract eventually live beside DoE's
+# `coordinator/docs/wiki/per-project-plugin-gating.md`, where its
+# documentation already lives -- when that lands, only this one path
+# constant changes; `evaluate_plugin_gating_drift`'s logic does not.
+# ---------------------------------------------------------------------------
+
+_PLUGIN_GATING_CONTRACT_PATH = Path(__file__).with_name("plugin_gating_contract.json")
+
+
+def _load_plugin_gating_contract() -> dict:
+    """Read the declared-correct `enabledPlugins` values this detector
+    checks against. Fail-open (returns `{}`, meaning "nothing to check")
+    on any read/parse failure or non-dict top level -- same posture as
+    every other lens in this module: a missing/corrupt contract must never
+    itself become a false-alarm source.
+
+    Deliberately does NOT cover every key in `enabledPlugins` -- only the
+    ones the contract names. `example-retrieval-repo@example-retrieval-repo` (currently `true`)
+    is a known open PM question (state/improvement-queue/2026-08-14-
+    example-retrieval-repo-s-11-3kb-agent-skill-payload-9795e0c6bfd3.yaml) and is
+    deliberately absent from the contract: asserting a value the PM has not
+    ruled on would make this detector wrong the moment they rule.
+    `clangd-lsp`, `context7`, `pyright-lsp`, `typescript-lsp` are unrelated
+    to gating and are also absent.
+    """
+    try:
+        with _PLUGIN_GATING_CONTRACT_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def evaluate_plugin_gating_drift(config_dir: Optional[Path] = None) -> str:
+    """One-line SessionStart detector for hand-edited `enabledPlugins`
+    drift against `_load_plugin_gating_contract()`'s declared-correct
+    values.
+
+    Silent (empty string) whenever every contract-covered key matches its
+    declared value -- the overwhelmingly common case, which must cost
+    nothing. Also silent on every fail-open path: settings.json missing or
+    unreadable, unparseable JSON, `enabledPlugins` absent or non-dict, or
+    an empty/unreadable contract -- a drift detector that cries wolf on an
+    uncertain read gets disabled, which is worse than not having it.
+
+    Reports a single line naming every drifted key with its current and
+    expected value -- register per docs/wiki/guard-messaging.md § Register:
+    the fact stated once, plus the terse fix, no repetition.
+    """
+    if config_dir is None:
+        raw = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
+            os.path.expanduser("~"), ".claude"
+        )
+        config_dir = Path(raw)
+
+    contract = _load_plugin_gating_contract()
+    if not contract:
+        return ""
+
+    settings_data = _load_json_dict(config_dir / "settings.json")
+    if settings_data is None:
+        return ""
+
+    enabled = settings_data.get("enabledPlugins")
+    if not isinstance(enabled, dict):
+        return ""
+
+    drifted = [
+        (key, enabled[key], expected)
+        for key, expected in sorted(contract.items())
+        if key in enabled and enabled[key] != expected
+    ]
+    if not drifted:
+        return ""
+
+    names = ", ".join(
+        f"{key}={current!r} (expected {expected!r})" for key, current, expected in drifted
+    )
+    return f"Plugin gating drift: {names}. Fix in settings.json's `enabledPlugins`."
+
+
+# ---------------------------------------------------------------------------
+# Guardless-peer-session detector -- a distinct question from every lens
+# above: those all inspect THIS session's own settings.json. This one asks
+# "is some OTHER live claude.exe process on this box running with no
+# --plugin-dir at all" -- a session that never had the coordinator plugin,
+# so every lens above (and every guard in the repo) is inert for it by
+# construction. That session cannot self-report (it runs no hook of ours),
+# so detection can only happen from an ALREADY-GUARDED peer session -- this
+# SessionStart lens is exactly that peer.
+#
+# Bug backlink: state/bug-backlog/2026-08-14-a-live-session-is-running-
+# plugin-dir-les-2ee0e6522f92.yaml. Ruling: detection only, never kill/
+# restart a peer's session (this lens does neither -- it only reads the
+# already-built, side-effect-free
+# `coordinator_core.ops.detect_guardless_sessions.detect()` verdict).
+# ---------------------------------------------------------------------------
+
+
+def evaluate_guardless_sessions() -> str:
+    """One-line SessionStart detector naming any live `claude.exe` process
+    on this box with no `--plugin-dir` -- an unguarded peer session that
+    cannot self-report (see module section docstring above).
+
+    Silent (empty string) whenever the underlying probe reports
+    `cannot_determine` (non-Windows, enumeration failure, unreadable
+    command line) or an empty `guardless` list -- both fail-open paths, same
+    posture as every other lens in this module: a probe that cries wolf on
+    an uncertain read gets disabled, which is worse than not having it.
+
+    Reports every guardless PID on one line, per docs/wiki/guard-messaging.md
+    § Register: the fact stated once, plus the terse, runnable fix. Names
+    `claude-doe` (a relaunch script), never a slash command -- a session
+    that never came up cannot run an agentic surface.
+    """
+    from coordinator_core.ops.detect_guardless_sessions import detect
+
+    result = detect()
+    if result.cannot_determine or not result.guardless:
+        return ""
+
+    pids = ", ".join(str(obs.pid) for obs in result.guardless)
+    return (
+        f"Guardless session(s), no --plugin-dir: PID {pids}. "
+        "Relaunch via claude-doe."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Hook-delivery duplication detector (DETECT-ONLY) -- a different question
 # from `_hook_layer_reachable` above. That predicate asks "is the hook layer
 # reachable via AT LEAST ONE path" (healthy iff true, either path suffices).

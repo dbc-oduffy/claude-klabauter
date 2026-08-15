@@ -1584,6 +1584,14 @@ async def _verify_scoped_to_sha_resolvable(
 # 2026-07-21)
 # ---------------------------------------------------------------------------
 
+# Full 40-hex-char sha shape, guarding `_commit_delivered_memo`'s
+# `git log --format=%H` output before it is trusted as `committed_sha` —
+# mirrors `ops/ceremony/commit_pipeline.py`'s own `_FULL_SHA_RE` use, kept
+# as a separate module-local constant rather than imported (this module
+# does not otherwise depend on commit_pipeline).
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
 @dataclasses.dataclass(frozen=True)
 class CommitOutcome:
     """Structured outcome of `_commit_delivered_memo` — replaces the prior
@@ -1604,11 +1612,29 @@ class CommitOutcome:
         branch name on a git add/commit failure — branch is a success fact).
     reason: the git failure reason (stderr/stdout text, or the OSError/
         no-active-branch description) on failure; None on success.
+    committed_sha: the RECEIVER-repo sha this call's own commit landed at
+        (docs/plans cross-repo memo, example-retrieval-repo-em, 2026-08-15, "pickup
+        cannot resolve a memo by its delivery sha") — `None` whenever the
+        sha cannot be attributed to THIS call with confidence, never a
+        guess. Deliberately NEVER a blind post-commit `git rev-parse HEAD`
+        (same concurrent-sibling hazard `ops/ceremony/commit_pipeline.py::
+        CommitOutcome.committed_sha` documents at C11 — a receiver repo is
+        a foreign, concurrently-written tree, so HEAD alone could pick up a
+        peer's own commit landing in the same window). Resolved instead via
+        `git log -1 --format=%H -- <memo_relpath>`, pathspec-scoped to the
+        exact file this call just added — collision-free in practice
+        because a delivery's inbox filename is unique per send, unlike a
+        bare HEAD read. `None` on the idempotent "nothing to commit" no-op
+        (a real success, but not THIS call's own commit — the file was
+        already committed by an earlier call or a peer, so backfilling the
+        pre-existing HEAD here would misattribute it) and on any failure
+        arm (mirrors `branch`'s own None-on-failure rule).
     """
 
     committed: bool
     branch: Optional[str]
     reason: Optional[str]
+    committed_sha: Optional[str] = None
 
 
 async def _commit_delivered_memo(
@@ -1852,7 +1878,10 @@ async def _commit_delivered_memo(
                 # files — routine under concurrent-EM git). Missing the third
                 # let an already-committed memo read as an uncommitted-
                 # delivery failure.
-                return CommitOutcome(committed=True, branch=branch_name, reason=None)
+                return CommitOutcome(
+                    committed=True, branch=branch_name, reason=None,
+                    committed_sha=None,
+                )
             await _unstage_delivered_memo()
             commit_reason = (
                 commit_err.decode(errors="replace")
@@ -1881,7 +1910,31 @@ async def _commit_delivered_memo(
         )
         return CommitOutcome(committed=False, branch=None, reason=reason)
 
-    return CommitOutcome(committed=True, branch=branch_name, reason=None)
+    committed_sha: Optional[str] = None
+    try:
+        # Pathspec-scoped, not a blind HEAD read — see `CommitOutcome.
+        # committed_sha`'s own docstring for the concurrent-sibling
+        # rationale. Best-effort: an unresolved sha degrades to None, never
+        # a failed send (this function's own never-raise contract).
+        sha_proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(receiver_repo_path),
+            "log", "-1", "--format=%H", "--", memo_relpath,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        sha_out, _sha_err = await sha_proc.communicate()
+        if sha_proc.returncode == 0:
+            resolved = sha_out.decode(errors="replace").strip()
+            if _FULL_SHA_RE.fullmatch(resolved):
+                committed_sha = resolved
+    except OSError:
+        pass
+
+    return CommitOutcome(
+        committed=True, branch=branch_name, reason=None,
+        committed_sha=committed_sha,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2179,6 +2232,7 @@ def _append_sent_ledger(
     in_reply_to: Optional[str],
     delivery_commit_reason: Optional[str] = None,
     delivery_commit_retried: Optional[bool] = None,
+    delivery_commit_sha: Optional[str] = None,
     sent_by: Optional[str] = None,
 ) -> Optional[str]:
     """Append-only local evidence that a send happened: one JSONL line per
@@ -2283,6 +2337,22 @@ def _append_sent_ledger(
     delivered memo's `sent_by:` frontmatter line for this send (durable
     session UUID, or the explicit unresolved sentinel — never a resolved
     messaging address).
+
+    delivery_commit_sha (example-retrieval-repo-em cross-repo memo, 2026-08-15,
+    "pickup cannot resolve a memo by its delivery sha"): adds the
+    `delivery_commit_sha` key to the written row — OPTIONAL key, same
+    tolerance rule as `delivery_commit_reason`/`retried`/`sent_by` above;
+    ~1719+ pre-existing rows on disk predate this field and simply lack
+    the key, and any reader MUST treat its absence as `None`/unknown,
+    never as a parse error. This is the SAME value as
+    `CommitOutcome.committed_sha` (see that field's own docstring for the
+    concurrent-sibling attribution rule) threaded through
+    `delivery_commit["sha"]` — `None` whenever the receiver-side commit
+    landed but its sha could not be attributed with confidence, or the
+    idempotent no-op/failure arms, never a guess. Recording it here turns
+    the SHA↔memo mapping into data on the sender's own ledger row instead
+    of the `git log --diff-filter=A` archaeology the memo's root-cause
+    report had to fall back to.
     """
     ledger_path = _sender_sent_ledger_path(sender_worktree)
     line = {
@@ -2296,6 +2366,7 @@ def _append_sent_ledger(
         "in_reply_to": in_reply_to,
         "delivery_commit_reason": delivery_commit_reason,
         "retried": delivery_commit_retried,
+        "delivery_commit_sha": delivery_commit_sha,
         "sent_by": sent_by,
     }
     appended_line = json.dumps(line, ensure_ascii=False) + "\n"
@@ -3238,6 +3309,7 @@ async def _memo_send(
         "branch": commit_outcome.branch,
         "reason": commit_outcome.reason,
         "retried": commit_retried,
+        "sha": commit_outcome.committed_sha,
     }
 
     # ── Sender-outbox sent-stamp (write-back onto the SENDER's own draft) ────
@@ -3284,6 +3356,7 @@ async def _memo_send(
             in_reply_to=in_reply_to,
             delivery_commit_reason=delivery_commit.get("reason"),
             delivery_commit_retried=delivery_commit.get("retried"),
+            delivery_commit_sha=delivery_commit.get("sha"),
             sent_by=sent_by,
         )
         ledger_appended = ledger_text is not None

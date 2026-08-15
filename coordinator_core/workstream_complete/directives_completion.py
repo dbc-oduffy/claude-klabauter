@@ -259,12 +259,17 @@ def compute_completion_entry_scaffold_gate(
 
 
 def completion_archive_predicate(repo_root: Path) -> bool:
-    """Step 2.6's own skip gate: `archive/` and `docs/project-tracker.md`
+    """Step 2.6's own skip gate: `archive/` and `state/workstreams/`
     absent means the project never adopted unified tracking — skip the
     whole completion-entry cluster (Action (a)/(b), Step 2.6.7, Step
     2.6.8) entirely, zero ceremony tax. Pure existence check, no CLI
-    (Design note 1)."""
-    return (repo_root / "archive").is_dir() or (repo_root / "docs" / "project-tracker.md").is_file()
+    (Design note 1). `state/workstreams/` mirrors the onboarding-currency
+    signal `detect_onboarding_offer._is_onboarded` uses (the substrate the
+    retired project-tracker render was rendered FROM), so the two gates
+    cannot drift apart — see docs/plans/
+    2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md
+    § C1."""
+    return (repo_root / "archive").is_dir() or (repo_root / "state" / "workstreams").is_dir()
 
 
 # ---------------------------------------------------------------------------

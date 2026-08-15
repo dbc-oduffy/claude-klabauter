@@ -891,7 +891,11 @@ def emit_schemas(
         json_doc = _reorder(json_doc)
         out_path = schema_dir / f"{name}.schema.json"
         assert_no_version_desync(name, json_doc, out_path)
-        out_path.write_text(json.dumps(json_doc, indent=2, ensure_ascii=False) + "\n")
+        out_path.write_text(
+            json.dumps(json_doc, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         bundle_defs[name] = json_doc
         emitted[name] = json_doc
 
@@ -907,7 +911,9 @@ def emit_schemas(
         "$defs": bundle_defs,
     }
     (schema_dir / "cockpit-contract.schema.json").write_text(
-        json.dumps(bundle, indent=2, ensure_ascii=False) + "\n"
+        json.dumps(bundle, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
 
     print(f"emit_schema: emitted {len(emitted)} entity schemas + 1 bundle -> {schema_dir}")

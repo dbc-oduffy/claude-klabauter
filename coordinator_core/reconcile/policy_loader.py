@@ -47,13 +47,20 @@ Repo-resident overlay (route 3 of 4, see § Overlay in the grammar pin):
   overlay alone -- a partial overlay restating a single key is valid because
   the floor supplies the rest. `policy.setdefault("auto_ship_enabled",
   False)` still runs LAST, after the merge, so no overlay can arm auto-ship
-  by omission. If the floor file exists but fails to read/parse (or its root
-  isn't a mapping), the merge does NOT silently fall back to an absent-
-  equivalent `{}` -- that would risk a merged-and-validated "loaded" result
-  built from only the overlay's own keys, losing the malformed-floor signal
-  `source` exists to carry. This case reports `source="malformed"` with a
-  floor-specific warning instead, same loudness as any other malformed
-  branch.
+  by omission. If the floor path is ABSENT (unresolvable, or resolvable but
+  not a file -- e.g. `CLAUDE_PLUGIN_ROOT` unset), the merge base is
+  `_conservative_policy()`, not `{}` -- so a partial overlay naming only the
+  keys it changes still validates and arms, while every key the overlay does
+  NOT name keeps its fail-closed conservative value. This must not depend on
+  an env var most non-harness invocations never set. If the floor file
+  EXISTS but fails to read/parse (or its root isn't a mapping), the merge
+  does NOT silently fall back to an absent-equivalent base -- that would risk
+  a merged-and-validated "loaded" result built from only the overlay's own
+  keys, losing the malformed-floor signal `source` exists to carry. This case
+  reports `source="malformed"` with a floor-specific warning instead, same
+  loudness as any other malformed branch. Absent-floor and malformed-floor
+  are deliberately different outcomes -- absent merges over conservative
+  defaults, malformed reports "malformed" and does not merge.
 
 Negative-spec:
   - Does NOT vendor or copy the policy YAML -- reads it fresh from disk (or
@@ -67,6 +74,12 @@ Negative-spec:
   - Does NOT deep-merge the overlay over the floor -- the merge is a
     top-level `dict.update`; `three_signal`'s sub-keys are one key's value,
     not independently merged.
+  - Does NOT treat an absent floor path the same as a malformed floor file --
+    absent (unresolvable `CLAUDE_PLUGIN_ROOT`, or no file there) merges the
+    overlay over `_conservative_policy()` and can report "loaded"; a floor
+    file that exists but fails to read/parse/mapping-check reports
+    "malformed" and does NOT merge, regardless of whether `CLAUDE_PLUGIN_ROOT`
+    is set.
   - `policy_report_fields` does NOT decide report FORMAT (JSON key names,
     Markdown layout, log-line shape) -- it only supplies the two-field
     payload. Wiring into `handoff.reconcile_open`'s returned dict and the
@@ -253,9 +266,12 @@ def load_policy(policy_path: Optional[str] = None) -> PolicyResult:
          is merged over the route-4 floor key by key (a top-level
          `dict.update`, not a deep merge) and grammar validation runs
          against the MERGED result -- a partial overlay restating only one
-         key is valid because the floor supplies the rest. A floor that
-         exists but fails to read/parse reports `source="malformed"` rather
-         than silently merging over `{}` (see module docstring).
+         key is valid because the floor supplies the rest. When the floor
+         path is ABSENT (`CLAUDE_PLUGIN_ROOT` unset or not a file there),
+         the merge base is `_conservative_policy()`, not `{}`, so this
+         route arms independent of that env var. A floor file that EXISTS
+         but fails to read/parse/mapping-check reports `source="malformed"`
+         rather than silently merging over any base (see module docstring).
       4. Best-effort ``CLAUDE_PLUGIN_ROOT``-relative default (the floor).
 
     Fail-closed on any failure to resolve/read/parse/validate -- see module
@@ -305,7 +321,7 @@ def load_policy(policy_path: Optional[str] = None) -> PolicyResult:
                 resolved_path=resolved_path_str,
             )
         floor_path = _resolve_default_policy_path()
-        floor: Dict[str, Any] = {}
+        floor: Dict[str, Any] = _conservative_policy()
         floor_warning: Optional[str] = None
         if floor_path is not None and floor_path.is_file():
             try:

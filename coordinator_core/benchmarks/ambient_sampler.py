@@ -14,7 +14,8 @@ per sample:
      "cpu_pct": float|null, "ram_free_mb": float|null, "ram_total_mb": float|null}
 
 Windows is first-class here (per repo doctrine: naked Python, no new .sh, no bash) —
-process/CPU/RAM counts are gathered via a PowerShell query on Windows and `ps`/
+process/CPU/RAM counts are gathered via `psutil` (a hard dependency, see
+`pyproject.toml`) in-process, not by shelling out to PowerShell/WMI, and `ps`/
 `/proc` style facilities are NOT used. `kill -0` is never used to test liveness (it
 lies about native Windows PIDs — state/lessons/kill-0-lies-about-native-windows-
 pids.md); `live_sessions` instead reuses the existing, already-correct
@@ -42,7 +43,6 @@ import argparse
 import json
 import os
 import platform
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -52,8 +52,6 @@ from coordinator_core import atomic_append
 
 MIN_INTERVAL_SECONDS = 10.0
 DEFAULT_INTERVAL_SECONDS = 30.0
-
-_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _sink_path(git_common_dir_path: Path) -> Path:
@@ -77,68 +75,51 @@ def _resolve_live_sessions_count() -> int:
 
 
 def _windows_process_and_memory_sample() -> "tuple[Optional[int], Optional[float], Optional[float], Optional[float]]":
-    """Return (claude_procs, cpu_pct, ram_free_mb, ram_total_mb) via PowerShell on Windows.
+    """Return (claude_procs, cpu_pct, ram_free_mb, ram_total_mb) via `psutil` on Windows.
 
-    Every field independently degrades to None on failure — a single WMI/CIM
+    Every field independently degrades to None on failure — a single psutil
     hiccup must not blank out fields that DID resolve. `kill -0` / raw PID
     liveness is never used here (see module docstring).
     """
+    import psutil
+
     claude_procs: Optional[int] = None
     cpu_pct: Optional[float] = None
     ram_free_mb: Optional[float] = None
     ram_total_mb: Optional[float] = None
 
     try:
-        proc_cmd = (
-            "(Get-Process | Where-Object { $_.ProcessName -match 'claude' } "
-            "| Measure-Object).Count"
+        # PowerShell's `ProcessName` carries no `.exe`, and `-match` is a
+        # case-insensitive substring regex, so a lowercase `in` test over
+        # `name` is the faithful equivalent of the old
+        # `Get-Process | Where-Object {ProcessName -match 'claude'}` query.
+        claude_procs = sum(
+            1
+            for p in psutil.process_iter(["name"])
+            if "claude" in (p.info["name"] or "").lower()
         )
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", proc_cmd],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=_NO_CONSOLE,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            claude_procs = int(out.stdout.strip())
     except Exception:
         claude_procs = None
 
     try:
-        os_cmd = (
-            "$os = Get-CimInstance Win32_OperatingSystem; "
-            "Write-Output ($os.FreePhysicalMemory); "
-            "Write-Output ($os.TotalVisibleMemorySize)"
-        )
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", os_cmd],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=_NO_CONSOLE,
-        )
-        if out.returncode == 0:
-            lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
-            if len(lines) >= 2:
-                # Win32_OperatingSystem reports these fields in KB.
-                ram_free_mb = float(lines[0]) / 1024.0
-                ram_total_mb = float(lines[1]) / 1024.0
+        # Semantic change from the old WMI probe, ruled under spine row C10
+        # of docs/plans/2026-08-06-shell-spawn-regrowth-gate.md (see
+        # probe-memory-headroom.py precedent): Win32_OperatingSystem's
+        # FreePhysicalMemory is strictly-free memory, while psutil's
+        # `available` is available memory (free + reclaimable cache) — the
+        # more useful number, and the one every other platform leg in this
+        # file already reports.
+        vm = psutil.virtual_memory()
+        ram_free_mb = vm.available / 1048576.0
+        ram_total_mb = vm.total / 1048576.0
     except Exception:
         ram_free_mb = None
         ram_total_mb = None
 
     try:
-        cpu_cmd = "(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", cpu_cmd],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            creationflags=_NO_CONSOLE,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            cpu_pct = float(out.stdout.strip())
+        # interval=0.3: the argless form returns 0.0 on its first call in a
+        # process. Kept small since this sampler runs on a busy box.
+        cpu_pct = psutil.cpu_percent(interval=0.3)
     except Exception:
         cpu_pct = None
 

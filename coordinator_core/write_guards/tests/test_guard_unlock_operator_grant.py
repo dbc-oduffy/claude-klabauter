@@ -101,7 +101,7 @@ class TestPresentSentinelGrantsOnce:
 
 class TestPerGuardIsolation:
     def test_sentinel_for_a_different_guard_does_not_clear_this_one(self):
-        gus.sentinel_path("sess-1", "block_tracker_edit").write_text("", encoding="utf-8")
+        gus.sentinel_path("sess-1", "block_priority_ledger_edit").write_text("", encoding="utf-8")
         out = engine.evaluate(_payload("sess-1"))
         assert _is_deny(out)
 

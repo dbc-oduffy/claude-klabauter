@@ -241,6 +241,15 @@ from coordinator_core.guard_advisory_counter import (
     record_advisory_fire as _record_advisory_fire,
     record_deny_fire as _record_deny_fire,
 )
+from coordinator_core.bash_guards._advisory_dedupe import (
+    advisory_dedupe_key as _advisory_dedupe_key,
+    already_advised as _already_advised,
+    degrade_advisory_envelope as _degrade_advisory_envelope,
+    mark_advised as _mark_advised,
+)
+from coordinator_core.bash_guards._write_bump_marker import (
+    resolve_gitdir as _resolve_gitdir_for_dedupe,
+)
 from coordinator_core.bash_guards._command_tokenizer import (
     ResolvedCommand as _ResolvedCommand,
     resolve_command_positions as _resolve_command_positions,
@@ -773,7 +782,93 @@ def _any_declared_matchers() -> "frozenset[str]":
     return _ANY_DECLARED_MATCHERS_CACHE
 
 
+def _session_advisory_already_fired(
+    name: str, out: Dict[str, Any], session_id: str, cwd: str
+) -> bool:
+    """Per-session, per-(guard,shape) advisory dedupe consult (item 7,
+    state/handoffs/2026-07-30-boot-context-bloat-non-orientation-surfaces.md;
+    baseline: state/audits/2026-08-14-boot-payload-baseline.md § "Item 7").
+
+    ``True`` only when this EXACT ``(guard name, advisory text)`` pair has
+    already fired once this session -- see
+    ``_advisory_dedupe.advisory_dedupe_key`` for the shape fingerprint.
+    ``False`` (never suppress) on every other path, by construction: this
+    function is TOTAL, called from inside `evaluate_payload_json`'s loop
+    OUTSIDE the per-guard try/except (mirroring `_suppress_advisory`'s own
+    placement one call above it in that loop), so a bug here must degrade to
+    "show the advisory" rather than crash the whole dispatch or silently
+    swallow one. On the FIRST firing of a given shape this call also records
+    the marker (best-effort, itself fail-open inside
+    `_advisory_dedupe.mark_advised`) so the SECOND firing sees it.
+
+    Callers are responsible for only invoking this on an envelope already
+    confirmed non-hard-deny (`not _is_hard_deny_envelope`) -- this function
+    has no notion of "deny" itself; see `_advisory_dedupe`'s own module
+    docstring, "NEVER CALLED FOR A BLOCK".
+    """
+    if not session_id:
+        return False
+    try:
+        shape_key = _advisory_dedupe_key(name, out)
+        if shape_key is None:
+            return False
+        gitdir = _resolve_gitdir_for_dedupe(cwd)
+        if _already_advised(gitdir, session_id, shape_key):
+            return True
+        _mark_advised(gitdir, session_id, shape_key)
+        return False
+    except Exception:  # noqa: BLE001 -- fail open: never suppress on a bug here
+        return False
+
+
 def evaluate_payload_json(
+    raw: str,
+    policy_file: Optional[str] = None,
+    host_is_windows: Optional[bool] = None,
+    resolved: Optional[List[_ResolvedCommand]] = None,
+    resolution_class: Optional[str] = None,
+    *,
+    collect_advisories: bool = False,
+) -> Union[Dict[str, Any], List[Dict[str, Any]], None]:
+    """Arm this dispatch's git-probe budget, then run the chain (see
+    ``_evaluate_payload_json_budgeted`` for the whole contract -- this
+    wrapper adds nothing else and returns its result unchanged).
+
+    A WRAPPER, not a ``try``/``finally`` around the chain in place, because
+    this function's signature is itself a cross-plane contract: DoE's
+    ``coordinator/hooks/scripts/preuse-bash-dispatch.py`` feature-detects
+    every parameter below via ``inspect.signature(evaluate_payload_json).
+    parameters`` before deciding what to pass. The parameters are therefore
+    spelled out here explicitly and forwarded positionally-by-name; a
+    ``*args, **kwargs`` passthrough would erase them from that signature and
+    silently drop ``policy_file``/``resolution_class`` on the floor at the
+    only caller that sends them.
+
+    THE SEAM IS DELIBERATELY THIS ONE AND ONLY THIS ONE. The budget exists
+    because the harness cancels a PreToolUse hook that overruns its window
+    (15 000 ms), and a cancelled hook delivers NO verdict at all -- the
+    2026-08-15 bare-commit sweep landed with neither its deny nor its
+    advisory printed, ``durationMs=16336``. This function is the entry point
+    of the process that runs inside that window; a check invoked directly
+    (every test in this package, ``_alternative_liveness``'s liveness
+    harness) is not, keeps no window, and must stay unbudgeted -- see
+    ``_dc._git_probe_deadline``'s inert-by-default note.
+    """
+    _dc._arm_git_probe_deadline()
+    try:
+        return _evaluate_payload_json_budgeted(
+            raw,
+            policy_file,
+            host_is_windows,
+            resolved,
+            resolution_class,
+            collect_advisories=collect_advisories,
+        )
+    finally:
+        _dc._disarm_git_probe_deadline()
+
+
+def _evaluate_payload_json_budgeted(
     raw: str,
     policy_file: Optional[str] = None,
     host_is_windows: Optional[bool] = None,
@@ -1317,6 +1412,37 @@ def evaluate_payload_json(
                     _record_advisory_fire(name, session_id, cwd)
                 except Exception:
                     pass
+            if (
+                not _is_hard_deny_envelope
+                and _session_advisory_already_fired(name, out, session_id, cwd)
+            ):
+                # Item 7 (state/handoffs/2026-07-30-boot-context-bloat-non-
+                # orientation-surfaces.md): this exact (guard, shape) advisory
+                # already fired once this session -- degrade to the terse
+                # alternative, not a full re-explanation (docs/wiki/guard-
+                # messaging.md § Register: the first firing already delivered
+                # the full guidance; the repeat is strictly new, shorter
+                # content -- the alternative alone -- not a second delivery of
+                # the same prose). The audit-count line just above still
+                # records this as a real firing (DR-277's count-and-log
+                # contract is unaffected by whether the agent's rendered text
+                # is full or degraded).
+                #
+                # This RETURNS the degraded envelope rather than `continue`-
+                # ing the chain: a `continue` here would let a LOWER-
+                # precedence guard win the slot a higher-precedence one had
+                # already claimed, making advisory precedence a function of
+                # per-session firing history. The chain-order contract (deny
+                # wins the hard chain; a non-suppressed advisory returns
+                # immediately) is unchanged -- this branch takes the exact
+                # same collect/return path as any other advisory below, just
+                # with `out` swapped for its degraded form.
+                degraded = _degrade_advisory_envelope(out)
+                if degraded is not None:
+                    out = degraded
+                # `degraded is None` (no terse alternative could be isolated)
+                # falls open to the FULL envelope already in `out` -- never
+                # silence (module docstring, "FAIL OPEN, UNCONDITIONALLY").
             if collect_advisories and not _is_hard_deny_envelope:
                 # A genuine (non-suppressed) hard-deny envelope must NEVER be
                 # folded into `_collected` -- "deny wins the hard chain" is
@@ -1869,7 +1995,7 @@ def _build_guard_chain(
         GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("cat-heredoc-write-advise", lambda: _dc.check_cat_heredoc_write_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
-        GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
+        GuardEntry("git-commit-safe-commit-advise", lambda: _dc.check_git_commit_safe_commit_advise(cmd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash", "PowerShell")),
         # BX-7/BX-8's missing rewrite targets, closing the two-shape gap this
         # dispatch was sent to close (DoE docs/plans/2026-07-29-windows-
         # viability-stop-the-spawn-storms.md, row BX-16): MULTI_PROBE_BANNER

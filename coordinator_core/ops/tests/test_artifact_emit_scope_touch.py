@@ -36,6 +36,15 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (artifact.emit
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _run(coro):
     return asyncio.run(coro)

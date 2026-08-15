@@ -65,6 +65,8 @@ _FIELD_DEFAULTS: Dict[str, Any] = {
     "push_status": PUSH_STATUS_NOT_ATTEMPTED,
     "pushed_range": None,
     "pushed_count": None,
+    "reason": "",
+    "unprovenanced_paths": (),
 }
 
 

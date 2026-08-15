@@ -17,6 +17,13 @@ from coordinator_core.diff_scoped_tests import (
     find_changed_test_files,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _MARKER_CMD = (
     "python3 -m pytest -m 'not cadence and not pending_fix and not designed_red' "
     "-n auto --maxprocesses=12"

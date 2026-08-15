@@ -840,43 +840,6 @@ _MIRROR_NATIVE_DESTINATION_REASON = (
     "that failure is about the repo, not about the file's own runtime."
 )
 
-_REASON_CANON_STRING = (
-    "Admission test: the path_separator/posix_mode_bits two-way "
-    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
-    "vs-carveout.md), CARVE-OUT side ('canonicalizing a path string ... so "
-    "it compares/stores consistently regardless of host') -- satisfied "
-    "because the construct never reaches a live host-filesystem I/O call, "
-    "the discriminator's dividing line for the FIX side. "
-    "This normalizes a path string -- a recorded frontmatter field, a "
-    "tool_input.file_path payload, a git-diff/`ls-files` line, an env var, "
-    "or a resolved-path fallback -- to a canonical forward-slash form for "
-    "comparison or storage, independent of which platform the string's "
-    "author or its current reader is on. os.sep is the wrong fix here: "
-    "os.sep reflects the host running this code, not the platform the "
-    "string came from, and is a no-op on POSIX that would leave a "
-    "backslash written on Windows (or embedded in test fixture/frontmatter "
-    "data) unnormalized. This is the correct, portable idiom for that job, "
-    "not a POSIX assumption."
-)
-
-_REASON_NOT_A_PATH = (
-    "Admission test: the path_separator/posix_mode_bits two-way "
-    "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
-    "vs-carveout.md), CARVE-OUT side -- satisfied because the flagged "
-    "literal is not a path-related construct at all, so neither the FIX "
-    "arm (host filesystem I/O with a hardcoded separator) nor the OTHER "
-    "carve-out buckets (string canonicalization, Windows-syntax parsing) "
-    "apply; it fails the discriminator's own premise rather than passing "
-    "it on a technicality. "
-    '"\\\\" + c emits a regex escape character for a translated Python re '
-    "character class -- this function has no relationship to filesystem "
-    "paths at all; the AST shape (BinOp Add with a literal backslash "
-    "constant) is structurally identical to a path-concatenation hack but "
-    "the semantic content is unrelated. Renaming or restructuring this to "
-    "satisfy a path-shaped detector would not make the code more portable "
-    "-- it isn't path code to begin with."
-)
-
 _REASON_CHMOD_DIR_GAP = (
     "Admission test: the path_separator/posix_mode_bits two-way "
     "fix-vs-carve-out discriminator (docs/reference/posix-portability-fix-"
@@ -1226,19 +1189,20 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         # for the false-positive measurement that drove the arm removal, and this
         # module's own docstring (L106) for the decision to retain the class name
         # as an empty BLOCKING slot rather than delete it outright.
-        REPO_DOE_CLAUDE: {
-            # Compares a COMMAND-LINE ARGUMENT against a path-shaped substring to decide whether
-            # to strip it. The token may not be a path at all (`-q`, `--no-header`), so
-            # PureWindowsPath is the wrong tool here: it would reinterpret a non-path argument as
-            # one. Textual comparison, never a filesystem decision.
-            "coordinator/bin/stable-suite-run.py": _REASON_NOT_A_PATH,
-            # Builds the POSIX-form `$HOME`/`_cc_root` the guard under test reads -- bash's $HOME
-            # is POSIX-shaped even under Git Bash, so forward slashes are the CORRECT value, not a
-            # portability slip. PureWindowsPath was tried and is actively wrong here: it maps ""
-            # to ".", and this file's test_t10_fail_open_zero_stderr_empty_root exercises an EMPTY
-            # root, so the swap changed what the guard was handed and broke the test.
-            "coordinator/tests/test_cc_root_source_guard.py": _REASON_CANON_STRING,
-        },
+        # Review: coordinator:code-reviewer (2026-08-14, wfc-S1 finding 2) --
+        # the two REPO_DOE_CLAUDE entries formerly here
+        # (coordinator/bin/stable-suite-run.py,
+        # coordinator/tests/test_cc_root_source_guard.py) exempted a class
+        # that can no longer fire in ANY repo: C1 dropped path_separator's
+        # three detection arms unconditionally (not scoped to
+        # claude-klabauter), so _scan_python_file never calls
+        # _record("path_separator", ...) for any repo_key, DoE-claude
+        # included -- the identical dead-letter rationale C2's own comment
+        # above used to strike the 148 REPO_CLAUDE_KLABAUTER rows. Struck by
+        # the same rationale rather than left for DoE-claude's own test
+        # tier to notice, since check_no_stale_exemptions is repo-scoped
+        # and a claude-klabauter gate run can never flag another repo's
+        # entries (see that function's own docstring).
     },
     "posix_mode_bits": {
         REPO_CLAUDE_KLABAUTER: {
@@ -2952,6 +2916,17 @@ def main(argv: List[str]) -> int:
 
     stale_markers_ok, stale_markers_msg = check_no_stale_fixture_markers(root)
 
+    # Review: coordinator:code-reviewer (2026-08-14, wfc-S1) -- AC13's
+    # check_no_stale_exemptions was defined and unit-tested but never
+    # wired into main(), so the gate binary could never fail on a stale
+    # EXEMPTIONS entry in production; only pytest running this module's
+    # own test file exercised it. Wired in here, mirroring stale_baseline_
+    # ok/stale_markers_ok two lines above -- same precomputed-raw-scan
+    # sharing shape as every other check() call in this function.
+    stale_exemptions_ok, stale_exemptions_msg = check_no_stale_exemptions(
+        root, precomputed_raw=scan(root, apply_exemptions=False)
+    )
+
     overall_ok = (
         ok
         and grown_ok
@@ -2960,6 +2935,7 @@ def main(argv: List[str]) -> int:
         and prefixes_ok
         and stale_baseline_ok
         and stale_markers_ok
+        and stale_exemptions_ok
     )
 
     if args.json:
@@ -2991,6 +2967,10 @@ def main(argv: List[str]) -> int:
                             "ok": stale_markers_ok,
                             "message": stale_markers_msg,
                         },
+                        "stale_exemptions": {
+                            "ok": stale_exemptions_ok,
+                            "message": stale_exemptions_msg,
+                        },
                     },
                     "scan": current_scan,
                 },
@@ -3005,6 +2985,7 @@ def main(argv: List[str]) -> int:
         print(prefixes_msg)
         print(stale_baseline_msg)
         print(stale_markers_msg)
+        print(stale_exemptions_msg)
 
     return 0 if overall_ok else 1
 

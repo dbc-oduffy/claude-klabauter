@@ -183,6 +183,53 @@ def test_validate_rejects_unknown_scope_kind() -> None:
         _validate("a..b", "code-reviewer", "chain", "ok", 10, "not-a-kind")
 
 
+def test_validate_names_every_invalid_enum_in_one_raise() -> None:
+    """First-wins costs a round trip per wrong field, and every one of those
+    round trips happens at a ceremony seam. All four closed vocabularies
+    report together."""
+    with pytest.raises(ValueError) as exc:
+        _validate("a..b", "not-a-reviewer", "not-a-scope", "not-a-verdict", 10, "not-a-kind")
+
+    message = str(exc.value)
+    for field in ("reviewer", "scope", "verdict", "scope_kind"):
+        assert f"{field} '" in message, message
+
+
+def test_validate_single_invalid_enum_message_is_unchanged() -> None:
+    """The aggregation must not perturb the one-bad-field message shape --
+    `test_wsc_tail_trampoline.py` asserts on its exact prefix."""
+    with pytest.raises(ValueError) as exc:
+        _validate("a..b", "bogus", "chain", "ok", 10, "diff")
+
+    assert str(exc.value).startswith(
+        "review_trail.write: reviewer 'bogus' is invalid; allowed: "
+    )
+    assert " | review_trail.write: " not in str(exc.value)
+
+
+def test_validate_hints_the_bare_name_for_an_agent_id_reviewer() -> None:
+    """`coordinator:code-reviewer` is the value nearest to hand at the seam --
+    it differs from the accepted one by a namespace prefix, so name it."""
+    with pytest.raises(ValueError, match=r"did you mean 'code-reviewer'\?"):
+        _validate("a..b", "coordinator:code-reviewer", "chain", "ok", 10, "diff")
+
+
+def test_validate_offers_no_hint_for_an_unrelated_reviewer() -> None:
+    with pytest.raises(ValueError) as exc:
+        _validate("a..b", "coordinator:nobody", "chain", "ok", 10, "diff")
+
+    assert "did you mean" not in str(exc.value)
+
+
+def test_validate_scope_message_distinguishes_scope_from_review_scale() -> None:
+    """The recurring wrong value is the review's own scale word (e.g.
+    `partitioned`), not a typo of an allowed one."""
+    with pytest.raises(ValueError) as exc:
+        _validate("a..b", "code-reviewer", "partitioned", "ok", 10, "diff")
+
+    assert "partition scale" in str(exc.value)
+
+
 def test_validate_rejects_diff_scope_kind_without_dotdot() -> None:
     with pytest.raises(ValueError, match="requires sha_range to contain"):
         _validate("abc1234", "code-reviewer", "chain", "ok", 10, "diff")

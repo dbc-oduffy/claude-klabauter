@@ -36,6 +36,15 @@ from coordinator_core.ops.engine_drift import (
     classify_drift,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 FLOOR = "6fdc7b4de770dc1c996b3c2a42bf2c7984dd67c9"
 RUNNING = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 

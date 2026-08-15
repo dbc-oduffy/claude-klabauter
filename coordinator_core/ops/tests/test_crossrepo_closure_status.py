@@ -36,6 +36,15 @@ from coordinator_core.ops.crossrepo_closure_status import (
     compute_closure_status,
 )
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _memo(worktree_root: Path, rel_dir: str, memo_id: str) -> None:
     d = worktree_root / rel_dir

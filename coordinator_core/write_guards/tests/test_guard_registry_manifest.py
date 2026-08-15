@@ -49,7 +49,6 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "block_subagent_archive_write",
         "block_subagent_grant_record_write",
         "block_subagent_plan_body_write",
-        "block_tracker_edit",
         "block_unauthorized_claude_md_write",
         "block_worktree_sentinel_write",
         "check_claude_md_size",

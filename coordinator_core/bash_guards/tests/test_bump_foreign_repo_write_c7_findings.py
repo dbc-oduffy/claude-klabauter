@@ -34,6 +34,13 @@ from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.session.core import session_dir
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 
 def _msys_form(p) -> str:

@@ -273,6 +273,31 @@ class GroupResult(TypedDict):
     # no-op. `None` on a landed commit or a genuine `commit_failed`.
 
 
+class DroppedGroup(TypedDict):
+    """One caller-supplied `CommitGroup` (handoff item 1,
+    `state/handoffs/2026-08-03-touched-path-bookkeeping.md`) that lost some
+    or all of its named paths to `safe_set` filtering in
+    `auto_commit_session_async` -- i.e. `len(kept) < len(g["paths"])`,
+    total-drop and partial-drop alike. A group that loses every path
+    previously vanished from `groups`, `failed_groups`, and `excluded`
+    (which is `compute_offer`-derived, not group-derived) all at once --
+    silent to both the operator and the diagnostics-log sink. This is that
+    group's own record, keyed on the caller-supplied `message` rather than
+    the (possibly now-empty) `paths` list, since an all-dropped group has no
+    surviving path to key on.
+
+    ``named`` -- how many paths the caller put in this group. ``matched`` --
+    how many of them were actually in this session's own computed
+    `safe_paths`; `matched < named` is the entry's own reason for existing.
+    Never populated for `_default_groups` output (the unattended-trigger
+    fallback): that grouping is computed FROM `safe_paths` itself, so it can
+    never lose a path to this filter -- see `auto_commit_session_async`."""
+
+    message: str
+    named: int
+    matched: int
+
+
 class AutoCommitReport(TypedDict):
     session_id: str
     groups: List[GroupResult]
@@ -284,6 +309,14 @@ class AutoCommitReport(TypedDict):
     # and without conflating it with the benign already-committed no-op
     # shape, which must stay quiet (see module docstring's wolf-crying
     # constraint).
+    dropped_groups: List[DroppedGroup]  # handoff item 1 (2026-08-03,
+    # touched-path-bookkeeping) -- one entry per caller-supplied `groups`
+    # entry that lost some or all of its named paths to the `safe_set`
+    # filter, empty when `groups` is `None` (the computed `_default_groups`
+    # path can never drop a path it did not itself put there). ADVISORY
+    # ONLY, same as `excluded`/DR-227 -- never a gate, never changes
+    # `main`'s exit code, and never widens `resolved_groups`/the commit
+    # boundary; see `DroppedGroup`'s own docstring for the shape.
     residue: "OrderedDict[str, List[str]]"  # C3 (2026-08-05 engine-ops-
     # declare-what-they-write plan) -- REPORT-ONLY, never a gate: every dirty
     # path still present in `git status --porcelain` AFTER the commit groups
@@ -1068,12 +1101,28 @@ async def auto_commit_session_async(
     offer = compute_offer(session_id, cwd)
     safe_set = set(offer["safe_paths"])
 
+    dropped_groups: List[DroppedGroup] = []
     if groups is None:
         resolved_groups = _default_groups(offer["safe_paths"], session_id)
     else:
         resolved_groups = []
         for g in groups:
-            kept = [p for p in g["paths"] if p in safe_set]
+            named_paths = g["paths"]
+            kept = [p for p in named_paths if p in safe_set]
+            if len(kept) < len(named_paths):
+                # Handoff item 1 (2026-08-03, touched-path-bookkeeping) --
+                # record the drop, total or partial, BEFORE the `if kept`
+                # gate below decides whether the group survives at all. A
+                # group that loses every path takes the `if kept` branch's
+                # else (never reached, `resolved_groups.append` skipped) and
+                # would otherwise leave no trace anywhere in this report.
+                dropped_groups.append(
+                    {
+                        "message": g["message"],
+                        "named": len(named_paths),
+                        "matched": len(kept),
+                    }
+                )
             if kept:
                 # Review: code-reviewer (Finding 4) — carry the caller-
                 # supplied `prose` body through; it was previously dropped
@@ -1095,6 +1144,7 @@ async def auto_commit_session_async(
         "groups": group_results,
         "excluded": offer["excluded"],
         "failed_groups": failed_groups,
+        "dropped_groups": dropped_groups,
         "residue": residue,
     }
 
@@ -1235,6 +1285,62 @@ def _log_excluded_diagnostic(
         return
 
 
+def _log_dropped_groups_diagnostic(
+    worktree_root: str, session_id: str, dropped_groups: List[DroppedGroup]
+) -> None:
+    """Best-effort write to the SAME
+    ``coordinator-sessions/logs/sessionend-auto-commit-diagnostics.log`` file
+    `_log_failed_groups_diagnostic`/`_log_excluded_diagnostic` append to --
+    mirrors both exactly in directory resolution, timestamp format,
+    exception-swallowing, and append shape. Handoff item 1 (2026-08-03,
+    touched-path-bookkeeping): a caller-supplied group that loses some or all
+    of its named paths to the `safe_set` filter previously appeared in
+    neither `groups`, `failed_groups`, nor `excluded` -- this is the ONE sink
+    the unattended SessionEnd hook can actually surface for it, since that
+    hook only inspects the subprocess exit code and never reads this CLI's
+    stdout (see `_log_failed_groups_diagnostic`'s own docstring). Never
+    raises; a diagnostics-write failure must not break the CLI's own exit
+    path.
+
+    DR-227 -- advisory ONLY, same as `_log_excluded_diagnostic`. This never
+    changes `main`'s exit code and must never be wired to do so: a dropped
+    group means the caller named a path outside its own session's computed
+    scope, not a failure of this module's own computation -- see
+    `AutoCommitReport.dropped_groups`'s own docstring. Do not promote this to
+    a gate.
+    """
+    if not dropped_groups:
+        return
+    try:
+        from coordinator_core.lifecycle import git_common_dir
+
+        common_dir = git_common_dir(Path(worktree_root))
+        log_dir = common_dir / "coordinator-sessions" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lines = [
+            "[%s] safe-commit-offer: %d caller-supplied group(s) partially or "
+            "fully dropped for session %s (named path(s) outside the "
+            "computed scope -- advisory only, exit code unaffected):"
+            % (stamp, len(dropped_groups), session_id)
+        ]
+        preview = dropped_groups[:_DROPPED_GROUPS_PREVIEW_COUNT]
+        for dg in preview:
+            lines.append(
+                "  - %s — named %d paths, %d matched"
+                % (dg["message"], dg["named"], dg["matched"])
+            )
+        remaining = len(dropped_groups) - len(preview)
+        if remaining > 0:
+            lines.append("  ... and %d more group(s)" % remaining)
+        with (log_dir / "sessionend-auto-commit-diagnostics.log").open(
+            "a", encoding="utf-8"
+        ) as fh:
+            fh.write("\n".join(lines) + "\n")
+    except Exception:
+        return
+
+
 #: How many of a group's own paths get named inline before the rest collapse
 #: into a "... and N more" tail. Bounds the report the same way
 #: `_EXCLUDED_LOG_PREVIEW_COUNT` bounds the diagnostics-log entry; the full
@@ -1264,6 +1370,16 @@ _RESIDUE_CLASS_SAMPLE_COUNT = 3
 #: the per-class COUNT is still shown in the summary line above regardless,
 #: this only bounds how many per-class detail lines get printed inline.
 _RESIDUE_CLASS_PREVIEW_COUNT = 8
+
+#: How many `dropped_groups` entries (handoff item 1, 2026-08-03
+#: touched-path-bookkeeping) get their own line -- in `_render_report`'s
+#: stdout and in `_log_dropped_groups_diagnostic`'s log sink alike -- before
+#: the rest collapse into a "... and N more group(s)" tail. Same idiom as
+#: `_RESIDUE_CLASS_PREVIEW_COUNT`: one line per GROUP, never one line per
+#: path -- a caller that named hundreds of groups in one call must not
+#: reproduce the 1938-line `excluded` incident this module's docstring
+#: already retired once.
+_DROPPED_GROUPS_PREVIEW_COUNT = 8
 
 
 def _commit_changed_count(sha: Optional[str], worktree_root: Optional[str]) -> Optional[int]:
@@ -1353,6 +1469,9 @@ def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None
     with many repo-root residue files (each its own class, per
     `_residue_class`) previously emitted one line per file here, the same
     unbounded shape this paragraph already forbids for `excluded`.
+    `dropped_groups` (handoff item 1, 2026-08-03 touched-path-bookkeeping)
+    carries the same bound via `_DROPPED_GROUPS_PREVIEW_COUNT` — one line
+    per GROUP, never per path.
 
     A THIRD property, from the example-cockpit-repo-em memo of 2026-08-05: every
     file count is labelled as either the commit's own change count or the
@@ -1383,6 +1502,28 @@ def _render_report(report: AutoCommitReport, worktree_root: Optional[str] = None
             "this session; left uncommitted on purpose (run `safe-commit-offer "
             "--dry-run --json` for the full list)." % (len(excluded), owned, untouched)
         )
+
+    dropped_groups = report.get("dropped_groups") or []
+    if dropped_groups:
+        # Handoff item 1 (2026-08-03, touched-path-bookkeeping) -- a
+        # caller-supplied group whose named paths fell wholly or partly
+        # outside this session's computed `safe_paths` is advisory-only
+        # (DR-227, same as `excluded` above), never a gate: the group is
+        # simply smaller (or absent) from `groups` below, not a failure.
+        lines.append(
+            "Dropped %d caller-supplied group(s) — named path(s) outside "
+            "this session's computed scope, left uncommitted on purpose "
+            "(run `safe-commit-offer --dry-run --json` for the full list):"
+            % len(dropped_groups)
+        )
+        shown = dropped_groups[:_DROPPED_GROUPS_PREVIEW_COUNT]
+        for dg in shown:
+            lines.append(
+                "  %s — named %d paths, %d matched" % (dg["message"], dg["named"], dg["matched"])
+            )
+        remaining = len(dropped_groups) - len(shown)
+        if remaining > 0:
+            lines.append("  ... and %d more group(s)" % remaining)
 
     residue = report.get("residue") or {}
     if residue:
@@ -1571,6 +1712,7 @@ def main(argv: List[str]) -> int:
         print(_render_report(report, worktree_root))
 
     _log_excluded_diagnostic(worktree_root, session_id, report["excluded"])
+    _log_dropped_groups_diagnostic(worktree_root, session_id, report["dropped_groups"])
 
     failed_groups = report["failed_groups"]
     if failed_groups:

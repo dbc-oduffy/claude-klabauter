@@ -13,6 +13,13 @@ import pytest
 from coordinator_core.ops.assert_no_dangling_plan_backlinks import main, run_gate, scan_missing_ids
 from coordinator_core.ops.spec_backlink_resolve import resolve
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _write(root: str, rel: str, content: str) -> None:
     full = os.path.join(root, rel)

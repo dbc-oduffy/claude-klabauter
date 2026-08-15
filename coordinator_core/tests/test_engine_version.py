@@ -16,6 +16,13 @@ import pytest
 
 from coordinator_core.engine_version import MIN_KNOWN_GOOD_SHA, resolve_engine_sha
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def test_resolve_engine_sha_returns_40_char_lowercase_hex_in_real_repo():
     sha = resolve_engine_sha()

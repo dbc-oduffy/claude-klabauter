@@ -6481,6 +6481,16 @@ def validate_frontmatter_obj(fm_dict: dict, schema_obj: dict) -> dict:
 #        normalisation, and the always-error-on-disagree /
 #        strict-gated-on-dangling split all carry over unchanged).
 #
+#   Asymmetry (Review: code-reviewer R1 P3): mechanism (1) covers all four
+#   path fields (predecessor / forked_from / additional_predecessors[] /
+#   origin_handoff); mechanism (2) covers only the two fields that today have
+#   an ID-companion (predecessor_id / origin_handoff_id) — forked_from and
+#   additional_predecessors[] have no ID-companion equivalent in the schema,
+#   so the "superset" framing above is a superset only over the fields that
+#   currently exist. Not a live gap (the schema has no forked_from_id or
+#   per-entry additional_predecessors IDs today); would need extending if
+#   either is ever added.
+#
 #   Empirical justification for restoring (2): predecessor_id/origin_handoff_id
 #   ARE populated and load-bearing in the live corpus as of 2026-07-24 (14
 #   files with non-null predecessor_id, 10 with non-null origin_handoff_id,
@@ -6921,9 +6931,8 @@ def _lint_parse_args(argv: list[str]) -> dict | None:
             i += 1
         elif tok in ('--schema', '--list-schemas', '--lint-existing'):
             print(
-                f'lint-frontmatter: {tok}: not ported — claude-klabauter BIG_PORT scoped this CLI to '
-                '--root/--file/--json/--strict-refs only (the three flag shapes DoE\'s live '
-                'callers consume). Open a port request if you need this flag.',
+                f'lint-frontmatter: {tok}: not ported — claude-klabauter BIG_PORT. '
+                'Open a port request if you need this flag.',
                 file=sys.stderr,
             )
             return None

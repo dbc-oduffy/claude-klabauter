@@ -22,6 +22,16 @@ Assembler scalars (C2 — v2.6.0 emit switch):
 Null roadmap_id guard (F4): if roadmap_id is None, both scalars are set to null without
   touching ctx.assembler_dag.
 
+Assembler degraded-state signals (scan_incomplete / scan_errors — RoadmapSummary schema
+  3.12.0, both `required`, non-nullable): read off the same ctx.assembler_dag(roadmap_id)
+  payload as roll_up/critical_path, mirroring roadmap_serve.py's
+  ``dag.get("scan_incomplete", False)`` / ``dag.get("scan_errors", [])`` shape. For the
+  null-roadmap_id branch (no assembler call), both fields take their schema-typed empty
+  values — scan_incomplete=False (schema type: boolean, no assembler ran so nothing is
+  known to be incomplete) and scan_errors=[] (schema type: array of string) — matching
+  roadmap_serve.py's own no-dag defaults, not `None` (the schema forbids null for either
+  field).
+
 Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) § SECTION 8.8 —
   RoadmapSummary. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P12
@@ -122,9 +132,13 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             dag = ctx.assembler_dag(roadmap_id)
             roll_up = dag.get("roll_up")
             critical_path = dag.get("critical_path")
+            scan_incomplete = dag.get("scan_incomplete", False)
+            scan_errors = dag.get("scan_errors", [])
         else:
             roll_up = None
             critical_path = None
+            scan_incomplete = False
+            scan_errors = []
 
         records.append({
             "repo": ctx.repo_name,
@@ -154,6 +168,8 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             # Assembler scalars (C2 / v2.6.0) — populated above from ctx.assembler_dag().
             "roll_up": roll_up,
             "critical_path": critical_path,
+            "scan_incomplete": scan_incomplete,
+            "scan_errors": scan_errors,
             "provenance": ctx.provenance("local_fs", path=path, derivation="parsed"),
         })
 

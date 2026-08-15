@@ -67,6 +67,8 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
+
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards import guard_grep_via_bash
@@ -401,7 +403,19 @@ class TestShapeOverlapPrecedenceInMessages:
         # construct) so the grep guard still has something actionable to
         # say; the precedence property under test (grep wins, banner stays
         # silent) is unchanged and still exercised.
-        cmd = 'echo "=== probe ==="; pwd; grep -Pn "TODO" src/'
+        #
+        # (iii) REPOINTED AGAIN (2026-08-14, _shape_classifier false-positive
+        # fix, state/audits/2026-08-14-boot-payload-baseline.md § "The
+        # false-positive matcher"): MULTI_PROBE_BANNER now requires every
+        # OTHER top-level (non-pipe-continuation) segment to itself be a
+        # harness-known-fact probe -- a bare top-level `grep ...` segment no
+        # longer counts as banner residue at all (correctly: a real search
+        # is not a session-fact re-probe). Piping `grep` off `pwd` keeps it a
+        # pipe CONTINUATION of the `pwd` probe (mirrors the plan's own
+        # canonical overlap example), so this command is still genuinely
+        # both shapes at once -- the precedence property under test is
+        # unchanged.
+        cmd = 'echo "=== probe ==="; pwd | grep -Pn "TODO"'
         classification = classify_command(cmd)
         assert classification.primary is not None
         assert classification.primary.shape is Shape.GREP_VIA_BASH
@@ -444,7 +458,14 @@ class TestShapeOverlapPrecedenceInMessages:
         # keep the grep guard actionable while the precedence property
         # (grep wins over both banner and head-tail residue) stays under
         # test unchanged.
-        cmd = 'echo "=== probe ==="; grep -Pn "TODO" src/ | head -n 5; pwd'
+        #
+        # (iii) REPOINTED AGAIN (2026-08-14, same false-positive fix as the
+        # two-shape overlap test above): the top-level `grep ...; pwd`
+        # ordering put `grep` at a top-level (non-pipe) segment, which no
+        # longer counts as banner residue under the tightened predicate.
+        # `pwd | grep ... | head` keeps `grep`/`head` as pipe continuations
+        # of the `pwd` probe, so all three shapes still genuinely overlap.
+        cmd = 'echo "=== probe ==="; pwd | grep -Pn "TODO" | head -n 5'
         classification = classify_command(cmd)
         assert classification.primary is not None
         assert classification.primary.shape is Shape.GREP_VIA_BASH
@@ -631,6 +652,20 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
     2026-07-29).
     """
 
+    @pytest.fixture(autouse=True)
+    def _empty_index(self, monkeypatch):
+        """This class's remit is advisory MESSAGE text, not index-probe
+        behavior (that's `test_git_commit_safe_commit_deny_escalation.py`'s
+        job, C7 + its 2026-08-15 solo-bare-commit sibling). None of the
+        UNSCOPED_FORMS below pin `-C <repo>`, so an un-stubbed probe would
+        read whatever THIS process's ambient cwd (the live claude-klabauter
+        checkout, shared and dirty) happens to have staged at test-run
+        time -- flaky by construction now that a non-empty index can
+        escalate a solo bare commit to DENY. Pinning the probe to "always
+        empty" keeps every row here at its pre-existing advisory outcome,
+        deterministically."""
+        monkeypatch.setattr(dispatch_checks, "_run_git", lambda *a, **k: (0, ""))
+
     #: Commit forms that already carry the ratified scope. Firing on any of
     #: these is a false positive on the doctrinally-correct form.
     SCOPED_FORMS = [
@@ -729,6 +764,19 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
     def test_non_commit_git_subcommand_returns_none(self):
         assert dispatch_checks.check_git_commit_safe_commit_advise("git status", "s") is None
 
+    def test_non_amend_advisory_text_is_unchanged_by_the_amend_fix(self):
+        """Negative-spec: a command with no `--amend` flag must keep the
+        pre-existing scoped-new-commit remediation text verbatim, never the
+        new amend-specific body."""
+        advisory = _advisory_text(
+            _hso(dispatch_checks.check_git_commit_safe_commit_advise(
+                'git commit -m "fix the thing"', "s"
+            ))
+        )
+        assert "rewrites whatever commit is at HEAD" not in advisory
+        assert "git notes add -f -m" not in advisory
+        assert "git add -- <paths> && git commit -m" in advisory
+        assert "scoped-git-commit" in advisory
 
 class TestMultiprobeBannerRewriteMessageAccuracy:
     def test_recognized_probes_rewrite_and_advisory_names_the_facts_batched(self):

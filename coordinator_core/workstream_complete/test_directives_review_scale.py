@@ -815,6 +815,41 @@ def test_split_tracked_partitions_mixed_tracked_and_untracked_with_normalization
         assert untracked == ["untracked.py"]
 
 
+def test_measure_session_review_scale_inputs_counts_backslash_tracked_modified_file():
+    """Review: code-reviewer — Finding (P1). `_split_tracked` normalizes
+    paths into its OWN `ls-files` pathspec but used to return `tracked`
+    built from the caller's original, unnormalized paths -- which
+    `_measure_session_review_scale_inputs` then fed straight into a second
+    `git diff --numstat` pathspec. On a path containing a backslash
+    separator, that second pathspec silently failed to match, undercounting
+    `gross_loc`/`code_loc` for the file -- the exact defect class the fix
+    was meant to close, one call site downstream. Regression pin: a tracked,
+    modified file passed with a backslash separator must still contribute
+    its diff lines."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _init_git_repo(root)
+        session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+        (root / "sub").mkdir()
+        (root / "sub" / "tracked.py").write_text("x = 1\n", encoding="utf-8")
+        _run_git(["add", "sub/tracked.py"], str(root))
+        _commit_as(root, "add tracked", _SESSION_ID)
+        (root / "sub" / "tracked.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+
+        gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+            root,
+            session_start_time,
+            _SESSION_ID,
+            uncommitted_paths=["sub\\tracked.py"],
+        )
+        assert gross_loc == 2
+        assert code_loc == 2
+        assert commit_count == 1
+        assert surface_count == 1
+
+
 def test_count_lines_unreadable_path_returns_none(tmp_path):
     """(review-integrator finding 1, half 2) `_count_lines` on a path that
     does not exist on disk returns `None`, never a zero standing in for the
@@ -1091,7 +1126,10 @@ import pytest
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
 # residue and is explicitly not the route for a new file --
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _commit(root: Path, filename: str, content: str, message: str) -> str:
@@ -1194,6 +1232,209 @@ def test_ac4_genuinely_empty_session_still_resolves_indeterminate(tmp_path, caps
 # regression guard. See state/bug-backlog/2026-08-14-review-scale-
 # uncommitted-leg-attributes-peer-work.yaml.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# `commit_slices_out` -- the per-commit slice side channel `brief()` emits at
+# `gates.review_scale.commit_slices` (A, docs/plans/2026-08-08-the-engine-
+# asks-for-facts-it-already-holds.md C-followup). Direct coverage of
+# `_measure_session_review_scale_inputs`'s side channel, plus the `--format=
+# %H` non-regression and the single-spawn claim. brief()-level coverage of
+# the presence/absence-of-key contract lives in test_workstream_complete.py.
+# ---------------------------------------------------------------------------
+
+
+def test_commit_slices_out_shape_and_ordering_two_commits(tmp_path):
+    """(1) One slice per session-owned commit, oldest-first, `sha_range` in
+    `<sha>^..<sha>` form, `diff_loc` matching that commit's OWN noise-
+    excluded LOC -- not the running total across commits."""
+    _init_git_repo(tmp_path)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    (tmp_path / "b.py").write_text("x = 1\n", encoding="utf-8")
+    _run_git(["add", "b.py"], str(tmp_path))
+    _commit_as(tmp_path, "first session commit", _SESSION_ID)
+    c1 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    (tmp_path / "c.py").write_text("y = 1\ny2 = 2\ny3 = 3\n", encoding="utf-8")
+    _run_git(["add", "c.py"], str(tmp_path))
+    _commit_as(tmp_path, "second session commit", _SESSION_ID)
+    c2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    slices: list = []
+    result = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
+    )
+    assert result[2] == 2  # commit_count
+
+    assert [s["sha"] for s in slices] == [c1, c2]
+    assert slices[0]["sha_range"] == f"{c1}^..{c1}"
+    assert slices[1]["sha_range"] == f"{c2}^..{c2}"
+    assert slices[0]["diff_loc"] == 1
+    assert slices[1]["diff_loc"] == 3
+
+
+def test_commit_slices_out_excludes_interleaved_foreign_commit(tmp_path):
+    """(2) The load-bearing property: on a shared `work/{machine}/{date}`
+    branch a FOREIGN commit interleaved between two session-owned commits
+    must produce slices naming only the session's own shas -- and no
+    emitted `sha_range` may span the foreign commit. A per-RANGE producer
+    (`first_own..last_own`) would silently include the foreign commit's own
+    diff; this pins that the producer is per-commit instead."""
+    _init_git_repo(tmp_path)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    (tmp_path / "mine1.py").write_text("m1 = 1\n", encoding="utf-8")
+    _run_git(["add", "mine1.py"], str(tmp_path))
+    _commit_as(tmp_path, "my first commit", _SESSION_ID)
+    mine1 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    (tmp_path / "foreign.py").write_text("\n".join(f"f{i} = {i}" for i in range(20)) + "\n", encoding="utf-8")
+    _run_git(["add", "foreign.py"], str(tmp_path))
+    _commit_as(tmp_path, "a peer's own commit", _PEER_SESSION_ID)
+    foreign = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    (tmp_path / "mine2.py").write_text("m2 = 1\nm2b = 2\n", encoding="utf-8")
+    _run_git(["add", "mine2.py"], str(tmp_path))
+    _commit_as(tmp_path, "my second commit", _SESSION_ID)
+    mine2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True, **_NO_CONSOLE
+    ).stdout.strip()
+
+    slices: list = []
+    result = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
+    )
+    assert result[2] == 2  # commit_count -- the foreign commit is not this session's
+
+    shas_seen = {s["sha"] for s in slices}
+    assert shas_seen == {mine1, mine2}
+    assert foreign not in shas_seen
+
+    for _slice in slices:
+        assert foreign not in _slice["sha_range"]
+
+    assert slices[0]["sha"] == mine1
+    assert slices[0]["diff_loc"] == 1
+    assert slices[1]["sha"] == mine2
+    assert slices[1]["diff_loc"] == 2
+
+
+def test_commit_slices_out_untouched_when_shas_unresolvable():
+    """(3, producer half) When `_session_owned_shas` cannot resolve (no
+    `session_id`), `commit_slices_out` is left EMPTY, never populated with a
+    guessed entry -- a caller must read the four-tuple's `commit_count is
+    None` to distinguish "unresolvable" from "resolved, zero commits", not
+    an empty list on its own (both leave the list empty)."""
+    slices: list = [{"sentinel": "must not be cleared or appended past"}]
+    result = wsc._measure_session_review_scale_inputs(Path("."), None, "", commit_slices_out=slices)
+    assert result == (None, None, None, None)
+    # Untouched: the pre-seeded sentinel is neither cleared nor added to.
+    assert slices == [{"sentinel": "must not be cleared or appended past"}]
+
+
+def test_commit_slices_out_empty_list_on_resolved_zero_commits(tmp_path):
+    """A resolved measurement with zero owned commits leaves `commit_slices_
+    out` as an empty list -- a real, honest answer, distinguishable from the
+    unresolvable case only via the four-tuple's `commit_count == 0`
+    (never `None`)."""
+    _init_git_repo(tmp_path)
+    slices: list = []
+    result = wsc._measure_session_review_scale_inputs(tmp_path, None, _SESSION_ID, commit_slices_out=slices)
+    assert result == (0, 0, 0, 0)
+    assert slices == []
+
+
+def test_format_h_change_is_non_regressive_and_still_one_spawn(tmp_path, monkeypatch):
+    """(5) The `--format=` -> `--format=%H` change must not alter
+    `gross_loc`/`code_loc`/`commit_count`/`surface_count`, and the committed
+    leg must still be exactly ONE git spawn (the marker lines injected by
+    `%H` are silently skipped by the numstat-row accumulators, per
+    `_split_per_commit_numstat`'s own docstring)."""
+    _init_git_repo(tmp_path)
+    session_start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    (tmp_path / "b.py").write_text("x = 1\n", encoding="utf-8")
+    _run_git(["add", "b.py"], str(tmp_path))
+    _commit_as(tmp_path, "first session commit", _SESSION_ID)
+    (tmp_path / "c.py").write_text("y = 1\ny2 = 2\n", encoding="utf-8")
+    _run_git(["add", "c.py"], str(tmp_path))
+    _commit_as(tmp_path, "second session commit", _SESSION_ID)
+
+    show_calls = []
+    real_run_git_read_only = wsc._run_git_read_only
+
+    def _counting(args, cwd):
+        if args and args[0] == "show":
+            show_calls.append(args)
+        return real_run_git_read_only(args, cwd)
+
+    monkeypatch.setattr(wsc, "_run_git_read_only", _counting)
+
+    without_side_channel = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[]
+    )
+    assert len(show_calls) == 1
+    assert "--format=%H" in show_calls[0]
+
+    slices: list = []
+    with_side_channel = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time, _SESSION_ID, uncommitted_paths=[], commit_slices_out=slices
+    )
+
+    assert with_side_channel == without_side_channel
+    assert with_side_channel == (3, 3, 2, 1)
+    assert len(slices) == 2
+
+
+# ---------------------------------------------------------------------------
+# `_split_per_commit_numstat` -- direct unit coverage of the pure text
+# splitter itself (independent of the module `commit_slices_out` wiring
+# above).
+# ---------------------------------------------------------------------------
+
+
+def test_split_per_commit_numstat_direct():
+    text = "\n".join([
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "1\t0\tfoo.py",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "2\t1\tbar.py",
+        "3\t0\tbaz.py",
+    ])
+    result = wsc._split_per_commit_numstat(
+        text, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+    )
+    assert set(result.keys()) == {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }
+    assert "1\t0\tfoo.py" in result["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    assert "2\t1\tbar.py" in result["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+    assert "3\t0\tbaz.py" in result["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+    assert "foo.py" not in result["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+
+
+def test_split_per_commit_numstat_ignores_marker_line_not_in_known_shas():
+    """A 40-hex-char numstat PATH (however unlikely) is not mistaken for a
+    commit boundary unless it is a member of the caller's own known `shas`
+    set."""
+    fake_path_line = "a" * 40
+    text = "\n".join([
+        "cccccccccccccccccccccccccccccccccccccccc",
+        f"1\t0\t{fake_path_line}",
+    ])
+    result = wsc._split_per_commit_numstat(text, ["cccccccccccccccccccccccccccccccccccccccc"])
+    assert list(result.keys()) == ["cccccccccccccccccccccccccccccccccccccccc"]
+    assert fake_path_line in result["cccccccccccccccccccccccccccccccccccccccc"]
 
 
 def test_measure_session_review_scale_inputs_misattributes_unclaimed_peer_dirty_file():

@@ -33,7 +33,10 @@ import coordinator_core.pickup_assemble as pa
 # reads actual git-tracked repo state. Declares the spawn per the ratchet's
 # Rule 2(b) marker escape (coordinator_core/tests/test_no_new_spawning_tests.py)
 # rather than an allowlist entry — mirrors test_read_only_invariant.py.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _isolated_git_env(anchor: Path) -> dict[str, str]:

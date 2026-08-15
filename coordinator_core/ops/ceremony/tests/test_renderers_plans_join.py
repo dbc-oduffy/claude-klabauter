@@ -2,8 +2,14 @@
 coordinator_core.ops.ceremony.tests.test_renderers_plans_join — coverage for the
 ``docs/plans/*.md`` <-> ``state/handoffs/*.md`` join added to
 ``coordinator_core.ops.ceremony.renderers`` (``_join_plans_to_handoffs``,
-``render_repo_section``'s compact remainder pointer,
 ``render_plans_index_markdown``).
+
+``render_repo_section`` (the tracker's compact remainder-pointer consumer of this
+join) was removed 2026-08-14 along with the handoff-tracker render path -- see
+``docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md``
+§ C2. Coverage that existed solely to exercise the tracker's own rendered text
+was removed with it; join/index coverage that did not depend on the tracker
+survives unchanged.
 
 Design source: state/handoffs/2026-07-25_000921_slate-tracker-and-registry-sync.md
 (EM design calls override the baton's own Item B menu — see that handoff for
@@ -29,7 +35,6 @@ from coordinator_core.ops.ceremony.renderers import (
     _plans_index_marker,
     _unlinked_reason,
     render_plans_index_markdown,
-    render_repo_section,
 )
 
 _MD_LINK_TARGET_RE = re.compile(r"\]\(([^)]+)\)")
@@ -50,69 +55,20 @@ def _write_plan(root: Path, name: str, body: str) -> None:
     (plans_dir / name).write_text(body, encoding="utf-8")
 
 
-class TestLinkedAnnotation:
-    def test_linked_plan_annotates_its_handoff_row(self, tmp_path: Path):
-        _write_handoff(tmp_path, "target.md", created="2026-01-01")
-        _write_plan(
-            tmp_path,
-            "2026-07-19-example-plan.md",
-            "---\ntitle: Example\nstatus: draft\n"
-            "predecessor_handoff: state/handoffs/target.md\n---\nBody.\n",
-        )
-
-        actual = render_repo_section(tmp_path)
-
-        handoffs_table = actual.split("## Handoffs", 1)[1].split("## Execution Handoffs", 1)[0]
-        assert "[plan: 2026-07-19-example-plan status: draft]" in handoffs_table
-        # No unresolved plans -> no remainder-pointer section at all.
-        assert "## Plans (no live tracker row)" not in actual
-
-    def test_missing_status_renders_as_unknown(self, tmp_path: Path):
-        _write_handoff(tmp_path, "target.md", created="2026-01-01")
-        _write_plan(
-            tmp_path,
-            "2026-07-19-no-status-plan.md",
-            "---\ntitle: Example\npredecessor_handoff: state/handoffs/target.md\n---\nBody.\n",
-        )
-
-        actual = render_repo_section(tmp_path)
-
-        assert "[plan: 2026-07-19-no-status-plan status: unknown]" in actual
-
-
 class TestUnlinkedRemainder:
-    def test_unlinked_plan_lands_in_index_unlinked_section_not_tracker_row(self, tmp_path: Path):
+    def test_unlinked_plan_lands_in_index_unlinked_section_not_linked(self, tmp_path: Path):
         _write_plan(
             tmp_path,
             "2026-07-19-orphan-plan.md",
             "---\ntitle: Orphan\nstatus: draft\n---\nBody.\n",
         )
 
-        tracker = render_repo_section(tmp_path)
         index = render_plans_index_markdown(tmp_path)
-
-        assert "## Plans (no live tracker row)" in tracker
-        assert "_1 plan has no live tracker row — see docs/plans/INDEX.md_" in tracker
-        # The tracker never dumps the plan's own row/filename — pointer only.
-        assert "2026-07-19-orphan-plan.md" not in tracker
 
         unlinked_section = index.split("## Unlinked", 1)[1]
         assert "2026-07-19-orphan-plan.md" in unlinked_section
         linked_section = index.split("## Linked", 1)[1].split("## Unlinked", 1)[0]
         assert "2026-07-19-orphan-plan.md" not in linked_section
-
-    def test_predecessor_handoff_pointing_at_missing_file_is_unlinked(self, tmp_path: Path):
-        _write_plan(
-            tmp_path,
-            "2026-07-19-dangling-plan.md",
-            "---\ntitle: Dangling\nstatus: draft\n"
-            "predecessor_handoff: state/handoffs/does-not-exist.md\n---\nBody.\n",
-        )
-
-        actual = render_repo_section(tmp_path)
-
-        assert "## Plans (no live tracker row)" in actual
-        assert "_1 plan has no live tracker row" in actual
 
     def test_index_distinguishes_dangling_predecessor_from_absent_one(self, tmp_path: Path):
         _write_plan(
@@ -140,14 +96,6 @@ class TestUnlinkedRemainder:
         assert "no `predecessor_handoff:` declared" in orphan_row
         assert "dangling" not in orphan_row
 
-    def test_no_plans_dir_produces_no_plans_section(self, tmp_path: Path):
-        _write_handoff(tmp_path, "solo.md", created="2026-01-01")
-
-        actual = render_repo_section(tmp_path)
-
-        assert "## Plans (no live tracker row)" not in actual
-
-
 class TestSidecarExclusion:
     def test_all_nine_sidecar_suffixes_excluded(self, tmp_path: Path):
         assert len(_PLAN_SIDECAR_SUFFIXES) == 9
@@ -172,10 +120,8 @@ class TestSidecarExclusion:
 
         records = _collect_plans_with_parse_errors(tmp_path)
 
+        # The generated index must not count itself as a plan.
         assert [Path(r["path"]).name for r in records] == ["2026-07-19-real-plan.md"]
-        # The generated index must not count itself — otherwise the tracker's
-        # remainder pointer drifts ahead of the index it points at.
-        assert "_1 plan has no live tracker row" in render_repo_section(tmp_path)
 
 
 def _write_archived_handoff(root: Path, rel_dir: str, name: str, *, created: str) -> str:
@@ -200,10 +146,8 @@ class TestArchivedResolution:
             "predecessor_handoff: state/handoffs/target.md\n---\nBody.\n",
         )
 
-        tracker = render_repo_section(tmp_path)
         index = render_plans_index_markdown(tmp_path)
 
-        assert "1 plan resolves to an archived handoff" in tracker
         archived_section = index.split("## Archived", 1)[1].split("## Unlinked", 1)[0]
         assert "2026-07-19-flat-archived-plan.md" in archived_section
         assert archived_path in archived_section
@@ -264,10 +208,11 @@ class TestArchivedResolution:
             "predecessor_handoff: state/handoffs/target.md\n---\nBody.\n",
         )
 
-        actual = render_repo_section(tmp_path)
+        joined = _join_plans_to_handoffs(_collect_plans_with_parse_errors(tmp_path), tmp_path)
 
-        assert "[plan: 2026-07-19-live-plan status: draft]" in actual
-        assert "## Plans (no live tracker row)" not in actual
+        j = joined[0]
+        assert j["resolution_state"] == "live"
+        assert j["resolved_handoff_path"] == "state/handoffs/target.md"
 
     def test_tracker_and_index_counts_reconcile(self, tmp_path: Path):
         _write_handoff(tmp_path, "live-target.md", created="2026-01-01")
@@ -378,10 +323,8 @@ class TestParseErrorStub:
         assert records[0]["path"].endswith("2026-07-19-broken-plan.md")
 
         # A parse-error plan has no predecessor_handoff -> counts as unlinked,
-        # not silently dropped from either render target.
-        tracker = render_repo_section(tmp_path)
+        # not silently dropped from the rendered index.
         index = render_plans_index_markdown(tmp_path)
-        assert "## Plans (no live tracker row)" in tracker
         assert "2026-07-19-broken-plan.md" in index.split("## Unlinked", 1)[1]
 
 

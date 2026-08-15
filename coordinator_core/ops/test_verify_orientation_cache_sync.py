@@ -28,6 +28,13 @@ import coordinator_core.ops.verify_orientation_cache_sync as _verify_mod
 import coordinator_core.orientation.regenerate_cache as _writer_mod
 from coordinator_core.ops.verify_orientation_cache_sync import main, verify
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _PASS_BODY = """---
 generated_by: test-writer
 generated_at: 2026-07-17T00:00:00Z

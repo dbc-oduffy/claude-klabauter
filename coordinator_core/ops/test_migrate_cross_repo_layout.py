@@ -19,6 +19,15 @@ from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(args, cwd):
     result = subprocess.run(["git"] + args, cwd=str(cwd), capture_output=True, text=True)

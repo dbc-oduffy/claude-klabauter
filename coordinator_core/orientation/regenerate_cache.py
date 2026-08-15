@@ -645,7 +645,7 @@ landed by this reconciliation.
 
 def emit_workstreams(repo_root: Path) -> List[str]:
     tracker: Optional[Path] = None
-    for cand in ("tasks/project-tracker.md", "docs/project-tracker.md", "tasks/tracker.md"):
+    for cand in ("tasks/project-tracker.md", "tasks/tracker.md"):
         p = repo_root / cand
         if p.is_file():
             tracker = p

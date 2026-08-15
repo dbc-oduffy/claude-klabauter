@@ -70,6 +70,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.subagent_arrival_check":           "coordinator_core.hooks",
     "hooks.subagent_fabrication_check":       "coordinator_core.hooks",
     "hooks.receiver_state_sensor":            "coordinator_core.hooks",
+    "hooks.subagent_sidecar_fill_check":      "coordinator_core.hooks",
     "backlog.record":                         "coordinator_core.ops.emit.recorder",
     "emit.cadence":                           "coordinator_core.ops.emit_cadence",
     "goal.append":                            "coordinator_core.ops.goal_append",
@@ -81,6 +82,10 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",
     "fleet.archive_completed_handoffs":       "coordinator_core.ops.fleet.archive_handoffs",
     "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
+    "fleet.aggregate_capability_index":       "coordinator_core.ops.fleet.capability_index",
+    "distill.curate_clusters":                "coordinator_core.ops.distill_curate_clusters",
+    "memo.fate_backfill":                     "coordinator_core.ops.memo_fate_backfill",
+    "updatedocs.gates":                       "coordinator_core.ops.updatedocs_gates",
     "chain_ancestry_waivers.reap":            "coordinator_core.ops.reap_chain_ancestry_waivers",
     "commit.anchors":                         "coordinator_core.ops.commit_anchors",
     "memo.transition":                        "coordinator_core.ops.memo_transition",
@@ -131,10 +136,10 @@ OP_MODULE_MAP: Dict[str, str] = {
     "sizing.record_spike_verdict":              "coordinator_core.ops.sizing_spike_verdict",
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
+    "deliverable.fork_detect":                 "coordinator_core.ops.deliverable_fork_detect",
     "ceremony.wsc_tail":                      "coordinator_core.ops.ceremony.wsc_tail",
     "ceremony.post_commit_tail":              "coordinator_core.ops.ceremony.post_commit_tail",
     "ceremony.session_instructions":          "coordinator_core.ops.ceremony.session_instructions",
-    "ceremony.render_handoff_tracker":        "coordinator_core.ops.ceremony.render_handoff_tracker",
     "records.query":                          "coordinator_core.ops.records_query",
     "handoff.columns":                        "coordinator_core.ops.handoff_columns_query",
     "changelog.append_day":                   "coordinator_core.ops.changelog_ops",
@@ -294,4 +299,15 @@ OP_MODULE_MAP: Dict[str, str] = {
     "diagnostics.always_refuses":             "coordinator_core.ops.diagnostics_probes",
     "diagnostics.always_structural_pin":      "coordinator_core.ops.diagnostics_probes",
     "ceremony.chunk_commits":                 "coordinator_core.ops.ceremony.chunk_commits",
+    "gate.validate_invocable":                 "coordinator_core.ops.gate_validate_invocable",
+    "install.detect_cmd_autorun_coverage":    "coordinator_core.ops.cmd_autorun_guard",
+    "install.write_cmd_autorun_guard":        "coordinator_core.ops.cmd_autorun_guard",
+    "install.strip_cmd_autorun_guard":        "coordinator_core.ops.cmd_autorun_guard",
+    # app_session.* — launch/census/teardown against a consuming repo's local
+    # dev app; one shared owning module, same many-keys-one-value shape as
+    # the hooks.* block above.
+    # Spec: docs/plans/2026-08-15-app-session-launch-census-teardown-ops.md § C3
+    "app_session.launch":                     "coordinator_core.ops.app_session",
+    "app_session.census":                     "coordinator_core.ops.app_session",
+    "app_session.teardown":                   "coordinator_core.ops.app_session",
 }

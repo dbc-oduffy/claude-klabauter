@@ -38,6 +38,13 @@ import coordinator_core.ops.run_semgrep_scan  # noqa: F401 — fires @register_o
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.run_semgrep_scan import _run_semgrep_scan
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _OP_NAME = "ci.run_semgrep_scan"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

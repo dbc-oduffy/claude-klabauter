@@ -27,11 +27,11 @@ Sequence
      re-derives the actual consumed-handoff SET fresh, immediately before the
      stamp write (AC6's correctness-critical liveness
      re-check; this module's initial resolve is NOT that re-check).
-  2. Pre-commit tail ops (best-effort, `tail_ops.py`): render-handoff-tracker +
-     refresh-roadmap-callout (step_2.75, native `renderers.render_repo_section`
-     / `refresh_roadmap_callout.main` ports -- wired 2026-07-22, closing a C9
-     enumeration gap: this list originally omitted them even though C8b/C8c
-     had already ported the underlying renderers), coverage.gate,
+  2. Pre-commit tail ops (best-effort, `tail_ops.py`): refresh-roadmap-callout
+     (step_2.75, native `refresh_roadmap_callout.main` port -- wired 2026-07-22,
+     closing a C9 enumeration gap; its former render-handoff-tracker sibling
+     was retired 2026-08-14, see docs/plans/2026-08-14-retire-the-handoff-
+     tracker-and-project-tracker-renders.md C2), coverage.gate,
      review_trail.write. Archive-sweeps are NOT here -- see step 5f below;
      they fire POST-commit, never pre-commit (C2, corrected 2026-07-23).
   3. Trailer derivation: caller-supplied `trailers` is used verbatim when
@@ -964,18 +964,20 @@ async def _run_precommit_tail(
     *,
     review_trail: "Optional[Union[dict, list]]",
     b_adjudication_present: bool,
+    partition_mandatory: bool = False,
     coverage_range: str,
     coverage_from_handoff: str,
     coverage_scope_paths: Optional[list[str]],
     consumed_handoff_paths: list[str],
     timing: Optional[_TailTiming] = None,
 ) -> tuple[dict[str, dict], list[str]]:
-    """Run every pre-commit tail op (C6 + render-handoff-tracker + refresh-roadmap-
-    callout (step_2.75, 2026-07-22 C9 wiring-gap fix) + coverage.gate + review_trail),
-    best-effort. Returns (results_by_label, extra_stage_paths).
+    """Run every pre-commit tail op (C6 + refresh-roadmap-callout (step_2.75,
+    2026-07-22 C9 wiring-gap fix; its former render-handoff-tracker sibling was
+    retired 2026-08-14) + coverage.gate + review_trail), best-effort. Returns
+    (results_by_label, extra_stage_paths).
 
-    `extra_stage_paths` folds the render-produced artifact paths (handoff
-    tracker, roadmap-callout stub index) into the caller's stage set so they
+    `extra_stage_paths` folds the render-produced artifact paths
+    (roadmap-callout stub index) into the caller's stage set so they
     land in the SAME ceremony commit (AC5 explicit pathspec) rather than as
     unswept dirty edits -- and, AC12/C7b, this session's chain-ancestry
     waiver subdirectory (if one exists on disk from an earlier, aborted
@@ -985,6 +987,16 @@ async def _run_precommit_tail(
     `consumed_handoff_paths` feeds `tail_ops.refresh_roadmap_callout` -- the same
     `initial_consumed` set the step-1 resolve already derived (see `_handler`),
     threaded straight through rather than re-resolved here.
+
+    `partition_mandatory` (D, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-
+    review-trail-skips-silently.md): the SAME fail-loud posture as
+    `b_adjudication_present`, forwarded to `tail_ops.write_review_trail`/
+    `write_review_trail_many` alongside it -- a resolved review-scale row 4/6
+    is as strong a statement that a review was owed as an adjudication
+    assertion is. Defaults `False` for the same back-compat reason
+    `b_adjudication_present` itself has no default here: every existing
+    direct call site keeps passing it explicitly and is unaffected; this
+    default only matters to a hypothetical future caller that omits it.
 
     `timing` records named sub-step spans (`precommit.tracker_and_roadmap`,
     `precommit.coverage_gate_fire`, `precommit.coverage_gate_join`,
@@ -1047,23 +1059,20 @@ async def _run_precommit_tail(
 
     extra_stage_paths: list[str] = []
 
-    # STEP_2_75 (2026-07-22 C9 wiring-gap fix): render-handoff-tracker + refresh-
-    # roadmap-callout -- disposable sibling renders, positioned before coverage.gate
-    # exactly as in the OLD wsc_commit.py's Op 4 (STEP_2_7 stamp+archive -> STEP_2_75
-    # render pair -> STEP_2_9C coverage.gate).
+    # STEP_2_75 (2026-07-22 C9 wiring-gap fix; handoff-tracker leg retired
+    # 2026-08-14, see docs/plans/2026-08-14-retire-the-handoff-tracker-and-
+    # project-tracker-renders.md C2): refresh-roadmap-callout -- a disposable
+    # sibling render, positioned before coverage.gate exactly as in the OLD
+    # wsc_commit.py's Op 4 (STEP_2_7 stamp+archive -> STEP_2_75 render pair ->
+    # STEP_2_9C coverage.gate).
     #
-    # Both renders write/rewrite an in-worktree file that is NOT otherwise part of
-    # the caller's explicit stage_paths -- `commit_pipeline.run_commit_pipeline`'s
+    # The render writes/rewrites an in-worktree file that is NOT otherwise part
+    # of the caller's explicit stage_paths -- `commit_pipeline.run_commit_pipeline`'s
     # `dirty_tree_gate` scans the WHOLE worktree (not just the explicit pathspec) and
-    # would flag either as an "unattributable" dirty path, hard-failing the ceremony
-    # commit. Folding their artifact paths into `extra_stage_paths` closes that gap;
+    # would flag it as an "unattributable" dirty path, hard-failing the ceremony
+    # commit. Folding its artifact paths into `extra_stage_paths` closes that gap;
     # `git add` on an already-clean/no-op file is a harmless idempotent no-op.
     with timing.measure("precommit.tracker_and_roadmap"):
-        handoff_tracker_result = tail_ops.render_handoff_tracker(worktree_root)
-        results[tail_ops.OP_HANDOFF_TRACKER] = handoff_tracker_result
-        if handoff_tracker_result.get("handoff_tracker_path"):
-            extra_stage_paths.append(handoff_tracker_result["handoff_tracker_path"])
-
         roadmap_callout_result = tail_ops.refresh_roadmap_callout(worktree_root, consumed_handoff_paths)
         results[tail_ops.OP_ROADMAP_CALLOUT] = roadmap_callout_result
         extra_stage_paths.extend(roadmap_callout_result.get("roadmap_stub_index_paths") or [])
@@ -1083,11 +1092,15 @@ async def _run_precommit_tail(
     with timing.measure("precommit.review_trail"):
         if isinstance(review_trail, list):
             results[tail_ops.OP_REVIEW_TRAIL] = await tail_ops.write_review_trail_many(
-                common_dir, review_trail, b_adjudication_present=b_adjudication_present,
+                common_dir, review_trail,
+                b_adjudication_present=b_adjudication_present,
+                partition_mandatory=partition_mandatory,
             )
         else:
             results[tail_ops.OP_REVIEW_TRAIL] = await tail_ops.write_review_trail(
-                common_dir, review_trail, b_adjudication_present=b_adjudication_present,
+                common_dir, review_trail,
+                b_adjudication_present=b_adjudication_present,
+                partition_mandatory=partition_mandatory,
             )
 
     # Join (C6): every other pre-commit step above has now run; await the
@@ -1111,9 +1124,16 @@ async def _run_precommit_tail(
     # is the correct home for the disambiguating signal. Purely additive/optional
     # -- old readers that ignore the field are unaffected; the verdict value
     # itself is untouched either way.
-    results[tail_ops.OP_COVERAGE_GATE]["review_metadata_supplied"] = not any(
-        skip == f"{tail_ops.OP_REVIEW_TRAIL}:no-review-metadata"
-        for skip in results[tail_ops.OP_REVIEW_TRAIL].get("skipped", [])
+    # Review: staff-eng 2026-08-14 -- was `not any(skip == ...no-review-
+    # metadata... for skip in [...]skipped)`, which read True on the
+    # b_adjudication_present + incomplete-metadata path (that branch returns
+    # a `failed_critical[]` entry, never a `no-review-metadata` skip -- see
+    # `tail_ops.write_review_trail`'s own docstring) despite zero trail
+    # records having been written. `metadata_supplied` is the direct fact
+    # both `write_review_trail` and `write_review_trail_many` now report on
+    # every return path, independent of write success/failure.
+    results[tail_ops.OP_COVERAGE_GATE]["review_metadata_supplied"] = bool(
+        results[tail_ops.OP_REVIEW_TRAIL].get("metadata_supplied", False)
     )
 
     return results, extra_stage_paths
@@ -1163,6 +1183,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                 semantics), via `wsc-tail.py`'s repeatable
                                 `--review-slice` flag.
         b_adjudication_present (bool, optional) -- see `tail_ops.write_review_trail`.
+        partition_mandatory    (bool, optional) -- sibling of `b_adjudication_present`
+                                above, see `tail_ops.write_review_trail`'s own
+                                `partition_mandatory` paragraph.
         coverage_range         (str, optional)  -- forwarded to `coverage.gate`.
         coverage_from_handoff  (str, optional)  -- forwarded to `coverage.gate`.
         coverage_scope_paths   (list[str], optional) -- forwarded to `coverage.gate`.
@@ -1240,6 +1263,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         nature = str(params.get("nature") or "")
         review_trail = params.get("review_trail")
         b_adjudication_present = bool(params.get("b_adjudication_present", False))
+        partition_mandatory = bool(params.get("partition_mandatory", False))
         coverage_range = str(params.get("coverage_range") or "")
         coverage_from_handoff = str(params.get("coverage_from_handoff") or "")
         coverage_scope_paths = params.get("coverage_scope_paths")
@@ -1356,6 +1380,54 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     sha_unverified = False
 
     if not resumed:
+        # --- Adjudication/review-trail supply gate (fail-loud, PRE-mutation) ---
+        # `tail_ops.write_review_trail` turns this exact input into a
+        # `failed_critical[]` entry, but that entry only becomes an exit code
+        # at the bottom of this handler -- by which point the ceremony commit
+        # has already landed. The observed shape (2026-08-14): a close-out
+        # asserting adjudication, supplying no review metadata, exiting
+        # non-zero AFTER its own commit, leaving a green-looking ceremony
+        # with no trail record and nothing left to re-run. The breach is
+        # decidable from params alone, so it is decided here, before the
+        # roadmap render, the coverage gate, and the commit.
+        if (b_adjudication_present or partition_mandatory) and not tail_ops.review_trail_metadata_complete(
+            review_trail
+        ):
+            fields_str = ", ".join(tail_ops.REVIEW_TRAIL_REQUIRED_FIELDS)
+            # D (cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-
+            # skips-silently.md): a resolved review-scale row 4/6
+            # (`partition_mandatory`) is folded into the SAME pre-commit
+            # refusal `b_adjudication_present` already trips -- a mandatory-
+            # partition close with NO review metadata at all must not exit 0
+            # any more than an adjudicated one may. The remediation names a
+            # runnable producer, not a slash command: `workstream-complete
+            # brief` already emits the per-commit slice list this needs at
+            # `gates.review_scale.commit_slices`.
+            if partition_mandatory and not b_adjudication_present:
+                breach = (
+                    f"{OP_NAME}: partition_mandatory with no complete review_trail record "
+                    f"-- required fields: {fields_str}. The engine's own workstream-complete "
+                    "brief already computed a per-commit slice list for this close at "
+                    "gates.review_scale.commit_slices -- fill in reviewer/scope/verdict per "
+                    "entry and supply the list as decisions['review'], or wsc-tail.py's "
+                    "--review-slice (repeatable) / discrete --review-* flags."
+                )
+            else:
+                breach = (
+                    f"{OP_NAME}: b_adjudication_present with no complete review_trail record "
+                    f"-- required fields: {fields_str}. Supply them (decisions['review'], or "
+                    "wsc-tail.py's --review-* / --review-slice flags), or drop the "
+                    "adjudication assertion."
+                )
+            _LOG.warning("wsc_tail: refusing commit -- %s", breach)
+            return {
+                "exit_code": 1,
+                "error": breach,
+                "diagnostics": [breach],
+                "disposition": disposition,
+                "resumed_from_sentinel": False,
+            }
+
         # --- Step 2: pre-commit tail ops (best-effort) --- `precommit_tail_total`
         # is the whole-call span; `_run_precommit_tail` records its own four
         # named sub-step spans into the SAME `timing` recorder (see that
@@ -1367,6 +1439,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 sid,
                 review_trail=review_trail,
                 b_adjudication_present=b_adjudication_present,
+                partition_mandatory=partition_mandatory,
                 coverage_range=coverage_range,
                 coverage_from_handoff=coverage_from_handoff,
                 coverage_scope_paths=coverage_scope_paths,

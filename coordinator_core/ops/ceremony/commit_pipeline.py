@@ -124,6 +124,17 @@ from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_pat
 _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony import git_native
+
+#: Shared argv-safe path packer + its budget constant, both promoted
+#: (2026-08-15) to `git_native.py` -- the shared home, since `git_native.py`
+#: cannot import back from this module (this module already imports
+#: `git_native`, above; a reverse import would be circular). Bound to these
+#: module-level names so every existing bare `_chunk_paths(...)` /
+#: `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS` reference below is unchanged --
+#: see `git_native._chunk_paths`'s own docstring for the packer itself.
+_chunk_paths = git_native._chunk_paths
+_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS = git_native._DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
+
 from coordinator_core.ops.ceremony.commit_gates import (
     DirtyTreeOutcome,
     GateOutcome,
@@ -443,6 +454,128 @@ def _worktree_key(root: Path, p: str) -> str:
         return p
 
 
+def _diverging_paths_chunked(
+    paths: Sequence[str],
+    cwd: str,
+    *,
+    timeout: float,
+) -> Set[str]:
+    """Chunked `diverging_paths(..., fail_loud=True)` for `explicit_stage()`'s
+    divergence check, closing the Windows argv-length defect a single
+    unchunked call hits at percolate-publish scale (~2000-2700 paths on one
+    `git diff --cached --name-only` argv exceeds the 32767-char Windows
+    command-line cap, `subprocess` reports `rc=127`, and the whole batch
+    reads as indeterminate even though nothing actually diverged -- see
+    `state/lessons/2026-08-14-partial-stage-protection-did-not-survive-a-
+    moving-head.md` for why that check exists and must not be weakened to
+    fix this). This is deliberately NOT one unfiltered `git diff --cached
+    --name-only` (no pathspec) with an in-process intersection against
+    `paths` -- that changes the cost model to full-index-size on a large
+    repo instead of pathspec-bounded, trading the argv problem for an
+    unrelated one; chunking keeps the same per-call cost shape `diverging_
+    paths()` already documents, just spread across more calls.
+
+    Paths are packed into chunks via `_chunk_paths()` (bounded by
+    `_DIVERGENCE_CHECK_ARGV_BUDGET_CHARS` -- see that constant's own
+    docstring), and each chunk gets its own independent `diverging_paths()`
+    call -- a path's divergence answer comes from exactly the one chunk it
+    was placed in, never from a whole-batch verdict ORed/ANDed across
+    chunks, so the answer for any given path is identical to what an
+    unchunked call would have produced for it. A `DivergenceCheckFailed`
+    from ANY chunk (a genuine `git diff` error, not an argv-length
+    artifact -- each chunk is already sized to avoid that) propagates
+    immediately and uncaught, exactly like the unchunked call used to:
+    `explicit_stage()`'s own `try`/`except DivergenceCheckFailed` still
+    refuses the whole call rather than guess at paths whose chunk never
+    got an answer.
+    """
+    diverged: Set[str] = set()
+    for chunk in _chunk_paths(paths):
+        diverged.update(diverging_paths(chunk, cwd=cwd, timeout=timeout, fail_loud=True))
+    return diverged
+
+
+def _ls_files_deleted_chunked(root: Path, paths: Sequence[str]) -> Tuple[Set[str], bool]:
+    """Chunked `git_native.ls_files_deleted()` for `explicit_stage()`'s
+    unstaged-deletion classification probe, closing the same Windows argv-
+    length defect `_diverging_paths_chunked` closes, one call site over.
+
+    `git ls-files --deleted -- <paths>` puts the caller's WHOLE batch on
+    argv (`git_native.ls_files_deleted`'s own docstring: "scoped to
+    `paths`, never called bare"). At percolate-publish scale this exceeded
+    the Windows `CreateProcess` cap, and the probe's failure was read as
+    "found nothing" -- degrading every genuinely-deleted caller path in the
+    batch to `missing-caller` and, via `rename_delete_probes_ok`, marking
+    every one of them `unverifiable_missing_caller_paths` (the "could not
+    be classified" defect this fix closes). Chunked exactly like the
+    divergence check: each chunk is an independent, pathspec-bounded
+    `ls_files_deleted()` call, and a path's membership in the returned set
+    comes from the ONE chunk it was placed in -- never a whole-batch
+    verdict merged across chunks.
+
+    Returns `(worktree_deleted, probe_ok)`. `probe_ok` is True only when
+    EVERY chunk answered (mirrors the pre-chunking scalar contract: the
+    caller's `rename_delete_probes_ok` gate must see this probe as
+    "answered" only when no chunk silently degraded to best-effort). A
+    failing chunk still contributes nothing to `worktree_deleted` for its
+    own paths (fail-closed toward the pre-fix "missing" bucket for exactly
+    those paths, same as the old scalar failure path did for the whole
+    batch) while chunks that DID answer keep their real membership answer
+    -- a genuine chunk-level `git` failure no longer taints paths that were
+    never in that chunk.
+    """
+    if not paths:
+        return set(), True
+
+    deleted: Set[str] = set()
+    probe_ok = True
+    for chunk in _chunk_paths(list(paths)):
+        result = git_native.ls_files_deleted(root, chunk)
+        if result.ok:
+            deleted.update(line for line in result.stdout.splitlines() if line)
+        else:
+            probe_ok = False
+    return deleted, probe_ok
+
+
+def _residue_paths_chunked(
+    root: Path, to_stage: Sequence[str]
+) -> Tuple[Set[str], bool, Optional["git_native.GitResult"]]:
+    """Chunked `git diff --cached --name-only -z -- <to_stage>` for
+    `explicit_stage()`'s post-`git add`-failure residue reconciliation --
+    same argv-length hazard `_diverging_paths_chunked` and
+    `_ls_files_deleted_chunked` close, one call site over (see
+    `explicit_stage()`'s own "Residue reconciliation" comment for what this
+    check protects and why `-z` is required).
+
+    Returns `(residue, indeterminate, first_failure)`. `residue` is the
+    CWD-relative name set of every path found ACTUALLY staged, unioned
+    across every chunk that answered -- a path's membership comes from
+    exactly the one chunk it was placed in, never a whole-batch verdict.
+    `indeterminate` is True iff at least one chunk's own `git diff` call
+    failed; `first_failure` is that chunk's `GitResult` (for diagnostic
+    text), or `None` when every chunk answered. A failing chunk's own
+    paths are simply absent from `residue` (fail-closed for exactly those
+    paths -- the caller's `reconciled_acted` filter already treats absence
+    as "not confirmed staged"), so a genuine `git diff` failure on one
+    chunk never gets read as "nothing in that chunk was staged" -- the
+    caller surfaces `indeterminate` precisely so that distinction is not
+    lost.
+    """
+    residue: Set[str] = set()
+    indeterminate = False
+    first_failure: Optional["git_native.GitResult"] = None
+    for chunk in _chunk_paths(to_stage):
+        result = git_native.diff_cached_name_only(root, paths=chunk, nul_separated=True)
+        if result.ok:
+            residue.update(entry for entry in result.stdout.split("\0") if entry)
+        else:
+            indeterminate = True
+            if first_failure is None:
+                first_failure = result
+    return residue, indeterminate, first_failure
+
+
 def explicit_stage(
     worktree_root: Union[str, Path],
     paths: Sequence[str],
@@ -694,19 +827,16 @@ def explicit_stage(
     # git reads. A failing/indeterminate probe degrades to "no unstaged
     # deletions found" (fail-closed toward the PRE-FIX "missing" bucket,
     # never toward fabricating a deletion this call cannot confirm).
-    worktree_deleted: Set[str] = set()
-    deleted_result = git_native.ls_files_deleted(root, list(paths))
-    if deleted_result.ok:
-        worktree_deleted = {line for line in deleted_result.stdout.splitlines() if line}
+    worktree_deleted, worktree_deleted_probe_ok = _ls_files_deleted_chunked(root, paths)
 
     # Whether the two probes that rule out "this missing path is actually a
-    # rename or deletion" (`diff_result`, `deleted_result` above) actually
-    # ANSWERED, rather than degrading to their empty best-effort default on
-    # failure. A caller path classified "genuinely absent" while this is
-    # False was never actually tested against a rename/deletion -- see
+    # rename or deletion" (`diff_result`, `worktree_deleted_probe_ok` above)
+    # actually ANSWERED, rather than degrading to their empty best-effort
+    # default on failure. A caller path classified "genuinely absent" while
+    # this is False was never actually tested against a rename/deletion -- see
     # `StageOutcome.unverifiable_missing_caller_paths`'s own docstring for
     # why that distinction matters to a reason string rendered downstream.
-    rename_delete_probes_ok = diff_result.ok and deleted_result.ok
+    rename_delete_probes_ok = diff_result.ok and worktree_deleted_probe_ok
 
     existing: List[str] = []
     skipped: List[str] = []
@@ -839,13 +969,10 @@ def explicit_stage(
     # path in this function.
     try:
         diverged: Set[str] = (
-            set(
-                diverging_paths(
-                    existing,
-                    cwd=str(root),
-                    timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS,
-                    fail_loud=True,
-                )
+            _diverging_paths_chunked(
+                existing,
+                cwd=str(root),
+                timeout=_DIVERGENCE_CHECK_TIMEOUT_SECS,
             )
             if existing
             else set()
@@ -925,7 +1052,27 @@ def explicit_stage(
             deletion_paths=deletion_paths,
         )
 
-    add_result = git_native.add_paths(root, to_stage)
+    # Chunked `git add -- <to_stage>` (2026-08-15 sweep): `to_stage` is the
+    # caller's own batch, unbounded by construction, and `add_paths()` puts
+    # it whole on argv -- the same Windows `CreateProcess` cap hazard every
+    # other batched call in this function closes. Chunking `git add` itself
+    # is semantics-preserving in a way chunking a QUERY is not: staging is
+    # additive and commutative across chunks (mirrors running the ORIGINAL
+    # single non-atomic `git add -- to_stage` call, which itself may stage
+    # some paths before failing on a later one -- see the "Residue
+    # reconciliation" comment below), so stopping at the first failing
+    # chunk reproduces the exact "some staged, then one fails, the rest
+    # never attempted" shape a single unchunked call could already produce
+    # -- never a NEW failure mode. The post-failure residue reconciliation
+    # immediately below is unaffected: it reconciles against real index
+    # state over the FULL `to_stage`, not per-chunk, so it still correctly
+    # reports every path this call's chunks actually staged before the
+    # first failure, regardless of chunk boundaries.
+    add_result = git_native.GitResult(returncode=0, stdout="", stderr="")
+    for _add_chunk in _chunk_paths(to_stage):
+        add_result = git_native.add_paths(root, _add_chunk)
+        if not add_result.ok:
+            break
     if add_result.ok:
         deletion_paths.extend(to_delete)
         return StageOutcome(
@@ -984,23 +1131,36 @@ def explicit_stage(
     # genuinely-partially-staged residue invisible to this call's rollback,
     # the same "staged-and-abandoned" shape this whole reconciliation exists
     # to close, just gated on filename bytes.
-    residue_result = git_native.diff_cached_name_only(root, paths=to_stage, nul_separated=True)
-    if residue_result.ok:
-        residue = set(residue_result.stdout.split("\0")) - {""}
-        # `_worktree_key` for the same reason the classification sets use it:
-        # `git diff --cached --name-only` reports CWD-relative names, so a raw
-        # membership test under-reports residue for an absolute caller path --
-        # the invisible-residue shape this reconciliation exists to close.
-        reconciled_acted = [p for p in to_stage if _worktree_key(root, p) in residue]
-        failed_entries = [f"git add: {reason}"]
-    else:
-        reconciled_acted = []
-        failed_entries = [
-            f"git add: {reason}",
-            "explicit_stage: post-failure residue check indeterminate -- "
-            "cannot confirm whether any of this call's paths were "
-            f"partially staged ({condense_git_diagnostic(residue_result.stderr) or f'exit_code={residue_result.returncode}'})",
-        ]
+    # Chunked (2026-08-15 sweep): `to_stage` is unbounded, and a single
+    # `git diff --cached --name-only -- to_stage` put the WHOLE batch on
+    # argv -- the exact Windows argv-length defect that read as
+    # "explicit_stage: post-failure residue check indeterminate" for every
+    # path in a percolate-publish-scale batch, even when nothing was
+    # actually unconfirmable. `_residue_paths_chunked` below answers each
+    # chunk independently and reports which (if any) chunk could not
+    # answer -- a chunk-level failure degrades ONLY that chunk's own paths
+    # to unconfirmed (fail-closed for exactly the paths this call cannot
+    # vouch for), rather than the pre-chunking behaviour of treating the
+    # ENTIRE batch as indeterminate merely because one argv-bounded slice
+    # of it failed. This is a strict improvement on the same fail-closed
+    # posture, never a relaxation: a chunk that never answers still leaves
+    # its paths out of `reconciled_acted`, exactly as the old whole-batch
+    # failure did for every path.
+    residue, residue_indeterminate, residue_failure = _residue_paths_chunked(root, to_stage)
+    # `_worktree_key` for the same reason the classification sets use it:
+    # `git diff --cached --name-only` reports CWD-relative names, so a raw
+    # membership test under-reports residue for an absolute caller path --
+    # the invisible-residue shape this reconciliation exists to close.
+    reconciled_acted = [p for p in to_stage if _worktree_key(root, p) in residue]
+    failed_entries = [f"git add: {reason}"]
+    if residue_indeterminate:
+        assert residue_failure is not None
+        failed_entries.append(
+            "explicit_stage: post-failure residue check indeterminate for one or "
+            "more path chunk(s) -- cannot confirm whether every one of this "
+            "call's paths were partially staged "
+            f"({condense_git_diagnostic(residue_failure.stderr) or f'exit_code={residue_failure.returncode}'})"
+        )
 
     return StageOutcome(
         exit_code=add_result.returncode,
@@ -1107,6 +1267,25 @@ class CommitOutcome:
             instead. Empty tuple (default) on every other outcome, including
             the agree branch's own success -- never populated there because
             the agree branch never diverges by construction.
+        reason -- AC7 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md,
+            C3): a short machine-readable tag distinguishing WHY this commit
+            did not land, one of `"patch-did-not-apply"`, `"head-blob-cas-
+            refusal"`, `"index-head-cas-refusal"`, `"commit-failure"` -- ""
+            on success. `commit()`'s own docstring names which condition maps
+            to which tag; a caller building a distinct exit path per failure
+            mode (the CLI) keys off this, not off `stderr` text. Never set for
+            the ordinary already-committed no-op (`exit_code == 1`,
+            `landed=False`) -- that is `"empty-commit-set"`, decided one layer
+            up (`scoped_git_commit._classify_uncommitted`, which alone has the
+            `git status` probe this distinction needs).
+        unprovenanced_paths -- AC4: when `stage_patch` (below) was supplied,
+            the subset of `commit_paths` the patch did NOT write new content
+            for -- these take today's ordinary staged-or-worktree path,
+            unchanged, so the resulting commit is provenanced for some paths
+            and worktree-sourced for others. Empty tuple whenever
+            `stage_patch` is not supplied, or every named path was covered by
+            the patch. Mirrors `worktree_excluded`'s own never-a-silent-drop
+            posture -- never inferred by a caller from absence.
     """
 
     exit_code: int
@@ -1114,6 +1293,8 @@ class CommitOutcome:
     landed: bool = False
     stderr: str = ""
     worktree_excluded: Tuple[str, ...] = ()
+    reason: str = ""
+    unprovenanced_paths: Tuple[str, ...] = ()
 
 
 def _write_commit_message_tempfile(
@@ -1153,6 +1334,56 @@ def _write_commit_message_tempfile(
     return Path(raw_path)
 
 
+#: AC7 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md, C3) --
+#: `CommitOutcome.reason` tags. Named here, once, so `commit()`'s own body
+#: and any test asserting on them share one spelling rather than a
+#: hand-typed string re-derived at each site.
+_REASON_PATCH_DID_NOT_APPLY = "patch-did-not-apply"
+_REASON_STAGE_INFRA_FAILURE = "stage-infra-failure"
+
+#: `git_native.stage_from_patch` reports failures in its OWN vocabulary
+#: (`apply-failed`, `index-infra-failure`); AC7's contract at this layer and at
+#: the CLI is the `patch-did-not-apply` family. Translate rather than pass
+#: through — a raw pass-through silently replaces the AC7 vocabulary, and
+#: collapsing every failure onto `patch-did-not-apply` tells an operator their
+#: patch is bad when `read-tree`/`ls-files` was the real fault. An unrecognized
+#: primitive reason maps to `stage-infra-failure`, never to a bad-patch claim
+#: this layer cannot substantiate.
+_STAGE_FAILURE_REASON_MAP = {
+    "apply-failed": _REASON_PATCH_DID_NOT_APPLY,
+    "index-infra-failure": _REASON_STAGE_INFRA_FAILURE,
+}
+_REASON_HEAD_BLOB_CAS_REFUSAL = "head-blob-cas-refusal"
+_REASON_INDEX_HEAD_CAS_REFUSAL = "index-head-cas-refusal"
+_REASON_COMMIT_FAILURE = "commit-failure"
+
+#: Substring `_agree_branch_cas_refusal` (git_native.py) always leads its
+#: `stderr` with -- the ONLY way `commit()` can distinguish that specific
+#: refusal from `commit_scoped()`'s other failure shapes without `git_native.
+#: py` itself carrying a `reason` field (out of this chunk's file scope; see
+#: docs/plans/2026-08-14-the-tool-stages-what-it-commits.md chunk C3's own
+#: `writes:` list). A string match, not a new sentinel object, precisely
+#: because the producing module is not this chunk's to touch.
+_INDEX_HEAD_CAS_MARKER = "compare-and-swap refused"
+
+
+def _classify_commit_scoped_failure_reason(result: "git_native.GitResult") -> str:
+    """AC7: map a failed `git_native.commit_scoped()` (or `_commit_scoped_
+    private_index()`) result onto one of the two reasons that can still fire
+    once `stage_from_patch()`/`stage_from_patch_cas_refusal()` have already
+    passed (or were never in play) -- the existing agree-branch index/HEAD
+    CAS refusal (`_agree_branch_cas_refusal`), or every other commit failure
+    (a `pre-commit` hook BLOCK, the private-index branch's own `update-ref`
+    compare-and-swap, a genuine git error). Never called for the ordinary
+    already-committed no-op -- that reclassification happens one layer up,
+    in `scoped_git_commit._classify_uncommitted`, which alone has the `git
+    status` probe the distinction needs.
+    """
+    if _INDEX_HEAD_CAS_MARKER in (result.stderr or ""):
+        return _REASON_INDEX_HEAD_CAS_REFUSAL
+    return _REASON_COMMIT_FAILURE
+
+
 def commit(
     worktree_root: Union[str, Path],
     *,
@@ -1160,6 +1391,7 @@ def commit(
     commit_paths: Sequence[str],
     common_dir: Optional[Path] = None,
     deliverable_id: Optional[str] = None,
+    stage_patch: Optional[Union[str, Path]] = None,
 ) -> CommitOutcome:
     """Commit exactly `commit_paths`, via `git_native.commit_scoped()` (C3/C4).
 
@@ -1238,6 +1470,36 @@ def commit(
     plan it is executing against) may pass it here to have it land as this
     commit's `Deliverable-Id:` trailer. Not sourced or defaulted here --
     `commit()` performs no discovery of its own.
+
+    `stage_patch` (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md)
+    -- optional path to a patch file. When given, `git_native.stage_from_
+    patch()` applies it under a process-private temporary index, bounded to
+    `commit_paths`, IMMEDIATELY before the commit step below (no probe-then-
+    act gap -- plan anti-scope: staging and committing happen in the same
+    call, never cached across an intervening step). The tool stages what it
+    commits: every path the patch writes new content for is committed with
+    THAT blob, verbatim, never re-read from the worktree or the shared index
+    -- provenance by construction (see `git_native.stage_from_patch`'s own
+    docstring for why a private index makes this unforgeable by a peer). A
+    named path the patch does NOT touch (AC4, additive per-path) falls
+    through to `git_native.commit_scoped()`'s own ordinary staged-or-worktree
+    resolution unchanged -- see `CommitOutcome.unprovenanced_paths` for how
+    that mixed shape is named on the response, never left for a caller to
+    infer from absence.
+
+    AC3's atomicity and AC2's base-hole CAS are `stage_from_patch()`'s own
+    (see that function's docstring) -- a failed apply returns
+    `CommitOutcome(exit_code=-1, reason="patch-did-not-apply")` and a stale
+    HEAD blob (a peer committed to a named path between the apply and this
+    commit) returns `CommitOutcome(exit_code=-1, reason="head-blob-cas-
+    refusal")`. Both use `exit_code=-1` -- the SAME Python-side-refusal
+    sentinel `commit_scoped()`'s own `_agree_branch_cas_refusal` already
+    uses, deliberately never `1` -- `0e80865cc` narrowed `scoped_git_commit.
+    _classify_uncommitted`'s reclassifier to `exit_code == 1` precisely so a
+    Python-side refusal is never read as "nothing to commit" (AC7's trap);
+    using `1` here would silently launder either refusal back into that
+    benign no-op the moment the caller's worktree happened to already match
+    HEAD.
     """
     root = Path(worktree_root)
     # Mint a per-commit token (W1) and append it as a `Commit-Token:` trailer
@@ -1287,8 +1549,66 @@ def commit(
         pre_sha_result = git_native.rev_parse_head(root)
         pre_sha = pre_sha_result.stdout.strip() if pre_sha_result.ok else None
 
+        unprovenanced_paths: Tuple[str, ...] = ()
+        supplied_blobs: Optional[Dict[str, str]] = None
+        if stage_patch is not None:
+            # AC1/AC3: applied HERE, immediately before the commit step
+            # below -- never earlier, never cached (plan anti-scope: no
+            # probe-then-act gap). A failed apply, or an unkeyable/directory/
+            # empty pathspec, refuses the WHOLE call with `exit_code=-1`
+            # (never `1` -- see this function's own docstring, AC7's trap).
+            staged = git_native.stage_from_patch(stage_patch, commit_paths, root)
+            if not staged.ok:
+                # Negative spec: the primitive's own `reason` survives to the
+                # caller. Collapsing every failure onto `patch-did-not-apply`
+                # tells an operator their patch is bad when the real fault was
+                # `read-tree`/`ls-files` (`index-infra-failure`) -- the exact
+                # misdirection AC7's distinguishable-reasons requirement
+                # exists to prevent. An unmapped reason still exits non-zero
+                # (`_EXIT_BUSINESS_FAIL`), never success.
+                return CommitOutcome(
+                    exit_code=-1,
+                    stderr=staged.stderr,
+                    reason=_STAGE_FAILURE_REASON_MAP.get(
+                        getattr(staged, "reason", None) or "",
+                        _REASON_STAGE_INFRA_FAILURE,
+                    ),
+                )
+            # AC2's base hole -- re-observed immediately before the commit
+            # this guards (`stage_from_patch_cas_refusal`'s own docstring):
+            # refuses rather than silently reverting a peer's commit that
+            # landed on a named path between the apply above and here.
+            cas_refusal = git_native.stage_from_patch_cas_refusal(
+                root, commit_paths, staged.head_blobs
+            )
+            if cas_refusal is not None:
+                return CommitOutcome(
+                    exit_code=-1,
+                    stderr=cas_refusal.stderr,
+                    reason=_REASON_HEAD_BLOB_CAS_REFUSAL,
+                )
+            supplied_blobs = staged.blobs
+            # AC4: additive per-path -- named exactly once here, never
+            # inferred by a caller from absence (mirrors `worktree_excluded`'s
+            # own never-a-silent-drop posture).
+            unprovenanced_paths = tuple(p for p in commit_paths if p not in supplied_blobs)
+
+        # `commit_scoped()` itself resolves `supplied_blobs` (C1/C2/C3,
+        # docs/plans/2026-08-14-the-tool-stages-what-it-commits.md): a
+        # supplied path always routes to `_commit_scoped_private_index` and
+        # is NEVER exposed to the agree branch's `git add`, regardless of
+        # what its own `diverging_paths()` call finds -- see that function's
+        # own `supplied_blobs` docstring paragraph. Passing the map straight
+        # through (rather than re-deriving the diverged/non_diverged split
+        # here) is what keeps mechanism selection computed exactly once
+        # (C1's own point) and keeps `_agree_branch_cas_refusal` on the path
+        # for every other call.
         result = git_native.commit_scoped(
-            commit_paths, msg_file, root, deliverable_id=deliverable_id
+            commit_paths,
+            msg_file,
+            root,
+            deliverable_id=deliverable_id,
+            supplied_blobs=supplied_blobs,
         )
         if not result.ok:
             # Deliberately NOT `_reason_from_git_result()` here (2026-08-03
@@ -1315,6 +1635,8 @@ def commit(
                     condense_git_diagnostic(result.stderr)
                     or f"exit_code={result.returncode}"
                 ),
+                reason=_classify_commit_scoped_failure_reason(result),
+                unprovenanced_paths=unprovenanced_paths,
             )
 
         stdout = result.stdout.strip()
@@ -1328,6 +1650,7 @@ def commit(
                 landed=True,
                 stderr=result.stderr,
                 worktree_excluded=result.worktree_excluded,
+                unprovenanced_paths=unprovenanced_paths,
             )
 
         # Agree branch (C11) -- `result.stdout` is `git commit`'s summary
@@ -1347,7 +1670,10 @@ def commit(
             post_sha_result = git_native.rev_parse_head(root)
             if post_sha_result.ok and post_sha_result.stdout.strip():
                 return CommitOutcome(
-                    exit_code=0, committed_sha=post_sha_result.stdout.strip(), landed=True
+                    exit_code=0,
+                    committed_sha=post_sha_result.stdout.strip(),
+                    landed=True,
+                    unprovenanced_paths=unprovenanced_paths,
                 )
             # `git commit` already created this commit (`result.ok` above) --
             # only its sha is unresolvable. W1: `landed=True` alongside
@@ -1357,6 +1683,7 @@ def commit(
                 landed=True,
                 stderr="commit: landed but sha verification failed -- HEAD unresolvable "
                 "on an unborn-branch first commit",
+                unprovenanced_paths=unprovenanced_paths,
             )
         if not subject:
             # Same reasoning as the unborn-branch case immediately above:
@@ -1365,8 +1692,27 @@ def commit(
                 exit_code=1,
                 landed=True,
                 stderr="commit: landed but sha verification requires a non-empty message subject",
+                unprovenanced_paths=unprovenanced_paths,
             )
 
+        # Pathspec restriction bounded to ONE argv-safe chunk (2026-08-15
+        # sweep), not the full `commit_paths` -- the same Windows argv-
+        # length hazard every other batched call in this module closes,
+        # `git log --grep=... -- <commit_paths>` included. Unlike the
+        # residue/classification probes above, this is not a per-path
+        # membership question -- it is "find the ONE commit this call just
+        # made", and the trailing pathspec exists only to narrow `git log`
+        # to commits that touched at least one real path from THIS commit
+        # (defense-in-depth: `_FULL_SHA_RE`'s own docstring already
+        # establishes the `Commit-Token:` match is collision-free by
+        # construction, since no peer can ever author this exact token
+        # string). This call's own commit necessarily touched EVERY path in
+        # `commit_paths`, so it necessarily touched every path in any
+        # non-empty SUBSET of `commit_paths` too -- restricting to the
+        # first argv-safe chunk (never the whole list) preserves the same
+        # narrowing property without needing every path on argv, and finds
+        # the identical single candidate a full-pathspec search would.
+        log_grep_paths = _chunk_paths(commit_paths)[0]
         match_result = git_native.log_grep(
             root,
             token_trailer,
@@ -1381,7 +1727,7 @@ def commit(
                 "--full-history",
                 f"{pre_sha}..HEAD",
                 "--",
-                *commit_paths,
+                *log_grep_paths,
             ],
         )
         candidates = (
@@ -1401,8 +1747,14 @@ def commit(
                     f"candidate(s) matching this call's token trailer in {pre_sha}..HEAD -- "
                     "refusing to guess (never falling back to a bare rev-parse HEAD)"
                 )[:200],
+                unprovenanced_paths=unprovenanced_paths,
             )
-        return CommitOutcome(exit_code=0, committed_sha=candidates[0], landed=True)
+        return CommitOutcome(
+            exit_code=0,
+            committed_sha=candidates[0],
+            landed=True,
+            unprovenanced_paths=unprovenanced_paths,
+        )
     finally:
         try:
             msg_file.unlink()
@@ -2125,6 +2477,15 @@ class PipelineResult:
     pushed_range: Optional[str] = None
     pushed_count: Optional[int] = None
     diagnostics: List[str] = field(default_factory=list)
+    #: AC7 (docs/plans/2026-08-14-the-tool-stages-what-it-commits.md, C3) --
+    #: mirrors `CommitOutcome.reason` verbatim when the commit step itself
+    #: failed; "" on every other outcome (a gate failure, a benign no-op, or
+    #: a landed commit). See that field's own docstring for the tag set.
+    reason: str = ""
+    #: AC4 -- mirrors `CommitOutcome.unprovenanced_paths` verbatim; empty
+    #: tuple whenever `stage_patch` was never supplied to `run_commit_
+    #: pipeline()`, or every named path was covered by the patch.
+    unprovenanced_paths: Tuple[str, ...] = ()
 
 
 def _resolve_pass_common_dir(cwd: str) -> Optional[Path]:
@@ -2290,6 +2651,7 @@ def run_commit_pipeline(
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
     deliverable_id: Optional[str] = None,
+    stage_patch: Optional[str] = None,
 ) -> PipelineResult:
     """Run the full stage -> gate -> commit -> [push] critical section.
 
@@ -2319,6 +2681,23 @@ def run_commit_pipeline(
     (and from there to `git_native.commit_scoped()`); `None` by default,
     unchanged behaviour for every existing caller. Not sourced or validated
     here -- the caller must already hold a provenance-bearing id.
+
+    `stage_patch` (C3, docs/plans/2026-08-14-the-tool-stages-what-it-commits.md)
+    -- optional path to a patch file, passed straight through to `commit()`.
+    `None` by default, unchanged behaviour for every existing caller. When
+    given, this pass NEVER stages `stage_paths` via `explicit_stage()`'s
+    ordinary `git add` -- see `explicit_stage`'s own negative-spec ("never
+    `git add`s a supplied-blob path"): a supplied blob's provenance comes
+    from `commit()`'s own process-private `stage_from_patch()` apply,
+    immediately before the commit step, and touching the SHARED index for
+    any named path first would be exactly the incident class this plan
+    exists to close (a peer's ordinary `git add`/`git commit` absorbing
+    content that was never theirs). A synthetic `StageOutcome` reports every
+    named path as already staged (nothing left for the gate/commit-paths
+    derivation to do) without spawning `git add` at all -- a path the patch
+    does not cover still lands via `git_native._commit_scoped_private_
+    index()`'s own worktree-read for that path (AC4), never via this
+    pipeline's shared-index staging.
 
     Purpose: the C4 orchestration entry point. Used to acquire `ceremony_lock`
     for the duration of the entire critical section -- that mutex was deleted
@@ -2520,7 +2899,60 @@ def run_commit_pipeline(
     staged_this_call: List[str] = []
     landed = False
     try:
-        stage = explicit_stage(root, stage_paths, caller_paths)
+        if stage_patch is not None:
+            # C3 (see this function's own docstring, `stage_patch`): never
+            # `git add`s a path the patch itself will cover onto the SHARED
+            # index -- `commit()` (below) is the sole place a covered path's
+            # content is touched, and it only ever touches its OWN process-
+            # private index for that path. AC4 (additive per-path): a
+            # NAMED path the patch does NOT cover still needs an ordinary
+            # `git add` here, same as any other invocation -- without it,
+            # the dirty-tree gate below cannot attribute that path's own
+            # worktree edit to this call (it would see a dirty, un-staged
+            # path outside this call's own staged set and refuse the whole
+            # commit). `patch_touched_paths()` answers "which of
+            # `stage_paths` will the patch cover" by parsing the patch text
+            # ONLY (`git apply --numstat`, no repo mutation, no read of
+            # index/worktree/HEAD) -- a cheap pre-check, never the
+            # authority on what actually lands (that is `stage_from_patch()`
+            # itself, inside `commit()`, immediately before the commit
+            # step -- no probe-then-act gap on the supplied-blob content
+            # itself, only on this staging-split decision, which never
+            # answers a divergence question the plan's anti-scope guards).
+            patch_touched = git_native.patch_touched_paths(stage_patch, root)
+            # Review: coordinator:code-reviewer (88f5accd, finding 3) -- reuse
+            # git_native._normalize_path_key instead of inlining its logic,
+            # so a future change to that key's normalization (e.g. added
+            # case-folding) cannot silently drift the two copies apart --
+            # path-key drift has already caused a live incident here (a
+            # C-quoted path never matching its key, silently exempting a
+            # guard).
+            patch_covered = [
+                p for p in stage_paths if git_native._normalize_path_key(p) in patch_touched
+            ]
+            remainder = [p for p in stage_paths if p not in patch_covered]
+            remainder_stage = (
+                explicit_stage(root, remainder, caller_paths)
+                if remainder
+                else StageOutcome(exit_code=0)
+            )
+            stage = StageOutcome(
+                exit_code=remainder_stage.exit_code,
+                acted=remainder_stage.acted,
+                skipped=list(remainder_stage.skipped)
+                + [f"stage-patch-covered:{p}" for p in patch_covered],
+                failed=remainder_stage.failed,
+                checked_paths=remainder_stage.checked_paths,
+                diverged_paths=remainder_stage.diverged_paths,
+                staged_paths=list(remainder_stage.staged_paths) + patch_covered,
+                swept_renames=remainder_stage.swept_renames,
+                deletion_paths=remainder_stage.deletion_paths,
+                missing_caller_paths=remainder_stage.missing_caller_paths,
+                ignored_caller_paths=remainder_stage.ignored_caller_paths,
+                unverifiable_missing_caller_paths=remainder_stage.unverifiable_missing_caller_paths,
+            )
+        else:
+            stage = explicit_stage(root, stage_paths, caller_paths)
         staged_this_call = list(stage.acted)
 
         if stage.failed:
@@ -2663,6 +3095,7 @@ def run_commit_pipeline(
             commit_paths=commit_paths,
             common_dir=common_dir,
             deliverable_id=deliverable_id,
+            stage_patch=stage_patch,
         )
         if commit_outcome.exit_code != 0:
             if not commit_outcome.landed:
@@ -2694,6 +3127,8 @@ def run_commit_pipeline(
                     sha_unverified=False,
                     push_status=PUSH_STATUS_NOT_ATTEMPTED,
                     diagnostics=diagnostics,
+                    reason=commit_outcome.reason,
+                    unprovenanced_paths=commit_outcome.unprovenanced_paths,
                 )
 
             # `commit_outcome.landed=True` with a non-zero `exit_code`
@@ -2735,6 +3170,7 @@ def run_commit_pipeline(
                     sha_unverified=True,
                     push_status=PUSH_STATUS_NOT_ATTEMPTED,
                     diagnostics=diagnostics,
+                    unprovenanced_paths=commit_outcome.unprovenanced_paths,
                 )
 
             # Let the push proceed (W2): `push_with_retry()` pushes
@@ -2781,6 +3217,7 @@ def run_commit_pipeline(
                 pushed_range=push_outcome.pushed_range,
                 pushed_count=push_outcome.pushed_count,
                 diagnostics=diagnostics,
+                unprovenanced_paths=commit_outcome.unprovenanced_paths,
             )
 
         # The commit landed -- `staged_this_call` is now committed
@@ -2835,6 +3272,7 @@ def run_commit_pipeline(
                 sha_unverified=False,
                 push_status=PUSH_STATUS_NOT_ATTEMPTED,
                 diagnostics=diagnostics,
+                unprovenanced_paths=commit_outcome.unprovenanced_paths,
             )
 
         push_outcome = push_with_retry(root)
@@ -2901,6 +3339,7 @@ def run_commit_pipeline(
             pushed_range=push_outcome.pushed_range,
             pushed_count=push_outcome.pushed_count,
             diagnostics=diagnostics,
+            unprovenanced_paths=commit_outcome.unprovenanced_paths,
         )
     finally:
         # `BaseException`-safe via `finally` (not a bare `except`) --

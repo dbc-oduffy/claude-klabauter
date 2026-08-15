@@ -9,13 +9,16 @@ WHY THIS GUARD EXISTS (empirical, not hypothetical)
     standing: ~297 files still spawn real git, plus ~100 duplicated
     module-local `def _git(...)` helpers with no shared chokepoint.
 
-    That residue is too large to gate strictly on day one -- a strict "no
-    spawning tests" rule would fail against nearly 300 files immediately.
-    So this guard is a RATCHET, not a clean gate: it freezes the residue
-    into a shrink-only `_BASELINE`, blocks NEW spawn-heavy test files from
-    joining it unmarked, and separately keeps import-time spawns (the
-    actual mechanism that broke `--collect-only`/`-k` filtering, per the
-    ledger) at a permanently strict zero.
+    That residue was too large to gate strictly on day one -- a strict "no
+    spawning tests" rule would have failed against nearly 300 files
+    immediately -- so this guard began life as a RATCHET over a frozen
+    `_BASELINE` of tolerated files rather than a clean gate.
+
+    THAT PHASE IS OVER. The baseline drained to empty on 2026-08-14 and was
+    deleted; see "THE GRANDFATHER CLAUSE IS DISCHARGED" below. Every
+    spawning test file now declares the spawn and is tiered onto the cadence
+    suite, which is a rule that enforces itself rather than a list of
+    exceptions nobody revisits.
 
 WHAT THIS GUARD DETECTS
     A "spawn site" is a call to `subprocess.run`/`Popen`/`check_output`/
@@ -33,7 +36,7 @@ WHAT THIS GUARD DETECTS
     `state/audits/2026-08-06-windows-hostility-census/B-subprocess-shellouts.md`
     both warn inflated earlier hand-counts roughly 3x.
 
-THREE RULES
+FOUR RULES
     Rule 1 -- import-time spawns: STRICT, no allowlist, no marker escape.
         A spawn site sitting at MODULE level (not nested in any function or
         method body) fails unconditionally, always, for every file. This is
@@ -47,25 +50,29 @@ THREE RULES
         `Path(__file__).resolve().parents[N]`, computed statically, never a
         spawned process.
 
-    Rule 2 -- new spawning test files: RATCHET.
+    Rule 2 -- a spawning test file must DECLARE the spawn.
         A file containing a function-level (non-module-level) spawn site
-        fails UNLESS either (a) its repo-relative POSIX path is in the
-        frozen `_BASELINE` below, or (b) EVERY test function in the file
-        that itself contains a spawn site carries `@pytest.mark.spawns_process`
-        (directly or via a stacked decorator list -- module-level
-        `pytestmark = [pytest.mark.spawns_process]` also satisfies this for
-        every test in the file). The marker is the declaration a NEW file
-        must make; the baseline is the one-time grandfather clause for the
-        pre-existing residue, not a route around the marker for new work.
+        fails unless EVERY test function in it that contains a spawn site
+        carries `@pytest.mark.spawns_process` (directly or via a stacked
+        decorator list -- module-level `pytestmark = [pytest.mark.spawns_process]`
+        also satisfies this for every test in the file). There is no
+        allowlist and no grandfather path; the marker is the only route.
 
-    Rule 3 -- stale baseline entries fail.
-        A `_BASELINE` entry that no longer exists on disk, or exists but no
-        longer contains any function-level spawn site, fails as stale. This
-        keeps `_BASELINE` monotonically shrinking -- entries may only be
-        REMOVED, never added -- rather than becoming a permanent parking
-        lot nobody revisits. Modeled directly on
-        `coordinator/tests/test_dr084_single_accessor_guard.py`'s
-        `test_allowlist_entries_still_exist_on_disk` staleness check.
+    Rule 3 -- REMOVED (2026-08-14), with the baseline it policed.
+        It failed `_BASELINE` entries that had gone stale, keeping the list
+        monotonically shrinking. The list is gone, so nothing is left to go
+        stale. `test_no_grandfather_clause_is_reintroduced` now holds the
+        line Rule 3 used to: no module-level exception list may come back.
+
+    Rule 4 -- a spawning test file must be TIERED off the per-commit path.
+        Declaring the spawn is not enough on its own: a file that spawns a
+        real process must also carry `pytest.mark.cadence`, so it runs at
+        cadence gates. Rule 2 without Rule 4 is what let this guard record
+        the residue for six weeks while never moving any of it -- 555 files
+        fully known, counted, and still running on the tier everyone runs.
+        A `conftest.py` is exempt from Rule 4 and must instead hold NO spawn
+        site at all: a marker only tiers the test that declares it, so a
+        spawn in a conftest is untierable by construction.
 
 THE GUARD ITSELF MUST NOT SPAWN
     Pure AST parse + filesystem walk. No `git ls-files`, no shelling out to
@@ -73,14 +80,15 @@ THE GUARD ITSELF MUST NOT SPAWN
     point is that spawning during test collection is what broke sessions.
 
 Spec backlink: state/audits/2026-08-07-spawn-heavy-test-excision-ledger.md
-Restoration workstream that drains `_BASELINE`:
-    state/handoffs/2026-08-07-restore-excised-spawn-heavy-tests.md
+Why the tiering is blanket rather than threshold-scoped:
+    state/audits/2026-08-14-spawn-baseline-tier-threshold-evidence.md
 """
 
 from __future__ import annotations
 
 import ast
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -414,10 +422,12 @@ def _has_spawns_process_marker(decorators: list[ast.expr]) -> bool:
     return "pytest.mark.spawns_process" in _decorator_names(decorators)
 
 
-def _has_module_level_pytestmark(tree: ast.Module) -> bool:
-    """True if the module declares `pytestmark = pytest.mark.spawns_process`
-    or `pytestmark = [pytest.mark.spawns_process, ...]` at module level --
-    the file-wide equivalent of decorating every test individually."""
+def _has_module_level_pytestmark(
+    tree: ast.Module, marker: str = "pytest.mark.spawns_process"
+) -> bool:
+    """True if the module declares `pytestmark = <marker>` or
+    `pytestmark = [<marker>, ...]` at module level -- the file-wide
+    equivalent of decorating every test individually."""
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
@@ -435,7 +445,7 @@ def _has_module_level_pytestmark(tree: ast.Module) -> bool:
                 target = target.value
             if isinstance(target, ast.Name):
                 parts.append(target.id)
-            if ".".join(reversed(parts)) == "pytest.mark.spawns_process":
+            if ".".join(reversed(parts)) == marker:
                 return True
     return False
 
@@ -586,475 +596,23 @@ def _all_reports() -> list[FileSpawnReport]:
 
 
 # ---------------------------------------------------------------------------
-# Rule 3 baseline. MACHINE-GENERATED 2026-08-07 by running this guard's own
-# detector over the tree at HEAD. Entries may only be REMOVED, never added
-# -- this is the grandfather clause for the ~297-file residue named in the
-# excision ledger, and it must shrink monotonically as the restoration
-# workstream (state/handoffs/2026-08-07-restore-excised-spawn-heavy-tests.md)
-# converts files to real mocking or adds the `spawns_process` marker.
-# Count at generation time: see the count asserted in
-# `test_baseline_count_matches_header` below (kept in lockstep with this
-# frozenset rather than duplicated as a bare literal here).
-#
-# RE-FROZEN 2026-08-07 (widening): the detector was extended to see spawns
-# reached indirectly through a local or imported helper function (e.g. a
-# module-local `def _git(...)` wrapper, or `_run_cli()` calling
-# `subprocess.run`), not just a literal `subprocess.run(...)` call inline in
-# the test body. That widening surfaced 64 previously-invisible files (563 ->
-# 627), then MINUS one file intentionally left off per this widening's own
-# dispatch brief -- coordinator_core/ops/session/tests/
-# test_resolve_chain_terminal_disposition.py belongs to a live peer session
-# and must not be marked/baselined by this change -- giving 626, then further
-# reduced (626 -> 623 -> 622) as entries were removed for files deleted from
-# disk (most recently: test_ceremony_lock.py, removed when ceremony_lock.py
-# became a no-op shim). No stale entries remain (Rule 3 held clean).
 # ---------------------------------------------------------------------------
-_BASELINE: frozenset[str] = frozenset(
-    {
-        'bin/tests/test_commit_anchors_failopen.py',
-        'bin/tests/test_shell_init_guard.py',
-        'coordinator/bin/lib/test_git_hook_install.py',
-        'coordinator/bin/test_coordinator_tasks_mirror.py',
-        'coordinator/bin/test_cross_repo_memo_c6.py',
-        'coordinator/bin/test_emit_goal_from_artifact.py',
-        'coordinator/bin/test_generate_tested_platforms.py',
-        'coordinator/bin/test_lint_frontmatter.py',
-        'coordinator/bin/test_migrate_bug_backlog.py',
-        'coordinator/bin/test_migrate_improvement_queue_project.py',
-        'coordinator/bin/test_probe_memory_headroom.py',
-        'coordinator/bin/test_spawn_census.py',
-        'coordinator/bin/test_sweep_actioned_memos.py',
-        'coordinator/bin/test_sweep_argv_shared.py',
-        'coordinator/bin/test_sweep_shipped_handoffs.py',
-        'coordinator/bin/test_sync_cockpit_contract.py',
-        'coordinator/bin/tests/test_assert_cwd.py',
-        'coordinator/bin/tests/test_check_install_divergence.py',
-        'coordinator/bin/tests/test_check_machine_path_leak.py',
-        'coordinator/bin/tests/test_check_multi_event_hook_hardcoded_event.py',
-        'coordinator/bin/tests/test_check_schema_version_bump.py',
-        'coordinator/bin/tests/test_claude_machine_local.py',
-        'coordinator/bin/tests/test_cmd_rem_line_metacharacters.py',
-        'coordinator/bin/tests/test_coordinator_doc_new_roadmap_baton_self_validation.py',
-        'coordinator/bin/tests/test_coordinator_lesson_add_meta_routing.py',
-        'coordinator/bin/tests/test_handoff_has_live_children.py',
-        'coordinator/bin/tests/test_learn_lessons_age_sweep.py',
-        'coordinator/bin/tests/test_machine_local_ladder_parity.py',
-        'coordinator/bin/tests/test_merge_release_notes_derive.py',
-        'coordinator/bin/tests/test_no_bin_docstring_command_substitution.py',
-        'coordinator/bin/tests/test_no_bin_polyglot_invariant.py',
-        'coordinator/bin/tests/test_parallel_review_orthogonality_guard.py',
-        'coordinator/bin/tests/test_publish_batch_delta_honest_reporting.py',
-        'coordinator/bin/tests/test_reap_integrated_review_findings_native.py',
-        'coordinator/bin/tests/test_record_platform_outcome.py',
-        'coordinator/bin/tests/test_repo_census.py',
-        'coordinator/bin/tests/test_shebang_removal_ordering_ratchet.py',
-        'coordinator/bin/tests/test_testpaths_location_guard.py',
-        'coordinator/bin/tests/test_validate_fast_and_packageability.py',
-        'coordinator/bin/tests/test_workweek_complete_drift_guards.py',
-        'coordinator/bin/tests/test_wsc_coverage_gate_runner.py',
-        'coordinator/bin/tests/test_zero_test_module_ratchet.py',
-        'coordinator/tests/conftest.py',
-        'coordinator/tests/test_agent_sessions_schema.py',
-        'coordinator/tests/test_aggregate_chain_loe.py',
-        'coordinator/tests/test_aggregate_chain_loe_diamond.py',
-        'coordinator/tests/test_append_plan_session.py',
-        'coordinator/tests/test_atlas_watch_drift.py',
-        'coordinator/tests/test_audit_roadmap_dependency_order.py',
-        'coordinator/tests/test_audit_roadmap_verdict_regex.py',
-        'coordinator/tests/test_b4_query_records_caller_parity.py',
-        'coordinator/tests/test_backfill_initiative_fk.py',
-        'coordinator/tests/test_backfill_week_changelog_gaps_facade.py',
-        'coordinator/tests/test_bash_exclusion_gate.py',
-        'coordinator/tests/test_bootstrap_orchestrate.py',
-        'coordinator/tests/test_bootstrap_repo.py',
-        'coordinator/tests/test_capture_fan_out_threshold.py',
-        'coordinator/tests/test_chain_preinstall_phase.py',
-        'coordinator/tests/test_chain_walk_setup_rename_compat.py',
-        'coordinator/tests/test_check_auto_reconcile.py',
-        'coordinator/tests/test_check_deferral_orphan_memo.py',
-        'coordinator/tests/test_check_deferral_partial_strangle.py',
-        'coordinator/tests/test_check_engine_drift.py',
-        'coordinator/tests/test_check_harvest_debt.py',
-        'coordinator/tests/test_check_machine_local_regeneratability.py',
-        'coordinator/tests/test_check_no_monolith_completion_append.py',
-        'coordinator/tests/test_check_plugin_drift_copy_install.py',
-        'coordinator/tests/test_check_registry_codename_leak_keepset.py',
-        'coordinator/tests/test_check_wsc_inline_budget.py',
-        'coordinator/tests/test_chunk6_onboarding_setup_doctor.py',
-        'coordinator/tests/test_classify_dispatch_shape.py',
-        'coordinator/tests/test_complete_entry_rollup.py',
-        'coordinator/tests/test_conformance_chain_preinstall_gate.py',
-        'coordinator/tests/test_coordinator_auto_push.py',
-        'coordinator/tests/test_coordinator_data_root.py',
-        'coordinator/tests/test_coordinator_doc_new_handoff_archived_twin_guard.py',
-        'coordinator/tests/test_coordinator_initiative_cli.py',
-        'coordinator/tests/test_coordinator_initiative_list_unattached.py',
-        'coordinator/tests/test_coordinator_reap_stale_locks.py',
-        'coordinator/tests/test_coordinator_render_rollup_cli.py',
-        'coordinator/tests/test_coordinator_renormalize_index.py',
-        'coordinator/tests/test_coordinator_root_warn_guard.py',
-        'coordinator/tests/test_coordinator_safe_commit.py',
-        'coordinator/tests/test_coordinator_session_self_claim.py',
-        'coordinator/tests/test_coordinator_setup_state.py',
-        'coordinator/tests/test_coordinator_uninstall_trampoline.py',
-        'coordinator/tests/test_count_distill_backlog.py',
-        'coordinator/tests/test_cruft_sweep_collapse.py',
-        'coordinator/tests/test_cruft_sweep_concurrency.py',
-        'coordinator/tests/test_cruft_sweep_jsonl.py',
-        'coordinator/tests/test_cruft_sweep_log.py',
-        'coordinator/tests/test_cruft_sweep_mtime_floor.py',
-        'coordinator/tests/test_cruft_sweep_phase_a.py',
-        'coordinator/tests/test_cruft_sweep_phase_b.py',
-        'coordinator/tests/test_deep_research_record_roundtrip.py',
-        'coordinator/tests/test_detect_initiative_candidates_port.py',
-        'coordinator/tests/test_detect_onboarding_offer.py',
-        'coordinator/tests/test_dirty_tree_gate.py',
-        'coordinator/tests/test_distill_cli_relocation.py',
-        'coordinator/tests/test_doctor_manifest_ssot.py',
-        'coordinator/tests/test_doctor_selection_grammar.py',
-        'coordinator/tests/test_doe_root_durable_resolution.py',
-        'coordinator/tests/test_dr084_migrate_live_duplicate_guard.py',
-        'coordinator/tests/test_dr_allocator.py',
-        'coordinator/tests/test_draft_plan_aging.py',
-        'coordinator/tests/test_emit_cockpit_snapshot_facade.py',
-        'coordinator/tests/test_ensure_vscode_readonly.py',
-        'coordinator/tests/test_extract_scope_paths.py',
-        'coordinator/tests/test_extract_verify_gate.py',
-        'coordinator/tests/test_fan_out_dispatch_plan_doc_oos.py',
-        'coordinator/tests/test_fan_out_integrator.py',
-        'coordinator/tests/test_flight_recorder_scaffolder.py',
-        'coordinator/tests/test_freeze_review_diff.py',
-        'coordinator/tests/test_generate_exec_summary.py',
-        'coordinator/tests/test_git_hook_install_foreign_hook_preservation.py',
-        'coordinator/tests/test_goal_coverage_scan.py',
-        'coordinator/tests/test_handoff_gate_aging.py',
-        'coordinator/tests/test_hardware_audit_ssot.py',
-        'coordinator/tests/test_hook_shims_portable.py',
-        'coordinator/tests/test_install_health_run.py',
-        'coordinator/tests/test_install_maximalist_trampoline.py',
-        'coordinator/tests/test_learn_lessons_roots.py',
-        'coordinator/tests/test_lesson_promote_node_enum.py',
-        'coordinator/tests/test_lessons_add_concurrency.py',
-        'coordinator/tests/test_lessons_closure.py',
-        'coordinator/tests/test_lessons_consumer_sweep.py',
-        'coordinator/tests/test_lessons_migration_parity.py',
-        'coordinator/tests/test_lessons_query.py',
-        'coordinator/tests/test_lessons_schema_roundtrip.py',
-        'coordinator/tests/test_list_reverse_drift_scoping.py',
-        'coordinator/tests/test_list_review_trail_records.py',
-        'coordinator/tests/test_live_machine_local_registry_isolation.py',
-        'coordinator/tests/test_migrate_completion_log_legacy.py',
-        'coordinator/tests/test_migrate_cross_repo_layout.py',
-        'coordinator/tests/test_mint_deliverable_id.py',
-        'coordinator/tests/test_new_project_scaffold.py',
-        'coordinator/tests/test_normalize_consumed_frontmatter.py',
-        'coordinator/tests/test_parse_resolves_trailer.py',
-        'coordinator/tests/test_percolate_engine_cutover.py',
-        'coordinator/tests/test_percolate_resolve_target.py',
-        'coordinator/tests/test_percolate_transform.py',
-        'coordinator/tests/test_posture_default_preservation.py',
-        'coordinator/tests/test_probe_onboarding_currency.py',
-        'coordinator/tests/test_prune_resolved_queue_entries.py',
-        'coordinator/tests/test_publish_guard_before_mutate.py',
-        'coordinator/tests/test_publish_honest_update_report.py',
-        'coordinator/tests/test_publish_materialize_inject_srcs.py',
-        'coordinator/tests/test_queue_append_node_validation.py',
-        'coordinator/tests/test_queue_append_workstream_native_transport.py',
-        'coordinator/tests/test_read_frontmatter_field.py',
-        'coordinator/tests/test_reap_integrated_review_findings.py',
-        'coordinator/tests/test_reap_stale_locks.py',
-        'coordinator/tests/test_records_query_filters.py',
-        'coordinator/tests/test_records_query_limit_and_unattached.py',
-        'coordinator/tests/test_records_query_py.py',
-        'coordinator/tests/test_records_query_repo_root.py',
-        'coordinator/tests/test_refresh_plugin_live_install_integration.py',
-        'coordinator/tests/test_refresh_queries_files_scope.py',
-        'coordinator/tests/test_refresh_roadmap_callout.py',
-        'coordinator/tests/test_refresh_source_is_live_venv.py',
-        'coordinator/tests/test_render_posture_overlay.py',
-        'coordinator/tests/test_render_template.py',
-        'coordinator/tests/test_render_template_multiline.py',
-        'coordinator/tests/test_render_template_tree.py',
-        'coordinator/tests/test_repo_setup_phase3j_integration.py',
-        'coordinator/tests/test_repomap_wrapper_resolution.py',
-        'coordinator/tests/test_resolve_coordinator_clone.py',
-        'coordinator/tests/test_resolve_repo_path.py',
-        'coordinator/tests/test_resolve_session_id.py',
-        'coordinator/tests/test_review_brightline_gate_session_filter.py',
-        'coordinator/tests/test_review_findings_scaffold.py',
-        'coordinator/tests/test_round_trip_t3.py',
-        'coordinator/tests/test_run_plan_tasks_spine_suites.py',
-        'coordinator/tests/test_run_report_fold_cli_roundtrip.py',
-        'coordinator/tests/test_safe_commit_offer_outcome_signal.py',
-        'coordinator/tests/test_safe_commit_offer_sigterm_handler.py',
-        'coordinator/tests/test_scaffold_canonical_structure.py',
-        'coordinator/tests/test_scan_addon_health_hookprobe.py',
-        'coordinator/tests/test_schema_cli.py',
-        'coordinator/tests/test_self_claim_refresh_queries.py',
-        'coordinator/tests/test_self_claim_snippet_sync.py',
-        'coordinator/tests/test_setup_detect_test_cmd.py',
-        'coordinator/tests/test_setup_health_ledger_seed.py',
-        'coordinator/tests/test_setup_rag_decision.py',
-        'coordinator/tests/test_snippet_registry.py',
-        'coordinator/tests/test_snippet_registry_conditional.py',
-        'coordinator/tests/test_snippet_registry_malformed.py',
-        'coordinator/tests/test_spawn_hidden.py',
-        'coordinator/tests/test_stamp_plan_status_on_ship.py',
-        'coordinator/tests/test_sync_plugin_wiki_mirror_guard.py',
-        'coordinator/tests/test_verify_doe_root_seam_sync.py',
-        'coordinator/tests/test_verify_no_console_flash.py',
-        'coordinator/tests/test_verify_no_console_flash_file_allow.py',
-        'coordinator/tests/test_workday_complete_backfill_anchor.py',
-        'coordinator/tests/test_workday_complete_backfill_inject_anchor.py',
-        'coordinator/tests/test_workday_complete_backfill_scan.py',
-        'coordinator/tests/test_workday_complete_step1_validate.py',
-        'coordinator/tests/test_workday_complete_step2_5_dirty_tree_rename_fold.py',
-        'coordinator/tests/test_workday_complete_step2_5_dirty_tree_smoke.py',
-        'coordinator/tests/test_workday_complete_step9_append_changelog_facade.py',
-        'coordinator/tests/test_workday_evening_tz_coherence.py',
-        'coordinator/tests/test_workday_start_cross_repo_memo_surface.py',
-        'coordinator/tests/test_workday_start_inbox_blitz_assemble.py',
-        'coordinator/tests/test_workday_start_outbox_stale_nudge.py',
-        'coordinator/tests/test_workday_start_step0_slug_selfheal.py',
-        'coordinator/tests/test_workstream_store_collision.py',
-        'coordinator_core/bash_guards/tests/test_block_subagent_commit.py',
-        'coordinator_core/bash_guards/tests/test_bump_foreign_repo_write.py',
-        'coordinator_core/bash_guards/tests/test_bump_foreign_repo_write_c7_findings.py',
-        'coordinator_core/bash_guards/tests/test_bump_outside_repo_write.py',
-        'coordinator_core/bash_guards/tests/test_cd_prefix_bypass.py',
-        'coordinator_core/bash_guards/tests/test_check_destructive_git_orphan_check2.py',
-        'coordinator_core/bash_guards/tests/test_check_destructive_git_revert_stash.py',
-        'coordinator_core/bash_guards/tests/test_check_destructive_rm_repo_root.py',
-        'coordinator_core/bash_guards/tests/test_check_seven_claude_md_budget.py',
-        'coordinator_core/bash_guards/tests/test_check_test_suite_invocation.py',
-        'coordinator_core/bash_guards/tests/test_check_validate_commit.py',
-        'coordinator_core/bash_guards/tests/test_command_tokenizer_length_ceiling.py',
-        'coordinator_core/bash_guards/tests/test_commit_scope_events.py',
-        'coordinator_core/bash_guards/tests/test_commit_tripwires.py',
-        'coordinator_core/bash_guards/tests/test_confinement_attack_corpus.py',
-        'coordinator_core/bash_guards/tests/test_dispatch_checks_git_fact_memoization.py',
-        'coordinator_core/bash_guards/tests/test_dispatch_crash_deny.py',
-        'coordinator_core/bash_guards/tests/test_dispatch_latency_bound.py',
-        'coordinator_core/bash_guards/tests/test_firing_shape_gate.py',
-        'coordinator_core/bash_guards/tests/test_git_commit_safe_commit_deny_escalation.py',
-        'coordinator_core/bash_guards/tests/test_guard_offer_invoke_params_stdin.py',
-        'coordinator_core/bash_guards/tests/test_platform_conditioned_deny_reachability.py',
-        'coordinator_core/bash_guards/tests/test_write_bump_applicability.py',
-        'coordinator_core/bash_guards/tests/test_write_bump_marker.py',
-        'coordinator_core/bash_guards/tests/test_write_bump_message.py',
-        'coordinator_core/bash_guards/tests/test_write_bump_session_start.py',
-        'coordinator_core/bash_guards/tests/test_write_bump_surface_parity.py',
-        'coordinator_core/baton_assemble/tests/test_deliverable_collision_warn.py',
-        'coordinator_core/baton_assemble/tests/test_j_continuation_vs_fork_excise.py',
-        'coordinator_core/benchmarks/tests/test_harness.py',
-        'coordinator_core/cartography/tests/test_file_index.py',
-        'coordinator_core/cartography/tests/test_tree.py',
-        'coordinator_core/contract/memo_conformance/test_doe_round_trip_conformance.py',
-        'coordinator_core/dispatch/tests/test_provision.py',
-        'coordinator_core/distill/tests/test_log_append.py',
-        'coordinator_core/distill/tests/test_ripe_filter.py',
-        'coordinator_core/frontmatter/tests/test_handoff_lineage_corpus_dangling_refs.py',
-        'coordinator_core/frontmatter/tests/test_plan_sizing_object_field.py',
-        'coordinator_core/frontmatter/tests/test_schema_drift_watch.py',
-        'coordinator_core/frontmatter/tests/test_schema_validate.py',
-        'coordinator_core/hooks/tests/test_track_touched_files_normalize.py',
-        'coordinator_core/install/test_clone_sibling_repo.py',
-        'coordinator_core/install/test_first_run.py',
-        'coordinator_core/install/test_resolve_claude_klabauter.py',
-        'coordinator_core/install/test_resolve_claude_klabauter_exec_cli.py',
-        'coordinator_core/install/test_substrate_resolution_journal.py',
-        'coordinator_core/install/test_wrapper_onto_path.py',
-        'coordinator_core/install/tests/test_observed_set_fold_install_surface.py',
-        'coordinator_core/install/tests/test_scaffold_structure.py',
-        'coordinator_core/ops/ceremony/tests/test_commit_exec_bit.py',
-        'coordinator_core/ops/ceremony/tests/test_commit_gates_known_scope.py',
-        'coordinator_core/ops/ceremony/tests/test_commit_scoped_trailer_replay.py',
-        'coordinator_core/ops/ceremony/tests/test_detached_render_commit.py',
-        'coordinator_core/ops/ceremony/tests/test_post_commit_tail.py',
-        'coordinator_core/ops/ceremony/tests/test_receipt_emit.py',
-        'coordinator_core/ops/ceremony/tests/test_snapshot_diff_and_head.py',
-        'coordinator_core/ops/ceremony/tests/test_update_docs_scan.py',
-        'coordinator_core/ops/ceremony/tests/test_wsc_tail_chain_ancestry_waiver_bookkeeping.py',
-        'coordinator_core/ops/ceremony/tests/test_wsc_tail_trailer_divergence.py',
-        'coordinator_core/ops/docgen/tests/test_c6_conformance.py',
-        'coordinator_core/ops/emit/tests/test_backlogs_section.py',
-        'coordinator_core/ops/emit/tests/test_classify_shas_on_origin_main.py',
-        'coordinator_core/ops/emit/tests/test_docs_staleness_stamp.py',
-        'coordinator_core/ops/emit/tests/test_doe_drift.py',
-        'coordinator_core/ops/emit/tests/test_emission_scope_e2e.py',
-        'coordinator_core/ops/emit/tests/test_emit_context_resolve.py',
-        'coordinator_core/ops/emit/tests/test_emit_default_path.py',
-        'coordinator_core/ops/emit/tests/test_emit_graceful_absent.py',
-        'coordinator_core/ops/emit/tests/test_emit_parity.py',
-        'coordinator_core/ops/emit/tests/test_file_attribution_section.py',
-        'coordinator_core/ops/emit/tests/test_lessons_provenance_ref.py',
-        'coordinator_core/ops/emit/tests/test_lma_cache.py',
-        'coordinator_core/ops/emit/tests/test_market_intel_arrays_empty.py',
-        'coordinator_core/ops/emit/tests/test_per_repo_emission_integration.py',
-        'coordinator_core/ops/emit/tests/test_routine_signals_native_ports.py',
-        'coordinator_core/ops/fleet/tests/test_memo_check_addressee.py',
-        'coordinator_core/ops/fleet/tests/test_setup_error_stderr_channel.py',
-        'coordinator_core/ops/session/tests/test_end_to_end_wrap_all_four_classes.py',
-        'coordinator_core/ops/session/tests/test_guard_settings_integrity.py',
-        'coordinator_core/ops/session/tests/test_guard_settings_integrity_restore_rungs.py',
-        'coordinator_core/ops/session/tests/test_in_process_writer_claim_path.py',
-        'coordinator_core/ops/session/tests/test_stranded_baton_drain.py',
-        'coordinator_core/ops/session/tests/test_sweep_consumed_handoffs.py',
-        'coordinator_core/ops/test_agent_worktree_sweep.py',
-        'coordinator_core/ops/test_assert_doctrine_cross_reference_counts.py',
-        'coordinator_core/ops/test_assert_no_dangling_plan_backlinks.py',
-        'coordinator_core/ops/test_backfill_initiative_fk.py',
-        'coordinator_core/ops/test_blocked.py',
-        'coordinator_core/ops/test_central_run_due.py',
-        'coordinator_core/ops/test_check_auto_memory_drained.py',
-        'coordinator_core/ops/test_check_auto_reconcile.py',
-        'coordinator_core/ops/test_check_harvest_debt.py',
-        'coordinator_core/ops/test_check_windows_ssh_binary.py',
-        'coordinator_core/ops/test_completion_ops.py',
-        'coordinator_core/ops/test_coordinator_postsync_marker_resync_check.py',
-        'coordinator_core/ops/test_coordinator_precommit_settings_tracking_check.py',
-        'coordinator_core/ops/test_detect_changed_dependency_manifests.py',
-        'coordinator_core/ops/test_detect_staged_rollback.py',
-        'coordinator_core/ops/test_dirty_tree_gate.py',
-        'coordinator_core/ops/test_dispatch_shape_classify.py',
-        'coordinator_core/ops/test_doc_staleness.py',
-        'coordinator_core/ops/test_ensure_doe_clone.py',
-        'coordinator_core/ops/test_fan_out_integrator.py',
-        'coordinator_core/ops/test_find_polluter.py',
-        'coordinator_core/ops/test_fold_execution_record.py',
-        'coordinator_core/ops/test_generate_exec_summary.py',
-        'coordinator_core/ops/test_install_meta_repo_precommit_hook_install_all.py',
-        'coordinator_core/ops/test_install_post_sync_hooks.py',
-        'coordinator_core/ops/test_merge_branch_into_workstream.py',
-        'coordinator_core/ops/test_merge_quiet_activity_gate.py',
-        'coordinator_core/ops/test_migrate_branch_canonical_case.py',
-        'coordinator_core/ops/test_migrate_completion_log_legacy.py',
-        'coordinator_core/ops/test_migrate_cross_repo_layout.py',
-        'coordinator_core/ops/test_mirror_ci_run_tests_require_tests.py',
-        'coordinator_core/ops/test_new_project_scaffold.py',
-        'coordinator_core/ops/test_normalize_claimed_frontmatter.py',
-        'coordinator_core/ops/test_orphan_branch_sweep.py',
-        'coordinator_core/ops/test_percolate_check_inverse_drift.py',
-        'coordinator_core/ops/test_renormalize_index.py',
-        'coordinator_core/ops/test_repo_bootstrap.py',
-        'coordinator_core/ops/test_resolve_baton_path.py',
-        'coordinator_core/ops/test_review_freeze_diff.py',
-        'coordinator_core/ops/test_run_pre_ci_hooks.py',
-        'coordinator_core/ops/test_run_semgrep_scan.py',
-        'coordinator_core/ops/test_run_shellcheck_sweep.py',
-        'coordinator_core/ops/test_scan_unresolved_ubt_records.py',
-        'coordinator_core/ops/test_schema_drift_gate.py',
-        'coordinator_core/ops/test_session_hierarchy_query.py',
-        'coordinator_core/ops/test_verify_arch_audit_atlas_refresh.py',
-        'coordinator_core/ops/test_verify_fix_files_changed.py',
-        'coordinator_core/ops/test_verify_orientation_cache_sync.py',
-        'coordinator_core/ops/test_verify_scout_inventory_completeness.py',
-        'coordinator_core/ops/test_whoami_run_tests.py',
-        'coordinator_core/ops/test_workday_start_cross_repo_memo_outbox_surface.py',
-        'coordinator_core/ops/test_workday_surface_stale_stash_entries.py',
-        'coordinator_core/ops/test_workweek_complete_reverse_drift_gate.py',
-        'coordinator_core/ops/test_write_identity_file.py',
-        'coordinator_core/ops/tests/test_ac_priority_drain_durability.py',
-        'coordinator_core/ops/tests/test_artifact_emit_scope_touch.py',
-        'coordinator_core/ops/tests/test_assert_plan_sizing_citation.py',
-        'coordinator_core/ops/tests/test_audience_mismatch_scan.py',
-        'coordinator_core/ops/tests/test_cascade_backstop_sweep.py',
-        'coordinator_core/ops/tests/test_cascade_baton_rows.py',
-        'coordinator_core/ops/tests/test_cascade_retract.py',
-        'coordinator_core/ops/tests/test_completion_ops_claim_state.py',
-        'coordinator_core/ops/tests/test_completion_ops_concurrency.py',
-        'coordinator_core/ops/tests/test_completion_ops_reconcile.py',
-        'coordinator_core/ops/tests/test_crossrepo_closure_status.py',
-        'coordinator_core/ops/tests/test_cutover_advance.py',
-        'coordinator_core/ops/tests/test_cutover_gate_schema_resolution.py',
-        'coordinator_core/ops/tests/test_deliverable_cascade_claim_state.py',
-        'coordinator_core/ops/tests/test_deliverable_rollup.py',
-        'coordinator_core/ops/tests/test_distill_apply_disposal.py',
-        'coordinator_core/ops/tests/test_distill_curation_status.py',
-        'coordinator_core/ops/tests/test_distill_disposal_manifest.py',
-        'coordinator_core/ops/tests/test_distill_scope.py',
-        'coordinator_core/ops/tests/test_distill_stamp_disposal.py',
-        'coordinator_core/ops/tests/test_doctor.py',
-        'coordinator_core/ops/tests/test_engine_drift.py',
-        'coordinator_core/ops/tests/test_goal_kr_status.py',
-        'coordinator_core/ops/tests/test_goals_match.py',
-        'coordinator_core/ops/tests/test_handoff_author_fork_claim_state.py',
-        'coordinator_core/ops/tests/test_handoff_match.py',
-        'coordinator_core/ops/tests/test_initiatives_serve.py',
-        'coordinator_core/ops/tests/test_ipc_get_op_handler_lazy_resolution.py',
-        'coordinator_core/ops/tests/test_lazy_ops_channel.py',
-        'coordinator_core/ops/tests/test_memo_fate_backfill.py',
-        'coordinator_core/ops/tests/test_memo_triage.py',
-        'coordinator_core/ops/tests/test_ownership_index.py',
-        'coordinator_core/ops/tests/test_plan_match.py',
-        'coordinator_core/ops/tests/test_plan_tasks_grouping_digest.py',
-        'coordinator_core/ops/tests/test_priority_drain.py',
-        'coordinator_core/ops/tests/test_priority_set.py',
-        'coordinator_core/ops/tests/test_queue_age_ping.py',
-        'coordinator_core/ops/tests/test_queue_append_concurrency.py',
-        'coordinator_core/ops/tests/test_queue_cluster.py',
-        'coordinator_core/ops/tests/test_registry_map_sync.py',
-        'coordinator_core/ops/tests/test_review_brightline_gate_claim_state.py',
-        'coordinator_core/ops/tests/test_review_trail_readjudication_report.py',
-        'coordinator_core/ops/tests/test_review_trail_write.py',
-        'coordinator_core/ops/tests/test_roadmap_serve.py',
-        'coordinator_core/ops/tests/test_strang10_invoke_smoke.py',
-        'coordinator_core/pickup_assemble/tests/test_claim_state_reads.py',
-        'coordinator_core/plugin_health/tests/test_drift.py',
-        'coordinator_core/reconcile/tests/test_ac27_differential_oracle.py',
-        'coordinator_core/reconcile/tests/test_commitments_recheck.py',
-        'coordinator_core/review_assemble/test_exec_auth_stamp.py',
-        'coordinator_core/review_assemble/test_residue.py',
-        'coordinator_core/session/tests/test_stale_claims.py',
-        'coordinator_core/session/tests/test_stale_claims_claim_state.py',
-        'coordinator_core/session_ledger/test_aggregate_chain_loe.py',
-        'coordinator_core/subagent_sandbox/tests/test_provision_report_touch_claim.py',
-        'coordinator_core/test_archive_stamp.py',
-        'coordinator_core/test_backlog_grind_assemble.py',
-        'coordinator_core/test_ceremony_common_tail.py',
-        'coordinator_core/test_diff_scoped_tests.py',
-        'coordinator_core/test_lazy_reexports.py',
-        'coordinator_core/test_machine_resolver.py',
-        'coordinator_core/test_pickup_assemble_reply_closure.py',
-        'coordinator_core/test_pickup_assemble_stamp_check.py',
-        'coordinator_core/test_resolve_validation_cmd.py',
-        'coordinator_core/testing/test_full_runner.py',
-        'coordinator_core/testing/test_suite_mutex.py',
-        'coordinator_core/tests/test_bash_guards_avoid_hooks_package.py',
-        'coordinator_core/tests/test_coverage_reviewed_set.py',
-        'coordinator_core/tests/test_cross_repo_probe_git_scoping.py',
-        'coordinator_core/tests/test_dag_handoff_id_index.py',
-        'coordinator_core/tests/test_decision_object_envelope.py',
-        'coordinator_core/tests/test_engine_version.py',
-        'coordinator_core/tests/test_git_ancestry.py',
-        'coordinator_core/tests/test_gitattributes_eol_coverage.py',
-        'coordinator_core/tests/test_handoff_gate_aging.py',
-        'coordinator_core/tests/test_hot_path_hook_import_budget.py',
-        'coordinator_core/tests/test_install_chain_driven_leaf_seed_sweep.py',
-        'coordinator_core/tests/test_install_publish_repo_precommit_hook.py',
-        'coordinator_core/tests/test_claude_klabauter_doctor_probe_selectors.py',
-        'coordinator_core/tests/test_no_optional_locks_read_sites.py',
-        'coordinator_core/tests/test_normalize_snippet.py',
-        'coordinator_core/tests/test_package_installable.py',
-        'coordinator_core/tests/test_pickup_assemble_import_perf.py',
-        'coordinator_core/tests/test_pickup_assemble_scoped_commit.py',
-        'coordinator_core/tests/test_scope_soak_enable.py',
-        'coordinator_core/tests/test_scope_warning_resolve.py',
-        'coordinator_core/tests/test_session_attribution.py',
-        'coordinator_core/tests/test_strategic_emit.py',
-        'coordinator_core/tests/test_strategic_generate.py',
-        'coordinator_core/tests/test_verify_orientation_cache_sync.py',
-        'coordinator_core/workday_complete/test_brief_goal_close_day.py',
-        'coordinator_core/workstream_complete/test_chain_partition_verdict_store_claim_path.py',
-        'coordinator_core/workstream_complete/test_workstream_complete_contract.py',
-        'coordinator_core/write_guards/tests/test_ac6_keep_hard_sweep.py',
-        'coordinator_core/write_guards/tests/test_casefold_bypass_lint.py',
-        'coordinator_core/write_guards/tests/test_guard_concrete_path_citations.py',
-        'coordinator_core/write_guards/tests/test_repo_root_shared_resolver.py',
-    }
-)
-
-_BASELINE_COUNT = 440
+# THE GRANDFATHER CLAUSE IS DISCHARGED (2026-08-14).
+#
+# `_BASELINE` was a frozen list of ~600 pre-existing spawning test files,
+# tolerated because a strict rule would have failed against all of them on day
+# one. It is gone: every file it held now declares `spawns_process` AND is
+# tiered onto `cadence` by Rule 4, so the tolerated-exception list has become a
+# rule that enforces itself. There is no allowlist to add a file to any more --
+# that is the point, and re-introducing one is what
+# `test_no_grandfather_clause_is_reintroduced` exists to catch.
+#
+# Why blanket rather than a heaviness threshold: the per-commit tier does not
+# run the test suite. This repo's pre-commit hook runs one gate
+# (detect-staged-rollback) and no pytest at all, so moving a test onto the
+# cadence suite reschedules it -- it does not stop it running and costs no
+# coverage. There was no tradeoff to tune, and so no threshold to pick.
+# ---------------------------------------------------------------------------
 
 
 _ALTERNATIVE_MSG_RULE1 = (
@@ -1072,9 +630,10 @@ _ALTERNATIVE_MSG_RULE2 = (
     "@pytest.mark.spawns_process (or set module-level "
     "`pytestmark = [pytest.mark.spawns_process]` to cover the whole file), "
     "declaring the real-process spawn explicitly, or (b) rewrite the test "
-    "against a mocked/faked git rather than a real spawned process. This is "
-    "a RATCHET, not a permanent block -- new files must declare via the "
-    "marker rather than growing the frozen _BASELINE grandfather list."
+    "against a mocked/faked git rather than a real spawned process. There is "
+    "no allowlist to add the file to -- the grandfather list was discharged "
+    "on 2026-08-14. A declared spawn must also carry `pytest.mark.cadence` "
+    "(Rule 4)."
 )
 
 
@@ -1098,22 +657,19 @@ def test_rule1_no_import_time_spawns() -> None:
 
 
 def test_rule2_new_spawning_files_ratchet() -> None:
-    """Rule 2 -- RATCHET. A file with a function-level spawn site must be
-    either in the frozen _BASELINE or fully marker-declared. See module
-    docstring 'Rule 2' section."""
+    """Rule 2 -- a file with a function-level spawn site must be fully
+    marker-declared. See module docstring 'Rule 2' section."""
     violations: list[str] = []
     for report in _all_reports():
         if not report.unmarked_spawning_funcs:
-            continue
-        if report.relpath in _BASELINE:
             continue
         funcs = ", ".join(report.unmarked_spawning_funcs)
         violations.append(f"{report.relpath} (unmarked: {funcs})")
     if violations:
         lines = "\n".join(f"  {v}" for v in sorted(violations))
         pytest.fail(
-            f"SPAWN-RATCHET Rule 2: {len(violations)} NEW spawning test file(s) "
-            f"not in the frozen baseline and not marked (direct or via a "
+            f"SPAWN-RATCHET Rule 2: {len(violations)} spawning test file(s) "
+            f"that do not declare it (direct or via a "
             f"resolved spawn-wrapper call; {len(_UNRESOLVED_IMPORTS)} import(s) "
             f"and {len(_UNKNOWN_ARGV0)} spawn-site argv0(s) were unresolvable "
             f"and skipped rather than guessed):\n{lines}\n\n"
@@ -1121,148 +677,60 @@ def test_rule2_new_spawning_files_ratchet() -> None:
         )
 
 
-def test_rule3_baseline_entries_are_not_stale() -> None:
-    """Rule 3 -- a _BASELINE entry that no longer exists, or no longer
-    contains a function-level spawn site, fails as stale. Keeps the
-    baseline monotonically shrinking rather than a permanent parking lot.
-    Mirrors coordinator/tests/test_dr084_single_accessor_guard.py's
-    test_allowlist_entries_still_exist_on_disk shape."""
-    reports_by_path = {report.relpath: report for report in _all_reports()}
-    stale: list[str] = []
-    for relpath in sorted(_BASELINE):
-        full_path = REPO_ROOT / relpath
-        if not full_path.is_file():
-            stale.append(f"{relpath} (file no longer exists on disk)")
+def test_rule4_every_spawning_file_is_cadence_tiered() -> None:
+    """Rule 4 -- a file that spawns a real process must ALSO carry
+    `pytest.mark.cadence`, so it runs at cadence gates and not on whatever
+    tier happens to sweep it up. See module docstring 'Rule 4'."""
+    untiered: list[str] = []
+    for path in _iter_test_files():
+        relpath = _rel(path)
+        if path.name == "conftest.py":
             continue
-        report = reports_by_path.get(relpath)
-        if report is None or not report.unmarked_spawning_funcs:
-            stale.append(f"{relpath} (no longer contains a function-level spawn site)")
-    assert not stale, (
-        f"SPAWN-RATCHET Rule 3: {len(stale)} stale _BASELINE entry(ies) -- remove them, "
-        "the baseline shrinks monotonically as files are fixed or excised:\n"
-        + "\n".join(f"  {s}" for s in stale)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        report = _analyze_file(path, relpath)
+        spawns = bool(report.module_level_linenos) or report.has_any_spawn
+        if not spawns:
+            continue
+        if _has_module_level_pytestmark(tree, "pytest.mark.cadence"):
+            continue
+        untiered.append(relpath)
+    assert not untiered, (
+        f"SPAWN-RATCHET Rule 4: {len(untiered)} file(s) spawn a real process but are "
+        "not tiered onto the cadence suite:\n"
+        + "\n".join(f"  {u}" for u in sorted(untiered))
+        + "\n\nFix: add `pytest.mark.cadence` to the module-level `pytestmark` list "
+        "(alongside `pytest.mark.spawns_process`), or rewrite the test against a "
+        "faked process so it stops spawning. A conftest.py cannot be tiered by a "
+        "marker at all -- move any spawning helper out of it into a sibling module."
     )
 
 
-def _parse_baseline_literal(source: str) -> list[str]:
-    """Return the `_BASELINE` frozenset literal's elements IN SOURCE ORDER,
-    duplicates preserved, by parsing `source` as Python.
+def test_no_grandfather_clause_is_reintroduced() -> None:
+    """The tolerated-exception list stays dead.
 
-    Why an AST parse of the source and not `len(_BASELINE)`: the runtime
-    object cannot answer the question this exists to ask. `frozenset`
-    de-duplicates on construction, so a literal carrying the same path twice
-    yields a set one smaller than the text -- the one way the literal and the
-    loaded object can disagree without anything failing. A regex over the text
-    cannot answer it either: the literal is single-quoted, and a double-quoted
-    scan returns zero entries while looking like a successful measurement.
-    That is the shape that produced a phantom "618 declared vs 610 parseable"
-    discrepancy during the 2026-08-13 measurement -- an artifact of the
-    counting method, not drift in the data (the literal held 618 genuinely
-    distinct entries at `4f616dc4f^`).
-
-    Spec backlink: state/handoffs/2026-08-13-spawn-ratchet-tier-marker-gap.md
+    NEGATIVE SPEC: `_BASELINE` was a shrink-only allowlist of spawning test
+    files. It drained to empty on 2026-08-14 and was deleted. The failure mode
+    this pins is the one that made the original necessary -- a future edit,
+    facing a batch of new spawning files, re-adds a frozen list instead of
+    marking them, and the guard goes back to producing the appearance of
+    enforcement while the population stays where it is.
     """
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.AnnAssign):
-            continue
-        if not isinstance(node.target, ast.Name) or node.target.id != "_BASELINE":
-            continue
-        call = node.value
-        if not isinstance(call, ast.Call) or not call.args:
-            break
-        literal = call.args[0]
-        if not isinstance(literal, ast.Set):
-            break
-        return [e.value for e in literal.elts if isinstance(e, ast.Constant)]
-    raise AssertionError(
-        "could not locate a `_BASELINE: frozenset[str] = frozenset({...})` "
-        "literal in the supplied source -- the baseline's declaration shape "
-        "changed and this self-check no longer reads it"
+    source = Path(__file__).read_text(encoding="utf-8")
+    banned = [
+        name
+        for name in ("_BASELINE", "_ALLOWLIST", "_GRANDFATHERED", "_EXEMPT")
+        if re.search(rf"^{name}\b\s*[:=]", source, re.MULTILINE)
+    ]
+    assert not banned, (
+        "SPAWN-RATCHET: a module-level exception list was reintroduced: "
+        + ", ".join(banned)
+        + ". The baseline was discharged on 2026-08-14 -- a spawning test file "
+        "declares `pytest.mark.spawns_process` and tiers onto `pytest.mark.cadence`, "
+        "or it stops spawning. There is no list to join."
     )
-
-
-def _baseline_self_check(source: str, declared: int) -> list[str]:
-    """Return the self-check's complaints about `source` against `declared`,
-    empty when the literal and the declared count agree. Split out from the
-    test so a crafted desync can be run through the SAME code path the real
-    baseline is checked by -- a desync test that re-implements the check
-    proves only that the re-implementation works."""
-    elements = _parse_baseline_literal(source)
-    problems: list[str] = []
-    duplicates = sorted({e for e in elements if elements.count(e) > 1})
-    if duplicates:
-        problems.append(
-            f"{len(duplicates)} duplicate entry(ies) in the _BASELINE literal -- "
-            f"frozenset silently collapses these, so the baseline is smaller than "
-            f"it reads: {', '.join(duplicates)}"
-        )
-    if len(elements) != declared:
-        problems.append(
-            f"the _BASELINE literal holds {len(elements)} entry(ies) but the "
-            f"declared count is {declared} -- update the declared count in the "
-            f"same edit that changes the literal"
-        )
-    return problems
-
-
-def test_baseline_count_is_self_checking_against_its_own_literal() -> None:
-    """Sanity anchor: the declared count, the source literal, and the loaded
-    frozenset must all agree, and the literal must carry no duplicate entry.
-
-    `_BASELINE_COUNT` is deliberately NOT derived as `len(_BASELINE)` -- that
-    assertion would be tautological and would catch nothing. It is pinned
-    instead against the SOURCE literal, which is the artifact a hand-edit
-    actually touches. Three-way agreement is what makes a silent divergence
-    impossible: a dropped line moves the literal and the set together but not
-    the declared count, and a duplicated line moves the literal without moving
-    the set."""
-    problems = _baseline_self_check(
-        Path(__file__).read_text(encoding="utf-8"), _BASELINE_COUNT
-    )
-    assert not problems, "SPAWN-RATCHET self-check:\n" + "\n".join(
-        f"  {p}" for p in problems
-    )
-    assert len(_BASELINE) == _BASELINE_COUNT
-
-
-def test_baseline_self_check_fails_loud_on_a_deliberate_desync() -> None:
-    """Proves the self-check above is load-bearing rather than merely present.
-    Both divergence shapes are run through `_baseline_self_check` itself: a
-    literal repeating an entry (invisible to `len(_BASELINE)`, since frozenset
-    collapses it) and a literal whose size disagrees with the declared count."""
-    duplicated = (
-        "_BASELINE: frozenset[str] = frozenset(\n"
-        "    {\n"
-        "        'a/test_one.py',\n"
-        "        'b/test_two.py',\n"
-        "        'a/test_one.py',\n"
-        "    }\n"
-        ")\n"
-    )
-    problems = _baseline_self_check(duplicated, declared=3)
-    assert any("duplicate" in p for p in problems), (
-        "a literal repeating an entry must be caught -- frozenset collapses it, "
-        "so nothing else in this guard can see it"
-    )
-
-    miscounted = (
-        "_BASELINE: frozenset[str] = frozenset(\n"
-        "    {\n"
-        "        'a/test_one.py',\n"
-        "        'b/test_two.py',\n"
-        "    }\n"
-        ")\n"
-    )
-    assert not _baseline_self_check(miscounted, declared=2), (
-        "a literal agreeing with its declared count must produce no complaint"
-    )
-    assert any(
-        "declared count" in p for p in _baseline_self_check(miscounted, declared=3)
-    ), "a declared count above the literal's true size must be caught"
-
-    with pytest.raises(AssertionError, match="declaration shape changed"):
-        _parse_baseline_literal("_OTHER = frozenset({'x'})\n")
 
 
 def test_known_string_corpus_files_produce_zero_hits() -> None:

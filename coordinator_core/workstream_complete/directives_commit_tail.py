@@ -814,6 +814,57 @@ def _review_fields_present(review: Any) -> bool:
     return all(review.get(k) not in (None, "") for k in _REVIEW_REQUIRED_FIELDS)
 
 
+def _review_any_qualifies(review: Any) -> bool:
+    """The ONE qualification predicate both commit-tail builders below share
+    for "does decisions['review'] back anything real" — dict shape delegates
+    straight to `_review_fields_present`; list shape is true iff ANY entry
+    qualifies (mirrors `build_close_tail_args_directive`'s own per-entry
+    `--review-slice` gate). Anything else (falsy, or a shape `validate_
+    review_shape` would already have rejected) is `False`.
+
+    Extracted so `build_wsc_tail_directive`'s `--adjudication-present`
+    predicate and `build_close_tail_args_directive`'s `--review-*`/
+    `--review-slice` predicate decide the SAME fact from the SAME code —
+    before this helper existed they were two independent predicates (bare
+    truthiness vs. `_review_fields_present`) that could disagree on an
+    incomplete-but-recognized shape (a dict missing required fields, a list
+    where every entry is incomplete, `[{}]`, `{'workstream': 'x'}`): that
+    input composed `--adjudication-present` while composing NO `--review-*`/
+    `--review-slice` token at all, so the mismatch surfaced only after a
+    live ceremony had already committed, as a `failed_critical`-driven
+    exit_code 2 the operator is told not to re-run for. `_raise_on_review_
+    truthy_unqualified` (below) now catches that class at assemble time,
+    before either builder's directive is even constructed."""
+    if isinstance(review, list):
+        return any(_review_fields_present(entry) for entry in review)
+    return _review_fields_present(review)
+
+
+def _raise_on_review_truthy_unqualified(review: Any) -> None:
+    """Raises `ValueError` when `review` is truthy but `_review_any_
+    qualifies` is `False` — the disagreement class `_review_any_qualifies`'s
+    own docstring names. Called once, from `build_wsc_tail_directive` (the
+    `--adjudication-present` producer), which `__init__.py` always calls in
+    the same assemble pass as `build_close_tail_args_directive` — raising
+    here aborts assembly before either directive reaches `directives[]`,
+    same loud-at-ingestion posture `validate_review_shape` already
+    establishes for shape, one layer up for completeness. Leaves the
+    post-commit `failed_critical` branch (`tail_ops.write_review_trail`) as
+    the defence-in-depth backstop it was designed to be, rather than the
+    primary detector for this class."""
+    if review and not _review_any_qualifies(review):
+        if isinstance(review, list):
+            detail = f"every entry of the {len(review)}-item list is missing required field(s)"
+        else:
+            missing = sorted(k for k in _REVIEW_REQUIRED_FIELDS if review.get(k) in (None, ""))
+            detail = f"missing required field(s): {missing!r}"
+        raise ValueError(
+            f"decisions['review'] is truthy but qualifies for no --review-*/--review-slice "
+            f"token ({detail}) — a close asserting a review must supply complete review "
+            f"metadata, or omit decisions['review'] entirely."
+        )
+
+
 #: Derived from `_REVIEW_REQUIRED_FIELDS` (never hand-duplicated) — the flat
 #: `review_<field>` spellings a caller might plausibly place directly on
 #: `decisions` instead of nesting them under `decisions["review"]`. A caller
@@ -859,6 +910,83 @@ def _warn_unrecognized_review_keys(decisions: dict[str, Any]) -> None:
         "'scope_kind'), not flat top-level keys.",
         file=sys.stderr,
     )
+
+
+#: The optional keys a single `review` dict (scalar shape, or one entry of
+#: the list shape) may carry alongside `_REVIEW_REQUIRED_FIELDS` -- mirrors
+#: `wsc-tail.py`'s `_REVIEW_SLICE_ALLOWED_KEYS` plus `workstream` (that one
+#: forwarded via wsc-tail.py's own `--review-workstream`, not through the
+#: `--review-slice` JSON path). Membership only, not completeness: a dict
+#: whose keys are a subset of `_REVIEW_ALLOWED_KEYS` is a legal shape even
+#: when a required field is absent -- that stays `_review_fields_present`'s
+#: and `build_write_trail_directives`'s own "an incomplete entry contributes
+#: nothing, silently" convention (state/bug-backlog/2026-08-14-wsc-apply-
+#: accepts-an-unconsumed-decision-debea052f8c5.yaml DESIGN NOTE: fix at
+#: decisions-ingestion, leave the lower per-layer conventions alone).
+_REVIEW_OPTIONAL_KEYS: tuple[str, ...] = ("scope_kind", "reviewer_evidence", "workstream")
+_REVIEW_ALLOWED_KEYS: frozenset[str] = frozenset(_REVIEW_REQUIRED_FIELDS) | frozenset(_REVIEW_OPTIONAL_KEYS)
+
+_REVIEW_SHAPE_MESSAGE = (
+    "decisions['review'] must be one of: falsy; a dict whose keys are a "
+    f"subset of {sorted(_REVIEW_ALLOWED_KEYS)!r}; or a list of such dicts."
+)
+
+
+def _raise_on_unrecognized_review_dict(entry: dict[str, Any]) -> None:
+    """Raises when `entry` (the scalar `review` dict, or one `list` entry)
+    carries a key outside `_REVIEW_ALLOWED_KEYS`. Silent on a dict whose
+    keys are all recognized, even if incomplete -- see `_REVIEW_ALLOWED_KEYS`
+    docstring above for why completeness is not this function's concern."""
+    unrecognized = sorted(set(entry) - _REVIEW_ALLOWED_KEYS)
+    if not unrecognized:
+        return
+    missing = sorted(k for k in _REVIEW_REQUIRED_FIELDS if entry.get(k) in (None, ""))
+    detail = f" Unrecognized key(s): {unrecognized!r}."
+    if missing:
+        detail += f" Missing required field(s): {missing!r}."
+    raise ValueError(f"{_REVIEW_SHAPE_MESSAGE}{detail}")
+
+
+def validate_review_shape(review: Any) -> None:
+    """The shared POSITIVE shape validator for `decisions['review']` --
+    called from BOTH reader sites (`build_close_tail_args_directive` below,
+    and `workstream_complete.build_write_trail_directives`) so they cannot
+    diverge. Two independent silent-dropping sites for one key was the
+    structural defect under state/bug-backlog/2026-08-14-wsc-apply-accepts-
+    an-unconsumed-decision-debea052f8c5.yaml (corroborated cross-repo:
+    cross-repo/inbox/2026-08-14-example-cockpit-repo-em-review-decisions-dict-
+    drops-silently-and-mints-a-not-reviewed-waiver.md) -- a dict nested one
+    key deeper than the accepted shapes (e.g. `{'slices': [...], ...}`)
+    passed both sites without a single flag or record produced, and the
+    ceremony still exited 0.
+
+    RAISES `ValueError` on anything outside the three legal shapes: falsy;
+    a dict whose keys are a subset of `_REVIEW_ALLOWED_KEYS`; or a list of
+    such dicts. Validates KEY-SET membership only, never per-field
+    completeness -- an incomplete-but-recognized dict/entry is left to the
+    lower layers' own pre-existing "contributes nothing, silently"
+    convention (`_review_fields_present`, `build_write_trail_directives`),
+    untouched per that backlog entry's DESIGN NOTE. This is a POSITIVE
+    validator (accepts by shape), distinct from `_warn_unrecognized_review_
+    keys` above, which is a diagnostic-only NEGATIVE check on a different
+    object -- flat `review_*` keys sitting on `decisions` itself, not on
+    `decisions['review']`.
+    """
+    if not review:
+        return
+    if isinstance(review, dict):
+        _raise_on_unrecognized_review_dict(review)
+        return
+    if isinstance(review, list):
+        for entry in review:
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"{_REVIEW_SHAPE_MESSAGE} Got a list entry of type "
+                    f"{type(entry).__name__}, not a dict."
+                )
+            _raise_on_unrecognized_review_dict(entry)
+        return
+    raise ValueError(f"{_REVIEW_SHAPE_MESSAGE} Got {type(review).__name__}.")
 
 
 def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]:
@@ -918,6 +1046,13 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
     exclusivity automatic; this function never emits both.
     """
     _warn_unrecognized_review_keys(decisions)
+    validate_review_shape(decisions.get(_KEY_REVIEW))
+    # Same shared predicate `build_wsc_tail_directive` raises on (see
+    # `_review_any_qualifies`'s docstring) — checked here too so a caller
+    # invoking this builder alone (not just via `__init__.py`'s always-both
+    # sequencing) gets the same loud-at-assemble-time failure rather than a
+    # silently review-less `wsc-close tail-args` argv.
+    _raise_on_review_truthy_unqualified(decisions.get(_KEY_REVIEW))
     args: list[str] = ["tail-args"]
     if decisions.get(_KEY_DELETED_PATHS):
         args += ["--deleted-paths", *[str(p) for p in decisions[_KEY_DELETED_PATHS]]]
@@ -949,7 +1084,9 @@ def build_close_tail_args_directive(decisions: dict[str, Any]) -> dict[str, Any]
     return _directive("d-close-tail-args", "wsc-close", args)
 
 
-def build_wsc_tail_directive(sid: str, decisions: dict[str, Any]) -> dict[str, Any]:
+def build_wsc_tail_directive(
+    sid: str, decisions: dict[str, Any], *, partition_mandatory: bool = False
+) -> dict[str, Any]:
     """The single trampoline call that stages `WSC_PATHS`, composes the
     commit message, runs the Step 2.67 deletion-claim + Step 3.0 dirty-tree
     gates, commits, and chains the async post-commit push — everything the
@@ -968,6 +1105,35 @@ def build_wsc_tail_directive(sid: str, decisions: dict[str, Any]) -> dict[str, A
     pre-existing inline `d-tail` directive in `__init__.py` already used
     plus the one token. `depends_on="d-close-tail-args"` is kept for
     ordering; the token is what actually threads the value.
+
+    `--adjudication-present` (bare, `store_true`) is composed whenever
+    `decisions["review"]` qualifies per `_review_any_qualifies` — the SAME
+    predicate `build_close_tail_args_directive` uses to decide whether it
+    composes any `--review-*`/`--review-slice` token, so the two can no
+    longer disagree (see `_review_any_qualifies`'s own docstring for the
+    disagreement class this closes). A truthy-but-unqualified `review`
+    (state/bug-backlog/2026-08-14-no-caller-composes-b-adjudication-present-
+    9f4c21a0e5d3.yaml's `proposed_action` names the original bare-truthiness
+    predicate, ruled by the PM; this refines it) raises `ValueError` at
+    assemble time instead — see `_raise_on_review_truthy_unqualified`. This
+    is the one caller that closes the loop `7c19e190ae86` opened: the flag
+    reaches `ceremony.wsc_tail`, which forwards it into `tail_ops.
+    write_review_trail`/`write_review_trail_many`'s fail-loud branch
+    (`failed_critical` instead of a silent `skipped`) when no review-trail
+    record is actually written. `validate_review_shape` (this module,
+    above) already guarantees a PRESENT `review` is well-shaped before this
+    function ever sees it, so "the EM asserted there was a review" now
+    means: a missing trail record composes a `failed_critical` tail entry,
+    which maps to `wsc-tail.py` exit_code 2 (`WSC_TAIL_EXIT_LADDER[2]`,
+    `directives_commit_tail.py` — status `commit-landed-tail-item-needs-
+    attention`, `halted=False`). The commit has ALREADY landed by the time
+    this fires (the review_trail write runs in the precommit tail phase,
+    not as a commit precondition) and the ceremony does not halt — this
+    converts a silent skip into a non-halting diagnostic the operator must
+    address directly, per the exit ladder's own "Do NOT re-run
+    d-run-wsc-tail" guidance, not a hard fail that blocks the commit. A
+    falsy/absent `review` composes NO flag — argv byte-identical to before
+    this predicate existed.
     """
     args: list[str] = ["--sid", sid]
     if decisions.get(_KEY_SUBJECT):
@@ -979,6 +1145,26 @@ def build_wsc_tail_directive(sid: str, decisions: dict[str, Any]) -> dict[str, A
         args += ["--stage-paths", *[str(p) for p in stage_paths]]
     if decisions.get(_KEY_GOVERNING_PLAN_SLUG):
         args += ["--governing-plan-slug", str(decisions[_KEY_GOVERNING_PLAN_SLUG])]
+    review_for_flag = decisions.get(_KEY_REVIEW)
+    _raise_on_review_truthy_unqualified(review_for_flag)
+    if _review_any_qualifies(review_for_flag):
+        args.append("--adjudication-present")
+    # D (cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-
+    # silently.md): `partition_mandatory` is a DEDICATED parameter, not a
+    # `decisions` key — `workstream_complete.brief` resolves it from
+    # `decide_review_scale`'s row-4/6 verdict and threads it straight
+    # through `build_directives`, never through `decisions` (which would
+    # make it look like a caller-suppliable, decisions-template-
+    # discoverable field; it is neither — see
+    # `test_every_decisions_key_read_anywhere_in_the_package_is_
+    # discoverable_from_the_template`'s AST scan, which is exactly why this
+    # is not a `decisions["..."]` read). `--partition-mandatory` mirrors
+    # `--adjudication-present`'s own bare/store_true shape and reaches the
+    # SAME fail-loud gate in `ceremony.wsc_tail` (a resolved partition-
+    # mandatory row is as strong a statement that a review was owed as an
+    # adjudication is).
+    if partition_mandatory:
+        args.append("--partition-mandatory")
     args.append("{d-close-tail-args.argv}")
     return _directive("d-run-wsc-tail", "wsc-tail", args, depends_on="d-close-tail-args")
 

@@ -25,6 +25,13 @@ import coordinator_core.ops.review_freeze_diff  # noqa: F401 — fires @register
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.review_freeze_diff import _handler, _validate_slice_id, freeze_diff
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _OP_NAME = "review.freeze_diff"
 
 DIFFS_SUBDIR = ("state", "review-trail", "diffs")

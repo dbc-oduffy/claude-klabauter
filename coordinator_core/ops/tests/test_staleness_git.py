@@ -24,7 +24,12 @@ from coordinator_core.ops.staleness_git import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.cadence
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:

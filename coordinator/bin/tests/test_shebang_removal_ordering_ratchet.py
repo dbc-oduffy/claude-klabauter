@@ -54,6 +54,15 @@ import os
 
 from ._polyglot_git_scan import blob_first_line, blob_full_text, tracked_bin_direct_children
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _RESOLVER_PATH = "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py"
 
 

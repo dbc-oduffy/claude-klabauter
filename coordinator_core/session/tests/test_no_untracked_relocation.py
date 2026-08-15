@@ -222,7 +222,6 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "ops/scope_warning_resolve.py", "resolve", "os.replace", "os.replace(tmp_path, log_file)", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "ops/session_hierarchy_derive.py", "_atomic_write_json", "os.replace", "os.replace(tmp, path)", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "ops/ceremony/receipt_emit.py", "_atomic_write_json", "os.replace", "os.replace(tmp_str, str(path))", 1): "atomic tmp->final; temp source never claimed",
-    ("coordinator_core", "ops/ceremony/tail_ops.py", "render_handoff_tracker", "os.replace", "os.replace(tmp_path_str, str(out_path))", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "ops/ceremony/tail_ops.py", "cs_archive", "shutil.move", "shutil.move(str(sdir), str(archive_dir))", 1): "source lives inside the .git subtree, explicitly outside claimable space (cs_archive)",
     ("coordinator_core", "ops/emit/lma_cache.py", "_store", "os.replace", "os.replace(tmp_name, path)", 1): "atomic tmp->final; temp source never claimed",
     ("coordinator_core", "ops/fleet/memo_compose.py", "_memo_compose", "os.replace", "os.replace(tmp_path, str(target_path))", 1): "atomic tmp->final; temp source never claimed",
@@ -308,10 +307,20 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("bin", "repomap/generate-repomap.py", "generate_task_scoped_map", "os.replace", "os.replace(tmp_path, output_path)", 1): "atomic tmp->final; temp source never claimed (generate_task_scoped_repomap)",
     ("bin", "repomap/generate-repomap.py", "generate_repomap", "os.replace", "os.replace(tmp_path, output_path)", 1): "atomic tmp->final; temp source never claimed (main, final write)",
     ("bin", "refresh-plugin-live-install.py", "_replace_restore", "Path.rename", "staging.rename(live_path)", 1): "live_path resolves under the plugin plugins_dir (the CLI's live plugin-install tree), outside this worktree -- not claimable by touch() in this process",
-    ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(dest_git, staging_dir / '.git')", 1): "dest_dir points at an external sibling-repo publish destination, outside this worktree entirely",
     ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(dest_dir, prior_backup)", 1): "dest_dir points at an external sibling-repo publish destination, outside this worktree entirely",
     ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(staging_dir, dest_dir)", 1): "dest_dir points at an external sibling-repo publish destination, outside this worktree entirely",
     ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(prior_backup, dest_dir)", 1): "recovery rename: prior_backup/dest_dir, same external-destination reasoning",
+    # The root-dest branch (2026-08-15): a flat-mirror row whose dest_subdir is
+    # empty has dest_dir == the mirror ROOT, and renaming that root fails on
+    # Windows whenever any handle is open anywhere beneath it -- which, for a
+    # mirror that is also a live engine install, is always. That branch swaps
+    # entry-by-entry instead, so its renames operate one level lower than the
+    # four above. Same external-destination reasoning: every path here is under
+    # the sibling-repo publish destination, never this worktree.
+    ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(dest_entry, prior)", 1): "per-entry swap under an external sibling-repo publish destination; rename-aside so a partial failure stays recoverable",
+    ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(prior, dest_entry)", 1): "recovery rename of the aside-copy, same external-destination reasoning",
+    ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(staging_entry, dest_entry)", 1): "directory entry moved into the external publish destination; staging source is this round's own copy, never claimed",
+    ("bin", "publish.py", "_swap_publish_staging_entry", "os.replace", "os.replace(staging_entry, dest_entry)", 1): "file entry replaced in the external publish destination; staging source is this round's own copy, never claimed",
 
     # --- Category 4: sites the plan's C3 table does not cover, found by  ---
     # --- this guard's own scan and classified here against the same      ---
@@ -328,15 +337,62 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "locked_write.py", "locked_rmw", "os.replace", "os.replace(tmp_path, str(target_path))", 1): "locked_rmw's atomic tmp->final write; temp source never claimed",
     ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit", "Path.rename", "move.dst.rename(move.src)", 1): "archive_and_commit: move.dst.rename(move.src) reverses a git-mv that landed on disk before the index update failed -- restores content to the ORIGINAL path, so any pre-existing claim on src (the restored destination) stays correctly attributed; this is an undo, not a forward relocation",
     ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit", "Path.rename", "move.dst.rename(move.src)", 2): "archive_and_commit: move.dst.rename(move.src) reverses ALL acted renames after a failed batch commit -- same undo-to-original-path reasoning as above",
+
+    # --- Category 5 (R6): sites the plan's C3 sweep never saw -- added to  ---
+    # --- the tree after the sweep (or after the allow-list was last       ---
+    # --- regenerated) and only surfaced once the Windows separator bug    ---
+    # --- (fixed above, see `_scan_root`'s `rel = path.relative_to(root).  ---
+    # --- as_posix()`) stopped masking every subdirectory finding. Same    ---
+    # --- source-side discriminator as Category 4 above; none are hazards.---
+    ("bin", "lib/halted_marker.py", "sync_halted_marker", "os.replace", "os.replace(tmp_path, marker_path)", 1): "atomic tmp->final rename; temp source is a fresh `.tmp-<pid>` sibling never touch()-claimed",
+    ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(prior_backup / '.git', dest_dir / '.git')", 1): "dest_dir/prior_backup point at an external sibling-repo publish destination, outside this worktree entirely -- same reasoning as this function's other three already-allowlisted renames",
+    ("bin", "tests/test_publish_swap_preserves_dest_git.py", "_stranded_prior_dir", "Path.rename", "stray.rename(prior)", 1): "test fixture: stray/prior both resolve under pytest tmp_path -- not the process's real worktree",
+    ("bin", "tests/test_publish_swap_preserves_dest_git.py", "test_arm_h_stranded_prior_glob_metachar_dest_name_ignores_lookalike_sibling", "Path.rename", "lookalike.rename(lookalike_prior)", 1): "test fixture: lookalike/lookalike_prior both resolve under pytest tmp_path -- not the process's real worktree",
+    ("bin", "tests/test_publish_swap_preserves_dest_git.py", "test_arm_j_non_matching_directory_is_untouched", "Path.rename", "prior_shaped.rename(prior)", 1): "test fixture: prior_shaped/prior both resolve under pytest tmp_path -- not the process's real worktree",
+    ("coordinator_core", "cartography/tests/test_churn.py", "test_op_churn_ratio_bounded_with_deletion_and_rename", "Path.rename", "(src / 'old_name.py').rename(src / 'new_name.py')", 1): "test fixture: src resolves under pytest tmp_path's synthetic git repo -- not the process's real worktree",
+    ("coordinator_core", "install/ensure_venv.py", "_swap_in_new_venv", "os.rename", "os.rename(venv_dir, stale_dir)", 1): "venv_dir/stale_dir both resolve under <settings_home>/.coordinator-venv*, outside this worktree entirely -- never touch()-claimed",
+    ("coordinator_core", "install/ensure_venv.py", "_swap_in_new_venv", "os.rename", "os.rename(build_dir, venv_dir)", 1): "build_dir/venv_dir both resolve under <settings_home>/.coordinator-venv*, outside this worktree entirely -- never touch()-claimed",
+    ("coordinator_core", "install/ensure_venv.py", "_write_sitepackages_pointer", "os.replace", "os.replace(tmp_path, pointer_path)", 1): "atomic tmp->final; pointer_path resolves under <settings_home>/bin, outside this worktree, and tmp_path is a fresh sibling never claimed",
+    ("coordinator_core", "install/maximalist.py", "_install_claude_doe_wrapper", "os.replace", "os.replace(tmp_dst, wrapper_dst)", 2): "second claude_doe_wrapper os.replace call in this function, same atomic tmp->final symlink-swap shape as ordinal #1 above; temp source never claimed",
+    ("coordinator_core", "ops/cartography_chunk_table.py", "write_chunk_table", "os.replace", "os.replace(tmp_path, str(target))", 1): "atomic tmp->final write of a run-scoped scratch artifact under state/scratch/; temp source (tempfile.mkstemp in the same run dir) never claimed",
+    ("coordinator_core", "ops/deliverable_ledger_write.py", "_restore_original_content", "os.replace", "os.replace(restore_tmp_path, artifact_path)", 1): "atomic tmp->final rewrite that RESTORES artifact_path to its pre-write content after a failed rendered-write -- the temp restore file is a fresh sibling never claimed, and artifact_path itself is never relocated, only rewritten in place",
+    ("coordinator_core", "ops/deliverable_ledger_write.py", "upsert_deliverable_ledger_rows", "os.replace", "os.replace(tmp_path, artifact_path)", 1): "atomic tmp->final rewrite under held_lock; temp source never claimed, artifact_path rewritten in place (not relocated)",
+    ("coordinator_core", "ops/install_doe_claude_precommit_hook.py", "_atomic_write", "os.replace", "os.replace(tmp_path, path)", 1): "atomic tmp->final write of the installed pre-commit hook; temp source is a fresh `.tmp.<pid>` sibling never claimed",
+    ("coordinator_core", "ops/reap_orphaned_agent_dirs.py", "_archive_candidate", "Path.rename", "agent_dir.rename(archive_dest)", 1): "agent_dir lives under .git/coordinator-sessions/.agents/, categorically outside claimable space -- same reasoning as session/reap.py's already-allowlisted _reap_stale_agents entry, which this function deliberately mirrors",
+    ("coordinator_core", "ops/rewrite_spec_backlinks.py", "rewrite_file", "os.replace", "os.replace(tmp_path, str(target_path))", 1): "atomic tmp->final rewrite of the file being edited in place; temp source never claimed, target_path rewritten in place (not relocated)",
+    ("coordinator_core", "ops/test_assert_no_dangling_plan_backlinks.py", "test_archive_round_trip_id_citation_survives_and_gate_stays_clean", "os.rename", "os.rename(os.path.join(root, plan_rel), os.path.join(root, dest_rel))", 1): "test fixture: root resolves under pytest tmp_path -- not the process's real worktree",
+    ("coordinator_core", "ops/test_install_doe_claude_precommit_hook.py", "test_hook_survives_the_repo_being_relocated", "Path.rename", "repo.rename(moved)", 1): "test fixture: repo/moved both resolve under pytest tmp_path -- not the process's real worktree",
+    ("coordinator_core", "ops/tests/test_deliverable_equivalence.py", "test_seed_zero_write_guard_negative_control_replace", "os.replace", "os.replace(src, violating_dst)", 1): "negative-control test: os.replace is monkeypatched to assert it never reaches an archive/ path, then deliberately called once under pytest tmp_path to prove the guard fires -- not a real relocation, the guard's own probe",
+    ("coordinator_core", "session/claims.py", "relocate_artifact_claim", "os.replace", "os.replace(old_claim_dir, new_claim_dir)", 1): "THE sanctioned entrypoint for relocating a claim DIRECTORY (a physical mkdir lock under <base>/<class>-claims/) alongside an artifact rename -- parallel purpose to relocate_touched_path but a different claim mechanism (directory move, not an appended touch-claim event); this IS the re-declare-then-move helper for this claim type",
+    ("coordinator_core", "session/core.py", "update_meta_fields", "os.replace", "os.replace(tmp_name, meta_path)", 1): "atomic tmp->final rename; meta_path resolves under .git/coordinator-sessions/<sid>/, outside claimable space, and temp source never claimed",
+    ("coordinator_core", "session/em_guard_grant.py", "write_em_guard_grant", "os.replace", "os.replace(tmp_name, grant_file)", 1): "atomic tmp->final rename; grant_file resolves under .git/coordinator-sessions/<sid>/, outside claimable space, and temp source never claimed",
+    ("coordinator_core", "session/receiver_state.py", "write_receiver_state", "os.replace", "os.replace(tmp_name, path)", 1): "atomic tmp->final rename; path resolves under .git/coordinator-sessions/<sid>/receiver-state.json, outside claimable space, and temp source never claimed",
+    ("coordinator_core", "session/scope.py", "_drop_owned_agent_dirs", "os.rename", "os.rename(agent_dir, archive_dest)", 1): "agent_dir lives under .git/coordinator-sessions/.agents/, categorically outside claimable space -- same reasoning as this module's own already-allowlisted archive() entry",
+    ("coordinator_core", "tests/test_locked_write_held_lock.py", "test_git_dir_rename_succeeds_when_lock_sidecar_is_outside_it", "os.rename", "os.rename(str(renamed_repo / '.git'), str(staging / '.git'))", 1): "test fixture: renamed_repo/staging both resolve under pytest tmp_path -- not the process's real worktree",
+    ("coordinator_core", "workstream_complete/directives_review.py", "record_gate_memo", "os.replace", "os.replace(tmp_str, str(path))", 1): "atomic tmp->final write of a gate memoisation marker; temp source (tempfile.mkstemp in the same dir) never claimed",
 }
 
 _METHODS = {"move", "rename", "replace"}
 
 
+_GITIGNORED_SCRATCH_GLOBS = ("*.wip.*.bak", "*.your-wip.*.bak")
+"""Patterns from the repo's own ``.gitignore`` (its ``*.wip.*.bak`` /
+``*.your-wip.*.bak`` lines) for editor/session scratch backup files that can
+land beside real source on a shared, concurrently-edited tree. This is a raw
+filesystem walk, not ``git ls-files``, so without this filter a peer
+session's untracked scratch backup reads as a real module and gets AST-
+parsed for relocation calls -- it is never a real call site, just a stale
+copy of one that already has (or will have) its own real-file finding."""
+
+
 def _iter_files(root: Path):
+    import fnmatch
+
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         for fn in filenames:
+            if any(fnmatch.fnmatch(fn, pat) for pat in _GITIGNORED_SCRATCH_GLOBS):
+                continue
             yield Path(dirpath) / fn
 
 
@@ -529,7 +585,7 @@ def _scan_root(root: Path) -> List[Tuple[str, str, int, int, str, str]]:
             tree = ast.parse(src, filename=str(path))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(root))
+        rel = path.relative_to(root).as_posix()
         module_aliases, func_aliases = _build_alias_map(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):

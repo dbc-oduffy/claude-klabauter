@@ -77,6 +77,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import List, Optional, Tuple, Union
 
+from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.session import claim_index
 from coordinator_core.session import core
 from coordinator_core.session import liveness
@@ -154,6 +155,68 @@ def handoff_lifecycle() -> ModuleType:
 # ---------------------------------------------------------------------------
 
 
+#: Same sub-second, bounded acquire timeout ``scope.touch()`` uses for its own
+#: ``touched.txt`` append lock (C2/C6, docs/plans/2026-08-14-cli-authored-
+#: writes-get-claimed.md) — deliberately shared, not independently re-tuned,
+#: since both writers target the same class of file under the same
+#: silent-failure contract (see ``atomic_dedup_append``'s docstring).
+_ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS = scope._TOUCH_LOCK_TIMEOUT_SECS
+
+
+def _atomic_dedup_append_lock_anchor(touched: str) -> Optional[Path]:
+    """Derive the ``held_lock`` ``anchor_root`` for a ``touched.txt`` path,
+    from the path's own on-disk position — this function has no ``cwd``/
+    ``root`` parameter of its own (unlike ``scope.touch()``), so it cannot
+    take the anchor as an argument the way that sibling writer does.
+
+    ``touched`` is always ``<git-common-dir>/coordinator-sessions/<sid>/
+    touched.txt`` (``core.session_dir`` / ``core.sessions_dir``), so its
+    THIRD parent is the git common dir itself: ``parents[0]`` = the ``<sid>``
+    directory, ``parents[1]`` = ``coordinator-sessions``, ``parents[2]`` =
+    the git common dir (named ``.git`` for every non-bare, non-worktree-
+    private layout this hub uses). ``held_lock``'s sidecar directory is
+    ``git_common_dir(anchor_root) / "coordinator-locks"`` — passing that
+    common dir's PARENT (the repo/worktree root) as ``anchor_root`` re-
+    derives the identical common dir, landing this writer in the SAME lock
+    sidecar ``scope.touch()`` uses when it is called with ``root or cwd``
+    equal to this same repo root, and the same sidecar
+    ``hooks/track_touched_files.py::_append_locked`` reaches via
+    ``locked_rmw(repo_root=...)`` (``_lock_dir_path`` and ``_lock_dir`` both
+    resolve through ``git_common_dir`` for the same anchor) — all THREE
+    ``touched.txt`` writers now key off one namespace for the same target
+    path.
+
+    Returns ``None`` when ``touched`` does not have the expected shape
+    (fewer than three parents, or the third parent is not literally named
+    ``.git`` — a test fixture writing to an ad-hoc temp path, for instance)
+    so the caller can fall back to the unlocked append rather than passing a
+    nonsense anchor into ``held_lock``.
+
+    ASYMMETRY WITH ``scope.touch()`` (Review: coordinatorcode-reviewer-
+    feb6d8e8 Finding 1): the "all THREE writers key off one namespace" claim
+    above holds only when the git common dir's basename is literally
+    ``.git`` — this helper does pure string arithmetic and never spawns
+    ``git`` (the governing plan's Anti-scope forbids adding a second git
+    spawn here; ``held_lock`` already spawns one internally via
+    ``git_common_dir``). ``scope.touch()`` instead resolves its anchor via
+    an actual ``git rev-parse --git-common-dir`` call, which is correct for
+    a bare repo or a relocated ``GIT_COMMON_DIR`` — shapes where the common
+    dir exists but is not named ``.git``. In exactly that (narrow, not
+    encountered in this hub's actual layouts) case, this helper returns
+    ``None`` and ``atomic_dedup_append`` silently degrades to the pre-C6
+    UNLOCKED append while ``scope.touch()`` in the same process/repo would
+    still correctly lock. Not fixed here — see the finding's rationale.
+    """
+    p = Path(os.path.abspath(touched))
+    parents = p.parents
+    if len(parents) < 3:
+        return None
+    common_dir = parents[2]
+    if common_dir.name != ".git":
+        return None
+    return common_dir.parent
+
+
 def atomic_dedup_append(touched: str, entry: str) -> bool:
     """Port of ``cs_atomic_dedup_append <touched-file> <new-entry>`` (786-801),
     made EVENT-AWARE (EM ratification 2026-08-03, plan
@@ -167,9 +230,34 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
     Append-only write (the fix for the T21 lost-update race: the prior
     mktemp+sort+mv pattern let N concurrent writers each read-then-overwrite,
     so the last mv won and earlier distinct-path merges were silently
-    dropped). Still pure append, one short write under PIPE_BUF — NO mktemp,
-    NO mv, NO flock; that discipline is the whole reason this function exists
-    and is preserved exactly.
+    dropped). Still pure append — NO mktemp, NO mv: that RMW-rewrite ban
+    stays absolute (T21's hazard is real and this function exists to kill
+    it). A LOCKED append is a different shape from RMW-rewrite and is
+    explicitly PERMITTED here (C6, docs/plans/2026-08-14-cli-authored-
+    writes-get-claimed.md — see below): it still never reads the file back
+    in order to rewrite it, so it cannot reintroduce the last-mv-wins race.
+
+    C6 MEASUREMENT (docs/plans/2026-08-14-cli-authored-writes-get-claimed.md
+    § C6): this writer shares C2's loss defect, and worse — N concurrent
+    processes each appending a unique path via this function, unlocked, lost
+    roughly a quarter to a half of the declared entries across repeated
+    120-write runs on this box (Windows, spawn-based multiprocessing;
+    C2 measured ~4.2% for the sibling ``scope.touch()`` writer under a
+    thread-based harness — the two harnesses are not directly comparable,
+    but both are unambiguously nonzero loss, not the zero the prior prose
+    asserted). NO corruption was observed at any rate; the interleaved
+    ``open(..., "a")`` writes never appeared truncated, byte-mixed, or
+    torn — writes were CLEANLY LOST (an entire declared line simply absent
+    from the final file), not corrupted. "Windows NTFS (Git Bash) serializes
+    concurrent appends without corruption" is therefore true as written and
+    was, before this measurement, read as license for a no-lock design it
+    does not actually support: serialization-without-corruption at the byte
+    level does not imply no writes are dropped, and this and C2's
+    measurement both refute that implication directly. Because the defect is
+    shared, the fix is shared: this function now wraps its dedup-scan+append
+    region in ``held_lock`` (see below), the same primitive, same anchor
+    resolution, same bounded timeout, same fail-open contract as C2's fix to
+    ``scope.touch()`` — not a bespoke lock design for this second writer.
 
     ``entry`` is a bare PATH, never a whole event line — but this is a
     LOWER-LEVEL primitive, and only the ``self_claim`` caller is guaranteed
@@ -195,55 +283,118 @@ def atomic_dedup_append(touched: str, entry: str) -> bool:
          redundant append, no second dialect for the legacy corpus. Reading
          the file to decide whether to append is fine; rewriting it is not
          (this pass never writes back).
-      2. Single-line append of ``scope.format_touch_event("T", entry)``. One
-         short write under PIPE_BUF (4096) is atomic on POSIX O_APPEND files,
-         and Windows NTFS (Git Bash) serializes concurrent appends without
-         corruption.
+      2. Single-line append of ``scope.format_touch_event("T", entry)``. A
+         single ``write()`` call of this size is atomic on a POSIX
+         ``O_APPEND`` file — the governing bound is the kernel's own
+         write-size limit (``SSIZE_MAX`` on Linux/POSIX), NOT ``PIPE_BUF``
+         (a pipe/FIFO constant with no defined role in regular-file
+         ``O_APPEND`` atomicity — the previous citation named the wrong
+         authority for a directionally-correct claim). True CROSS-PROCESS
+         atomicity of that single write additionally requires Linux >= 3.14.
+         Windows NTFS (Git Bash) serializes concurrent appends WITHOUT
+         CORRUPTION — but, per the C6 measurement above, WITH LOSS: this is
+         a claim about byte-level tearing, not about every writer's line
+         surviving, and must not be read as the latter.
 
     Silent-failure contract: ALWAYS returns True (bash ``return 0`` on every
     path), so an advisory hook never blocks tool calls. A missing/unreadable
     file simply falls through to the append; an append that itself fails
-    (OSError) is swallowed and still reports success.
+    (OSError) is swallowed and still reports success. The lock below shares
+    this contract exactly: a failed/timed-out/unavailable acquire degrades
+    to the unlocked append rather than raising or blocking the caller.
 
     ``touched`` and ``entry`` are REQUIRED (bash ``${1:?}`` / ``${2:?}``) —
     an empty value raises ValueError.
+
+    Locking (C6, docs/plans/2026-08-14-cli-authored-writes-get-claimed.md):
+    the dedup-scan+append region below is wrapped in
+    :func:`coordinator_core.locked_write.held_lock` whenever an anchor can
+    be derived from ``touched`` (see ``_atomic_dedup_append_lock_anchor``),
+    with the same bounded sub-second timeout ``scope.touch()`` uses
+    (``_ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS``). Fails open — no derivable
+    anchor, ``LockTimeout``, ``RuntimeError`` (no lock backend), ``ValueError``
+    (``held_lock``'s own precondition), or ``OSError`` (e.g. from
+    ``held_lock``'s own release path, ``_plat_unlock``/``os.close``) all
+    degrade to the pre-C6 unlocked scan+append rather than raising or
+    blocking the silent-failure-contract caller — EXCEPT that a scan+append
+    that already ran inside the ``with`` block is never re-run a second
+    time: see ``appended_locked`` in the implementation below (Review:
+    coordinatorcode-reviewer-feb6d8e8 Finding 4).
     """
     if not touched:
         raise ValueError("touched-file required")
     if not entry:
         raise ValueError("new-entry required")
 
-    # Fast-exit: is the LAST event recorded for this path already 'T'?
-    # Non-atomic read is fine — a false negative just falls through to the
-    # append, where a duplicate T event may land (harmless: still CLAIMED,
-    # and cleaned at next consumption-time dedup).
-    #
-    # Review: coordinatorcode-reviewer-7ca5d82a Finding 3 — mirrors
-    # scope.touch()'s reversed-scan-and-break: only entry's own last event
-    # is ever needed, so scan backward and stop at the first match rather
-    # than building a Dict[str, str] over every distinct path in the file.
-    already_claimed = False
-    try:
-        with open(touched, encoding="utf-8") as fh:
-            lines = fh.readlines()
-        for line in reversed(lines):
-            stripped = line.rstrip("\n")
-            if not stripped:
-                continue
-            verb, _ts, path = scope.parse_touch_event(stripped)
-            if path == entry:
-                already_claimed = verb == "T"
-                break
-    except OSError:
-        pass  # file missing / unreadable -> fall through to append
-    if already_claimed:
-        return True
+    def _dedup_scan_and_append() -> None:
+        # Fast-exit: is the LAST event recorded for this path already 'T'?
+        # Non-atomic read is fine — a false negative just falls through to
+        # the append, where a duplicate T event may land (harmless: still
+        # CLAIMED, and cleaned at next consumption-time dedup). Both the
+        # read and the append MUST be inside the same lock scope when
+        # locked — reading last-event state and appending as two unguarded
+        # steps races the dedup DECISION even with an atomic append.
+        #
+        # Review: coordinatorcode-reviewer-7ca5d82a Finding 3 — mirrors
+        # scope.touch()'s reversed-scan-and-break: only entry's own last
+        # event is ever needed, so scan backward and stop at the first
+        # match rather than building a Dict[str, str] over every distinct
+        # path in the file.
+        already_claimed = False
+        try:
+            with open(touched, encoding="utf-8") as fh:
+                lines = fh.readlines()
+            for line in reversed(lines):
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                verb, _ts, path = scope.parse_touch_event(stripped)
+                if path == entry:
+                    already_claimed = verb == "T"
+                    break
+        except OSError:
+            pass  # file missing / unreadable -> fall through to append
+        if already_claimed:
+            return
 
-    try:
-        with open(touched, "a", encoding="utf-8") as fh:
-            fh.write(scope.format_touch_event("T", entry) + "\n")
-    except OSError:
-        return True  # silent-failure contract — never block the caller
+        try:
+            with open(touched, "a", encoding="utf-8") as fh:
+                fh.write(scope.format_touch_event("T", entry) + "\n")
+        except OSError:
+            return  # silent-failure contract — never block the caller
+
+    # Review: coordinatorcode-reviewer-feb6d8e8 Finding 3 — the closure above
+    # has no return value: this outer function's own contract is
+    # unconditional ``return True`` on every path (bash ``return 0`` on
+    # every path, see docstring's "Silent-failure contract"), regardless of
+    # whether the scan+append actually appended, no-opped on dedup, or
+    # swallowed an OSError. A future reader must not "restore" a bool
+    # propagation that was never part of this function's contract.
+    anchor = _atomic_dedup_append_lock_anchor(touched)
+    appended_locked = False
+    if anchor is not None:
+        try:
+            with held_lock(
+                Path(os.path.abspath(touched)),
+                anchor_root=anchor,
+                timeout=_ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS,
+            ):
+                # Review: coordinatorcode-reviewer-feb6d8e8 Finding 4 — this
+                # flag is set INSIDE the `with` block, immediately after the
+                # scan+append returns, not after the `with` statement exits.
+                # An exception raised by held_lock's own RELEASE path
+                # (_plat_unlock/os.close, surfaced from the `with` statement
+                # AFTER the append already succeeded) is caught by the
+                # `except` below, but by then appended_locked is already
+                # True, so the fallback branch does not re-run the
+                # scan+append a second time against an already-appended
+                # file.
+                _dedup_scan_and_append()
+                appended_locked = True
+        except (LockTimeout, OSError, RuntimeError, ValueError):
+            pass
+    if not appended_locked:
+        _dedup_scan_and_append()
     return True
 
 

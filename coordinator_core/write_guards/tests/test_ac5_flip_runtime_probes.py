@@ -11,7 +11,7 @@ Covers the write-side wave's nine C2-C12 hard-deny -> advisory flips
 (DR-277, docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md):
 block_cutover_phase_hand_edit, block_dev_repo_sentinel_write,
 block_em_hand_edit_pending_review_integration, block_priority_ledger_edit,
-block_tracker_edit, check_claude_md_size, guard_memory_store_cap,
+check_claude_md_size, guard_memory_store_cap,
 nudge_improvement_queue_write, nudge_prose_queue_creation.
 
 Bash-side flips (see `test_ac5_bash_flip_runtime_probes.py` in
@@ -45,7 +45,6 @@ from coordinator_core.write_guards import block_cutover_phase_hand_edit
 from coordinator_core.write_guards import block_dev_repo_sentinel_write
 from coordinator_core.write_guards import block_em_hand_edit_pending_review_integration
 from coordinator_core.write_guards import block_priority_ledger_edit
-from coordinator_core.write_guards import block_tracker_edit
 from coordinator_core.write_guards import check_claude_md_size
 from coordinator_core.write_guards import guard_memory_store_cap
 from coordinator_core.write_guards import nudge_improvement_queue_write
@@ -181,23 +180,6 @@ class TestBlockPriorityLedgerEdit:
         _assert_advisory_not_deny(out, must_contain="priority-set")
 
 
-class TestBlockTrackerEdit:
-    def test_former_deny_now_advises_through_engine(self, monkeypatch):
-        monkeypatch.delenv(block_tracker_edit._OVERRIDE_ENV_VAR, raising=False)
-        payload = {
-            "tool_name": "Write",
-            "tool_input": {
-                "file_path": "state/handoff-tracker.md",
-                "content": "hand-edited\n",
-            },
-        }
-        out = engine.evaluate(payload)
-        assert out is not None
-        hso = out["hookSpecificOutput"]
-        assert "permissionDecision" not in hso
-        assert hso["additionalContext"]
-
-
 class TestCheckClaudeMdSize:
     def test_former_deny_now_advises_through_engine(self, tmp_path):
         (tmp_path / ".git").mkdir(parents=True, exist_ok=True)
@@ -277,7 +259,6 @@ class TestNudgeProseQueueCreation:
         (block_dev_repo_sentinel_write, 122),
         (block_em_hand_edit_pending_review_integration, 115),
         (block_priority_ledger_edit, 114),
-        (block_tracker_edit, 113),
         (check_claude_md_size, 106),
         (guard_memory_store_cap, 121),
         (nudge_improvement_queue_write, 120),

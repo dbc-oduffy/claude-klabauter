@@ -458,3 +458,142 @@ class TestReplayTodayCase:
         expected_ref = _full12("/sock/d8.sock")[:6]
         assert result.address == f"claude-klabauter-d8 [{expected_ref}]"
         assert result.candidates == []
+
+
+class TestNotReachableReasonIsNamed:
+    """The `not_reachable` arm must not collapse "no such live session"
+    into "this harness cannot address anyone".
+
+    Measured live 2026-08-14 (Claude Code 2.1.232, Windows): 44/44
+    `<claude-config>/sessions/*.json` records omit `messagingSocketPath`
+    because the harness's cross-session-inbox gate is off, so every peer
+    resolved to `not_reachable` with no way for a caller to tell that
+    apart from a dead/absent session. These pin the distinction, not the
+    gate's current state -- each fixture builds the registry shape it
+    asserts about.
+    """
+
+    def test_live_record_without_socket_reports_messaging_unavailable(
+        self, monkeypatch
+    ):
+        # The fleet-wide shape: the target IS live and named, and NOTHING
+        # in the registry carries a socket. "No such session" would be a
+        # false statement about a live, busy peer.
+        snap = {
+            "sid-live": _record("claude-klabauter-11", None),
+            "sid-other": _record("claude-klabauter-22", None),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-live")
+        assert result.outcome == "not_reachable"
+        assert result.address is None
+        assert result.reason == reachability.NotReachableReason.MESSAGING_UNAVAILABLE
+
+    def test_absent_record_reports_no_live_record(self, monkeypatch):
+        snap = {"sid-live": _record("claude-klabauter-11", "/sock/a.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-gone")
+        assert result.outcome == "not_reachable"
+        assert result.reason == reachability.NotReachableReason.NO_LIVE_RECORD
+
+    def test_socketless_peer_among_socketed_peers_is_a_peer_fact(self, monkeypatch):
+        # Messaging IS available here -- one peer simply never registered
+        # an inbox. Reporting the harness-wide reason would send the reader
+        # after a capability that is already working.
+        snap = {
+            "sid-bound": _record("claude-klabauter-11", "/sock/a.sock"),
+            "sid-unbound": _record("claude-klabauter-22", None),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-unbound")
+        assert result.outcome == "not_reachable"
+        assert result.reason == reachability.NotReachableReason.PEER_INBOX_ABSENT
+
+    def test_named_record_with_socket_but_no_name_reports_no_peer_name(
+        self, monkeypatch
+    ):
+        snap = {"sid-nameless": _record(None, "/sock/a.sock")}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-nameless")
+        assert result.outcome == "not_reachable"
+        assert result.reason == reachability.NotReachableReason.NO_PEER_NAME
+
+    def test_empty_owner_id_reason_says_nothing_about_the_registry(self, monkeypatch):
+        def _explode():
+            raise AssertionError("snapshot() must not be read for a falsy owner id")
+
+        monkeypatch.setattr(hr, "snapshot", _explode)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("")
+        assert result.outcome == "not_reachable"
+        assert result.reason == reachability.NotReachableReason.NO_OWNER_ID
+
+    def test_reachable_and_own_session_carry_no_reason(self, monkeypatch):
+        snap = {
+            "sid-self": _record("claude-klabauter-11", "/sock/self.sock"),
+            "sid-peer": _record("claude-klabauter-22", "/sock/peer.sock"),
+        }
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: ("sid-self", snap["sid-self"]))
+
+        assert reachability.resolve_address("sid-peer").reason is None
+        own = reachability.resolve_address("sid-self")
+        assert own.outcome == "own_session"
+        assert own.reason is None
+        assert own.address is None
+
+
+class TestMessagingAvailablePredicate:
+    def test_false_when_no_record_carries_a_socket(self):
+        snap = {
+            "sid-a": _record("claude-klabauter-11", None),
+            "sid-b": _record("claude-klabauter-22", None),
+        }
+        assert reachability.messaging_available(snap) is False
+
+    def test_true_when_any_record_carries_a_socket(self):
+        snap = {
+            "sid-a": _record("claude-klabauter-11", None),
+            "sid-b": _record("claude-klabauter-22", "/sock/b.sock"),
+        }
+        assert reachability.messaging_available(snap) is True
+
+    def test_empty_snapshot_is_unavailable(self):
+        assert reachability.messaging_available({}) is False
+
+
+class TestNoSubstituteRefWhenSocketAbsent:
+    """Anti-scope: a socketless record must never acquire a manufactured
+    address. The harness hashes its own live socket path and nothing else,
+    so any stand-in (`sessionId`, `pid`, `cwd`) yields an address the
+    harness refuses -- "a confident wrong address is worse than no
+    address"."""
+
+    def test_socketless_record_is_omitted_from_resolve_candidates(self):
+        snap = {
+            "sid-bound": _record("claude-klabauter-11", "/sock/a.sock"),
+            "sid-unbound": _record("claude-klabauter-22", None),
+        }
+        resolved = {c.session_id for c in reachability.resolve_candidates(snap)}
+        assert resolved == {"sid-bound"}
+
+    def test_no_address_string_embeds_the_session_id(self, monkeypatch):
+        snap = {"sid-unbound": _record("claude-klabauter-22", None)}
+        monkeypatch.setattr(hr, "snapshot", lambda: snap)
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        result = reachability.resolve_address("sid-unbound")
+        assert result.address is None
+        assert reachability.resolve_advisory_address("sid-unbound") == ""
+        assert reachability.resolve_addresses_bulk(["sid-unbound"]) == {
+            "sid-unbound": ""
+        }

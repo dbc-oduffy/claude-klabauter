@@ -23,7 +23,10 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
 # residue and is explicitly not the route for a new file --
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _handler = decline_mod._handler
 

@@ -93,6 +93,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # the agent's declared target path(s), same reason subagent_zero_tool_use_resolve
     # is common_dir (needs git_common_dir to locate its per-session store).
     "hooks.subagent_fabrication_check":      "common_dir",
+    # hooks.subagent_sidecar_fill_check — common_dir: repo_root arrives as the
+    # gitdir (git_common_dir(request_repo), NOT the worktree root — see
+    # ipc.resolve_op_repo_key). The handler derives the worktree root via
+    # main_worktree_root(git_common_dir(repo_root)) before joining
+    # state/subagent-share/<session_id>/ (the scan target), same idiom as
+    # subagent_fabrication_check; repo_root itself (already the gitdir) is
+    # used directly as the advisory-dedupe marker root, same reason
+    # subagent_zero_tool_use_resolve is common_dir.
+    "hooks.subagent_sidecar_fill_check":     "common_dir",
     # Working-tree, keyed on show-toplevel (per-worktree)
     "coverage.gate":                         "show_top",
     # cutover.gate — common_dir (NOT show_top like coverage.gate above): cutover
@@ -154,6 +163,16 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # coordinator_core._settings_home), not the caller's repo; _origin_worktree not
     # required (same "none" class as engine.drift / percolate.validate_store).
     "plugin_health.drift":                   "none",
+    # app_session.launch / .census / .teardown — the launch target is a CONSUMING
+    # repo supplied by the caller, and the spawned-process handles persist under
+    # that repo's git common dir (never <root>/.git, which is a FILE in a linked
+    # worktree). "common_dir" so every linked worktree of one repo censuses and
+    # tears down the same set of processes: a launch from one worktree and a
+    # teardown from a sibling must not see disjoint state, or teardown silently
+    # leaves the process running.
+    "app_session.launch":                    "common_dir",
+    "app_session.census":                    "common_dir",
+    "app_session.teardown":                  "common_dir",
     # plugin_health.scan — no repo state accessed: read-only reader of the
     # OPERATOR's OWN machine-local plugin/consumer sentinel roots
     # (COORDINATOR_PLUGINS_ROOT / COORDINATOR_CONSUMER_HEALTH_ROOT env-resolved,
@@ -267,6 +286,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.archive_completed_plans":         "common_dir",
     "fleet.archive_completed_handoffs":      "common_dir",
     "fleet.prune_closed_bugs":               "common_dir",
+    "fleet.aggregate_capability_index":      "common_dir",
     "fleet.reap_unintegrated_findings":      "common_dir",
     "fleet.reap_integrated_findings":        "common_dir",
     # fleet.handoffs_for_plan — COMPUTE_ONLY read op, but still "common_dir": unlike
@@ -429,6 +449,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # main_worktree_root(common_dir) for project-scope path resolution (F1/AC13).
     # DR-213 sanctioned carve-out; spec: docs/plans/2026-07-05-strang-08-queue-append-strangle.md § C1/C2
     "queue.append":                          "common_dir",
+    # peer_notice.send / peer_notice.check — same-repo peer-contention notice
+    # channel: keyed on git_common_dir (state/peer-notices/ is main-worktree-
+    # rooted, same class as queue.append above).
+    "peer_notice.send":                      "common_dir",
+    "peer_notice.check":                     "common_dir",
     # queue.close — same keying class as queue.append: it stamps and commits one
     # entry under the caller's own state/improvement-queue/, then hands that
     # already-committed path to fleet.archive_queue_entry (DR-270).
@@ -534,14 +559,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # emit a receipt). Handler derives worktree via main_worktree_root(common_dir).
     # Spec: docs/plans/2026-07-08-session-specific-instruction-set-emitter.op-spec.md
     "ceremony.session_instructions":         "common_dir",
-    # ceremony.render_handoff_tracker — the C9 disk seam for C8b's render_repo_section;
-    # keyed on git_common_dir for its default per-repo mode (handler derives worktree via
-    # main_worktree_root(common_dir), same as wsc_tail/session_instructions). Its
-    # --all-repos mode ignores repo_root entirely (enumerates every machine-local-registered
-    # repos.* repo, not the caller's own tree) — same "some branches ignore repo_root" shape
-    # as session.record_pickup; common_dir is still the correct default-mode scope.
-    # Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C8b/C9
-    "ceremony.render_handoff_tracker":       "common_dir",
     # strang-10 A+B residual writer strangle — changelog / completion / review-trail write ops.
     # Keyed on git_common_dir: changelog.* + review_trail.write write main-worktree-rooted state/
     # (handler derives worktree via main_worktree_root(common_dir), never repo_root/'state' directly);
@@ -679,6 +696,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "deliverable.cascade_terminal":            "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
+    # deliverable.fork_detect — keyed on git_common_dir for the same reason as the
+    # three cascade ops above: the detector walks the main-worktree-rooted corpus
+    # (state/handoffs/, docs/plans/) through seed_deliverable_ledger_rows. Read-only —
+    # it reports slug-prefix fork families and writes nothing, the equivalence map
+    # included.
+    # Spec: docs/plans/2026-08-14-baton-closes-when-its-plan-ships.md § AC12
+    "deliverable.fork_detect":                  "common_dir",
     # sizing.decline — keyed on git_common_dir, same scope class as
     # deliverable.cascade_terminal above: the handler reads/writes a
     # main-worktree-rooted state/sizings/ file, derived via
@@ -1287,6 +1311,11 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "diagnostics.always_succeeds":              "none",
     "diagnostics.always_refuses":               "none",
     "diagnostics.always_structural_pin":        "none",
+    # gate.validate_invocable — "none": takes an explicit `changed_files`
+    # wire param (any repo's diff/changed-file set), accesses no
+    # per-session implicit repo state (no common_dir/show_top resolution).
+    # Spec: docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1
+    "gate.validate_invocable":                  "none",
 }
 
 # ---------------------------------------------------------------------------

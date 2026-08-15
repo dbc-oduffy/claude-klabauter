@@ -38,6 +38,7 @@ from coordinator_core.ipc import (
     INVALID_PARAMS,
     INTERNAL_ERROR,
     STRUCTURAL_PIN_ERROR,
+    CallerFacingValidationError,
     _ORIGIN_WORKTREE_FIELD,
     _OP_KEY_SCOPE,
     dispatch_message,
@@ -108,10 +109,20 @@ def _raising_structural_handler(params: dict, ctx=None, repo_root=None) -> dict:
     raise ContractPinError("deliberate structural test failure — pin desync")
 
 
+def _raising_caller_facing_handler(params: dict, ctx=None, repo_root=None) -> dict:
+    """Handler that raises the REAL CallerFacingValidationError — triggers INVALID_PARAMS
+    (-32602) with the message preserved, unlike the generic INTERNAL_ERROR path
+    `_raising_handler` exercises above. Mirrors `_raising_structural_handler`'s own
+    "use the production class, not a synthetic stand-in" rationale — the same class
+    `review_trail_write._validate`'s enum checks raise."""
+    raise CallerFacingValidationError("deliberate caller-facing test failure — allowed: a | b")
+
+
 _TEST_HANDLERS = {
     "test.sync": _sync_handler,
     "test.async": _async_handler,
     "test.raise": _raising_handler,
+    "test.raise_caller_facing": _raising_caller_facing_handler,
     "test.raise_structural": _raising_structural_handler,
 }
 
@@ -277,6 +288,42 @@ def test_handler_raises_structural_error_returns_32001():
     # ContractPinError) is preserved verbatim, unlike the generic class-name-only
     # INTERNAL_ERROR message.
     assert "deliberate structural test failure — pin desync" in d["error"]["message"]
+
+
+def test_handler_raises_caller_facing_validation_returns_32602():
+    """Handler raises CallerFacingValidationError → INVALID_PARAMS (-32602), message
+    preserved — B, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-trail-skips-
+    silently.md. Contrasted with `test_handler_raises_returns_32603` above: a validator
+    that already composed a caller-facing message (naming its own legal values) must not
+    be collapsed into the same class-name-only INTERNAL_ERROR bucket an arbitrary,
+    unclassified exception gets."""
+    msg = {"jsonrpc": "2.0", "id": 13, "method": "test.raise_caller_facing", "params": {}}
+    with _RegistryScope(_TEST_HANDLERS):
+        d = _run(dispatch_message(msg))
+    assert "error" in d
+    assert d["error"]["code"] == INVALID_PARAMS
+    assert d["error"]["code"] != INTERNAL_ERROR
+    assert d["id"] == 13
+    assert "deliberate caller-facing test failure — allowed: a | b" in d["error"]["message"]
+
+
+def test_handler_raises_plain_value_error_still_returns_32603():
+    """A plain (unclassified) ValueError -- no `caller_facing_validation` marker -- must
+    keep the pre-existing generic INTERNAL_ERROR / class-name-only shape unchanged. Guards
+    against a widened marker check (e.g. `isinstance(exc, ValueError)` instead of the
+    duck-type attribute) that would silently reclassify every ValueError in the codebase,
+    not just the ones that opted in."""
+    def _raising_plain_value_error(params: dict, ctx=None, repo_root=None) -> dict:
+        raise ValueError("an ordinary, non-caller-facing ValueError")
+
+    handlers = dict(_TEST_HANDLERS)
+    handlers["test.raise_plain_value_error"] = _raising_plain_value_error
+    msg = {"jsonrpc": "2.0", "id": 14, "method": "test.raise_plain_value_error", "params": {}}
+    with _RegistryScope(handlers):
+        d = _run(dispatch_message(msg))
+    assert "error" in d
+    assert d["error"]["code"] == INTERNAL_ERROR
+    assert d["error"]["message"] == "Internal error: ValueError"
 
 
 # ---------------------------------------------------------------------------
@@ -948,6 +995,16 @@ def test_timeout_for_resolves_per_op_override():
     assert ipc._timeout_for("test.nonesuch") == ipc.DISPATCH_TIMEOUT_SECS
 
 
+def test_timeout_for_resolves_scoped_git_commit_override():
+    """ceremony.scoped_git_commit resolves to its widened per-op override (2026-08-15,
+    live incident: a ~2116-path publish commit died at the 30s global default), not the
+    global runaway guard — see the _OP_TIMEOUT_OVERRIDES comment block in ipc.py for the
+    measurement this value is sized from.
+    """
+    assert ipc._timeout_for("ceremony.scoped_git_commit") == ipc._OP_TIMEOUT_OVERRIDES["ceremony.scoped_git_commit"]
+    assert ipc._timeout_for("ceremony.scoped_git_commit") != ipc.DISPATCH_TIMEOUT_SECS
+
+
 def test_op_timeout_overrides_public_proxy_contents_and_immutability():
     """OP_TIMEOUT_OVERRIDES (public parity surface) mirrors _OP_TIMEOUT_OVERRIDES and is read-only.
 
@@ -957,6 +1014,7 @@ def test_op_timeout_overrides_public_proxy_contents_and_immutability():
     """
     assert dict(ipc.OP_TIMEOUT_OVERRIDES) == dict(ipc._OP_TIMEOUT_OVERRIDES)
     assert "ceremony.wsc_tail" not in ipc.OP_TIMEOUT_OVERRIDES
+    assert "ceremony.scoped_git_commit" in ipc.OP_TIMEOUT_OVERRIDES
     with pytest.raises(TypeError):
         ipc.OP_TIMEOUT_OVERRIDES["test.new"] = 1.0
 

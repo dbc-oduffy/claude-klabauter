@@ -123,6 +123,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
+from coordinator_core._settings_home import native_path_form
 from coordinator_core.win_portability import no_console_creationflags
 
 # A2: every subprocess.run gets a bounded timeout + stdin=DEVNULL. Cold,
@@ -416,8 +417,11 @@ def _claude_home_cli_argv(*args: str) -> List[str]:
     A bare ``"claude-home"`` fails on Windows with WinError 2 (CreateProcess
     does not consult PATHEXT). Probe known install locations for the
     delivered ``.cmd`` first, then PATH (``shutil.which`` DOES honour
-    PATHEXT), then fall back to the bare name. Ported verbatim from the
-    register-coordinator-mirror.sh trampoline's own helper.
+    PATHEXT), then fall back to the bare name. The POSIX rungs below were
+    originally ported verbatim from the register-coordinator-mirror.sh
+    trampoline's own helper, but have since diverged (see the POSIX
+    paragraph below); the Windows branch's shape was never drawn from that
+    helper and is unaffected by the divergence.
 
     Settings-home first (DR-210 Amendment 2026-07-24: "resolves nothing
     through ~/.claude/bin") — this probe previously tried the retired compat
@@ -425,6 +429,39 @@ def _claude_home_cli_argv(*args: str) -> List[str]:
     platform that matters most (Windows is the primary machine). Swapped so
     settings-home wins whenever both candidates exist; the mirror candidate
     is retained, tried last.
+
+    POSIX branch mirrors the same settings-home-first shape: a bare
+    ``"claude-home"`` PATH lookup is order-dependent on whatever the
+    invoking process's PATH happens to contain, which can resolve to the
+    retired mirror ahead of settings-home (see
+    state/audits/2026-07-25-claude-bin-mirror-read-rungs.md § 2, this
+    function's row). Probe settings-home by explicit path first, then PATH,
+    and the retired mirror only after both; the bareword is the final rung.
+    This ladder differs from ``bin/claude-klabauter-doctor-probe.py::_resolve_machine_local``
+    (the in-family model), which is PATH-first, then settings-home, then the
+    mirror — the opposite order for the first two rungs. Both orders satisfy
+    "mirror last," which is the invariant DR-210 cares about, but the two
+    functions are not drop-in equivalent and should not be assumed so by a
+    future consolidation.
+
+    Negative spec, BOTH branches: the mirror does not go ahead of
+    ``shutil.which``. Probing it earlier would let a retired directory
+    outrank the operator's own PATH, which is the precedence the audit
+    exists to remove, not to relocate.
+
+    The Windows branch carried that inversion until 2026-08-15 and also
+    ignored ``COORDINATOR_SETTINGS_HOME`` outright, deriving its
+    settings-home candidate from the home directory alone — so a relocated
+    settings home found no candidate and fell through to the retired
+    mirror. Both are fixed; the two branches now run the same ladder.
+
+    Negative spec: this helper is NOT the interactive launch chain, and an
+    earlier pass deferred the Windows fix on the mistaken belief that it
+    was. Its only caller runs ``subprocess.run(..., capture_output=True)``
+    for a ``claude-home plugins`` query. The console-input-mode defect that
+    makes launch-chain depth load-bearing belongs to ``claude-doe`` /
+    ``claude.exe`` (see ``93089e568``), a different artifact reached
+    through a different function. Do not import that caution here.
     """
     if os.name == "nt":
         home = (
@@ -433,15 +470,37 @@ def _claude_home_cli_argv(*args: str) -> List[str]:
             or os.environ.get("USERPROFILE")
             or os.path.expanduser("~")
         )
-        for cand in (
-            os.path.join(home, ".coordinator-claude-settings", "bin", "claude-home.cmd"),
-            os.path.join(home, ".claude", "bin", "claude-home.cmd"),
-        ):
-            if os.path.isfile(cand):
-                return [cand, *args]
+        settings_home_cand = os.path.join(
+            os.environ.get("COORDINATOR_SETTINGS_HOME")
+            or os.path.join(home, ".coordinator-claude-settings"),
+            "bin",
+            "claude-home.cmd",
+        )
+        if os.path.isfile(settings_home_cand):
+            return [settings_home_cand, *args]
         found = shutil.which("claude-home")
         if found:
             return [found, *args]
+        mirror_cand = os.path.join(home, ".claude", "bin", "claude-home.cmd")
+        if os.path.isfile(mirror_cand):
+            return [mirror_cand, *args]
+        return ["claude-home", *args]
+
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    settings_home_cand = os.path.join(
+        os.environ.get("COORDINATOR_SETTINGS_HOME")
+        or os.path.join(home, ".coordinator-claude-settings"),
+        "bin",
+        "claude-home",
+    )
+    if os.path.isfile(settings_home_cand):
+        return [settings_home_cand, *args]
+    found = shutil.which("claude-home")
+    if found:
+        return [found, *args]
+    mirror_cand = os.path.join(home, ".claude", "bin", "claude-home")
+    if os.path.isfile(mirror_cand):
+        return [mirror_cand, *args]
     return ["claude-home", *args]
 
 
@@ -799,9 +858,24 @@ def _install_claude_doe_wrapper(
     Windows has no equivalent-cost native symlink story -- ``os.symlink``
     there requires either elevated (Administrator) privileges or Developer
     Mode enabled by default, neither of which this installer can assume or
-    silently request -- so it keeps the original ``shutil.copy2`` install,
-    byte-for-byte unchanged (AC10) -- ``settings_bin`` is accepted but
-    unused on that branch.
+    silently request -- so it keeps a ``shutil.copy2`` install of the
+    wrapper bytes -- ``settings_bin`` is accepted but unused on that
+    branch. The copy itself, however, is staged to a same-directory temp
+    path and published with ``os.replace`` rather than written in place:
+    an in-place ``shutil.copy2`` onto ``wrapper_dst`` truncates-then-writes
+    the destination, and a concurrent shell holding that path open (e.g.
+    the very shim this install pass is re-publishing) can observe or
+    execute a half-written file mid-copy. ``os.replace`` on Windows is
+    ``MoveFileExW`` with ``MOVEFILE_REPLACE_EXISTING``, atomic for a
+    same-volume rename the way POSIX ``rename(2)`` is; deriving the temp
+    path from ``local_bin`` (the destination's own directory) rather than
+    the system temp dir keeps it on the same volume so ``os.replace``
+    stays a true rename instead of degrading to a non-atomic copy+delete
+    across volumes. A sharing violation on the replace itself (destination
+    open with a deny-write share mode) is surfaced as a loud install
+    failure, matching this function's existing FATAL-and-exit pattern --
+    silently leaving a half-published wrapper is not an acceptable
+    degradation.
 
     Negative-spec: do NOT resolve the symlink target via PATH lookup or via
     ``coordinator_core._settings_home.settings_home()`` -- both would
@@ -827,15 +901,36 @@ def _install_claude_doe_wrapper(
             return
 
         os.makedirs(local_bin, exist_ok=True)
+        # Stage the copy at a same-directory temp path, then publish with
+        # `os.replace` rather than `shutil.copy2` writing `wrapper_dst` in
+        # place -- an in-place copy truncates-then-writes the destination,
+        # and a concurrent shell holding that path open can observe or
+        # execute a half-written file mid-copy (the same defect class the
+        # POSIX branch above already guards against via its own
+        # tmp-then-`os.replace` publish). The temp path is derived from
+        # `local_bin` (the destination's own directory), not the system
+        # temp dir, so it stays on the same volume and `os.replace` is a
+        # true atomic rename rather than a non-atomic cross-volume
+        # copy+delete.
+        tmp_dst = os.path.join(local_bin, f"claude-doe.tmp-{os.getpid()}")
         try:
             # A5: preserve/force exec bits explicitly -- shutil.copy2 preserves mode
             # from source (mirrors `cp -p`), but the trailing chmod belt-and-braces
             # guards the case where the source itself lacks +x for some reason,
             # matching the oracle's unconditional `chmod +x` after `cp -p`.
-            shutil.copy2(wrapper_src, wrapper_dst)
-            st = os.stat(wrapper_dst)
-            os.chmod(wrapper_dst, st.st_mode | 0o111)
+            shutil.copy2(wrapper_src, tmp_dst)
+            st = os.stat(tmp_dst)
+            os.chmod(tmp_dst, st.st_mode | 0o111)
         except OSError as exc:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_dst)
+            print(f"FATAL: failed to install claude-doe wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            os.replace(tmp_dst, wrapper_dst)
+        except OSError as exc:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_dst)
             print(f"FATAL: failed to install claude-doe wrapper to {wrapper_dst}: {exc}", file=sys.stderr)
             sys.exit(1)
 
@@ -966,6 +1061,18 @@ def _run_body(
         except RequireHomeError as exc:
             print(f"FATAL: {exc}", file=sys.stderr)
             return 1
+
+    # Root write-side seam for the DoE clone path form. The DoE-side trampoline
+    # resolves this under Git-Bash on Windows, where `pwd` yields the MSYS mount
+    # form (`/x/DoE-claude`); handed on verbatim it is re-read by native-Windows
+    # node / py.exe consumers as drive-relative `X:\x\DoE-claude` (doubled
+    # drive), which is how `repos.doe_claude` and the `.doe-root` pointer came to
+    # hold an unresolvable path. Normalizing once HERE covers every downstream
+    # derivation in one place -- the REPO_DOE_CLAUDE env overlay handed to child
+    # phases, the `.coordinator-dev-repo` sentinel probe, and the
+    # `machine-local set repos.doe_claude` seed that gen_doe_root_pointer later
+    # reads. No-op off Windows and on already-native paths.
+    doe_clone = native_path_form(doe_clone)
 
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = coord_root
@@ -1250,6 +1357,7 @@ def _run_body(
     # script was only a thin polyglot trampoline back into THIS repo's
     # coordinator_core.ops.gen_claude_doe_shim -- called in-process now.
     from coordinator_core.ops.gen_claude_doe_shim import (  # local import: avoid import cost on --help
+        _default_shell_family as _gen_claude_doe_shim_default_family,
         main as _gen_claude_doe_shim_main,
     )
 
@@ -1267,8 +1375,26 @@ def _run_body(
     # --check-only` is listed first so it stays a literal prefix of the
     # logged argv line (test_c13_check_only_forwarded_to_each_native_phase
     # substring-matches "gen-claude-doe-shim --check-only").
-    _shim_tmpl = os.path.join(coord_root, "templates", "shell", "claude-doe-shim.sh.tmpl")
-    shim_args = (["--check-only"] if check_only else []) + ["--template", _shim_tmpl]
+    # The template must follow the SHELL FAMILY, not be hardcoded. The generator
+    # copies template bytes verbatim but names its destination from the family
+    # (`_shim_filename`), and that family defaults to "powershell" on native
+    # Windows. A hardcoded `.sh.tmpl` here therefore wrote 62 lines of bash into
+    # `claude-doe-shim.ps1`, whose dot-source defines no `claude()` at all — a
+    # plugin-less session on every launch, with the profile's sentinel block
+    # present and correct so nothing downstream reported a problem.
+    # `--shell` is passed explicitly rather than left to the default so the
+    # template and the family cannot drift apart again from this call site.
+    _shim_family = _gen_claude_doe_shim_default_family()
+    _shim_tmpl_name = (
+        "claude-doe-shim.ps1.tmpl" if _shim_family == "powershell" else "claude-doe-shim.sh.tmpl"
+    )
+    _shim_tmpl = os.path.join(coord_root, "templates", "shell", _shim_tmpl_name)
+    shim_args = (["--check-only"] if check_only else []) + [
+        "--template",
+        _shim_tmpl,
+        "--shell",
+        _shim_family,
+    ]
     orch.run_required_py(
         "gen-claude-doe-shim (Step 3.5a.2 -- claude() shell shim)",
         _gen_claude_doe_shim_main,
@@ -1676,12 +1802,13 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         # place this ORCHESTRATOR writes directly rather than delegating to
         # a declaring writer module. POSIX: `os.symlink` + atomic
         # `os.replace` onto `~/.local/bin/claude-doe`, pointed at
-        # `<settings-home>/bin/claude-doe`. Windows: `shutil.copy2` +
-        # `os.chmod` of the same destination from
-        # `<claude-klabauter-root>/coordinator/bin/claude-doe.py`, byte-for-byte (no
-        # native symlink story assumed — see the function's own docstring).
-        # One entry covers both branches; they share a destination and
-        # purpose, differing only in write mechanism.
+        # `<settings-home>/bin/claude-doe`. Windows: `shutil.copy2` of the
+        # wrapper binary from `<claude-klabauter-root>/coordinator/bin/claude-doe.py`
+        # to a same-directory temp path, `os.chmod` on that temp path, then
+        # atomic `os.replace` onto the same destination (no native symlink
+        # story assumed — see the function's own docstring). One entry
+        # covers both branches; they share a destination and purpose,
+        # differing only in copy vs. symlink for the staged artifact.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -1692,10 +1819,12 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                         "symlinks this path onto "
                         "<settings-home>/bin/claude-doe (atomic "
                         "os.replace of a temp symlink); Windows instead "
-                        "shutil.copy2's the wrapper binary directly from "
-                        "<claude-klabauter-root>/coordinator/bin/claude-doe.py plus a "
-                        "chmod +x. Written in-line by this orchestrator, "
-                        "not through a declaring delegate."
+                        "shutil.copy2's the wrapper binary from "
+                        "<claude-klabauter-root>/coordinator/bin/claude-doe.py to a "
+                        "same-directory temp path, chmods +x, then "
+                        "publishes with an atomic os.replace onto this "
+                        "path. Written in-line by this orchestrator, not "
+                        "through a declaring delegate."
                     ),
                 ),
             ),

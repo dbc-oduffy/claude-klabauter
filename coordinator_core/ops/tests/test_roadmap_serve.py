@@ -49,6 +49,13 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.roadmap_serve import _handler
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # ---------------------------------------------------------------------------
 # Registry completeness assertion (universal positive floor)
 #
@@ -344,6 +351,32 @@ class TestRoadmapServe:
         assert result["edges"] == []
         assert result["critical_path"] == []
         assert result["roll_up"]["pct_shipped"] is None
+
+    def test_degenerate_returns_have_same_key_set_as_success(self, tmp_path):
+        """Both degenerate early-returns (missing roadmap_id, absent repo_root)
+        expose the SAME key set as the success payload — a set comparison, not a
+        spot-check, so a future added/removed key cannot regress silently."""
+        repo_root = tmp_path / "repo"
+        common_dir = _make_git_repo(repo_root)
+        handoffs_dir = repo_root / "state" / "handoffs"
+        _write_stub_handoff(
+            handoffs_dir,
+            "2026-07-05-strang-keys.md",
+            roadmap_id="claude-klabauter-strangler",
+            stub_id="strang-keys",
+            deployment_state="in_flight",
+        )
+
+        success = _run(
+            _handler({"roadmap_id": "claude-klabauter-strangler"}, repo_root=common_dir)
+        )
+        missing_roadmap_id = _run(_handler({}, repo_root=common_dir))
+        no_repo_root = _run(
+            _handler({"roadmap_id": "claude-klabauter-strangler"}, repo_root=None)
+        )
+
+        assert set(success.keys()) == set(missing_roadmap_id.keys())
+        assert set(success.keys()) == set(no_repo_root.keys())
 
     def test_only_matching_roadmap_id_returned(self, tmp_path):
         """Stubs with a different roadmap_id are excluded from the serve result."""

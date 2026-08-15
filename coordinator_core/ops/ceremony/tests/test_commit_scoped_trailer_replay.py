@@ -35,6 +35,13 @@ import pytest
 from coordinator_core.ops.ceremony import git_native
 from .fixtures.real_git import make_agree_path, make_diverged_path, real_git_repo
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _SESSION_ID = "abcdef12-3456-7890-abcd-ef1234567890"
 _DELIVERABLE_ID = "deliverable-c10-remainder"
 

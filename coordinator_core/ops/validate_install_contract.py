@@ -58,6 +58,17 @@ Negative-spec (deliberate behavior differences from the bash+jq oracle):
       additive documentation, not a behavior change; addendum rule 3 requires
       the Usage block to match `main()`'s actual returns, which the oracle's
       own help text did not attempt.
+    - Point 4 grew a records-crosscheck arm the bash oracle never had (check-
+      point4 ask#2, gated on DoE's platform-outcome.schema.json landing —
+      state/handoffs/2026-07-21_190724_checkpoint4-platform-outcome-records-
+      crosscheck.md): each declared tested_platforms[] entry is now also
+      checked against committed state/platform-outcomes/ records via the same
+      derive_tested_platforms() the C3a generator uses, so this validator can
+      never fail a manifest the generator itself would have written. This is
+      a DELIBERATE ADDED behavior, not a faithfulness gap — the bash oracle
+      predates the platform-outcome record store entirely and had no way to
+      express it. Defensively neutered: an absent records dir or missing
+      PyYAML never produces a finding (cannot verify != violation).
     - Exit-code contract (BUSINESS codes, this module's `main()` only):
         0 — compliant, OR not opted into the contract, OR no manifest declared
         1 — one or more packageability findings, OR a CLI usage error
@@ -73,6 +84,12 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, List, Optional
+
+from coordinator_core.ops.platform_outcome_records import (
+    current_repo_sha,
+    derive_tested_platforms,
+    records_root,
+)
 
 _DEFAULT_MANIFEST_RELPATH = "coordinator/docs/install/agent-install-manifest.json"
 
@@ -289,14 +306,29 @@ def _check_point3(manifest: dict, failures: _Failures) -> None:
         )
 
 
-def _check_point4(manifest: dict, failures: _Failures) -> None:
-    """Point 4: tested_platforms declared as an array (may be empty).
+def _check_point4(manifest: dict, failures: _Failures, repo_root: str) -> None:
+    """Point 4: tested_platforms declared as an array (may be empty), AND each
+    declared platform backed by a committed, passing, non-stale
+    platform-outcome record (check-point4 ask#2 — cross-repo/inbox/2026-07-21-
+    claude-central-em-check-point4-derive-and-relax.md; baton:
+    state/handoffs/2026-07-21_190724_checkpoint4-platform-outcome-records-crosscheck.md).
 
-    An empty array is valid — it honestly declares "no platform has an
-    execution-verified record yet" (the correct day-one state for a
-    greenfield repo whose tested_platforms is DoE-derived from
-    state/platform-outcomes/ records, not hand-asserted). Only a missing
-    or non-array value fails this check.
+    Array-shape arm (unchanged from ask#1, commit 9a10aba9): a missing or
+    non-array value fails; an empty array is valid — it honestly declares "no
+    platform has an execution-verified record yet".
+
+    Records-crosscheck arm (this ask): reuses the SAME derivation the
+    generator (coordinator/bin/generate-tested-platforms.py) uses to compute
+    tested_platforms from state/platform-outcomes/ records — so this check can
+    never fail a manifest the generator itself would have written, grandfather
+    clause included. One FAIL finding per declared platform that the
+    derivation does NOT confirm (no passing, fresh, entry-point-surface record
+    backs it). DEFENSIVE (non-negotiable, per the baton): an absent
+    state/platform-outcomes/ dir, or PyYAML being unavailable, must NEVER
+    itself produce a finding — "cannot verify" is not "violation", and a
+    greenfield repo with no records dir at all must stay clean (regressing
+    that would undo commit 9a10aba9's unblock). No exception may escape this
+    function.
     """
     tested = manifest.get("tested_platforms")
     if not isinstance(tested, list):
@@ -306,6 +338,43 @@ def _check_point4(manifest: dict, failures: _Failures) -> None:
             'declare tested_platforms as an array, e.g. "tested_platforms": '
             '["macos"] once verified, or [] if none are yet — do not conflate '
             "with present_platforms (shipped-but-unverified).",
+        )
+        return
+
+    if not tested:
+        return
+
+    try:
+        current_sha = current_repo_sha(repo_root)
+        derived, _advisories = derive_tested_platforms(
+            records_root(repo_root), manifest, current_sha
+        )
+    except Exception as exc:
+        # Defensive: a records-side failure is never a finding (greenfield/
+        # absent-records-dir/PyYAML-unavailable must stay clean — see
+        # docstring). Stays observable rather than a silent pass so a real
+        # bug in the derivation isn't indistinguishable from the expected
+        # defensive cases; SKIP voice per docs/wiki/guard-messaging.md § Register.
+        print(
+            f"SKIP: point-4 records cross-check unavailable ({exc!r}); "
+            "tested_platforms left unverified for this run.",
+            file=sys.stderr,
+        )
+        return
+
+    for platform in tested:
+        if platform in derived:
+            continue
+        failures.add(
+            "point-4",
+            f"tested_platforms declares '{platform}', but no passing, fresh "
+            "platform-outcome record backs it",
+            f"either re-run the install ceremony on {platform} and record the "
+            "outcome with coordinator/bin/record-platform-outcome.py, or remove "
+            f"'{platform}' from tested_platforms until it does — a record is "
+            "stale (and cannot back a claim) once its surface_sha no longer "
+            "matches this repo's current HEAD (PRIMARY) or its observed_at is "
+            "more than 30 days old (SECONDARY); either rule alone invalidates it.",
         )
 
 
@@ -462,7 +531,7 @@ def main(argv: List[str]) -> int:
     _check_point1(manifest, failures)
     _check_point2(manifest, failures)
     _check_point3(manifest, failures)
-    _check_point4(manifest, failures)
+    _check_point4(manifest, failures, repo_root)
     _check_point6(manifest, failures)
 
     if failures.count > 0:

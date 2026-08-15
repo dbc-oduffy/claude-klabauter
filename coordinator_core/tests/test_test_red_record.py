@@ -28,6 +28,13 @@ from coordinator_core.ops.test_red_record import (
     write_test_red_record,
 )
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 

@@ -166,6 +166,94 @@ def test_scan_secrets_medium_hit_does_not_block(tmp_path):
     assert "HIGH" in out and "(none)" in out
 
 
+_IDENTITY_FIXTURE = (
+    'PERSONAL_EXPECTED_PATTERNS=("codename-alpha")\n'
+    'PERSONAL_REVIEW_PATTERNS=("codename-alpha")\n'
+    'PERSONAL_ALLOW_TOKENS=("dbc-alpha")\n'
+)
+
+
+def test_scan_secrets_identity_per_repo_rung_present_no_note(tmp_path, monkeypatch):
+    """Regression guard for the ladder itself: a populated per-repo
+    setup/.percolate-identity must not trip the UNCONFIGURED NOTE, and the
+    machine-local rung must not even be consulted when the per-repo rung
+    already resolves."""
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "no-such-claude-home"))
+
+    setup_dir = tmp_path / "setup"
+    setup_dir.mkdir()
+    identity_file = setup_dir / ".percolate-identity"
+    identity_file.write_text(_IDENTITY_FIXTURE, encoding="utf-8")
+
+    target_file = tmp_path / "clean.md"
+    target_file.write_text("nothing interesting here\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(
+        ["scan-secrets", "--files", str(file_list), "--identity-file", str(identity_file)]
+    )
+    assert rc == 0
+    assert "UNCONFIGURED" not in out
+    assert "machine-local rung" not in out
+
+
+def test_scan_secrets_identity_machine_local_rung_present_no_note(tmp_path, monkeypatch):
+    """AC (the regression this stub exists to fix): the per-repo rung is
+    absent but the machine-local rung resolves and is populated -- the
+    UNCONFIGURED NOTE must NOT fire. `COORDINATOR_SETTINGS_HOME` is pointed
+    at an isolated tmp_path fixture so this never depends on the real
+    ~/.coordinator-claude-settings/.percolate-identity on the running
+    machine."""
+    settings_home = tmp_path / "settings-home"
+    settings_home.mkdir()
+    machine_local_identity = settings_home / ".percolate-identity"
+    machine_local_identity.write_text(_IDENTITY_FIXTURE, encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+
+    setup_dir = tmp_path / "setup"
+    setup_dir.mkdir()
+    identity_file = setup_dir / ".percolate-identity"  # deliberately absent
+
+    target_file = tmp_path / "clean.md"
+    target_file.write_text("nothing interesting here\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(
+        ["scan-secrets", "--files", str(file_list), "--identity-file", str(identity_file)]
+    )
+    assert rc == 0
+    assert "UNCONFIGURED" not in out
+    assert str(machine_local_identity) in out
+    assert "machine-local rung" in out
+
+
+def test_scan_secrets_identity_both_rungs_absent_note_fires(tmp_path, monkeypatch):
+    """Both rungs absent -- the NOTE must still fire with its actionable
+    remediation text (genuine-absence case, not regressed by the ladder)."""
+    settings_home = tmp_path / "settings-home"
+    settings_home.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+
+    setup_dir = tmp_path / "setup"
+    setup_dir.mkdir()
+    identity_file = setup_dir / ".percolate-identity"  # absent on both rungs
+
+    target_file = tmp_path / "clean.md"
+    target_file.write_text("nothing interesting here\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(
+        ["scan-secrets", "--files", str(file_list), "--identity-file", str(identity_file)]
+    )
+    assert rc == 0
+    assert "UNCONFIGURED" in out
+    assert "populate PERSONAL_REVIEW_PATTERNS" in out
+
+
 def test_tier_medium_python_decorator_not_classified_as_email(tmp_path):
     """A Python decorator line (`@pytest.mark.parametrize(`) has no local
     part before `@` — only leading whitespace — so it must not collide with

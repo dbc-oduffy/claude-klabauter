@@ -25,10 +25,21 @@ does not fire (never a false deny). Do not "tighten" this into a strict
 shell-argument parser; see the plan's Anti-scope, "do not enumerate
 evasions".
 
-Deliberately NOT covered here, per the plan's own enumeration: any shape
-requiring adversarial-style interpreter indirection beyond the single inline
-`-c` case AC4 names (C5's own scope, not this module's) -- out of scope by
-design, not an oversight (§ Design posture, "do not enumerate evasions").
+PM-RATIFIED REVERSAL, 2026-08-14 (`docs/plans/2026-08-14-interpreter-body-
+write-sinks.md`) -- record this, do not re-derive the old rule. This module
+previously stated that interpreter indirection beyond the single inline
+`-c` case was out of scope BY DESIGN ("do not enumerate evasions",
+DoE-claude:pln-write-confinement-guards-cross-996567 § Design posture). That
+exclusion was written against *adversarial* evasion. The reversal covers
+only the ACCIDENTAL shape underneath it -- a write target that exists
+solely inside a heredoc body or a `python`/`python3 -c` payload string, the
+shape two independent EMs hit while holding the scratchpad rule in context,
+not someone routing around this guard on purpose. See
+`extract_interpreter_payload_write_sink_targets` below, a NEW,
+separately-named C5-only extractor -- `extract_write_sink_targets_for_
+segment` above (C4's shared table) is untouched by this reversal, and every
+other clause of "do not enumerate evasions" (base64, `exec`, assembled
+paths, other interpreters) still stands.
 
 Also carries `nearest_existing_ancestor()` (lifted from C4 during C5's own
 landing) -- the shared "walk up to the nearest real directory" helper both
@@ -67,6 +78,13 @@ import re
 from typing import List, Optional
 
 from ._dialect import _strip_ps_quotes
+from ._command_tokenizer import (
+    _HEREDOC_OPEN_RE,
+    _extract_dash_c_payload,
+    ResolutionConfidence,
+    normalize_executable_basename,
+    resolve_command_positions,
+)
 
 #: Redirection operator token shape shlex's tokenizer emits when `>`/`>>`
 #: (optionally fd-prefixed, e.g. `2>`, `1>>`) is surrounded by whitespace --
@@ -563,3 +581,300 @@ def resolve_relative(base: str, target: str) -> Optional[str]:
     if os.path.isabs(t):
         return t
     return os.path.join(b, t)
+
+
+# ---------------------------------------------------------------------------
+# Interpreter-payload write-sink extraction (C5 plan "the outside-repo bump
+# never looks inside an interpreter body", 2026-08-14, see the PM-ratified
+# reversal recorded in this module's own top docstring). SEPARATE from
+# `extract_write_sink_targets_for_segment` above and NEVER consumed by C4
+# (`bump_foreign_repo_write.py`) -- opted in by `bump_outside_repo_write.py`
+# (C5) only. Operates on the RAW command STRING, not an already-tokenized
+# segment: by the time `_command_tokenizer.resolve_command_positions` hands
+# back tokenized segments, a heredoc BODY has already been stripped
+# (`_strip_heredocs`, deliberately, for its 33 other consumers), so the
+# write-sink shapes this section recognizes are only ever visible in the
+# raw text.
+# ---------------------------------------------------------------------------
+
+#: `python`/`python3` only -- the one PM-ratified interpreter (see module
+#: docstring). A second interpreter (`node -e`, `ruby -e`, `perl -e`) is
+#: explicitly out of scope for this pass (plan's own "Out of scope").
+_PYTHON_C_FLAG_INTERPRETERS = frozenset({"python", "python3"})
+
+#: Quoted-string literal, single- or double-quoted, with escape support --
+#: matched with a NEGATIVE LOOKBEHIND against an immediately preceding
+#: identifier character so a prefixed string (`f'...'`, `r'...'`, `b'...'`,
+#: or a bare variable name butted up against a quote) never matches. This is
+#: the fail-open direction the plan's own AC5 names ("an f-string ... yields
+#: NOTHING") -- this module has no Python parser and does not evaluate an
+#: f-string's interpolated value, so treating one as a literal path would be
+#: simply wrong, not merely imprecise.
+_PY_QUOTED_LITERAL = r"(?<![A-Za-z0-9_])('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")"
+
+#: `open(<path>, <mode>)` -- positional `mode` argument, checked below
+#: (`_mode_allows_write`) for a `w`/`a`/`x` character; a read-only mode
+#: (`'r'`, `'rb'`) is not a write-sink shape at all.
+_PY_OPEN_CALL_RE = re.compile(
+    r"\bopen\(\s*" + _PY_QUOTED_LITERAL + r"\s*,\s*" + _PY_QUOTED_LITERAL
+)
+
+#: `<path-literal>).write_text(` / `<path-literal>).write_bytes(` -- the
+#: `Path(...)`/`PurePath(...)`-constructed-then-chained shape (`pathlib.
+#: Path('../mine.patch').write_text('x')`). Matches on the closing paren
+#: immediately before the method call, not on the constructor name itself,
+#: since `Path`/`pathlib.Path`/a re-assigned alias all share this identical
+#: tail shape and this module does not track import aliases.
+_PY_WRITE_TEXT_BYTES_RE = re.compile(
+    _PY_QUOTED_LITERAL + r"\s*\)\s*\.\s*(?:write_text|write_bytes)\("
+)
+
+#: `<path-literal>).open(<mode>)` -- `Path(...).open('w')`, the `Path`-object
+#: sibling of the builtin `open(<path>, <mode>)` shape above. Same
+#: mode-must-contain-w/a/x check.
+_PY_DOT_OPEN_RE = re.compile(
+    _PY_QUOTED_LITERAL + r"\s*\)\s*\.\s*open\(\s*" + _PY_QUOTED_LITERAL
+)
+
+#: `os.makedirs(<path>)` / `os.mkdir(<path>)`.
+_PY_MAKEDIRS_RE = re.compile(r"\bos\.\s*(?:makedirs|mkdir)\(\s*" + _PY_QUOTED_LITERAL)
+
+#: `shutil.copy*(<src>, <dst>)` / `shutil.move(<src>, <dst>)` -- only
+#: `<dst>` (the second positional argument) is captured; `<src>` is matched
+#: but never captured, as a run of non-comma/non-paren characters --
+#: deliberately coarse (does not balance nested calls in the `<src>`
+#: position) since an unmatched `<src>` shape simply yields no candidate
+#: here, the fail-open direction this whole module already applies
+#: everywhere else.
+_PY_SHUTIL_RE = re.compile(
+    r"\bshutil\.\s*(?:copy\w*|move)\(\s*[^,()]*\s*,\s*" + _PY_QUOTED_LITERAL
+)
+
+
+#: ONE alternation, tried in encounter order at each scan position -- see
+#: `_strip_comments_and_docstrings` for why this replaced two sequential
+#: passes (code-reviewer sidecar `ffbcb84d`, findings 1 and 2, EM-directed
+#: fix). `re.sub` scans left to right and, at each position, tries
+#: alternatives in the order written, so whichever construct's opener
+#: STARTS FIRST in the text wins -- exactly the ordering semantics a
+#: two-pass strip cannot express, since the second pass has no memory of
+#: what the first pass already consumed:
+#:
+#:   1. `"""..."""` / `'''...'''` -- a PAIRED triple-quoted block, non-greedy.
+#:   2. `#...` to end of line -- a comment, tried only once no paired
+#:      triple-quote opens earlier at this position.
+#:   3. `"""...` / `'''...` to END OF TEXT -- an UNTERMINATED triple-quote
+#:      opener with no matching close anywhere in the remaining text. Only
+#:      reached when neither #1 nor #2 matched at this position, i.e. this
+#:      is a real string-literal opener, not a comment containing a stray
+#:      `"""`/`'''` token (that case is caught by #2 first, since the `#`
+#:      that starts the comment necessarily precedes the stray quote chars
+#:      inside it).
+_PY_COMMENT_OR_STRING_RE = re.compile(
+    r'"""[\s\S]*?"""'
+    r"|'''[\s\S]*?'''"
+    r"|#[^\n]*"
+    r'|"""[\s\S]*'
+    r"|'''[\s\S]*"
+)
+
+
+def _strip_comments_and_docstrings(text: str) -> str:
+    """Best-effort removal of Python comments and triple-quoted strings from
+    `text` before the write-shape regexes below scan it -- deliberately in
+    the FALSE-DENY-AVOIDING direction, not the parser-building direction the
+    plan's Anti-scope forbids: this is plain text stripping, no AST, no
+    execution model.
+
+    ONE regex, ONE pass (`_PY_COMMENT_OR_STRING_RE`) -- not two sequential
+    `re.sub` calls. The original two-pass version (triple-quotes stripped
+    first, then `#`-comments) had no ordering constraint between the two
+    passes: a triple-quote token appearing INSIDE a `#` comment paired with a
+    LATER, genuine triple-quoted string before the comment regex ever got a
+    chance to neutralize it, silently erasing every real line of code in
+    between -- including a real outside-repo write (code-reviewer sidecar
+    `ffbcb84d`, finding 1, P1: a false MISS on a real write, the direction
+    this module's whole design already tolerates being over-cautious about
+    but never silently drops). A single alternation tried left-to-right at
+    each position fixes this because whichever construct's opener occurs
+    FIRST in the text is the one `re.sub` matches, matching real Python
+    tokenization order for this purpose.
+
+    ACCEPTED TRADE, on purpose, do not "fix" this back: naive `#`-comment
+    stripping can truncate a line where a `#` sits inside a quoted path
+    (`open('../x#y', 'w')`), turning that case into a MISS. Misses are
+    tolerable under this module's fail-open posture; false denies (a
+    docstring/comment merely describing a write call producing a real bump)
+    are not -- that asymmetry is the entire reason this function exists.
+
+    SECOND ACCEPTED TRADE, same asymmetry, now also handled correctly: an
+    UNTERMINATED triple-quote (no matching close anywhere in `text`) means
+    every remaining character is lexically INSIDE that string literal --
+    this function erases it to end of text (alternatives 3/4 above) rather
+    than leaving it unstripped. Leaving it unstripped was the false-deny
+    bug: a bare mention of a write-call shape inside that dangling
+    "docstring" text would otherwise reach the write-shape regexes and bump
+    on text that never executes. Erasing to end of text can only ever
+    produce a MISS (the tolerated direction), never a false deny."""
+    return _PY_COMMENT_OR_STRING_RE.sub(
+        lambda m: "" if m.group(0).startswith("#") else " ", text
+    )
+
+
+def _mode_allows_write(mode_literal: str) -> bool:
+    """`mode_literal` is a quoted Python string INCLUDING its quotes (e.g.
+    `"'wb'"`); True if its content contains any of `w`/`a`/`x` -- the write,
+    append, or exclusive-create mode characters. A read-only mode (`'r'`,
+    `'rb'`, `'r+'`) never matches -- this closed set does not distinguish
+    `'r+'`'s own read-and-write semantics, matching the plan's own AC table,
+    which names no `r+` case."""
+    content = mode_literal[1:-1]
+    return any(c in content for c in "wax")
+
+
+def _python_write_targets_in_text(text: str) -> List[str]:
+    """Scan `text` (a heredoc body or an inline `-c` payload string) for the
+    CLOSED set of Python write shapes this plan ratifies -- see this
+    section's own module-docstring addendum. Every match's path/destination
+    group is a LITERAL quoted string only (`_PY_QUOTED_LITERAL`'s own
+    negative lookbehind already excludes an f-string/r-string/b-string
+    prefix); a concatenation, a variable, or any shape this closed set does
+    not name yields nothing for that occurrence, never a guess."""
+    text = _strip_comments_and_docstrings(text)
+    targets: List[str] = []
+
+    for m in _PY_OPEN_CALL_RE.finditer(text):
+        if _mode_allows_write(m.group(2)):
+            targets.append(m.group(1)[1:-1])
+
+    for m in _PY_WRITE_TEXT_BYTES_RE.finditer(text):
+        targets.append(m.group(1)[1:-1])
+
+    for m in _PY_DOT_OPEN_RE.finditer(text):
+        if _mode_allows_write(m.group(2)):
+            targets.append(m.group(1)[1:-1])
+
+    for m in _PY_MAKEDIRS_RE.finditer(text):
+        targets.append(m.group(1)[1:-1])
+
+    for m in _PY_SHUTIL_RE.finditer(text):
+        targets.append(m.group(1)[1:-1])
+
+    return targets
+
+
+def _iter_heredoc_bodies(text: str) -> List[str]:
+    """Every TERMINATED heredoc body in raw command text `text`, in
+    left-to-right encounter order -- reuses `_command_tokenizer.
+    _HEREDOC_OPEN_RE` (per this module's own reuse contract, never
+    re-implemented) to locate each opener, mirroring `_command_tokenizer.
+    _strip_heredocs`'s own terminator-scan exactly, but COLLECTING the body
+    instead of discarding it. An unterminated heredoc (`_strip_heredocs`'s
+    own fail-open case) is skipped, not returned partially -- half a
+    heredoc body is not reliable source text to scan.
+
+    KEEP IN SYNC: this hand-mirrors `_command_tokenizer._strip_heredocs`'s
+    terminator-walk rather than calling it, because `_strip_heredocs`
+    discards the body this function needs to return -- any change to that
+    function's opener/terminator/`<<-`-tab-stripping semantics must be
+    ported here by hand."""
+    if "<<" not in text:
+        return []
+    bodies: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        m = _HEREDOC_OPEN_RE.search(text, i)
+        if not m:
+            break
+        strip_tabs = text[m.start(): m.start() + 3] == "<<-"
+        marker = m.group(2)
+        nl = text.find("\n", m.end())
+        if nl == -1:
+            break
+        j = nl + 1
+        lines: List[str] = []
+        terminated = False
+        while j < n:
+            line_end = text.find("\n", j)
+            raw_line = text[j: line_end if line_end != -1 else n]
+            check_line = raw_line.lstrip("\t") if strip_tabs else raw_line
+            j = (line_end + 1) if line_end != -1 else n
+            if check_line == marker:
+                terminated = True
+                break
+            lines.append(raw_line)
+        if terminated:
+            bodies.append("\n".join(lines))
+        i = j
+    return bodies
+
+
+def _iter_python_dash_c_payloads(raw_cmd: str) -> List[str]:
+    """Every inline `-c` payload string handed to a `python`/`python3`
+    interpreter at DEPTH 0 of `raw_cmd` -- tokenizes via `_command_tokenizer.
+    resolve_command_positions` (the package's one resolve-once entry point,
+    per this module's own "reuses rather than reimplements" precedent) and
+    reuses `_command_tokenizer._extract_dash_c_payload` (the SAME
+    bundled/standalone `-c` scan `bump_outside_repo_write._extract_inline_c_
+    payload` itself mirrors) rather than re-deriving that pattern a third
+    time. Depth 0 only -- a `-c` payload nested inside another interpreter's
+    own payload is already out of this module's reach without a second
+    recursive unwrap, and this closed set stays narrow on purpose (see
+    module docstring addendum)."""
+    try:
+        segments = resolve_command_positions(
+            raw_cmd, preserve_windows_backslashes=_host_is_windows()
+        )
+    except Exception:  # noqa: BLE001 -- fail open, never propagate a parse error
+        return []
+    payloads: List[str] = []
+    for rc in segments:
+        if rc.depth != 0 or rc.confidence == ResolutionConfidence.UNRESOLVED or not rc.tokens:
+            continue
+        head_base = normalize_executable_basename(rc.tokens[0])
+        if head_base not in _PYTHON_C_FLAG_INTERPRETERS:
+            continue
+        payload = _extract_dash_c_payload(rc.tokens[1:])
+        if payload:
+            payloads.append(payload)
+    return payloads
+
+
+def extract_interpreter_payload_write_sink_targets(raw_cmd: str) -> List[str]:
+    """Raw candidate write-target strings found INSIDE an interpreter
+    PAYLOAD carried by `raw_cmd` -- a heredoc body, or a `python`/`python3
+    -c` argument string -- rather than a shell token operand
+    (`extract_write_sink_targets_for_segment`'s own territory). See this
+    section's own module-docstring addendum for the PM-ratified scope this
+    function exists to close.
+
+    Exactly like its sibling: no resolution, no verdict -- the caller
+    resolves each candidate against its own effective cwd and applies its
+    own no-git-root predicate, which is also why an over-broad candidate
+    here is harmless (anything resolving under a git root is dropped by the
+    caller before it can bump).
+
+    FAILS OPEN: any exception at any step of this function -- heredoc
+    scanning, `-c`-payload extraction, or the Python-shape regex scan --
+    yields no candidates for that step rather than propagating; this
+    function itself never raises. C5-only, opt-in (see
+    `bump_outside_repo_write._iter_write_sink_candidates`) -- C4
+    (`bump_foreign_repo_write.py`) does not call this function and this
+    module's own shared bash-shape table above (`extract_write_sink_
+    targets_for_segment`) is untouched by its addition."""
+    targets: List[str] = []
+
+    try:
+        for body in _iter_heredoc_bodies(raw_cmd):
+            targets.extend(_python_write_targets_in_text(body))
+    except Exception:  # noqa: BLE001 -- fail open
+        pass
+
+    try:
+        for payload in _iter_python_dash_c_payloads(raw_cmd):
+            targets.extend(_python_write_targets_in_text(payload))
+    except Exception:  # noqa: BLE001 -- fail open
+        pass
+
+    return targets

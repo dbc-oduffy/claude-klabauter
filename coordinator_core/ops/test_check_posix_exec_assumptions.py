@@ -2272,6 +2272,7 @@ def test_main_json_flag_emits_valid_json_with_expected_top_level_keys(tmp_path, 
         "stale_exempt_prefixes",
         "stale_baseline_entries",
         "stale_fixture_markers",
+        "stale_exemptions",
     }
     assert "scan" in payload
     assert "env_shebang" in payload["scan"]
@@ -2310,6 +2311,45 @@ def test_main_without_json_flag_prints_human_readable_text_not_json(tmp_path, ca
     assert "OK" in out
     with pytest.raises(json.JSONDecodeError):
         json.loads(out)
+
+
+def test_main_flags_stale_exemption_through_the_wired_check(tmp_path, capsys):
+    """AC13's wiring proof at the main() boundary, not just the direct
+    function call: `test_check_no_stale_exemptions_flags_a_grant_whose_
+    file_no_longer_offends` above proves the function's own logic, but
+    that is exactly what let the wiring gap (Review: coordinator:code-
+    reviewer, 2026-08-14, wfc-S1 finding 1) go unnoticed -- a passing
+    unit test on the bare function says nothing about whether the gate
+    binary (main()) ever calls it. This drives main() itself and asserts
+    the stale grant fails the run through --json's stale_exemptions key
+    AND the process exit code, so a future regression that re-drops the
+    wiring (but leaves the function and its own unit tests intact) fails
+    red here."""
+    repo = _init_repo(tmp_path)
+    (repo / "coordinator").mkdir()
+    fixed = repo / "coordinator" / "fixed-tool.py"
+    fixed.write_text("print('hello')\n", encoding="utf-8")
+    _commit_all(repo)
+    baseline_path = repo / "state" / "posix-exec-baseline.json"
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_path.write_text(json.dumps({cls: [] for cls in CLASSES}), encoding="utf-8")
+
+    repo_key = repo_key_for_root(repo)
+    orig = check_posix_exec_assumptions.EXEMPTIONS
+    check_posix_exec_assumptions.EXEMPTIONS = {
+        "env_shebang": {repo_key: {"coordinator/fixed-tool.py": "stale grant"}},
+    }
+    try:
+        exit_code = main(["--root", str(repo), "--baseline", str(baseline_path), "--json"])
+    finally:
+        check_posix_exec_assumptions.EXEMPTIONS = orig
+    out = capsys.readouterr().out
+
+    payload = json.loads(out)
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert payload["checks"]["stale_exemptions"]["ok"] is False
+    assert "coordinator/fixed-tool.py" in payload["checks"]["stale_exemptions"]["message"]
 
 
 def test_real_tree_has_no_stale_exempt_prefix():
@@ -2641,14 +2681,12 @@ def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers():
     this fires immediately if it is evidence-incomplete, exactly the gap
     that let the 2026-08-13 grant through with item 3 missing."""
     markers = ("mechanism:", "permanence:", "windows leg:", "live caller:")
-    checked_any_third_test_entry = False
     for cls, per_repo in EXEMPTIONS.items():
         for repo_key, relpaths in per_repo.items():
             for relpath, reason in relpaths.items():
                 lowered = reason.lower()
                 if "permanent artifact-shape irreducibility" not in lowered:
                     continue
-                checked_any_third_test_entry = True
                 missing = [m for m in markers if m not in lowered]
                 assert not missing, (
                     f"EXEMPTIONS[{cls!r}][{repo_key!r}][{relpath!r}] invokes "
@@ -2656,11 +2694,33 @@ def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers():
                     f"item(s) {missing} -- all four (mechanism, permanence, "
                     "Windows leg, live caller) are required, or no grant"
                 )
-    # No assertion on checked_any_third_test_entry: it is fine for zero
-    # third-test entries to currently exist (the register may be entirely
-    # two-leg-pair/two-way-discriminator grants at any given drain) -- the
-    # per-entry loop above is what actually gates a future addition.
-    assert checked_any_third_test_entry in (True, False)
+
+    # Review: coordinator:code-reviewer (2026-08-14, wfc-S1 finding 3) --
+    # the loop above provides zero live coverage while no real EXEMPTIONS
+    # entry invokes the third admission test (true as of this drain), and
+    # the prior `assert checked_any_third_test_entry in (True, False)`
+    # tautology could never fail regardless. These fixtures exercise the
+    # exact same per-entry logic against a synthetic entry, so the check
+    # itself is proven capable of failing, independent of whether a real
+    # third-test grant currently exists.
+    complete_reason = (
+        "permanent artifact-shape irreducibility -- mechanism: resolves "
+        "PYTHON_BIN before any Python exists to run. permanence: not "
+        "contingent on any peer artifact's shape. windows leg: "
+        "<settings-home>/bin/tool.cmd. live caller: install-substrate.py."
+    )
+    incomplete_reason = (
+        "permanent artifact-shape irreducibility -- mechanism: resolves "
+        "PYTHON_BIN before any Python exists to run. permanence: not "
+        "contingent on any peer artifact's shape."
+    )
+
+    def _missing_markers(reason: str):
+        lowered = reason.lower()
+        return [m for m in markers if m not in lowered]
+
+    assert not _missing_markers(complete_reason)
+    assert _missing_markers(incomplete_reason) == ["windows leg:", "live caller:"]
 
 
 # ---------------------------------------------------------------------------

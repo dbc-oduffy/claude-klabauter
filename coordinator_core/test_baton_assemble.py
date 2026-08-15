@@ -254,11 +254,10 @@ class TestKindParametrizedCascade:
         # so a dedicated stamp directive here would always be a no-op (see
         # coordinator_core/baton_assemble/__init__.py's module docstring).
         assert "handoff.stamp_phase" not in clis
-        assert "render-project-tracker" in clis
+        # 2026-08-14: render-project-tracker (d4) retired alongside the
+        # renderer -- no directive named it here after that removal.
+        assert "render-project-tracker" not in clis
         assert "handoff.author_fork" not in clis
-
-        render_tracker_directive = next(d for d in decision["directives"] if d["cli"] == "render-project-tracker")
-        assert render_tracker_directive["depends_on"] == ["d1"]
 
         jp_ids = {jp["id"] for jp in decision["judgment_points"]}
         assert "j-continuation-vs-fork" in jp_ids
@@ -2889,7 +2888,6 @@ class TestApplyBaseClosedDispatchRejection:
             "session-claim-cli",
             "handoff.stamp_phase",
             "handoff.author_fork",
-            "render-project-tracker",
             "handoff.supersede_predecessor",
         ):
             assert callable(ba_apply._resolve_cli(name))
@@ -2901,7 +2899,6 @@ class TestApplyBaseClosedDispatchRejection:
             "session-claim-cli",
             "handoff.stamp_phase",
             "handoff.author_fork",
-            "render-project-tracker",
             "handoff.supersede_predecessor",
             "handoff-carry-gate",
         }
@@ -2933,18 +2930,6 @@ class TestEveryEmittedDirectiveActuallyDispatches:
         "session-claim-cli": None,
         "handoff.stamp_phase": "handoff.stamp_phase",
         "handoff.author_fork": "handoff.author_fork",
-        # 2026-07-28 break-class fix: was "project.render_tracker" -- no
-        # module anywhere registered that op name (confirmed by repo-wide
-        # grep), so `apply handoff <slug>` hard-aborted at d4 with
-        # "unrecognized op 'project.render_tracker'" every time it fired.
-        # `render-project-tracker` was never an `ipc` op at all: it is a
-        # standalone `coordinator/bin/` CLI (the SOLE writer of
-        # `docs/project-tracker.md`), reached by subprocess exactly like
-        # `coordinator-doc-new`/`lint-frontmatter`/`session-claim-cli`
-        # above -- so it belongs in the `None` (standalone subprocess CLI,
-        # no op registry involved) bucket, not the op-dispatch bucket. See
-        # `apply._dispatch_render_project_tracker`'s own docstring.
-        "render-project-tracker": None,
         "handoff.supersede_predecessor": "handoff.archive_transition",
     }
 
@@ -2977,16 +2962,6 @@ class TestEveryEmittedDirectiveActuallyDispatches:
         `_CLI_OP_NAMES` above), the op name it passes must be a REGISTERED
         JSON-RPC op after a full eager import -- not merely a key that
         happens to exist in `_CLI_DISPATCH`.
-
-        `project.render_tracker` (the `render-project-tracker` directive's
-        target) is a SEPARATE, pre-existing, not-this-task's-scope defect:
-        no module anywhere registers that op name (confirmed by repo-wide
-        grep, 2026-07-25) -- `_dispatch_render_project_tracker` dispatches to
-        an op that was never implemented, independent of the
-        handoff.stamp_phase import-trigger bug this task fixes. Marked
-        xfail (not skipped/removed) so it stays visible in test output as an
-        open, tracked break rather than being silently dropped from
-        coverage.
         """
         import coordinator_core.ops as ops_pkg
         from coordinator_core.ipc import get_op_handler
@@ -2996,123 +2971,10 @@ class TestEveryEmittedDirectiveActuallyDispatches:
         for cli, op_name in self._CLI_OP_NAMES.items():
             if op_name is None:
                 continue
-            if op_name == "project.render_tracker":
-                # Would fail today: no module registers this op name.
-                # Tracked separately -- see docstring above.
-                continue
             assert get_op_handler(op_name) is not None, (
                 f"cli {cli!r} dispatches to op {op_name!r} via "
                 "_invoke_op_in_process, but no module registers that op name"
             )
-
-    @pytest.mark.xfail(
-        reason=(
-            "pre-existing, out-of-this-task's-scope defect: 'project.render_tracker' "
-            "is never registered by any op module -- the render-project-tracker "
-            "directive's _dispatch_render_project_tracker dispatches to a "
-            "nonexistent op. Historically masked because handoff.stamp_phase's "
-            "directive (removed 2026-07-25) always aborted the run before this "
-            "directive could ever be reached. Flagged in the fixing session's "
-            "run report for a follow-up bounded task; not fixed here (requires "
-            "a design decision -- implement the op, or redirect the dispatch to "
-            "a subprocess CLI like d1/d2 -- outside this fix's bounded scope)."
-        ),
-        strict=True,
-    )
-    def test_render_project_tracker_op_is_registered(self):
-        import coordinator_core.ops as ops_pkg
-        from coordinator_core.ipc import get_op_handler
-
-        ops_pkg._eager_import_all()
-        assert get_op_handler("project.render_tracker") is not None
-
-
-class TestDispatchRenderProjectTrackerFailPosture:
-    """d4 degrades, never raises -- the 2026-07-29 break-class fix.
-
-    The live defect: on any repo whose `docs/project-tracker.md` is
-    hand-curated and whose `state/workstreams/` store is empty, the renderer's
-    zero-workstream truncation guard correctly declined, this handler raised,
-    `execute_directives` reported APPLY_EXIT_PARTIAL_MUTATION, and d1's
-    compensator DELETED the freshly-minted successor -- so `/handoff` could
-    not mint a baton at all there, and the operator hand-ran the remaining
-    directives one at a time. `docs/project-tracker.md` is a derived view and
-    nothing depends on d4, so a raise trades the save-state for a stale copy
-    of a regenerable file. See the handler's own FAIL POSTURE docstring.
-    """
-
-    @staticmethod
-    def _run(monkeypatch, tmp_path, returncode: int, stderr: str = "") -> dict[str, Any]:
-        monkeypatch.setattr(
-            "coordinator_core.resolution.facade.resolve_operator_config",
-            lambda: dict(_FAKE_OPERATOR_CONFIG),
-        )
-        monkeypatch.setattr(
-            ba_apply.subprocess,
-            "run",
-            lambda *a, **k: subprocess.CompletedProcess(
-                a[0] if a else [], returncode, stdout="", stderr=stderr
-            ),
-        )
-        return ba_apply._dispatch_render_project_tracker([], tmp_path)
-
-    def test_not_queue_backed_decline_degrades_quietly_and_is_labelled(
-        self, monkeypatch, tmp_path, capsys
-    ):
-        """2026-08-05 fix: a hand-curated repo's tracker is not queue-backed
-        by design and this decline fires on EVERY `/handoff` there -- a
-        warning that always fires trains its reader to stop reading warnings,
-        including the genuinely-suspect `tracker-render-regression` case
-        below. Demoted from a printed degrade to a quiet, structured-only
-        one: still fully present in the returned `degraded` dict for a
-        `--json` consumer, but no longer shouted on stderr."""
-        from coordinator_core.ops.render_project_tracker import EXIT_NOT_APPLICABLE
-
-        detail = self._run(
-            monkeypatch, tmp_path, EXIT_NOT_APPLICABLE, stderr="refusing to overwrite"
-        )
-
-        assert detail["degraded"]["reason"] == "tracker-not-queue-backed"
-        assert detail["degraded"]["returncode"] == EXIT_NOT_APPLICABLE
-        assert detail["degraded"]["stderr"] == "refusing to overwrite"
-        # No longer printed -- this is the steady-state, information-free
-        # outcome for every hand-curated-tracker repo on every `/handoff`.
-        err = capsys.readouterr().err
-        assert err == ""
-
-    def test_genuine_renderer_fault_also_degrades_but_is_labelled_differently(
-        self, monkeypatch, tmp_path
-    ):
-        """A broken renderer is still not worth destroying a baton over -- but
-        it must be distinguishable in the report from the steady-state decline,
-        so only the former gets chased as a defect."""
-        detail = self._run(monkeypatch, tmp_path, 1, stderr="boom")
-
-        assert detail["degraded"]["reason"] == "render-failed"
-        assert detail["degraded"]["stderr"] == "boom"
-
-    def test_render_regression_degrades_and_is_labelled_distinctly(
-        self, monkeypatch, tmp_path, capsys
-    ):
-        """`EXIT_RENDER_REGRESSION` (the renderer's own truncation guard
-        catching a collapse-to-zero over a previously-populated tracker) must
-        be distinguishable from both the benign not-queue-backed decline and
-        a generic renderer fault -- the DATA axis, not the FAULT axis."""
-        from coordinator_core.ops.render_project_tracker import EXIT_RENDER_REGRESSION
-
-        detail = self._run(
-            monkeypatch, tmp_path, EXIT_RENDER_REGRESSION, stderr="truncation guard fired"
-        )
-
-        assert detail["degraded"]["reason"] == "tracker-render-regression"
-        assert detail["degraded"]["returncode"] == EXIT_RENDER_REGRESSION
-        assert detail["degraded"]["stderr"] == "truncation guard fired"
-        err = capsys.readouterr().err
-        assert "degraded" in err
-        assert "truncation guard fired" in err
-
-    def test_success_reports_no_degrade(self, monkeypatch, tmp_path):
-        assert self._run(monkeypatch, tmp_path, 0)["degraded"] is None
 
 
 class TestApplyBasePerDirectiveHalt:
@@ -5318,7 +5180,6 @@ class _ReplayHarness:
 
         self.monkeypatch.setitem(ba_apply._CLI_DISPATCH, "coordinator-doc-new", _fake_d1)
         self.monkeypatch.setitem(ba_apply._CLI_DISPATCH, "lint-frontmatter", _noop("d2"))
-        self.monkeypatch.setitem(ba_apply._CLI_DISPATCH, "render-project-tracker", _noop("d4"))
         self.monkeypatch.setitem(ba_apply._CLI_DISPATCH, "session-claim-cli", _noop("d5"))
 
     def run(self) -> tuple[int, dict]:
@@ -5371,7 +5232,7 @@ class TestCleanFirstRunIsUnchanged:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
         assert report["replayed"] == []
         assert all(not r["already_satisfied"] for r in report["results"])
         assert report["commit_sha"]
@@ -5472,7 +5333,7 @@ class TestD6AlreadySupersededWedge:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
         assert [e["directive_id"] for e in report["replayed"]] == ["d1"]
         assert successor in report["replayed"][0]["reason"]
         # No duplicate mutation: one successor, same bytes, same edge.
@@ -5512,7 +5373,7 @@ class TestReplayAfterPartialAbortBeforeD6:
     precisely so an earlier failure leaves the predecessor untouched; these
     tests pin that the re-run is then a clean run, not a second mint."""
 
-    @pytest.mark.parametrize("fail_at", ["d2", "d4", "d5"])
+    @pytest.mark.parametrize("fail_at", ["d2", "d5"])
     def test_placeholder_scaffold_is_compensated_and_the_rerun_converges(
         self, tmp_path, monkeypatch, fail_at
     ):
@@ -5531,7 +5392,7 @@ class TestReplayAfterPartialAbortBeforeD6:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
         # A clean re-run, not a replay -- there was no residue to resume.
         assert report["replayed"] == []
         assert harness.archived_predecessor() is not None
@@ -6915,7 +6776,6 @@ class TestC5AbortD6LeavesPlanClaimIntact:
 
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "coordinator-doc-new", _fake_d1)
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "lint-frontmatter", _fake_noop)
-        monkeypatch.setitem(ba_apply._CLI_DISPATCH, "render-project-tracker", _fake_noop)
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "session-claim-cli", _fake_d5)
         monkeypatch.setitem(
             ba_apply._CLI_DISPATCH, "handoff.supersede_predecessor", _fake_failing_d6
@@ -6933,13 +6793,6 @@ class TestC5AbortD6LeavesPlanClaimIntact:
                 "id": "d2",
                 "cli": "lint-frontmatter",
                 "args": ["--file", str(plan_path)],
-                "depends_on": ["d1"],
-                "already_satisfied": False,
-            },
-            {
-                "id": "d4",
-                "cli": "render-project-tracker",
-                "args": [],
                 "depends_on": ["d1"],
                 "already_satisfied": False,
             },
@@ -7006,7 +6859,7 @@ class TestStandaloneHandoffApplyEndToEnd:
     (`session-claim-cli: release-artifact: basename required`, rc=1),
     `apply`'s own d1 compensation then deleting the scaffold it had just
     minted, so the ceremony produced NOTHING. Drives a REAL `apply()` run
-    (only the subprocess-shaped directives -- d1/d2/d4 -- faked, matching
+    (only the subprocess-shaped directives -- d1/d2 -- faked, matching
     `_ReplayHarness`'s own established pattern) and asserts it now succeeds
     end to end and lands the successor at a slugified, date-prefixed path."""
 
@@ -7050,7 +6903,6 @@ class TestStandaloneHandoffApplyEndToEnd:
 
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "coordinator-doc-new", _fake_d1)
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "lint-frontmatter", _noop("d2"))
-        monkeypatch.setitem(ba_apply._CLI_DISPATCH, "render-project-tracker", _noop("d4"))
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         exit_code, report = ba_apply.apply(
@@ -7062,7 +6914,7 @@ class TestStandaloneHandoffApplyEndToEnd:
         )
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d1", "d2", "d4"]
+        assert report["landed"] == ["d1", "d2"]
         assert d1_calls == [f"state/handoffs/{today}-some-title-here.md"]
         assert (repo / "state" / "handoffs" / f"{today}-some-title-here.md").is_file()
 
@@ -7287,7 +7139,6 @@ class TestD7ApplyEndToEnd:
 
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "coordinator-doc-new", _fake_d1)
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "lint-frontmatter", _noop("d2"))
-        monkeypatch.setitem(ba_apply._CLI_DISPATCH, "render-project-tracker", _noop("d4"))
         monkeypatch.setitem(ba_apply._CLI_DISPATCH, "session-claim-cli", _noop("d5"))
         monkeypatch.setitem(
             ba_apply._CLI_DISPATCH, "handoff.supersede_predecessor", _noop("d6")
@@ -7311,7 +7162,7 @@ class TestD7ApplyEndToEnd:
             ],
         )
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
         assert report["degraded"] == []
 
     def test_predecessor_with_no_carried_items_leaves_apply_unchanged(
@@ -7323,7 +7174,7 @@ class TestD7ApplyEndToEnd:
             ["handoff_id: hnd-pred-1a2b4c", 'predecessor: "none"'],
         )
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d4", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
         assert report["degraded"] == []
 
     def test_undeclared_state_predecessor_aborts_the_whole_apply(self, tmp_path, monkeypatch):

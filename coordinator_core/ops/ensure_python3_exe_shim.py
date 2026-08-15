@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import asyncio
 import filecmp
+import ntpath
 import os
 import shutil
 import subprocess
@@ -137,14 +138,44 @@ def _resolve_python_bin() -> str:
 
     See module docstring "Direct-import adaptation" for the PythonPinInvalid
     fallback rationale.
+
+    Requests the CONSOLE interpreter (``prefer_windowless=False``) and rejects a
+    windowless result via the same console-sibling defense-in-depth ladder as
+    ``coordinator_core.install.substrate._resolve_baked_python_bin`` -- this shim
+    is, like ``python3.cmd``, a general-purpose ``python3.exe`` any caller may
+    invoke with a live stdin pipe; see that function's docstring for the full
+    windowless-vs-console rationale and the originating incident. The
+    ``PythonPinInvalid`` -> ``sys.executable`` fallback above is guarded too:
+    ``sys.executable`` is itself windowless if this op ever runs under
+    ``pythonw``.
     """
-    from coordinator_core.pyresolve import PythonPinInvalid, resolve_python_bin
+    from coordinator_core.pyresolve import (
+        PythonPinInvalid,
+        _WINDOWLESS_BASENAMES,
+        _console_sibling,
+        resolve_python_bin,
+    )
+
+    def _reject_windowless(candidate: str) -> str:
+        if not candidate:
+            return candidate
+        if ntpath.basename(candidate).lower() not in _WINDOWLESS_BASENAMES:
+            return candidate
+        sibling = _console_sibling(candidate)
+        if sibling:
+            return sibling
+        print(
+            f"{_LOG_PREFIX} WARNING: resolved interpreter '{candidate}' is windowless "
+            "with no console sibling on disk; no interpreter to shim",
+            file=sys.stderr,
+        )
+        return ""
 
     try:
-        python_bin, _args = resolve_python_bin()
+        python_bin, _args = resolve_python_bin(prefer_windowless=False)
     except PythonPinInvalid:
-        return sys.executable or ""
-    return python_bin or ""
+        return _reject_windowless(sys.executable or "")
+    return _reject_windowless(python_bin or "")
 
 
 def _is_appx_stub(path: Path) -> bool:

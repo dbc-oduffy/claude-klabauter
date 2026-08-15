@@ -1220,12 +1220,26 @@ def cs_unclaim_handoff(
     Optional `reaped_from` is the reaper's opt-in provenance signal (plan
     docs/plans/2026-08-05-reaper-preserves-closure-evidence.md § C2) — see
     coordinator_core.ops.handoff_transition._unclaim's docstring for the
-    reaped_from_session resolution order it triggers."""
+    reaped_from_session resolution order it triggers.
+
+    Resolves a `session_id` the same way `cs_claim_handoff` does
+    (`resolve_current_session_id(worktree_root=worktree)`) and threads it into
+    params for `_unclaim`'s Session Ledger discharge-evidence advisory. ONE
+    deliberate divergence from `cs_claim_handoff`'s precedent: an unresolvable
+    sid does NOT fail loud here — claim's empty-claimed_by stake does not apply
+    to an advisory riding on the release path, so no sid simply means no warn
+    and a normal unclaim (docs/plans/2026-08-14-discharge-evidence-at-the-
+    unclaim-seam.md AC2c)."""
     params: dict = {"verb": "unclaim"}
     if note:
         params["note"] = note
     if reaped_from:
         params["reaped_from"] = reaped_from
+    worktree, _repo_root = _resolve_repo_root_for(Path(handoff_path))
+    if worktree is not None:
+        sid = resolve_current_session_id(worktree_root=worktree)
+        if sid:
+            params["session_id"] = sid
     result = _call_handoff_transition(handoff_path, params)
     rc = int(result.get("exit_code", 1))
     if rc != 0:

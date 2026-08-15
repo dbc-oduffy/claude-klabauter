@@ -25,6 +25,13 @@ from coordinator_core.ops.emit.context import _GIT_BACKED_SOURCE_KINDS, EmitCont
 from coordinator_core.ops.emit.envelope import resolve_coordinator_root
 from coordinator_core.ops.emit.sections.lessons import collect
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 

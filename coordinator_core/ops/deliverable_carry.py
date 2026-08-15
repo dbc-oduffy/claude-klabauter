@@ -228,6 +228,71 @@ def resolve_session_state_parent_deliverable_id(
     return dlvr_id
 
 
+def resolve_explicit_predecessor_edge_deliverable_id(
+    read_frontmatter_field,
+    predecessor_path: "str | None",
+) -> "str | None":
+    """Explicit-predecessor-edge tier (C2, AC1/AC4/AC9) — carries
+    `deliverable_id` onto an artifact being scaffolded from an AUTHOR-
+    ASSERTED explicit edge (`--predecessor` at the CLI seam), regardless of
+    the referenced artifact's `kind`.
+
+    Sibling to `resolve_session_state_parent_deliverable_id` above, and
+    deliberately narrower in what it gates on: that tier admits a SESSION-
+    HELD claim only when the held artifact's own `kind` marks it a roadmap
+    stub, because holding a claim is not, by itself, evidence of descent
+    (AC4's negative half, unchanged — see that function's docstring and
+    `_ROADMAP_STUB_KINDS`). This tier sees a different signal: the author
+    explicitly named `predecessor_path` as this artifact's predecessor. That
+    assertion is descent evidence on its own, independent of the referenced
+    artifact's `kind` — DR-294 declines a *live pickup claim* as guard
+    evidence ("a claim is bookkeeping, not an attestation") for an analogous
+    guard, but an author-asserted explicit edge is not a session-bookkeeping
+    signal, so it sits outside DR-294's decline (see this plan's C2 body).
+
+    ``predecessor_path`` is a caller-resolved path (mirroring every other
+    tier in this module's contract of taking already-resolved paths rather
+    than resolving them itself) — typically the CLI's `--predecessor` flag
+    value, joined against the repo root by the caller.
+
+    Omit-rather-than-guess: no `predecessor_path`, an unreadable file, or an
+    absent/`null`/blank `deliverable_id` on the referenced artifact all
+    return `None` — the caller then falls through to whatever the next rung
+    (or ultimately mint-from-slug) resolves. This function NEVER raises,
+    mirroring `resolve_session_state_parent_deliverable_id`'s own error
+    posture: there is only one candidate value here, never two rungs that
+    could disagree, so there is nothing for a raise to protect.
+
+    Does NOT touch `resolve_deliverable_and_initiative`'s claimed-plan/
+    predecessor cascade below — that cascade is the `handoff` arm's own
+    ruled 2026-08-03 behaviour (claimed-plan outranks predecessor there, and
+    a disagreement between them still raises `DivergentDeliverableIdError`)
+    and this function is never called from within it.
+
+    Logs the accept/reject outcome on stderr per DR-207 D1 (AC2), matching
+    `resolve_session_state_parent_deliverable_id`'s own logging convention.
+    """
+    if not predecessor_path or not os.path.isfile(predecessor_path):
+        return None
+
+    dlvr_id = read_frontmatter_field(predecessor_path, "deliverable_id")
+    if not dlvr_id:
+        print(
+            "deliverable_carry: explicit-predecessor-edge tier — predecessor "
+            f"{predecessor_path!r} carries no deliverable_id (absent/null/blank) "
+            "— falling through",
+            file=sys.stderr,
+        )
+        return None
+
+    print(
+        "deliverable_carry: explicit-predecessor-edge tier — predecessor "
+        f"{predecessor_path!r} carries deliverable_id {dlvr_id!r} — carrying",
+        file=sys.stderr,
+    )
+    return dlvr_id
+
+
 def resolve_deliverable_and_initiative(
     read_frontmatter_field,
     mint,

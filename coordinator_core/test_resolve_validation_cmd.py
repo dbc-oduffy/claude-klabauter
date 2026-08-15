@@ -29,6 +29,13 @@ from coordinator_core.resolve_validation_cmd import (
     resolve_python_interp,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):

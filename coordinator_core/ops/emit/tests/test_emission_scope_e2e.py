@@ -32,6 +32,13 @@ from coordinator_core.ops.emit import validate
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.envelope import emit
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 _SLUG = "fixture-owner/emission-scope-e2e"
 

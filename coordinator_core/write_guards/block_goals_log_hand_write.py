@@ -11,7 +11,9 @@ repo-root-relative, and quarantines a malformed ``weekly_perceptible`` /
 ``key_results_status`` before the row ever reaches disk.
 
 Every sibling substrate wire in this repo already closes this exact hole:
-``block_tracker_edit.py``, ``block_memo_status_hand_edit.py``,
+the retired ``block_tracker_edit.py`` (deleted under the tracker-render
+retirement plan, docs/plans/2026-08-14-retire-the-handoff-tracker-and-
+project-tracker-renders.md), ``block_memo_status_hand_edit.py``,
 ``block_priority_ledger_edit.py``, ``block_home_dir_memo_delivery.py``. The
 goals wire was the only one without one — per ``block_priority_ledger_edit.
 py``'s own docstring, adding a guard of this shape "is not a novel
@@ -23,8 +25,8 @@ guards match conditions, not containers, and resolving the root would cost
 a subprocess on every Write/Edit/MultiEdit/NotebookEdit in the fleet. The
 varying parts of the physical path are the machine slug and the root
 prefix — neither is literal here; only the constant
-``goals-log.<machine>.jsonl`` filename shape is matched, mirroring
-``block_tracker_edit.py`` / ``block_priority_ledger_edit.py``'s own
+``goals-log.<machine>.jsonl`` filename shape is matched, mirroring the
+retired ``block_tracker_edit.py`` / ``block_priority_ledger_edit.py``'s own
 discipline exactly, including the backslash/slash-run normalization.
 
 Design-as-offers (load-bearing, not stylistic): the denial reason LEADS
@@ -79,7 +81,7 @@ def _extract_file_path(tool_name: str, tool_input: Dict[str, Any]) -> str:
 
 def _normalize(file_path: str) -> str:
     """Backslash -> forward slash, then collapse slash runs (parity with
-    `block_tracker_edit.py`'s F5-fixed normalizer)."""
+    the retired `block_tracker_edit.py`'s F5-fixed normalizer)."""
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")

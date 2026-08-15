@@ -739,6 +739,20 @@ LAUNCHER_PARITY_EXEMPTIONS: dict[str, str] = {
     # site resolves the settings-home copies instead. `test_no_parity_exemption_is_stale`
     # is what caught the row outliving its file -- the same staleness discipline
     # AC13 generalises to the POSIX-exec register.
+    # Review: code-reviewer (wfc-S2-launchers, Finding 2) flagged an apparent
+    # contradiction between this "not on PATH" claim and the deleted forwarders'
+    # own docstrings ("harness-injected plugin bin ... resolves on tool shells
+    # where ~/.claude/bin is NOT on PATH"). Both are true, about different
+    # trees: THIS repo's coordinator/bin (the source copy) is never
+    # PATH-injected -- only DoE-claude's own coordinator/bin is (a distinct
+    # directory the harness injects for its own plugin). The forwarders'
+    # docstrings described the general pattern correct for DoE-claude's copy
+    # but never held for claude-klabauter's. Settled on disk, not by convenience: see
+    # docs/plans/2026-08-14-windows-first-class-gate-and-exemptions.md:116
+    # ("coordinator/bin is the SOURCE side, not the executed side") and
+    # docs/research/2026-08-14-posix-exec-final-36-bin-name-dispositions.md's
+    # `machine-local` per-name evidence section (the sibling DoE-claude/
+    # example-game-repo forwarders are EXEMPT, not deleted, for exactly this reason).
     # -- Not generator output at all: the widened roots (2026-08-03) ---------
     # The 2026-08-03 sweep over `bin/`, `coordinator/lib/`,
     # `coordinator/scripts/` and `scripts/` regenerated all 47 files that were
@@ -1069,6 +1083,77 @@ def test_raw_cmdline_block_bodies_match_between_generators():
         "docstrings claim they are mirrored line for line; extend both "
         "together."
     )
+
+
+_CMD_EXISTENCE_GATE = 'if not "%_py%"=="" if exist "%_py%" goto :run_baked'
+_CMD_EMPTINESS_ONLY_GATE = 'if not "%_py%"=="" goto :run_baked'
+_PS1_EXISTENCE_GATE = (
+    "if ($_pybin -ne '' -and -not (Test-Path -LiteralPath $_pybin)) { $_pybin = '' }"
+)
+_PS1_EMPTINESS_ONLY_GATE = "if ($_pybin -eq '') { $_pybin = '' }"
+
+
+def test_interpreter_ladder_existence_gate_present_in_all_three_emitters(tmp_path):
+    """One-fixed-two-not regression guard for the baked-interpreter existence
+    gate (`_write_agent_cmd_forwarder`'s own docstring § "The baked rung is
+    guarded by `if exist`"; `render_cmd`/`render_ps1`'s own module docstring
+    § "The baked rung is EXISTENCE-GATED").
+
+    On 2026-07-28 review (Finding 1 of that pass) found the exist-gate
+    present in `coordinator_core/install/substrate.py`'s emitter but absent
+    from BOTH `gen-launcher-shim.py` emitters (`render_cmd`, `render_ps1`).
+    All three were later fixed, but nothing asserted they stay in sync --
+    reverting any ONE of the three back to a bare emptiness check (
+    `if not "%_py%"=="" goto :run_baked`, no `if exist`; PowerShell's
+    `-and -not (Test-Path ...)` conjunct dropped) fails no other test in this
+    file, since none of it diffs rendered BYTES against a fourth ladder
+    generator or reads gate semantics -- only exact byte parity against
+    each generator's OWN current output. A baked `_py=`/`$_pybin` naming a
+    since-deleted interpreter then passes the emptiness-only check and the
+    launcher execs a nonexistent binary: the Windows silent-degradation
+    shape this whole gate family exists to kill (see this file's own
+    LAUNCHER_PARITY_ROOTS section header for the related but distinct byte-
+    parity mechanism -- that mechanism catches a launcher body drifting from
+    its OWN generator's current output; this test catches the three
+    generators' gates drifting from EACH OTHER).
+
+    Renders all three emitters fresh (never reads committed launcher files,
+    which byte-parity already covers) and, for each, both confirms the real
+    existence-gate string is present AND proves a degraded (emptiness-only)
+    substitute is texturally distinguishable -- so this test would actually
+    fail, not vacuously pass, if any one emitter regressed.
+    """
+    from coordinator_core.install.substrate import _write_agent_cmd_forwarder
+
+    gen = _load_gen_launcher_shim()
+
+    dst = tmp_path / "fake-tool.cmd"
+    _write_agent_cmd_forwarder(
+        "fake-tool",
+        dst,
+        False,
+        python3_cmd_resolved_bin="C:\\fake-python-bin\\python.exe",  # abs-path-ok: synthetic test fixture value, never resolved on disk
+        target="",
+    )
+    substrate_body = dst.read_text(encoding="utf-8")
+    cmd_body = gen.render_cmd("fake-tool.py")
+    ps1_body = gen.render_ps1("fake-tool.py")
+
+    assert _CMD_EXISTENCE_GATE in substrate_body
+    assert _CMD_EXISTENCE_GATE in cmd_body
+    assert _PS1_EXISTENCE_GATE in ps1_body
+
+    # Prove each assertion is not vacuous: an in-memory degrade of the
+    # rendered string (never the on-disk generator source) to the
+    # emptiness-only form must make the positive assertion above fail.
+    degraded_substrate = substrate_body.replace(_CMD_EXISTENCE_GATE, _CMD_EMPTINESS_ONLY_GATE)
+    assert _CMD_EXISTENCE_GATE not in degraded_substrate
+
+    degraded_cmd = cmd_body.replace(_CMD_EXISTENCE_GATE, _CMD_EMPTINESS_ONLY_GATE)
+    assert _CMD_EXISTENCE_GATE not in degraded_cmd
+
+    degraded_ps1 = ps1_body.replace(_PS1_EXISTENCE_GATE, _PS1_EMPTINESS_ONLY_GATE)
+    assert _PS1_EXISTENCE_GATE not in degraded_ps1
 
 
 def test_parity_guard_is_not_mostly_exemptions():
@@ -1409,3 +1494,189 @@ def test_argv_fidelity_matrix(argv_probe_launchers, leg, label, invocation_args,
         pytest.skip("cmd leg needs cmd.exe — not observable on a POSIX host")
     launcher = cmd_path if leg == "cmd" else ps1_path
     assert _pwsh_probe(launcher, invocation_args) == expected
+
+
+# ---------------------------------------------------------------------------
+# CARET ROUND-TRIP GUARD (2026-08-15)
+#
+# state/bug-backlog/2026-08-08-cmd-exe-shim-eats-the-caret-in-a-git-rev-
+# 6679bf76eb8a.yaml documents cmd.exe stripping a literal `^` from `%*`
+# during its OWN command-line parse, ahead of anything a launcher body can
+# do about it. `gen-launcher-shim.py`'s fix (module docstring § RAW-CMDLINE-
+# PRESERVATION ENTRYPOINTS) is opt-in per entrypoint: `_RAW_CMDLINE_ENTRYPOINTS`
+# names the CLIs whose `.cmd` twin captures `%CMDCMDLINE%` before Python runs,
+# and `coordinator/bin/lib/raw_cmdline_recovery.py::recover_windows_argv` is
+# the entrypoint-side half that re-derives un-mangled argv from that capture.
+#
+# `test_argv_fidelity_matrix` above deliberately does NOT cover this case --
+# its probe callee reads `sys.argv` directly, which is a faithful oracle for
+# every OTHER argv-fidelity defect but would only prove the caret is lost
+# (the known-bad, pre-recovery shape), never that the opt-in recovery
+# mechanism actually restores it. This section is a SEPARATE round-trip
+# oracle, through a REAL `cmd.exe`-interpreted `.cmd` launcher generated
+# with `preserve_raw_cmdline=True`, whose probe callee calls
+# `recover_windows_argv` itself -- the same call every `_RAW_CMDLINE_
+# ENTRYPOINTS` member makes -- so a regression in either half (the launcher's
+# capture block or the recovery module's parse) fails this test, not just a
+# unit test of `recover_windows_argv` in isolation (which would prove nothing
+# about whether the shell layer ever hands it real captured text).
+# ---------------------------------------------------------------------------
+
+_CARET_PROBE_LAUNCHER_NAME = "caret_probe"
+
+_RAW_CMDLINE_RECOVERY_PATH = REPO_ROOT / "coordinator" / "bin" / "lib" / "raw_cmdline_recovery.py"
+
+
+#: The exact refusal marker `coordinator-write-review-trail.py`'s
+#: `__main__` guard prints to stderr on `UnsoundRawCmdlineTransport` (see
+#: its `if __name__ == "__main__":` block) -- the probe callee below mirrors
+#: that entrypoint's catch-and-refuse contract (not scoped-git-commit's or
+#: cross-repo-memo.py's warn-and-proceed contract) because it is the one
+#: entrypoint whose response is a clean, unambiguous (exit code, stderr
+#: text) pair a subprocess round-trip probe can assert against without
+#: also needing a ledger-row fixture.
+_CARET_REFUSAL_MARKER = "the invoking shell stripped characters from this command line"
+
+
+def _caret_probe_callee_body() -> str:
+    """The probe callee's source: recovers argv via the REAL
+    `raw_cmdline_recovery.recover_windows_argv` (loaded from its actual
+    repo path, not a copy) and prints it as JSON -- the exact shape
+    `coordinator-write-review-trail.py`/`scoped-git-commit` themselves call
+    (`_recover_windows_argv` wrappers), so this probe is not a reimplementation
+    of the recovery contract, just a thin JSON-emitting caller of it.
+
+    On `UnsoundRawCmdlineTransport` this mirrors `coordinator-write-
+    review-trail.py`'s own `__main__` guard: print a refusal to stderr and
+    exit non-zero, rather than let `recover_windows_argv` hand back a
+    silently-mangled argv."""
+    recovery_path = str(_RAW_CMDLINE_RECOVERY_PATH).replace("\\", "\\\\")
+    return (
+        "import sys, json, importlib.util\n"
+        f"_spec = importlib.util.spec_from_file_location('raw_cmdline_recovery', r'{recovery_path}')\n"
+        "_mod = importlib.util.module_from_spec(_spec)\n"
+        "_spec.loader.exec_module(_mod)\n"
+        "try:\n"
+        f"    print(json.dumps(_mod.recover_windows_argv(sys.argv[1:], '{_CARET_PROBE_LAUNCHER_NAME}.cmd')))\n"
+        "except _mod.UnsoundRawCmdlineTransport:\n"
+        f"    print({_CARET_REFUSAL_MARKER!r}, file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+    )
+
+
+def _subprocess_list_probe_refuses(launcher: Path, args: list) -> None:
+    """Spawn the launcher directly via `subprocess.run([str(launcher), *args])`
+    -- no shell, no `pwsh` -- and assert the CALLEE's `coordinator-write-
+    review-trail.py`-shaped refusal (non-zero exit, `_CARET_REFUSAL_MARKER`
+    on stderr) rather than a recovered argv.
+
+    On Windows, `CreateProcess`'s file-association substitution still routes
+    a `.cmd` target through `cmd.exe`, but it does NOT outer-quote the
+    resulting post-`/c` string the way `_pwsh_probe`'s `& '<launcher>' ...`
+    invocation does. This is one of the non-outer-quoted spawn shapes named
+    in the plan's measured substrate (git-bash/MSYS and
+    `subprocess.run([...])` list-form both land here, PowerShell does not) --
+    the shape neither the 2026-08-10 fix nor its guard ever exercised,
+    because every prior oracle spawned through pwsh. See
+    `caret_probe_launcher`'s docstring.
+
+    This non-outer-quoted transport is UNSOUND per
+    `raw_cmdline_recovery._classify_raw_cmdline_transport`, and the caret
+    is destroyed by cmd.exe's own `/c` parse before this process's first
+    line ran, so no parse here can recover it (see that module's
+    docstring). Asserting a recovered caret here would be the exact
+    wrongly-passing test this plan exists to close."""
+    proc = subprocess.run(
+        [str(launcher), *args],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode != 0, (
+        f"expected a refusal (non-zero exit) for an unsound, non-outer-quoted "
+        f"transport, got rc=0:\nargv: {[str(launcher), *args]}\nstdout: {proc.stdout}"
+    )
+    assert _CARET_REFUSAL_MARKER in proc.stderr, (
+        f"expected the caret-refusal marker on stderr, got:\nstderr: {proc.stderr}"
+    )
+
+
+@pytest.fixture(scope="module")
+def caret_probe_launcher(tmp_path_factory):
+    """A real `.cmd` launcher generated with `preserve_raw_cmdline=True`,
+    baked to the live interpreter, for a callee that recovers argv via the
+    real `raw_cmdline_recovery` module -- see section header.
+
+    The sound cases below spawn through `pwsh` (`_pwsh_probe`): its
+    `& '<launcher>' ...` invocation outer-quotes the ENTIRE post-`/c` string
+    cmd.exe receives, and the caret survives cmd.exe's own `/c` parse under
+    that shape. The failing case spawns through `_subprocess_list_probe_refuses`
+    instead, whose `subprocess.run([str(launcher), *args])` does not
+    outer-quote that string -- the same non-outer-quoted shape git-bash/MSYS
+    produce. This is NOT a separate, Python-specific quoting gap in Python's
+    own `.bat`/`.cmd` launch path, and it is not this mechanism's cover
+    story: measured, the mechanism is spawn-shape quoting, and any caller
+    that does not outer-quote the post-`/c` string loses the caret before
+    this process's first line runs -- the excluded shape is the failing one.
+    See Measured substrate row 4 in
+    `docs/plans/2026-08-15-the-caret-fix-went-to-the-caller-that-never-broke.md`."""
+    if _PWSH is None:
+        pytest.skip("pwsh not on PATH -- caret round-trip oracle needs a real PowerShell subprocess spawn")
+    if sys.platform != "win32":
+        pytest.skip("caret round-trip needs a real cmd.exe — not observable on a POSIX host")
+    gen = _load_gen_launcher_shim()
+    tmp_path = tmp_path_factory.mktemp("caret-roundtrip")
+    callee = tmp_path / f"{_CARET_PROBE_LAUNCHER_NAME}.py"
+    callee.write_text(_caret_probe_callee_body(), encoding="utf-8")
+    cmd_path = tmp_path / f"{_CARET_PROBE_LAUNCHER_NAME}.cmd"
+    cmd_path.write_text(
+        gen.render_cmd(f"{_CARET_PROBE_LAUNCHER_NAME}.py", preserve_raw_cmdline=True),
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    cmd_path.write_bytes(_bake_python_bin(cmd_path.read_bytes(), sys.executable, quoted=False))
+    return cmd_path
+
+
+_CARET_ROUND_TRIP_CASES = [
+    ("pwsh", "'51652dd75^..51652dd75'", ["51652dd75^..51652dd75"]),
+    ("pwsh", "'a^b'", ["a^b"]),
+    ("pwsh", "'100%25'", ["100%25"]),
+    # `expected` is unused for this row -- `_subprocess_list_probe_refuses`
+    # takes no `expected` argument; `None` is a placeholder to keep the
+    # 3-tuple shape the pwsh rows need, not a value ever compared against.
+    ("list", ["51652dd75^..51652dd75"], None),
+]
+
+
+@pytest.mark.parametrize(
+    "spawner, invocation, expected",
+    _CARET_ROUND_TRIP_CASES,
+    ids=["single-caret-git-range", "caret-mid-token", "percent", "list-form-caret-not-outer-quoted"],
+)
+def test_caret_survives_real_cmd_shim_round_trip(caret_probe_launcher, spawner, invocation, expected):
+    """A `^`-bearing argument (the exact `<sha>^..<sha>` shape from the
+    review-trail incident) survives byte-identical through a REAL `.cmd`
+    launcher generated with `preserve_raw_cmdline=True`, invoked into the
+    Python process's recovered argv -- proving the opt-in raw-cmdline-
+    capture mechanism actually closes the defect it was built for, not just
+    that a string-level unit test of `recover_windows_argv` passes in
+    isolation.
+
+    The `pwsh`-spawned cases (`_pwsh_probe`) outer-quote the post-`/c`
+    string and are the sound, working transport this mechanism was built
+    and guarded against. The `list`-spawned case
+    (`_subprocess_list_probe_refuses`) is the non-outer-quoted shape named
+    in the plan's measured substrate -- as of C1/C2,
+    `recover_windows_argv` classifies this transport UNSOUND and raises
+    `UnsoundRawCmdlineTransport` rather than handing back a silently
+    mangled "recovered" argv, so this case asserts the loud refusal
+    (non-zero exit, refusal marker on stderr), never a recovered caret:
+    the caret's bytes are destroyed by cmd.exe's own `/c` parse before
+    this process's first line ran and cannot be recovered by any parse
+    here (see `raw_cmdline_recovery.py`'s module docstring)."""
+    if spawner == "pwsh":
+        assert _pwsh_probe(caret_probe_launcher, invocation) == expected
+    else:
+        _subprocess_list_probe_refuses(caret_probe_launcher, invocation)

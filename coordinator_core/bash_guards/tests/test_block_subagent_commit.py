@@ -41,6 +41,13 @@ from coordinator_core.ops.session import scope_report as _scope_report
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import scope as _session_scope
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _SUBAGENT_TYPE = "coordinator:executor"
 
 

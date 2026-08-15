@@ -388,7 +388,7 @@ def test_stale_archive_sweeps_liveness_surfaces_remedy_sub_bullets(tmp_path):
 
 
 def test_stale_class_with_no_remedy_renders_no_extra_commands(tmp_path):
-    """TRACKER_REGEN has no on-demand CLI (REMEDY_COMMANDS maps it to ()) -- its stale
+    """ROADMAP_CALLOUT has no on-demand CLI (REMEDY_COMMANDS maps it to ()) -- its stale
     bullet must render with NO sub-bullet commands invented."""
     from coordinator_core.ops.ceremony import housekeeping_liveness as hl
     from datetime import datetime, timedelta, timezone
@@ -397,12 +397,12 @@ def test_stale_class_with_no_remedy_renders_no_extra_commands(tmp_path):
     liveness_path = hl.liveness_path(str(repo))
     liveness_path.parent.mkdir(parents=True, exist_ok=True)
     stale_ts = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    liveness_path.write_text('{"' + hl.TRACKER_REGEN + '": "' + stale_ts + '"}', encoding="utf-8")
+    liveness_path.write_text('{"' + hl.ROADMAP_CALLOUT + '": "' + stale_ts + '"}', encoding="utf-8")
 
     result = mod.build_cache(invoker="workday-start", repo_root=repo, pinboard="", pinboard_set=True)
     output = result["output"]
 
-    assert hl.TRACKER_REGEN in output
+    assert hl.ROADMAP_CALLOUT in output
     assert "sweep-" not in output
 
 

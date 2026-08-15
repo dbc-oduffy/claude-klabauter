@@ -56,7 +56,10 @@ from coordinator_core.ops.handoff_stamp import _handler as _stamp_handler
 # property under test is git's own disk/HEAD drift behaviour, which no
 # fixture stands in for. See test_handoff_reconcile_close_terminal_defects.py's
 # identical pytestmark for the same reasoning.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _OP_NAME = "handoff.ship_and_archive"
 assert _OP_NAME in _REGISTRY, (

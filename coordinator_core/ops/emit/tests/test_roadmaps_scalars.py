@@ -23,6 +23,9 @@ import pytest
 
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections.roadmaps import collect
+from coordinator_core.ops.emit.validate import _VENDOR_CONTRACT
+
+_ROADMAP_SUMMARY_SCHEMA = _VENDOR_CONTRACT / "schema" / "roadmap-summary.schema.json"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +81,8 @@ _FAKE_DAG_PAYLOAD = {
         "pct_shipped": 100.0,
     },
     "critical_path": ["strang-01"],
+    "scan_incomplete": True,
+    "scan_errors": ["state/roadmap/broken/OVERVIEW.md: unreadable subtree"],
 }
 
 
@@ -111,6 +116,14 @@ class TestRoadmapScalarsNonNullId:
         assert rec["critical_path"] == _FAKE_DAG_PAYLOAD["critical_path"], (
             f"critical_path mismatch: expected {_FAKE_DAG_PAYLOAD['critical_path']!r}, "
             f"got {rec['critical_path']!r}"
+        )
+        assert rec["scan_incomplete"] == _FAKE_DAG_PAYLOAD["scan_incomplete"], (
+            f"scan_incomplete mismatch: expected {_FAKE_DAG_PAYLOAD['scan_incomplete']!r}, "
+            f"got {rec['scan_incomplete']!r}"
+        )
+        assert rec["scan_errors"] == _FAKE_DAG_PAYLOAD["scan_errors"], (
+            f"scan_errors mismatch: expected {_FAKE_DAG_PAYLOAD['scan_errors']!r}, "
+            f"got {rec['scan_errors']!r}"
         )
 
     def test_assembler_called_with_correct_roadmap_id(self) -> None:
@@ -169,6 +182,14 @@ class TestRoadmapScalarsNullId:
         )
         assert rec["critical_path"] is None, (
             f"Expected critical_path=None for null roadmap_id, got {rec['critical_path']!r}"
+        )
+        assert rec["scan_incomplete"] is False, (
+            f"Expected scan_incomplete=False (schema-typed boolean, no null) for null "
+            f"roadmap_id, got {rec['scan_incomplete']!r}"
+        )
+        assert rec["scan_errors"] == [], (
+            f"Expected scan_errors=[] (schema-typed array, no null) for null roadmap_id, "
+            f"got {rec['scan_errors']!r}"
         )
 
     def test_assembler_not_called_for_null_roadmap_id(self) -> None:
@@ -242,3 +263,57 @@ class TestRoadmapScalarsMixedRecords:
 
         # assembler_dag called exactly once — only for the non-null roadmap_id.
         mock_dag.assert_called_once_with("roadmap-delta")
+
+
+class TestRoadmapScalarsSchemaConformance:
+    """Emitted rows satisfy the vendored RoadmapSummary schema's scan_incomplete/scan_errors
+    ``required`` + type constraints (3.12.0) — the actual proof this fix discharges the
+    contract violation, not merely that the two keys exist with equality-matched values."""
+
+    def _validate_scan_fields(self, record: dict) -> None:
+        jsonschema = pytest.importorskip("jsonschema")
+        if not _ROADMAP_SUMMARY_SCHEMA.exists():
+            pytest.skip("vendored roadmap-summary.schema.json not present")
+
+        import json
+
+        schema = json.loads(_ROADMAP_SUMMARY_SCHEMA.read_text(encoding="utf-8"))
+        props = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
+        assert "scan_incomplete" in required, "schema no longer requires scan_incomplete"
+        assert "scan_errors" in required, "schema no longer requires scan_errors"
+
+        # Validate just the two fields' sub-schemas directly — the full record additionally
+        # carries emit-derived/deliverable-spine facets not under test here.
+        jsonschema.validate(
+            instance=record["scan_incomplete"], schema=props["scan_incomplete"]
+        )
+        jsonschema.validate(instance=record["scan_errors"], schema=props["scan_errors"])
+
+    def test_non_null_roadmap_id_scan_fields_conform(self) -> None:
+        ctx = _make_ctx()
+        raw_records = [_minimal_record("roadmap-alpha")]
+
+        with patch(
+            "coordinator_core.ops.emit.sections.roadmaps._query_roadmap_records",
+            return_value=raw_records,
+        ), patch.object(ctx, "assembler_dag", return_value=_FAKE_DAG_PAYLOAD):
+            records, _ = collect(ctx)
+
+        self._validate_scan_fields(records[0])
+
+    def test_null_roadmap_id_scan_fields_conform(self) -> None:
+        """The no-assembler branch must ALSO emit schema-conformant (non-null) values —
+        this is the case the schema's own `required`+non-nullable typing forces: a bare
+        `null` for either field would fail these sub-schema checks."""
+        ctx = _make_ctx()
+        raw_records = [_minimal_record(None)]
+
+        with patch(
+            "coordinator_core.ops.emit.sections.roadmaps._query_roadmap_records",
+            return_value=raw_records,
+        ), patch.object(ctx, "assembler_dag"):
+            records, _ = collect(ctx)
+
+        self._validate_scan_fields(records[0])

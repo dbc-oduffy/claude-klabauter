@@ -79,8 +79,9 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 # NOTE: `archive_stamp._commit_session_id` and `ops.session_context.
 # resolve_current_session_id` are imported LOCALLY (inside
@@ -175,6 +176,15 @@ _STRUCTURAL_STOPWORD_TOKENS: frozenset = frozenset({
 #: tracker.md]` previously satisfied both signal (a) (title tokens matched an
 #: unrelated tracker-touching commit) and signal (b) (its own doc + the tracker
 #: both trivially "exist") on zero real deliverable evidence.
+#:
+#: KEPT LIVE despite the tracker-render retirement plan (docs/plans/2026-08-14-
+#: retire-the-handoff-tracker-and-project-tracker-renders.md): both files still
+#: exist on disk (their deletion is deferred to that plan's AC8, coordinated
+#: with the cross-repo cut in § C6). Dropping this exclusion ahead of that
+#: deletion reopens the exact false-positive this set exists to close --
+#: `state/handoff-tracker.md`'s filename itself contributes a "tracker" noun
+#: token once it's treated as an ordinary deliverable, which is precisely what
+#: `TestSelfReferentialScopeIsNotADeliverable` regression-guards against.
 _NON_DELIVERABLE_SCOPE_FILES: frozenset = frozenset({
     "state/handoff-tracker.md",
     "state/doe-handoff-tracker.md",
@@ -199,6 +209,15 @@ def _is_non_deliverable_scope_entry(path_str: str) -> bool:
 _DEFAULT_SUBJECT_MATCH_MIN_TOKENS = 2
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+#: Sentinel prefix marking a commit-header line in `_deliverable_deleted_by_commit`'s
+#: batched `git log --name-only --pretty=format:<sentinel>%H %s` output, so a commit
+#: header line can be told apart from a `--name-only` deleted-path line even when a
+#: file path happens to start with a hex-looking string. Deliberately NOT a character
+#: git's own pathspec/pretty-format machinery could ever emit on its own (a NUL byte
+#: is impossible in `%s`/path output; this printable stand-in is chosen for `.strip()`/
+#: string-split simplicity over the file's existing parsing idiom).
+_DELETED_COMMIT_SENTINEL = "\x01COMMIT\x01"
 
 
 def _is_directory_scope(path_str: str) -> bool:
@@ -443,6 +462,158 @@ def _deliverable_present(
             elif target.exists():
                 return True
     return False
+
+
+def _deliverable_deleted_by_commit(
+    worktree_root: Path,
+    scope: Sequence[str],
+    since: Optional[str],
+    denylist: Sequence[str],
+) -> Optional[Tuple[str, str]]:
+    """Signal (b), deletion-aware branch: was one of the handoff's scope paths
+    REMOVED by a real, reachable, non-mechanical commit?
+
+    Purpose: `_deliverable_present` alone is a pure presence test, so any
+    handoff whose deliverable is a REMOVAL (a de-bash wave, a port-out, a
+    consolidation) reads its own successful outcome — the path correctly
+    absent from disk — as evidence AGAINST shipped-ness. This helper is the
+    positive counterpart: a scope path that is absent on disk AND has a
+    git-reachable, non-mechanical commit that deleted it is affirmative
+    deliverable evidence, not negative. Spec backlink: cross-repo/inbox/
+    2026-08-14-example-retrieval-repo-em-auto-reconcile-cannot-see-deletion-deliverables.md
+    Finding 2.
+
+    Issues ONE `git log --diff-filter=D --name-only` call over the WHOLE
+    (filtered) scope list — mirroring `_find_candidate_commits`'s batched
+    shape (`args.extend(scope)`), not a per-entry spawn (P2, code review,
+    `state/subagent-share/60a896a5-.../coordinatorcode-reviewer-645adcb1.md`:
+    a per-entry loop cost 100+ git spawns per handoff on a 100+-path scope
+    list, on the miss path of the workday-start sweep across 41 open
+    handoffs — see CLAUDE.md § Load norm). `--name-only` interleaves each
+    commit's header line (prefixed by a NUL-safe sentinel, see
+    `_DELETED_COMMIT_SENTINEL`, so a subject containing a literal `%H`-shaped
+    substring can never be mistaken for a header) with the list of paths it
+    touched; this function parses that stream back into (sha, subject,
+    [deleted-path, ...]) triples in Python. Skips the same non-deliverable/
+    directory-shaped entries `_deliverable_present` and `_derive_noun_tokens`
+    already skip BEFORE building the pathspec list — a directory deletion is
+    exactly as non-discriminating as directory presence was (Defect 2,
+    `_is_directory_scope`'s docstring) — and empty/filtered-to-nothing scope
+    short-circuits to None without spawning git at all.
+
+    A scope entry's glob metacharacters (`*`, `?`, `[`) are passed straight
+    through to git as literal pathspec syntax here — this is git's own
+    wildcard matching (case-sensitive, no `**` recursion, POSIX-style
+    bracket classes), NOT `_deliverable_present`'s `Path.glob()` semantics
+    (platform case-folding, `**` recursive matching, Python's `fnmatch`
+    bracket-class rules). A glob-shaped scope entry can therefore match a
+    different set of deletions here than it would match presences in
+    `_deliverable_present` — documented divergence, not a bug (P2, code
+    review, same sidecar as above).
+
+    A `<repo-id>:<path>` cross-repo scope entry (`_is_cross_repo_scope_entry`)
+    is NOT filtered out before being handed to git as a pathspec — unlike
+    `_evaluate_explicit_ship_claim`, which calls `_split_cross_repo_scope`
+    first. Verified degradation (P3, same sidecar): a mid-string colon does
+    not trigger git's magic-pathspec parsing, so the entry silently matches
+    nothing and contributes no false hit — the same silent-miss posture
+    `_deliverable_present` already has for cross-repo entries. Left
+    unfiltered deliberately: adding a fourth, differently-scoped cross-repo
+    posture to this module (on top of `_evaluate_explicit_ship_claim`'s
+    filtering, `_deliverable_present`'s non-filtering, and this helper's own)
+    would be a net documentation cost for a path that is already provably
+    safe, not a correctness fix.
+
+    Each candidate deleting commit must clear the SAME two bars a signal-(a)
+    candidate does: not a denylisted mechanical-commit subject
+    (`_is_mechanical_subject` — a mechanical sweep commit must not mint
+    deletion evidence any more than it mints subject-match evidence), and
+    reachable on some local branch (`_sha_on_any_local_branch` — an
+    unreachable deletion is not evidence). `git log`'s default newest-first
+    order is preserved through parsing, so the first (sha, path) pair
+    clearing both bars is the MOST RECENT qualifying deletion. The returned
+    `path` is always one of the commit's own real `--name-only` deleted
+    paths, filtered down to ones that survived the pre-spawn skip filters
+    above — never a scope entry the caller never asked about.
+
+    Deliberately does NOT correlate the deleting commit's subject against
+    the derived noun tokens signal (a) uses (negative-spec, per the memo's
+    stated remit): an absent path with a reachable, non-mechanical deletion
+    is positive signal-(b) evidence on its own; signal (a)'s token match is
+    a separate, independently-required signal, and DEC-1's three-signal bar
+    still requires both to hold before any auto-ship. This means a scope
+    path deleted once for unrelated reasons, later re-added for this
+    handoff's actual purpose, then swept away again by a different
+    unrelated non-mechanical commit would still credit the ORIGINAL
+    deletion — an accepted recall-over-precision tradeoff of a path-only
+    heuristic, not an oversight; do not "fix" this by adding token
+    correlation here.
+
+    Degrades the same way `_find_candidate_commits` does on a `git log`
+    failure (non-zero returncode) — treated as "no evidence", not raised —
+    so a malformed `since` value or pathspec cannot abort evaluation.
+    """
+    candidate_paths = [
+        p for p in scope
+        if p and not _is_non_deliverable_scope_entry(p) and not _is_directory_scope(p)
+    ]
+    if not candidate_paths:
+        return None
+
+    args: List[str] = [
+        "log", "--diff-filter=D", "--name-only",
+        f"--pretty=format:{_DELETED_COMMIT_SENTINEL}%H %s", "--no-color",
+    ]
+    if since:
+        args.append(f"--since={since}")
+    args.append("--")
+    args.extend(candidate_paths)
+
+    result = _git(worktree_root, args)
+    if result.returncode != 0:
+        return None
+
+    literal_paths = {p for p in candidate_paths if not any(ch in p for ch in "*?[")}
+    glob_patterns = [p for p in candidate_paths if any(ch in p for ch in "*?[")]
+
+    def _allowed(deleted_path: str) -> bool:
+        if deleted_path in literal_paths:
+            return True
+        return any(fnmatch(deleted_path, pattern) for pattern in glob_patterns)
+
+    sha: Optional[str] = None
+    subject = ""
+    deleted_paths: List[str] = []
+
+    def _evaluate_pending() -> Optional[Tuple[str, str]]:
+        if sha is None:
+            return None
+        if _is_mechanical_subject(subject, denylist):
+            return None
+        matching = [p for p in deleted_paths if _allowed(p)]
+        if not matching:
+            return None
+        if not _sha_on_any_local_branch(worktree_root, sha):
+            return None
+        return (sha, matching[0])
+
+    for line in result.stdout.splitlines():
+        line = line.rstrip("\n")
+        if not line.strip():
+            continue
+        if line.startswith(_DELETED_COMMIT_SENTINEL):
+            hit = _evaluate_pending()
+            if hit is not None:
+                return hit
+            header = line[len(_DELETED_COMMIT_SENTINEL):]
+            parts = header.split(" ", 1)
+            sha = parts[0]
+            subject = parts[1] if len(parts) > 1 else ""
+            deleted_paths = []
+        else:
+            deleted_paths.append(line.strip())
+
+    return _evaluate_pending()
 
 
 def _sha_on_any_local_branch(worktree_root: Path, sha: str) -> bool:
@@ -726,11 +897,43 @@ def _find_plan_path_in_scope(scope: Sequence[str]) -> Optional[str]:
     Purpose: signal (ii)'s plan-lookup step — a handoff's scope may name its own
     authoring plan alongside its deliverable paths; this locates that plan so its
     frontmatter `status` can be read as corroborating (never sole) ship evidence.
+
+    Kept as the single-pointer lookup consumed ONLY by `_evaluate_explicit_ship_claim`
+    (the no-scope-token-match corroboration branch) — unchanged deliberately, so that
+    call site's existing behavior is not altered as a side effect of the auto-ship
+    plan-demotion gate below, which instead uses the plural `_find_all_plan_paths_in_scope`
+    to see every named plan, not just the first. Spec backlink:
+    state/bug-backlog/2026-08-15-auto-ship-verdict-is-0-for-3-against-gro-cc4c1c2d7bcb.yaml
     """
     for path_str in scope:
         if path_str.startswith("docs/plans/") and path_str.endswith(".md"):
             return path_str
     return None
+
+
+def _find_all_plan_paths_in_scope(scope: Sequence[str]) -> List[str]:
+    """Resolve EVERY `docs/plans/*.md` pathspec present in a handoff's scope, in
+    scope-list order.
+
+    Purpose: the auto-ship plan-corroboration gate (`_apply_plan_corroboration_
+    gate`, called from `evaluate_commit_reality`) must not read only the FIRST
+    plan pointer and stop — a baton naming three plans in scope where the first
+    happens to be `status:implemented` and a LATER one is `status:approved`/
+    `draft` previously read as fully corroborated on the single most favorable
+    pointer, ignoring the refuting ones (D1,
+    `state/audits/2026-08-15-three-auto-ship-nominations-adjudicated.md`).
+    `_find_plan_path_in_scope` (singular) is left untouched for its existing
+    call site — see that function's own docstring. Named `_find_all_...`
+    (plural noun preceded by "all") rather than merely `_find_plan_paths_in_
+    scope`, so the two names differ by more than pluralization alone (P2,
+    code-review sidecar `coordinatorcode-reviewer-527901aa.md`: the prior
+    one-letter difference from the singular was a live trap for a future
+    reader reaching for the wrong one).
+    """
+    return [
+        path_str for path_str in scope
+        if path_str.startswith("docs/plans/") and path_str.endswith(".md")
+    ]
 
 
 def _read_plan_status(worktree_root: Path, plan_path: str) -> Optional[str]:
@@ -775,6 +978,133 @@ def _demote_awaiting_gate_auto_ship(
             "auto-ship a gated handoff; gate_eval is the sole clearing authority"
         ]
         result["verdict"] = "surface"
+    return result
+
+
+def _apply_plan_corroboration_gate(
+    result: Dict[str, Any],
+    scope: Sequence[str],
+    worktree_root: Path,
+    *,
+    shipped_in_verified: bool = False,
+) -> Dict[str, Any]:
+    """Demote-only chokepoint for the R1/R2 plan-corroboration rule
+    (state/bug-backlog/2026-08-15-auto-ship-verdict-is-0-for-3-against-gro-
+    cc4c1c2d7bcb.yaml), applied to EVERY route through `evaluate_commit_reality`
+    that can produce `verdict: "auto-ship"` — not just the three-signal
+    candidates path. `auto-ship` is the only verdict this module produces that
+    triggers an unattended, destructive `ship_and_archive`; this is the single
+    rule both routes read, so a future third route that forgets to call it is
+    the only way to regress it (P0, code-review sidecar
+    `coordinatorcode-reviewer-527901aa.md`: `_evaluate_explicit_ship_claim`'s
+    scope-overlap and session-attribution branches previously returned
+    `auto-ship` directly, several hundred lines before this gate, with no
+    linked-plan requirement at all).
+
+    Demote-only: a non-`auto-ship` verdict passes through completely
+    unchanged. Never promotes any verdict, from any path.
+
+    R1: every `docs/plans/*.md` scope pointer is resolved (not just the
+    first). Terminal is `status:implemented` ONLY — `landed` is deliberately
+    NOT terminal (module docstring's `plan_landed` note: `landed` means "code
+    is in", not "shipped", per lifecycle_constants' negative-spec and DoE
+    ruling `80b0b29fb`). A pointer whose status is unreadable/missing is also
+    non-terminal. EXCEPTION, `shipped_in_verified=True` only: a `landed`
+    pointer alongside a verified explicit shipped_in stamp does not demote —
+    `landed` is corroborating, not REFUTING, evidence (pre-existing behavior
+    pinned by `TestExplicitShipClaimPlanLanded.
+    test_plan_landed_with_verified_shipped_in_still_auto_ships`, C2 AC8;
+    `_evaluate_explicit_ship_claim`'s own `plan_landed` no-shipped_in branch
+    treats it the same way). `approved`/`draft`/unreadable remain refuting on
+    every route, verified or not.
+
+    R2 + `shipped_in_verified`: a scope naming NO plan pointer at all
+    ordinarily also demotes (auto-ship is narrowed to batons that name their
+    own corroborating plan). `shipped_in_verified=True` — passed only by the
+    explicit-ship-claim path, and only when that path's own verdict is
+    already `auto-ship` (meaning it already required the SHA to be reachable
+    AND either self-scope-overlapping or positively attributed to the calling
+    session via `_sha_attributed_to_session`) — treats that verified stamp as
+    sufficient corroboration in place of a plan pointer, so R2's "no pointer"
+    branch is skipped for that route alone. R1 still applies unconditionally
+    on either route: a REFUTING plan pointer (approved/draft/unreadable) demotes
+    even when `shipped_in_verified` is True — an explicit claim plus
+    contradicting plan evidence is exactly the misattribution case R1 exists
+    to catch, so `shipped_in_verified` only ever substitutes for the ABSENCE
+    of a pointer, never overrides a present, non-terminal one. The
+    three-signal candidates path never sets this flag — an "absence of
+    contradiction" commit match alone is not the kind of deliberate,
+    human/CLI-authored claim `shipped_in` is, so it gets no such exemption.
+    """
+    if result.get("verdict") != "auto-ship":
+        return result
+
+    evidence = list(result.get("evidence") or [])
+    plan_paths = _find_all_plan_paths_in_scope(scope)
+
+    if not plan_paths:
+        if shipped_in_verified:
+            evidence.append(
+                "no linked docs/plans/*.md pointer in scope — accepted on a "
+                "verified explicit shipped_in stamp (reachable + scope-overlap "
+                "or session-attributed) as sufficient corroboration in place "
+                "of a plan pointer"
+            )
+            result = dict(result)
+            result["evidence"] = evidence
+            return result
+        evidence.append(
+            "no linked docs/plans/*.md pointer in scope — auto-ship requires a "
+            "corroborating terminal plan and none was named — demoted to surface"
+        )
+        result = dict(result)
+        result["evidence"] = evidence
+        result["verdict"] = "surface"
+        result["confidence"] = "partial"
+        return result
+
+    non_terminal_findings: List[str] = []
+    landed_findings: List[str] = []
+    for plan_path in plan_paths:
+        plan_status = _read_plan_status(worktree_root, plan_path)
+        if plan_status == "implemented":
+            continue
+        if plan_status == "landed" and shipped_in_verified:
+            # `landed` is not REFUTING evidence (unlike approved/draft/
+            # unreadable) — it means "code is in", the same weaker-but-not-
+            # contradicting tier `_evaluate_explicit_ship_claim`'s own
+            # no-shipped_in branch already treats as corroborating (see
+            # `plan_landed` there). On the candidates path
+            # (`shipped_in_verified=False`) `landed` is deliberately left
+            # non-terminal per lifecycle_constants' negative-spec / DoE
+            # ruling `80b0b29fb` — the distinction here is narrower: a
+            # verified explicit `shipped_in` stamp already carries its own
+            # strong corroboration, so a `landed` (not a refuting status)
+            # pointer alongside it does not additionally demote.
+            landed_findings.append(
+                f"linked plan {plan_path} is status:landed — corroborating, not "
+                "refuting, alongside a verified shipped_in stamp"
+            )
+            continue
+        status_desc = plan_status if plan_status else "unreadable/missing"
+        non_terminal_findings.append(
+            f"linked plan {plan_path} is status:{status_desc} (not implemented)"
+        )
+    if non_terminal_findings:
+        evidence.append(
+            "; ".join(non_terminal_findings) + " — auto-ship demoted to surface"
+        )
+        result = dict(result)
+        result["evidence"] = evidence
+        result["verdict"] = "surface"
+        result["confidence"] = "partial"
+        return result
+
+    if landed_findings:
+        evidence.extend(landed_findings)
+    evidence.append("plan-corroboration gate cleared")
+    result = dict(result)
+    result["evidence"] = evidence
     return result
 
 
@@ -1070,7 +1400,15 @@ def evaluate_commit_reality(
     deployment_state = (handoff.get("deployment_state") or "").strip().lower()
 
     denylist = policy.get("mechanical_commit_denylist")
-    if denylist is None:
+    if not denylist:
+        # Empty is treated as absent, not as "filter nothing". `_conservative_policy()`
+        # supplies `[]` for this key, and that base became reachable WHILE ARMED once an
+        # absent floor started merging an overlay over conservative defaults instead of
+        # `{}` (policy_loader.load_policy). An `is None` check let that empty list through
+        # as a real value, disabling mechanical-commit filtering on the one path that can
+        # fire an unattended destructive archive -- measured live: 5 denylist entries with
+        # the floor resolvable, 0 without it. A caller wanting no filtering at all is not a
+        # supported configuration on this path.
         denylist = list(_DEFAULT_MECHANICAL_DENYLIST)
     attribution_guard_enabled = policy.get("cross_handoff_attribution", True)
 
@@ -1107,7 +1445,16 @@ def evaluate_commit_reality(
     if deliverable_present:
         evidence.append("deliverable present on disk")
     else:
-        evidence.append("deliverable absent on disk")
+        deletion_hit = _deliverable_deleted_by_commit(worktree_root, scope, since, denylist)
+        if deletion_hit is not None:
+            deletion_sha, deletion_path = deletion_hit
+            deliverable_present = True
+            evidence.append(
+                "deliverable absent on disk — deletion was the deliverable "
+                f"({deletion_sha} deleted {deletion_path})"
+            )
+        else:
+            evidence.append("deliverable absent on disk")
 
     if not candidates:
         evidence.append("no non-mechanical commit subject matches scope/title tokens")
@@ -1115,7 +1462,11 @@ def evaluate_commit_reality(
             handoff, worktree_root, scope, deliverable_present, evidence
         )
         if explicit_claim_verdict is not None:
-            return _demote_awaiting_gate_auto_ship(explicit_claim_verdict, deployment_state)
+            gated_claim_verdict = _apply_plan_corroboration_gate(
+                explicit_claim_verdict, scope, worktree_root,
+                shipped_in_verified=explicit_claim_verdict.get("verdict") == "auto-ship",
+            )
+            return _demote_awaiting_gate_auto_ship(gated_claim_verdict, deployment_state)
         return {
             "handoff_id": handoff_id,
             "candidate_sha": None,
@@ -1177,11 +1528,30 @@ def evaluate_commit_reality(
                 "verdict": "surface",
             }
 
+    # Plan-corroboration gate (R1+R2, state/bug-backlog/2026-08-15-auto-ship-
+    # verdict-is-0-for-3-against-gro-cc4c1c2d7bcb.yaml): `auto-ship` is the ONLY
+    # verdict this module produces that triggers an unattended, destructive
+    # `ship_and_archive` — absence of contradiction is not evidence for THAT
+    # verdict, and `surface` still nominates the baton for a human to look at, so
+    # this gate only ever demotes, never promotes. Mirrors the cross-handoff
+    # attribution guard immediately above: all three signals held, but a further
+    # check can still knock `auto-ship` down to `surface` before the module ever
+    # returns it. Routed through the SAME chokepoint
+    # (`_apply_plan_corroboration_gate`) the explicit-ship-claim path uses — see
+    # that function's docstring for the full R1/R2 rule; this path never sets
+    # `shipped_in_verified`, since an "absence of contradiction" commit match
+    # alone is not the deliberate, human/CLI-authored claim that exemption is
+    # reserved for.
     evidence.append("three-signal DEC-1 bar cleared")
-    return _demote_awaiting_gate_auto_ship({
-        "handoff_id": handoff_id,
-        "candidate_sha": candidate_sha,
-        "confidence": "high",
-        "evidence": evidence,
-        "verdict": "auto-ship",
-    }, deployment_state)
+    gated = _apply_plan_corroboration_gate(
+        {
+            "handoff_id": handoff_id,
+            "candidate_sha": candidate_sha,
+            "confidence": "high",
+            "evidence": evidence,
+            "verdict": "auto-ship",
+        },
+        scope,
+        worktree_root,
+    )
+    return _demote_awaiting_gate_auto_ship(gated, deployment_state)

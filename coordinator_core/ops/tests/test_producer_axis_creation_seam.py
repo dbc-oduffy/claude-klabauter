@@ -45,7 +45,10 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import shape as session_shape
 from coordinator_core.session.producer_resolve import resolve_producer_for_creation
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 _GIT_ENV = {"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
             "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"}

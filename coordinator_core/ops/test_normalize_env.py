@@ -16,10 +16,12 @@ installed tool versions and is intentionally excluded from the frozen
 fixtures; probe-dependent behavior is covered independently in section E via
 synthetic NDJSON.
 
-Family I (fresh-install surface) coverage: test_fresh_install_shape_no_probe_lib
-simulates a cold machine where NORMALIZE_ENV_PREREQ_PROBE_PATH is unresolvable
-(known systemic issue per porter brief) and asserts the module degrades with
-an actionable message rather than crashing.
+Family I (fresh-install surface) coverage: the probe layer is in-process
+Python (`coordinator_core.install.prereq_probe`), so there is no cold-machine
+path-resolution hazard left to simulate -- the oracle-era
+NORMALIZE_ENV_PREREQ_PROBE_PATH gate was removed 2026-08-14 (it hard-errored on
+every real invocation and false-passed when bypassed). What Family I still
+asserts is that a --dry-run on any platform completes without a traceback.
 """
 from __future__ import annotations
 
@@ -38,11 +40,7 @@ from coordinator_core.ops import normalize_env as ne
 def _run_port(args, home: Path = None, in_text: str = "", env_extra=None):
     out = io.StringIO()
     in_stream = io.StringIO(in_text)
-    env_patch = {"NORMALIZE_ENV_PREREQ_PROBE_PATH": ""}
-    if env_extra:
-        env_patch.update(env_extra)
-    with patch.dict(os.environ, env_patch):
-        os.environ.pop("NORMALIZE_ENV_PREREQ_PROBE_PATH", None)
+    with patch.dict(os.environ, env_extra or {}):
         rc = ne.main(args, out=out, in_stream=in_stream, home=home or Path.home())
     return out.getvalue(), rc
 
@@ -241,10 +239,9 @@ def test_darwin_bash_profile_repair_preserves_prior_file_mode(tmp_path):
         '"detail":"orphaned","remediation":"fix it"}\n'
     )
     runner = ne.NeRunner(yes=True)
-    runner.prereq_probe_path = "/fake/prereq_probe.sh"
     out = io.StringIO()
 
-    with patch.object(ne, "_ne_run_bash_probe_fn", return_value="/opt/homebrew/bin:/usr/bin:/Users/me/.local/bin"), \
+    with patch.object(ne, "_ne_run_probe_fn", return_value="/opt/homebrew/bin:/usr/bin:/Users/me/.local/bin"), \
          patch.object(ne, "_ne_verify_bash_profile_repair", return_value=True):
         ne._ne_darwin_bash_profile_repair(probe_output, home, dry_run=False, runner=runner, out=out)
 
@@ -349,22 +346,22 @@ def test_windows_plan_alias_fix_gated_on_python_fix_only():
 # timeout + stdin=DEVNULL + the platform-appropriate creationflags.
 # ---------------------------------------------------------------------------
 
-def test_run_bash_probe_fn_dispatches_to_native_prereq_probe(monkeypatch):
-    """_ne_run_bash_probe_fn is a native in-process dispatch table onto
+def test_run_probe_fn_dispatches_to_native_prereq_probe(monkeypatch):
+    """_ne_run_probe_fn is a native in-process dispatch table onto
     coordinator_core.install.prereq_probe (2026-07-21 de-bash cutover) — no
-    subprocess.run call of its own; prereq_probe_path/timeout are accepted
-    only for call-site compatibility with the (unchanged) availability gate."""
+    subprocess.run call of its own, and (since 2026-08-14) no probe-library
+    path parameter either."""
     monkeypatch.setitem(ne._PROBE_FN_DISPATCH, "_co_probe_longpaths", lambda: "sentinel-ndjson-line\n")
 
     with patch.object(ne.subprocess, "run") as mock_run:
-        out = ne._ne_run_bash_probe_fn("/fake/prereq_probe.sh", "_co_probe_longpaths")
+        out = ne._ne_run_probe_fn("_co_probe_longpaths")
 
     mock_run.assert_not_called()
     assert out == "sentinel-ndjson-line\n"
 
 
-def test_run_bash_probe_fn_unknown_fn_expr_returns_empty():
-    assert ne._ne_run_bash_probe_fn("/fake/prereq_probe.sh", "_co_not_a_real_probe") == ""
+def test_run_probe_fn_unknown_fn_expr_returns_empty():
+    assert ne._ne_run_probe_fn("_co_not_a_real_probe") == ""
 
 
 def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
@@ -384,7 +381,12 @@ def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
 
     runner = ne.NeRunner(yes=True)
     out = io.StringIO()
-    ne._ne_step1_longpaths(runner, "", probes_available=False, out=out)
+    verify_ndjson = (
+        '{"name":"longpaths","status":"pass","severity":"blocking",'
+        '"detail":"enabled","remediation":""}' + chr(10)
+    )
+    with patch.object(ne, "_ne_run_probe_fn", return_value=verify_ndjson):
+        ne._ne_step1_longpaths(runner, out=out)
 
     assert captured["timeout"] == 15
     assert captured["stdin"] is subprocess.DEVNULL
@@ -393,35 +395,39 @@ def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# G. Fresh-install-shape smoke test (Family I) — CLAUDE_KLABAUTER_ROOT-adjacent env is
-# NOT how this module resolves its bash-side probe dependency; the analogous
-# cold-machine hazard here is NORMALIZE_ENV_PREREQ_PROBE_PATH being unset or
-# pointing at a nonexistent path. Both must degrade with an actionable
-# message, never a traceback.
+# G. Fresh-install-shape smoke test (Family I) — the probe layer is an
+# in-process import, so a cold machine has no probe-path to fail to resolve.
+# What must hold is that a --dry-run on either platform branch runs the probes
+# for real and never reports "all prereqs satisfied" without having probed.
 # ---------------------------------------------------------------------------
 
-def test_fresh_install_shape_no_probe_lib_env_var_set():
-    """Cold machine: env var absent entirely. Windows-path build_windows_plan
-    is never reached because probes_available is False -- verified via the
-    macOS/Linux branch, which is what CI actually exercises."""
+def test_fresh_install_shape_dry_run_completes_without_traceback():
     out = io.StringIO()
-    with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("NORMALIZE_ENV_PREREQ_PROBE_PATH", None)
-        rc = ne.main(["--dry-run"], out=out, in_stream=io.StringIO(""))
+    rc = ne.main(["--dry-run"], out=out, in_stream=io.StringIO(""))
     assert rc == 0
-    rendered = out.getvalue()
-    assert "Traceback" not in rendered
+    assert "Traceback" not in out.getvalue()
 
 
-def test_fresh_install_shape_probe_lib_path_set_but_missing(tmp_path):
-    """Cold machine: env var set but points at a path that doesn't exist
-    (e.g. a stale machine-local pointer) -- must hard-error with remediation,
-    not crash."""
-    bogus = tmp_path / "does-not-exist" / "prereq_probe.sh"
+def test_dry_run_always_reports_probe_results(monkeypatch):
+    """Regression net for the 2026-08-14 false-pass: the removed
+    `probes_available` gate let a bypassed invocation print "All prereqs
+    satisfied. Nothing to do." after running zero probes. The probe summary
+    must appear on every run, on both platform branches."""
+    probe_ndjson = (
+        '{"name":"uv","status":"fail","severity":"blocking",'
+        '"detail":"uv not found","remediation":"pip install uv"}\n'
+    )
+    monkeypatch.setattr(ne, "_ne_run_probe_fn", lambda fn_expr: probe_ndjson)
+    monkeypatch.setattr(ne, "_ne_is_windows", lambda: True)
+
     out = io.StringIO()
-    with patch.dict(os.environ, {"NORMALIZE_ENV_PREREQ_PROBE_PATH": str(bogus)}):
-        rc = ne.main(["--dry-run"], out=out, in_stream=io.StringIO(""))
-    assert rc == ne.EXIT_HARD_ERROR
+    rc = ne.main(["--dry-run"], out=out, in_stream=io.StringIO(""))
+    rendered = out.getvalue()
+
+    assert rc == 0
+    assert "Current prereq probe results:" in rendered
+    assert "probe results unavailable" not in rendered
+    assert "All prereqs satisfied. Nothing to do." not in rendered
 
 
 def test_is_windows_never_raises_when_uname_absent(monkeypatch):

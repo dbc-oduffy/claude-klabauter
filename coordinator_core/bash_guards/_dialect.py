@@ -106,28 +106,35 @@ the BASH leg (a Windows path such as ``C:`` + backslash + ``Users`` + backslash 
 <!-- abs-path-ok: verbatim quote of that audit's own measured tokenizer input/output pair -->
 `shlex` under `posix=True` treats backslash as an escape character, which is
 correct for real POSIX shells and wrong for a Windows-path-bearing string
-typed at a Windows-first agent seam. DISPOSITION: documented-why-not-fixed-
-here, not handled. This module's `dialect_from_tool_name` and BASH branch
+typed at a Windows-first agent seam. DISPOSITION: not handled here, and this
+session's own measurement is why: the Bash tool's executor is Git Bash,
+which consumes an unquoted backslash exactly as `shlex` does, so a payload
+this tokenizer fails to recognize is also a payload that does not execute
+<!-- abs-path-ok: verbatim probe path run this session to confirm the claim above -->
+(confirmed this session: `ls` on ``X:`` + backslash + ``claude-klabauter`` +
+backslash + ``CLAUDE.md`` errors `cannot access 'X:claude_klabauterCLAUDE.md'`,
+and a redirect to ``sub`` + backslash + ``dir`` + backslash + ``out.txt``
+creates a file literally named `subdirout.txt`, not a nested path). This
+module's `dialect_from_tool_name` and BASH branch
 (`resolve_segments_for_dialect`) delegate to `_command_tokenizer
 .tokenize_full_command` UNCHANGED -- no edit to that function or its
-`shlex` construction. Reasons, both independently sufficient: (1) that
-audit's own § "Ownership" is explicit that the shared `_command_tokenizer`
-module is claimed and in flight by another session/owner, and a second
-concurrent change to the same `shlex` construction under an active owner is
-how two sessions produce one incoherent guard set -- exactly what this
-plan's own Anti-scope forbids for `dispatch.py` and, by the same reasoning
-this audit itself applies, for `_command_tokenizer.py`'s bash-leg lexer
-construction too. (2) This chunk's OWN surface is `_dialect.py`, not
-`_command_tokenizer.py` -- widening scope to also patch the bash leg would
-be exactly the "the wave-map author works out the partition" style
-scope-creep this repo's north star exists to rule out. The tradeoff itself
-(disable `shlex.escape`, which is byte-identical on every non-backslash
-shape tried but changes `find ... -exec rm {} \\;`) is fully documented at
-that audit's own § "The fix is a real tradeoff" and requires no restatement
-here; a future PowerShell-dialect caller of this module's BASH branch
-inherits the SAME pre-existing bash-leg mangling every other bash-dialect
-caller of `tokenize_full_command` already has today -- this module makes
-that inheritance no worse and no better.
+`shlex` construction. The shipped fix for the caller that actually needed
+Windows-backslash-preserving behavior is a separate, opt-in mechanism, not a
+change to this shared `shlex` construction: commit `05fb6ef70` added
+`tokenize_full_command`'s `preserve_windows_backslashes` keyword, which
+masks an unquoted backslash with a private-use sentinel before `shlex` sees
+the text and un-masks it in the resulting tokens, leaving `shlex.escape` at
+its POSIX default for every caller that does not pass it. Two callers now
+opt in via `resolve_command_positions(..., preserve_windows_backslashes=
+_host_is_windows())`: `bump_foreign_repo_write.py` and
+`bump_outside_repo_write.py`. This module's OWN surface is `_dialect.py`,
+not `_command_tokenizer.py` -- widening scope to also patch the bash leg's
+default would be exactly the "the wave-map author works out the partition"
+style scope-creep this repo's north star exists to rule out; that remains
+the standing structural reason this module makes no such change. Full
+record, including this same resolution annotated onto the audit itself in
+this same change: `state/audits/2026-08-07-bash-guard-tokenizer-eats-
+windows-path-separators.md`.
 
 Required segmentation/tokenization test cases (measured returning `None` in
 the spike verdict record, Table 1; see `tests/test_command_tokenizer_length

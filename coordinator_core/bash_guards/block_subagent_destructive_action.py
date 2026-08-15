@@ -1339,6 +1339,20 @@ _GIT_GLOBAL_OPT_SPACE_FORM = frozenset({"--git-dir", "--work-tree"})
 #: classifier. See module docstring "COMMAND-POSITION GIT-TOKEN FIX".
 _NOT_A_GIT_INVOCATION = object()
 
+#: `parse_ok=False` sentinel distinguishing the INLINE-INTERPRETER
+#: CARVE-OUT branch (a `-c`-flagged interpreter head with a bundled `-c`
+#: flag -- `python3 -c '...'`, `bash -c '...'`, ...) from a genuinely
+#: unparseable REAL shell segment. Both route to the legacy free-text
+#: classifier (fail-closed on the specific destructive-verb patterns is
+#: unchanged for both), but `_evaluate_git_segment` uses this sentinel to
+#: suppress ONLY legacy's terminal "unrecognized git verb (default-deny)"
+#: catchall for this branch -- see `_evaluate_git_segment`'s "INDIRECTION-
+#: PAYLOAD CATCHALL FIX" docstring entry: an interpreter `-c` payload is
+#: not real shell syntax, so the bare free-text presence of "git" here
+#: carries no invocation meaning, the same reasoning already applied to
+#: `_unwrap_and_classify`'s `strict=False` recursive scan.
+_INTERPRETER_C_PAYLOAD_AMBIGUOUS = object()
+
 #: Passthrough wrapper binaries that run their remaining argv unchanged --
 #: see `_strip_leading_subshell_and_env`'s BX-13 fix comment. Same set
 #: `dispatch_checks.py`'s `_BYPASS_PREFIX` already tolerates.
@@ -1614,7 +1628,7 @@ def _git_subcommand_and_remaining_for_segment(
         if interp_base in _C_FLAG_INTERPRETERS and any(
             _BUNDLED_C_FLAG_RE.match(tok) for tok in working[1:]
         ):
-            return None, False, []
+            return _INTERPRETER_C_PAYLOAD_AMBIGUOUS, False, []
         return _NOT_A_GIT_INVOCATION, True, []
     subcmd, ambiguous, remaining = _real_git_subcommand(working[1:])
     if ambiguous:
@@ -2264,18 +2278,71 @@ def _evaluate_git_segment(seg: str, strict: bool = True) -> Optional[str]:
     only from `_unwrap_and_classify`'s recursive indirection-payload scan,
     where the "segment" may be non-shell text like python source) disables
     this shortcut and preserves the original full-token-scan behavior.
+
+    INDIRECTION-PAYLOAD CATCHALL FIX (2026-08-15, this change -- AC5/AC6 of
+    docs/plans/2026-08-15-the-close-s-three-deferred-defects-becom.md C3):
+    confirmed live -- a read-only `python3 -c "print(open('notes.txt')
+    .read().count('git'))"` probe (the reported incident: a review-
+    integrator's file-read probe, no git subprocess attempted or
+    attemptable) was DENIED. Root cause: `strict=False`'s own token scan
+    (in `_git_subcommand_and_remaining_for_segment`) never finds a token
+    whose basename equals exactly `git` here (`shlex.split` glues the
+    payload into one non-`git`-shaped token, since Python source is not
+    shell syntax), so it returns `parse_ok=False` -- indistinguishable, at
+    this call site, from a GENUINELY unparseable payload -- and both route
+    to `_evaluate_git_segment_legacy`, whose free-text scan has NO "found
+    nothing destructive-shaped" allow branch: it falls all the way to its
+    own terminal "unrecognized git verb (default-deny)" line whenever the
+    segment merely CONTAINS the word "git" (the `\\bgit\\b` gate in
+    `_unwrap_and_classify`) without matching any of the specific
+    destructive-verb patterns above it (push --force, rebase, reset --hard,
+    stash pop/apply, ...). That terminal catchall is correct default-deny
+    posture for a REAL shell segment (`strict=True`'s only path here is a
+    genuinely unparseable shell command, where failing closed on an
+    unrecognized verb is exactly the intended "novel verb" protection) --
+    it is NOT correct for arbitrary python source that merely mentions
+    "git" as data, since there `\\bgit\\b` presence carries no invocation
+    meaning at all.
+
+    Fix: `strict` (already known here, no new state needed) is threaded
+    into `_evaluate_git_segment_legacy` as `default_deny_on_unmatched`.
+    `strict=True` keeps the terminal catchall (unchanged fail-closed
+    behavior for a genuinely unparseable REAL shell segment). `strict=False`
+    (the `-c`-payload recursive scan) suppresses ONLY that terminal
+    catchall -- every specific destructive-verb pattern above it in
+    `_evaluate_git_segment_legacy` (push --force, rebase, reset --hard,
+    commit --amend, branch -D, stash pop/apply/drop/clear, stash unscoped,
+    tag -d, reflog delete/expire, filter-branch/filter-repo, clean -fd,
+    worktree <mutate>, remote <mutate>, checkout <pathspec>, restore
+    <worktree>) is UNCHANGED and still fires on free-text co-occurrence,
+    since none of those checks depend on this catchall -- see
+    `test_indirection_python_inline_c_destructive_payload_denies` (still
+    green: `subprocess.run(["git", "push", "--force"])` is caught by the
+    push+--force free-text pattern, not the catchall this narrows).
     """
     subcmd, parse_ok, remaining = _git_subcommand_and_remaining_for_segment(
         seg, strict=strict
     )
     if not parse_ok:
-        return _evaluate_git_segment_legacy(seg)
+        # Suppress legacy's terminal catchall for either (a) the recursive
+        # `-c`-payload scan (`strict=False`), or (b) the INLINE-INTERPRETER
+        # CARVE-OUT sentinel (a `-c`-flagged interpreter head even in
+        # `strict=True` mode -- `_INTERPRETER_C_PAYLOAD_AMBIGUOUS`) -- both
+        # are non-shell-syntax payload text, not a real shell segment. A
+        # genuinely unparseable REAL shell segment (`subcmd is None` here)
+        # keeps the catchall unchanged.
+        default_deny_on_unmatched = strict and subcmd is not _INTERPRETER_C_PAYLOAD_AMBIGUOUS
+        return _evaluate_git_segment_legacy(
+            seg, default_deny_on_unmatched=default_deny_on_unmatched
+        )
     if subcmd is _NOT_A_GIT_INVOCATION:
         return None
     return _evaluate_git_segment_anchored(seg, subcmd, remaining)
 
 
-def _evaluate_git_segment_legacy(seg: str) -> Optional[str]:
+def _evaluate_git_segment_legacy(
+    seg: str, default_deny_on_unmatched: bool = True
+) -> Optional[str]:
     """Evaluate ONE git-bearing command segment (reference hook 290-447).
 
     Returns the ``_DENY_KIND`` label if this segment denies, else ``None``
@@ -2289,6 +2356,16 @@ def _evaluate_git_segment_legacy(seg: str) -> Optional[str]:
     "today's behavior" fallback the module comment above requires when a
     segment cannot be shlex-tokenized. Do not add the new read-only verbs
     (`merge-base`, `grep`, ...) here; that widening is anchored-path-only.
+
+    ``default_deny_on_unmatched`` (2026-08-15, see `_evaluate_git_segment`'s
+    "INDIRECTION-PAYLOAD CATCHALL FIX" docstring entry for the full
+    rationale): governs ONLY the terminal fallback line at the very end of
+    this function. ``True`` (default -- the `strict=True`/genuinely-
+    unparseable-real-shell-segment caller) preserves the original
+    "unrecognized git verb (default-deny)" catchall unchanged. ``False``
+    (the `strict=False`/`-c`-payload indirection-scan caller) returns
+    ``None`` (allow) instead of that catchall -- every specific
+    destructive-verb check ABOVE the catchall is unaffected either way.
     """
     # --- WORKING-TREE-CLOBBER DENY SET (checked before the general
     # verb-allowlist walk) ---------------------------------------------
@@ -2404,6 +2481,14 @@ def _evaluate_git_segment_legacy(seg: str) -> Optional[str]:
         if _CONFIG_GET_RE.search(seg):
             return None
         return "git config (not --get)"
+
+    if not default_deny_on_unmatched:
+        # strict=False caller (`-c`-payload indirection scan): the segment
+        # mentions "git" as free text but matched none of the specific
+        # destructive-verb patterns above -- no argv-shaped git invocation
+        # was ever confirmed here (see `_evaluate_git_segment`'s docstring
+        # entry). Allow rather than default-deny on bare word presence.
+        return None
 
     return "unrecognized git verb (default-deny)"
 

@@ -58,7 +58,10 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.session import em_guard_grant as eg
 from coordinator_core.session import guard_unlock_sentinel
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 GUARD_NAME = "bump-foreign-repo-write"
 

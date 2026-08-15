@@ -140,6 +140,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.plan_handoffs", 'registers "fleet.handoffs_for_plan"'),
     ("coordinator_core.ops.fleet.archive_handoffs", 'registers "fleet.archive_completed_handoffs"'),
     ("coordinator_core.ops.fleet.prune_bugs", 'registers "fleet.prune_closed_bugs"'),
+    ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
     ("coordinator_core.ops.reap_chain_ancestry_waivers", 'registers "chain_ancestry_waivers.reap"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
@@ -163,6 +164,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.roadmap_serve", 'registers "roadmap.serve"'),
     ("coordinator_core.ops.roadmap_link_stubs", 'registers "roadmap.link_stubs"'),
     ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
+    ("coordinator_core.ops.peer_notice_send", 'registers "peer_notice.send"'),
+    ("coordinator_core.ops.peer_notice_check", 'registers "peer_notice.check"'),
     ("coordinator_core.ops.queue_close", 'registers "queue.close"'),
     ("coordinator_core.ops.queue_promote", 'registers "queue.promote"'),
     ("coordinator_core.ops.queue_cluster", 'registers "queue.cluster"'),
@@ -209,6 +212,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.cascade_retract",
         'registers "deliverable.cascade_retract" (C6d retraction/revision, AC6f)',
     ),
+    (
+        "coordinator_core.ops.deliverable_fork_detect",
+        'registers "deliverable.fork_detect" (C7 report-only slug-prefix fork-family '
+        "detector, AC12 — reachable by name, from no boot/commit-path trigger)",
+    ),
     ("coordinator_core.ops.ceremony.wsc_tail", 'registers "ceremony.wsc_tail"'),
     (
         "coordinator_core.ops.ceremony.post_commit_tail",
@@ -217,7 +225,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "in-process by wsc_tail.py)",
     ),
     ("coordinator_core.ops.ceremony.session_instructions", 'registers "ceremony.session_instructions"'),
-    ("coordinator_core.ops.ceremony.render_handoff_tracker", 'registers "ceremony.render_handoff_tracker"'),
     ("coordinator_core.session_ledger.aggregate_chain_loe", 'registers "session_ledger.aggregate_chain_loe"'),
     ("coordinator_core.ops.records_query", 'registers "records.query"'),
     (
@@ -447,6 +454,23 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.diagnostics_probes",
         'registers "diagnostics.always_succeeds", "diagnostics.always_refuses", '
         '"diagnostics.always_structural_pin" (write-free transport-failure probes)',
+    ),
+    (
+        "coordinator_core.ops.gate_validate_invocable",
+        'registers "gate.validate_invocable" (merge-gate DoD checker skeleton, '
+        "docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1)",
+    ),
+    (
+        "coordinator_core.ops.cmd_autorun_guard",
+        'registers "install.detect_cmd_autorun_coverage", '
+        '"install.write_cmd_autorun_guard", "install.strip_cmd_autorun_guard" '
+        "(cmd.exe AutoRun coverage-gap probe/write/strip)",
+    ),
+    (
+        "coordinator_core.ops.app_session",
+        'registers "app_session.launch", "app_session.census", '
+        '"app_session.teardown" (docs/plans/2026-08-15-app-session-launch-'
+        "census-teardown-ops.md § C3)",
     ),
 ]
 

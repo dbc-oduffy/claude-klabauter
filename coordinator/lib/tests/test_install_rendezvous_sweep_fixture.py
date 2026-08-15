@@ -35,9 +35,15 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # mechanism) — same precedent as
 # coordinator_core/tests/test_install_chain_driven_leaf_seed_sweep.py, which
 # skips identically when bash is unavailable (Windows without git-bash/WSL).
-pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None, reason="no bash on PATH — Windows without git-bash/WSL"
-)
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+    pytest.mark.skipif(
+            shutil.which("bash") is None, reason="no bash on PATH — Windows without git-bash/WSL"
+        ),
+]
 
 _TEMPLATE_REL = "coordinator/templates/handoffs/continue-onboarding-and-installation.md"
 

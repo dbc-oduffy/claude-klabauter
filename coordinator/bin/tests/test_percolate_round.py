@@ -29,6 +29,13 @@ from typing import List
 
 import pytest
 
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 # Review: code-reviewer — no `cadence` marker: subprocess.run is fully
 # monkeypatched below, nothing here spawns a real process, so this suite
 # belongs in the per-commit tier, not deferred to cadence gates.
@@ -81,6 +88,12 @@ class _SubprocessSpy:
                  toplevel_returncode=0):
         self.calls: List[List[str]] = []
         self.call_kwargs: List[dict] = []
+        #: `--pathspec-from-file <path>`'s file content, captured AT CALL
+        #: TIME (never after `_run_round` returns) -- `_cmd_round`'s own
+        #: `tempfile.TemporaryDirectory` is torn down before control
+        #: returns to the test, so the file itself is gone by the time an
+        #: assertion could read it back any other way.
+        self.pathspec_from_file_content: list[str] | None = None
         self._dryrun_stdout = dryrun_stdout
         self._real_stdout = real_stdout
         self._parse1_stdout = parse1_stdout
@@ -185,6 +198,11 @@ class _SubprocessSpy:
         if str(_mod._PARSE_DRYRUN) in joined:
             return _completed(0, self._parse1_stdout, "")
         if str(_mod._SCOPED_GIT_COMMIT) in joined:
+            if "--pathspec-from-file" in cmd:
+                idx = cmd.index("--pathspec-from-file")
+                self.pathspec_from_file_content = (
+                    Path(str(cmd[idx + 1])).read_text(encoding="utf-8").splitlines()
+                )
             return _completed(0, self._commit_stdout, "")
         if "run-all-checks.py" in joined:
             return _completed(self._ci_returncode, self._ci_stdout, "")
@@ -227,7 +245,8 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
                 rev_parse_stdout="deadbeef1234\n", no_delta=False,
                 check_ignore_stdout="", check_ignore_returncode=1,
                 ls_files_returncode=0, toplevel_stdout=None,
-                toplevel_returncode=0):
+                toplevel_returncode=0, invocation_authorized=False,
+                stdin_isatty=True):
     dest = tmp_path / "dest"
     dest.mkdir()
     if ci_exists:
@@ -279,7 +298,11 @@ def _run_round(tmp_path, monkeypatch, *, ci_returncode=0, ci_exists=True, gate_f
         argv += ["--reconcile-dest", reconcile_dest]
     if no_delta:
         argv.append("--no-delta")
+    if invocation_authorized:
+        argv.append("--invocation-authorized")
     args = parser.parse_args(argv)
+
+    monkeypatch.setattr(_mod.sys.stdin, "isatty", lambda: stdin_isatty)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -381,8 +404,12 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
     assert len(commit_calls) == 1
     commit_cmd = commit_calls[0]
 
-    dash_idx = commit_cmd.index("--")
-    pathspec = commit_cmd[dash_idx + 1 :]
+    # AC (WinError 206 fix): the pathspec never rides argv — no bare `--`
+    # separator is emitted by `_cmd_round` anymore, only a file reference.
+    assert "--" not in commit_cmd
+    assert "--pathspec-from-file" in commit_cmd
+    assert spy.pathspec_from_file_content is not None
+    pathspec = spy.pathspec_from_file_content
 
     # Review: coordinatorcode-reviewer-c58be590 (live-round follow-up) --
     # `5858489a8` (repo-relative pathspec entries) predates these
@@ -407,6 +434,69 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
             assert not other.startswith(entry + "/"), (
                 f"{entry!r} is a directory prefix of {other!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# WinError 206 regression pin: a several-thousand-path pathspec must never
+# ride the commit subprocess's argv. Windows CreateProcess caps a command
+# line at 32767 characters, which a full-publish ~2000-path pathspec
+# exceeds outright (the actual live-round failure this fix addresses). This
+# cannot portably assert the Windows limit itself (this suite runs
+# cross-platform) -- instead it asserts the argv this code hands
+# `subprocess.run` stays small and bounded regardless of pathspec size,
+# with every path routed through `--pathspec-from-file` instead.
+# ---------------------------------------------------------------------------
+
+def test_large_pathspec_commit_argv_stays_bounded_not_on_argv(tmp_path, monkeypatch):
+    large_real_stdout = "".join(
+        f"NEW: generated/file-{i:05d}.md\n" for i in range(4000)
+    )
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    ci_dir = dest / ".github" / "scripts"
+    ci_dir.mkdir(parents=True)
+    (ci_dir / "run-all-checks.py").write_text("", encoding="utf-8")
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=large_real_stdout,
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(False),
+    )
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+    monkeypatch.setattr(_mod.sys.stdin, "isatty", lambda: True)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+    assert rc == _mod._EXIT_OK
+
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+    commit_cmd = commit_calls[0]
+
+    # The regression this pins: 4000 individual path tokens must NOT appear
+    # in the subprocess argv this code constructs — only a short file path
+    # naming where they live.
+    assert len(commit_cmd) < 20
+    assert "--pathspec-from-file" in commit_cmd
+    assert not any("generated/file-" in str(tok) for tok in commit_cmd)
+
+    assert spy.pathspec_from_file_content is not None
+    assert len(spy.pathspec_from_file_content) == 4000
+    assert "generated/file-00000.md" in spy.pathspec_from_file_content
+    assert "generated/file-03999.md" in spy.pathspec_from_file_content
 
 
 def test_commit_ordered_after_ci_smoke_is_false_ci_runs_after_commit(tmp_path, monkeypatch):
@@ -499,6 +589,78 @@ def test_gate_fires_without_yes_declined_cancels_before_real_run(tmp_path, monke
 
     assert rc == _mod._EXIT_OK
     assert "Publish cancelled." in out
+
+    real_run_calls = [
+        c for c in spy.calls
+        if str(_mod._PUBLISH) in " ".join(str(x) for x in c) and "--dry-run" not in c
+    ]
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert real_run_calls == []
+    assert commit_calls == []
+
+
+# ---------------------------------------------------------------------------
+# cross-repo/inbox/2026-08-14-doe-claude-em-percolate-round-non-tty-confirm-
+# crashes.md + ...-depersonalize-corrupts-python-identifiers.md § 4: the
+# Step 3 confirm must ride an explicit invocation token (not a bare
+# isatty() check), else a cron/nested-agent caller could auto-proceed.
+# ---------------------------------------------------------------------------
+
+def test_gate_fires_with_invocation_authorized_skips_input_and_proceeds(tmp_path, monkeypatch):
+    """--invocation-authorized (the skill-wrapper token): input() is never
+    called and the round proceeds to a real publish and commit, exactly
+    like --yes but via the distinct flag (--yes stays forbidden on an
+    interactive PM session per the invoking skill's own rules)."""
+    input_calls = []
+    monkeypatch.setattr("builtins.input", lambda *a, **k: input_calls.append(1) or "n")
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, gate_fires=True, yes=False, invocation_authorized=True,
+    )
+
+    assert rc == _mod._EXIT_OK
+    assert input_calls == []
+    assert "Step 3 gate fired: 1 medium hit(s)" in out
+    assert "Proceed with real publish? [y/N] y (--invocation-authorized)" in out
+
+    commit_calls = [c for c in spy.calls if str(_mod._SCOPED_GIT_COMMIT) in " ".join(str(x) for x in c)]
+    assert len(commit_calls) == 1
+
+
+def test_gate_fires_tty_without_token_still_prompts(tmp_path, monkeypatch):
+    """A bare interactive tty invocation with no token behaves exactly as
+    before: input() is called, unchanged from today's prompt."""
+    input_calls = []
+    monkeypatch.setattr("builtins.input", lambda *a, **k: input_calls.append(1) or "n")
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, gate_fires=True, yes=False, invocation_authorized=False,
+        stdin_isatty=True,
+    )
+
+    assert rc == _mod._EXIT_OK
+    assert input_calls == [1]
+    assert "Publish cancelled." in out
+
+
+def test_gate_fires_non_tty_without_token_named_refusal_no_eoferror(tmp_path, monkeypatch):
+    """The regression that matters: a non-tty caller with no token must
+    NOT hit input() (which would raise EOFError under redirected/closed
+    stdin) -- it gets a named refusal at the distinct exit code instead,
+    and never reaches the real publish/commit steps."""
+    def _raise_eof(*a, **k):
+        raise EOFError("EOF when reading a line")
+    monkeypatch.setattr("builtins.input", _raise_eof)
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, gate_fires=True, yes=False, invocation_authorized=False,
+        stdin_isatty=False,
+    )
+
+    assert rc == _mod._EXIT_CONFIRM_REQUIRED
+    assert rc == 3
+    assert "Step 3 confirm required" in out
+    assert "Step 3 gate fired: 1 medium hit(s)" in out  # verdict-so-far still printed
 
     real_run_calls = [
         c for c in spy.calls
@@ -734,6 +896,163 @@ def test_real_run_failure_returns_fail(tmp_path, monkeypatch):
     rc = _mod._cmd_round(args)
 
     assert rc == _mod._EXIT_FAIL
+
+
+def test_real_run_partial_row_failure_exits_nonzero_with_verdict(tmp_path, monkeypatch):
+    """Regression for the doe-claude-em-reported defect: a Step 4 real run
+    that reports some rows failed (`Rows succeeded: 3/5`, `Rows FAILED: ...`
+    on stderr, `STATUS: PARTIAL` on stderr) must never let the round exit 0
+    or end silently — assert BOTH the exit code AND the printed verdict,
+    since either alone would have missed the original regression (a caller
+    that only checks exit code, or only greps output, each missed half of
+    it)."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _real_partial(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            return _completed(
+                1,
+                _real_stdout() + "Rows succeeded: 3/5 (a, b, c)\n",
+                "Rows FAILED:    2 (coordinator-claude, coordinator-claude-publish-repo-toplevel)\n"
+                "STATUS: PARTIAL — this publish is now PARTIALLY synced (3 row(s) landed, 2 did not).\n",
+            )
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _real_partial)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+    out = buf.getvalue()
+
+    assert rc == _mod._EXIT_FAIL
+    assert "percolate-round alpha — FAIL" in out
+    assert "Rows succeeded: 3/5" in out
+
+
+def test_real_run_partial_row_failure_via_stderr_only_still_fails(tmp_path, monkeypatch):
+    """Defense-in-depth case: `publish.py` reports failed rows on stderr
+    (`Rows FAILED:` / `STATUS: PARTIAL`) but its own exit code somehow comes
+    back 0 — the round must not trust the exit code alone and must still
+    fail loud with a verdict, since a future `publish.py` exit-code
+    regression is exactly the shape of the original incident."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _real_mismatch(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            return _completed(
+                0,
+                _real_stdout() + "Rows succeeded: 3/5 (a, b, c)\n",
+                "Rows FAILED:    2 (coordinator-claude, coordinator-claude-publish-repo-toplevel)\n"
+                "STATUS: PARTIAL — this publish is now PARTIALLY synced (3 row(s) landed, 2 did not).\n",
+            )
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _real_mismatch)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+    out = buf.getvalue()
+
+    assert rc == _mod._EXIT_FAIL
+    assert "percolate-round alpha — FAIL" in out
+    assert "Rows succeeded: 3/5" in out
+
+
+def test_all_rows_succeeded_still_exits_ok_with_verdict(tmp_path, monkeypatch):
+    """A clean all-rows-succeeded run keeps exiting 0 and still prints its
+    (PASS) verdict — the partial-failure fix must not regress the happy
+    path into a false failure."""
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_returncode=0, gate_fires=False)
+
+    assert rc == _mod._EXIT_OK
+    assert "percolate-round alpha — PASS" in out
+
+
+def test_fully_failed_real_run_keeps_existing_exit_code(tmp_path, monkeypatch):
+    """A real run where every requested row failed (`Rows succeeded: 0/2`,
+    nonzero exit) keeps the existing `_EXIT_FAIL` contract — this fix only
+    adds the verdict line and the stderr-only fail-safe; it does not move
+    the fully-failed case's exit code."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse1_stdout=_parse1_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+
+    def _real_all_failed(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            return _completed(
+                1,
+                "Rows succeeded: 0/2\n",
+                "Rows FAILED:    2 (a, b)\n",
+            )
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _real_all_failed)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    parser = _mod._build_parser()
+    args = parser.parse_args(["alpha", "--percolate-root", str(percolate_root), "--yes"])
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+    out = buf.getvalue()
+
+    assert rc == _mod._EXIT_FAIL
+    assert "percolate-round alpha — FAIL" in out
+    assert "Rows succeeded: 0/2" in out
 
 
 def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
@@ -1989,3 +2308,323 @@ def test_repo_root_resolution_failure_returns_fail(tmp_path, monkeypatch):
         toplevel_returncode=1,
     )
     assert rc == _mod._EXIT_FAIL
+
+
+# ---------------------------------------------------------------------------
+# D1 regression -- inherited-holder handoff (§ docs/plans/2026-08-14-
+# percolate-round-deadlock-and-gate-attribution.md, chunk C1). `_cmd_round`
+# spans `_round_held_lock(Path(dest))` across the Step 4 real-run subprocess;
+# `publish.py::main`'s own lock loop re-acquires the SAME key
+# (`held_lock`'s `sha1(realpath(target))`) whenever a row's dest resolves to
+# that same repo root. `held_lock` is a real flock, non-reentrant even
+# WITHIN one process (its own module docstring: "Do NOT call held_lock
+# re-entrantly on the same target in the same process") -- these tests
+# reproduce the collision directly, in-process, with no subprocess spawn
+# needed, exactly the hazard that docstring warns about.
+#
+# Pre-fix failure evidence (this docstring, not a stashed file): before this
+# chunk's fix, `publish.py::main`'s lock loop had no knowledge of
+# `PERCOLATE_ROUND_INHERITED_LOCK_ROOTS` at all -- it unconditionally
+# attempted `_publish_held_lock` for every resolved root, so
+# `test_inherited_root_does_not_deadlock` below (which holds the parent lock
+# over root A, sets the inheritance env var for A only, and expects `main`
+# to complete both rows) reproduces the exact D1 timeout: with the fix
+# reverted (env var absent from the check, or the `continue` skip removed),
+# `main` blocks on root A until `LOCK_TIMEOUT_SECS`, returns 1, and
+# `rows_reached` never gets past the lock loop -- confirmed by temporarily
+# reverting the `publish.py` lock-loop edit and re-running this test locally
+# (`could not acquire the per-destination publish lock for <A>` on stderr,
+# `rc == 1`, `rows_reached == []`).
+# ---------------------------------------------------------------------------
+
+def _init_git_repo_for_lock(root: Path) -> None:
+    """Minimal git init so `_dest_repo_root` resolves `root` as a repo root
+    (a bare `.git` directory is sufficient -- `held_lock`'s key derivation
+    is pure path arithmetic over `os.path.realpath`, it never inspects git
+    history)."""
+    (root / ".git").mkdir(parents=True, exist_ok=True)
+
+
+def _load_publish_module_for_lock_test():
+    spec = importlib.util.spec_from_file_location(
+        "publish_percolate_round_lock_handoff_under_test", _BIN_DIR / "publish.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    import sys as _sys
+
+    _sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _wire_lock_test_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[str, Path]", *, rows_reached: list):
+    """Same shape as `test_publish_row_isolation.py`'s `_wire_common_fakes`
+    -- stubs every precondition `main()` runs before its OWN lock loop (Part
+    B) and row loop, so this test drives the REAL lock-acquisition code
+    (the code under test for D1) rather than a hand-rolled stand-in for it."""
+
+    def fake_row(name: str, dest: Path) -> str:
+        src = tmp_path / f"src-{name}"
+        src.mkdir(parents=True, exist_ok=True)
+        return f"{name}|mirror|{src}|{dest}"
+
+    monkeypatch.setattr(
+        publish_mod, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
+    )
+    monkeypatch.setattr(
+        publish_mod, "load_targets", lambda setup_dir, target_filter=None: [
+            fake_row(name, dest) for name, dest in row_dests.items()
+        ]
+    )
+
+    class _FakeClaudeKlabauter:
+        def resolve_target(self, store, name):
+            raise KeyError(name)
+
+        def run_parse_sweep(self, repo_root):
+            return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
+
+        def enumerate_gate_entrypoints(self, repo_root):
+            return ()
+
+    monkeypatch.setattr(publish_mod, "_import_claude_klabauter_percolate", lambda: _FakeClaudeKlabauter())
+    monkeypatch.setattr(publish_mod, "assert_percolate_store_ready", lambda engine_claude_klabauter, path: {})
+    monkeypatch.setattr(publish_mod, "locate_percolate_store", lambda setup_dir: tmp_path / "store.yaml")
+    monkeypatch.setattr(publish_mod, "resolve_percolate_identity_path", lambda setup_dir: tmp_path / "id")
+    monkeypatch.setattr(publish_mod, "check_identity_file_present", lambda path, setup_dir: tmp_path / "id")
+    monkeypatch.setattr(publish_mod, "check_identity_file_safe", lambda path: None)
+    monkeypatch.setattr(
+        publish_mod,
+        "parse_percolate_identity",
+        lambda path: publish_mod.PercolateIdentity(review=["dummy-pattern"]),
+    )
+    monkeypatch.setattr(publish_mod, "_resolve_publish_sync_module_path", lambda setup_dir: tmp_path / "publish_sync.py")
+    monkeypatch.setattr(publish_mod, "_import_publish_sync", lambda setup_dir: object())
+    monkeypatch.setattr(publish_mod, "check_publish_sync_contract", lambda *a, **k: None)
+    monkeypatch.setattr(publish_mod, "dispatch_end_of_run_identity_check", lambda *a, **k: True)
+    monkeypatch.setattr(publish_mod, "dispatch_end_of_run_install_doc_payload_check", lambda *a, **k: True)
+    monkeypatch.setattr(publish_mod, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)
+
+    def fake_process_target(target, setup_dir, totals, **kwargs):
+        rows_reached.append(target.name)
+        totals.processed += 1
+
+    monkeypatch.setattr(publish_mod, "process_target", fake_process_target)
+
+
+@pytest.mark.spawns_process
+def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
+    """AC2, half 1 -- the parent (`percolate-round.py`) already holds
+    `_round_held_lock` over root A when it spawns Step 4; `publish.py` must
+    NOT re-attempt to acquire A when A's realpath is named in
+    `PERCOLATE_ROUND_INHERITED_LOCK_ROOTS`. Root B (a second row's dest,
+    NOT held by anyone) must still get acquired and the row loop reached for
+    both rows -- proves the skip is per-root, not a blanket disable."""
+    import coordinator_core.locked_write as locked_write
+
+    publish_mod = _load_publish_module_for_lock_test()
+
+    root_a = tmp_path / "dest-a"
+    root_b = tmp_path / "dest-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    _init_git_repo_for_lock(root_a)
+    _init_git_repo_for_lock(root_b)
+
+    # Speed up the timeout for this test only -- `timeout` is a keyword-only
+    # parameter on the real generator function `@contextmanager` wraps
+    # (`held_lock.__wrapped__`), so its default lives in that function's own
+    # `__kwdefaults__` and is safely patchable without touching any call
+    # site.
+    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+
+    # `publish_mod.main` runs IN-PROCESS below (no subprocess spawn despite
+    # this test's `spawns_process` marker), so `os.getppid()` observed
+    # inside `main`'s PID-verification is THIS test process's own
+    # `os.getppid()` -- not `os.getpid()` -- matching the real wire format
+    # (`"<true parent pid>=<realpath>"`, § code-reviewer P2 fail-closed fix).
+    monkeypatch.setenv(
+        "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS",
+        f"{os.getppid()}={os.path.realpath(str(root_a))}",
+    )
+
+    rows_reached: list = []
+    _wire_lock_test_fakes(
+        publish_mod, monkeypatch, tmp_path,
+        {"row-a": root_a, "row-b": root_b},
+        rows_reached=rows_reached,
+    )
+
+    with _mod._round_held_lock(Path(root_a), holder_label="percolate-round:test-target"):
+        rc = publish_mod.main(["row-a,row-b"])
+
+    assert rc == 0
+    assert rows_reached == ["row-a", "row-b"]
+    assert "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS" not in os.environ
+
+
+@pytest.mark.spawns_process
+def test_non_inherited_root_still_locked(tmp_path, monkeypatch):
+    """AC2, half 2 -- a root NOT named in the inheritance env var must still
+    go through real lock acquisition. Root A is inherited (parent holds it,
+    skipped); root B is independently held by a THIRD party (not the
+    parent, not this run) and is NOT inherited -- `publish.py` must still
+    try to acquire B, time out, and fail the run, proving the skip did not
+    silently widen into "skip all locking when the token is present."""
+    import coordinator_core.locked_write as locked_write
+
+    publish_mod = _load_publish_module_for_lock_test()
+
+    root_a = tmp_path / "dest-a"
+    root_b = tmp_path / "dest-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    _init_git_repo_for_lock(root_a)
+    _init_git_repo_for_lock(root_b)
+
+    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+
+    monkeypatch.setenv(
+        "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS",
+        f"{os.getppid()}={os.path.realpath(str(root_a))}",
+    )
+
+    rows_reached: list = []
+    _wire_lock_test_fakes(
+        publish_mod, monkeypatch, tmp_path,
+        {"row-a": root_a, "row-b": root_b},
+        rows_reached=rows_reached,
+    )
+
+    with _mod._round_held_lock(Path(root_a), holder_label="percolate-round:test-target"):
+        with locked_write.held_lock(Path(root_b), holder_label="third-party-holder"):
+            rc = publish_mod.main(["row-a,row-b"])
+
+    assert rc == 1
+    assert rows_reached == []
+
+
+@pytest.mark.spawns_process
+def test_inherited_root_pid_mismatch_still_locked(tmp_path, monkeypatch):
+    """§ code-reviewer P2 fail-closed fix -- a token whose PID does NOT
+    match `os.getppid()` (a stray exported value, or a nested/second-order
+    invocation) must be treated as absent: the named root still goes
+    through real lock acquisition and the run fails exactly as if no token
+    were present at all."""
+    import coordinator_core.locked_write as locked_write
+
+    publish_mod = _load_publish_module_for_lock_test()
+
+    root_a = tmp_path / "dest-a"
+    root_a.mkdir()
+    _init_git_repo_for_lock(root_a)
+
+    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+
+    # A syntactically well-formed token, but with a PID that cannot be the
+    # true parent (`os.getppid()` inside `main` below is this test
+    # process's own getppid() -- guaranteed not equal to a PID one past the
+    # max representable signed 32-bit value).
+    monkeypatch.setenv(
+        "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS",
+        f"2147483647={os.path.realpath(str(root_a))}",
+    )
+
+    rows_reached: list = []
+    _wire_lock_test_fakes(
+        publish_mod, monkeypatch, tmp_path,
+        {"row-a": root_a},
+        rows_reached=rows_reached,
+    )
+
+    with locked_write.held_lock(Path(root_a), holder_label="third-party-holder"):
+        rc = publish_mod.main(["row-a"])
+
+    assert rc == 1
+    assert rows_reached == []
+
+
+@pytest.mark.spawns_process
+def test_inherited_root_malformed_token_still_locked(tmp_path, monkeypatch):
+    """§ code-reviewer P2 fail-closed fix -- a malformed entry (no `=`
+    delimiter, or a non-integer PID) must not be treated as an inherited
+    root: fail closed, still lock."""
+    import coordinator_core.locked_write as locked_write
+
+    publish_mod = _load_publish_module_for_lock_test()
+
+    root_a = tmp_path / "dest-a"
+    root_a.mkdir()
+    _init_git_repo_for_lock(root_a)
+
+    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+
+    # No `=` delimiter at all -- the pre-fix bare-realpath format.
+    monkeypatch.setenv(
+        "PERCOLATE_ROUND_INHERITED_LOCK_ROOTS", os.path.realpath(str(root_a))
+    )
+
+    rows_reached: list = []
+    _wire_lock_test_fakes(
+        publish_mod, monkeypatch, tmp_path,
+        {"row-a": root_a},
+        rows_reached=rows_reached,
+    )
+
+    with locked_write.held_lock(Path(root_a), holder_label="third-party-holder"):
+        rc = publish_mod.main(["row-a"])
+
+    assert rc == 1
+    assert rows_reached == []
+
+
+def test_step4_inherited_lock_token_uses_producer_own_pid(tmp_path, monkeypatch):
+    """Producer-side pin for the § `_INHERITED_LOCK_ROOTS_ENV` wire format.
+
+    The consumer-side tests above (`test_inherited_root_*`) hand-build their
+    own `f"{os.getppid()}=..."` fixture tokens and document, in comments,
+    that this is an intentional inversion -- `publish.main` runs IN-PROCESS
+    in those tests, so `os.getppid()` observed there is the test process's
+    own value, standing in for "the real parent's pid" as seen from a
+    simulated child. Nothing in that file exercises what `_cmd_round`
+    itself actually writes.
+
+    This test closes that gap: it runs `_cmd_round` for real (via
+    `_run_round`, the module's own subprocess-boundary stub) and inspects
+    the `env=` kwarg on the Step 4 real-run `publish.py` call -- proving
+    the producer writes `f"{os.getpid()}=<realpath>"` using ITS OWN pid
+    (`_cmd_round`'s pid, which is this test process's `os.getpid()`, since
+    the test directly invokes `_cmd_round`), not `os.getppid()` or a bare
+    realpath. A silent swap to `getppid()` here would never match a real
+    child's `getppid()` -- publish.py's skip would never fire, and the D1
+    deadlock this token exists to prevent would return with the whole
+    suite still green."""
+    orig_environ = dict(os.environ)
+
+    rc, _out, spy, dest = _run_round(tmp_path, monkeypatch)
+    assert rc == _mod._EXIT_OK
+
+    real_run_kwargs = [
+        kwargs
+        for cmd, kwargs in zip(spy.calls, spy.call_kwargs)
+        if str(_mod._PUBLISH) in " ".join(str(c) for c in cmd) and "--dry-run" not in cmd
+    ]
+    assert len(real_run_kwargs) == 1, "expected exactly one Step 4 real-run publish.py call"
+    real_env = real_run_kwargs[0].get("env")
+    assert real_env is not None, "Step 4 real-run call must pass an explicit env="
+
+    token = real_env.get(_mod._INHERITED_LOCK_ROOTS_ENV)
+    assert token is not None, f"{_mod._INHERITED_LOCK_ROOTS_ENV} missing from Step 4 env"
+
+    pid_part, _, realpath_part = token.partition("=")
+    assert pid_part == str(os.getpid()), (
+        "token pid component must be the producer's OWN pid (os.getpid()), "
+        f"not os.getppid() or anything else -- got {pid_part!r}, expected {os.getpid()!r}"
+    )
+    assert realpath_part == os.path.realpath(str(dest))
+
+    # The token must exist only in the child's env copy -- never mutate the
+    # parent (`_cmd_round`'s own, i.e. this test process's) os.environ.
+    assert _mod._INHERITED_LOCK_ROOTS_ENV not in os.environ
+    assert os.environ == orig_environ

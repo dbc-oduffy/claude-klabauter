@@ -28,6 +28,15 @@ import sys
 import unittest
 from pathlib import Path
 
+import pytest
+
+# Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
+# cadence suite is the separate threshold ruling, not this declaration.
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _SCRIPT = _BIN_DIR / "plan-tasks-stamp"
 

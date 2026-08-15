@@ -30,7 +30,10 @@ import pytest
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
 # residue and is explicitly not the route for a new file --
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
 
 
 def _isolated_git_env(anchor: Path) -> dict[str, str]:
@@ -134,10 +137,18 @@ def test_default_no_recommendation_matches_pre_c7_shape() -> None:
     assert jp["id"] == "jgate"
     assert jp["recommendation"] is None
     assert jp["reason"] == "insufficient-evidence"
-    assert jp["dispositions"] == [
+    # Piece B (cross-repo/inbox/2026-08-04-example-market-data-repo-em-pickup-
+    # jgate-cleared-strands-gate-fields.md) — both dispositions now carry a
+    # `guidance` string; `resolves` is unchanged (negative spec 4).
+    assert [{"value": d["value"], "resolves": d["resolves"]} for d in jp["dispositions"]] == [
         {"value": "cleared", "resolves": ["d2"]},
         {"value": "not-cleared", "resolves": []},
     ]
+    assert all(d.get("guidance") for d in jp["dispositions"])
+    # Review: staff-eng finding 6 — keep the shape guard the prior `==`
+    # comparison gave (an unexpected extra key on a disposition), even
+    # though `guidance`'s prose content is only truthiness-checked above.
+    assert all(set(d) == {"value", "resolves", "guidance"} for d in jp["dispositions"])
 
 
 def test_recommendation_present_still_emits_full_judgment_point_unchanged_dispositions() -> None:
@@ -152,10 +163,12 @@ def test_recommendation_present_still_emits_full_judgment_point_unchanged_dispos
     # Dispositions/resolves are IDENTICAL to the no-recommendation shape —
     # a recommendation narrows what the EM reads, never the EM's own
     # dispositions or what resolving each one clears (negative spec 4).
-    assert jp["dispositions"] == [
+    assert [{"value": d["value"], "resolves": d["resolves"]} for d in jp["dispositions"]] == [
         {"value": "cleared", "resolves": ["d2"]},
         {"value": "not-cleared", "resolves": []},
     ]
+    assert all(d.get("guidance") for d in jp["dispositions"])
+    assert all(set(d) == {"value", "resolves", "guidance"} for d in jp["dispositions"])
 
 
 def test_recommendation_rationale_names_the_blocker_and_sha(tmp_path: Path) -> None:

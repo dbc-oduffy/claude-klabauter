@@ -25,6 +25,13 @@ import pytest
 
 from coordinator_core.reconcile import ac27_differential_oracle as oracle
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

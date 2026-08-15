@@ -70,6 +70,12 @@ _WRAPPER_INVOCATIONS = [
     (git_native.ls_files_deleted, ("/tmp/repo", ["a.txt", "b.txt"]), {}),
     (git_native.reset_paths, ("/tmp/repo", ["a.txt", "b.txt"]), {}),
     (git_native.commit_with_message_file, ("/tmp/repo", "/tmp/msg", ["a.txt"]), {}),
+    (git_native.add_paths_pathspec_file, ("/tmp/repo", ["a.txt", "b.txt"]), {}),
+    (
+        git_native.commit_with_message_file_pathspec_scoped,
+        ("/tmp/repo", "/tmp/msg", ["a.txt"]),
+        {},
+    ),
     (git_native.rev_parse_head, ("/tmp/repo",), {}),
     (git_native.log_grep, ("/tmp/repo", "Session-Id: abc"), {}),
     (git_native.log_diff_filter, ("/tmp/repo", "R"), {}),

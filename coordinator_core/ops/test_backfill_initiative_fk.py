@@ -27,6 +27,13 @@ from coordinator_core.ops.backfill_initiative_fk import (
     main,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _make_fake_coordinator_initiative(bin_dir: Path, known_ids: set) -> Path:
     """Write a fake python3 `coordinator-initiative` that supports `attach <path> <id>`:

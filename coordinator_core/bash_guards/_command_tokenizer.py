@@ -1198,6 +1198,12 @@ def _strip_heredocs(text: str) -> str:
     terminator-matching purposes (this resolver has no need for the
     quoted-delimiter distinction of suppressing expansion inside the body,
     since the body is discarded entirely).
+
+    KEEP IN SYNC: `_write_bump_sink_shapes._iter_heredoc_bodies` hand-mirrors
+    this terminator-walk (it needs the body TEXT, which this function
+    discards, so it cannot simply call this function and diff) -- any change
+    to the opener/terminator/`<<-`-tab-stripping semantics here must be
+    ported there by hand.
     """
     if "<<" not in text:
         return text

@@ -26,6 +26,13 @@ from coordinator_core.bash_guards.guard_offer_invoke_params_stdin import (
     check_offer_invoke_params_stdin,
 )
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 # The two tests below spawn `python3 -m coordinator_core.invoke` as a real
 # subprocess. That child inherits cwd but NOT pytest's rootdir sys.path
 # insertion, so it can only resolve the `coordinator_core` package when cwd

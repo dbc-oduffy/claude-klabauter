@@ -20,15 +20,19 @@ probe layer previously bridged to DoE's scripts/lib/prereq_probe.sh via a
 `coordinator_core.install.prereq_probe`'s already-landed native port
 in-process — no subprocess, no bash dependency, same probe SSOT (that
 module's `probe_all`/`probe_longpaths`/`probe_uv`/`probe_python`/
-`shell_login_env_reconstruction_source`). The `prereq_probe_path` /
-`probes_available` file-presence gate and the Windows hard-error path
-(`_ne_no_probe_lib_windows_hard_error`) are preserved verbatim — a missing
-coordinator-plugin checkout still degrades exactly like the oracle (probes
-unavailable, informational-only continuation on POSIX; hard error on
-Windows) even though the probes themselves no longer require that checkout
-to execute, because the file's presence is the existing signal this module
-uses to infer "running from a full coordinator install" rather than a bare
-Claude-klabauter clone.
+`shell_login_env_reconstruction_source`). The oracle-era `prereq_probe_path`
+/ `probes_available` file-presence gate was REMOVED on 2026-08-14: it keyed
+"can this run probe?" off the on-disk presence of `scripts/lib/prereq_probe.sh`,
+a file deleted on 2026-07-22. Every documented invocation therefore hard-errored
+("prereq_probe.sh not found at ..."), and any invocation that bypassed the
+trampoline skipped every probe and printed "All prereqs satisfied. Nothing to
+do." — a green result from a run that probed nothing, which on a cold macOS box
+is precisely the step meant to catch the bash floor.
+
+Negative-spec: do NOT reintroduce a file-existence gate around the probe layer.
+The probes are in-process Python; their availability is an import-time property,
+not a filesystem one. If a future probe genuinely can become unavailable, the
+outcome must be indeterminate (non-zero), never "all prereqs satisfied".
 
 Negative-spec (retired bash-oracle behavior — do NOT reintroduce differently):
     - Never mutate before the consent prompt (CONSENT-INVARIANT) — the backup
@@ -69,7 +73,7 @@ _CREATIONFLAGS = no_console_creationflags()
 
 # Exit codes — preserved verbatim from the bash oracle (business-code parity).
 EXIT_OK = 0
-EXIT_HARD_ERROR = 1  # prereq_probe.sh missing (Windows path) / backup write failure
+EXIT_HARD_ERROR = 1  # backup-file write failure
 EXIT_USAGE_ERROR = 2  # unknown arg / --restore missing file / --restore file not found
 EXIT_NONINTERACTIVE_ABORT = 3  # EOF / no-tty consent gate, --yes not passed
 EXIT_PARTIAL_FAILURE = 4  # one or more mutation steps failed
@@ -265,17 +269,15 @@ _PROBE_FN_DISPATCH = {
 }
 
 
-def _ne_run_bash_probe_fn(prereq_probe_path: str, fn_expr: str, timeout: int = _PROBE_TIMEOUT_SECS) -> str:
+def _ne_run_probe_fn(fn_expr: str) -> str:
     """Invoke one of the native `coordinator_core.install.prereq_probe` port's
     functions in-process, keyed by *fn_expr* (the bash-oracle function name
     this call site historically invoked via a `bash -c 'source ...; <fn>'`
     subprocess — see module docstring § Probe delegation, 2026-07-21
-    de-bash cutover). *prereq_probe_path* and *timeout* are accepted for
-    call-site compatibility (the availability gate at every caller still
-    checks `prereq_probe_path`) but are unused by the native path — no
-    subprocess, no lib file to source, no timeout to bound.
+    de-bash cutover). No subprocess, no lib file to source, no timeout to
+    bound: the former `prereq_probe_path`/`timeout` parameters were dead
+    weight and are gone.
     """
-    del prereq_probe_path, timeout
     fn = _PROBE_FN_DISPATCH.get(fn_expr)
     if fn is None:
         return ""
@@ -470,9 +472,7 @@ def _ne_darwin_bash_profile_repair(
     print("  Source: zsh login shell (untouched by the bash orphan — not the broken bash).", file=out)
     print("  NO chsh is performed — only ~/.bash_profile is updated.\n", file=out)
 
-    recon_source = _ne_run_bash_probe_fn(
-        runner.prereq_probe_path, "_co_shell_login_env_reconstruction_source"
-    ).strip()
+    recon_source = _ne_run_probe_fn("_co_shell_login_env_reconstruction_source").strip()
 
     if not recon_source:
         print("  INCONCLUSIVE: zsh login PATH could not be probed (zsh absent or unprobeable).", file=out)
@@ -592,7 +592,7 @@ _NE_POSIX_MANUAL_STEPS = {
 
 
 def _ne_posix_path(
-    os_name: str, prereq_probe_path: str, dry_run: bool, yes: bool, home: Path, out, in_stream=None
+    os_name: str, dry_run: bool, yes: bool, home: Path, out, in_stream=None
 ) -> int:
     """macOS/Linux: print offers; Darwin additionally offers bash-profile
     repair when shell_login_env fails. Never mutates outside that one Darwin
@@ -608,20 +608,17 @@ def _ne_posix_path(
         print("Ensure Python 3.11+, uv, and git are installed manually.\n", file=out)
 
     runner = NeRunner(yes=yes)
-    runner.prereq_probe_path = prereq_probe_path
 
-    probes_available = bool(prereq_probe_path and Path(prereq_probe_path).is_file())
-    if probes_available:
-        probe_output = _ne_run_bash_probe_fn(prereq_probe_path, "_co_prereq_probe_all")
-        print("Current prereq probe results:", file=out)
-        _ne_print_probe_summary(probe_output, out)
-        print(file=out)
+    probe_output = _ne_run_probe_fn("_co_prereq_probe_all")
+    print("Current prereq probe results:", file=out)
+    _ne_print_probe_summary(probe_output, out)
+    print(file=out)
 
-        if os_name == "Darwin":
-            try:
-                _ne_darwin_bash_profile_repair(probe_output, home, dry_run, runner, out, in_stream)
-            except _NeNonInteractiveAbort:
-                return EXIT_NONINTERACTIVE_ABORT
+    if os_name == "Darwin":
+        try:
+            _ne_darwin_bash_profile_repair(probe_output, home, dry_run, runner, out, in_stream)
+        except _NeNonInteractiveAbort:
+            return EXIT_NONINTERACTIVE_ABORT
 
     if runner.steps_succeeded or runner.steps_failed:
         print("\n=== macOS Repair Summary ===", file=out)
@@ -769,7 +766,7 @@ def _ne_write_backup_file(backup_path: Path, out) -> bool:
     return True
 
 
-def _ne_step1_longpaths(runner: NeRunner, prereq_probe_path: str, probes_available: bool, out, in_stream=None) -> None:
+def _ne_step1_longpaths(runner: NeRunner, out, in_stream=None) -> None:
     print("--- Step: git long-path support ---", file=out)
     try:
         proceed = runner.prompt_yn("Apply: git config --global core.longpaths true", out, in_stream)
@@ -798,27 +795,24 @@ def _ne_step1_longpaths(runner: NeRunner, prereq_probe_path: str, probes_availab
 
     if ok:
         print("  Applied.", file=out)
-        if probes_available:
-            verify_out = _ne_run_bash_probe_fn(prereq_probe_path, "_co_probe_longpaths")
-            # Single-probe output has no "name" filter needed -- take the
-            # (only) record's status field directly.
-            recs = _ne_parse_probe_lines(verify_out)
-            verify_status = recs[0].get("status", "") if recs else ""
-            print(f"  Post-fix probe: longpaths = {verify_status}", file=out)
-            if verify_status == "pass":
-                runner.record_success("git core.longpaths=true")
-            else:
-                print("  WARNING: probe still non-pass after fix.", file=sys.stderr)
-                runner.record_failure("git core.longpaths (probe did not flip to pass)")
-        else:
+        verify_out = _ne_run_probe_fn("_co_probe_longpaths")
+        # Single-probe output has no "name" filter needed -- take the
+        # (only) record's status field directly.
+        recs = _ne_parse_probe_lines(verify_out)
+        verify_status = recs[0].get("status", "") if recs else ""
+        print(f"  Post-fix probe: longpaths = {verify_status}", file=out)
+        if verify_status == "pass":
             runner.record_success("git core.longpaths=true")
+        else:
+            print("  WARNING: probe still non-pass after fix.", file=sys.stderr)
+            runner.record_failure("git core.longpaths (probe did not flip to pass)")
     else:
         print("  ERROR: git config --global core.longpaths true failed.", file=sys.stderr)
         runner.record_failure("git core.longpaths (git config command failed)")
     print(file=out)
 
 
-def _ne_step2_uv(runner: NeRunner, prereq_probe_path: str, probes_available: bool, out, in_stream=None) -> None:
+def _ne_step2_uv(runner: NeRunner, out, in_stream=None) -> None:
     """Install uv via `py -m pip install uv` against a resolved python/py/python3.
 
     Deliberate isolation boundary — do not convert the pip-install subprocess
@@ -865,18 +859,15 @@ def _ne_step2_uv(runner: NeRunner, prereq_probe_path: str, probes_available: boo
 
     if ok:
         print("  uv install attempted.", file=out)
-        if probes_available:
-            verify_out = _ne_run_bash_probe_fn(prereq_probe_path, "_co_probe_uv")
-            recs = _ne_parse_probe_lines(verify_out)
-            verify_status = recs[0].get("status", "") if recs else ""
-            print(f"  Post-fix probe: uv = {verify_status}", file=out)
-            if verify_status == "pass":
-                runner.record_success("uv installed")
-            else:
-                print("  WARNING: uv probe still non-pass after install (may need PATH refresh).", file=sys.stderr)
-                runner.record_failure("uv install (probe did not flip to pass; may need new shell)")
+        verify_out = _ne_run_probe_fn("_co_probe_uv")
+        recs = _ne_parse_probe_lines(verify_out)
+        verify_status = recs[0].get("status", "") if recs else ""
+        print(f"  Post-fix probe: uv = {verify_status}", file=out)
+        if verify_status == "pass":
+            runner.record_success("uv installed")
         else:
-            runner.record_success("uv install attempted")
+            print("  WARNING: uv probe still non-pass after install (may need PATH refresh).", file=sys.stderr)
+            runner.record_failure("uv install (probe did not flip to pass; may need new shell)")
     else:
         print("  ERROR: pip install uv failed.", file=sys.stderr)
         runner.record_failure("uv install (pip command failed)")
@@ -917,9 +908,9 @@ exit 0
 """
 
 
-def _ne_step3_python(runner: NeRunner, prereq_probe_path: str, probes_available: bool, out, in_stream=None) -> None:
+def _ne_step3_python(runner: NeRunner, out, in_stream=None) -> None:
     print("--- Step: install Python 3.12 ---", file=out)
-    print(f"  Current python probe: {_ne_probe_detail_for(runner.probe_output, 'python') if probes_available else ''}", file=out)
+    print(f"  Current python probe: {_ne_probe_detail_for(runner.probe_output, 'python')}", file=out)
     print("  This step installs Python 3.12 via winget (Python.Python.3.12).", file=out)
     print("  After install, a new shell session will be needed to pick up the new PATH entry.", file=out)
     try:
@@ -958,18 +949,15 @@ def _ne_step3_python(runner: NeRunner, prereq_probe_path: str, probes_available:
 
     if ok:
         print("  Python 3.12 install initiated via winget.", file=out)
-        if probes_available:
-            verify_out = _ne_run_bash_probe_fn(prereq_probe_path, "_co_probe_python")
-            recs = _ne_parse_probe_lines(verify_out)
-            verify_status = recs[0].get("status", "") if recs else ""
-            print(f"  Post-fix probe: python = {verify_status}", file=out)
-            if verify_status == "pass":
-                runner.record_success("Python 3.12 installed (pass)")
-            else:
-                print("  NOTE: python probe still non-pass — open a new terminal and re-run.", file=sys.stderr)
-                runner.record_success("Python 3.12 install dispatched (new shell needed to confirm)")
+        verify_out = _ne_run_probe_fn("_co_probe_python")
+        recs = _ne_parse_probe_lines(verify_out)
+        verify_status = recs[0].get("status", "") if recs else ""
+        print(f"  Post-fix probe: python = {verify_status}", file=out)
+        if verify_status == "pass":
+            runner.record_success("Python 3.12 installed (pass)")
         else:
-            runner.record_success("Python 3.12 install attempted via winget")
+            print("  NOTE: python probe still non-pass — open a new terminal and re-run.", file=sys.stderr)
+            runner.record_success("Python 3.12 install dispatched (new shell needed to confirm)")
     else:
         print("  ERROR: winget install Python.Python.3.12 failed.", file=sys.stderr)
         print("  Manual fallback: https://www.python.org/downloads/", file=sys.stderr)
@@ -978,7 +966,7 @@ def _ne_step3_python(runner: NeRunner, prereq_probe_path: str, probes_available:
 
 
 def _ne_step4_alias_disable(
-    runner: NeRunner, plan: _NeWindowsPlan, prereq_probe_path: str, probes_available: bool, out, in_stream=None
+    runner: NeRunner, plan: _NeWindowsPlan, out, in_stream=None
 ) -> None:
     print("--- Step: disable WindowsApps App Execution aliases for python/python3 ---", file=out)
 
@@ -1026,11 +1014,10 @@ def _ne_step4_alias_disable(
 
     if ok:
         print("  App Execution aliases for python/python3 disabled.", file=out)
-        if probes_available:
-            verify_out = _ne_run_bash_probe_fn(prereq_probe_path, "_co_probe_python")
-            recs = _ne_parse_probe_lines(verify_out)
-            verify_status = recs[0].get("status", "") if recs else ""
-            print(f"  Post-fix probe: python = {verify_status}", file=out)
+        verify_out = _ne_run_probe_fn("_co_probe_python")
+        recs = _ne_parse_probe_lines(verify_out)
+        verify_status = recs[0].get("status", "") if recs else ""
+        print(f"  Post-fix probe: python = {verify_status}", file=out)
         runner.record_success("WindowsApps python/python3 App Execution aliases disabled")
     else:
         print("  ERROR: PowerShell command to disable aliases failed.", file=sys.stderr)
@@ -1041,26 +1028,20 @@ def _ne_step4_alias_disable(
 
 
 def _ne_windows_path(
-    prereq_probe_path: str, dry_run: bool, yes: bool, home: Path, out, in_stream=None
+    dry_run: bool, yes: bool, home: Path, out, in_stream=None
 ) -> int:
     """Windows environment normalization: build fix plan, print, dry-run
     early-exit, rollback-first backup, then consent-gated Steps 1-4 in
     blast-radius-last order. Mirrors oracle lines 604-1075."""
-    probes_available = bool(prereq_probe_path and Path(prereq_probe_path).is_file())
-    probe_output = ""
-    if probes_available:
-        probe_output = _ne_run_bash_probe_fn(prereq_probe_path, "_co_prereq_probe_all")
+    probe_output = _ne_run_probe_fn("_co_prereq_probe_all")
 
     print("\n=== normalize-env — Windows environment normalization ===\n", file=out)
 
-    if probes_available:
-        print("Current prereq probe results:", file=out)
-        _ne_print_probe_summary(probe_output, out)
-        print(file=out)
-    else:
-        print("  (probe results unavailable)\n", file=out)
+    print("Current prereq probe results:", file=out)
+    _ne_print_probe_summary(probe_output, out)
+    print(file=out)
 
-    plan = _ne_build_windows_plan(probe_output) if probes_available else _NeWindowsPlan()
+    plan = _ne_build_windows_plan(probe_output)
 
     if plan.count == 0:
         print("All prereqs satisfied. Nothing to do.", file=out)
@@ -1084,18 +1065,17 @@ def _ne_windows_path(
     print(f"  normalize-env --restore {backup_path}\n", file=out)
 
     runner = NeRunner(yes=yes)
-    runner.prereq_probe_path = prereq_probe_path
     runner.probe_output = probe_output
 
     try:
         if plan.longpaths:
-            _ne_step1_longpaths(runner, prereq_probe_path, probes_available, out, in_stream)
+            _ne_step1_longpaths(runner, out, in_stream)
         if plan.uv:
-            _ne_step2_uv(runner, prereq_probe_path, probes_available, out, in_stream)
+            _ne_step2_uv(runner, out, in_stream)
         if plan.python:
-            _ne_step3_python(runner, prereq_probe_path, probes_available, out, in_stream)
+            _ne_step3_python(runner, out, in_stream)
         if plan.alias:
-            _ne_step4_alias_disable(runner, plan, prereq_probe_path, probes_available, out, in_stream)
+            _ne_step4_alias_disable(runner, plan, out, in_stream)
     except _NeNonInteractiveAbort:
         return EXIT_NONINTERACTIVE_ABORT
 
@@ -1136,15 +1116,6 @@ def _ne_windows_path(
     return EXIT_OK
 
 
-def _ne_default_prereq_probe_path() -> Optional[str]:
-    """Resolution order: explicit env var set by the DoE-side trampoline
-    (which knows its own coordinator/scripts/ location) -- this module has
-    no reliable way to locate a sibling-repo bash script on its own, per
-    the Build-For-Someone-Else's-Machine path-resolution-order convention
-    (explicit flag/env var before marker auto-discovery)."""
-    return os.environ.get("NORMALIZE_ENV_PREREQ_PROBE_PATH")
-
-
 def main(argv: list, *, out=None, in_stream=None, home: Optional[Path] = None) -> int:
     out = out if out is not None else sys.stdout
     in_stream = in_stream if in_stream is not None else sys.stdin
@@ -1159,19 +1130,13 @@ def main(argv: list, *, out=None, in_stream=None, home: Optional[Path] = None) -
     if args["restore_file"] is not None:
         return _ne_handle_restore(args["restore_file"], home, out)
 
-    prereq_probe_path = _ne_default_prereq_probe_path()
-    if prereq_probe_path and not Path(prereq_probe_path).is_file():
-        print(f"ERROR: prereq_probe.sh not found at {prereq_probe_path}", file=sys.stderr)
-        print("  Run from the coordinator repo root or ensure scripts/lib/ is intact.", file=sys.stderr)
-        return EXIT_HARD_ERROR
-
     is_windows = _ne_is_windows()
     os_name = "Windows" if is_windows else _ne_uname_s()
 
     try:
         if is_windows:
-            return _ne_windows_path(prereq_probe_path or "", args["dry_run"], args["yes"], home, out, in_stream)
-        return _ne_posix_path(os_name, prereq_probe_path or "", args["dry_run"], args["yes"], home, out, in_stream)
+            return _ne_windows_path(args["dry_run"], args["yes"], home, out, in_stream)
+        return _ne_posix_path(os_name, args["dry_run"], args["yes"], home, out, in_stream)
     except _NeNonInteractiveAbort:
         return EXIT_NONINTERACTIVE_ABORT
 

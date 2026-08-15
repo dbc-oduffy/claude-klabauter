@@ -1,4 +1,4 @@
-"""
+r"""
 coordinator_core.session.harness_registry — pure parser over the harness's
 own `<claude-config>/sessions/*.json` registry.
 
@@ -17,7 +17,94 @@ Public surface (pinned contract — do not change without updating consumers):
 `name` and `messaging_socket_path` (added
 `state/handoffs/2026-08-13-session-owner-reachability-registry.md` § 1) are
 parsed exactly like `cwd`: optional string fields, `None` when absent or
-non-string, no verdict attached. They exist so
+non-string, no verdict attached.
+
+`messagingSocketPath` IS the harness's current spelling — verified against
+the shipped CLI bundle, not inferred from records (Claude Code 2.1.232,
+`~/.local/share/claude/versions/2.1.232`; the same spelling is present in
+2.1.227 and 2.1.228). A registry in which NO record carries it does not
+mean the key drifted and this parser needs correcting: the harness writes
+the field from `CLAUDE_CODE_MESSAGING_SOCKET`, which is set only by a
+successful cross-session-inbox bind, and it skips that bind entirely when
+its messaging gate is off. Measured 2026-08-14: 44/44 records on this box
+omit the field, and this session's own environment has no
+`CLAUDE_CODE_MESSAGING_SOCKET`. Renaming the key read here, or deriving a
+substitute from `sessionId`/`pid`, would manufacture an address the
+harness itself refuses — see `coordinator_core.session.reachability`'s
+module docstring and `messaging_available()`.
+
+The gate's DEFAULT is a remote feature flag — verified against the
+shipped CLI bundle 2026-08-15 (Claude Code 2.1.233,
+`~/.local/share/claude/versions/2.1.233`): the bind is gated by
+GrowthBook under the telemetry name `agents_cross_session_inbox`, and
+there is a LATE-BIND path — a GrowthBook refresh that flips the gate ON
+mid-session makes the harness call `startCrossSessionInbox()` and then
+`updateSessionMessagingSocketPath()`, so a session can gain
+`messaging_socket_path` after this module has already parsed it as
+absent.
+
+**The gate is NOT remote-only, and an earlier revision of this docstring
+was wrong to say so.** From bundle 2.1.232 onward the gate predicate
+short-circuits `true` on the environment variable
+`CLAUDE_CODE_HARBOR_KITE` BEFORE it reaches either the platform check or
+the GrowthBook read, so the operator's own box can force it on — proven
+end to end on Windows (pipe bound, `messagingSocketPath` published, a
+real peer message delivered), recorded in
+`state/audits/2026-08-14-cross-session-messaging-gate-predicate-and-build-channel.md`.
+The predicate is mangled per bundle: grep the literal string
+`tengu_harbor_kite`, never a function name. Bundles before 2.1.232
+returned false on Windows before ever reading the variable, so there the
+override is inert rather than wrong.
+
+Reading a gate-off registry therefore does NOT license "nothing local can
+be done". `coordinator/bin/claude-doe.py` already defaults the variable
+on for every session it launches. What is still unexplained, and is a
+Claude-klabauter defect rather than a remote-flag fact, is that the default has not
+yet produced a bound inbox on the interactive path: measured 2026-08-15,
+45 records started after that launcher default landed and 0 of them carry
+`messaging_socket_path`. Until that is chased down, a `False` from
+`messaging_available()` is a live-capability reading, never evidence
+about who owns the switch.
+
+That the gate merely CYCLES — rather than peer messaging being absent on
+Windows or never having worked — is settled by this box's own harness
+debug log (`<claude-config>/debug/*.txt`), which records both states
+within six minutes of each other:
+
+    2026-08-14T22:18:45Z [DEBUG] [uds-messaging] Skipped: cross-session
+        messaging gate off (will late-bind if a GrowthBook refresh
+        enables it)
+    2026-08-14T22:24:13Z [INFO]  [uds-messaging] Listening:
+        \\.\pipe\cc-msg-3a24e4fdba67d42615065a1f8b22efbe
+
+The second line is the inbox bound and listening on a native Windows
+named pipe, and it is the mechanism behind the cross-repo EM-to-EM round
+trip DoE-claude recorded that day
+(`archive/handoffs/2026-08/2026-08-14-addressability-retraction-and-peer-read-wiring.md`).
+So a gate-off reading here is a point-in-time fact about a remote flag,
+never evidence that the capability is missing on this platform.
+
+The pipe name is `\\.\pipe\<prefix><16 random bytes, hex>`
+(`getDefaultUdsSocketPath` in the same bundle). Random per bind is why
+publication through this registry is load-bearing rather than
+convenience: a peer's address cannot be recomputed from `sessionId`,
+`pid`, or anything else a reader holds, so a record that omits
+`messaging_socket_path` describes a session no caller can address.
+
+Measured the same session: every record now additionally carries
+`peerProtocol: <int>` (42/42 records, all `peerProtocol: 1`; 0/42 carried
+`messaging_socket_path`, same gate-off signature as 2026-08-14's 44/44).
+This is a SEPARATE field answering a SEPARATE question — the harness's
+own FleetView peer listing filters on `peerProtocol >= 1` plus liveness
+plus a 24h recency window, NOT on the socket, so peer VISIBILITY
+(FleetView listing a peer) and peer DELIVERABILITY (`SendMessage`
+actually reaching it) are two different predicates on this harness
+version. This module parses `peerProtocol` nowhere and does not need to:
+`messaging_available()` (`coordinator_core.session.reachability`) remains
+the correct predicate for DELIVERABILITY specifically, and its docstring
+says so explicitly for the same reason this paragraph does — so a future
+reader does not "fix" `messaging_available()` toward `peerProtocol` and
+quietly turn a deliverability check into a visibility check. They exist so
 `coordinator_core.session.reachability` can build a `SendMessage` address
 without a second parser over this same directory — see that module's
 docstring for the ref-derivation and ambiguity-disambiguation this unlocks.
@@ -154,7 +241,7 @@ Negative-spec:
     - No caching/memoization across `snapshot()` calls — each call is a
       fresh, single scan; staleness policy belongs to the caller.
 
-`procStart` is observed in TWO shapes. On macOS (Claude Code 2.1.231,
+`procStart` is observed in THREE shapes. On macOS (Claude Code 2.1.231,
 observed 2026-08-13) it is a POSIX ctime string, e.g.
 `"Thu Aug 13 09:42:07 2026"` — **UTC**, not local time, confirmed live
 against 37/37 real records on this box via `calendar.timegm`: sub-second
@@ -165,16 +252,20 @@ NOT parse this leg with `time.mktime` — see the negative-spec entry below
 re: `core.lstart_to_epoch`. Parsed via `time.strptime` + `calendar.timegm`,
 with an ISO-8601 fallback (naive treated as UTC via
 `.replace(tzinfo=timezone.utc)`, tz-aware converted via `.timestamp()`). On
-Windows it is assumed to be a FILETIME integer — 100ns ticks since
-1601-01-01, converted via `int(procStart) / 1e7 - 11644473600` — but this
-leg is UNVERIFIED on Windows (assumed correct, not confirmed live) and
-unchanged by the string-parsing addition. A converted epoch outside
-`[now - 90d, now + 1h]` is REJECTED (record yields `None`) before it is
-ever returned, identically for both legs: this turns a unit mismatch or
-bad-shape record into an explicit `None` rather than a coincidence risk.
-The FILETIME leg was verified in an earlier session against 22 live rows
-on this box: sub-millisecond agreement with
-`psutil.Process(pid).create_time()` on every one.
+Windows it is a FILETIME — 100ns ticks since 1601-01-01, converted via
+`int(procStart) / 1e7 - 11644473600` — carried either as a genuine JSON
+`int`, or, as a last-resort third leg tried only after both the ctime and
+ISO-8601 string attempts fail, as a digits-only JSON string. Both FILETIME
+legs are now verified live on Windows, not merely assumed: the string leg
+was measured 2026-08-14 against 54/54 real `sessions/*.json` records
+carrying `procStart` as a string of digits (before this leg existed,
+`_proc_start_to_epoch` returned `None` for every one of them), and the
+int leg against 22 live rows in an earlier session — both to
+sub-millisecond agreement with `psutil.Process(pid).create_time()`. A
+converted epoch outside `[now - 90d, now + 1h]` is REJECTED (record yields
+`None`) before it is ever returned, identically for every leg: this turns
+a unit mismatch or bad-shape record into an explicit `None` rather than a
+coincidence risk.
 
 Negative-spec: `coordinator_core.session.core.lstart_to_epoch` parses a
 visually identical ctime shape but deliberately reads it as LOCAL time,
@@ -291,14 +382,31 @@ def _proc_start_to_epoch(raw) -> float | None:
     one, while `time.mktime` (local-time interpretation) is off by exactly
     the machine's UTC offset — do NOT swap this back to `time.mktime`) or
     ISO-8601 (naive treated as UTC via `.replace(tzinfo=timezone.utc)`,
-    tz-aware converted via `.timestamp()`). The FILETIME leg is tried first
-    and requires a genuine, non-bool `int` — mirroring `_parse_one`'s own
-    `pid` check (`isinstance(raw, bool)` rejected, `isinstance(raw, int)`
-    required) — never a bare `int(raw)`, which would silently truncate a
-    JSON float into the FILETIME leg and would just as silently swallow a
-    numeric string (e.g. `"133..."`) into it before the string branches
-    below ever get a chance to try it as ctime/ISO-8601. A float or a
-    string always falls through to the string branches.
+    tz-aware converted via `.timestamp()`).
+
+    Three shapes are accepted, tried in this order: (1) a genuine, non-bool
+    `int` FILETIME — mirroring `_parse_one`'s own `pid` check
+    (`isinstance(raw, bool)` rejected, `isinstance(raw, int)` required),
+    never a bare `int(raw)`, which would silently truncate a JSON float into
+    this leg; (2) a string tried as ctime then ISO-8601; (3) if both string
+    attempts fail AND the string is an unsigned ASCII all-digits string
+    (`raw.isascii() and raw.isdigit()` — plain `str.isdigit()` alone admits
+    non-decimal Unicode digit characters, e.g. superscript `'²'`, that
+    `int()` then rejects with `ValueError`), it is retried as a FILETIME
+    (100ns ticks since 1601-01-01) — the digits-string leg of last resort,
+    no sign handling, no float strings, no whitespace tolerance. Measured
+    live on Windows
+    (2026-08-14, Claude Code): 54/54 real `sessions/*.json` records carry
+    `procStart` as a JSON string of digits (a Windows FILETIME rendered as a
+    string, not a bare int as originally assumed) — before this leg
+    existed, `_proc_start_to_epoch` returned `None` for every one of them.
+    The digits-string leg MUST come last, after both ctime and ISO-8601
+    have already been tried and failed: a numeric string is ambiguous on
+    its face (it could in principle be a mis-shaped ctime/ISO value) and
+    this ordering is what lets the genuine date-string shapes claim it
+    first, matching how the `int` leg already refuses to treat a numeric
+    string as its own case. A float or a non-digits string always falls
+    through past every FILETIME leg entirely.
 
     Raises nothing — every failure mode (non-numeric, non-date string,
     overflow, out of the `[now - 90d, now + 1h]` sanity band) returns None
@@ -318,14 +426,21 @@ def _proc_start_to_epoch(raw) -> float | None:
             try:
                 dt = datetime.fromisoformat(raw)
             except ValueError:
-                return None
-            if dt.tzinfo is None:
-                try:
-                    epoch = dt.replace(tzinfo=timezone.utc).timestamp()
-                except (ValueError, OverflowError):
+                if raw.isascii() and raw.isdigit():
+                    try:
+                        epoch = int(raw) / _FILETIME_TICKS_PER_SEC - _FILETIME_EPOCH_OFFSET_SEC
+                    except (ValueError, OverflowError):
+                        return None
+                else:
                     return None
             else:
-                epoch = dt.timestamp()
+                if dt.tzinfo is None:
+                    try:
+                        epoch = dt.replace(tzinfo=timezone.utc).timestamp()
+                    except (ValueError, OverflowError):
+                        return None
+                else:
+                    epoch = dt.timestamp()
 
     if epoch is None:
         return None

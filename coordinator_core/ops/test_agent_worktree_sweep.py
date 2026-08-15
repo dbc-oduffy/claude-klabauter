@@ -19,6 +19,13 @@ from coordinator_core.ops.agent_worktree_sweep import (
 )
 from coordinator_core.session import liveness as cs_liveness
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(

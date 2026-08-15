@@ -38,9 +38,8 @@ def _init_git_repo(path):
     )
 
 
-def _write_project_tracker(path):
-    (path / "docs").mkdir(parents=True, exist_ok=True)
-    (path / "docs" / "project-tracker.md").write_text("# Project Tracker\n")
+def _mark_onboarded(path):
+    (path / "state" / "workstreams").mkdir(parents=True, exist_ok=True)
 
 
 def _write_gitignore_distribution(path):
@@ -129,7 +128,7 @@ def test_case3_stale_drift_offers(tmp_path):
     repo = tmp_path / "case3"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 1)
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
 
@@ -160,7 +159,7 @@ def test_case4b_dismissed_stale_still_silent(tmp_path):
     repo = tmp_path / "case4b"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 1)
     (repo / ".git" / "coordinator-onboarding-dismissed").touch()
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
@@ -178,7 +177,7 @@ def test_case5_onboarded_current_silent(tmp_path):
     repo = tmp_path / "case5"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 2)
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
 
@@ -211,7 +210,7 @@ def test_primary_path_probe_script_present_offers(tmp_path):
     repo = tmp_path / "primary"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 1)
 
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
@@ -228,7 +227,7 @@ def test_primary_path_probe_script_present_unstamped(tmp_path):
     repo = tmp_path / "primary-unstamped"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     # No currency stamp -> unstamped(legacy)
 
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
@@ -256,7 +255,7 @@ def test_case7_fallback_source_is_live_silent(tmp_path):
     repo = tmp_path / "case7"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     # No currency stamp -> would be unstamped(legacy) if not source_is_live.
 
     plugin_root = repo / "plugins" / "coordinator"
@@ -274,7 +273,7 @@ def test_case7b_fallback_non_source_is_live_offers(tmp_path):
     repo = tmp_path / "case7b"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 1)
 
     plugin_root = tmp_path / "case7b-plugin"
@@ -332,7 +331,7 @@ def test_main_never_fails_on_missing_plugin_root(tmp_path, monkeypatch, capsys):
     repo = tmp_path / "main-no-plugin"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 1)
 
     monkeypatch.delenv("DETECT_ONBOARDING_PLUGIN_ROOT", raising=False)
@@ -360,7 +359,7 @@ def test_fallback_unresolvable_claude_klabauter_root_degrades_to_silent(tmp_path
     repo = tmp_path / "case-unresolvable-claude-klabauter-root"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 1)
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
 
@@ -385,7 +384,7 @@ def test_fallback_reaches_probe_when_claude_klabauter_root_resolved(tmp_path):
     repo = tmp_path / "case-fallback-reachable"
     repo.mkdir()
     _init_git_repo(repo)
-    _write_project_tracker(repo)
+    _mark_onboarded(repo)
     _write_currency_stamp(repo, 1)
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
 

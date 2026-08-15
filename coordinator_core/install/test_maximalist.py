@@ -1025,8 +1025,11 @@ def test_c13_platform_localize_failure_is_fatal_not_advisory(stub_env, monkeypat
 # to marshal.
 # ---------------------------------------------------------------------------
 
-def test_claude_home_cli_argv_posix_uses_bare_name(monkeypatch):
+def test_claude_home_cli_argv_posix_uses_bare_name(tmp_path, monkeypatch):
     monkeypatch.setattr(maximalist.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: None)
     assert maximalist._claude_home_cli_argv("plugins") == ["claude-home", "plugins"]
 
 
@@ -1086,6 +1089,137 @@ def test_claude_home_cli_argv_windows_falls_back_to_bare_name_when_unresolvable(
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.setattr(maximalist.shutil, "which", lambda name: None)
     assert maximalist._claude_home_cli_argv("plugins") == ["claude-home", "plugins"]
+
+
+def test_claude_home_cli_argv_posix_prefers_settings_home_explicit_path(tmp_path, monkeypatch):
+    """POSIX regression for state/audits/2026-07-25-claude-bin-mirror-read-rungs.md
+    § 2's `maximalist.py` row: the bare `["claude-home", *args]` fallback is
+    PATH-order-dependent and can resolve the retired mirror ahead of
+    settings-home. Explicit settings-home path must win before any PATH
+    lookup or bareword is attempted."""
+    monkeypatch.setattr(maximalist.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cand = tmp_path / ".coordinator-claude-settings" / "bin" / "claude-home"
+    cand.parent.mkdir(parents=True, exist_ok=True)
+    cand.write_text("", encoding="utf-8")
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: None)
+    assert maximalist._claude_home_cli_argv("plugins") == [str(cand), "plugins"]
+
+
+def test_claude_home_cli_argv_posix_falls_back_to_mirror_explicit_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(maximalist.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cand = tmp_path / ".claude" / "bin" / "claude-home"
+    cand.parent.mkdir(parents=True, exist_ok=True)
+    cand.write_text("", encoding="utf-8")
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: None)
+    assert maximalist._claude_home_cli_argv("plugins") == [str(cand), "plugins"]
+
+
+def test_claude_home_cli_argv_windows_path_lookup_outranks_the_retired_mirror(tmp_path, monkeypatch):
+    """Windows counterpart of the POSIX PATH-vs-mirror pin.
+
+    The nt branch probed the mirror `.cmd` by explicit path BEFORE
+    `shutil.which`, so a retired directory outranked the operator's PATH on
+    the platform this repo calls first-class. Executed on a real Windows
+    host, not only under a monkeypatched `os.name`.
+    """
+    monkeypatch.setattr(maximalist.os, "name", "nt")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    mirror_cand = tmp_path / ".claude" / "bin" / "claude-home.cmd"
+    mirror_cand.parent.mkdir(parents=True, exist_ok=True)
+    mirror_cand.write_text("", encoding="utf-8")
+    on_path = tmp_path / "elsewhere" / "claude-home.cmd"
+    on_path.parent.mkdir(parents=True, exist_ok=True)
+    on_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: str(on_path))
+    assert maximalist._claude_home_cli_argv("plugins") == [str(on_path), "plugins"]
+
+
+def test_claude_home_cli_argv_windows_honours_relocated_settings_home(tmp_path, monkeypatch):
+    """A relocated `COORDINATOR_SETTINGS_HOME` must win on Windows too.
+
+    The nt branch derived its settings-home candidate from the home
+    directory alone and never consulted the env var, so on a box with a
+    relocated settings home it found nothing there and fell through to the
+    retired mirror — the exact resolution DR-210 forbids, reached by an
+    ordering bug rather than by an explicit rung.
+    """
+    monkeypatch.setattr(maximalist.os, "name", "nt")
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    relocated = tmp_path / "elsewhere-settings"
+    settings_cand = relocated / "bin" / "claude-home.cmd"
+    settings_cand.parent.mkdir(parents=True, exist_ok=True)
+    settings_cand.write_text("", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(relocated))
+    mirror_cand = tmp_path / ".claude" / "bin" / "claude-home.cmd"
+    mirror_cand.parent.mkdir(parents=True, exist_ok=True)
+    mirror_cand.write_text("", encoding="utf-8")
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: None)
+    assert maximalist._claude_home_cli_argv("plugins") == [str(settings_cand), "plugins"]
+
+
+def test_claude_home_cli_argv_windows_mirror_still_reachable_as_last_rung(tmp_path, monkeypatch):
+    """Removing the mirror's primacy must not remove the mirror. Wholesale
+    removal is DoE's call, not ours."""
+    monkeypatch.setattr(maximalist.os, "name", "nt")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    mirror_cand = tmp_path / ".claude" / "bin" / "claude-home.cmd"
+    mirror_cand.parent.mkdir(parents=True, exist_ok=True)
+    mirror_cand.write_text("", encoding="utf-8")
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: None)
+    assert maximalist._claude_home_cli_argv("plugins") == [str(mirror_cand), "plugins"]
+
+
+def test_claude_home_cli_argv_posix_path_lookup_outranks_the_retired_mirror(tmp_path, monkeypatch):
+    """The retired mirror is the LAST explicit rung, behind PATH — not the
+    second.
+
+    Every other POSIX case here stubs `shutil.which` to None, so none of them
+    can see where the mirror sits relative to a real PATH hit. Without this
+    pin, reordering the mirror ahead of `which` stays green while silently
+    letting a retired directory outrank the operator's own PATH, which is the
+    precedence the mirror audit exists to remove rather than relocate.
+    """
+    monkeypatch.setattr(maximalist.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mirror_cand = tmp_path / ".claude" / "bin" / "claude-home"
+    mirror_cand.parent.mkdir(parents=True, exist_ok=True)
+    mirror_cand.write_text("", encoding="utf-8")
+    on_path = tmp_path / "elsewhere" / "claude-home"
+    on_path.parent.mkdir(parents=True, exist_ok=True)
+    on_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: str(on_path))
+    assert maximalist._claude_home_cli_argv("plugins") == [str(on_path), "plugins"]
+
+
+def test_claude_home_cli_argv_posix_both_candidates_present_settings_home_wins(tmp_path, monkeypatch):
+    """Precedence pin, POSIX counterpart of the Windows
+    `..._both_candidates_present_settings_home_wins` test: settings-home must
+    win over the retired mirror when both explicit paths exist."""
+    monkeypatch.setattr(maximalist.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings_home_cand = tmp_path / ".coordinator-claude-settings" / "bin" / "claude-home"
+    mirror_cand = tmp_path / ".claude" / "bin" / "claude-home"
+    for cand in (settings_home_cand, mirror_cand):
+        cand.parent.mkdir(parents=True, exist_ok=True)
+        cand.write_text("", encoding="utf-8")
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: None)
+    assert maximalist._claude_home_cli_argv("plugins") == [str(settings_home_cand), "plugins"]
+
+
+def test_claude_home_cli_argv_posix_falls_back_to_path_lookup(tmp_path, monkeypatch):
+    monkeypatch.setattr(maximalist.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(maximalist.shutil, "which", lambda name: "/opt/found/claude-home")
+    assert maximalist._claude_home_cli_argv("plugins") == ["/opt/found/claude-home", "plugins"]
 
 
 def test_resolve_coordinator_live_path_tier1_success(monkeypatch):
@@ -1571,3 +1705,38 @@ def test_writer_discovery_failure_is_loud_and_recorded_unreported(stub_env, monk
     persisted = _receipt_module.load_receipt(settings_home_override=settings_home)
     assert persisted is not None
     assert "<discovery-failed:some/broken_writer.py>" in persisted.unreported_writer_ids
+
+
+# ---------------------------------------------------------------------------
+# DoE-clone path form (Windows only)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.name != "nt", reason="mount-form repair is os.name=='nt'-gated by design")
+def test_msys_mount_form_doe_clone_is_normalized_before_every_downstream_use(stub_env, capsys):
+    r"""This is the ROOT write-side seam for the `.doe-root` mis-resolution bug.
+
+    The DoE-side trampoline resolves the clone root under Git-Bash on Windows,
+    where it comes back as the MSYS mount form `/x/DoE-claude`. Every consumer
+    downstream of here is a native-Windows process that reads a leading `/x/` as
+    drive-relative `X:\x\DoE-claude`, so the form has to be repaired ONCE at
+    ingest — before the REPO_DOE_CLAUDE env overlay handed to child phases and
+    before the `repos.doe_claude` registry seed that `gen_doe_root_pointer` and
+    the trust anchor later read back.
+    """
+    native = Path(stub_env["doe_clone"]).as_posix()
+    mount_form = f"/{native[0].lower()}{native[2:]}"
+
+    rc = maximalist.run(
+        check_only=True,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=mount_form,
+        claude_home_dir=str(stub_env["claude_home"]),
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"{native[0].upper()}:{native[2:]}" in out
+    assert mount_form not in out

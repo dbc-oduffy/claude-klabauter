@@ -109,7 +109,7 @@ class TestBlockSubagentPlanBodyBashWrite:
         monkeypatch.setattr(
             block_subagent_plan_body_bash_write,
             "_read_backpointer_subagent_type",
-            lambda git_root, agent_id: subagent_type,
+            lambda git_root, agent_id, **kw: subagent_type,
         )
         monkeypatch.setattr(
             block_subagent_plan_body_bash_write, "_write_block_log", lambda *a, **kw: None

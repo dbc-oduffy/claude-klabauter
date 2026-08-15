@@ -33,6 +33,13 @@ from coordinator_core.ops.ceremony.git_native import add_paths
 
 from .fixtures.real_git import make_agree_path, make_diverged_path, real_git_repo
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(

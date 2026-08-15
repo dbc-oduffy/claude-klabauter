@@ -616,3 +616,60 @@ def test_op_probe_windows_terminal_presence_handler():
         # (engine auto-offloads via asyncio.to_thread), called directly.
         result = pp._probe_windows_terminal_presence_op({})
     assert result == {"present": True, "method": "path"}
+
+
+# ---------------------------------------------------------------------------
+# register_op import isolation — this module is vendored by sibling repos
+# (e.g. Example-retrieval-repo-ue-addon) that carry no coordinator_core.ipc; it must
+# import cleanly with a no-op register_op fallback in that environment while
+# still using the real ipc.register_op (and populating ipc's registry) when
+# ipc IS importable, the normal in-repo case.
+# ---------------------------------------------------------------------------
+def test_import_succeeds_and_ops_register_when_ipc_is_importable():
+    """Positive case: normal import uses the real ipc.register_op, and both
+    decorated probe ops land in ipc's registry (unaffected by this module's
+    guarded import)."""
+    import importlib
+
+    from coordinator_core import ipc as real_ipc
+
+    reloaded = importlib.reload(pp)
+    assert reloaded.register_op is real_ipc.register_op
+    assert callable(reloaded._probe_skill_frontmatter_valid_op)
+    assert callable(reloaded._probe_windows_terminal_presence_op)
+    assert real_ipc._REGISTRY.get("install.probe_skill_frontmatter_valid") is (
+        reloaded._probe_skill_frontmatter_valid_op
+    )
+    assert real_ipc._REGISTRY.get("install.probe_windows_terminal_presence") is (
+        reloaded._probe_windows_terminal_presence_op
+    )
+
+
+def test_import_succeeds_with_register_op_fallback_when_ipc_unimportable(monkeypatch):
+    """Vendor case: coordinator_core.ipc unimportable (e.g. a sibling repo's
+    vendored copy of this module, with no engine tree behind it). The module
+    must still import cleanly, via the no-op register_op fallback, and its
+    two decorated probe functions must still be plain callables.
+
+    sys.modules["coordinator_core.ipc"] = None is the standard forcing idiom:
+    Python treats a None entry as "this import previously failed" and raises
+    ImportError immediately on the next `import coordinator_core.ipc`,
+    without needing to actually delete the installed package.
+    """
+    import importlib
+    import sys
+
+    # monkeypatch restores both sys.modules entries on teardown (including
+    # the module object this file's own `pp` reference points at, which is
+    # a separate, untouched object from the one `import_module` below
+    # produces) -- no manual reload needed.
+    monkeypatch.setitem(sys.modules, "coordinator_core.ipc", None)
+    monkeypatch.delitem(sys.modules, "coordinator_core.install.prereq_probe", raising=False)
+
+    fresh = importlib.import_module("coordinator_core.install.prereq_probe")
+    assert callable(fresh._probe_skill_frontmatter_valid_op)
+    assert callable(fresh._probe_windows_terminal_presence_op)
+    assert fresh.register_op.__module__ != "coordinator_core.ipc"
+    # The fallback decorator returns the function unchanged.
+    marker = object()
+    assert fresh.register_op("some.op")(marker) is marker

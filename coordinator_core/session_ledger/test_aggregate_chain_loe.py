@@ -25,6 +25,13 @@ import pytest
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session_ledger.aggregate_chain_loe import main, resolve_state_root
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _write_handoff(path: Path, created: str = "2026-05-05", predecessor: str = "null") -> None:
     path.write_text(

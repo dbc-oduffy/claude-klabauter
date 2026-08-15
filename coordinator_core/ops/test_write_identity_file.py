@@ -46,6 +46,13 @@ from coordinator_core.locked_write import LockTimeout  # noqa: E402
 import coordinator_core.ops.write_identity_file as wif  # noqa: E402
 from coordinator_core.ops.write_identity_file import _handler  # noqa: E402
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 _OP_NAME = "install.write_identity_file"
 assert _OP_NAME in _REGISTRY, (
     f"import guard failed: {_OP_NAME!r} not in _REGISTRY — "

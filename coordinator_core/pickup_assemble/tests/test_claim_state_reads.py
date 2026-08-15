@@ -37,6 +37,13 @@ import pytest
 import coordinator_core.claim_state as claim_state_mod
 import coordinator_core.pickup_assemble as pa
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # Minimal, self-contained git harness (deliberately NOT imported from the
@@ -238,8 +245,8 @@ def test_compute_competing_claim_send_message_address_resolves(tmp_path, monkeyp
         lambda root: {"sibling-sid": (True, "meta")},
     )
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk",
-        lambda sids: {"sibling-sid": "claude-klabauter-57 [b2afcd]"},
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
+        lambda sids: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
@@ -247,13 +254,15 @@ def test_compute_competing_claim_send_message_address_resolves(tmp_path, monkeyp
 
     by_holder = {c["claimed_by"]: c for c in result["candidates"]}
     assert by_holder["sibling-sid"]["send_message_address"] == "claude-klabauter-57 [b2afcd]"
+    assert by_holder["sibling-sid"]["send_message_address_unavailable_reason"] is None
 
 
 def test_compute_competing_claim_send_message_address_empty_when_unresolvable(
     tmp_path, monkeypatch
 ):
-    """A holder the resolver cannot place gets `""`, never absent, and the
-    verdict/disposition are unaffected."""
+    """A holder the resolver cannot place, WHILE messaging is available
+    box-wide, gets `""` (never absent) and a `None` reason -- the
+    peer-specific arm. `verdict`/`disposition` are unaffected."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_handoff(repo, "self.md", scope=["coordinator_core/foo.py"])
@@ -266,8 +275,8 @@ def test_compute_competing_claim_send_message_address_empty_when_unresolvable(
         lambda root: {"sibling-sid": (True, "meta")},
     )
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk",
-        lambda sids: {},
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
+        lambda sids: ({}, True),
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
@@ -276,6 +285,45 @@ def test_compute_competing_claim_send_message_address_empty_when_unresolvable(
     assert result["verdict"] == "live-peer"
     by_holder = {c["claimed_by"]: c for c in result["candidates"]}
     assert by_holder["sibling-sid"]["send_message_address"] == ""
+    assert by_holder["sibling-sid"]["send_message_address_unavailable_reason"] is None
+
+
+def test_compute_competing_claim_send_message_address_none_when_messaging_unavailable(
+    tmp_path, monkeypatch
+):
+    """`cross-repo/inbox/2026-08-15-example-retrieval-repo-em-peer-messaging-gate-off-
+    vs-proven-round-trip.md` § "Smaller, concrete: the empty-string
+    rendering" -- when NO peer on the box can have an address (the
+    harness's cross-session inbox is unbound), the field must render as
+    `None` with `send_message_address_unavailable_reason ==
+    "peer-messaging-unavailable"`, distinguishable from the peer-specific
+    `""` arm above. `verdict`/`disposition` are unaffected."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "self.md", scope=["coordinator_core/foo.py"])
+    _seed_handoff(repo, "sibling.md", scope=["coordinator_core/foo.py"])
+    _make_ledger_claim(repo, "sibling.md", "sibling-sid")
+
+    monkeypatch.setattr(
+        pa._liveness,
+        "live_session_verdicts",
+        lambda root: {"sibling-sid": (True, "meta")},
+    )
+    monkeypatch.setattr(
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
+        lambda sids: ({}, False),
+    )
+
+    fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
+    result = pa.compute_competing_claim(repo, fm, "state/handoffs/self.md")
+
+    assert result["verdict"] == "live-peer"
+    by_holder = {c["claimed_by"]: c for c in result["candidates"]}
+    assert by_holder["sibling-sid"]["send_message_address"] is None
+    assert (
+        by_holder["sibling-sid"]["send_message_address_unavailable_reason"]
+        == "peer-messaging-unavailable"
+    )
 
 
 def test_compute_competing_claim_address_resolution_failure_leaves_brief_unchanged(
@@ -300,18 +348,18 @@ def test_compute_competing_claim_address_resolution_failure_leaves_brief_unchang
         raise RuntimeError("simulated resolution failure")
 
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk", _raise
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability", _raise
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
     baseline_fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk",
-        lambda sids: {"sibling-sid": "claude-klabauter-57 [b2afcd]"},
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
+        lambda sids: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
     )
     baseline = pa.compute_competing_claim(repo, baseline_fm, "state/handoffs/self.md")
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk", _raise
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability", _raise
     )
     result = pa.compute_competing_claim(repo, fm, "state/handoffs/self.md")
 
@@ -320,6 +368,7 @@ def test_compute_competing_claim_address_resolution_failure_leaves_brief_unchang
     baseline_by_holder = {c["claimed_by"]: dict(c) for c in baseline["candidates"]}
     for sid, candidate in by_holder.items():
         assert candidate["send_message_address"] == ""
+        assert candidate["send_message_address_unavailable_reason"] is None
         other = dict(baseline_by_holder[sid])
         other.pop("send_message_address")
         other.pop("send_message_address_resolved_at")
@@ -348,8 +397,8 @@ def test_compute_competing_claim_send_message_address_resolved_at_is_stamped(
         lambda root: {"sibling-sid": (True, "meta")},
     )
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk",
-        lambda sids: {"sibling-sid": "claude-klabauter-57 [b2afcd]"},
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
+        lambda sids: ({"sibling-sid": "claude-klabauter-57 [b2afcd]"}, True),
     )
 
     fm = {"predecessor": "none", "scope": ["coordinator_core/foo.py"]}
@@ -406,8 +455,8 @@ def test_compute_successor_handoffs_send_message_address_resolves(tmp_path, monk
 
     monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "successor-sid")
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk",
-        lambda sids: {"successor-sid": "claude-klabauter-11 [aaaaaa]"},
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability",
+        lambda sids: ({"successor-sid": "claude-klabauter-11 [aaaaaa]"}, True),
     )
 
     result = pa.compute_successor_handoffs(repo, "state/handoffs/self.md")
@@ -415,6 +464,7 @@ def test_compute_successor_handoffs_send_message_address_resolves(tmp_path, monk
     by_holder = {c["claimed_by"]: c for c in result["candidates"]}
     assert by_holder["successor-sid"]["send_message_address"] == "claude-klabauter-11 [aaaaaa]"
     assert by_holder["successor-sid"]["send_message_address_resolved_at"]
+    assert by_holder["successor-sid"]["send_message_address_unavailable_reason"] is None
 
 
 def test_compute_successor_handoffs_address_resolution_failure_leaves_kind_unchanged(
@@ -440,13 +490,14 @@ def test_compute_successor_handoffs_address_resolution_failure_leaves_kind_uncha
         raise RuntimeError("simulated resolution failure")
 
     monkeypatch.setattr(
-        "coordinator_core.session.reachability.resolve_addresses_bulk", _raise
+        "coordinator_core.session.reachability.resolve_addresses_bulk_with_availability", _raise
     )
 
     result = pa.compute_successor_handoffs(repo, "state/handoffs/self.md")
 
     by_holder = {c["claimed_by"]: c for c in result["candidates"]}
     assert by_holder["successor-sid"]["send_message_address"] == ""
+    assert by_holder["successor-sid"]["send_message_address_unavailable_reason"] is None
     assert by_holder["successor-sid"]["kind"] == "in_flight_live"
 
 

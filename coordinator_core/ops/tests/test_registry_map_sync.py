@@ -46,6 +46,15 @@ import coordinator_core.ops  # noqa: F401 -- triggers every op module's register
 import coordinator_core.ipc as ipc
 from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
+import pytest
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 # ---------------------------------------------------------------------------
 # (a) static parity -- OP_MODULE_MAP.keys() == live-registry.keys()

@@ -1026,3 +1026,144 @@ def test_unresolvable_value_rejected(tmp_path):
     assert "dlv-doesnotexist" in result.stderr
     head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
     assert head_after == head_before
+
+
+# ---------------------------------------------------------------------------
+# Percolate-publish-scale argv-length fix (2026-08-15): `commit_scoped()`'s
+# own agree-branch `git add`/`git commit` convert to `--pathspec-from-file`
+# (never chunked -- atomicity), and its own `diverging_paths()` divergence
+# check chunks instead (`git diff` rejects `--pathspec-from-file` outright --
+# see `git_native._diverging_paths_chunked`'s own docstring). This is the
+# last of the five argv-length sites this repo's commit path had; siblings
+# `ef84c2ee9`/`fe0f4eb84`/`25268ed33`/`47e8defbb` closed the other four. Live
+# failure this closes: "commit_scoped: divergence check indeterminate for
+# 2080 path(s) -- refusing to guess the commit mechanism (... rc=127 ...)".
+# ---------------------------------------------------------------------------
+
+
+def _make_bulk_agree_paths(repo: Path, n: int, subdir: str = "bulk") -> list[str]:
+    """Write + stage `n` small files under `subdir` in ONE `git add`
+    subprocess call (never one `git add` per file, unlike `make_agree_path`
+    used one-at-a-time elsewhere in this module) -- setup speed only, not
+    itself exercising the argv-length fix under test. Average path length
+    (`"bulk/file_NNNNN.txt"`, ~20 chars) times `n` in the thousands is
+    exactly the shape that blew the raw 32767-char Windows argv cap before
+    this fix -- realistic, not an inflated synthetic length.
+    """
+    base = repo / subdir
+    base.mkdir(parents=True, exist_ok=True)
+    rels: list[str] = []
+    for i in range(n):
+        rel = f"{subdir}/file_{i:05d}.txt"
+        (repo / rel).write_text(f"content {i}\n", encoding="utf-8")
+        rels.append(rel)
+    _git(["add", "-A", "--", subdir], repo)
+    return rels
+
+
+def test_large_pathspec_commits_as_exactly_one_commit(tmp_path):
+    """Atomicity pin: a 2000+ path commit through the agree branch's own
+    `--pathspec-from-file` staging/commit lands as EXACTLY ONE commit, never
+    chunked into several -- `commit_scoped()`'s whole contract is that the
+    named pathspec lands as one commit (see `commit_with_message_file_
+    pathspec_scoped()`'s own docstring for why the commit leg is never
+    chunked, unlike the divergence check)."""
+    repo = real_git_repo(tmp_path)
+    paths = _make_bulk_agree_paths(repo, 2200)
+    msg_file = _write_msg(tmp_path)
+    count_before = int(_git(["rev-list", "--count", "HEAD"], repo).stdout.strip())
+
+    result = git_native.commit_scoped(paths, msg_file, repo)
+
+    assert result.ok, result.stderr
+    count_after = int(_git(["rev-list", "--count", "HEAD"], repo).stdout.strip())
+    assert count_after == count_before + 1
+    committed = set(_committed_files_at_head(repo))
+    assert set(paths) <= committed
+
+
+def test_argv_stays_bounded_and_uses_pathspec_file_for_add_and_commit(tmp_path, monkeypatch):
+    """Subprocess argv shape pin (cannot portably assert the literal Windows
+    32767-char limit from a non-Windows-specific test, so this asserts the
+    SHAPE that keeps every call under it): the agree branch's `git add` and
+    `git commit` never carry the raw path list on argv -- both carry a
+    `--pathspec-from-file=<f>` token instead -- and every chunked `git diff`
+    call this batch triggers stays under a generous bound, never one
+    unchunked argv holding all 2000+ paths."""
+    repo = real_git_repo(tmp_path)
+    paths = _make_bulk_agree_paths(repo, 2000)
+    msg_file = _write_msg(tmp_path)
+
+    real_run = git_native.subprocess.run
+    argvs: list[list[str]] = []
+
+    def _spy(args, *a, **kw):
+        argvs.append(list(args))
+        return real_run(args, *a, **kw)
+
+    monkeypatch.setattr(git_native.subprocess, "run", _spy)
+
+    result = git_native.commit_scoped(paths, msg_file, repo)
+    assert result.ok, result.stderr
+
+    add_argv = next(a for a in argvs if len(a) > 1 and a[1] == "add")
+    commit_argv = next(a for a in argvs if len(a) > 1 and a[1] == "commit")
+    assert any(tok.startswith("--pathspec-from-file=") for tok in add_argv), add_argv
+    assert any(tok.startswith("--pathspec-from-file=") for tok in commit_argv), commit_argv
+    # None of the actual path strings sit on the add/commit argv -- they
+    # live in the pathspec file instead.
+    assert not (set(paths) & set(add_argv))
+    assert not (set(paths) & set(commit_argv))
+
+    diff_argvs = [a for a in argvs if len(a) > 1 and a[1] == "diff"]
+    assert diff_argvs, "expected at least one chunked `git diff` divergence call"
+    for a in diff_argvs:
+        total_len = sum(len(tok) for tok in a)
+        assert total_len < 20000, f"unchunked-looking git diff argv: {total_len} chars"
+
+
+def test_large_batch_diverged_path_preserved_amid_agree_bulk(tmp_path):
+    """Per-path protection preserved at scale: one genuinely diverged path
+    inside an otherwise-agreeing 1500-path batch still routes to the
+    private-index branch and survives with its STAGED content verbatim --
+    the chunked divergence check must never OR/AND a whole-chunk verdict
+    into a batch answer that could paper over this single path (state/
+    lessons/2026-08-14-partial-stage-protection-did-not-survive-a-moving-
+    head.md)."""
+    repo = real_git_repo(tmp_path)
+    paths = _make_bulk_agree_paths(repo, 1500)
+    make_diverged_path(repo, "diverged.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    paths.append("diverged.txt")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(paths, msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert result.worktree_excluded == ("diverged.txt",)
+    assert _committed_content_at_head(repo, "diverged.txt") == "STAGED\n"
+    assert (repo / "diverged.txt").read_text(encoding="utf-8") == "WORKTREE\n"
+    committed = set(_committed_files_at_head(repo))
+    assert set(paths) <= committed
+
+
+def test_large_batch_genuine_divergence_failure_still_fails_loud(tmp_path, monkeypatch):
+    """A genuine `diverging_paths()` failure (not an argv-length artifact --
+    each chunk is already sized to avoid that) still fails the WHOLE call
+    loud, never partially commits or silently treats the un-checked chunks
+    as clean, even at percolate-publish scale."""
+    repo = real_git_repo(tmp_path)
+    paths = _make_bulk_agree_paths(repo, 1200)
+    msg_file = _write_msg(tmp_path)
+    head_before = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+    def _boom(*args, **kwargs):
+        raise DivergenceCheckFailed("simulated git diff failure mid-batch")
+
+    monkeypatch.setattr(git_native, "diverging_paths", _boom)
+
+    result = git_native.commit_scoped(paths, msg_file, repo)
+
+    assert result.ok is False
+    assert "indeterminate" in result.stderr.lower()
+    head_after = _git(["rev-parse", "HEAD"], repo).stdout.strip()
+    assert head_after == head_before

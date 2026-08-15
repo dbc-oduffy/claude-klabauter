@@ -770,8 +770,25 @@ def _directive(
     args: list[str],
     depends_on: Any = None,
     already_satisfied: bool = False,
+    advisory: bool = False,
 ) -> dict[str, Any]:
-    return {"id": id_, "cli": cli, "args": args, "depends_on": depends_on, "already_satisfied": already_satisfied}
+    """`advisory=True` marks this directive per `apply_base.execute_
+    directives`'s own advisory-marker contract: a raising handler is
+    recorded and surfaced, never taken to `APPLY_EXIT_PARTIAL_MUTATION`,
+    and never reaches compensation. Omitting it (every pre-existing
+    caller) reproduces today's byte-identical directive dict — no
+    `"advisory"` key at all, not a `False`-valued one, so a caller doing
+    its own `directive.keys()` shape check sees nothing new either."""
+    directive = {
+        "id": id_,
+        "cli": cli,
+        "args": args,
+        "depends_on": depends_on,
+        "already_satisfied": already_satisfied,
+    }
+    if advisory:
+        directive["advisory"] = True
+    return directive
 
 
 def _build_legacy_coverage_and_trail_directives(
@@ -832,6 +849,7 @@ def _build_legacy_coverage_and_trail_directives(
             "d-coverage-gate",
             "wsc-coverage-gate-runner",
             ["coverage-gate", "--from-handoff", gate.consumed_handoff],
+            advisory=True,
         )
         if repo_root is not None and directives_review.gate_memo_hit(
             repo_root, coverage_directive["id"], gate.consumed_handoff
@@ -896,7 +914,17 @@ def build_write_trail_directives(review: Any) -> list[dict[str, Any]]:
 
     `None`/`{}`/`[]`/any other falsy value: no directives (today's
     behavior for an absent/empty `review` key, preserved for both shapes).
+
+    Calls `directives_commit_tail.validate_review_shape` first -- the SAME
+    shared validator `build_close_tail_args_directive` calls, so the two
+    independent reader sites cannot diverge (state/bug-backlog/2026-08-14-
+    wsc-apply-accepts-an-unconsumed-decision-debea052f8c5.yaml). RAISES
+    `ValueError` on a shape outside {falsy | dict of recognized keys | list
+    of such dicts} -- a caller-supplied `review` nested one key deeper than
+    either accepted shape now fails loud here instead of silently
+    contributing zero directives.
     """
+    directives_commit_tail.validate_review_shape(review)
     if not review:
         return []
     if isinstance(review, dict):
@@ -967,6 +995,7 @@ def build_directives(
     repo_root: Path,
     governing_plan: Optional[directives_lessons_plan.GoverningPlan] = None,
     session_start_time: Any = None,
+    partition_mandatory: bool = False,
 ) -> list[dict[str, Any]]:
     """Assembles the FULL mechanical directive spine — Convert #2's
     original Step 2.4/2.9/2.67/3 core plus every submodule's contribution
@@ -994,6 +1023,15 @@ def build_directives(
     floor_kwargs` below) — `None` (every existing caller, including every
     test that constructs `build_directives` directly) reproduces today's
     exact `["--session-id", sid]` call, unchanged.
+
+    `partition_mandatory` (D, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-
+    wsc-review-trail-skips-silently.md): `brief()`'s own resolved
+    `decide_review_scale(...).partition_mandatory`, threaded straight to
+    `directives_commit_tail.build_wsc_tail_directive` below — a DEDICATED
+    parameter, deliberately never a `decisions[...]` key (that would make
+    it look caller-suppliable and decisions-template-discoverable; it is
+    neither, it is this module's own resolved verdict). Defaults `False`,
+    reproducing every existing caller's argv byte-identically.
     """
     directives: list[dict[str, Any]] = []
 
@@ -1137,7 +1175,11 @@ def build_directives(
 
     # -- Step 3/3.5/3.6 (C2e): commit-tail keystone through cadence --
     directives.append(directives_commit_tail.build_close_tail_args_directive(decisions))
-    directives.append(directives_commit_tail.build_wsc_tail_directive(gate.sid, effective_decisions))
+    directives.append(
+        directives_commit_tail.build_wsc_tail_directive(
+            gate.sid, effective_decisions, partition_mandatory=partition_mandatory
+        )
+    )
     # `d-archive-session-claim` is DELIBERATELY NOT emitted here (2026-07-28).
     # This ceremony fires once per closed workstream, and a session can
     # close several workstreams before it ends — but `scope.archive()` moves
@@ -2747,6 +2789,45 @@ def _accumulate_code_loc_numstat(text: str) -> int:
     return total
 
 
+_COMMIT_MARKER_LINE_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _split_per_commit_numstat(text: str, shas: list[str]) -> dict[str, str]:
+    """Splits ``text`` -- the output of a SINGLE `git show --numstat
+    --format=%H <shas>` call -- into one numstat block per commit, keyed by
+    sha. `%H` (rather than the empty `--format=` this module used before
+    A, docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md
+    C-followup) puts a bare-sha marker line at the head of each commit's
+    block; `git show` verified live to preserve the caller's own `shas`
+    order rather than re-sorting.
+
+    NO SECOND GIT SPAWN: this is a pure text split over the SAME stdout
+    `_measure_session_review_scale_inputs`'s committed leg already fetches
+    for `gross_loc`/`code_loc` — changing the format string from `""` to
+    `"%H"` does not add a spawn, and `_accumulate_numstat`/
+    `_accumulate_code_loc_numstat`'s numstat-row regex already ignores any
+    line that fails to match `added\\tdeleted\\tpath`, so the marker lines
+    this format now injects are silently skipped by both accumulators —
+    their totals are unaffected by this change.
+
+    `shas` bounds which marker lines are treated as commit boundaries
+    (membership-checked against the caller's own known-good set) rather
+    than trusting `_COMMIT_MARKER_LINE_RE` alone — a numstat PATH could
+    theoretically also be exactly 40 lowercase hex characters, however
+    unlikely; the membership check makes that ambiguity moot."""
+    known = set(shas)
+    blocks: dict[str, list[str]] = {}
+    current: Optional[str] = None
+    for line in text.splitlines():
+        if _COMMIT_MARKER_LINE_RE.match(line) and line in known:
+            current = line
+            blocks[current] = []
+            continue
+        if current is not None:
+            blocks[current].append(line)
+    return {sha: "\n".join(lines) for sha, lines in blocks.items()}
+
+
 def _split_tracked(root: Path, paths: list[str]) -> Optional[tuple[list[str], list[str]]]:
     """Partitions `paths` into (tracked, untracked). `git diff` is blind to
     untracked files, so an unpartitioned diff silently scores a session whose
@@ -2790,6 +2871,7 @@ def _measure_session_review_scale_inputs(
     session_start_time: Any,
     session_id: str = "",
     uncommitted_paths: Optional[list[str]] = None,
+    commit_slices_out: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
     """Measures `(gross_loc, code_loc, commit_count, surface_count)` — the
     four disk-derivable row-4 brightline inputs `decide_review_scale` reads
@@ -2834,7 +2916,26 @@ def _measure_session_review_scale_inputs(
     outcome the review trail exists to prevent.
 
     `surface_count` reuses `review_brightline_gate.classify_surface` — the
-    same bucketing the `review-brightline-gate` CLI this verdict names."""
+    same bucketing the `review-brightline-gate` CLI this verdict names.
+
+    ``commit_slices_out`` (A, docs/plans/2026-08-08-the-engine-asks-for-
+    facts-it-already-holds.md C-followup): when not ``None``, appended
+    IN PLACE with one ``{"sha": ..., "sha_range": "<sha>^..<sha>", "diff_
+    loc": <int>}`` dict per session-owned commit, oldest-first, derived
+    from `_split_per_commit_numstat` over the SAME `git show` text this
+    function already fetches for `gross_loc`/`code_loc` (no second spawn).
+    This is a SIDE CHANNEL, not a return value — the four-tuple return
+    stays byte-identical so every existing caller/test is unaffected.
+    Left untouched (never appended to) when `shas` is `None`
+    (unresolvable) or the committed-leg `git show` itself fails — a caller
+    must read `commit_count is None` off this function's own return, not
+    an empty `commit_slices_out`, to tell "unresolvable" apart from
+    "resolved, zero commits" (mirrors the four-tuple's own None-vs-zero
+    contract). Uncommitted work is DELIBERATELY never appended here — it
+    has no sha and so cannot become a `sha_range` slice; a caller that
+    needs to know uncommitted work contributed LOC not covered by any
+    slice compares its own `code_loc` against the sum of `diff_loc` across
+    the appended entries."""
     shas = _session_owned_shas(root, session_id)
     if shas is None:
         return None, None, None, None
@@ -2845,11 +2946,26 @@ def _measure_session_review_scale_inputs(
     surfaces: set[str] = set()
 
     if shas:
-        committed = _run_git_read_only(["show", "--numstat", "--format=", *shas], root)
+        # `--format=%H` (not the empty `--format=` this call used before A)
+        # -- puts a marker line at each commit's head so `_split_per_commit_
+        # numstat` can attribute LOC per commit from this SAME spawn; see
+        # that helper's own docstring for why the accumulators below are
+        # unaffected by the format change.
+        committed = _run_git_read_only(["show", "--numstat", "--format=%H", *shas], root)
         if committed is None:
             return None, None, None, None
         gross_loc += _accumulate_numstat(committed, surfaces)
         code_loc += _accumulate_code_loc_numstat(committed)
+        if commit_slices_out is not None:
+            per_sha_text = _split_per_commit_numstat(committed, shas)
+            for sha in shas:
+                commit_slices_out.append(
+                    {
+                        "sha": sha,
+                        "sha_range": f"{sha}^..{sha}",
+                        "diff_loc": _accumulate_code_loc_numstat(per_sha_text.get(sha, "")),
+                    }
+                )
 
     if uncommitted_paths is None:
         uncommitted_paths = [
@@ -2869,7 +2985,18 @@ def _measure_session_review_scale_inputs(
         return None, None, None, None
     tracked, untracked = split
     if tracked:
-        dirty = _run_git_read_only(["diff", "--numstat", "HEAD", "--", *tracked], root)
+        # Review: code-reviewer — Finding (P1). `_split_tracked` returns
+        # `tracked` built from the caller's original, unnormalized paths
+        # (backslash-containing on Windows) -- normalizing it only for its
+        # OWN internal `ls-files` pathspec, not for the caller. Feeding that
+        # raw list into this second `git diff --numstat` pathspec reproduces
+        # the exact defect this fix was meant to close, one call site
+        # downstream. Normalize here, the same way `_split_tracked`
+        # normalizes before its own `ls-files` call.
+        normalized_tracked = [p.replace("\\", "/") for p in tracked]
+        dirty = _run_git_read_only(
+            ["diff", "--numstat", "HEAD", "--", *normalized_tracked], root
+        )
         if dirty is None:
             return None, None, None, None
         gross_loc += _accumulate_numstat(dirty, surfaces)
@@ -3263,9 +3390,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # own `session_start_time` docstring for why this replaces a second,
     # later resolution of the same fact.
     session_start_time = directives_memo_lifecycle.resolve_session_start_time(root, gate.sid)
-    directives = build_directives(
-        gate, decisions, root, governing_plan=governing_plan, session_start_time=session_start_time
-    )
 
     # AC1/AC2/AC4 — the seven row-4/5/6 inputs are caller-supplied `decisions`
     # facts, never assembler-computed (brief() is read-only and budgeted; see
@@ -3339,12 +3463,22 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             row["path"] for row in classified_session_files if row["session_authored"]
         ]
 
+    # A (docs/plans/2026-08-08-the-engine-asks-for-facts-it-already-holds.md
+    # C-followup, cross-repo/inbox/2026-08-15-example-retrieval-repo-em-wsc-review-
+    # trail-skips-silently.md): trail-ready per-commit slices, collected as
+    # a side channel of the SAME measurement call below (no second git
+    # spawn) — see `_measure_session_review_scale_inputs`'s own
+    # `commit_slices_out` docstring paragraph. `None` (never `[]`) means
+    # "unresolvable", read off `measured_commit_count is None` below, since
+    # this list stays empty either way until that distinction is known.
+    review_scale_commit_slices: list[dict[str, Any]] = []
     measured_gross_loc, measured_code_loc, measured_commit_count, measured_surface_count = (
         _measure_session_review_scale_inputs(
             root,
             session_start_time,
             gate.sid,
             uncommitted_paths=measurement_paths,
+            commit_slices_out=review_scale_commit_slices,
         )
     )
     resolved_gross_loc = decisions.get("gross_loc")
@@ -3408,6 +3542,21 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         chain_disposition=gate.disposition,
         chain_partition_verdict=chain_partition_verdict,
         commit_count_scope=resolved_commit_count_scope,
+    )
+
+    # D (same spec backlink as A above): `directives = build_directives(...)`
+    # could not run any earlier than this point — it needs the RESOLVED
+    # `review_scale_decision.partition_mandatory` verdict just computed
+    # above, threaded through as a dedicated parameter (never a
+    # `decisions[...]` key — see `build_directives`'s own `partition_
+    # mandatory` docstring paragraph for why).
+    directives = build_directives(
+        gate,
+        decisions,
+        root,
+        governing_plan=governing_plan,
+        session_start_time=session_start_time,
+        partition_mandatory=bool(review_scale_decision.partition_mandatory),
     )
 
     judgment_points: list[dict[str, Any]] = []
@@ -3591,6 +3740,32 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         "stage_paths": stage_paths_candidates,
     }
 
+    # A (spec backlink above): a trail-ready `review_scale.commit_slices`
+    # payload, additive to `review_scale_decision._asdict()` — never a
+    # replacement key, and never emitted when the underlying measurement
+    # was unresolvable (`measured_commit_count is None`; see
+    # `_measure_session_review_scale_inputs`'s own None-vs-zero contract).
+    # A resolved-but-empty list (session owns zero commits) IS emitted —
+    # that is an honest answer, not a failure. `scope_kind="diff"` on
+    # every entry: each slice is a real code sha_range, never a plan/
+    # integration record. The caller fills reviewer/scope/verdict per
+    # entry and passes the list straight through as `decisions["review"]`
+    # (`directives_commit_tail.build_close_tail_args_directive`'s existing
+    # list branch already consumes this exact shape as `--review-slice`).
+    review_scale_payload = review_scale_decision._asdict()
+    if measured_commit_count is not None:
+        for _slice in review_scale_commit_slices:
+            _slice["scope_kind"] = "diff"
+        review_scale_payload["commit_slices"] = review_scale_commit_slices
+        # Uncommitted work has no sha and so can never become a slice — said
+        # here rather than silently dropped: the gap between measured
+        # `code_loc` and the sum of the slices' own `diff_loc` is exactly
+        # the uncommitted contribution no slice covers.
+        _sliced_code_loc = sum(s["diff_loc"] for s in review_scale_commit_slices)
+        review_scale_payload["uncommitted_code_loc"] = (
+            max(0, measured_code_loc - _sliced_code_loc) if measured_code_loc is not None else None
+        )
+
     envelope = build_envelope(
         artifact={"path": str(root), "classification": "workstream", "frontmatter": {}},
         preflight={
@@ -3609,7 +3784,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "open_spine_row_worklist": open_spine_row_gate._asdict(),
             "landed_reconciliation": landed_reconciliation_gate._asdict(),
             "consumed_handoff_completeness": consumed_handoff_completeness_gate._asdict(),
-            "review_scale": review_scale_decision._asdict(),
+            "review_scale": review_scale_payload,
             "stage_paths_candidates": stage_paths_candidates,
             "repo_identity": repo_identity_gate,
         },

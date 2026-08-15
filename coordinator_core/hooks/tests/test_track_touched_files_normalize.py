@@ -33,6 +33,13 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import scope as touch_scope
 from coordinator_core.session import core as session_core
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _make_repo(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path)

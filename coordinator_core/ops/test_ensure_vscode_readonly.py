@@ -1,10 +1,16 @@
 """Tests for coordinator_core.ops.ensure_vscode_readonly.
 
-Golden oracle — ported case-for-case (fresh create, merge-preserving strict
-JSON, JSONC with backup, idempotent second run, unparseable-preserved,
-bad-arg exit 2 x2).
+The two `files.readonlyInclude` globs this module once merged protected the
+generated handoff-tracker renders, both retired fleet-wide — see
+docs/plans/2026-08-14-retire-the-handoff-tracker-and-project-tracker-renders.md.
+`GUARD_KEYS` is now empty, so `_merge_settings` is a permanent no-op: it never
+writes `settings.json`, regardless of the file's starting shape. These cases
+assert that no-op contract (byte-identical / absent) rather than a merge that
+no longer happens.
 
-Port of: test-ensure-vscode-readonly.sh (DoE 894d4bc6, 2026-07-22)
+Was: golden-oracle port of test-ensure-vscode-readonly.sh (DoE 894d4bc6,
+2026-07-22) — the merge/backup/idempotent assertions below are retired
+alongside the guard itself.
 """
 
 from __future__ import annotations
@@ -13,43 +19,32 @@ import json
 
 import pytest
 
-from coordinator_core.ops.ensure_vscode_readonly import main
-
-K1 = "**/state/handoff-tracker.md"
-K2 = "**/state/doe-handoff-tracker.md"
+from coordinator_core.ops.ensure_vscode_readonly import GUARD_KEYS, main
 
 
-def _read(p):
-    return json.loads(p.read_text(encoding="utf-8"))
+def test_guard_keys_is_empty():
+    assert GUARD_KEYS == {}
 
 
-def test_fresh_create_no_vscode_dir(tmp_path, capsys):
+def test_fresh_create_no_vscode_dir_writes_nothing(tmp_path, capsys):
     rc = main(["--root", str(tmp_path)])
     assert rc == 0
     settings = tmp_path / ".vscode" / "settings.json"
-    obj = _read(settings)
-    assert obj["files.readonlyInclude"][K1] is True
-    assert obj["files.readonlyInclude"][K2] is True
+    assert not settings.exists()
 
 
-def test_merge_into_strict_json_preserves_other_keys(tmp_path):
+def test_existing_settings_json_untouched(tmp_path):
     vscode = tmp_path / ".vscode"
     vscode.mkdir()
     settings = vscode / "settings.json"
-    settings.write_text(
-        json.dumps({"editor.tabSize": 2, "files.readonlyInclude": {"**/vendor/**": True}}),
-        encoding="utf-8",
-    )
+    raw = json.dumps({"editor.tabSize": 2, "files.readonlyInclude": {"**/vendor/**": True}})
+    settings.write_text(raw, encoding="utf-8")
     rc = main(["--root", str(tmp_path)])
     assert rc == 0
-    obj = _read(settings)
-    assert obj["editor.tabSize"] == 2
-    assert obj["files.readonlyInclude"]["**/vendor/**"] is True
-    assert obj["files.readonlyInclude"][K1] is True
-    assert obj["files.readonlyInclude"][K2] is True
+    assert settings.read_text(encoding="utf-8") == raw
 
 
-def test_jsonc_adds_guard_backs_up_original(tmp_path):
+def test_jsonc_settings_untouched_no_backup_written(tmp_path):
     vscode = tmp_path / ".vscode"
     vscode.mkdir()
     settings = vscode / "settings.json"
@@ -60,25 +55,19 @@ def test_jsonc_adds_guard_backs_up_original(tmp_path):
     settings.write_text(raw, encoding="utf-8")
     rc = main(["--root", str(tmp_path)])
     assert rc == 0
-    obj = _read(settings)
-    assert obj["editor.tabSize"] == 4
-    assert obj["files.autoSave"] == "off"
-    assert obj["files.readonlyInclude"][K1] is True
-    assert obj["files.readonlyInclude"][K2] is True
+    assert settings.read_text(encoding="utf-8") == raw
     backup = vscode / "settings.json.bak"
-    assert backup.is_file()
-    assert "my editor prefs" in backup.read_text(encoding="utf-8")
+    assert not backup.exists()
 
 
 def test_idempotent_second_run_byte_identical(tmp_path):
     rc = main(["--root", str(tmp_path)])
     assert rc == 0
     settings = tmp_path / ".vscode" / "settings.json"
-    first = settings.read_text(encoding="utf-8")
+    assert not settings.exists()
     rc = main(["--root", str(tmp_path)])
     assert rc == 0
-    second = settings.read_text(encoding="utf-8")
-    assert first == second
+    assert not settings.exists()
 
 
 def test_unparseable_settings_preserved_not_clobbered(tmp_path):

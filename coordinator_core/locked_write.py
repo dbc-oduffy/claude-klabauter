@@ -738,10 +738,28 @@ def held_lock(
     short one: pass *target* and nothing else.
 
     ``anchor_root`` remains available as an explicit opt-out for callers that
-    must be namespaced elsewhere — in practice the test suite, which needs
-    per-``tmp_path`` isolation. Passing it opts OUT of the shared namespace:
-    a caller that passes one only some of the time has reintroduced exactly
-    the defect this parameter's default exists to remove.
+    must be namespaced elsewhere. Passing it opts OUT of the shared namespace:
+    a caller that passes one only some of the time for the SAME *target* has
+    reintroduced exactly the defect this parameter's default exists to remove.
+
+    Two legitimate opt-out classes, both required to pass it EVERY time for
+    their target:
+
+    1. The test suite, which needs per-``tmp_path`` isolation.
+    2. The ``touched.txt`` writers — ``session/scope.py::touch()`` and
+       ``session/claims.py::atomic_dedup_append`` (C2/C6,
+       ``docs/plans/2026-08-14-cli-authored-writes-get-claimed.md``). Their
+       *target* is a file inside the caller's OWN repo, not a foreign repo
+       root, so the reasoning above (an anchor two installs answer
+       differently) does not apply to them. They MUST anchor at the repo
+       root, because the third writer of that same file —
+       ``hooks/track_touched_files.py`` — locks it via ``locked_rmw``, whose
+       sidecar resolves through ``_lock_dir_path``/``git_common_dir``. A
+       default-anchored ``held_lock`` here would land in
+       ``_machine_lock_dir()`` and exclude that writer not at all, silently.
+       Do NOT "simplify" those call sites to the short form: it compiles,
+       it runs, it locks, and it stops serialising the one writer it most
+       needs to serialise against.
 
     Either way the resolved anchor is validated: if the sidecar directory
     would land inside *target* (the ``anchor_root == target`` shape

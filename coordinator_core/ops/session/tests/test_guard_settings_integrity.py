@@ -43,8 +43,21 @@ import pytest
 
 from coordinator_core.ops.session import guard_settings_integrity as _gsi
 from coordinator_core.ops.session.guard_settings_integrity import (
+    evaluate_guardless_sessions,
+    evaluate_plugin_gating_drift,
     evaluate_settings_integrity,
 )
+from coordinator_core.ops.detect_guardless_sessions import (
+    DetectionResult,
+    ProcessObservation,
+)
+
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
 
 
 @pytest.fixture(autouse=True)
@@ -227,3 +240,168 @@ def test_multiple_unreachable_keys_all_named(tmp_path):
     assert "example-game-repo-control@example-game-workbench-repo" in text
     assert "game-dev@example-game-workbench-repo" in text
     assert "context7@claude-plugins-official" not in text
+
+
+# ---------------------------------------------------------------------------
+# evaluate_plugin_gating_drift -- 2026-08-14 config-value drift detector
+# (state/subagent-share/ed69af78-ccc1-4efc-8b58-4cc93cb3b461/
+# coordinatorstaff-eng-3c57c48d.md). Uses the real
+# `plugin_gating_contract.json` shipped beside the module (all-`False`
+# today) rather than monkeypatching it -- these tests pin behavior against
+# the live contract, matching the fixture-not-real-settings.json discipline
+# for the OTHER file this module reads.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_gating_drift_fires_on_drifted_fixture(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(
+        config_dir,
+        {
+            "game-dev@example-game-workbench-repo": True,
+            "example-game-repo@example-game-workbench-repo": False,
+            "example-game-repo-control@example-game-workbench-repo": False,
+        },
+    )
+
+    text = evaluate_plugin_gating_drift(config_dir)
+    assert "game-dev@example-game-workbench-repo" in text
+    assert "example-game-repo-control@example-game-workbench-repo" not in text
+    assert "expected" in text
+    assert "False" in text
+
+
+def test_plugin_gating_drift_silent_on_shipped_default(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(
+        config_dir,
+        {
+            "game-dev@example-game-workbench-repo": False,
+            "example-game-repo@example-game-workbench-repo": False,
+            "example-game-repo-control@example-game-workbench-repo": False,
+            "example-retrieval-repo@example-retrieval-repo": True,
+        },
+    )
+
+    assert evaluate_plugin_gating_drift(config_dir) == ""
+
+
+def test_plugin_gating_drift_silent_on_missing_settings_file(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    # No settings.json written at all.
+
+    assert evaluate_plugin_gating_drift(config_dir) == ""
+
+
+def test_plugin_gating_drift_silent_on_malformed_settings_json(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text("{not valid json", encoding="utf-8")
+
+    assert evaluate_plugin_gating_drift(config_dir) == ""
+
+
+def test_plugin_gating_drift_silent_on_missing_enabled_plugins_key(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(json.dumps({}), encoding="utf-8")
+
+    assert evaluate_plugin_gating_drift(config_dir) == ""
+
+
+def test_plugin_gating_drift_silent_on_non_dict_enabled_plugins(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "settings.json").write_text(
+        json.dumps({"enabledPlugins": "not-a-dict"}), encoding="utf-8"
+    )
+
+    assert evaluate_plugin_gating_drift(config_dir) == ""
+
+
+def test_plugin_gating_drift_silent_on_unreadable_contract(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(config_dir, {"game-dev@example-game-workbench-repo": True})
+    monkeypatch.setattr(
+        _gsi, "_PLUGIN_GATING_CONTRACT_PATH", tmp_path / "does-not-exist.json"
+    )
+
+    assert evaluate_plugin_gating_drift(config_dir) == ""
+
+
+# ---------------------------------------------------------------------------
+# evaluate_guardless_sessions -- 2026-08-14 unguarded-peer-session detector
+# (state/bug-backlog/2026-08-14-a-live-session-is-running-plugin-dir-les-
+# 2ee0e6522f92.yaml). Injects the underlying
+# `coordinator_core.ops.detect_guardless_sessions.detect` verdict directly --
+# never enumerates real processes in a test (brief requirement).
+# ---------------------------------------------------------------------------
+
+
+def test_guardless_sessions_fires_and_names_pid(monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(
+            cannot_determine=False,
+            reason=None,
+            observed=[
+                ProcessObservation(
+                    pid=17152, command_line="claude.exe --dangerously-skip-permissions", guarded=False
+                )
+            ],
+            guardless=[
+                ProcessObservation(
+                    pid=17152, command_line="claude.exe --dangerously-skip-permissions", guarded=False
+                )
+            ],
+        ),
+    )
+
+    text = evaluate_guardless_sessions()
+    assert "17152" in text
+    assert "claude-doe" in text
+
+
+def test_guardless_sessions_silent_when_all_guarded(monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(
+            cannot_determine=False,
+            reason=None,
+            observed=[
+                ProcessObservation(
+                    pid=43052,
+                    command_line='claude.exe --plugin-dir X:/DoE-claude/coordinator',  # abs-path-ok: fixture-only placeholder command line, not a real host path
+                    guarded=True,
+                )
+            ],
+            guardless=[],
+        ),
+    )
+
+    assert evaluate_guardless_sessions() == ""
+
+
+def test_guardless_sessions_silent_when_cannot_determine(monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(
+            cannot_determine=True,
+            reason="process-table probe is Windows-only (platform.system() == 'Linux')",
+        ),
+    )
+
+    assert evaluate_guardless_sessions() == ""
+
+
+def test_guardless_sessions_silent_on_empty_observations(monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(cannot_determine=False, reason=None, observed=[], guardless=[]),
+    )
+
+    assert evaluate_guardless_sessions() == ""

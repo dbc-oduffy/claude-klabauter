@@ -35,6 +35,13 @@ import pytest
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards.dispatch import _crash_deny, evaluate_payload_json
 
+# Spawns a real external process; runs at cadence gates, not per-commit.
+# Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
+pytestmark = [
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
+
 
 def _reason(result) -> str:
     return result["hookSpecificOutput"]["permissionDecisionReason"]

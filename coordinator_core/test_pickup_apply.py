@@ -1510,3 +1510,265 @@ class TestMemoClaimSameSessionReentry:
         final_text = memo_path.read_text(encoding="utf-8")
         assert "status: actioned" in final_text
         assert "actioned_note" in final_text
+
+
+# ---------------------------------------------------------------------------
+# Piece A (cross-repo/inbox/2026-08-04-example-market-data-repo-em-pickup-jgate-
+# cleared-strands-gate-fields.md) — `jgate: cleared` now records via a new
+# `gate-recheck` directive, sequenced strictly before `claim-handoff`.
+# ---------------------------------------------------------------------------
+
+def _seed_awaiting_gate_handoff(repo: Path, name: str, extra: str = "") -> Path:
+    path = repo / "state" / "handoffs" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        f'title: "Test Handoff {name}"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: awaiting_gate\n"
+        'gate_dependency: "peer campaign must settle first"\n'
+        f"{extra}"
+    )
+    path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add {name}")
+    return path
+
+
+class TestGateRecheckVerbDispatch:
+    """`archive-stamp-cli gate-recheck` — the new verb (`_dispatch_archive_
+    stamp_cli`), unit-level: directive shape, RuntimeError-with-error
+    propagation, path scoping."""
+
+    def test_unrecognized_argument_count_raises(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        with pytest.raises(pa_apply.UnrecognizedDirective):
+            pa_apply._dispatch_archive_stamp_cli(["gate-recheck", "state/handoffs/h1.md"], repo)
+
+    def test_cleared_gate_recheck_lands_ready_to_fire(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_awaiting_gate_handoff(repo, "g1.md")
+
+        result = pa_apply._dispatch_archive_stamp_cli(
+            ["gate-recheck", "state/handoffs/g1.md", "2026-02-01"], repo
+        )
+        assert result == {
+            "cli": "archive-stamp-cli",
+            "verb": "gate-recheck",
+            "handoff_path": "state/handoffs/g1.md",
+        }
+        text = hp.read_text(encoding="utf-8")
+        assert "deployment_state: ready_to_fire" in text
+        assert "gate_dependency:" not in text
+        assert "last_gate_recheck: 2026-02-01" in text
+
+    def test_refusal_on_unresolved_gate_evidence_raises_runtime_error(self, tmp_path):
+        # A `kind: human` leg is "always indeterminate — permanent, by
+        # construction" (reconcile/gate_eval.py) — never reduces to
+        # `"freed"`, so `_gate_recheck`'s act-time re-verification refuses
+        # the write (MutateAbort, no write) and this handler surfaces that
+        # as a clean directive failure, not a silent pass.
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_awaiting_gate_handoff(
+            repo,
+            "g2.md",
+            extra=(
+                "gate_evidence:\n"
+                "  covers_prose: true\n"
+                "  legs:\n"
+                "    - leg_id: leg-1\n"
+                "      kind: human\n"
+            ),
+        )
+
+        # Review: staff-eng finding 6 — pin that the raised message is useful,
+        # not merely that a RuntimeError happened.
+        with pytest.raises(RuntimeError, match="gate_evidence.*not 'freed'"):
+            pa_apply._dispatch_archive_stamp_cli(
+                ["gate-recheck", "state/handoffs/g2.md", "2026-02-01"], repo
+            )
+
+        text = (repo / "state" / "handoffs" / "g2.md").read_text(encoding="utf-8")
+        assert "deployment_state: awaiting_gate" in text
+
+
+class TestGateRecheckOrderingBeforeClaim:
+    """Piece A's load-bearing ordering property, exercised end-to-end
+    through `brief()` + `apply()`: `d-gate-recheck` must land strictly
+    before `d2` (claim-handoff) — `_gate_recheck` `MutateAbort`s outside
+    `awaiting_gate`, so a wrong order would fail loud rather than silently
+    reorder."""
+
+    def test_cleared_disposition_lands_gate_recheck_then_claim_in_order(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_awaiting_gate_handoff(repo, "g1.md")
+
+        exit_code, report = pa_apply.apply(
+            "state/handoffs/g1.md",
+            session_id="sid-gate-cleared",
+            repo_root=repo,
+            decisions={"jgate": {"disposition": "cleared"}},
+        )
+
+        assert exit_code == pa_apply.APPLY_EXIT_OK
+        assert report["landed"] == ["d1", "d-gate-recheck", "d2"]
+        text = hp.read_text(encoding="utf-8")
+        # d2 (claim-handoff) landed last, so the final on-disk state is the
+        # claim's, not gate-recheck's intermediate ready_to_fire.
+        assert "deployment_state: in_flight" in text
+        assert "status: claimed" in text
+        assert "last_gate_recheck:" in text
+
+    def test_not_cleared_disposition_leaves_both_directives_unfired(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_awaiting_gate_handoff(repo, "g2.md")
+
+        exit_code, report = pa_apply.apply(
+            "state/handoffs/g2.md",
+            session_id="sid-gate-not-cleared",
+            repo_root=repo,
+            decisions={"jgate": {"disposition": "not-cleared"}},
+        )
+
+        assert exit_code == pa_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["landed"] == ["d1"]
+        assert "d-gate-recheck" not in report["landed"]
+        assert "d2" not in report["landed"]
+        assert "jgate" in report["unresolved_judgment_points"]
+        text = hp.read_text(encoding="utf-8")
+        assert "deployment_state: awaiting_gate" in text
+
+    # Review: coordinator:code-reviewer — `build_gate_recheck_directive`'s
+    # docstring asserts both drop-recovery arms are safe (idempotent no-op)
+    # after gate-recheck lands but `d2` (claim-handoff) then fails. Neither
+    # arm was exercised anywhere in this diff; these two tests force that
+    # exact partial-mutation sequence (gate-recheck succeeds, claim-handoff
+    # raises) and then drive each recovery path against it.
+
+    def test_drop_after_gate_recheck_partial_mutation_is_idempotent_no_op(
+        self, tmp_path, monkeypatch
+    ):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_awaiting_gate_handoff(repo, "g4.md")
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("simulated claim-handoff failure")
+
+        monkeypatch.setattr(pa_apply, "cs_claim_handoff", _boom)
+
+        exit_code, report = pa_apply.apply(
+            "state/handoffs/g4.md",
+            session_id="sid-gate-partial-drop",
+            repo_root=repo,
+            decisions={"jgate": {"disposition": "cleared"}},
+        )
+
+        assert exit_code == pa_apply.APPLY_EXIT_PARTIAL_MUTATION
+        assert report["landed"] == ["d1", "d-gate-recheck"]
+        assert report["failed_directive"] == "d2"
+        text = hp.read_text(encoding="utf-8")
+        assert "deployment_state: ready_to_fire" in text
+
+        drop_exit_code, drop_report = pa_apply.drop(
+            "state/handoffs/g4.md",
+            session_id="sid-gate-partial-drop",
+            repo_root=repo,
+        )
+
+        assert drop_exit_code == pa_apply.APPLY_EXIT_OK
+        assert drop_report["unclaimed"] is True
+        text = hp.read_text(encoding="utf-8")
+        assert "deployment_state: open" in text or "status: open" in text
+
+    def test_rerun_of_apply_after_gate_recheck_partial_mutation_is_byte_identical(
+        self, tmp_path, monkeypatch
+    ):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_awaiting_gate_handoff(repo, "g5.md")
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("simulated claim-handoff failure")
+
+        monkeypatch.setattr(pa_apply, "cs_claim_handoff", _boom)
+
+        exit_code, report = pa_apply.apply(
+            "state/handoffs/g5.md",
+            session_id="sid-gate-partial-rerun",
+            repo_root=repo,
+            decisions={"jgate": {"disposition": "cleared"}},
+        )
+        assert exit_code == pa_apply.APPLY_EXIT_PARTIAL_MUTATION
+        assert report["landed"] == ["d1", "d-gate-recheck"]
+        text_after_first = hp.read_text(encoding="utf-8")
+        assert "deployment_state: ready_to_fire" in text_after_first
+
+        monkeypatch.undo()
+
+        rerun_exit_code, rerun_report = pa_apply.apply(
+            "state/handoffs/g5.md",
+            session_id="sid-gate-partial-rerun",
+            repo_root=repo,
+            decisions={"jgate": {"disposition": "cleared"}},
+        )
+
+        assert rerun_exit_code == pa_apply.APPLY_EXIT_OK
+        # Review: coordinator:code-reviewer / review-integrator — the
+        # docstring's claim is that a re-run hits `_gate_recheck`'s own
+        # already-`ready_to_fire` no-op arm. That is NOT what happens: by
+        # the second `apply`, `deployment_state` is already `ready_to_fire`
+        # (not `awaiting_gate`), so `brief()` never emits the `jgate`
+        # judgment point or `d-gate-recheck` directive at all on this run —
+        # `d-gate-recheck` is absent from `landed`, not re-landed
+        # byte-identically. The end state still recovers correctly (`d2`
+        # claims directly from `ready_to_fire`), but via a different
+        # mechanism than the docstring describes. Escalated, not silently
+        # reconciled — see review-integrator's completion report.
+        assert rerun_report["landed"] == ["d1", "d2"]
+        assert "d-gate-recheck" not in rerun_report["landed"]
+        text_after_rerun = hp.read_text(encoding="utf-8")
+        assert "deployment_state: in_flight" in text_after_rerun
+        assert "status: claimed" in text_after_rerun
+
+    def test_unresolved_gate_evidence_halts_the_claim_via_partial_mutation(self, tmp_path):
+        # `jgate: cleared` is answered, but live gate_evidence re-resolution
+        # refuses the recheck — `d2` must never fire on a refused recheck.
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_awaiting_gate_handoff(
+            repo,
+            "g3.md",
+            extra=(
+                "gate_evidence:\n"
+                "  covers_prose: true\n"
+                "  legs:\n"
+                "    - leg_id: leg-1\n"
+                "      kind: human\n"
+            ),
+        )
+
+        exit_code, report = pa_apply.apply(
+            "state/handoffs/g3.md",
+            session_id="sid-gate-evidence-refused",
+            repo_root=repo,
+            decisions={"jgate": {"disposition": "cleared"}},
+        )
+
+        assert exit_code == pa_apply.APPLY_EXIT_PARTIAL_MUTATION
+        assert report["landed"] == ["d1"]
+        assert "d2" not in report["landed"]
+        # Review: staff-eng finding 2 regression surface — the refusal reason
+        # must reach the report, not just stderr.
+        assert report["failed_directive"] == "d-gate-recheck"
+        assert "gate_evidence" in report["error"]
+        assert "not 'freed'" in report["error"]
+        text = hp.read_text(encoding="utf-8")
+        assert "deployment_state: awaiting_gate" in text

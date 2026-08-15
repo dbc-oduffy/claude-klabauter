@@ -53,7 +53,28 @@ from coordinator_core.session import liveness as liveness_mod
 # stands in for. The spawn ratchet's `_BASELINE` is shrink-only pre-existing
 # residue and is explicitly not the route for a new file --
 # coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+]
+
+
+@pytest.fixture(autouse=True)
+def _reset_registry_snapshot_cache():
+    # Review: coordinator:code-reviewer P2 — this file exercises
+    # session_live/claim_holder_live (via holder_reads_live and the
+    # real-registry tests below), which route through liveness's
+    # per-process registry-snapshot memoization
+    # (liveness_mod._cached_registry_lookup). Only
+    # coordinator_core/session/tests/test_liveness.py reset that cache;
+    # left unreset here, whichever test in a shared pytest worker process
+    # first populates it (including one in a DIFFERENT file) leaks its
+    # snapshot into every later session_live/claim_holder_live call in this
+    # file, silently masking a monkeypatched registry_dir(). Reset before
+    # AND after each test so cross-file ordering never matters.
+    liveness_mod._registry_snapshot_cache = None
+    yield
+    liveness_mod._registry_snapshot_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -677,9 +698,15 @@ def test_a_rebrief_by_the_holder_carries_no_reclaim_record(
     assert "RECLAIMED" not in again.decision_object["narration"]
 
 
-def test_a_dead_holder_takeover_is_also_reported_as_a_reclaim(
+def test_an_absent_holder_takeover_is_also_reported_as_a_reclaim(
     tmp_path, as_session, holder_reads_live
 ):
+    """`holder_reads_live` patches only `claim_holder_live`, so `sid-dead` has
+    neither a session dir nor a registry record — `session_verdict` returns no
+    verdict at all. That is `holder-absent`, NOT `dead-holder`: no process
+    check ran (Review: staff-eng F2). A takeover backed by a real
+    process-identity check is covered by
+    `test_pickup_claim_stage_stamp_evidence.py`."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_memo(repo, "m1.md")
@@ -691,7 +718,7 @@ def test_a_dead_holder_takeover_is_also_reported_as_a_reclaim(
 
     reclaimed = result.decision_object["gates"]["claim_reclaim"]
     assert reclaimed["holder"] == "sid-dead"
-    assert reclaimed["basis"] == "dead-holder"
+    assert reclaimed["basis"] == "holder-absent"
 
 
 # ---------------------------------------------------------------------------

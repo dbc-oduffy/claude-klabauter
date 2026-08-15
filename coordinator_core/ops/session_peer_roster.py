@@ -47,6 +47,8 @@ def _row_to_dict(row: "peer_roster.PeerRow") -> Dict[str, Any]:
         "status": row.status,
         "running_seconds": row.running_seconds,
         "is_self": row.is_self,
+        "self_determination": row.self_determination,
+        "messaging_available": row.messaging_available,
     }
 
 
@@ -63,7 +65,18 @@ def _session_peer_roster(params: dict, repo_root: Optional[Path] = None) -> dict
 
     Returns:
         {"rows": [{"session_id", "address", "name", "ref", "cwd", "status",
-                    "running_seconds", "is_self"}, ...]}
+                    "running_seconds", "is_self", "self_determination",
+                    "messaging_available"}, ...]}
+
+    `self_determination` and `messaging_available` are carried through
+    verbatim from `peer_roster.PeerRow`, matching what
+    `coordinator/bin/session-reachability-cli.py`'s own row serializer
+    already emits for the first of them. Both are per-row by that
+    dataclass's contract, not this veneer's choice; `messaging_available`
+    is what tells a caller that an all-`address: null` roster is an
+    unbound harness inbox rather than a set of stale or unresolvable
+    records. A row dict is the whole answer for a consumer holding only
+    the rows, so neither field is dropped here.
 
     Scope "none" (op_scopes.py): this op's own `repo_root` engine kwarg is
     never resolved/injected for a "none"-scoped op -- the `repo_root` WIRE
